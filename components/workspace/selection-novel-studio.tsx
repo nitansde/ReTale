@@ -1382,15 +1382,27 @@ export function SelectionNovelStudio() {
                     预估剩余：{knowledgeRebuildPaused ? '已暂停' : knowledgeRebuildEtaMinutes ? `约 ${knowledgeRebuildEtaMinutes} 分钟` : '计算中'}
                   </p>
                   <div className="mt-3 grid grid-cols-2 gap-2">
-                    <button
-                      onClick={() => {
-                        void handlePauseKnowledge()
-                      }}
-                      disabled={!knowledgeRebuildActive || Boolean(knowledgeActionLoading)}
-                      className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {knowledgeActionLoading === 'pause' ? '暂停中…' : '暂停重建'}
-                    </button>
+                    {knowledgeRebuildPaused ? (
+                      <button
+                        onClick={() => {
+                          void handleRebuildKnowledge()
+                        }}
+                        disabled={Boolean(knowledgeActionLoading) || knowledgeRebuilding}
+                        className="rounded-xl border border-violet-400/30 bg-violet-500/15 px-3 py-2 text-[11px] font-medium text-violet-100 transition hover:bg-violet-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {knowledgeRebuilding ? '继续中…' : '继续重建'}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          void handlePauseKnowledge()
+                        }}
+                        disabled={!knowledgeRebuildActive || Boolean(knowledgeActionLoading)}
+                        className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {knowledgeActionLoading === 'pause' ? '暂停中…' : '暂停重建'}
+                      </button>
+                    )}
                     <button
                       onClick={() => {
                         void handleAbortKnowledge()
@@ -1987,7 +1999,7 @@ export function SelectionNovelStudio() {
 
       {settingsOpen ? (
         <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm" onClick={() => setSettingsOpen(false)}>
-          <div className="absolute inset-x-0 top-[8vh] mx-auto w-full max-w-2xl rounded-[32px] border border-white/10 bg-[#0d1017] p-5 shadow-[0_30px_120px_rgba(0,0,0,0.5)]" onClick={(event) => event.stopPropagation()}>
+          <div className="absolute inset-x-0 top-[8vh] mx-auto max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-[32px] border border-white/10 bg-[#0d1017] p-5 shadow-[0_30px_120px_rgba(0,0,0,0.5)]" onClick={(event) => event.stopPropagation()}>
             <div className="mb-5 flex items-start justify-between gap-3">
               <div>
                 <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">AI settings</p>
