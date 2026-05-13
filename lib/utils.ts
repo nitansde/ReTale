@@ -20,19 +20,108 @@ export function countChineseFriendlyWords(text: string) {
   return text.replace(/\s/g, '').length
 }
 
-export function plainTextToHtml(text: string) {
-  return text
+function endsWithParagraphPunctuation(text: string) {
+  return /[。！？!?…]+[”’」』】）》」』）)]*$/.test(text)
+}
+
+function startsWithParagraphIndent(text: string) {
+  return /^[\t 　]+/.test(text)
+}
+
+export function splitPlainTextParagraphs(text: string) {
+  const normalized = text.replace(/\r\n?/g, '\n').trim()
+  if (!normalized) return [] as string[]
+
+  const paragraphs: string[] = []
+  const blocks = normalized
     .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+
+  for (const block of blocks) {
+    const lines = block
+      .split('\n')
+      .map((line) => line.replace(/\s+$/g, ''))
+      .filter((line) => line.trim())
+
+    if (!lines.length) continue
+
+    let buffer = ''
+
+    for (const line of lines) {
+      const trimmedLine = line.trim()
+      if (!buffer) {
+        buffer = trimmedLine
+        continue
+      }
+
+      if (startsWithParagraphIndent(line) || endsWithParagraphPunctuation(buffer)) {
+        paragraphs.push(buffer.trim())
+        buffer = trimmedLine
+        continue
+      }
+
+      buffer = `${buffer}${trimmedLine}`
+    }
+
+    if (buffer.trim()) {
+      paragraphs.push(buffer.trim())
+    }
+  }
+
+  return paragraphs.filter(Boolean)
+}
+
+export function plainTextToHtml(text: string) {
+  const paragraphs = splitPlainTextParagraphs(text)
+  return (paragraphs.length ? paragraphs : ['　'])
     .map((paragraph) => `<p>${paragraph.trim() || '　'}</p>`)
     .join('')
 }
 
-export function getParagraphsFromHtml(html: string) {
-  const text = htmlToPlainText(html)
-  return text
-    .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trim())
+export function plainTextLinesToHtml(text: string) {
+  const paragraphs = text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
     .filter(Boolean)
+
+  return (paragraphs.length ? paragraphs : ['　'])
+    .map((paragraph) => `<p>${paragraph || '　'}</p>`)
+    .join('')
+}
+
+export function normalizeLegacySingleParagraphHtml(html: string) {
+  const trimmed = html.trim()
+  if (!trimmed) return html
+
+  if (!/^(\s*<p>[\s\S]*?<\/p>\s*)+$/i.test(trimmed)) {
+    return html
+  }
+
+  const paragraphMatches = Array.from(trimmed.matchAll(/<p>([\s\S]*?)<\/p>/gi))
+  if (!paragraphMatches.length) {
+    return html
+  }
+
+  const paragraphContents = paragraphMatches.map((match) => match[1] ?? '')
+  if (paragraphContents.some((content) => /<(?!br\s*\/?>)/i.test(content))) {
+    return html
+  }
+
+  const normalizedText = paragraphContents
+    .map((content) => content.replace(/<br\s*\/?>/gi, '\n').replace(/&nbsp;/g, ' '))
+    .join('\n')
+  const nonEmptyLineCount = normalizedText.split('\n').filter((line) => line.trim()).length
+  if (nonEmptyLineCount <= paragraphMatches.length) {
+    return html
+  }
+
+  return plainTextLinesToHtml(normalizedText)
+}
+
+export function getParagraphsFromHtml(html: string) {
+  return splitPlainTextParagraphs(htmlToPlainText(html))
 }
 
 export function formatNowLabel() {

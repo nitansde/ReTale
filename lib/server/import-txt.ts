@@ -1,4 +1,4 @@
-import { countChineseFriendlyWords, plainTextToHtml } from '@/lib/utils'
+import { countChineseFriendlyWords, plainTextLinesToHtml } from '@/lib/utils'
 import type { Chapter, PersistedNovelState, Volume } from '@/lib/types'
 
 const CHAPTER_HEADING_REGEX = /(第\s*[0-9一二三四五六七八九十百千零两]+\s*章[^\n]*)/g
@@ -18,8 +18,8 @@ function buildImportedChapter(params: {
     volumeId: params.volumeId,
     title: params.title,
     order: params.order,
-    content: plainTextToHtml(cleanText),
-    originalContent: plainTextToHtml(cleanText),
+    content: plainTextLinesToHtml(cleanText),
+    originalContent: plainTextLinesToHtml(cleanText),
     status: 'draft' as const,
     wordCount: countChineseFriendlyWords(cleanText),
     updatedAt: '刚刚 · 导入',
