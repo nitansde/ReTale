@@ -6,10 +6,11 @@ import {
   enqueueKnowledgeJob,
   getMainBranchId,
   hashContent,
+  rebuildBranchFts,
   replaceChapterFts,
   splitChapterLines,
 } from '@/lib/server/knowledge-store'
-import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne, type SqlParam, withTransaction } from '@/lib/server/sqlite'
 import { htmlToPlainText, plainTextToHtml, uid } from '@/lib/utils'
 
 type PersistImportedNovelParams = {
@@ -76,6 +77,47 @@ type KnowledgeEntityRow = {
   lastSeenChapter: number | null
 }
 
+type KnowledgeRebuildPayloadChapter = {
+  chapterId: string
+  chapterNo: number
+  extraction: ChapterKnowledgeExtraction
+}
+
+type KnowledgeRebuildJobPayload = {
+  branchId: string
+  phase?: 'extract' | 'cleanup' | 'write' | 'snapshot'
+  currentChapterId?: string | null
+  pendingChapterIds?: string[]
+  chapterWeightsById?: Record<string, number>
+  totalChapterWeight?: number
+  processedChapterWeight?: number
+  extractedChapters?: KnowledgeRebuildPayloadChapter[]
+}
+
+type KnowledgeRebuildJobState = {
+  payload: KnowledgeRebuildJobPayload
+  pendingChapterIds: string[]
+  chapterWeightsById: Record<string, number>
+  totalChapterWeight: number
+  processedChapterWeight: number
+  extractedChapters: KnowledgeRebuildPayloadChapter[]
+  phase: KnowledgeRebuildJobPayload['phase']
+}
+
+export type KnowledgeRebuildJobOutcome = 'completed' | 'paused' | 'aborted'
+
+class KnowledgeRebuildPausedError extends Error {
+  constructor() {
+    super('Knowledge rebuild paused')
+  }
+}
+
+class KnowledgeRebuildAbortedError extends Error {
+  constructor() {
+    super('Knowledge rebuild aborted')
+  }
+}
+
 function toChapterLike(params: { chapterId: string; novelId: string; title: string; chapterNo: number; rawText: string }): Chapter {
   return {
     id: params.chapterId,
@@ -125,10 +167,15 @@ function updateKnowledgeJob(
     status?: string
     currentStep?: string | null
     progress?: number
+    payload?: unknown
     errorMessage?: string | null
   }
 ) {
-  const entries = Object.entries(fields).filter(([, value]) => value !== undefined)
+  const entries = Object.entries(fields).flatMap<[string, SqlParam]>(([key, value]) => {
+    if (value === undefined) return []
+    if (key === 'payload') return [['payloadJson', value === null ? null : JSON.stringify(value)]]
+    return [[key, value as SqlParam]]
+  })
   if (!entries.length) return
   execute(
     `UPDATE KnowledgeJob SET ${entries.map(([key]) => `${key} = ?`).join(', ')}, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
@@ -140,6 +187,306 @@ function updateKnowledgeJob(
 function getChapterProgressWeight(rawText: string | null) {
   const normalized = (rawText ?? '').trim()
   return Math.max(1, normalized.length)
+}
+
+function parseKnowledgeRebuildJobPayload(payloadJson: string | null) {
+  if (!payloadJson) return null
+
+  try {
+    const payload = JSON.parse(payloadJson) as KnowledgeRebuildJobPayload
+    if (!payload || typeof payload !== 'object' || typeof payload.branchId !== 'string') {
+      return null
+    }
+    return payload
+  } catch {
+    return null
+  }
+}
+
+function getKnowledgeExtractionProgress(state: { processedChapterWeight: number; totalChapterWeight: number }) {
+  if (state.totalChapterWeight <= 0 || state.processedChapterWeight >= state.totalChapterWeight) {
+    return 0.8
+  }
+
+  return 0.1 + (state.processedChapterWeight / state.totalChapterWeight) * 0.7
+}
+
+function hasUsableExtractedKnowledge(extraction: ChapterKnowledgeExtraction) {
+  return extraction.characters.length > 0
+    || extraction.relations.length > 0
+    || extraction.events.length > 0
+    || extraction.worldbuilding.length > 0
+    || extraction.openThreads.length > 0
+}
+
+function getKnowledgeRebuildJobState(jobId: string): KnowledgeRebuildJobState | null {
+  const row = queryOne<{ payloadJson: string | null }>('SELECT payloadJson FROM KnowledgeJob WHERE id = ?', jobId)
+  const payload = parseKnowledgeRebuildJobPayload(row?.payloadJson ?? null)
+  if (!payload) {
+    return null
+  }
+
+  return {
+    payload,
+    phase: payload.phase ?? 'extract',
+    pendingChapterIds: Array.isArray(payload.pendingChapterIds) ? payload.pendingChapterIds : [],
+    chapterWeightsById: payload.chapterWeightsById ?? {},
+    totalChapterWeight: typeof payload.totalChapterWeight === 'number' ? Math.max(0, payload.totalChapterWeight) : 0,
+    processedChapterWeight: typeof payload.processedChapterWeight === 'number' ? Math.max(0, payload.processedChapterWeight) : 0,
+    extractedChapters: Array.isArray(payload.extractedChapters) ? payload.extractedChapters : [],
+  }
+}
+
+function isKnowledgeRebuildJobStateInitialized(state: KnowledgeRebuildJobState | null) {
+  if (!state) return false
+
+  return state.pendingChapterIds.length > 0
+    || Object.keys(state.chapterWeightsById).length > 0
+    || state.totalChapterWeight > 0
+    || state.processedChapterWeight > 0
+    || state.extractedChapters.length > 0
+    || state.phase !== 'extract'
+}
+
+function initializeKnowledgeRebuildJobState(jobId: string, payload: KnowledgeRebuildJobPayload) {
+  const pendingChapterIds = payload.pendingChapterIds ?? []
+  const chapterWeightsById = payload.chapterWeightsById ?? {}
+  const totalChapterWeight =
+    typeof payload.totalChapterWeight === 'number'
+      ? Math.max(0, payload.totalChapterWeight)
+      : pendingChapterIds.reduce((sum, chapterId) => sum + (chapterWeightsById[chapterId] ?? 0), 0)
+
+  updateKnowledgeJob(jobId, {
+    payload: {
+      ...payload,
+      phase: payload.phase ?? 'extract',
+      pendingChapterIds,
+      chapterWeightsById,
+      totalChapterWeight,
+      currentChapterId: payload.currentChapterId ?? null,
+      processedChapterWeight: Math.max(0, payload.processedChapterWeight ?? 0),
+      extractedChapters: payload.extractedChapters ?? [],
+    },
+  })
+}
+
+function setCurrentKnowledgeJobChapter(jobId: string, chapterId: string | null) {
+  const state = getKnowledgeRebuildJobState(jobId)
+  if (!state) {
+    return null
+  }
+
+  updateKnowledgeJob(jobId, {
+    payload: {
+      ...state.payload,
+      currentChapterId: chapterId,
+      phase: state.phase,
+      pendingChapterIds: state.pendingChapterIds,
+      chapterWeightsById: state.chapterWeightsById,
+      totalChapterWeight: state.totalChapterWeight,
+      processedChapterWeight: state.processedChapterWeight,
+      extractedChapters: state.extractedChapters,
+    },
+  })
+
+  return {
+    ...state,
+    payload: {
+      ...state.payload,
+      currentChapterId: chapterId,
+    },
+  }
+}
+
+function removePendingChaptersFromKnowledgeJob(jobId: string, chapterIds: string[]) {
+  const state = getKnowledgeRebuildJobState(jobId)
+  if (!state || !chapterIds.length) {
+    return state
+  }
+
+  const removedIds = new Set(chapterIds.filter((chapterId) => chapterId !== state.payload.currentChapterId))
+  if (!removedIds.size) {
+    return state
+  }
+
+  let removedWeight = 0
+  const pendingChapterIds = state.pendingChapterIds.filter((chapterId) => {
+    if (!removedIds.has(chapterId)) return true
+    removedWeight += state.chapterWeightsById[chapterId] ?? 0
+    return false
+  })
+
+  if (pendingChapterIds.length === state.pendingChapterIds.length) {
+    return state
+  }
+
+  const chapterWeightsById = { ...state.chapterWeightsById }
+  for (const chapterId of chapterIds) {
+    delete chapterWeightsById[chapterId]
+  }
+  const extractedChapters = state.extractedChapters.filter((chapter) => !removedIds.has(chapter.chapterId))
+
+  const nextState: KnowledgeRebuildJobState = {
+    ...state,
+    pendingChapterIds,
+    chapterWeightsById,
+    totalChapterWeight: Math.max(0, state.totalChapterWeight - removedWeight),
+    extractedChapters,
+  }
+
+  updateKnowledgeJob(jobId, {
+    progress: getKnowledgeExtractionProgress(nextState),
+    payload: {
+      ...state.payload,
+      phase: nextState.phase,
+      pendingChapterIds: nextState.pendingChapterIds,
+      chapterWeightsById: nextState.chapterWeightsById,
+      totalChapterWeight: nextState.totalChapterWeight,
+      processedChapterWeight: nextState.processedChapterWeight,
+      extractedChapters: nextState.extractedChapters,
+    },
+  })
+
+  return nextState
+}
+
+function completePendingChapterInKnowledgeJob(jobId: string, chapterId: string) {
+  const state = getKnowledgeRebuildJobState(jobId)
+  if (!state) {
+    return null
+  }
+
+  if (!state.pendingChapterIds.includes(chapterId)) {
+    return state
+  }
+
+  const chapterWeight = state.chapterWeightsById[chapterId] ?? 0
+  const pendingChapterIds = state.pendingChapterIds.filter((id) => id !== chapterId)
+  const chapterWeightsById = { ...state.chapterWeightsById }
+  delete chapterWeightsById[chapterId]
+
+  const nextState: KnowledgeRebuildJobState = {
+    ...state,
+    pendingChapterIds,
+    chapterWeightsById,
+    processedChapterWeight: Math.min(state.totalChapterWeight, state.processedChapterWeight + chapterWeight),
+  }
+
+  updateKnowledgeJob(jobId, {
+    progress: getKnowledgeExtractionProgress(nextState),
+    payload: {
+      ...state.payload,
+      currentChapterId: null,
+      phase: state.phase,
+      pendingChapterIds: nextState.pendingChapterIds,
+      chapterWeightsById: nextState.chapterWeightsById,
+      totalChapterWeight: nextState.totalChapterWeight,
+      processedChapterWeight: nextState.processedChapterWeight,
+      extractedChapters: state.extractedChapters,
+    },
+  })
+
+  return nextState
+}
+
+function chapterStillExists(chapterId: string) {
+  return Boolean(queryOne<{ id: string }>('SELECT id FROM KnowledgeChapter WHERE id = ? LIMIT 1', chapterId)?.id)
+}
+
+function setKnowledgeRebuildJobPhase(jobId: string, phase: NonNullable<KnowledgeRebuildJobPayload['phase']>) {
+  const state = getKnowledgeRebuildJobState(jobId)
+  if (!state) return null
+
+  const nextState: KnowledgeRebuildJobState = {
+    ...state,
+    phase,
+  }
+
+  updateKnowledgeJob(jobId, {
+    payload: {
+      ...state.payload,
+      phase,
+      pendingChapterIds: state.pendingChapterIds,
+      chapterWeightsById: state.chapterWeightsById,
+      totalChapterWeight: state.totalChapterWeight,
+      processedChapterWeight: state.processedChapterWeight,
+      extractedChapters: state.extractedChapters,
+    },
+  })
+
+  return nextState
+}
+
+function appendExtractedChapterToKnowledgeJob(jobId: string, chapter: KnowledgeRebuildPayloadChapter) {
+  const state = getKnowledgeRebuildJobState(jobId)
+  if (!state) return null
+
+  const extractedChapters = [...state.extractedChapters.filter((item) => item.chapterId !== chapter.chapterId), chapter]
+  const nextState: KnowledgeRebuildJobState = {
+    ...state,
+    extractedChapters,
+  }
+
+  updateKnowledgeJob(jobId, {
+    payload: {
+      ...state.payload,
+      phase: state.phase,
+      pendingChapterIds: state.pendingChapterIds,
+      chapterWeightsById: state.chapterWeightsById,
+      totalChapterWeight: state.totalChapterWeight,
+      processedChapterWeight: state.processedChapterWeight,
+      extractedChapters,
+    },
+  })
+
+  return nextState
+}
+
+function removeExtractedChapterFromKnowledgeJob(jobId: string, chapterId: string) {
+  const state = getKnowledgeRebuildJobState(jobId)
+  if (!state) return null
+
+  const extractedChapters = state.extractedChapters.filter((chapter) => chapter.chapterId !== chapterId)
+  const nextState: KnowledgeRebuildJobState = {
+    ...state,
+    extractedChapters,
+  }
+
+  updateKnowledgeJob(jobId, {
+    payload: {
+      ...state.payload,
+      phase: state.phase,
+      pendingChapterIds: state.pendingChapterIds,
+      chapterWeightsById: state.chapterWeightsById,
+      totalChapterWeight: state.totalChapterWeight,
+      processedChapterWeight: state.processedChapterWeight,
+      extractedChapters,
+    },
+  })
+
+  return nextState
+}
+
+function getKnowledgeJobRow(jobId: string) {
+  return queryOne<{ status: string; errorMessage: string | null }>(
+    'SELECT status, errorMessage FROM KnowledgeJob WHERE id = ?',
+    jobId
+  )
+}
+
+function assertKnowledgeRebuildContinues(jobId: string) {
+  const job = getKnowledgeJobRow(jobId)
+  if (!job) {
+    throw new KnowledgeRebuildAbortedError()
+  }
+
+  if (job.status === 'paused') {
+    throw new KnowledgeRebuildPausedError()
+  }
+
+  if (job.status !== 'queued' && job.status !== 'running') {
+    throw new KnowledgeRebuildAbortedError()
+  }
 }
 
 async function waitForKnowledgeJobCompletion(jobId: string, options?: { timeoutMs?: number; pollMs?: number }) {
@@ -165,10 +512,21 @@ async function waitForKnowledgeJobCompletion(jobId: string, options?: { timeoutM
       throw new Error(job.errorMessage || 'Knowledge rebuild failed')
     }
 
+    if (job.status === 'paused' || job.status === 'aborted') {
+      return
+    }
+
     await new Promise((resolve) => setTimeout(resolve, pollMs))
   }
 
   throw new Error('Knowledge rebuild timed out')
+}
+
+function getKnowledgeJobOutcome(jobId: string): KnowledgeRebuildJobOutcome {
+  const status = queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', jobId)?.status
+  if (status === 'paused') return 'paused'
+  if (status === 'aborted') return 'aborted'
+  return 'completed'
 }
 
 function upsertNovelRecord(params: { novelId: string; title: string; author?: string | null; sourceType?: string }) {
@@ -291,6 +649,37 @@ async function clearDerivedKnowledge(novelId: string, branchId: string) {
   })
 }
 
+async function clearKnowledgeGraphData(novelId: string, branchId: string) {
+  await withTransaction(async () => {
+    execute('DELETE FROM ChapterSnapshot WHERE novelId = ? AND branchId = ?', novelId, branchId)
+    execute(
+      'DELETE FROM FactEvidence WHERE factId IN (SELECT id FROM KnowledgeFact WHERE novelId = ? AND branchId = ?)',
+      novelId,
+      branchId
+    )
+    execute('DELETE FROM KnowledgeFact WHERE novelId = ? AND branchId = ?', novelId, branchId)
+    execute('DELETE FROM KnowledgeRelation WHERE novelId = ? AND branchId = ?', novelId, branchId)
+    execute(
+      'DELETE FROM EventParticipant WHERE eventId IN (SELECT id FROM KnowledgeEvent WHERE novelId = ? AND branchId = ?)',
+      novelId,
+      branchId
+    )
+    execute('DELETE FROM KnowledgeEvent WHERE novelId = ? AND branchId = ?', novelId, branchId)
+    execute('DELETE FROM KnowledgeWorld WHERE novelId = ? AND branchId = ?', novelId, branchId)
+    execute(
+      'DELETE FROM EntityAppearance WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ?)',
+      novelId,
+      branchId
+    )
+    execute(
+      'DELETE FROM EntityAlias WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ?)',
+      novelId,
+      branchId
+    )
+    execute('DELETE FROM KnowledgeEntity WHERE novelId = ? AND branchId = ?', novelId, branchId)
+  })
+}
+
 async function getOrCreateCharacterEntity(params: {
   novelId: string
   branchId: string
@@ -343,6 +732,19 @@ async function getOrCreateCharacterEntity(params: {
     params.status
   )
   return id
+}
+
+function findCharacterEntityIdByName(branchId: string, name: string) {
+  return queryOne<{ id: string }>(
+    `
+      SELECT id
+      FROM KnowledgeEntity
+      WHERE branchId = ? AND canonicalName = ? AND entityType = 'character'
+      LIMIT 1
+    `,
+    branchId,
+    name
+  )?.id ?? null
 }
 
 async function persistChapterExtraction(params: {
@@ -413,9 +815,11 @@ async function persistChapterExtraction(params: {
   }
 
   for (const relation of params.extraction.relations) {
-    const sourceEntityId = entityIdByName.get(relation.source)
-    const targetEntityId = entityIdByName.get(relation.target)
+    const sourceEntityId = entityIdByName.get(relation.source) ?? findCharacterEntityIdByName(params.branchId, relation.source)
+    const targetEntityId = entityIdByName.get(relation.target) ?? findCharacterEntityIdByName(params.branchId, relation.target)
     if (!sourceEntityId || !targetEntityId) continue
+    entityIdByName.set(relation.source, sourceEntityId)
+    entityIdByName.set(relation.target, targetEntityId)
     const evidence = relation.evidence[0]
 
     execute(
@@ -726,24 +1130,28 @@ async function buildSnapshotsForNovel(params: { novelId: string; branchId: strin
 
 export async function rebuildKnowledgeForNovel(params: { novelId: string; branchId?: string }) {
   const branchId = params.branchId ?? getMainBranchId(params.novelId)
-  const activeJob = queryOne<{ id: string }>(
-    "SELECT id FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = 'extract_chapter_knowledge' AND status IN ('queued', 'running') ORDER BY createdAt DESC LIMIT 1",
+  const activeJob = queryOne<{ id: string; status: string }>(
+    "SELECT id, status FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = 'extract_chapter_knowledge' AND status IN ('queued', 'running', 'paused') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1",
     params.novelId,
     branchId
   )
 
   if (activeJob?.id) {
-    await waitForKnowledgeJobCompletion(activeJob.id)
-    return { jobId: activeJob.id }
+    if (activeJob.status !== 'paused') {
+      await waitForKnowledgeJobCompletion(activeJob.id)
+      return { jobId: activeJob.id, outcome: getKnowledgeJobOutcome(activeJob.id) }
+    }
   }
 
-  const job = await enqueueKnowledgeJob({
-    novelId: params.novelId,
-    branchId,
-    jobType: 'extract_chapter_knowledge',
-    currentStep: '准备重建',
-    payload: { branchId },
-  })
+  const job = activeJob?.status === 'paused'
+    ? { id: activeJob.id }
+    : await enqueueKnowledgeJob({
+        novelId: params.novelId,
+        branchId,
+        jobType: 'extract_chapter_knowledge',
+        currentStep: '准备重建',
+        payload: { branchId },
+      })
 
   if (!job?.id) {
     throw new Error('Failed to create knowledge job')
@@ -755,90 +1163,220 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
       params.novelId,
       branchId
     )
-    const existingDerivedKnowledgeCount = queryOne<{ count: number }>(
-      'SELECT COUNT(*) as count FROM ChapterSnapshot WHERE novelId = ? AND branchId = ?',
-      params.novelId,
-      branchId
-    )?.count ?? 0
-    const extractedChapters: Array<{
-      chapterId: string
-      chapterNo: number
-      extraction: ChapterKnowledgeExtraction
-    }> = []
-    const totalChapterWeight = Math.max(1, chapters.reduce((sum, chapter) => sum + getChapterProgressWeight(chapter.rawText), 0))
-    let processedChapterWeight = 0
+    let jobState = getKnowledgeRebuildJobState(job.id)
+    if (!isKnowledgeRebuildJobStateInitialized(jobState)) {
+      const chapterWeightsById = Object.fromEntries(chapters.map((chapter) => [chapter.id, getChapterProgressWeight(chapter.rawText)]))
+      const totalChapterWeight = chapters.reduce((sum, chapter) => sum + (chapterWeightsById[chapter.id] ?? 0), 0)
 
-    updateKnowledgeJob(job.id, { status: 'running', currentStep: '抽取章节知识', progress: 0.05 })
-
-    for (let index = 0; index < chapters.length; index += 1) {
-      const chapter = chapters[index]
-      const chapterWeight = getChapterProgressWeight(chapter.rawText)
-      updateKnowledgeJob(job.id, {
-        currentStep: `抽取第 ${chapter.chapterNo} 章`,
-        progress: 0.1 + (processedChapterWeight / totalChapterWeight) * 0.7,
+      initializeKnowledgeRebuildJobState(job.id, {
+        branchId,
+        phase: 'extract',
+        pendingChapterIds: chapters.map((chapter) => chapter.id),
+        chapterWeightsById,
+        totalChapterWeight,
+        processedChapterWeight: 0,
+        extractedChapters: [],
       })
+      jobState = getKnowledgeRebuildJobState(job.id)
+    }
 
-      const chapterLike = toChapterLike({
-        chapterId: chapter.id,
-        novelId: params.novelId,
-        title: chapter.title ?? `第${chapter.chapterNo}章`,
-        chapterNo: chapter.chapterNo,
-        rawText: chapter.rawText,
-      })
-      const extractionResult = await extractChapterKnowledgeOffline({
-        chapter: chapterLike,
-        chapterNo: chapter.chapterNo,
-      })
+    updateKnowledgeJob(job.id, {
+      status: 'running',
+      errorMessage: null,
+      currentStep: jobState?.phase === 'extract' ? '抽取章节知识' : '继续知识重建',
+      progress: Math.max(0.05, queryOne<{ progress: number }>('SELECT progress FROM KnowledgeJob WHERE id = ?', job.id)?.progress ?? 0),
+    })
 
-      if (existingDerivedKnowledgeCount > 0 && extractionResult.provider === 'fallback') {
-        throw new Error('Knowledge rebuild aborted because structured extraction failed and fallback would overwrite existing knowledge')
+    while (true) {
+      assertKnowledgeRebuildContinues(job.id)
+      jobState = getKnowledgeRebuildJobState(job.id)
+      if (!jobState) {
+        throw new Error('Knowledge rebuild job state is missing')
       }
 
-      processedChapterWeight += chapterWeight
+      const currentJobState = jobState
 
-      updateKnowledgeJob(job.id, {
-        currentStep: `抽取第 ${chapter.chapterNo} 章（Ollama${extractionResult.model ? `: ${extractionResult.model}` : ''}）`,
-        progress: 0.1 + (processedChapterWeight / totalChapterWeight) * 0.7,
-      })
+      if (currentJobState.phase === 'extract') {
+        const currentChapters = queryAll<KnowledgeChapterRow>(
+          'SELECT id, novelId, branchId, chapterNo, title, rawText, summary, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? ORDER BY chapterNo ASC',
+          params.novelId,
+          branchId
+        )
+        const remainingChapters = currentChapters.filter((chapter) => currentJobState.pendingChapterIds.includes(chapter.id))
 
-      extractedChapters.push({
-        chapterId: chapter.id,
-        chapterNo: chapter.chapterNo,
-        extraction: extractionResult.extraction,
-      })
+        if (!remainingChapters.length) {
+          if (!currentJobState.extractedChapters.some((chapter) => hasUsableExtractedKnowledge(chapter.extraction))) {
+            throw new Error('Knowledge rebuild aborted because structured extraction returned no usable knowledge')
+          }
+          setKnowledgeRebuildJobPhase(job.id, 'cleanup')
+          continue
+        }
+
+        const chapter = remainingChapters[0]
+        const stateWithCurrentChapter = setCurrentKnowledgeJobChapter(job.id, chapter.id)
+
+        updateKnowledgeJob(job.id, {
+          currentStep: `抽取第 ${chapter.chapterNo} 章`,
+          progress: getKnowledgeExtractionProgress(stateWithCurrentChapter ?? jobState),
+        })
+
+        const chapterLike = toChapterLike({
+          chapterId: chapter.id,
+          novelId: params.novelId,
+          title: chapter.title ?? `第${chapter.chapterNo}章`,
+          chapterNo: chapter.chapterNo,
+          rawText: chapter.rawText,
+        })
+        const extractionResult = await extractChapterKnowledgeOffline({
+          chapter: chapterLike,
+          chapterNo: chapter.chapterNo,
+        })
+
+        assertKnowledgeRebuildContinues(job.id)
+
+        if (!chapterStillExists(chapter.id)) {
+          removePendingChaptersFromKnowledgeJob(job.id, [chapter.id])
+          continue
+        }
+
+        appendExtractedChapterToKnowledgeJob(job.id, {
+          chapterId: chapter.id,
+          chapterNo: chapter.chapterNo,
+          extraction: extractionResult.extraction,
+        })
+        const completedState = completePendingChapterInKnowledgeJob(job.id, chapter.id)
+
+        updateKnowledgeJob(job.id, {
+          currentStep: `抽取第 ${chapter.chapterNo} 章（${extractionResult.provider}${extractionResult.model ? `: ${extractionResult.model}` : ''}）`,
+          progress: getKnowledgeExtractionProgress(completedState ?? stateWithCurrentChapter ?? jobState),
+        })
+        continue
+      }
+
+      if (currentJobState.phase === 'cleanup') {
+        updateKnowledgeJob(job.id, { currentStep: '清理旧知识', progress: 0.8 })
+        assertKnowledgeRebuildContinues(job.id)
+        await clearDerivedKnowledge(params.novelId, branchId)
+        setKnowledgeRebuildJobPhase(job.id, 'write')
+        continue
+      }
+
+      if (currentJobState.phase === 'write') {
+        const writeQueue = currentJobState.extractedChapters
+          .filter((chapter) => chapterStillExists(chapter.chapterId))
+          .sort((left, right) => left.chapterNo - right.chapterNo)
+
+        if (writeQueue.length !== currentJobState.extractedChapters.length) {
+          for (const chapter of currentJobState.extractedChapters) {
+            if (!chapterStillExists(chapter.chapterId)) {
+              removeExtractedChapterFromKnowledgeJob(job.id, chapter.chapterId)
+            }
+          }
+          continue
+        }
+
+        if (!writeQueue.length) {
+          setKnowledgeRebuildJobPhase(job.id, 'snapshot')
+          continue
+        }
+
+        const chapter = writeQueue[0]
+        updateKnowledgeJob(job.id, {
+          currentStep: `写入第 ${chapter.chapterNo} 章知识`,
+          progress: 0.82 + (1 / Math.max(1, writeQueue.length)) * 0.08,
+        })
+
+        assertKnowledgeRebuildContinues(job.id)
+        await persistChapterExtraction({
+          novelId: params.novelId,
+          branchId,
+          chapterId: chapter.chapterId,
+          chapterNo: chapter.chapterNo,
+          extraction: chapter.extraction,
+        })
+        removeExtractedChapterFromKnowledgeJob(job.id, chapter.chapterId)
+        continue
+      }
+
+      updateKnowledgeJob(job.id, { currentStep: '构建章节快照', progress: 0.9 })
+      assertKnowledgeRebuildContinues(job.id)
+      await buildSnapshotsForNovel({ novelId: params.novelId, branchId })
+      break
     }
 
-    updateKnowledgeJob(job.id, { currentStep: '清理旧知识', progress: 0.8 })
-    await clearDerivedKnowledge(params.novelId, branchId)
-
-    for (let index = 0; index < extractedChapters.length; index += 1) {
-      const chapter = extractedChapters[index]
-      updateKnowledgeJob(job.id, {
-        currentStep: `写入第 ${chapter.chapterNo} 章知识`,
-        progress: 0.82 + ((index + 1) / Math.max(1, extractedChapters.length)) * 0.08,
-      })
-
-      await persistChapterExtraction({
-        novelId: params.novelId,
-        branchId,
-        chapterId: chapter.chapterId,
-        chapterNo: chapter.chapterNo,
-        extraction: chapter.extraction,
-      })
-    }
-
-    updateKnowledgeJob(job.id, { currentStep: '构建章节快照', progress: 0.9 })
-    await buildSnapshotsForNovel({ novelId: params.novelId, branchId })
     updateKnowledgeJob(job.id, { status: 'succeeded', currentStep: '完成', progress: 1 })
 
-    return { jobId: job.id }
+    return { jobId: job.id, outcome: 'completed' as const }
   } catch (error) {
+    if (error instanceof KnowledgeRebuildPausedError) {
+      updateKnowledgeJob(job.id, { status: 'paused', currentStep: '已暂停' })
+      return { jobId: job.id, outcome: 'paused' as const }
+    }
+
+    if (error instanceof KnowledgeRebuildAbortedError) {
+      updateKnowledgeJob(job.id, {
+        status: 'aborted',
+        currentStep: null,
+        progress: 0,
+        payload: {
+          branchId,
+          phase: 'extract',
+          currentChapterId: null,
+          pendingChapterIds: [],
+          chapterWeightsById: {},
+          totalChapterWeight: 0,
+          processedChapterWeight: 0,
+          extractedChapters: [],
+        },
+      })
+      return { jobId: job.id, outcome: 'aborted' as const }
+    }
+
     updateKnowledgeJob(job.id, {
       status: 'failed',
       errorMessage: error instanceof Error ? error.message : 'Knowledge rebuild failed',
     })
     throw error
   }
+}
+
+export async function pauseKnowledgeRebuildForNovel(params: { novelId: string; branchId?: string }) {
+  const branchId = params.branchId ?? getMainBranchId(params.novelId)
+  const activeJob = queryOne<{ id: string }>(
+    "SELECT id FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = 'extract_chapter_knowledge' AND status IN ('queued', 'running') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1",
+    params.novelId,
+    branchId
+  )
+
+  if (!activeJob?.id) {
+    return 'idle' as const
+  }
+
+  updateKnowledgeJob(activeJob.id, { status: 'paused', currentStep: '已暂停' })
+  return 'paused' as const
+}
+
+export async function abortKnowledgeRebuildForNovel(params: { novelId: string; branchId?: string }) {
+  const branchId = params.branchId ?? getMainBranchId(params.novelId)
+  const activeJob = queryOne<{ id: string }>(
+    "SELECT id FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = 'extract_chapter_knowledge' AND status IN ('queued', 'running', 'paused') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1",
+    params.novelId,
+    branchId
+  )
+
+  if (!activeJob?.id) {
+    return 'idle' as const
+  }
+
+  updateKnowledgeJob(activeJob.id, { status: 'aborted', currentStep: null, progress: 0 })
+  return 'aborted' as const
+}
+
+export async function deleteKnowledgeGraphForNovel(params: { novelId: string; branchId?: string }) {
+  const branchId = params.branchId ?? getMainBranchId(params.novelId)
+  await abortKnowledgeRebuildForNovel({ novelId: params.novelId, branchId })
+  await clearKnowledgeGraphData(params.novelId, branchId)
+  return 'deleted' as const
 }
 
 export async function persistImportedNovelToKnowledgeStore(params: PersistImportedNovelParams) {
@@ -948,14 +1486,37 @@ export async function syncWorkspacePayloadToKnowledgeStore(payload: {
     .slice()
     .sort((a, b) => a.order - b.order)
 
-  if (!chapters.length) return
-
   const groupedByNovel = new Map<string, Chapter[]>()
   for (const chapter of chapters) {
     const current = groupedByNovel.get(chapter.novelId) ?? []
     current.push(chapter)
     groupedByNovel.set(chapter.novelId, current)
   }
+
+  const desiredNovelIds = new Set(groupedByNovel.keys())
+  const staleNovelIds = queryAll<{ id: string }>('SELECT id FROM NovelRecord').filter((row) => !desiredNovelIds.has(row.id))
+
+  if (staleNovelIds.length) {
+    for (const novel of staleNovelIds) {
+      const branchId = getMainBranchId(novel.id)
+      const activeJob = queryOne<{ id: string }>(
+        "SELECT id FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = 'extract_chapter_knowledge' AND status IN ('queued', 'running') ORDER BY createdAt DESC LIMIT 1",
+        novel.id,
+        branchId
+      )
+
+      if (activeJob?.id) {
+        await waitForKnowledgeJobCompletion(activeJob.id)
+      }
+
+      await withTransaction(async () => {
+        execute('DELETE FROM text_spans_fts WHERE novel_id = ?', novel.id)
+        execute('DELETE FROM NovelRecord WHERE id = ?', novel.id)
+      })
+    }
+  }
+
+  if (!desiredNovelIds.size) return
 
   const orderedNovelIds = Array.from(groupedByNovel.keys()).sort((left, right) => {
     if (left === payload.currentNovelId) return -1
@@ -978,14 +1539,30 @@ export async function syncWorkspacePayloadToKnowledgeStore(payload: {
       novelId,
       branchId
     )
+    const desiredChapterIds = new Set(novelChapters.map((chapter) => chapter.id))
+    const staleChapters = existing.filter((chapter) => !desiredChapterIds.has(chapter.id))
+    const activeJob = queryOne<{ id: string; status: string }>(
+      "SELECT id, status FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = 'extract_chapter_knowledge' AND status IN ('queued', 'running', 'paused') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1",
+      novelId,
+      branchId
+    )
+    if (staleChapters.length) {
+      await withTransaction(async () => {
+        for (const chapter of staleChapters) {
+          execute('DELETE FROM KnowledgeChapter WHERE id = ?', chapter.id)
+        }
+      })
+
+      if (activeJob?.id) {
+        removePendingChaptersFromKnowledgeJob(
+          activeJob.id,
+          staleChapters.map((chapter) => chapter.id)
+        )
+      }
+    }
     const existingById = new Map(existing.map((item) => [item.id, item]))
     const existingSnapshotCount = queryOne<{ count: number }>(
       'SELECT COUNT(*) as count FROM ChapterSnapshot WHERE novelId = ? AND branchId = ?',
-      novelId,
-      branchId
-    )?.count ?? 0
-    const activeJobCount = queryOne<{ count: number }>(
-      "SELECT COUNT(*) as count FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND status IN ('queued', 'running')",
       novelId,
       branchId
     )?.count ?? 0
@@ -1059,51 +1636,21 @@ export async function syncWorkspacePayloadToKnowledgeStore(payload: {
       firstChangedChapterNo = firstChangedChapterNo === null ? chapterNo : Math.min(firstChangedChapterNo, chapterNo)
     }
 
-    if (refreshedSpans.length) {
+    if (staleChapters.length) {
+      await rebuildBranchFts(novelId, branchId)
+    } else if (refreshedSpans.length) {
       await replaceChapterFts(refreshedSpans)
     }
 
-    if (shouldBootstrapKnowledge) {
-      if (activeJobCount === 0) {
-        await rebuildKnowledgeForNovel({ novelId, branchId })
+    if (shouldBootstrapKnowledge || staleChapters.length || firstChangedChapterNo !== null) {
+      if (activeJob?.status === 'paused') {
+        continue
       }
-      continue
-    }
 
-    if (firstChangedChapterNo !== null) {
-      execute(
-        `
-          UPDATE ChapterSnapshot
-          SET status = 'stale', updatedAt = CURRENT_TIMESTAMP
-          WHERE novelId = ? AND branchId = ? AND chapterNo >= ?
-        `,
-        novelId,
-        branchId,
-        firstChangedChapterNo
-      )
-      execute(
-        `
-          UPDATE KnowledgeChapter
-          SET isDirty = 1,
-              dirtyReason = ?,
-              knowledgeStatus = 'stale',
-              updatedAt = CURRENT_TIMESTAMP
-          WHERE novelId = ? AND branchId = ? AND chapterNo >= ?
-        `,
-        `Workspace changed from chapter ${firstChangedChapterNo}`,
-        novelId,
-        branchId,
-        firstChangedChapterNo
-      )
-      if (activeJobCount === 0) {
-        await enqueueKnowledgeJob({
-          novelId,
-          branchId,
-          jobType: 'rebuild_from_chapter',
-          currentStep: `等待从第 ${firstChangedChapterNo} 章重建`,
-          payload: { fromChapterNo: firstChangedChapterNo },
-        })
+      if (activeJob?.id) {
+        await waitForKnowledgeJobCompletion(activeJob.id)
       }
+      await rebuildKnowledgeForNovel({ novelId, branchId })
     }
   }
 }

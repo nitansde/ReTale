@@ -51,6 +51,24 @@ type KnowledgeProjectionPayload = Pick<
   'localOutlines' | 'localCharacters' | 'localCharacterRelations' | 'localWorldEntries' | 'localTimelineEvents'
 >
 
+type KnowledgeRebuildStatus = {
+  jobId: string
+  novelId: string
+  status: string
+  progress: number
+  currentStep: string | null
+  createdAt: string
+  updatedAt: string
+  etaMinutes: number | null
+}
+
+type KnowledgeActionOutcome = 'completed' | 'paused' | 'aborted' | 'deleted' | 'idle'
+
+type KnowledgeProjectionResult = KnowledgeProjectionPayload & {
+  knowledgeRebuildStatus: KnowledgeRebuildStatus | null
+  jobOutcome: KnowledgeActionOutcome | null
+}
+
 function normalizeKnowledgeProjection(data: Partial<KnowledgeProjectionPayload>): KnowledgeProjectionPayload {
   return {
     localOutlines: data.localOutlines ?? [],
@@ -61,32 +79,45 @@ function normalizeKnowledgeProjection(data: Partial<KnowledgeProjectionPayload>)
   }
 }
 
-async function fetchKnowledgeProjection(options?: { novelId?: string; method?: 'GET' | 'POST' }): Promise<KnowledgeProjectionPayload> {
+function normalizeKnowledgeProjectionResult(data: Partial<KnowledgeProjectionResult>): KnowledgeProjectionResult {
+  return {
+    ...normalizeKnowledgeProjection(data),
+    knowledgeRebuildStatus: data.knowledgeRebuildStatus ?? null,
+    jobOutcome: data.jobOutcome ?? null,
+  }
+}
+
+async function fetchKnowledgeProjection(options?: {
+  novelId?: string
+  method?: 'GET' | 'POST'
+  action?: 'rebuild' | 'pause' | 'abort' | 'delete-knowledge'
+}): Promise<KnowledgeProjectionResult> {
   const novelId = options?.novelId
   const method = options?.method ?? 'GET'
+  const action = options?.action ?? 'rebuild'
 
   if (method === 'POST') {
     const response = await fetch('/api/knowledge-view', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ novelId }),
+      body: JSON.stringify({ novelId, action }),
     })
-    const data = (await response.json()) as Partial<KnowledgeProjectionPayload> & { ok?: boolean; error?: string }
+    const data = (await response.json()) as Partial<KnowledgeProjectionResult> & { ok?: boolean; error?: string }
     if (!response.ok || !data.ok) {
-      throw new Error(data.error || 'Failed to rebuild knowledge projection')
+      throw new Error(data.error || 'Failed to update knowledge projection')
     }
 
-    return normalizeKnowledgeProjection(data)
+    return normalizeKnowledgeProjectionResult(data)
   }
 
   const search = novelId ? `?novelId=${encodeURIComponent(novelId)}` : ''
   const response = await fetch(`/api/knowledge-view${search}`, { cache: 'no-store' })
-  const data = (await response.json()) as Partial<KnowledgeProjectionPayload> & { ok?: boolean; error?: string }
+  const data = (await response.json()) as Partial<KnowledgeProjectionResult> & { ok?: boolean; error?: string }
   if (!response.ok || !data.ok) {
     throw new Error(data.error || 'Failed to load knowledge projection')
   }
 
-  return normalizeKnowledgeProjection(data)
+  return normalizeKnowledgeProjectionResult(data)
 }
 
 function mergeKnowledgeProjection(state: PersistedNovelState, projection: KnowledgeProjectionPayload, novelId?: string): KnowledgeProjectionPayload {
@@ -276,7 +307,10 @@ type NovelStore = PersistedNovelState & {
   deleteTimelineEvent: (id: string) => void
   deleteChapter: (chapterId: string) => void
   deleteNovel: (novelId: string) => void
-  rebuildStoryKnowledge: (novelId?: string) => Promise<void>
+  rebuildStoryKnowledge: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
+  pauseStoryKnowledgeRebuild: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
+  abortStoryKnowledgeRebuild: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
+  deleteStoryKnowledgeGraph: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   refreshKnowledgeProjection: (novelId?: string) => Promise<void>
 
   setAISettingsField: (field: keyof AISettings, value: string | boolean) => void
@@ -588,29 +622,70 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     const state = get()
     const targetNovelId = novelId ?? state.currentNovelId
     const chaptersForNovel = state.localChapters.filter((chapter) => chapter.novelId === targetNovelId && !chapter.parentChapterId)
-    if (!targetNovelId || !chaptersForNovel.length) return
+    if (!targetNovelId || !chaptersForNovel.length) return null
 
-    const projection = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST' })
+    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST' })
+    const projection = normalizeKnowledgeProjection(result)
 
     set((current) => ({
       ...mergeKnowledgeProjection(current, projection, targetNovelId),
-      trajectories: [
-        {
-          id: uid('traj'),
-          chapterId: chaptersForNovel[0].id,
-          type: 'note',
-          title: '重建知识视图',
-          detail: `已基于本地知识库重建《${chaptersForNovel[0].title}》所在小说的人物、关系、设定与时间线视图。`,
-          createdAt: formatNowLabel(),
-        },
-        ...current.trajectories,
-      ],
+      trajectories: result.jobOutcome === 'completed'
+        ? [
+            {
+              id: uid('traj'),
+              chapterId: chaptersForNovel[0].id,
+              type: 'note',
+              title: '重建知识视图',
+              detail: `已基于本地知识库重建《${chaptersForNovel[0].title}》所在小说的人物、关系、设定与时间线视图。`,
+              createdAt: formatNowLabel(),
+            },
+            ...current.trajectories,
+          ]
+        : current.trajectories,
     }))
+
+    return result
+  },
+  pauseStoryKnowledgeRebuild: async (novelId) => {
+    const state = get()
+    const targetNovelId = novelId ?? state.currentNovelId
+    if (!targetNovelId) return null
+
+    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'pause' })
+    const projection = normalizeKnowledgeProjection(result)
+    set((current) => ({
+      ...mergeKnowledgeProjection(current, projection, targetNovelId),
+    }))
+    return result
+  },
+  abortStoryKnowledgeRebuild: async (novelId) => {
+    const state = get()
+    const targetNovelId = novelId ?? state.currentNovelId
+    if (!targetNovelId) return null
+
+    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'abort' })
+    const projection = normalizeKnowledgeProjection(result)
+    set((current) => ({
+      ...mergeKnowledgeProjection(current, projection, targetNovelId),
+    }))
+    return result
+  },
+  deleteStoryKnowledgeGraph: async (novelId) => {
+    const state = get()
+    const targetNovelId = novelId ?? state.currentNovelId
+    if (!targetNovelId) return null
+
+    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-knowledge' })
+    const projection = normalizeKnowledgeProjection(result)
+    set((current) => ({
+      ...mergeKnowledgeProjection(current, projection, targetNovelId),
+    }))
+    return result
   },
   refreshKnowledgeProjection: async (novelId) => {
-    const projection = await fetchKnowledgeProjection({ novelId, method: 'GET' })
+    const result = await fetchKnowledgeProjection({ novelId, method: 'GET' })
     set((current) => ({
-      ...mergeKnowledgeProjection(current, projection, novelId),
+      ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), novelId),
     }))
   },
   setAISettingsField: (field, value) =>
@@ -777,7 +852,10 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     return { currentChapterId: nextChapter.id, currentTab: 'editor', localChapters: [...state.localChapters, nextChapter] }
   }),
   exportWorkspace: () => JSON.stringify(serializeState(get()), null, 2),
-  importWorkspace: (payload) => set((state) => ({ ...state, ...payload, localNovels: payload.localNovels ?? state.localNovels })),
+  importWorkspace: (payload) => set((state) => normalizeWorkspaceState({
+    ...serializeState(state),
+    ...payload,
+  })),
   resetWorkspace: () => set({ ...initialState }),
   loadFromBackend: async () => {
     const [workspaceResponse, aiResponse] = await Promise.all([
@@ -790,7 +868,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     const normalizedWorkspace = normalizeWorkspaceState(workspace)
     set({
       ...normalizedWorkspace,
-      ...projection,
+      ...normalizeKnowledgeProjection(projection),
       aiSettings,
       isHydrated: true,
       backendLoaded: true,
@@ -807,7 +885,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       })
       const projection = await fetchKnowledgeProjection()
       set(() => ({
-        ...projection,
+        ...normalizeKnowledgeProjection(projection),
       }))
     } finally {
       set({ isSaving: false })

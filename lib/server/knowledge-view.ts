@@ -1,5 +1,11 @@
 import type { Character, CharacterRelation, OutlineItem, TimelineEvent, WorldEntry, WorldEntryType } from '@/lib/types'
-import { rebuildKnowledgeForNovel } from '@/lib/server/knowledge-rebuild'
+import {
+  abortKnowledgeRebuildForNovel,
+  deleteKnowledgeGraphForNovel,
+  type KnowledgeRebuildJobOutcome,
+  pauseKnowledgeRebuildForNovel,
+  rebuildKnowledgeForNovel,
+} from '@/lib/server/knowledge-rebuild'
 import { getMainBranchId } from '@/lib/server/knowledge-store'
 import { queryAll } from '@/lib/server/sqlite'
 
@@ -24,6 +30,12 @@ export type KnowledgeRebuildStatus = {
 
 export type KnowledgeViewPayload = KnowledgeProjectionPayload & {
   knowledgeRebuildStatus: KnowledgeRebuildStatus | null
+}
+
+export type KnowledgeViewActionOutcome = KnowledgeRebuildJobOutcome | 'deleted' | 'idle'
+
+export type KnowledgeViewActionPayload = KnowledgeViewPayload & {
+  jobOutcome: KnowledgeViewActionOutcome
 }
 
 function createEmptyProjection(): KnowledgeProjectionPayload {
@@ -68,7 +80,7 @@ function getKnowledgeRebuildStatus(novelIds?: string[]): KnowledgeRebuildStatus 
     `
       SELECT id as jobId, novelId, status, progress, currentStep, createdAt, updatedAt
       FROM KnowledgeJob
-      WHERE novelId = ? AND jobType = 'extract_chapter_knowledge' AND status IN ('queued', 'running')
+      WHERE novelId = ? AND jobType = 'extract_chapter_knowledge' AND status IN ('queued', 'running', 'paused')
       ORDER BY updatedAt DESC, createdAt DESC
       LIMIT 1
     `,
@@ -81,7 +93,7 @@ function getKnowledgeRebuildStatus(novelIds?: string[]): KnowledgeRebuildStatus 
 
   return {
     ...status,
-    etaMinutes: estimateRebuildEtaMinutes(status.progress, status.createdAt),
+    etaMinutes: status.status === 'paused' ? null : estimateRebuildEtaMinutes(status.progress, status.createdAt),
   }
 }
 
@@ -309,18 +321,82 @@ export async function buildKnowledgeProjection(novelIds?: string[]): Promise<Kno
   }
 }
 
-export async function rebuildAuthoritativeKnowledgeView(novelId: string): Promise<KnowledgeViewPayload> {
+export async function rebuildAuthoritativeKnowledgeView(novelId: string): Promise<KnowledgeViewActionPayload> {
   if (!novelId.trim()) {
     return {
       ...createEmptyProjection(),
       knowledgeRebuildStatus: null,
+      jobOutcome: 'idle',
     }
   }
 
-  await rebuildKnowledgeForNovel({
+  const rebuildResult = await rebuildKnowledgeForNovel({
     novelId,
     branchId: getMainBranchId(novelId),
   })
 
-  return buildKnowledgeProjection([novelId])
+  return {
+    ...(await buildKnowledgeProjection([novelId])),
+    jobOutcome: rebuildResult.outcome,
+  }
+}
+
+export async function pauseAuthoritativeKnowledgeRebuild(novelId: string): Promise<KnowledgeViewActionPayload> {
+  if (!novelId.trim()) {
+    return {
+      ...createEmptyProjection(),
+      knowledgeRebuildStatus: null,
+      jobOutcome: 'idle',
+    }
+  }
+
+  const jobOutcome = await pauseKnowledgeRebuildForNovel({
+    novelId,
+    branchId: getMainBranchId(novelId),
+  })
+
+  return {
+    ...(await buildKnowledgeProjection([novelId])),
+    jobOutcome,
+  }
+}
+
+export async function abortAuthoritativeKnowledgeRebuild(novelId: string): Promise<KnowledgeViewActionPayload> {
+  if (!novelId.trim()) {
+    return {
+      ...createEmptyProjection(),
+      knowledgeRebuildStatus: null,
+      jobOutcome: 'idle',
+    }
+  }
+
+  const jobOutcome = await abortKnowledgeRebuildForNovel({
+    novelId,
+    branchId: getMainBranchId(novelId),
+  })
+
+  return {
+    ...(await buildKnowledgeProjection([novelId])),
+    jobOutcome,
+  }
+}
+
+export async function deleteAuthoritativeKnowledgeGraph(novelId: string): Promise<KnowledgeViewActionPayload> {
+  if (!novelId.trim()) {
+    return {
+      ...createEmptyProjection(),
+      knowledgeRebuildStatus: null,
+      jobOutcome: 'idle',
+    }
+  }
+
+  const jobOutcome = await deleteKnowledgeGraphForNovel({
+    novelId,
+    branchId: getMainBranchId(novelId),
+  })
+
+  return {
+    ...(await buildKnowledgeProjection([novelId])),
+    jobOutcome,
+  }
 }
