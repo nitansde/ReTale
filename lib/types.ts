@@ -183,8 +183,11 @@ export type RewriteSelection = {
 
 export type AISettings = {
   rewriteProvider?: 'openai-compatible' | 'ollama'
+  knowledgeProvider?: 'openai-compatible' | 'ollama'
   baseUrl: string
   apiKey: string
+  apiKeyConfigured?: boolean
+  apiKeyMasked?: string
   model: string
   configured?: boolean
   ollamaBaseUrl?: string
