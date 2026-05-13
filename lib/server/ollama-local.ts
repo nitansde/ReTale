@@ -25,6 +25,14 @@ type OllamaChatResponse = {
   }
 }
 
+type OllamaChatStreamChunk = {
+  message?: {
+    content?: string
+  }
+  done?: boolean
+  error?: string
+}
+
 type OllamaConfig = {
   baseUrl: string
   model: string | null
@@ -39,6 +47,8 @@ export type OllamaExtractionResult = {
   model?: string
   error?: string
 }
+
+export type KnowledgeExtractionPromptMode = 'full' | 'focused'
 
 type OllamaRewriteRequest = {
   sourceText: string
@@ -82,7 +92,8 @@ export type OllamaModelOption = {
 const DEFAULT_BASE_URL = 'http://127.0.0.1:11434'
 const DEFAULT_TIMEOUT_MS = 600000
 const EXTRACTION_TOP_LEVEL_ARRAY_KEYS = ['relations', 'events', 'worldbuilding', 'open_threads'] as const
-const EXTRACTION_SCHEMA = {
+const EXTRACTION_MAX_PROMPT_LINES = 60
+export const EXTRACTION_SCHEMA = {
   type: 'object',
   properties: {
     chapter_no: { type: 'integer' },
@@ -239,7 +250,11 @@ function normalizeEvidence(raw: unknown): KnowledgeEvidence[] {
     .map((item) => {
       if (!item || typeof item !== 'object') return null
       const record = item as Record<string, unknown>
-      const quote = typeof record.quote === 'string' ? record.quote.trim() : ''
+      const quote = typeof record.quote === 'string'
+        ? record.quote.trim()
+        : typeof record.text === 'string'
+          ? record.text.trim()
+          : ''
       const lineStart = Number(record.line_start ?? record.lineStart)
       const lineEnd = Number(record.line_end ?? record.lineEnd ?? lineStart)
       if (!quote || !Number.isFinite(lineStart) || !Number.isFinite(lineEnd)) return null
@@ -252,14 +267,326 @@ function normalizeEvidence(raw: unknown): KnowledgeEvidence[] {
     .filter((item): item is KnowledgeEvidence => Boolean(item))
 }
 
-function normalizeExtraction(raw: unknown, chapterNo: number): ChapterKnowledgeExtraction {
-  const record = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
-  const openThreadsRaw = record.open_threads ?? record.openThreads
+function toRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function stringifyLooseValue(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => stringifyLooseValue(item))
+      .filter(Boolean)
+      .join('、')
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => {
+        const normalized = stringifyLooseValue(item)
+        return normalized ? `${key}：${normalized}` : ''
+      })
+      .filter(Boolean)
+    return entries.join('；')
+  }
+  return ''
+}
+
+function isLikelyCharacterCategory(category: string) {
+  const normalized = category.trim().toLowerCase()
+  return normalized.includes('人物')
+    || normalized.includes('角色')
+    || normalized.includes('主角')
+    || normalized.includes('npc')
+}
+
+function normalizeLooseWorldCategory(category: string) {
+  if (category.includes('地点') || category.includes('地理')) return 'geography'
+  if (category.includes('组织') || category.includes('公会') || category.includes('势力')) return 'politics'
+  if (category.includes('规则') || category.includes('职业') || category.includes('能力')) return 'rule'
+  if (category.includes('物品') || category.includes('装备') || category.includes('卡牌')) return 'item'
+  if (category.includes('历史') || category.includes('时代')) return 'history'
+  return 'concept'
+}
+
+function buildLooseEventName(text: string) {
+  const compact = text.replace(/\s+/g, ' ').trim()
+  const head = compact.split(/[，。；：,.!?！？]/)[0]?.trim() ?? ''
+  const base = head || compact
+  if (base.length <= 24) return base
+  return `${base.slice(0, 24).trim()}…`
+}
+
+function hasPrimaryExtractionCollections(record: Record<string, unknown>) {
+  return Array.isArray(record.characters)
+    || Array.isArray(record.entities)
+    || Array.isArray(record.relations)
+    || Array.isArray(record.events)
+    || Array.isArray(record.worldbuilding)
+    || Array.isArray(record.open_threads)
+    || Array.isArray(record.openThreads)
+}
+
+function hasNarrativeProfileFields(record: Record<string, unknown>) {
+  return record.main_character !== undefined
+    || record.setting !== undefined
+    || record.key_locations !== undefined
+    || record.key_items !== undefined
+    || record.world_status !== undefined
+    || record.plot_summary !== undefined
+    || record.chapter_content !== undefined
+}
+
+function normalizeNarrativeProfileExtraction(record: Record<string, unknown>, chapterNo: number): ChapterKnowledgeExtraction {
+  const summary = typeof record.plot_summary === 'string'
+    ? record.plot_summary.trim()
+    : typeof record.chapter_content === 'string'
+      ? record.chapter_content.trim()
+      : typeof record.summary === 'string'
+        ? record.summary.trim()
+        : ''
+  const topLevelEvidence = normalizeEvidence(record.evidence)
+  const characters: ChapterKnowledgeExtraction['characters'] = []
+  const worldbuilding: ChapterKnowledgeExtraction['worldbuilding'] = []
+  const events: ChapterKnowledgeExtraction['events'] = []
+
+  const mainCharacter = toRecord(record.main_character)
+  if (mainCharacter) {
+    const name = typeof mainCharacter.name === 'string' ? mainCharacter.name.trim() : ''
+    if (name) {
+      characters.push({
+        name,
+        aliases: [],
+        status: '活跃',
+        descriptionDelta: stringifyLooseValue({
+          role: mainCharacter.role,
+          guild_name: mainCharacter.guild_name,
+          title: mainCharacter.title,
+          identity: mainCharacter.identity,
+          special_ability: mainCharacter.special_ability,
+          achievements: mainCharacter.achievements,
+          appearance: mainCharacter.appearance,
+          personality_traits: mainCharacter.personality_traits,
+        }),
+        evidence: topLevelEvidence,
+      })
+    }
+  }
+
+  const setting = toRecord(record.setting)
+  if (setting) {
+    const worldName = typeof setting.world_name === 'string' ? setting.world_name.trim() : ''
+    const definition = stringifyLooseValue({
+      world_type: setting.world_type,
+      era_description: setting.era_description,
+      current_chapter: setting.current_chapter,
+      current_section: setting.current_section,
+    })
+    if (worldName && definition) {
+      worldbuilding.push({
+        term: worldName,
+        category: 'history',
+        definition,
+        evidence: topLevelEvidence,
+      })
+    }
+  }
+
+  const worldStatus = toRecord(record.world_status)
+  if (worldStatus) {
+    const definition = stringifyLooseValue(worldStatus)
+    if (definition) {
+      worldbuilding.push({
+        term: '世界状态',
+        category: 'history',
+        definition,
+        evidence: topLevelEvidence,
+      })
+    }
+  }
+
+  if (Array.isArray(record.key_locations)) {
+    for (const item of record.key_locations) {
+      const term = stringifyLooseValue(item)
+      if (!term) continue
+      worldbuilding.push({
+        term,
+        category: 'geography',
+        definition: summary || '章节关键地点',
+        evidence: topLevelEvidence,
+      })
+    }
+  }
+
+  if (Array.isArray(record.key_items)) {
+    for (const item of record.key_items) {
+      const term = stringifyLooseValue(item)
+      if (!term) continue
+      worldbuilding.push({
+        term,
+        category: 'item',
+        definition: summary || '章节关键物品',
+        evidence: topLevelEvidence,
+      })
+    }
+  }
+
+  if (summary) {
+    events.push({
+      name: buildLooseEventName(summary),
+      summary,
+      eventType: 'story',
+      participants: characters.map((character) => ({ name: character.name, role: '主角' })),
+      consequences: '',
+      importance: 3,
+      evidence: topLevelEvidence,
+    })
+  }
+
   return {
     chapterNo,
-    summary: typeof record.summary === 'string' ? record.summary.trim() : '',
-    characters: Array.isArray(record.characters)
-      ? record.characters
+    summary,
+    characters,
+    relations: [],
+    events,
+    worldbuilding,
+    openThreads: [],
+  }
+}
+
+function normalizeLooseArrayExtraction(items: unknown[], chapterNo: number): ChapterKnowledgeExtraction {
+  const summaryParts: string[] = []
+  const characters: ChapterKnowledgeExtraction['characters'] = []
+  const worldbuilding: ChapterKnowledgeExtraction['worldbuilding'] = []
+  const events: ChapterKnowledgeExtraction['events'] = []
+
+  for (const item of items) {
+    const row = toRecord(item)
+    if (!row) continue
+
+    const name = typeof row.name === 'string' ? row.name.trim() : ''
+    const category = typeof row.entity === 'string'
+      ? row.entity.trim()
+      : typeof row.type === 'string'
+        ? row.type.trim()
+        : typeof row.category === 'string'
+          ? row.category.trim()
+          : ''
+    const evidence = normalizeEvidence(row.evidence)
+    const description = typeof row.description === 'string'
+      ? row.description.trim()
+      : typeof row.summary === 'string'
+        ? row.summary.trim()
+        : typeof row.content === 'string'
+          ? row.content.trim()
+          : stringifyLooseValue(row.attributes)
+
+    if (description) {
+      summaryParts.push(description)
+    }
+
+    if (!name) {
+      if (description) {
+        events.push({
+          name: buildLooseEventName(description),
+          summary: description,
+          eventType: 'story',
+          participants: [],
+          consequences: '',
+          importance: 3,
+          evidence,
+        })
+      }
+      continue
+    }
+
+    if (isLikelyCharacterCategory(category)) {
+      characters.push({
+        name,
+        aliases: [],
+        status: typeof row.status === 'string' ? row.status.trim() : '活跃',
+        descriptionDelta: description,
+        evidence,
+      })
+      continue
+    }
+
+    worldbuilding.push({
+      term: name,
+      category: normalizeLooseWorldCategory(category),
+      definition: description,
+      evidence,
+    })
+  }
+
+  return {
+    chapterNo,
+    summary: summaryParts.join(' ').trim(),
+    characters,
+    relations: [],
+    events,
+    worldbuilding,
+    openThreads: [],
+  }
+}
+
+export function normalizeKnowledgeExtraction(raw: unknown, chapterNo: number): ChapterKnowledgeExtraction {
+  if (Array.isArray(raw)) {
+    const records = raw
+      .map((item) => toRecord(item))
+      .filter((item): item is Record<string, unknown> => Boolean(item))
+
+    const structuredRoot = records
+      .find((item) => item && (
+        Array.isArray(item.characters)
+        || Array.isArray(item.entities)
+        || Array.isArray(item.relations)
+        || Array.isArray(item.events)
+        || Array.isArray(item.worldbuilding)
+        || Array.isArray(item.open_threads)
+        || Array.isArray(item.openThreads)
+      ))
+
+    if (structuredRoot) {
+      return normalizeKnowledgeExtraction(structuredRoot, chapterNo)
+    }
+
+    const narrativeRoot = records.find((item) => hasNarrativeProfileFields(item))
+    if (narrativeRoot) {
+      return normalizeNarrativeProfileExtraction(narrativeRoot, chapterNo)
+    }
+
+    return normalizeLooseArrayExtraction(raw, chapterNo)
+  }
+
+  const record = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+  if (!hasPrimaryExtractionCollections(record)) {
+    if (hasNarrativeProfileFields(record)) {
+      return normalizeNarrativeProfileExtraction(record, chapterNo)
+    }
+  }
+
+  const openThreadsRaw = record.open_threads ?? record.openThreads
+  const charactersRaw = Array.isArray(record.characters)
+    ? record.characters
+    : Array.isArray(record.entities)
+      ? record.entities
+      : []
+  return {
+    chapterNo,
+    summary: typeof record.summary === 'string'
+      ? record.summary.trim()
+      : typeof record.content_summary === 'string'
+        ? record.content_summary.trim()
+        : typeof record.contentSummary === 'string'
+          ? record.contentSummary.trim()
+          : typeof record.content === 'string'
+            ? record.content.trim()
+          : '',
+    characters: Array.isArray(charactersRaw)
+      ? charactersRaw
           .map((item) => {
             if (!item || typeof item !== 'object') return null
             const row = item as Record<string, unknown>
@@ -273,6 +600,8 @@ function normalizeExtraction(raw: unknown, chapterNo: number): ChapterKnowledgeE
                 ? row.description_delta.trim()
                 : typeof row.descriptionDelta === 'string'
                   ? row.descriptionDelta.trim()
+                  : typeof row.description === 'string'
+                    ? row.description.trim()
                   : '',
               evidence: normalizeEvidence(row.evidence),
             }
@@ -531,40 +860,202 @@ async function getOllamaRewriteConfig(): Promise<OllamaConfig> {
   return resolveOllamaTextConfig(stored.rewriteModel, 'No local Ollama rewrite model found')
 }
 
-function buildPrompt(chapterTitle: string, chapterNo: number, rawText: string) {
-  const numberedLines = rawText
+export function buildKnowledgeExtractionPrompt(
+  chapterTitle: string,
+  chapterNo: number,
+  rawText: string,
+  mode: KnowledgeExtractionPromptMode = 'full'
+) {
+  const sourceLines = rawText
     .replace(/\r\n?/g, '\n')
     .split('\n')
+  const truncated = sourceLines.length > EXTRACTION_MAX_PROMPT_LINES
+  const excerptLines = truncated ? sourceLines.slice(0, EXTRACTION_MAX_PROMPT_LINES) : sourceLines
+  const numberedLines = excerptLines
     .map((line, index) => `${index + 1}: ${line}`)
     .join('\n')
 
+  if (mode === 'focused') {
+    return [
+      `任务：只基于第 ${chapterNo} 章内容，补充抽取人物关系、世界设定和未解决线索。`,
+      '只返回 1 个 JSON 对象。不要返回顶层数组。不要解释。不要输出 markdown。',
+      '固定字段只能是：chapter_no、summary、characters、relations、events、worldbuilding、open_threads。',
+      '本轮重点只抽取 relations、worldbuilding、open_threads。summary 可以简短；characters 和 events 若无必要一律返回空数组。',
+      '结果必须精确、精简、可验证。不要把泛泛背景写成设定，不要把弱暗示写成关系，不要编造。',
+      'evidence 字段固定使用 quote、line_start、line_end。不要使用 text、content 或其他字段名。',
+      truncated ? `本次仅提供前 ${EXTRACTION_MAX_PROMPT_LINES} 行节选。不要猜测未提供的后续内容。` : '本次提供完整章节内容。',
+      '最小示例：',
+      '{"chapter_no":1,"summary":"","characters":[],"relations":[{"source":"甲","target":"乙","type":"同伴","polarity":"positive","strength":3,"change":"合作开始","valid_from_chapter":1,"evidence":[{"quote":"甲与乙决定同行。","line_start":3,"line_end":3}]}],"events":[],"worldbuilding":[{"term":"黑塔","category":"organization","definition":"一座负责训练学徒的组织。","evidence":[{"quote":"黑塔每年招收学徒。","line_start":8,"line_end":8}]}],"open_threads":[{"name":"失踪的导师","description":"导师去向未明，后续仍需解释。","evidence":[{"quote":"导师至今没有回来。","line_start":12,"line_end":12}]}]}',
+      `章节标题：${chapterTitle}`,
+      '章节正文（带行号）：',
+      numberedLines,
+    ].join('\n\n')
+  }
+
   return [
-    `你是本地小说知识抽取器。请只基于第 ${chapterNo} 章内容抽取结构化知识。`,
-    '只返回 JSON。不要解释。不要输出 markdown。',
-    '如果不确定，就返回空数组，不要编造。',
-    '所有 evidence 都必须引用原文，并带上 line_start 与 line_end。',
+    `任务：只基于第 ${chapterNo} 章内容抽取结构化知识。`,
+    '只返回 1 个 JSON 对象。不要返回顶层数组。不要解释。不要输出 markdown。',
+    '固定字段只能是：chapter_no、summary、characters、relations、events、worldbuilding、open_threads。',
+    '如果某一类无法确定，就返回空数组，不要编造。',
+    'evidence 字段固定使用 quote、line_start、line_end。不要使用 text、content 或其他字段名。',
+    truncated ? `本次仅提供前 ${EXTRACTION_MAX_PROMPT_LINES} 行节选。不要猜测未提供的后续内容。` : '本次提供完整章节内容。',
+    '最小示例：',
+    '{"chapter_no":1,"summary":"一句话总结","characters":[{"name":"林澄","aliases":[],"status":"活跃","description_delta":"主角","evidence":[{"quote":"林澄开口说话。","line_start":1,"line_end":1}]}],"relations":[],"events":[],"worldbuilding":[],"open_threads":[]}',
     `章节标题：${chapterTitle}`,
-    '输出 JSON 结构：',
-    JSON.stringify(EXTRACTION_SCHEMA),
     '章节正文（带行号）：',
     numberedLines,
   ].join('\n\n')
 }
 
-function extractJsonCandidate(content: string) {
+function extractFirstJsonCandidate(content: string) {
   const trimmed = content.trim()
   const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
   if (fencedMatch?.[1]?.trim()) {
-    return fencedMatch[1].trim()
+    return extractFirstJsonCandidate(fencedMatch[1].trim())
   }
 
   const firstBrace = trimmed.indexOf('{')
-  const lastBrace = trimmed.lastIndexOf('}')
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    return trimmed.slice(firstBrace, lastBrace + 1).trim()
+  const firstBracket = trimmed.indexOf('[')
+  const startIndexes = [firstBrace, firstBracket].filter((index) => index >= 0)
+  const startIndex = startIndexes.length ? Math.min(...startIndexes) : -1
+
+  if (startIndex >= 0) {
+    const stack: Array<'{' | '['> = []
+    let inString = false
+    let escaped = false
+
+    for (let index = startIndex; index < trimmed.length; index += 1) {
+      const char = trimmed[index]
+
+      if (inString) {
+        if (escaped) {
+          escaped = false
+          continue
+        }
+
+        if (char === '\\') {
+          escaped = true
+          continue
+        }
+
+        if (char === '"') {
+          inString = false
+        }
+        continue
+      }
+
+      if (char === '"') {
+        inString = true
+        continue
+      }
+
+      if (char === '{' || char === '[') {
+        stack.push(char)
+        continue
+      }
+
+      if (char === '}' && stack.at(-1) === '{') {
+        stack.pop()
+      } else if (char === ']' && stack.at(-1) === '[') {
+        stack.pop()
+      }
+
+      if (!stack.length) {
+        return trimmed.slice(startIndex, index + 1).trim()
+      }
+    }
+
+    return trimmed.slice(startIndex).trim()
   }
 
   return trimmed
+}
+
+function collectTopLevelJsonCandidates(content: string) {
+  const candidates: string[] = []
+  const trimmed = content.trim()
+  if (!trimmed) return candidates
+
+  let startIndex = -1
+  const stack: Array<'{' | '['> = []
+  let inString = false
+  let escaped = false
+
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const char = trimmed[index]
+
+    if (inString) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+
+      if (char === '\\') {
+        escaped = true
+        continue
+      }
+
+      if (char === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (char === '"') {
+      inString = true
+      continue
+    }
+
+    if (char === '{' || char === '[') {
+      if (startIndex < 0) {
+        startIndex = index
+      }
+      stack.push(char)
+      continue
+    }
+
+    if (char === '}' || char === ']') {
+      if (!stack.length) {
+        continue
+      }
+
+      const expectedOpen = char === '}' ? '{' : '['
+      if (stack.at(-1) !== expectedOpen) {
+        continue
+      }
+
+      stack.pop()
+      if (!stack.length && startIndex >= 0) {
+        candidates.push(trimmed.slice(startIndex, index + 1).trim())
+        startIndex = -1
+      }
+    }
+  }
+
+  return candidates
+}
+
+function extractJsonCandidates(content: string) {
+  const trimmed = content.trim()
+  if (!trimmed) return [] as string[]
+
+  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const sources = [fencedMatch?.[1]?.trim(), trimmed].filter((value): value is string => Boolean(value))
+  const candidates: string[] = []
+  const seen = new Set<string>()
+
+  for (const source of sources) {
+    const extracted = collectTopLevelJsonCandidates(source)
+    const nextCandidates = extracted.length ? extracted : [extractFirstJsonCandidate(source)]
+    for (const candidate of nextCandidates) {
+      const normalized = candidate.trim()
+      if (!normalized || seen.has(normalized)) continue
+      seen.add(normalized)
+      candidates.push(normalized)
+    }
+  }
+
+  return candidates
 }
 
 function getJsonStructureStack(content: string, limit = content.length) {
@@ -698,20 +1189,63 @@ function repairTopLevelBoundaries(content: string) {
   return repaired
 }
 
-function parseStructuredContent(content: string) {
-  const candidate = extractJsonCandidate(content)
+export function parseKnowledgeExtractionCandidates(content: string) {
+  const candidates = extractJsonCandidates(content)
+  let lastError: unknown = new Error('Failed to parse Ollama JSON')
+  const parsedCandidates: unknown[] = []
+  const seenVariants = new Set<string>()
 
-  try {
-    return JSON.parse(candidate)
-  } catch (initialError) {
+  for (const candidate of candidates) {
     const boundaryRepaired = repairTopLevelBoundaries(candidate)
     const closerRepaired = repairMismatchedClosers(boundaryRepaired)
     const completed = `${closerRepaired}${closeContainers(getJsonStructureStack(closerRepaired))}`
+    const variants = [candidate]
     if (completed !== candidate) {
-      return JSON.parse(completed)
+      variants.push(completed)
     }
-    throw initialError
+
+    for (const variant of variants) {
+      if (seenVariants.has(variant)) continue
+      seenVariants.add(variant)
+
+      try {
+        parsedCandidates.push(JSON.parse(variant))
+      } catch (error) {
+        lastError = error
+      }
+    }
   }
+
+  if (parsedCandidates.length) {
+    return parsedCandidates
+  }
+
+  throw lastError
+}
+
+function parseStructuredContent(content: string) {
+  const [firstCandidate] = parseKnowledgeExtractionCandidates(content)
+  if (firstCandidate === undefined) {
+    throw new Error('Failed to parse Ollama JSON')
+  }
+  return firstCandidate
+}
+
+export function hasUsableKnowledgeExtraction(
+  extraction: ChapterKnowledgeExtraction,
+  mode: KnowledgeExtractionPromptMode = 'full'
+) {
+  if (mode === 'focused') {
+    return extraction.relations.length > 0
+      || extraction.worldbuilding.length > 0
+      || extraction.openThreads.length > 0
+  }
+
+  return extraction.characters.length > 0
+    || extraction.relations.length > 0
+    || extraction.events.length > 0
+    || extraction.worldbuilding.length > 0
+    || extraction.openThreads.length > 0
 }
 
 async function requestStructuredExtraction(params: {
@@ -740,7 +1274,7 @@ async function requestStructuredExtraction(params: {
         messages: [
           {
             role: 'system',
-            content: 'You extract structured chapter knowledge and return valid JSON only.',
+            content: 'Return exactly one valid JSON object for chapter knowledge. Never return a top-level array. Never output markdown or commentary.',
           },
           {
             role: 'user',
@@ -788,16 +1322,15 @@ async function requestStructuredRepair(params: {
         messages: [
           {
             role: 'system',
-            content: 'You repair malformed JSON into valid JSON that matches the provided schema. Do not add commentary or markdown.',
+            content: 'Repair malformed JSON into exactly one valid JSON object that matches the requested chapter-knowledge shape. Never return a top-level array. Do not add commentary or markdown.',
           },
           {
             role: 'user',
             content: [
               '下面是一段本地模型生成的无效 JSON，请只修复 JSON 结构问题。',
+              '请只返回与当前请求格式完全匹配的 JSON 对象。',
               '不要补充原文中不存在的事实，不要输出解释。',
               `解析错误：${params.errorMessage}`,
-              '目标 JSON Schema：',
-              JSON.stringify(EXTRACTION_SCHEMA),
               '无效 JSON：',
               params.invalidContent,
             ].join('\n\n'),
@@ -822,6 +1355,7 @@ export async function extractChapterKnowledgeWithOllama(params: {
   chapterTitle: string
   chapterNo: number
   rawText: string
+  mode?: KnowledgeExtractionPromptMode
 }): Promise<OllamaExtractionResult> {
   const config = await getOllamaExtractionConfig()
   if (!config.enabled || !config.model) {
@@ -831,7 +1365,8 @@ export async function extractChapterKnowledgeWithOllama(params: {
     }
   }
 
-  const prompt = buildPrompt(params.chapterTitle, params.chapterNo, params.rawText)
+  const mode = params.mode ?? 'full'
+  const prompt = buildKnowledgeExtractionPrompt(params.chapterTitle, params.chapterNo, params.rawText, mode)
   let lastError = 'Failed to parse Ollama JSON'
   let lastContent = ''
 
@@ -859,12 +1394,30 @@ export async function extractChapterKnowledgeWithOllama(params: {
         continue
       }
 
-      const parsed = parseStructuredContent(content)
-      return {
-        enabled: true,
-        model: config.model,
-        extraction: normalizeExtraction(parsed, params.chapterNo),
+      const parsedCandidates = parseKnowledgeExtractionCandidates(content)
+      for (const parsed of parsedCandidates) {
+        const extraction = normalizeKnowledgeExtraction(parsed, params.chapterNo)
+        if (hasUsableKnowledgeExtraction(extraction, mode)) {
+          return {
+            enabled: true,
+            model: config.model,
+            extraction,
+          }
+        }
       }
+
+      lastError = 'Ollama returned parseable JSON but no usable knowledge'
+      console.error('Ollama extraction returned no usable knowledge', {
+        chapterTitle: params.chapterTitle,
+        chapterNo: params.chapterNo,
+        model: config.model,
+        rawOutput: content,
+      })
+      if (attempt === 0) {
+        continue
+      }
+
+      break
     } catch (error) {
       lastError = error instanceof Error ? error.message : 'Ollama extraction failed'
       if (lastContent) {
@@ -899,6 +1452,26 @@ function chunkTextStream(text: string) {
   })
 }
 
+function buildOllamaChatRequestBody(params: {
+  model: string
+  messages: Array<{ role: 'system' | 'user'; content: string }>
+  temperature?: number
+  format?: unknown
+  stream: boolean
+}) {
+  return {
+    model: params.model,
+    stream: params.stream,
+    think: false,
+    keep_alive: '5m',
+    format: params.format,
+    options: {
+      temperature: params.temperature ?? 0.7,
+    },
+    messages: params.messages,
+  }
+}
+
 async function requestOllamaChat(params: {
   baseUrl: string
   model: string
@@ -914,17 +1487,7 @@ async function requestOllamaChat(params: {
     const response = await fetch(`${params.baseUrl.replace(/\/$/, '')}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: params.model,
-        stream: false,
-        think: false,
-        keep_alive: '5m',
-        format: params.format,
-        options: {
-          temperature: params.temperature ?? 0.7,
-        },
-        messages: params.messages,
-      }),
+      body: JSON.stringify(buildOllamaChatRequestBody({ ...params, stream: false })),
       signal: controller.signal,
     })
 
@@ -934,6 +1497,39 @@ async function requestOllamaChat(params: {
     }
 
     return await response.json() as OllamaChatResponse
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function requestOllamaChatStream(params: {
+  baseUrl: string
+  model: string
+  messages: Array<{ role: 'system' | 'user'; content: string }>
+  timeoutMs: number
+  temperature?: number
+}) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), params.timeoutMs)
+
+  try {
+    const response = await fetch(`${params.baseUrl.replace(/\/$/, '')}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildOllamaChatRequestBody({ ...params, stream: true })),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(`Ollama HTTP ${response.status}: ${text.slice(0, 400)}`)
+    }
+
+    if (!response.body) {
+      throw new Error('No response body returned from Ollama')
+    }
+
+    return response.body
   } finally {
     clearTimeout(timeout)
   }
@@ -1021,10 +1617,10 @@ export async function streamRewriteWithOllama(input: OllamaStreamRewriteRequest)
   }
 
   try {
-    const response = await requestOllamaChat({
+    const upstream = await requestOllamaChatStream({
       baseUrl: config.baseUrl,
       model: config.model,
-      timeoutMs: Math.min(config.timeoutMs, 45000),
+      timeoutMs: config.timeoutMs,
       temperature: input.temperature ?? 0.7,
       messages: [
         { role: 'system', content: input.systemPrompt },
@@ -1032,14 +1628,84 @@ export async function streamRewriteWithOllama(input: OllamaStreamRewriteRequest)
       ],
     })
 
-    const content = response.message?.content?.trim() ?? ''
-    if (!content) {
-      return { enabled: true, error: 'No content returned from model' }
-    }
+    const decoder = new TextDecoder()
+    const encoder = new TextEncoder()
+    const reader = upstream.getReader()
+
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        let buffer = ''
+        let sawContent = false
+        let finished = false
+
+        const flushLine = (line: string) => {
+          const trimmed = line.trim()
+          if (!trimmed) return
+
+          let parsed: OllamaChatStreamChunk
+          try {
+            parsed = JSON.parse(trimmed) as OllamaChatStreamChunk
+          } catch {
+            return
+          }
+
+          if (parsed.error) {
+            controller.error(new Error(parsed.error))
+            finished = true
+            return
+          }
+
+          const content = parsed.message?.content ?? ''
+          if (content) {
+            sawContent = true
+            controller.enqueue(encoder.encode(content))
+          }
+
+          if (parsed.done) {
+            finished = true
+          }
+        }
+
+        try {
+          while (!finished) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop() ?? ''
+
+            for (const line of lines) {
+              flushLine(line)
+              if (finished) break
+            }
+          }
+
+          if (!finished && buffer.trim()) {
+            flushLine(buffer)
+          }
+        } catch (error) {
+          controller.error(error)
+          return
+        } finally {
+          try {
+            await reader.cancel()
+          } catch {
+          }
+        }
+
+        if (!sawContent) {
+          controller.error(new Error('No content returned from model'))
+          return
+        }
+
+        controller.close()
+      },
+    })
 
     return {
       enabled: true,
-      stream: chunkTextStream(content),
+      stream,
     }
   } catch (error) {
     return {
