@@ -35,6 +35,9 @@ type FloatingPosition = {
   left: number
 }
 
+const TOOLBAR_EDGE_PADDING = 12
+const TOOLBAR_OFFSET_Y = 56
+
 type RoleplayTurn = {
   id: string
   role: 'user' | 'assistant'
@@ -95,6 +98,48 @@ type OllamaModelOption = {
   family?: string
   parameterSize?: string
   quantization?: string
+}
+
+type OpenAICompatibleModelOption = {
+  id: string
+  label: string
+}
+
+function WorkspaceStatusState(props: {
+  icon: typeof LoaderCircle
+  title: string
+  description: string
+  ctaLabel?: string
+}) {
+  const Icon = props.icon
+
+  return (
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(129,140,248,0.12),_transparent_30%),#0a0c12] text-zinc-100">
+      <div className="mx-auto flex min-h-screen max-w-[1600px] items-center justify-center px-3 py-8 sm:px-5 lg:px-6">
+        <section className="w-full max-w-2xl rounded-[30px] border border-white/10 bg-[#11141d] p-6 shadow-[0_28px_90px_rgba(0,0,0,0.35)] sm:p-8">
+          <div className="rounded-[24px] border border-white/8 bg-[#0b0d12] p-6 sm:p-7">
+            <div className="mb-5 inline-flex h-14 w-14 items-center justify-center rounded-[20px] border border-white/10 bg-white/[0.04] text-zinc-200">
+              <Icon className={cn('h-6 w-6', props.icon === LoaderCircle && 'animate-spin')} />
+            </div>
+            <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Workspace</p>
+            <h1 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{props.title}</h1>
+            <p className="mt-3 max-w-xl text-sm leading-7 text-zinc-400">{props.description}</p>
+            {props.ctaLabel ? (
+              <div className="mt-6">
+                <Link
+                  href="/library"
+                  className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-zinc-100 transition hover:bg-white/[0.08]"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  {props.ctaLabel}
+                </Link>
+              </div>
+            ) : null}
+          </div>
+        </section>
+      </div>
+    </main>
+  )
 }
 
 const OUTLINE_TYPE_LABELS: Record<OutlineType, string> = {
@@ -250,6 +295,9 @@ export function SelectionNovelStudio() {
   const setAISettingsField = useNovelStore((state) => state.setAISettingsField)
   const saveAISettings = useNovelStore((state) => state.saveAISettings)
   const rebuildStoryKnowledge = useNovelStore((state) => state.rebuildStoryKnowledge)
+  const pauseStoryKnowledgeRebuild = useNovelStore((state) => state.pauseStoryKnowledgeRebuild)
+  const abortStoryKnowledgeRebuild = useNovelStore((state) => state.abortStoryKnowledgeRebuild)
+  const deleteStoryKnowledgeGraph = useNovelStore((state) => state.deleteStoryKnowledgeGraph)
   const refreshKnowledgeProjection = useNovelStore((state) => state.refreshKnowledgeProjection)
   const localCharacters = useNovelStore((state) => state.localCharacters)
   const localCharacterRelations = useNovelStore((state) => state.localCharacterRelations)
@@ -321,10 +369,14 @@ export function SelectionNovelStudio() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [knowledgeRebuilding, setKnowledgeRebuilding] = useState(false)
   const [knowledgeRebuildStatus, setKnowledgeRebuildStatus] = useState<KnowledgeRebuildStatus | null>(null)
+  const [knowledgeActionLoading, setKnowledgeActionLoading] = useState<'pause' | 'abort' | 'delete' | null>(null)
+  const [confirmDeleteKnowledge, setConfirmDeleteKnowledge] = useState(false)
   const [ollamaTextModels, setOllamaTextModels] = useState<OllamaModelOption[]>([])
   const [ollamaEmbeddingModels, setOllamaEmbeddingModels] = useState<OllamaModelOption[]>([])
   const [ollamaModelsLoading, setOllamaModelsLoading] = useState(false)
   const [ollamaModelsError, setOllamaModelsError] = useState('')
+  const [openAICompatibleModels, setOpenAICompatibleModels] = useState<OpenAICompatibleModelOption[]>([])
+  const [openAICompatibleModelsLoading, setOpenAICompatibleModelsLoading] = useState(false)
   const [editState, setEditState] = useState<{
     type: 'char' | 'outline' | 'world' | 'relation' | 'timeline' | null
     id: string | null
@@ -333,19 +385,26 @@ export function SelectionNovelStudio() {
   const knowledgePanelReadOnly = true
 
   const editorRef = useRef<HTMLDivElement | null>(null)
+  const toolbarRef = useRef<HTMLDivElement | null>(null)
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hydratedRef = useRef(false)
   const lastActiveKnowledgeJobIdRef = useRef<string | null>(null)
+  const openAICompatibleModelsRequestRef = useRef(0)
+
+  const showKnowledgeToast = (message: string, duration = 1800) => {
+    setToast(message)
+    window.setTimeout(() => setToast(''), duration)
+  }
 
   useEffect(() => {
     loadFromBackend().catch(() => undefined)
   }, [loadFromBackend])
 
   useEffect(() => {
-    if (backendLoaded && !currentNovelId) {
+    if (backendLoaded && localChapters.length === 0) {
       router.push('/library')
     }
-  }, [backendLoaded, currentNovelId, router])
+  }, [backendLoaded, localChapters.length, router])
 
   useEffect(() => {
     if (!backendLoaded) return
@@ -368,6 +427,8 @@ export function SelectionNovelStudio() {
       lastActiveKnowledgeJobIdRef.current = null
       return
     }
+
+    setConfirmDeleteKnowledge(false)
 
     let cancelled = false
 
@@ -394,9 +455,8 @@ export function SelectionNovelStudio() {
         if (hadActiveJob) {
           lastActiveKnowledgeJobIdRef.current = null
           await refreshKnowledgeProjection(currentNovelId)
-          if (!cancelled) {
-            setToast('知识视图已更新')
-            window.setTimeout(() => setToast(''), 1800)
+          if (!cancelled && !knowledgeRebuilding && !knowledgeActionLoading) {
+            showKnowledgeToast('知识视图已更新')
           }
         }
       } catch {
@@ -412,12 +472,24 @@ export function SelectionNovelStudio() {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [currentNovelId, refreshKnowledgeProjection])
+  }, [currentNovelId, knowledgeActionLoading, knowledgeRebuilding, refreshKnowledgeProjection])
 
   useEffect(() => {
     if (!settingsOpen) return
     void loadOllamaModels(aiSettings?.ollamaBaseUrl)
   }, [settingsOpen])
+
+  useEffect(() => {
+    if (!settingsOpen || (aiSettings?.rewriteProvider ?? 'openai-compatible') !== 'openai-compatible') return
+
+    const timer = window.setTimeout(() => {
+      void loadOpenAICompatibleModels(aiSettings?.baseUrl, aiSettings?.apiKey)
+    }, 250)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [aiSettings?.apiKey, aiSettings?.baseUrl, aiSettings?.rewriteProvider, settingsOpen])
 
   const novelVolumes = useMemo(
     () => localVolumes.filter((volume) => volume.novelId === currentNovelId).slice().sort((a, b) => a.order - b.order),
@@ -432,6 +504,7 @@ export function SelectionNovelStudio() {
     () => localChapters.filter((chapter) => chapter.novelId === currentNovelId).slice().sort((a, b) => a.order - b.order),
     [localChapters, currentNovelId]
   )
+  const hasWorkspaceContent = localChapters.length > 0
 
   const currentChapter = useMemo(
     () => sortedChapters.find((chapter) => chapter.id === currentChapterId) ?? sortedChapters[0],
@@ -458,6 +531,8 @@ export function SelectionNovelStudio() {
   const knowledgeRebuildEtaMinutes = useMemo(() => {
     return knowledgeRebuildStatus?.etaMinutes ?? null
   }, [knowledgeRebuildStatus])
+  const knowledgeRebuildPaused = knowledgeRebuildStatus?.status === 'paused'
+  const knowledgeRebuildActive = knowledgeRebuildStatus?.status === 'running' || knowledgeRebuildStatus?.status === 'queued'
 
   const editor = useEditor({
     extensions: [StarterKit],
@@ -511,8 +586,8 @@ export function SelectionNovelStudio() {
       }
       setSelectionText(selection.text)
       setToolbarPos({
-        top: window.scrollY + selection.rect.top - 56,
-        left: window.scrollX + selection.rect.left + selection.rect.width / 2,
+        top: selection.rect.top - TOOLBAR_OFFSET_Y,
+        left: selection.rect.left + selection.rect.width / 2,
       })
     }
 
@@ -525,6 +600,24 @@ export function SelectionNovelStudio() {
       window.removeEventListener('scroll', handler, true)
     }
   }, [activeMode])
+
+  useEffect(() => {
+    if (!toolbarPos || activeMode || !toolbarRef.current) return
+
+    const toolbarRect = toolbarRef.current.getBoundingClientRect()
+    const nextTop = Math.min(
+      Math.max(toolbarPos.top, TOOLBAR_EDGE_PADDING),
+      window.innerHeight - toolbarRect.height - TOOLBAR_EDGE_PADDING
+    )
+    const nextLeft = Math.min(
+      Math.max(toolbarPos.left, toolbarRect.width / 2 + TOOLBAR_EDGE_PADDING),
+      window.innerWidth - toolbarRect.width / 2 - TOOLBAR_EDGE_PADDING
+    )
+
+    if (nextTop !== toolbarPos.top || nextLeft !== toolbarPos.left) {
+      setToolbarPos({ top: nextTop, left: nextLeft })
+    }
+  }, [activeMode, toolbarPos])
 
   const resetContextForChapter = (chapter: Chapter) => {
     const nextText = htmlToPlainText(chapter.content)
@@ -551,12 +644,24 @@ export function SelectionNovelStudio() {
 
   const selectedRewriteCandidate = rewriteFlow.candidates[rewriteFlow.selectedIndex]
   const rewriteProvider = aiSettings?.rewriteProvider ?? 'openai-compatible'
-  const hasRealModel = Boolean(aiSettings?.configured && aiSettings?.apiKey && aiSettings?.model)
+  const knowledgeProvider = aiSettings?.knowledgeProvider ?? 'ollama'
+  const selectedOpenAICompatibleModel = openAICompatibleModels.some((model) => model.id === (aiSettings?.model ?? ''))
+    ? (aiSettings?.model ?? '')
+    : ''
+  const hasRealModel = Boolean(aiSettings?.configured && aiSettings?.model)
   const providerLabel = rewriteProvider === 'ollama'
     ? `${aiSettings?.ollamaRewriteModel || 'Ollama 自动选择'} · 本地`
     : hasRealModel
       ? `${aiSettings?.model} · 已连接`
       : 'Fallback 模式'
+  const knowledgeProviderLabel = knowledgeProvider === 'openai-compatible'
+    ? (hasRealModel ? `${aiSettings?.model} · OpenAI-compatible` : 'OpenAI-compatible 未配置')
+    : `${aiSettings?.ollamaModel || 'Ollama 自动选择'} · 本地`
+
+  useEffect(() => {
+    if (!settingsOpen || rewriteProvider !== 'openai-compatible') return
+    void loadOpenAICompatibleModels(aiSettings?.baseUrl, aiSettings?.apiKey)
+  }, [rewriteProvider, settingsOpen])
 
   const getInstructionForMode = (mode: ActionMode) => {
     if (mode === 'rewrite') return rewritePrompt
@@ -687,6 +792,50 @@ export function SelectionNovelStudio() {
     }
   }
 
+  const loadOpenAICompatibleModels = async (baseUrl?: string, apiKey?: string) => {
+    const requestId = openAICompatibleModelsRequestRef.current + 1
+    openAICompatibleModelsRequestRef.current = requestId
+    const trimmedBaseUrl = baseUrl?.trim() ?? ''
+    if (!trimmedBaseUrl) {
+      setOpenAICompatibleModels([])
+      setOpenAICompatibleModelsLoading(false)
+      return
+    }
+
+    setOpenAICompatibleModelsLoading(true)
+
+    try {
+      const response = await fetch('/api/settings/ai/openai-models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseUrl: trimmedBaseUrl, apiKey: apiKey?.trim() ?? '' }),
+      })
+      const data = (await response.json()) as {
+        ok?: boolean
+        models?: OpenAICompatibleModelOption[]
+      }
+
+      if (openAICompatibleModelsRequestRef.current !== requestId) {
+        return
+      }
+
+      if (!response.ok || !data.ok) {
+        setOpenAICompatibleModels([])
+        return
+      }
+
+      setOpenAICompatibleModels(data.models ?? [])
+    } catch {
+      if (openAICompatibleModelsRequestRef.current === requestId) {
+        setOpenAICompatibleModels([])
+      }
+    } finally {
+      if (openAICompatibleModelsRequestRef.current === requestId) {
+        setOpenAICompatibleModelsLoading(false)
+      }
+    }
+  }
+
   const handleDeleteChapter = async (chapter: Chapter) => {
     const branchCount = localChapters.filter((item) => item.parentChapterId === chapter.id).length
     const prompt = chapter.parentChapterId
@@ -732,17 +881,90 @@ export function SelectionNovelStudio() {
   }
 
   const handleRebuildKnowledge = async () => {
-    if (!currentNovelId || knowledgeRebuilding) return
+    if (!currentNovelId || knowledgeRebuilding || knowledgeActionLoading) return
     setKnowledgeRebuilding(true)
     try {
-      await rebuildStoryKnowledge(currentNovelId)
-      setToast('知识视图已刷新')
-      window.setTimeout(() => setToast(''), 1800)
+      const result = await rebuildStoryKnowledge(currentNovelId)
+      if (!result) return
+
+      setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+
+      if (result.knowledgeRebuildStatus?.jobId) {
+        lastActiveKnowledgeJobIdRef.current = result.knowledgeRebuildStatus.jobId
+      } else {
+        lastActiveKnowledgeJobIdRef.current = null
+      }
+
+      if (result.jobOutcome === 'paused') {
+        showKnowledgeToast('知识重建已暂停')
+      } else if (result.jobOutcome === 'aborted') {
+        lastActiveKnowledgeJobIdRef.current = null
+        setKnowledgeRebuildStatus(null)
+        showKnowledgeToast('知识重建已终止')
+      } else if (result.jobOutcome === 'completed') {
+        showKnowledgeToast('知识视图已更新')
+      }
     } catch {
-      setToast('知识视图重建失败')
-      window.setTimeout(() => setToast(''), 2200)
+      showKnowledgeToast('知识视图重建失败', 2200)
     } finally {
       setKnowledgeRebuilding(false)
+    }
+  }
+
+  const handlePauseKnowledge = async () => {
+    if (!currentNovelId || !knowledgeRebuildActive || knowledgeActionLoading) return
+    setKnowledgeActionLoading('pause')
+    try {
+      const result = await pauseStoryKnowledgeRebuild(currentNovelId)
+      if (!result) return
+
+      setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      if (result.knowledgeRebuildStatus?.jobId) {
+        lastActiveKnowledgeJobIdRef.current = result.knowledgeRebuildStatus.jobId
+      }
+
+      showKnowledgeToast(result.jobOutcome === 'paused' ? '知识重建已暂停' : '当前没有进行中的知识重建任务')
+    } catch {
+      showKnowledgeToast('暂停知识重建失败', 2200)
+    } finally {
+      setKnowledgeActionLoading(null)
+    }
+  }
+
+  const handleAbortKnowledge = async () => {
+    if (!currentNovelId || (!knowledgeRebuildStatus && !knowledgeRebuilding) || knowledgeActionLoading) return
+    setKnowledgeActionLoading('abort')
+    try {
+      const result = await abortStoryKnowledgeRebuild(currentNovelId)
+      if (!result) return
+
+      lastActiveKnowledgeJobIdRef.current = null
+      setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      setKnowledgeRebuilding(false)
+      showKnowledgeToast(result.jobOutcome === 'aborted' ? '知识重建已终止' : '当前没有可终止的知识重建任务')
+    } catch {
+      showKnowledgeToast('终止知识重建失败', 2200)
+    } finally {
+      setKnowledgeActionLoading(null)
+    }
+  }
+
+  const handleDeleteKnowledgeGraph = async () => {
+    if (!currentNovelId || knowledgeActionLoading) return
+    setKnowledgeActionLoading('delete')
+    try {
+      const result = await deleteStoryKnowledgeGraph(currentNovelId)
+      if (!result) return
+
+      lastActiveKnowledgeJobIdRef.current = null
+      setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      setKnowledgeRebuilding(false)
+      setConfirmDeleteKnowledge(false)
+      showKnowledgeToast(result.jobOutcome === 'deleted' ? '已清空当前小说的知识图谱数据' : '当前小说知识图谱未发生变化', 2000)
+    } catch {
+      showKnowledgeToast('删除知识图谱失败', 2200)
+    } finally {
+      setKnowledgeActionLoading(null)
     }
   }
 
@@ -896,8 +1118,36 @@ export function SelectionNovelStudio() {
     }
   }
 
+  if (!backendLoaded) {
+    return (
+      <WorkspaceStatusState
+        icon={LoaderCircle}
+        title="正在恢复工作区"
+        description="正在读取你上次的章节与工作区选择。加载完成后，会自动打开一个有效章节；如果当前没有可用内容，也会带你回到书库继续导入。"
+      />
+    )
+  }
+
+  if (!hasWorkspaceContent) {
+    return (
+      <WorkspaceStatusState
+        icon={BookOpen}
+        title="工作区里还没有可用章节"
+        description="当前持久化状态里没有可恢复的小说章节，所以这个工作区暂时无法打开。你可以回到书库选择已有小说，或先导入新的 TXT 内容再继续写作。"
+        ctaLabel="返回书库并导入"
+      />
+    )
+  }
+
   if (!currentChapter) {
-    return <main className="min-h-screen bg-[#0a0c12] text-zinc-100" />
+    return (
+      <WorkspaceStatusState
+        icon={LoaderCircle}
+        title="正在修复章节选择"
+        description="检测到当前章节指向不可用，系统正在回退到一个有效章节。这个过程不会清空你的工作区内容，只会重新对齐当前选择。"
+        ctaLabel="返回书库"
+      />
+    )
   }
 
   return (
@@ -1107,16 +1357,16 @@ export function SelectionNovelStudio() {
                   onClick={() => {
                     void handleRebuildKnowledge()
                   }}
-                  disabled={knowledgeRebuilding}
+                  disabled={knowledgeRebuilding || knowledgeRebuildActive || knowledgeActionLoading === 'pause' || knowledgeActionLoading === 'abort' || knowledgeActionLoading === 'delete'}
                   className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {knowledgeRebuilding ? '重建中…' : '重建知识视图'}
+                  {knowledgeRebuilding ? '处理中…' : knowledgeRebuildPaused ? '继续知识视图重建' : '重建知识视图'}
                 </button>
               </div>
               {knowledgeRebuildStatus ? (
                 <div className="mt-3 rounded-2xl border border-violet-300/15 bg-black/20 px-3 py-3 text-xs text-zinc-300">
                   <div className="mb-2 flex items-center justify-between gap-3">
-                    <span>本地知识图谱重建中</span>
+                    <span>{knowledgeRebuildPaused ? '本地知识图谱已暂停' : '本地知识图谱重建中'}</span>
                     <span>{Math.max(0, Math.min(100, Math.round((knowledgeRebuildStatus.progress ?? 0) * 100)))}%</span>
                   </div>
                   <div className="h-2 overflow-hidden rounded-full bg-white/10">
@@ -1126,13 +1376,71 @@ export function SelectionNovelStudio() {
                     />
                   </div>
                   <p className="mt-2 text-[11px] leading-5 text-zinc-400">
-                    {knowledgeRebuildStatus.currentStep || '正在准备知识重建…'}
+                    {knowledgeRebuildStatus.currentStep || (knowledgeRebuildPaused ? '等待继续重建…' : '正在准备知识重建…')}
                   </p>
                   <p className="mt-1 text-[11px] leading-5 text-zinc-500">
-                    预估剩余：{knowledgeRebuildEtaMinutes ? `约 ${knowledgeRebuildEtaMinutes} 分钟` : '计算中'}
+                    预估剩余：{knowledgeRebuildPaused ? '已暂停' : knowledgeRebuildEtaMinutes ? `约 ${knowledgeRebuildEtaMinutes} 分钟` : '计算中'}
                   </p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => {
+                        void handlePauseKnowledge()
+                      }}
+                      disabled={!knowledgeRebuildActive || Boolean(knowledgeActionLoading)}
+                      className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {knowledgeActionLoading === 'pause' ? '暂停中…' : '暂停重建'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        void handleAbortKnowledge()
+                      }}
+                      disabled={Boolean(knowledgeActionLoading)}
+                      className="rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {knowledgeActionLoading === 'abort' ? '终止中…' : '终止当前任务'}
+                    </button>
+                  </div>
                 </div>
               ) : null}
+              <div className="mt-3 rounded-2xl border border-rose-400/15 bg-rose-500/[0.06] px-3 py-3 text-xs text-zinc-300">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-rose-200/70">Danger zone</p>
+                    <p className="mt-1 leading-5 text-zinc-400">只清空当前小说在 SQLite 中投影出的知识图谱数据，不会删除正文章节。</p>
+                  </div>
+                  <button
+                    onClick={() => setConfirmDeleteKnowledge((current) => !current)}
+                    disabled={knowledgeActionLoading === 'delete'}
+                    className="rounded-full border border-rose-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    删除知识图谱
+                  </button>
+                </div>
+                {confirmDeleteKnowledge ? (
+                  <div className="mt-3 rounded-xl border border-rose-400/15 bg-black/20 p-3">
+                    <p className="text-[11px] leading-5 text-rose-100">请再次确认：这会清空当前小说的人物、关系、设定、时间线和章节快照投影数据。</p>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        onClick={() => {
+                          void handleDeleteKnowledgeGraph()
+                        }}
+                        disabled={Boolean(knowledgeActionLoading)}
+                        className="flex-1 rounded-xl border border-rose-400/20 bg-rose-500/15 px-3 py-2 text-[11px] text-rose-100 transition hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {knowledgeActionLoading === 'delete' ? '删除中…' : '确认删除当前小说知识图谱'}
+                      </button>
+                      <button
+                        onClick={() => setConfirmDeleteKnowledge(false)}
+                        disabled={knowledgeActionLoading === 'delete'}
+                        className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
               <p className="mt-3 rounded-2xl border border-white/8 bg-black/20 px-3 py-2 text-xs leading-5 text-zinc-400">
                 右侧内容现在来自 SQLite 知识库投影，当前阶段先保持只读，避免把本地临时编辑误认为已写回 authoritative KB。
               </p>
@@ -1642,8 +1950,9 @@ export function SelectionNovelStudio() {
 
       {toolbarPos && selectionText && !activeMode ? (
         <div
+          ref={toolbarRef}
           className="pointer-events-none fixed z-40"
-          style={{ top: Math.max(toolbarPos.top, 12), left: toolbarPos.left, transform: 'translateX(-50%)' }}
+          style={{ top: toolbarPos.top, left: toolbarPos.left, transform: 'translateX(-50%)' }}
         >
           <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-white/10 bg-[#090b10]/96 p-1 shadow-[0_18px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl">
             {(['rewrite', 'roleplay', 'expand'] as ActionMode[]).map((mode) => {
@@ -1683,7 +1992,7 @@ export function SelectionNovelStudio() {
               <div>
                 <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">AI settings</p>
                 <h3 className="mt-1 text-xl font-semibold text-zinc-100">模型服务配置</h3>
-                <p className="mt-2 text-sm leading-6 text-zinc-400">这里会同时配置改写模型，以及本地知识图谱重建时使用的 Ollama 模型。</p>
+                <p className="mt-2 text-sm leading-6 text-zinc-400">这里会配置改写模型，以及知识抽取时使用的提供方与模型。</p>
               </div>
               <button onClick={() => setSettingsOpen(false)} className="rounded-2xl border border-white/10 p-2 text-zinc-300 hover:bg-white/[0.06]"><X className="h-4 w-4" /></button>
             </div>
@@ -1716,6 +2025,9 @@ export function SelectionNovelStudio() {
                           className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
                           placeholder="https://api.openai.com/v1"
                         />
+                        <p className="mt-2 text-xs leading-5 text-zinc-500">
+                          模型发现会尝试读取当前 Base URL 下的 <code className="rounded bg-white/5 px-1 py-0.5 text-[11px] text-zinc-300">/models</code>；如果服务不支持，仍可继续手动填写 Model。
+                        </p>
                       </label>
                       <label className="block">
                         <span className="mb-2 block text-sm text-zinc-300">API Key</span>
@@ -1723,18 +2035,62 @@ export function SelectionNovelStudio() {
                           value={aiSettings?.apiKey ?? ''}
                           onChange={(event) => setAISettingsField('apiKey', event.target.value)}
                           className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                          placeholder="sk-..."
+                          placeholder={aiSettings?.apiKeyMasked || 'sk-...'}
                         />
+                        {aiSettings?.apiKeyConfigured && !aiSettings?.apiKey ? (
+                          <p className="mt-2 text-xs leading-5 text-zinc-500">当前已保存 API Key。留空保存会保持现有 key，不会自动清除。</p>
+                        ) : null}
                       </label>
                       <label className="block">
                         <span className="mb-2 block text-sm text-zinc-300">Model</span>
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <p className="text-xs leading-5 text-zinc-500">
+                            {openAICompatibleModelsLoading
+                              ? '正在读取当前 Base URL 的可用模型…'
+                              : openAICompatibleModels.length > 0
+                                ? `已发现 ${openAICompatibleModels.length} 个可用模型，可直接选择，也可继续手动输入。`
+                                : '可手动输入模型名；如果当前服务支持 /models，这里会自动补全建议。'}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void loadOpenAICompatibleModels(aiSettings?.baseUrl, aiSettings?.apiKey)
+                            }}
+                            className="shrink-0 rounded-2xl border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/[0.06]"
+                          >
+                            {openAICompatibleModelsLoading ? '刷新中…' : '刷新模型'}
+                          </button>
+                        </div>
+                        <select
+                          value={selectedOpenAICompatibleModel}
+                          onChange={(event) => setAISettingsField('model', event.target.value)}
+                          disabled={openAICompatibleModelsLoading || openAICompatibleModels.length === 0}
+                          className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="">
+                            {openAICompatibleModelsLoading
+                              ? '正在读取可用模型…'
+                              : openAICompatibleModels.length > 0
+                                ? '从已发现模型中选择'
+                                : '当前没有可选模型，继续手动填写'}
+                          </option>
+                          {openAICompatibleModels.map((model) => (
+                            <option key={model.id} value={model.id}>
+                              {model.label}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="mt-2 text-xs leading-5 text-zinc-500">选择后会直接回填到下方 Model 输入框；如果列表为空，继续手动填写即可。</p>
                         <input
                           value={aiSettings?.model ?? ''}
                           onChange={(event) => setAISettingsField('model', event.target.value)}
-                          className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+                          className="mt-3 w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
                           placeholder="deepseek-v4-flash"
                         />
                       </label>
+                      {!openAICompatibleModelsLoading && aiSettings?.baseUrl?.trim() && openAICompatibleModels.length === 0 ? (
+                        <p className="text-sm text-zinc-500">当前没有发现可用的 OpenAI-compatible 模型；你仍然可以继续手动填写 Model。</p>
+                      ) : null}
                     </>
                   ) : (
                     <>
@@ -1762,11 +2118,39 @@ export function SelectionNovelStudio() {
               </div>
 
               <div className="rounded-[24px] border border-white/10 bg-[#0b0d12] p-4">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Knowledge extraction</p>
+                <h4 className="mt-2 text-sm font-medium text-zinc-100">知识抽取提供方</h4>
+                <p className="mt-1 text-xs leading-5 text-zinc-500">知识图谱重建可以使用 OpenAI-compatible API，或继续使用本地 Ollama。OpenAI-compatible 会复用上方的 Base URL、API Key 和 Model。</p>
+                <div className="mt-4 space-y-4">
+                  <label className="block">
+                    <span className="mb-2 block text-sm text-zinc-300">Provider</span>
+                    <select
+                      value={knowledgeProvider}
+                      onChange={(event) => setAISettingsField('knowledgeProvider', event.target.value)}
+                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+                    >
+                      <option value="ollama">Ollama 本地模型</option>
+                      <option value="openai-compatible">OpenAI-compatible</option>
+                    </select>
+                  </label>
+                  {knowledgeProvider === 'openai-compatible' ? (
+                    <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-zinc-400">
+                      当前知识抽取将复用上方的 OpenAI-compatible Base URL、API Key 与 Model。
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-zinc-400">
+                      当前知识抽取将使用下方配置的 Ollama Base URL 与知识抽取模型。
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-white/10 bg-[#0b0d12] p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Ollama local</p>
-                    <h4 className="mt-2 text-sm font-medium text-zinc-100">知识抽取与 RAG 模型</h4>
-                    <p className="mt-1 text-xs leading-5 text-zinc-500">保留知识图谱重建语言模型选择，并新增单独的 embedding 模型选项供后续 RAG 使用。</p>
+                    <h4 className="mt-2 text-sm font-medium text-zinc-100">Ollama 本地模型</h4>
+                    <p className="mt-1 text-xs leading-5 text-zinc-500">当知识抽取 provider 选择 Ollama 时，会使用这里的语言模型；embedding 模型继续保留给后续 RAG。</p>
                   </div>
                   <button
                     type="button"
@@ -1831,7 +2215,7 @@ export function SelectionNovelStudio() {
             </div>
 
             <div className="mt-6 flex items-center justify-between gap-3">
-              <p className="text-sm text-zinc-500">当前状态：{providerLabel}</p>
+              <p className="text-sm text-zinc-500">当前状态：改写 {providerLabel} / 知识 {knowledgeProviderLabel}</p>
               <div className="flex gap-2">
                 <button onClick={() => setSettingsOpen(false)} className="rounded-2xl border border-white/10 px-4 py-2 text-sm text-zinc-300 hover:bg-white/[0.06]">取消</button>
                 <button onClick={saveSettings} className="rounded-2xl bg-violet-500 px-4 py-2 text-sm font-medium text-white hover:bg-violet-400">保存设置</button>
