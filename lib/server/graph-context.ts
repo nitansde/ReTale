@@ -343,7 +343,7 @@ async function buildGraphAwareResultFromSeeds(params: {
       strength: edge.strength,
       confidence: edge.confidence,
       validFromChapter: edge.validFromChapter,
-      validToChapter: edge.validToChapter ?? undefined,
+      validUntilChapter: edge.validUntilChapter,
       evidenceQuote: edge.evidenceQuote ?? undefined,
       evidenceLocation: edge.evidenceSpanId
         ? (() => {

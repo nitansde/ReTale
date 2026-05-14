@@ -64,7 +64,7 @@ export type GraphEdge = {
   strength: number
   confidence: number
   validFromChapter: number
-  validToChapter?: number
+  validUntilChapter: number
   evidenceQuote?: string
   evidenceLocation?: {
     chapterNo: number
@@ -101,7 +101,7 @@ export type EntityLinkRow = {
   weight: number
   sourceChapter: number
   validFromChapter: number
-  validToChapter: number | null
+  validUntilChapter: number
   evidenceSpanId: string | null
   evidenceQuote: string | null
   confidence: number
@@ -119,7 +119,7 @@ export type EntityStateRow = {
   description: string | null
   sourceChapter: number
   validFromChapter: number
-  validToChapter: number | null
+  validUntilChapter: number
   evidenceSpanId: string | null
   evidenceQuote: string | null
   confidence: number
@@ -142,19 +142,4 @@ export type EventLinkRow = {
   evidenceQuote: string | null
   confidence: number
   status: LinkStatus
-}
-
-export type GraphContextCacheRow = {
-  id: string
-  novelId: string
-  branchId: string
-  cacheKey: string
-  asOfChapter: number
-  seedEntityIdsJson: string
-  graphNodesJson: string
-  graphEdgesJson: string
-  contextText: string
-  sourceHash: string
-  createdAt: string
-  updatedAt: string
 }

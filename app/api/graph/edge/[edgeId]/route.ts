@@ -65,6 +65,10 @@ export async function PATCH(request: Request, context: RouteContext) {
       return NextResponse.json({ ok: false, error: 'Invalid JSON body' }, { status: 400 })
     }
 
+    if (Object.prototype.hasOwnProperty.call(body, 'validToChapter')) {
+      return NextResponse.json({ ok: false, error: 'validToChapter is no longer supported; use validUntilChapter' }, { status: 400 })
+    }
+
     let normalizedLinkType: string | undefined
     if (body.linkType !== undefined) {
       const candidate = String(body.linkType).trim()
@@ -75,9 +79,9 @@ export async function PATCH(request: Request, context: RouteContext) {
     }
 
     const validFromChapter = normalizeOptionalPositiveInteger(body.validFromChapter, 'validFromChapter')
-    const validToChapter = normalizeOptionalPositiveInteger(body.validToChapter, 'validToChapter')
-    if (typeof validFromChapter === 'number' && typeof validToChapter === 'number' && validToChapter < validFromChapter) {
-      return NextResponse.json({ ok: false, error: 'validToChapter must be greater than or equal to validFromChapter' }, { status: 400 })
+    const validUntilChapter = normalizeOptionalPositiveInteger(body.validUntilChapter, 'validUntilChapter')
+    if (typeof validFromChapter === 'number' && typeof validUntilChapter === 'number' && validUntilChapter <= validFromChapter) {
+      return NextResponse.json({ ok: false, error: 'validUntilChapter must be greater than validFromChapter' }, { status: 400 })
     }
 
     const edge = await editEntityLink({
@@ -88,7 +92,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       polarity: normalizeOptionalPolarity(body.polarity),
       strength: normalizeOptionalStrength(body.strength),
       validFromChapter: typeof validFromChapter === 'number' ? validFromChapter : undefined,
-      validToChapter,
+      validUntilChapter,
       includeByDefault: normalizeOptionalBoolean(body.includeByDefault, 'includeByDefault'),
     })
 
@@ -96,7 +100,10 @@ export async function PATCH(request: Request, context: RouteContext) {
       return NextResponse.json({ ok: false, error: 'Edge not found' }, { status: 404 })
     }
 
-    return NextResponse.json({ ok: true, edge })
+    return NextResponse.json({
+      ok: true,
+      edge,
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to edit graph edge'
     const status = message.includes('Expected exactly one matching KnowledgeRelation') ? 409 : message.includes('must') || message.includes('Invalid JSON body') ? 400 : 500

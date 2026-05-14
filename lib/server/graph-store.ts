@@ -1,15 +1,12 @@
 import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
+import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 import { deleteBranchRetrievalIndexFromChapter } from '@/lib/server/retrieval-index'
 import type {
   EntityLinkRow,
   EntityStateRow,
   EventLinkRow,
-  GraphContextCacheRow,
-  GraphEdge,
-  GraphNode,
   LinkStatus,
 } from '@/lib/server/graph-types'
-import { uid } from '@/lib/utils'
 
 type ActiveGraphQueryParams = {
   novelId: string
@@ -18,21 +15,6 @@ type ActiveGraphQueryParams = {
   includeLowConfidence?: boolean
   includePotentiallyStale?: boolean
   confirmedOnly?: boolean
-}
-
-type GraphContextCacheRecord = {
-  id: string
-  novelId: string
-  branchId: string
-  cacheKey: string
-  asOfChapter: number
-  seedEntityIds: string[]
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-  contextText: string
-  sourceHash: string
-  createdAt: string
-  updatedAt: string
 }
 
 type KnowledgeRelationMatchRow = {
@@ -47,7 +29,7 @@ type EntityLinkEditParams = {
   polarity?: EntityLinkRow['polarity']
   strength?: number
   validFromChapter?: number
-  validToChapter?: number | null
+  validUntilChapter?: number | null
   includeByDefault?: boolean
 }
 
@@ -65,17 +47,27 @@ function appendGenericRelationFilter(baseSql: string, columnName: string) {
   return `${baseSql} AND TRIM(${columnName}) NOT IN ('', '关系', '人物关系', '角色关系', '关联', '联系', '相关')`
 }
 
-function appendConfirmedOnlyFilter(baseSql: string, confirmedOnly: boolean) {
-  return confirmedOnly ? `${baseSql} AND status = 'user_confirmed'` : baseSql
+function normalizeValidFromChapter(value: number) {
+  if (!Number.isFinite(value) || value < 1) {
+    throw new Error('validFromChapter must be a positive chapter number')
+  }
+
+  return Math.floor(value)
 }
 
-function parseJsonArray<T>(value: string, fallback: T[]): T[] {
-  try {
-    const parsed = JSON.parse(value) as unknown
-    return Array.isArray(parsed) ? (parsed as T[]) : fallback
-  } catch {
-    return fallback
+function normalizeValidUntilChapter(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return INF_CHAPTER
   }
+  if (!Number.isFinite(value) || value < 1) {
+    throw new Error('validUntilChapter must be a positive chapter number or omitted for open-ended intervals')
+  }
+
+  return Math.floor(value)
+}
+
+function appendConfirmedOnlyFilter(baseSql: string, confirmedOnly: boolean) {
+  return confirmedOnly ? `${baseSql} AND status = 'user_confirmed'` : baseSql
 }
 
 export function loadActiveEntityLinks(params: ActiveGraphQueryParams) {
@@ -85,11 +77,11 @@ export function loadActiveEntityLinks(params: ActiveGraphQueryParams) {
         appendStatusFilters(
           `
             SELECT id, novelId, branchId, sourceEntityId, targetEntityId, linkType, label, description,
-                   polarity, strength, weight, sourceChapter, validFromChapter, validToChapter,
+                   polarity, strength, weight, sourceChapter, validFromChapter, validUntilChapter,
                    evidenceSpanId, evidenceQuote, confidence, status, includeByDefault
             FROM EntityLink
             WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
-              AND (validToChapter IS NULL OR validToChapter >= ?)
+              AND validUntilChapter > ?
           `,
           params.includePotentiallyStale ?? false
         ),
@@ -109,10 +101,11 @@ export function loadActiveEntityStates(params: ActiveGraphQueryParams) {
       appendStatusFilters(
         `
           SELECT id, novelId, branchId, entityId, stateType, stateValue, description, sourceChapter,
-                 validFromChapter, validToChapter, evidenceSpanId, evidenceQuote, confidence, status, includeByDefault
-          FROM EntityState
-          WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
-            AND (validToChapter IS NULL OR validToChapter >= ?)
+                  validFromChapter, evidenceSpanId, evidenceQuote, confidence, status, includeByDefault,
+                  validUntilChapter
+           FROM EntityState
+           WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
+             AND validUntilChapter > ?
         `,
         params.includePotentiallyStale ?? false
       ),
@@ -141,109 +134,6 @@ export function loadActiveEventLinks(params: ActiveGraphQueryParams) {
   return queryAll<EventLinkRow>(sql, params.novelId, params.branchId, params.chapterNo)
 }
 
-export function getGraphContextCache(params: {
-  novelId: string
-  branchId: string
-  cacheKey: string
-  asOfChapter: number
-}) {
-  const row = queryOne<GraphContextCacheRow>(
-    `
-      SELECT id, novelId, branchId, cacheKey, asOfChapter, seedEntityIdsJson, graphNodesJson,
-             graphEdgesJson, contextText, sourceHash, createdAt, updatedAt
-      FROM GraphContextCache
-      WHERE novelId = ? AND branchId = ? AND cacheKey = ? AND asOfChapter = ?
-      LIMIT 1
-    `,
-    params.novelId,
-    params.branchId,
-    params.cacheKey,
-    params.asOfChapter
-  )
-
-  if (!row) {
-    return null
-  }
-
-  return {
-    id: row.id,
-    novelId: row.novelId,
-    branchId: row.branchId,
-    cacheKey: row.cacheKey,
-    asOfChapter: row.asOfChapter,
-    seedEntityIds: parseJsonArray<string>(row.seedEntityIdsJson, []),
-    nodes: parseJsonArray<GraphNode>(row.graphNodesJson, []),
-    edges: parseJsonArray<GraphEdge>(row.graphEdgesJson, []),
-    contextText: row.contextText,
-    sourceHash: row.sourceHash,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  } satisfies GraphContextCacheRecord
-}
-
-export function saveGraphContextCache(params: {
-  novelId: string
-  branchId: string
-  cacheKey: string
-  asOfChapter: number
-  seedEntityIds: string[]
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-  contextText: string
-  sourceHash: string
-}) {
-  const existing = queryOne<{ id: string }>(
-    'SELECT id FROM GraphContextCache WHERE branchId = ? AND cacheKey = ? AND asOfChapter = ? LIMIT 1',
-    params.branchId,
-    params.cacheKey,
-    params.asOfChapter
-  )
-
-  const id = existing?.id ?? uid('graph-cache')
-  execute(
-    `
-      INSERT INTO GraphContextCache (
-        id, novelId, branchId, cacheKey, asOfChapter, seedEntityIdsJson,
-        graphNodesJson, graphEdgesJson, contextText, sourceHash
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(branchId, cacheKey, asOfChapter) DO UPDATE SET
-        novelId = excluded.novelId,
-        seedEntityIdsJson = excluded.seedEntityIdsJson,
-        graphNodesJson = excluded.graphNodesJson,
-        graphEdgesJson = excluded.graphEdgesJson,
-        contextText = excluded.contextText,
-        sourceHash = excluded.sourceHash,
-        updatedAt = CURRENT_TIMESTAMP
-    `,
-    id,
-    params.novelId,
-    params.branchId,
-    params.cacheKey,
-    params.asOfChapter,
-    JSON.stringify(params.seedEntityIds),
-    JSON.stringify(params.nodes),
-    JSON.stringify(params.edges),
-    params.contextText,
-    params.sourceHash
-  )
-
-  return id
-}
-
-export function invalidateGraphContextCacheFromChapter(params: {
-  novelId: string
-  branchId: string
-  fromChapterNo: number
-}) {
-  execute(
-    'DELETE FROM GraphContextCache WHERE novelId = ? AND branchId = ? AND asOfChapter >= ?',
-    params.novelId,
-    params.branchId,
-    params.fromChapterNo
-  )
-}
-
 export function updateEntityLinkStatus(params: { id: string; status: LinkStatus; includeByDefault?: boolean }) {
   const includeByDefault =
     params.includeByDefault === undefined
@@ -268,7 +158,7 @@ export function loadEntityLinkById(id: string) {
   return queryOne<EntityLinkRow>(
     `
       SELECT id, novelId, branchId, sourceEntityId, targetEntityId, linkType, label, description,
-             polarity, strength, weight, sourceChapter, validFromChapter, validToChapter,
+             polarity, strength, weight, sourceChapter, validFromChapter, validUntilChapter,
              evidenceSpanId, evidenceQuote, confidence, status, includeByDefault
       FROM EntityLink
       WHERE id = ?
@@ -290,7 +180,7 @@ function loadMatchingKnowledgeRelationIds(link: EntityLinkRow) {
         AND relationType = ?
         AND sourceChapter = ?
         AND validFromChapter = ?
-        AND ((validToChapter IS NULL AND ? IS NULL) OR validToChapter = ?)
+        AND validUntilChapter = ?
         AND ((evidenceSpanId IS NULL AND ? IS NULL) OR evidenceSpanId = ?)
     `,
     link.novelId,
@@ -300,32 +190,13 @@ function loadMatchingKnowledgeRelationIds(link: EntityLinkRow) {
     link.linkType,
     link.sourceChapter,
     link.validFromChapter,
-    link.validToChapter,
-    link.validToChapter,
+    normalizeValidUntilChapter(link.validUntilChapter),
     link.evidenceSpanId,
     link.evidenceSpanId
   )
 }
 
 async function markDownstreamGraphArtifactsStale(params: { novelId: string; branchId: string; fromChapterNo: number }) {
-  execute(
-    `
-      UPDATE ChapterSnapshot
-      SET status = 'stale', updatedAt = CURRENT_TIMESTAMP
-      WHERE novelId = ? AND branchId = ? AND chapterNo >= ?
-    `,
-    params.novelId,
-    params.branchId,
-    params.fromChapterNo
-  )
-
-  execute(
-    'DELETE FROM GraphContextCache WHERE novelId = ? AND branchId = ? AND asOfChapter >= ?',
-    params.novelId,
-    params.branchId,
-    params.fromChapterNo
-  )
-
   await deleteBranchRetrievalIndexFromChapter(params.branchId, params.fromChapterNo)
 }
 
@@ -420,11 +291,18 @@ export async function editEntityLink(params: EntityLinkEditParams) {
   const nextLinkType = params.linkType ?? link.linkType
   const nextPolarity = params.polarity === undefined ? link.polarity : params.polarity
   const nextStrength = params.strength ?? link.strength
-  const nextValidFromChapter = params.validFromChapter ?? link.validFromChapter
-  const nextValidToChapter = params.validToChapter === undefined ? link.validToChapter : params.validToChapter
+  const nextValidFromChapter = normalizeValidFromChapter(params.validFromChapter ?? link.validFromChapter)
+  const nextValidUntilChapter = normalizeValidUntilChapter(
+    params.validUntilChapter === undefined ? link.validUntilChapter : params.validUntilChapter
+  )
   const nextLabel = params.label === undefined ? link.label : params.label
   const nextDescription = params.description === undefined ? link.description : params.description
   const nextIncludeByDefault = params.includeByDefault === undefined ? link.includeByDefault : params.includeByDefault ? 1 : 0
+
+  if (nextValidUntilChapter <= nextValidFromChapter) {
+    throw new Error('validUntilChapter must be greater than validFromChapter')
+  }
+
   const affectedFromChapter = Math.min(link.validFromChapter, nextValidFromChapter)
 
   await withTransaction(async () => {
@@ -439,8 +317,8 @@ export async function editEntityLink(params: EntityLinkEditParams) {
             polarity = ?,
             strength = ?,
             validFromChapter = ?,
-            validToChapter = ?,
-            includeByDefault = ?,
+             validUntilChapter = ?,
+             includeByDefault = ?,
             status = 'user_confirmed',
             updatedAt = CURRENT_TIMESTAMP
         WHERE id = ?
@@ -451,7 +329,7 @@ export async function editEntityLink(params: EntityLinkEditParams) {
       nextPolarity,
       nextStrength,
       nextValidFromChapter,
-      nextValidToChapter,
+      nextValidUntilChapter,
       nextIncludeByDefault,
       params.id
     )
@@ -463,7 +341,7 @@ export async function editEntityLink(params: EntityLinkEditParams) {
             polarity = ?,
             strength = ?,
             validFromChapter = ?,
-            validToChapter = ?,
+            validUntilChapter = ?,
             status = 'user_confirmed',
             updatedAt = CURRENT_TIMESTAMP
         WHERE id = ?
@@ -472,7 +350,7 @@ export async function editEntityLink(params: EntityLinkEditParams) {
       nextPolarity,
       nextStrength,
       nextValidFromChapter,
-      nextValidToChapter,
+      nextValidUntilChapter,
       relationId
     )
 
@@ -501,11 +379,11 @@ export function loadEntityLinksByEntityIds(params: ActiveGraphQueryParams & { en
   return queryAll<EntityLinkRow>(
     `
       SELECT id, novelId, branchId, sourceEntityId, targetEntityId, linkType, label, description,
-             polarity, strength, weight, sourceChapter, validFromChapter, validToChapter,
+             polarity, strength, weight, sourceChapter, validFromChapter, validUntilChapter,
              evidenceSpanId, evidenceQuote, confidence, status, includeByDefault
       FROM EntityLink
       WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
-        AND (validToChapter IS NULL OR validToChapter >= ?)
+        AND validUntilChapter > ?
         AND ${statusFilter}
         ${confidenceFilter}
         ${confirmedOnlyFilter}
@@ -538,10 +416,11 @@ export function loadEntityStatesByEntityIds(params: ActiveGraphQueryParams & { e
   return queryAll<EntityStateRow>(
     `
       SELECT id, novelId, branchId, entityId, stateType, stateValue, description, sourceChapter,
-             validFromChapter, validToChapter, evidenceSpanId, evidenceQuote, confidence, status, includeByDefault
+             validFromChapter, evidenceSpanId, evidenceQuote, confidence, status, includeByDefault,
+             validUntilChapter
       FROM EntityState
       WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
-        AND (validToChapter IS NULL OR validToChapter >= ?)
+        AND validUntilChapter > ?
         AND ${statusFilter}
         ${confidenceFilter}
         ${confirmedOnlyFilter}
