@@ -9,8 +9,10 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@lancedb/lancedb": "^0.27.2",
     "@tiptap/react": "^3.23.1",
     "@tiptap/starter-kit": "^3.23.1",
+    "@xyflow/react": "^12.10.2",
     "clsx": "^2.1.1",
     "lucide-react": "^1.14.0",
     "next": "16.2.6",

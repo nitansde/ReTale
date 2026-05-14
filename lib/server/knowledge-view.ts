@@ -9,6 +9,19 @@ import {
 import { getMainBranchId } from '@/lib/server/knowledge-store'
 import { queryAll } from '@/lib/server/sqlite'
 
+function isGenericRelationLabel(value: string) {
+  const normalized = value.trim().toLocaleLowerCase('en-US')
+  return !normalized
+    || normalized === '关系'
+    || normalized === '人物关系'
+    || normalized === '角色关系'
+    || normalized === '关联'
+    || normalized === '联系'
+    || normalized === '相关'
+    || normalized === 'relation'
+    || normalized === 'relationship'
+}
+
 export type KnowledgeProjectionPayload = {
   localCharacters: Character[]
   localCharacterRelations: CharacterRelation[]
@@ -253,19 +266,21 @@ export async function buildKnowledgeProjection(novelIds?: string[]): Promise<Kno
   }))
 
   const localCharacterRelations: CharacterRelation[] = dedupeById(
-    relations.map((relation) => ({
-      id: relation.id,
-      novelId: relation.sourceNovelId,
-      fromCharacterId: relation.sourceEntityId,
-      toCharacterId: relation.targetEntityId,
-      label: relation.relationType,
-      strength: toRelationStrength(relation.strength),
-      status: toRelationStatus(relation.validToChapter, relation.polarity),
-      note: relation.polarity ? `极性：${relation.polarity}` : '',
-      chapterIds: chapterIdByNovelAndNo.get(`${relation.sourceNovelId}:${relation.sourceChapter}`)
-        ? [chapterIdByNovelAndNo.get(`${relation.sourceNovelId}:${relation.sourceChapter}`)!]
-        : [],
-    }))
+    relations
+      .filter((relation) => !isGenericRelationLabel(relation.relationType))
+      .map((relation) => ({
+        id: relation.id,
+        novelId: relation.sourceNovelId,
+        fromCharacterId: relation.sourceEntityId,
+        toCharacterId: relation.targetEntityId,
+        label: relation.relationType,
+        strength: toRelationStrength(relation.strength),
+        status: toRelationStatus(relation.validToChapter, relation.polarity),
+        note: relation.polarity ? `极性：${relation.polarity}` : '',
+        chapterIds: chapterIdByNovelAndNo.get(`${relation.sourceNovelId}:${relation.sourceChapter}`)
+          ? [chapterIdByNovelAndNo.get(`${relation.sourceNovelId}:${relation.sourceChapter}`)!]
+          : [],
+      }))
   )
 
   const localWorldEntries: WorldEntry[] = worlds.map((world) => ({

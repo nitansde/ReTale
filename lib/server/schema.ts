@@ -108,10 +108,13 @@ CREATE TABLE IF NOT EXISTS EntityAlias (
   id TEXT PRIMARY KEY,
   entityId TEXT NOT NULL,
   alias TEXT NOT NULL,
+  evidenceSpanId TEXT,
+  evidenceQuote TEXT,
   sourceChapter INTEGER,
   confidence REAL NOT NULL DEFAULT 0.7,
   userConfirmed INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (entityId) REFERENCES KnowledgeEntity(id) ON DELETE CASCADE,
+  FOREIGN KEY (evidenceSpanId) REFERENCES TextSpan(id) ON DELETE SET NULL,
   UNIQUE (entityId, alias)
 );
 
@@ -125,6 +128,59 @@ CREATE TABLE IF NOT EXISTS EntityAppearance (
   evidenceSpanId TEXT,
   FOREIGN KEY (entityId) REFERENCES KnowledgeEntity(id) ON DELETE CASCADE,
   FOREIGN KEY (chapterId) REFERENCES KnowledgeChapter(id) ON DELETE CASCADE,
+  FOREIGN KEY (evidenceSpanId) REFERENCES TextSpan(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS EntityLink (
+  id TEXT PRIMARY KEY,
+  novelId TEXT NOT NULL,
+  branchId TEXT NOT NULL,
+  sourceEntityId TEXT NOT NULL,
+  targetEntityId TEXT NOT NULL,
+  linkType TEXT NOT NULL,
+  label TEXT,
+  description TEXT,
+  polarity TEXT,
+  strength INTEGER NOT NULL DEFAULT 3,
+  weight REAL NOT NULL DEFAULT 1,
+  sourceChapter INTEGER NOT NULL,
+  validFromChapter INTEGER NOT NULL,
+  validToChapter INTEGER,
+  evidenceSpanId TEXT,
+  evidenceQuote TEXT,
+  confidence REAL NOT NULL DEFAULT 0.7,
+  status TEXT NOT NULL DEFAULT 'ai_generated',
+  includeByDefault INTEGER NOT NULL DEFAULT 1,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novelId) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (sourceEntityId) REFERENCES KnowledgeEntity(id) ON DELETE CASCADE,
+  FOREIGN KEY (targetEntityId) REFERENCES KnowledgeEntity(id) ON DELETE CASCADE,
+  FOREIGN KEY (evidenceSpanId) REFERENCES TextSpan(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS EntityState (
+  id TEXT PRIMARY KEY,
+  novelId TEXT NOT NULL,
+  branchId TEXT NOT NULL,
+  entityId TEXT NOT NULL,
+  stateType TEXT NOT NULL,
+  stateValue TEXT NOT NULL,
+  description TEXT,
+  sourceChapter INTEGER NOT NULL,
+  validFromChapter INTEGER NOT NULL,
+  validToChapter INTEGER,
+  evidenceSpanId TEXT,
+  evidenceQuote TEXT,
+  confidence REAL NOT NULL DEFAULT 0.7,
+  status TEXT NOT NULL DEFAULT 'ai_generated',
+  includeByDefault INTEGER NOT NULL DEFAULT 1,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novelId) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (entityId) REFERENCES KnowledgeEntity(id) ON DELETE CASCADE,
   FOREIGN KEY (evidenceSpanId) REFERENCES TextSpan(id) ON DELETE SET NULL
 );
 
@@ -219,6 +275,30 @@ CREATE TABLE IF NOT EXISTS EventParticipant (
   UNIQUE (eventId, entityId, role)
 );
 
+CREATE TABLE IF NOT EXISTS EventLink (
+  id TEXT PRIMARY KEY,
+  novelId TEXT NOT NULL,
+  branchId TEXT NOT NULL,
+  sourceEventId TEXT NOT NULL,
+  targetEventId TEXT NOT NULL,
+  linkType TEXT NOT NULL,
+  label TEXT,
+  description TEXT,
+  sourceChapter INTEGER NOT NULL,
+  validFromChapter INTEGER NOT NULL,
+  evidenceSpanId TEXT,
+  evidenceQuote TEXT,
+  confidence REAL NOT NULL DEFAULT 0.7,
+  status TEXT NOT NULL DEFAULT 'ai_generated',
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novelId) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (sourceEventId) REFERENCES KnowledgeEvent(id) ON DELETE CASCADE,
+  FOREIGN KEY (targetEventId) REFERENCES KnowledgeEvent(id) ON DELETE CASCADE,
+  FOREIGN KEY (evidenceSpanId) REFERENCES TextSpan(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS KnowledgeWorld (
   id TEXT PRIMARY KEY,
   novelId TEXT NOT NULL,
@@ -257,6 +337,24 @@ CREATE TABLE IF NOT EXISTS ChapterSnapshot (
   UNIQUE (novelId, branchId, chapterNo)
 );
 
+CREATE TABLE IF NOT EXISTS GraphContextCache (
+  id TEXT PRIMARY KEY,
+  novelId TEXT NOT NULL,
+  branchId TEXT NOT NULL,
+  cacheKey TEXT NOT NULL,
+  asOfChapter INTEGER NOT NULL,
+  seedEntityIdsJson TEXT NOT NULL,
+  graphNodesJson TEXT NOT NULL,
+  graphEdgesJson TEXT NOT NULL,
+  contextText TEXT NOT NULL,
+  sourceHash TEXT NOT NULL,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novelId) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  UNIQUE (branchId, cacheKey, asOfChapter)
+);
+
 CREATE TABLE IF NOT EXISTS KnowledgeJob (
   id TEXT PRIMARY KEY,
   novelId TEXT NOT NULL,
@@ -277,10 +375,20 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_chapter_branch_no ON KnowledgeChapter(b
 CREATE INDEX IF NOT EXISTS idx_text_span_branch_chapter ON TextSpan(branchId, chapterNo);
 CREATE INDEX IF NOT EXISTS idx_text_span_chapter_type ON TextSpan(chapterId, spanType);
 CREATE INDEX IF NOT EXISTS idx_knowledge_entity_branch_name ON KnowledgeEntity(branchId, entityType, canonicalName);
+CREATE INDEX IF NOT EXISTS idx_entity_link_source_valid ON EntityLink(branchId, sourceEntityId, validFromChapter, validToChapter);
+CREATE INDEX IF NOT EXISTS idx_entity_link_target_valid ON EntityLink(branchId, targetEntityId, validFromChapter, validToChapter);
+CREATE INDEX IF NOT EXISTS idx_entity_link_chapter ON EntityLink(branchId, sourceChapter);
+CREATE INDEX IF NOT EXISTS idx_entity_link_status ON EntityLink(branchId, status);
+CREATE INDEX IF NOT EXISTS idx_entity_state_entity_valid ON EntityState(branchId, entityId, validFromChapter, validToChapter);
+CREATE INDEX IF NOT EXISTS idx_entity_state_status ON EntityState(branchId, status);
 CREATE INDEX IF NOT EXISTS idx_knowledge_fact_branch_source ON KnowledgeFact(branchId, sourceChapter);
 CREATE INDEX IF NOT EXISTS idx_knowledge_relation_branch_valid ON KnowledgeRelation(branchId, validFromChapter, validToChapter);
 CREATE INDEX IF NOT EXISTS idx_knowledge_event_branch_chapter ON KnowledgeEvent(branchId, chapterNo, importance);
+CREATE INDEX IF NOT EXISTS idx_event_link_source_valid ON EventLink(branchId, sourceEventId, validFromChapter);
+CREATE INDEX IF NOT EXISTS idx_event_link_target_valid ON EventLink(branchId, targetEventId, validFromChapter);
+CREATE INDEX IF NOT EXISTS idx_event_link_status ON EventLink(branchId, status);
 CREATE INDEX IF NOT EXISTS idx_knowledge_world_branch_valid ON KnowledgeWorld(branchId, validFromChapter, validToChapter);
+CREATE INDEX IF NOT EXISTS idx_graph_context_cache_branch_chapter ON GraphContextCache(branchId, asOfChapter);
 CREATE INDEX IF NOT EXISTS idx_snapshot_branch_chapter_status ON ChapterSnapshot(branchId, chapterNo, status);
 CREATE INDEX IF NOT EXISTS idx_job_novel_status ON KnowledgeJob(novelId, status);
 CREATE INDEX IF NOT EXISTS idx_job_branch_status ON KnowledgeJob(branchId, status);

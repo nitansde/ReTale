@@ -1,11 +1,20 @@
 import { createHash } from 'node:crypto'
-import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
+import { execute, queryOne, withTransaction } from '@/lib/server/sqlite'
 import { uid } from '@/lib/utils'
 
 export const MAIN_BRANCH_NAME = 'main'
 
 export function getMainBranchId(novelId: string) {
   return `${novelId}:main`
+}
+
+export function normalizeBranchId(novelId: string, branchId?: string | null) {
+  const normalized = branchId?.trim()
+  if (!normalized) {
+    return getMainBranchId(novelId)
+  }
+
+  return normalized.includes(':') ? normalized : `${novelId}:${normalized}`
 }
 
 export type LineRecordInput = {
@@ -35,8 +44,6 @@ export type EvidenceSearchResult = {
   chapterNo: number
   score: number
 }
-
-let ftsReadyPromise: Promise<void> | null = null
 
 export function hashContent(value: string) {
   return createHash('sha256').update(value).digest('hex')
@@ -179,24 +186,6 @@ export function buildTextSpansFromLines(params: {
   return spans
 }
 
-export async function ensureKnowledgeFts() {
-  if (!ftsReadyPromise) {
-    ftsReadyPromise = Promise.resolve(execute(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS text_spans_fts USING fts5(
-        span_id UNINDEXED,
-        novel_id UNINDEXED,
-        branch_id UNINDEXED,
-        chapter_no UNINDEXED,
-        span_type UNINDEXED,
-        text,
-        tokenize = 'unicode61'
-      )
-    `)).then(() => undefined)
-  }
-
-  await ftsReadyPromise
-}
-
 export async function ensureMainBranch(novelId: string) {
   const branchId = getMainBranchId(novelId)
   execute(
@@ -246,91 +235,6 @@ export async function enqueueKnowledgeJob(params: {
   )
 }
 
-export async function replaceChapterFts(spans: TextSpanInput[]) {
-  await ensureKnowledgeFts()
-  if (!spans.length) return
-
-  const chapterIds = Array.from(new Set(spans.map((item) => item.chapterId)))
-  const chapterNoMap = new Map(spans.map((item) => [item.chapterId, item.chapterNo]))
-  const branchMap = new Map(spans.map((item) => [item.chapterId, item.branchId]))
-
-  await withTransaction(async () => {
-    for (const chapterId of chapterIds) {
-      execute(
-        'DELETE FROM text_spans_fts WHERE branch_id = ? AND chapter_no = ?',
-        branchMap.get(chapterId) ?? null,
-        chapterNoMap.get(chapterId) ?? 0
-      )
-    }
-
-    for (const span of spans) {
-      execute(
-        'INSERT INTO text_spans_fts (span_id, novel_id, branch_id, chapter_no, span_type, text) VALUES (?, ?, ?, ?, ?, ?)',
-        span.id,
-        span.novelId,
-        span.branchId,
-        span.chapterNo,
-        span.spanType,
-        span.text
-      )
-    }
-  })
-}
-
-export async function rebuildBranchFts(novelId: string, branchId: string) {
-  await ensureKnowledgeFts()
-  execute('DELETE FROM text_spans_fts WHERE novel_id = ? AND branch_id = ?', novelId, branchId)
-  const spans = queryAll<{ id: string; novelId: string; branchId: string; chapterNo: number; spanType: string; text: string }>(
-    'SELECT id, novelId, branchId, chapterNo, spanType, text FROM TextSpan WHERE novelId = ? AND branchId = ?',
-    novelId,
-    branchId
-  )
-
-  await withTransaction(async () => {
-    for (const span of spans) {
-      execute(
-        'INSERT INTO text_spans_fts (span_id, novel_id, branch_id, chapter_no, span_type, text) VALUES (?, ?, ?, ?, ?, ?)',
-        span.id,
-        span.novelId,
-        span.branchId,
-        span.chapterNo,
-        span.spanType,
-        span.text
-      )
-    }
-  })
-}
-
-export async function searchEvidenceSpans(params: {
-  branchId: string
-  maxChapterNo: number
-  query: string
-  limit?: number
-}) {
-  await ensureKnowledgeFts()
-  const limit = params.limit ?? 8
-  const query = params.query.trim().replace(/"/g, ' ')
-  if (!query) return [] as EvidenceSearchResult[]
-
-  const rows = queryAll<EvidenceSearchResult>(
-    `
-      SELECT span_id as spanId, chapter_no as chapterNo, bm25(text_spans_fts) as score
-      FROM text_spans_fts
-      WHERE text_spans_fts MATCH ?
-        AND branch_id = ?
-        AND chapter_no <= ?
-      ORDER BY score
-      LIMIT ?
-    `,
-    query,
-    params.branchId,
-    params.maxChapterNo,
-    limit
-  )
-
-  return rows
-}
-
 export async function markKnowledgeStaleFromChapter(params: {
   novelId: string
   branchId: string
@@ -367,7 +271,9 @@ export async function markKnowledgeStaleFromChapter(params: {
       `
         UPDATE KnowledgeFact
         SET status = 'outdated', updatedAt = CURRENT_TIMESTAMP
-        WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'
+        WHERE novelId = ? AND branchId = ?
+          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND status != 'user_confirmed'
       `,
       params.novelId,
       params.branchId,
@@ -378,7 +284,35 @@ export async function markKnowledgeStaleFromChapter(params: {
       `
         UPDATE KnowledgeRelation
         SET status = 'outdated', updatedAt = CURRENT_TIMESTAMP
-        WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'
+        WHERE novelId = ? AND branchId = ?
+          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND status != 'user_confirmed'
+      `,
+      params.novelId,
+      params.branchId,
+      params.fromChapterNo
+    )
+
+    execute(
+      `
+        UPDATE EntityLink
+        SET status = 'potentially_stale', updatedAt = CURRENT_TIMESTAMP
+        WHERE novelId = ? AND branchId = ?
+          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND status != 'user_confirmed'
+      `,
+      params.novelId,
+      params.branchId,
+      params.fromChapterNo
+    )
+
+    execute(
+      `
+        UPDATE EntityState
+        SET status = 'potentially_stale', updatedAt = CURRENT_TIMESTAMP
+        WHERE novelId = ? AND branchId = ?
+          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND status != 'user_confirmed'
       `,
       params.novelId,
       params.branchId,
@@ -398,13 +332,40 @@ export async function markKnowledgeStaleFromChapter(params: {
 
     execute(
       `
+        UPDATE EventLink
+        SET status = 'potentially_stale', updatedAt = CURRENT_TIMESTAMP
+        WHERE novelId = ? AND branchId = ?
+          AND (validFromChapter >= ? OR sourceChapter >= ?)
+          AND status != 'user_confirmed'
+      `,
+      params.novelId,
+      params.branchId,
+      params.fromChapterNo,
+      params.fromChapterNo
+    )
+
+    execute(
+      `
         UPDATE KnowledgeWorld
         SET status = 'outdated', updatedAt = CURRENT_TIMESTAMP
-        WHERE novelId = ? AND branchId = ? AND firstSeenChapter >= ? AND status != 'user_confirmed'
+        WHERE novelId = ? AND branchId = ?
+          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND status != 'user_confirmed'
       `,
       params.novelId,
       params.branchId,
       params.fromChapterNo
     )
+
+    execute(
+      'DELETE FROM GraphContextCache WHERE novelId = ? AND branchId = ? AND asOfChapter >= ?',
+      params.novelId,
+      params.branchId,
+      params.fromChapterNo
+    )
   })
+
+  const { deleteBranchRetrievalIndexFromChapter } = await import('@/lib/server/retrieval-index')
+  await deleteBranchRetrievalIndexFromChapter(params.branchId, params.fromChapterNo)
+
 }

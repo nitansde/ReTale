@@ -6,10 +6,13 @@ import {
   enqueueKnowledgeJob,
   getMainBranchId,
   hashContent,
-  rebuildBranchFts,
-  replaceChapterFts,
+  markKnowledgeStaleFromChapter,
   splitChapterLines,
 } from '@/lib/server/knowledge-store'
+import {
+  deleteBranchRetrievalIndex,
+  rebuildBranchRetrievalIndex,
+} from '@/lib/server/retrieval-index'
 import { execute, queryAll, queryOne, type SqlParam, withTransaction } from '@/lib/server/sqlite'
 import { htmlToPlainText, plainTextToHtml, uid } from '@/lib/utils'
 
@@ -143,6 +146,30 @@ function createEmptySnapshot(chapterNo: number) {
     open_threads: [] as SnapshotThread[],
     forbidden_future_facts: `Do not use any facts from chapters > ${chapterNo}.`,
   }
+}
+
+function chooseConciseKnowledgeText(existing: string | null | undefined, incoming: string | null | undefined) {
+  const left = (existing ?? '').trim()
+  const right = (incoming ?? '').trim()
+  if (!left) return right
+  if (!right) return left
+  if (left === right) return left
+  if (left.includes(right)) return right
+  if (right.includes(left)) return left
+  return left.length <= right.length ? left : right
+}
+
+function isGenericSnapshotRelationType(value: string) {
+  const normalized = value.trim().toLocaleLowerCase('en-US')
+  return !normalized
+    || normalized === '关系'
+    || normalized === '人物关系'
+    || normalized === '角色关系'
+    || normalized === '关联'
+    || normalized === '联系'
+    || normalized === '相关'
+    || normalized === 'relation'
+    || normalized === 'relationship'
 }
 
 function findEvidenceSpanId(chapterId: string, lineStart: number, lineEnd: number) {
@@ -604,6 +631,7 @@ function insertTextSpans(spans: ReturnType<typeof buildTextSpansFromLines>) {
 
 async function clearDerivedKnowledge(novelId: string, branchId: string) {
   await withTransaction(async () => {
+    execute('DELETE FROM GraphContextCache WHERE novelId = ? AND branchId = ?', novelId, branchId)
     execute('DELETE FROM ChapterSnapshot WHERE novelId = ? AND branchId = ?', novelId, branchId)
     execute(
       'DELETE FROM FactEvidence WHERE factId IN (SELECT id FROM KnowledgeFact WHERE novelId = ? AND branchId = ?)',
@@ -621,12 +649,27 @@ async function clearDerivedKnowledge(novelId: string, branchId: string) {
       branchId
     )
     execute(
+      "DELETE FROM EntityLink WHERE novelId = ? AND branchId = ? AND status != 'user_confirmed'",
+      novelId,
+      branchId
+    )
+    execute(
+      "DELETE FROM EntityState WHERE novelId = ? AND branchId = ? AND status != 'user_confirmed'",
+      novelId,
+      branchId
+    )
+    execute(
       'DELETE FROM EventParticipant WHERE eventId IN (SELECT id FROM KnowledgeEvent WHERE novelId = ? AND branchId = ?)',
       novelId,
       branchId
     )
     execute(
       "DELETE FROM KnowledgeEvent WHERE novelId = ? AND branchId = ? AND status != 'user_confirmed'",
+      novelId,
+      branchId
+    )
+    execute(
+      "DELETE FROM EventLink WHERE novelId = ? AND branchId = ? AND status != 'user_confirmed'",
       novelId,
       branchId
     )
@@ -651,6 +694,7 @@ async function clearDerivedKnowledge(novelId: string, branchId: string) {
 
 async function clearKnowledgeGraphData(novelId: string, branchId: string) {
   await withTransaction(async () => {
+    execute('DELETE FROM GraphContextCache WHERE novelId = ? AND branchId = ?', novelId, branchId)
     execute('DELETE FROM ChapterSnapshot WHERE novelId = ? AND branchId = ?', novelId, branchId)
     execute(
       'DELETE FROM FactEvidence WHERE factId IN (SELECT id FROM KnowledgeFact WHERE novelId = ? AND branchId = ?)',
@@ -659,12 +703,15 @@ async function clearKnowledgeGraphData(novelId: string, branchId: string) {
     )
     execute('DELETE FROM KnowledgeFact WHERE novelId = ? AND branchId = ?', novelId, branchId)
     execute('DELETE FROM KnowledgeRelation WHERE novelId = ? AND branchId = ?', novelId, branchId)
+    execute('DELETE FROM EntityLink WHERE novelId = ? AND branchId = ?', novelId, branchId)
+    execute('DELETE FROM EntityState WHERE novelId = ? AND branchId = ?', novelId, branchId)
     execute(
       'DELETE FROM EventParticipant WHERE eventId IN (SELECT id FROM KnowledgeEvent WHERE novelId = ? AND branchId = ?)',
       novelId,
       branchId
     )
     execute('DELETE FROM KnowledgeEvent WHERE novelId = ? AND branchId = ?', novelId, branchId)
+    execute('DELETE FROM EventLink WHERE novelId = ? AND branchId = ?', novelId, branchId)
     execute('DELETE FROM KnowledgeWorld WHERE novelId = ? AND branchId = ?', novelId, branchId)
     execute(
       'DELETE FROM EntityAppearance WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ?)',
@@ -797,6 +844,33 @@ async function persistChapterExtraction(params: {
       )
     }
 
+    const primaryEvidence = item.evidence[0]
+    const primaryEvidenceSpanId = primaryEvidence
+      ? findEvidenceSpanId(params.chapterId, primaryEvidence.lineStart, primaryEvidence.lineEnd)
+      : null
+
+    execute(
+      `
+        INSERT INTO EntityState (
+          id, novelId, branchId, entityId, stateType, stateValue, description,
+          sourceChapter, validFromChapter, evidenceSpanId, evidenceQuote, confidence, status, includeByDefault
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_generated', 1)
+      `,
+      uid('entity-state'),
+      params.novelId,
+      params.branchId,
+      entityId,
+      'character_status',
+      item.status || 'unknown',
+      item.descriptionDelta || null,
+      params.chapterNo,
+      params.chapterNo,
+      primaryEvidenceSpanId,
+      primaryEvidence?.quote ?? null,
+      0.7
+    )
+
     execute(
       `
         INSERT INTO KnowledgeFact (
@@ -821,25 +895,165 @@ async function persistChapterExtraction(params: {
     entityIdByName.set(relation.source, sourceEntityId)
     entityIdByName.set(relation.target, targetEntityId)
     const evidence = relation.evidence[0]
+    const evidenceSpanId = evidence ? findEvidenceSpanId(params.chapterId, evidence.lineStart, evidence.lineEnd) : null
 
-    execute(
+    const existingRelation = queryOne<{
+      id: string
+      status: string | null
+      polarity: string | null
+      strength: number | null
+      sourceChapter: number | null
+      validFromChapter: number | null
+      evidenceSpanId: string | null
+    }>(
       `
-        INSERT INTO KnowledgeRelation (
-          id, novelId, branchId, sourceEntityId, targetEntityId, relationType, polarity, strength, sourceChapter, validFromChapter, evidenceSpanId
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        SELECT id, status, polarity, strength, sourceChapter, validFromChapter, evidenceSpanId
+        FROM KnowledgeRelation
+        WHERE novelId = ? AND branchId = ? AND sourceEntityId = ? AND targetEntityId = ? AND relationType = ?
+          AND validFromChapter <= ?
+          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+        ORDER BY CASE status WHEN 'user_confirmed' THEN 0 ELSE 1 END, sourceChapter DESC
+        LIMIT 1
       `,
-      uid('relation'),
       params.novelId,
       params.branchId,
       sourceEntityId,
       targetEntityId,
       relation.type,
+      params.chapterNo,
+      params.chapterNo
+    )
+
+    if (existingRelation) {
+      if (existingRelation.status !== 'user_confirmed') {
+        execute(
+          `
+            UPDATE KnowledgeRelation
+            SET polarity = ?,
+                strength = ?,
+                sourceChapter = ?,
+                validFromChapter = ?,
+                evidenceSpanId = ?,
+                updatedAt = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `,
+          existingRelation.polarity && existingRelation.polarity !== 'neutral' ? existingRelation.polarity : relation.polarity,
+          Math.max(existingRelation.strength ?? relation.strength, relation.strength),
+          Math.max(existingRelation.sourceChapter ?? params.chapterNo, params.chapterNo),
+          Math.min(existingRelation.validFromChapter ?? relation.validFromChapter, relation.validFromChapter),
+          evidenceSpanId ?? existingRelation.evidenceSpanId,
+          existingRelation.id
+        )
+      }
+    } else {
+      execute(
+        `
+          INSERT INTO KnowledgeRelation (
+            id, novelId, branchId, sourceEntityId, targetEntityId, relationType, polarity, strength, sourceChapter, validFromChapter, evidenceSpanId
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        uid('relation'),
+        params.novelId,
+        params.branchId,
+        sourceEntityId,
+        targetEntityId,
+        relation.type,
+        relation.polarity,
+        relation.strength,
+        params.chapterNo,
+        relation.validFromChapter,
+        evidenceSpanId
+      )
+    }
+
+    const existingLink = queryOne<{
+      id: string
+      status: string | null
+      polarity: string | null
+      strength: number | null
+      sourceChapter: number | null
+      validFromChapter: number | null
+      evidenceSpanId: string | null
+      evidenceQuote: string | null
+      description: string | null
+    }>(
+      `
+        SELECT id, status, polarity, strength, sourceChapter, validFromChapter, evidenceSpanId, evidenceQuote, description
+        FROM EntityLink
+        WHERE novelId = ? AND branchId = ? AND sourceEntityId = ? AND targetEntityId = ? AND linkType = ?
+          AND validFromChapter <= ?
+          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+        ORDER BY CASE status WHEN 'user_confirmed' THEN 0 ELSE 1 END, sourceChapter DESC
+        LIMIT 1
+      `,
+      params.novelId,
+      params.branchId,
+      sourceEntityId,
+      targetEntityId,
+      relation.type,
+      params.chapterNo,
+      params.chapterNo
+    )
+
+    if (existingLink) {
+      if (existingLink.status !== 'user_confirmed') {
+        execute(
+          `
+            UPDATE EntityLink
+            SET label = ?,
+                description = ?,
+                polarity = ?,
+                strength = ?,
+                sourceChapter = ?,
+                validFromChapter = ?,
+                evidenceSpanId = ?,
+                evidenceQuote = ?,
+                updatedAt = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `,
+          relation.type,
+          chooseConciseKnowledgeText(existingLink.description, relation.change) || null,
+          existingLink.polarity && existingLink.polarity !== 'neutral' ? existingLink.polarity : relation.polarity,
+          Math.max(existingLink.strength ?? relation.strength, relation.strength),
+          Math.max(existingLink.sourceChapter ?? params.chapterNo, params.chapterNo),
+          Math.min(existingLink.validFromChapter ?? relation.validFromChapter, relation.validFromChapter),
+          evidenceSpanId ?? existingLink.evidenceSpanId,
+          evidence?.quote ?? existingLink.evidenceQuote,
+          existingLink.id
+        )
+      }
+      continue
+    }
+
+    execute(
+      `
+        INSERT INTO EntityLink (
+          id, novelId, branchId, sourceEntityId, targetEntityId, linkType, label, description,
+          polarity, strength, weight, sourceChapter, validFromChapter, validToChapter,
+          evidenceSpanId, evidenceQuote, confidence, status, includeByDefault
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_generated', 1)
+      `,
+      uid('entity-link'),
+      params.novelId,
+      params.branchId,
+      sourceEntityId,
+      targetEntityId,
+      relation.type,
+      relation.type,
+      relation.change || null,
       relation.polarity,
       relation.strength,
+      1,
       params.chapterNo,
       relation.validFromChapter,
-      evidence ? findEvidenceSpanId(params.chapterId, evidence.lineStart, evidence.lineEnd) : null
+      null,
+      evidenceSpanId,
+      evidence?.quote ?? null,
+      0.7
     )
   }
 
@@ -891,13 +1105,20 @@ async function persistChapterExtraction(params: {
     )
 
     if (existing) {
+      const existingWorld = queryOne<{ status: string | null; definition: string | null }>(
+        'SELECT status, definition FROM KnowledgeWorld WHERE id = ?',
+        existing.id
+      )
+      if (existingWorld?.status === 'user_confirmed') {
+        continue
+      }
       execute(
         `
           UPDATE KnowledgeWorld
           SET definition = ?, validToChapter = NULL, evidenceSpanId = ?, updatedAt = CURRENT_TIMESTAMP
           WHERE id = ?
         `,
-        item.definition,
+        chooseConciseKnowledgeText(existingWorld?.definition, item.definition),
         evidence ? findEvidenceSpanId(params.chapterId, evidence.lineStart, evidence.lineEnd) : null,
         existing.id
       )
@@ -1004,6 +1225,37 @@ async function buildSnapshotsForNovel(params: { novelId: string; branchId: strin
       aliasesByEntityId.set(alias.entityId, current)
     }
 
+    const activeStates = entityIds.length
+      ? queryAll<{
+          entityId: string
+          stateValue: string
+          validFromChapter: number
+          sourceChapter: number
+          confidence: number
+        }>(
+          `
+            SELECT entityId, stateValue, validFromChapter, sourceChapter, confidence
+            FROM EntityState
+            WHERE novelId = ? AND branchId = ?
+              AND entityId IN (${entityIds.map(() => '?').join(', ')})
+              AND validFromChapter <= ?
+              AND (validToChapter IS NULL OR validToChapter >= ?)
+              AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+            ORDER BY validFromChapter DESC, sourceChapter DESC, confidence DESC
+          `,
+          params.novelId,
+          params.branchId,
+          ...entityIds,
+          chapter.chapterNo,
+          chapter.chapterNo
+        )
+      : []
+    const latestStateByEntityId = new Map<string, string>()
+    for (const state of activeStates) {
+      if (latestStateByEntityId.has(state.entityId)) continue
+      latestStateByEntityId.set(state.entityId, state.stateValue)
+    }
+
     const relations = queryAll<{
       relationType: string
       polarity: string | null
@@ -1021,7 +1273,9 @@ async function buildSnapshotsForNovel(params: { novelId: string; branchId: strin
         JOIN KnowledgeEntity te ON te.id = r.targetEntityId
         WHERE r.novelId = ? AND r.branchId = ? AND r.validFromChapter <= ?
           AND (r.validToChapter IS NULL OR r.validToChapter >= ?)
-        LIMIT 16
+          AND r.status NOT IN ('rejected', 'outdated', 'potentially_stale')
+        ORDER BY CASE r.status WHEN 'user_confirmed' THEN 0 ELSE 1 END, r.strength DESC, r.sourceChapter DESC
+        LIMIT 24
       `,
       params.novelId,
       params.branchId,
@@ -1048,8 +1302,9 @@ async function buildSnapshotsForNovel(params: { novelId: string; branchId: strin
         FROM KnowledgeWorld
         WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
           AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
         ORDER BY firstSeenChapter ASC
-        LIMIT 12
+        LIMIT 24
       `,
       params.novelId,
       params.branchId,
@@ -1076,27 +1331,59 @@ async function buildSnapshotsForNovel(params: { novelId: string; branchId: strin
     snapshot.major_characters = entities.map((entity) => ({
       name: entity.canonicalName,
       aliases: aliasesByEntityId.get(entity.id) ?? [],
-      status: entity.status ?? '活跃',
-      lastSeenChapter: entity.lastSeenChapter ?? chapter.chapterNo,
+      status: latestStateByEntityId.get(entity.id) ?? '活跃',
+      lastSeenChapter: entity.lastSeenChapter ? Math.min(entity.lastSeenChapter, chapter.chapterNo) : chapter.chapterNo,
     }))
-    snapshot.active_relationships = relations.map((relation) => ({
-      source: relation.sourceName,
-      target: relation.targetName,
-      type: relation.relationType,
-      polarity: relation.polarity ?? 'neutral',
-      validFromChapter: relation.validFromChapter,
-      evidenceChapter: relation.sourceChapter,
-    }))
+    const dedupedRelations = new Map<string, SnapshotRelation>()
+    for (const relation of relations) {
+      if (isGenericSnapshotRelationType(relation.relationType)) continue
+      const key = [relation.sourceName, relation.targetName, relation.relationType]
+        .map((part) => part.trim().toLocaleLowerCase('en-US'))
+        .join('::')
+      const nextRelation: SnapshotRelation = {
+        source: relation.sourceName,
+        target: relation.targetName,
+        type: relation.relationType,
+        polarity: relation.polarity ?? 'neutral',
+        validFromChapter: relation.validFromChapter,
+        evidenceChapter: relation.sourceChapter,
+      }
+      const existing = dedupedRelations.get(key)
+      if (!existing) {
+        dedupedRelations.set(key, nextRelation)
+        continue
+      }
+      if (nextRelation.validFromChapter > existing.validFromChapter || nextRelation.evidenceChapter > existing.evidenceChapter) {
+        dedupedRelations.set(key, nextRelation)
+      }
+    }
+    snapshot.active_relationships = [...dedupedRelations.values()].slice(0, 16)
     snapshot.recent_events = events.map((event) => ({
       chapter: event.chapterNo,
       name: event.name,
       summary: event.summary,
     }))
-    snapshot.world_rules = worlds.map((world) => ({
-      term: world.term,
-      definition: world.definition,
-      firstSeenChapter: world.firstSeenChapter ?? chapter.chapterNo,
-    }))
+    const dedupedWorlds = new Map<string, SnapshotRule>()
+    for (const world of worlds) {
+      const key = world.term.trim().toLocaleLowerCase('en-US')
+      if (!key) continue
+      const nextRule: SnapshotRule = {
+        term: world.term,
+        definition: world.definition,
+        firstSeenChapter: world.firstSeenChapter ?? chapter.chapterNo,
+      }
+      const existing = dedupedWorlds.get(key)
+      if (!existing) {
+        dedupedWorlds.set(key, nextRule)
+        continue
+      }
+      dedupedWorlds.set(key, {
+        term: existing.term,
+        definition: chooseConciseKnowledgeText(existing.definition, nextRule.definition),
+        firstSeenChapter: Math.min(existing.firstSeenChapter, nextRule.firstSeenChapter),
+      })
+    }
+    snapshot.world_rules = [...dedupedWorlds.values()].slice(0, 12)
     snapshot.open_threads = openThreadFacts.map((fact) => {
       const parsed = fact.valueJson ? (JSON.parse(fact.valueJson) as { description?: string }) : {}
       return {
@@ -1304,6 +1591,10 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
       break
     }
 
+    updateKnowledgeJob(job.id, { currentStep: '构建 Lance 检索索引', progress: 0.96 })
+    assertKnowledgeRebuildContinues(job.id)
+    await rebuildBranchRetrievalIndex(params.novelId, branchId)
+
     updateKnowledgeJob(job.id, { status: 'succeeded', currentStep: '完成', progress: 1 })
 
     return { jobId: job.id, outcome: 'completed' as const }
@@ -1444,20 +1735,6 @@ export async function persistImportedNovelToKnowledgeStore(params: PersistImport
     }
   })
 
-  const spans = chapterRows.flatMap((row) =>
-    buildTextSpansFromLines({
-      novelId: params.novelId,
-      branchId,
-      chapterId: row.chapterId,
-      chapterNo: row.chapterNo,
-      text: row.rawText,
-      lines: splitChapterLines(row.rawText),
-    })
-  )
-  if (spans.length) {
-    await replaceChapterFts(spans)
-  }
-
   await enqueueKnowledgeJob({
     novelId: params.novelId,
     branchId,
@@ -1509,8 +1786,9 @@ export async function syncWorkspacePayloadToKnowledgeStore(payload: {
         await waitForKnowledgeJobCompletion(activeJob.id)
       }
 
+      await deleteBranchRetrievalIndex(branchId)
+
       await withTransaction(async () => {
-        execute('DELETE FROM text_spans_fts WHERE novel_id = ?', novel.id)
         execute('DELETE FROM NovelRecord WHERE id = ?', novel.id)
       })
     }
@@ -1636,13 +1914,24 @@ export async function syncWorkspacePayloadToKnowledgeStore(payload: {
       firstChangedChapterNo = firstChangedChapterNo === null ? chapterNo : Math.min(firstChangedChapterNo, chapterNo)
     }
 
-    if (staleChapters.length) {
-      await rebuildBranchFts(novelId, branchId)
-    } else if (refreshedSpans.length) {
-      await replaceChapterFts(refreshedSpans)
-    }
+    const invalidationFromChapterNo = [
+      firstChangedChapterNo,
+      staleChapters.length ? Math.min(...staleChapters.map((chapter) => chapter.chapterNo)) : null,
+    ].reduce<number | null>((current, value) => {
+      if (value === null) return current
+      if (current === null) return value
+      return Math.min(current, value)
+    }, null)
 
     if (shouldBootstrapKnowledge || staleChapters.length || firstChangedChapterNo !== null) {
+      if (invalidationFromChapterNo !== null) {
+        await markKnowledgeStaleFromChapter({
+          novelId,
+          branchId,
+          fromChapterNo: invalidationFromChapterNo,
+        })
+      }
+
       if (activeJob?.status === 'paused') {
         continue
       }
