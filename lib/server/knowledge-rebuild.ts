@@ -3,13 +3,11 @@ import { normalizeAISettings } from '@/lib/ai-settings'
 import {
   buildCharacterDescriptionDelta,
   hasCharacterRoleCardProfile,
-  mergeCharacterRoleCardProfiles,
-  normalizeCharacterRoleCardProfile,
   type ChapterKnowledgeExtraction,
-  type CharacterRoleCardProfile,
 } from '@/lib/story-knowledge'
 import { extractChapterKnowledgeOffline } from '@/lib/server/knowledge-extraction'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
+import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 import {
   buildTextSpansFromLines,
   enqueueKnowledgeJob,
@@ -34,40 +32,6 @@ type PersistImportedNovelParams = {
   sourceType?: string
 }
 
-type SnapshotCharacter = {
-  name: string
-  aliases: string[]
-  status: string
-  lastSeenChapter: number
-  profile?: CharacterRoleCardProfile
-}
-
-type SnapshotRelation = {
-  source: string
-  target: string
-  type: string
-  polarity: string
-  validFromChapter: number
-  evidenceChapter: number
-}
-
-type SnapshotEvent = {
-  chapter: number
-  name: string
-  summary: string
-}
-
-type SnapshotRule = {
-  term: string
-  definition: string
-  firstSeenChapter: number
-}
-
-type SnapshotThread = {
-  name: string
-  description: string
-}
-
 type KnowledgeChapterRow = {
   id: string
   novelId: string
@@ -83,21 +47,13 @@ type KnowledgeChapterRow = {
   knowledgeStatus: string
 }
 
-type KnowledgeEntityRow = {
-  id: string
-  canonicalName: string
-  status: string | null
-  description: string | null
-  lastSeenChapter: number | null
-}
-
 type KnowledgeRebuildPayloadChapter = {
   chapterId: string
   chapterNo: number
   extraction: ChapterKnowledgeExtraction
 }
 
-type KnowledgeRebuildStepKey = 'extract' | 'cleanup' | 'write' | 'snapshot' | 'index'
+type KnowledgeRebuildStepKey = 'extract' | 'cleanup' | 'write' | 'index'
 
 type KnowledgeRebuildStepStatus = 'pending' | 'running' | 'paused' | 'completed'
 
@@ -138,13 +94,12 @@ type KnowledgeRebuildJobState = {
   phase: KnowledgeRebuildJobPayload['phase']
 }
 
-const KNOWLEDGE_REBUILD_STEP_ORDER: KnowledgeRebuildStepKey[] = ['extract', 'cleanup', 'write', 'snapshot', 'index']
+const KNOWLEDGE_REBUILD_STEP_ORDER: KnowledgeRebuildStepKey[] = ['extract', 'cleanup', 'write', 'index']
 
 const KNOWLEDGE_REBUILD_STEP_LABELS: Record<KnowledgeRebuildStepKey, string> = {
   extract: '抽取章节知识',
   cleanup: '清理旧知识',
   write: '写入结构化知识',
-  snapshot: '构建章节快照',
   index: '构建 Lance 检索索引',
 }
 
@@ -177,18 +132,6 @@ function toChapterLike(params: { chapterId: string; novelId: string; title: stri
   }
 }
 
-function createEmptySnapshot(chapterNo: number) {
-  return {
-    as_of_chapter: chapterNo,
-    major_characters: [] as SnapshotCharacter[],
-    active_relationships: [] as SnapshotRelation[],
-    recent_events: [] as SnapshotEvent[],
-    world_rules: [] as SnapshotRule[],
-    open_threads: [] as SnapshotThread[],
-    forbidden_future_facts: `Do not use any facts from chapters > ${chapterNo}.`,
-  }
-}
-
 function chooseConciseKnowledgeText(existing: string | null | undefined, incoming: string | null | undefined) {
   const left = (existing ?? '').trim()
   const right = (incoming ?? '').trim()
@@ -198,64 +141,6 @@ function chooseConciseKnowledgeText(existing: string | null | undefined, incomin
   if (left.includes(right)) return right
   if (right.includes(left)) return left
   return left.length <= right.length ? left : right
-}
-
-function loadCharacterProfilesByEntityId(params: {
-  novelId: string
-  branchId: string
-  entityIds: string[]
-  maxChapterNo?: number
-}) {
-  if (!params.entityIds.length) {
-    return new Map<string, CharacterRoleCardProfile>()
-  }
-
-  const chapterFilter = typeof params.maxChapterNo === 'number'
-    ? 'AND validFromChapter <= ? AND (validToChapter IS NULL OR validToChapter >= ?)'
-    : ''
-  const rows = queryAll<{ subjectEntityId: string | null; valueJson: string | null; sourceChapter: number }>(
-    `
-      SELECT subjectEntityId, valueJson, sourceChapter
-      FROM KnowledgeFact
-      WHERE novelId = ? AND branchId = ? AND factType = 'character_profile'
-        AND subjectEntityId IN (${params.entityIds.map(() => '?').join(', ')})
-        AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
-        ${chapterFilter}
-      ORDER BY validFromChapter ASC, sourceChapter ASC
-    `,
-    params.novelId,
-    params.branchId,
-    ...params.entityIds,
-    ...(typeof params.maxChapterNo === 'number' ? [params.maxChapterNo, params.maxChapterNo] : [])
-  )
-
-  const profileByEntityId = new Map<string, CharacterRoleCardProfile>()
-  for (const row of rows) {
-    const entityId = row.subjectEntityId?.trim()
-    if (!entityId || !row.valueJson) continue
-    try {
-      const parsed = JSON.parse(row.valueJson) as { profile?: unknown }
-      const profile = normalizeCharacterRoleCardProfile(parsed.profile)
-      if (!hasCharacterRoleCardProfile(profile)) continue
-      profileByEntityId.set(entityId, mergeCharacterRoleCardProfiles(profileByEntityId.get(entityId), profile))
-    } catch {
-    }
-  }
-
-  return profileByEntityId
-}
-
-function isGenericSnapshotRelationType(value: string) {
-  const normalized = value.trim().toLocaleLowerCase('en-US')
-  return !normalized
-    || normalized === '关系'
-    || normalized === '人物关系'
-    || normalized === '角色关系'
-    || normalized === '关联'
-    || normalized === '联系'
-    || normalized === '相关'
-    || normalized === 'relation'
-    || normalized === 'relationship'
 }
 
 function findEvidenceSpanId(chapterId: string, lineStart: number, lineEnd: number) {
@@ -330,7 +215,20 @@ function normalizeKnowledgeRebuildJobPayload(payload: unknown) {
   if (!payload || typeof payload !== 'object' || typeof (payload as { branchId?: unknown }).branchId !== 'string') {
     return null
   }
-  return payload as KnowledgeRebuildJobPayload
+
+  const candidate = payload as KnowledgeRebuildJobPayload & {
+    stageStartedAtByKey?: Partial<Record<KnowledgeRebuildStepKey, string>>
+  }
+  const rawPhase = (payload as { phase?: unknown }).phase
+  const normalizedPhase: KnowledgeRebuildJobPayload['phase'] = rawPhase === 'extract' || rawPhase === 'cleanup' || rawPhase === 'write' || rawPhase === 'index'
+      ? rawPhase
+      : undefined
+
+  return {
+    ...candidate,
+    phase: normalizedPhase,
+    stageStartedAtByKey: { ...(candidate.stageStartedAtByKey ?? {}) },
+  }
 }
 
 function parseStageStartedAt(value: string | undefined) {
@@ -464,8 +362,6 @@ function buildKnowledgeRebuildSteps(payload: KnowledgeRebuildJobPayload, runtime
     } else if (key === 'write') {
       progress = status === 'completed' ? 1 : writeProgress
       etaMinutes = status === 'running' ? estimateStageEtaMinutes(progress, stageStartedAtByKey.write) : null
-    } else if (key === 'snapshot') {
-      progress = status === 'completed' ? 1 : (phase === 'snapshot' ? 0.55 : 0)
     } else if (key === 'index') {
       progress = status === 'completed' ? 1 : (phase === 'index' ? activeIndexProgress : 0)
       etaMinutes = status === 'running' ? activeIndexEtaMinutes : null
@@ -970,8 +866,6 @@ function insertTextSpans(spans: ReturnType<typeof buildTextSpansFromLines>) {
 
 async function clearDerivedKnowledge(novelId: string, branchId: string) {
   await withTransaction(async () => {
-    execute('DELETE FROM GraphContextCache WHERE novelId = ? AND branchId = ?', novelId, branchId)
-    execute('DELETE FROM ChapterSnapshot WHERE novelId = ? AND branchId = ?', novelId, branchId)
     execute(
       'DELETE FROM FactEvidence WHERE factId IN (SELECT id FROM KnowledgeFact WHERE novelId = ? AND branchId = ?)',
       novelId,
@@ -1033,8 +927,6 @@ async function clearDerivedKnowledge(novelId: string, branchId: string) {
 
 async function clearKnowledgeGraphData(novelId: string, branchId: string) {
   await withTransaction(async () => {
-    execute('DELETE FROM GraphContextCache WHERE novelId = ? AND branchId = ?', novelId, branchId)
-    execute('DELETE FROM ChapterSnapshot WHERE novelId = ? AND branchId = ?', novelId, branchId)
     execute(
       'DELETE FROM FactEvidence WHERE factId IN (SELECT id FROM KnowledgeFact WHERE novelId = ? AND branchId = ?)',
       novelId,
@@ -1188,34 +1080,81 @@ async function persistChapterExtraction(params: {
       ? findEvidenceSpanId(params.chapterId, primaryEvidence.lineStart, primaryEvidence.lineEnd)
       : null
 
-    execute(
+    const activeEntityState = queryOne<{
+      id: string
+      stateValue: string
+      status: string
+    }>(
       `
-        INSERT INTO EntityState (
-          id, novelId, branchId, entityId, stateType, stateValue, description,
-          sourceChapter, validFromChapter, evidenceSpanId, evidenceQuote, confidence, status, includeByDefault
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_generated', 1)
+        SELECT id, stateValue, status
+        FROM EntityState
+        WHERE novelId = ? AND branchId = ? AND entityId = ? AND stateType = 'character_status'
+          AND validFromChapter <= ?
+          AND validUntilChapter > ?
+          AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+        ORDER BY CASE status WHEN 'user_confirmed' THEN 0 ELSE 1 END, sourceChapter DESC, confidence DESC
+        LIMIT 1
       `,
-      uid('entity-state'),
       params.novelId,
       params.branchId,
       entityId,
-      'character_status',
-      item.status || 'unknown',
-      item.descriptionDelta || null,
       params.chapterNo,
       params.chapterNo,
-      primaryEvidenceSpanId,
-      primaryEvidence?.quote ?? null,
-      0.7
     )
+
+    let nextEntityStateStatus = 'ai_generated'
+    let shouldInsertEntityState = true
+    if (activeEntityState) {
+      if (activeEntityState.stateValue === (item.status || 'unknown')) {
+        shouldInsertEntityState = false
+      } else if (activeEntityState.status === 'user_confirmed') {
+        nextEntityStateStatus = 'conflicted'
+      } else {
+        execute(
+          `
+            UPDATE EntityState
+            SET validUntilChapter = ?, updatedAt = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `,
+          params.chapterNo,
+          activeEntityState.id
+        )
+      }
+    }
+
+    if (shouldInsertEntityState) {
+      execute(
+        `
+          INSERT INTO EntityState (
+            id, novelId, branchId, entityId, stateType, stateValue, description,
+            sourceChapter, validFromChapter, validUntilChapter,
+            evidenceSpanId, evidenceQuote, confidence, status, includeByDefault
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        `,
+        uid('entity-state'),
+        params.novelId,
+        params.branchId,
+        entityId,
+        'character_status',
+        item.status || 'unknown',
+        item.descriptionDelta || null,
+        params.chapterNo,
+        params.chapterNo,
+        INF_CHAPTER,
+        primaryEvidenceSpanId,
+        primaryEvidence?.quote ?? null,
+        0.7,
+        nextEntityStateStatus
+      )
+    }
 
     execute(
       `
-        INSERT INTO KnowledgeFact (
-          id, novelId, branchId, factType, subjectEntityId, predicate, valueJson, sourceChapter, validFromChapter
-        )
-        VALUES (?, ?, ?, 'character_status', ?, 'status', ?, ?, ?)
+          INSERT INTO KnowledgeFact (
+            id, novelId, branchId, factType, subjectEntityId, predicate, valueJson, sourceChapter, validFromChapter, validUntilChapter
+          )
+          VALUES (?, ?, ?, 'character_status', ?, 'status', ?, ?, ?, ?)
       `,
       uid('fact'),
       params.novelId,
@@ -1223,16 +1162,17 @@ async function persistChapterExtraction(params: {
       entityId,
       JSON.stringify({ status: item.status, descriptionDelta: item.descriptionDelta }),
       params.chapterNo,
-      params.chapterNo
+      params.chapterNo,
+      INF_CHAPTER
     )
 
     if (hasCharacterRoleCardProfile(item.profile)) {
       execute(
         `
           INSERT INTO KnowledgeFact (
-            id, novelId, branchId, factType, subjectEntityId, predicate, valueJson, sourceChapter, validFromChapter
+            id, novelId, branchId, factType, subjectEntityId, predicate, valueJson, sourceChapter, validFromChapter, validUntilChapter
           )
-          VALUES (?, ?, ?, 'character_profile', ?, 'role_card', ?, ?, ?)
+          VALUES (?, ?, ?, 'character_profile', ?, 'role_card', ?, ?, ?, ?)
         `,
         uid('fact-profile'),
         params.novelId,
@@ -1243,7 +1183,8 @@ async function persistChapterExtraction(params: {
           descriptionDelta: buildCharacterDescriptionDelta(item.profile, item.descriptionDelta),
         }),
         params.chapterNo,
-        params.chapterNo
+        params.chapterNo,
+        INF_CHAPTER
       )
     }
   }
@@ -1271,7 +1212,7 @@ async function persistChapterExtraction(params: {
         FROM KnowledgeRelation
         WHERE novelId = ? AND branchId = ? AND sourceEntityId = ? AND targetEntityId = ? AND relationType = ?
           AND validFromChapter <= ?
-          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND validUntilChapter > ?
           AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
         ORDER BY CASE status WHEN 'user_confirmed' THEN 0 ELSE 1 END, sourceChapter DESC
         LIMIT 1
@@ -1310,9 +1251,9 @@ async function persistChapterExtraction(params: {
       execute(
         `
           INSERT INTO KnowledgeRelation (
-            id, novelId, branchId, sourceEntityId, targetEntityId, relationType, polarity, strength, sourceChapter, validFromChapter, evidenceSpanId
+            id, novelId, branchId, sourceEntityId, targetEntityId, relationType, polarity, strength, sourceChapter, validFromChapter, validUntilChapter, evidenceSpanId
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         uid('relation'),
         params.novelId,
@@ -1324,6 +1265,7 @@ async function persistChapterExtraction(params: {
         relation.strength,
         params.chapterNo,
         relation.validFromChapter,
+        INF_CHAPTER,
         evidenceSpanId
       )
     }
@@ -1344,7 +1286,7 @@ async function persistChapterExtraction(params: {
         FROM EntityLink
         WHERE novelId = ? AND branchId = ? AND sourceEntityId = ? AND targetEntityId = ? AND linkType = ?
           AND validFromChapter <= ?
-          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND validUntilChapter > ?
           AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
         ORDER BY CASE status WHEN 'user_confirmed' THEN 0 ELSE 1 END, sourceChapter DESC
         LIMIT 1
@@ -1390,13 +1332,13 @@ async function persistChapterExtraction(params: {
 
     execute(
       `
-        INSERT INTO EntityLink (
-          id, novelId, branchId, sourceEntityId, targetEntityId, linkType, label, description,
-          polarity, strength, weight, sourceChapter, validFromChapter, validToChapter,
-          evidenceSpanId, evidenceQuote, confidence, status, includeByDefault
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_generated', 1)
-      `,
+          INSERT INTO EntityLink (
+            id, novelId, branchId, sourceEntityId, targetEntityId, linkType, label, description,
+            polarity, strength, weight, sourceChapter, validFromChapter, validUntilChapter,
+            evidenceSpanId, evidenceQuote, confidence, status, includeByDefault
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_generated', 1)
+        `,
       uid('entity-link'),
       params.novelId,
       params.branchId,
@@ -1406,14 +1348,14 @@ async function persistChapterExtraction(params: {
       relation.type,
       relation.change || null,
       relation.polarity,
-      relation.strength,
-      1,
-      params.chapterNo,
-      relation.validFromChapter,
-      null,
-      evidenceSpanId,
-      evidence?.quote ?? null,
-      0.7
+        relation.strength,
+          1,
+          params.chapterNo,
+          relation.validFromChapter,
+          INF_CHAPTER,
+          evidenceSpanId,
+          evidence?.quote ?? null,
+        0.7
     )
   }
 
@@ -1475,10 +1417,11 @@ async function persistChapterExtraction(params: {
       execute(
         `
           UPDATE KnowledgeWorld
-          SET definition = ?, validToChapter = NULL, evidenceSpanId = ?, updatedAt = CURRENT_TIMESTAMP
+          SET definition = ?, validUntilChapter = ?, evidenceSpanId = ?, updatedAt = CURRENT_TIMESTAMP
           WHERE id = ?
         `,
         chooseConciseKnowledgeText(existingWorld?.definition, item.definition),
+        INF_CHAPTER,
         evidence ? findEvidenceSpanId(params.chapterId, evidence.lineStart, evidence.lineEnd) : null,
         existing.id
       )
@@ -1486,11 +1429,11 @@ async function persistChapterExtraction(params: {
     }
 
     execute(
-      `
+        `
         INSERT INTO KnowledgeWorld (
-          id, novelId, branchId, term, category, definition, firstSeenChapter, validFromChapter, evidenceSpanId
+          id, novelId, branchId, term, category, definition, firstSeenChapter, validFromChapter, validUntilChapter, evidenceSpanId
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       uid('world'),
       params.novelId,
@@ -1500,16 +1443,17 @@ async function persistChapterExtraction(params: {
       item.definition,
       params.chapterNo,
       params.chapterNo,
+      INF_CHAPTER,
       evidence ? findEvidenceSpanId(params.chapterId, evidence.lineStart, evidence.lineEnd) : null
     )
   }
 
   for (const thread of params.extraction.openThreads) {
     const factId = uid('fact-thread')
-    execute(
-      `
-        INSERT INTO KnowledgeFact (id, novelId, branchId, factType, predicate, valueJson, sourceChapter, validFromChapter)
-        VALUES (?, ?, ?, 'open_thread', ?, ?, ?, ?)
+      execute(
+        `
+        INSERT INTO KnowledgeFact (id, novelId, branchId, factType, predicate, valueJson, sourceChapter, validFromChapter, validUntilChapter)
+        VALUES (?, ?, ?, 'open_thread', ?, ?, ?, ?, ?)
       `,
       factId,
       params.novelId,
@@ -1517,7 +1461,8 @@ async function persistChapterExtraction(params: {
       thread.name,
       JSON.stringify({ description: thread.description }),
       params.chapterNo,
-      params.chapterNo
+      params.chapterNo,
+      INF_CHAPTER
     )
 
     const evidence = thread.evidence[0]
@@ -1548,238 +1493,6 @@ async function persistChapterExtraction(params: {
     params.extraction.summary,
     params.chapterId
   )
-}
-
-async function buildSnapshotsForNovel(params: { novelId: string; branchId: string }) {
-  const chapters = queryAll<KnowledgeChapterRow>(
-    'SELECT id, novelId, branchId, chapterNo, title, rawText, summary, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? ORDER BY chapterNo ASC',
-    params.novelId,
-    params.branchId
-  )
-
-  let runningHash = ''
-  for (const chapter of chapters) {
-    const entities = queryAll<KnowledgeEntityRow & { importance: number }>(
-      `
-        SELECT id, canonicalName, status, description, lastSeenChapter, importance
-        FROM KnowledgeEntity
-        WHERE novelId = ? AND branchId = ? AND firstSeenChapter <= ?
-        ORDER BY importance DESC, canonicalName ASC
-        LIMIT 16
-      `,
-      params.novelId,
-      params.branchId,
-      chapter.chapterNo
-    )
-    const entityIds = entities.map((entity) => entity.id)
-    const aliases = entityIds.length
-      ? queryAll<{ entityId: string; alias: string }>(
-          `SELECT entityId, alias FROM EntityAlias WHERE entityId IN (${entityIds.map(() => '?').join(', ')})`,
-          ...entityIds
-        )
-      : []
-    const aliasesByEntityId = new Map<string, string[]>()
-    for (const alias of aliases) {
-      const current = aliasesByEntityId.get(alias.entityId) ?? []
-      current.push(alias.alias)
-      aliasesByEntityId.set(alias.entityId, current)
-    }
-    const profileByEntityId = loadCharacterProfilesByEntityId({
-      novelId: params.novelId,
-      branchId: params.branchId,
-      entityIds,
-      maxChapterNo: chapter.chapterNo,
-    })
-
-    const activeStates = entityIds.length
-      ? queryAll<{
-          entityId: string
-          stateValue: string
-          validFromChapter: number
-          sourceChapter: number
-          confidence: number
-        }>(
-          `
-            SELECT entityId, stateValue, validFromChapter, sourceChapter, confidence
-            FROM EntityState
-            WHERE novelId = ? AND branchId = ?
-              AND entityId IN (${entityIds.map(() => '?').join(', ')})
-              AND validFromChapter <= ?
-              AND (validToChapter IS NULL OR validToChapter >= ?)
-              AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
-            ORDER BY validFromChapter DESC, sourceChapter DESC, confidence DESC
-          `,
-          params.novelId,
-          params.branchId,
-          ...entityIds,
-          chapter.chapterNo,
-          chapter.chapterNo
-        )
-      : []
-    const latestStateByEntityId = new Map<string, string>()
-    for (const state of activeStates) {
-      if (latestStateByEntityId.has(state.entityId)) continue
-      latestStateByEntityId.set(state.entityId, state.stateValue)
-    }
-
-    const relations = queryAll<{
-      relationType: string
-      polarity: string | null
-      validFromChapter: number
-      sourceChapter: number
-      sourceName: string
-      targetName: string
-    }>(
-      `
-        SELECT r.relationType, r.polarity, r.validFromChapter, r.sourceChapter,
-               se.canonicalName as sourceName,
-               te.canonicalName as targetName
-        FROM KnowledgeRelation r
-        JOIN KnowledgeEntity se ON se.id = r.sourceEntityId
-        JOIN KnowledgeEntity te ON te.id = r.targetEntityId
-        WHERE r.novelId = ? AND r.branchId = ? AND r.validFromChapter <= ?
-          AND (r.validToChapter IS NULL OR r.validToChapter >= ?)
-          AND r.status NOT IN ('rejected', 'outdated', 'potentially_stale')
-        ORDER BY CASE r.status WHEN 'user_confirmed' THEN 0 ELSE 1 END, r.strength DESC, r.sourceChapter DESC
-        LIMIT 24
-      `,
-      params.novelId,
-      params.branchId,
-      chapter.chapterNo,
-      chapter.chapterNo
-    )
-
-    const events = queryAll<{ chapterNo: number; name: string; summary: string }>(
-      `
-        SELECT chapterNo, name, summary
-        FROM KnowledgeEvent
-        WHERE novelId = ? AND branchId = ? AND chapterNo <= ?
-        ORDER BY chapterNo DESC, importance DESC
-        LIMIT 6
-      `,
-      params.novelId,
-      params.branchId,
-      chapter.chapterNo
-    )
-
-    const worlds = queryAll<{ term: string; definition: string; firstSeenChapter: number | null }>(
-      `
-        SELECT term, definition, firstSeenChapter
-        FROM KnowledgeWorld
-        WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
-          AND (validToChapter IS NULL OR validToChapter >= ?)
-          AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
-        ORDER BY firstSeenChapter ASC
-        LIMIT 24
-      `,
-      params.novelId,
-      params.branchId,
-      chapter.chapterNo,
-      chapter.chapterNo
-    )
-
-    const openThreadFacts = queryAll<{ predicate: string; valueJson: string | null }>(
-      `
-        SELECT predicate, valueJson
-        FROM KnowledgeFact
-        WHERE novelId = ? AND branchId = ? AND factType = 'open_thread' AND validFromChapter <= ?
-          AND (validToChapter IS NULL OR validToChapter >= ?)
-        ORDER BY sourceChapter DESC
-        LIMIT 8
-      `,
-      params.novelId,
-      params.branchId,
-      chapter.chapterNo,
-      chapter.chapterNo
-    )
-
-    const snapshot = createEmptySnapshot(chapter.chapterNo)
-    snapshot.major_characters = entities.map((entity) => ({
-      name: entity.canonicalName,
-      aliases: aliasesByEntityId.get(entity.id) ?? [],
-      status: latestStateByEntityId.get(entity.id) ?? '活跃',
-      lastSeenChapter: entity.lastSeenChapter ? Math.min(entity.lastSeenChapter, chapter.chapterNo) : chapter.chapterNo,
-      profile: hasCharacterRoleCardProfile(profileByEntityId.get(entity.id)) ? profileByEntityId.get(entity.id) : undefined,
-    }))
-    const dedupedRelations = new Map<string, SnapshotRelation>()
-    for (const relation of relations) {
-      if (isGenericSnapshotRelationType(relation.relationType)) continue
-      const key = [relation.sourceName, relation.targetName, relation.relationType]
-        .map((part) => part.trim().toLocaleLowerCase('en-US'))
-        .join('::')
-      const nextRelation: SnapshotRelation = {
-        source: relation.sourceName,
-        target: relation.targetName,
-        type: relation.relationType,
-        polarity: relation.polarity ?? 'neutral',
-        validFromChapter: relation.validFromChapter,
-        evidenceChapter: relation.sourceChapter,
-      }
-      const existing = dedupedRelations.get(key)
-      if (!existing) {
-        dedupedRelations.set(key, nextRelation)
-        continue
-      }
-      if (nextRelation.validFromChapter > existing.validFromChapter || nextRelation.evidenceChapter > existing.evidenceChapter) {
-        dedupedRelations.set(key, nextRelation)
-      }
-    }
-    snapshot.active_relationships = [...dedupedRelations.values()].slice(0, 16)
-    snapshot.recent_events = events.map((event) => ({
-      chapter: event.chapterNo,
-      name: event.name,
-      summary: event.summary,
-    }))
-    const dedupedWorlds = new Map<string, SnapshotRule>()
-    for (const world of worlds) {
-      const key = world.term.trim().toLocaleLowerCase('en-US')
-      if (!key) continue
-      const nextRule: SnapshotRule = {
-        term: world.term,
-        definition: world.definition,
-        firstSeenChapter: world.firstSeenChapter ?? chapter.chapterNo,
-      }
-      const existing = dedupedWorlds.get(key)
-      if (!existing) {
-        dedupedWorlds.set(key, nextRule)
-        continue
-      }
-      dedupedWorlds.set(key, {
-        term: existing.term,
-        definition: chooseConciseKnowledgeText(existing.definition, nextRule.definition),
-        firstSeenChapter: Math.min(existing.firstSeenChapter, nextRule.firstSeenChapter),
-      })
-    }
-    snapshot.world_rules = [...dedupedWorlds.values()].slice(0, 12)
-    snapshot.open_threads = openThreadFacts.map((fact) => {
-      const parsed = fact.valueJson ? (JSON.parse(fact.valueJson) as { description?: string }) : {}
-      return {
-        name: fact.predicate,
-        description: parsed.description ?? fact.predicate,
-      }
-    })
-
-    runningHash = hashContent(`${runningHash}:${chapter.sourceHash}`)
-    execute(
-      `
-        INSERT INTO ChapterSnapshot (id, novelId, branchId, chapterId, chapterNo, snapshotJson, sourceRevisionHash, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'ready')
-        ON CONFLICT(novelId, branchId, chapterNo) DO UPDATE SET
-          chapterId = excluded.chapterId,
-          snapshotJson = excluded.snapshotJson,
-          sourceRevisionHash = excluded.sourceRevisionHash,
-          status = excluded.status,
-          updatedAt = CURRENT_TIMESTAMP
-      `,
-      uid('snapshot'),
-      params.novelId,
-      params.branchId,
-      chapter.id,
-      chapter.chapterNo,
-      JSON.stringify(snapshot),
-      runningHash
-    )
-  }
 }
 
 export async function rebuildKnowledgeForNovel(params: { novelId: string; branchId?: string }) {
@@ -1991,10 +1704,7 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
           continue
         }
 
-        if (!writeQueue.length) {
-          setKnowledgeRebuildJobPhase(job.id, 'snapshot')
-          continue
-        }
+        if (!writeQueue.length) break
 
         const chapter = writeQueue[0]
         updateKnowledgeJob(job.id, {
@@ -2014,10 +1724,6 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
         continue
       }
 
-      updateKnowledgeJob(job.id, { currentStep: '构建章节快照', progress: 0.9 })
-      assertKnowledgeRebuildContinues(job.id)
-      await buildSnapshotsForNovel({ novelId: params.novelId, branchId })
-      break
     }
 
     setKnowledgeRebuildJobPhase(job.id, 'index')
@@ -2284,12 +1990,34 @@ export async function syncWorkspacePayloadToKnowledgeStore(payload: {
       }
     }
     const existingById = new Map(existing.map((item) => [item.id, item]))
-    const existingSnapshotCount = queryOne<{ count: number }>(
-      'SELECT COUNT(*) as count FROM ChapterSnapshot WHERE novelId = ? AND branchId = ?',
+    const existingStructuredKnowledgeCount = queryOne<{ count: number }>(
+      `
+        SELECT (
+          (SELECT COUNT(*) FROM KnowledgeEntity WHERE novelId = ? AND branchId = ?)
+          + (SELECT COUNT(*) FROM KnowledgeFact WHERE novelId = ? AND branchId = ?)
+          + (SELECT COUNT(*) FROM KnowledgeRelation WHERE novelId = ? AND branchId = ?)
+          + (SELECT COUNT(*) FROM EntityLink WHERE novelId = ? AND branchId = ?)
+          + (SELECT COUNT(*) FROM EntityState WHERE novelId = ? AND branchId = ?)
+          + (SELECT COUNT(*) FROM KnowledgeEvent WHERE novelId = ? AND branchId = ?)
+          + (SELECT COUNT(*) FROM KnowledgeWorld WHERE novelId = ? AND branchId = ?)
+        ) AS count
+      `,
+      novelId,
+      branchId,
+      novelId,
+      branchId,
+      novelId,
+      branchId,
+      novelId,
+      branchId,
+      novelId,
+      branchId,
+      novelId,
+      branchId,
       novelId,
       branchId
     )?.count ?? 0
-    const shouldBootstrapKnowledge = novelChapters.length > 0 && (existing.length === 0 || existingSnapshotCount === 0)
+    const shouldBootstrapKnowledge = novelChapters.length > 0 && (existing.length === 0 || existingStructuredKnowledgeCount === 0)
 
     let firstChangedChapterNo: number | null = null
     const refreshedSpans: ReturnType<typeof buildTextSpansFromLines> = []

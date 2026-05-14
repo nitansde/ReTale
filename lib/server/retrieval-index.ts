@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import * as lancedb from '@lancedb/lancedb'
+import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 import { estimateTokenCount, type TextSpanInput } from '@/lib/server/knowledge-store'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { embedTextsWithOpenAICompatible } from '@/lib/server/openai-compatible'
@@ -32,7 +33,7 @@ type RetrievalDocSeedRow = {
   chapterId: string
   chapterNo: number
   validFromChapter: number
-  validToChapter: number
+  validUntilChapter: number
   lineStart: number
   lineEnd: number
   spanType: string
@@ -86,7 +87,7 @@ export type LanceEvidenceSearchResult = {
 type SourceTruthRow = {
   id: string
   validFromChapter: number
-  validToChapter: number
+  validUntilChapter: number
   status: string
   includeByDefault: number
 }
@@ -263,7 +264,7 @@ function toRetrievalDocRow(span: TextSpanInput): RetrievalDocSeedRow {
     chapterId: span.chapterId,
     chapterNo: span.chapterNo,
     validFromChapter: span.chapterNo,
-    validToChapter: -1,
+    validUntilChapter: INF_CHAPTER,
     lineStart: span.lineStart,
     lineEnd: span.lineEnd,
     spanType: span.spanType,
@@ -410,7 +411,7 @@ function loadBranchChapterSummaryDocs(novelId: string, branchId: string) {
     chapterId: row.id,
     chapterNo: row.chapterNo,
     validFromChapter: row.chapterNo,
-    validToChapter: -1,
+    validUntilChapter: INF_CHAPTER,
     lineStart: -1,
     lineEnd: -1,
     spanType: '',
@@ -465,9 +466,16 @@ function loadBranchEntityProfileDocs(novelId: string, branchId: string) {
     current.push(alias.alias)
     aliasesByEntityId.set(alias.entityId, current)
   }
-  const profileRows = queryAll<{ subjectEntityId: string | null; valueJson: string | null; sourceChapter: number; validFromChapter: number | null }>(
+  const profileRows = queryAll<{
+    id: string
+    subjectEntityId: string | null
+    valueJson: string | null
+    sourceChapter: number
+    validFromChapter: number | null
+    validUntilChapter: number
+  }>(
     `
-      SELECT subjectEntityId, valueJson, sourceChapter, validFromChapter
+      SELECT id, subjectEntityId, valueJson, sourceChapter, validFromChapter, validUntilChapter
       FROM KnowledgeFact
       WHERE novelId = ? AND branchId = ? AND factType = 'character_profile'
         AND subjectEntityId IN (${entityIds.map(() => '?').join(', ')})
@@ -478,15 +486,23 @@ function loadBranchEntityProfileDocs(novelId: string, branchId: string) {
     branchId,
     ...entityIds,
   )
-  const profileRowsByEntityId = new Map<string, Array<{ valueJson: string; sourceChapter: number; validFromChapter: number }>>()
+  const profileRowsByEntityId = new Map<string, Array<{
+    id: string
+    valueJson: string
+    sourceChapter: number
+    validFromChapter: number
+    validUntilChapter: number
+  }>>()
   for (const row of profileRows) {
     const entityId = row.subjectEntityId?.trim()
     if (!entityId || !row.valueJson) continue
     const current = profileRowsByEntityId.get(entityId) ?? []
     current.push({
+      id: row.id,
       valueJson: row.valueJson,
       sourceChapter: row.sourceChapter,
       validFromChapter: row.validFromChapter ?? row.sourceChapter,
+      validUntilChapter: row.validUntilChapter,
     })
     profileRowsByEntityId.set(entityId, current)
   }
@@ -509,7 +525,7 @@ function loadBranchEntityProfileDocs(novelId: string, branchId: string) {
         chapterId: '',
         chapterNo,
         validFromChapter: chapterNo,
-        validToChapter: -1,
+        validUntilChapter: INF_CHAPTER,
         lineStart: -1,
         lineEnd: -1,
         spanType: '',
@@ -537,7 +553,9 @@ function loadBranchEntityProfileDocs(novelId: string, branchId: string) {
         const compactDescription = buildCharacterDescriptionDelta(cumulativeProfile, '')
         const nextRow = rows[index + 1]
         const validFromChapter = Math.max(0, row.validFromChapter || row.sourceChapter)
-        const validToChapter = nextRow ? Math.max(validFromChapter, nextRow.validFromChapter - 1) : -1
+        const nextTransitionChapter = nextRow ? Math.max(validFromChapter + 1, nextRow.validFromChapter) : INF_CHAPTER
+        const explicitValidUntilChapter = row.validUntilChapter
+        const validUntilChapter = Math.max(validFromChapter + 1, Math.min(explicitValidUntilChapter, nextTransitionChapter))
         const text = [
           `实体：${entity.canonicalName}`,
           `类型：${entity.entityType}`,
@@ -550,11 +568,11 @@ function loadBranchEntityProfileDocs(novelId: string, branchId: string) {
           id: `entity-profile:${entity.id}:${validFromChapter}:${index}`,
           branchId,
           sourceType: 'entity_profile' as const,
-          sourceId: entity.id,
+          sourceId: row.id,
           chapterId: '',
           chapterNo: validFromChapter,
           validFromChapter,
-          validToChapter,
+          validUntilChapter,
           lineStart: -1,
           lineEnd: -1,
           spanType: '',
@@ -578,7 +596,7 @@ function loadBranchEntityProfileDocs(novelId: string, branchId: string) {
             entity.entityType,
             entity.canonicalName,
             validFromChapter,
-            validToChapter,
+            validUntilChapter,
             aliasList.join('|'),
             JSON.stringify(cumulativeProfile),
           ]),
@@ -654,7 +672,7 @@ function loadBranchEventSummaryDocs(novelId: string, branchId: string) {
       chapterId: '',
       chapterNo: event.chapterNo,
       validFromChapter: event.chapterNo,
-      validToChapter: -1,
+      validUntilChapter: INF_CHAPTER,
       lineStart: event.lineStart ?? -1,
       lineEnd: event.lineEnd ?? -1,
       spanType: '',
@@ -688,11 +706,11 @@ function loadBranchWorldbuildingDocs(novelId: string, branchId: string) {
     definition: string
     firstSeenChapter: number | null
     validFromChapter: number | null
-    validToChapter: number | null
+    validUntilChapter: number
     status: string
   }>(
     `
-      SELECT id, term, category, definition, firstSeenChapter, validFromChapter, validToChapter, status
+      SELECT id, term, category, definition, firstSeenChapter, validFromChapter, validUntilChapter, status
       FROM KnowledgeWorld
       WHERE novelId = ? AND branchId = ?
       ORDER BY firstSeenChapter ASC, term ASC
@@ -715,7 +733,7 @@ function loadBranchWorldbuildingDocs(novelId: string, branchId: string) {
       chapterId: '',
       chapterNo,
       validFromChapter: row.validFromChapter ?? chapterNo,
-      validToChapter: row.validToChapter ?? -1,
+      validUntilChapter: row.validUntilChapter,
       lineStart: -1,
       lineEnd: -1,
       spanType: '',
@@ -735,7 +753,7 @@ function loadBranchWorldbuildingDocs(novelId: string, branchId: string) {
         row.definition,
         row.firstSeenChapter,
         row.validFromChapter,
-        row.validToChapter,
+        row.validUntilChapter,
       ]),
     }
   })
@@ -746,7 +764,7 @@ function loadBranchRelationshipDocs(novelId: string, branchId: string) {
     id: string
     sourceChapter: number
     validFromChapter: number
-    validToChapter: number | null
+    validUntilChapter: number
     linkType: string
     label: string | null
     description: string | null
@@ -762,7 +780,7 @@ function loadBranchRelationshipDocs(novelId: string, branchId: string) {
     lineEnd: number | null
   }>(
     `
-      SELECT el.id, el.sourceChapter, el.validFromChapter, el.validToChapter, el.linkType, el.label,
+      SELECT el.id, el.sourceChapter, el.validFromChapter, el.validUntilChapter, el.linkType, el.label,
              el.description, el.polarity, el.strength, el.evidenceQuote, el.status, el.includeByDefault,
              se.canonicalName AS sourceName, te.canonicalName AS targetName,
              ts.chapterId AS chapterId, ts.lineStart AS lineStart, ts.lineEnd AS lineEnd
@@ -794,7 +812,7 @@ function loadBranchRelationshipDocs(novelId: string, branchId: string) {
       chapterId: row.chapterId ?? '',
       chapterNo: row.sourceChapter,
       validFromChapter: row.validFromChapter,
-      validToChapter: row.validToChapter ?? -1,
+      validUntilChapter: row.validUntilChapter,
       lineStart: row.lineStart ?? -1,
       lineEnd: row.lineEnd ?? -1,
       spanType: '',
@@ -815,7 +833,7 @@ function loadBranchRelationshipDocs(novelId: string, branchId: string) {
         row.label,
         row.description,
         row.validFromChapter,
-        row.validToChapter,
+        row.validUntilChapter,
         row.evidenceQuote,
       ]),
     }
@@ -829,11 +847,11 @@ function loadBranchOpenThreadDocs(novelId: string, branchId: string) {
     valueJson: string | null
     sourceChapter: number
     validFromChapter: number
-    validToChapter: number | null
+    validUntilChapter: number
     status: string
   }>(
     `
-      SELECT id, predicate, valueJson, sourceChapter, validFromChapter, validToChapter, status
+      SELECT id, predicate, valueJson, sourceChapter, validFromChapter, validUntilChapter, status
       FROM KnowledgeFact
       WHERE novelId = ? AND branchId = ? AND factType = 'open_thread'
       ORDER BY sourceChapter ASC, predicate ASC
@@ -886,7 +904,7 @@ function loadBranchOpenThreadDocs(novelId: string, branchId: string) {
       chapterId: evidence?.chapterId ?? '',
       chapterNo: fact.sourceChapter,
       validFromChapter: fact.validFromChapter,
-      validToChapter: fact.validToChapter ?? -1,
+      validUntilChapter: fact.validUntilChapter,
       lineStart: evidence?.lineStart ?? -1,
       lineEnd: evidence?.lineEnd ?? -1,
       spanType: '',
@@ -955,9 +973,9 @@ function buildLancePredicate(maxChapterNo: number) {
   return [
     `chapterNo <= ${maxChapterNo}`,
     `validFromChapter <= ${maxChapterNo}`,
-    `(validToChapter < 0 OR validToChapter >= ${maxChapterNo})`,
+    `validUntilChapter > ${maxChapterNo}`,
     `includeByDefault = 1`,
-    `status NOT IN ('rejected', 'outdated')`,
+    `status NOT IN ('rejected', 'outdated', 'potentially_stale')`,
   ].join(' AND ')
 }
 
@@ -985,10 +1003,18 @@ async function loadSourceTruthRows(rows: RetrievalDocSearchRow[]) {
       (byType.get('entity_profile')?.length
         ? queryAll<SourceTruthRow>(
             `
-              SELECT id, COALESCE(firstSeenChapter, 0) AS validFromChapter, -1 AS validToChapter, 'ready' AS status, 1 AS includeByDefault
+              SELECT id, validFromChapter,
+                     validUntilChapter,
+                     status,
+                     1 AS includeByDefault
+              FROM KnowledgeFact
+              WHERE id IN (${byType.get('entity_profile')?.map(() => '?').join(', ')})
+              UNION ALL
+              SELECT id, COALESCE(firstSeenChapter, 0) AS validFromChapter, ${INF_CHAPTER} AS validUntilChapter, 'ready' AS status, 1 AS includeByDefault
               FROM KnowledgeEntity
               WHERE id IN (${byType.get('entity_profile')?.map(() => '?').join(', ')})
             `,
+            ...(byType.get('entity_profile') ?? []),
             ...(byType.get('entity_profile') ?? [])
           )
         : [])
@@ -997,7 +1023,7 @@ async function loadSourceTruthRows(rows: RetrievalDocSearchRow[]) {
       (byType.get('relationship')?.length
         ? queryAll<SourceTruthRow>(
             `
-              SELECT id, validFromChapter, COALESCE(validToChapter, -1) AS validToChapter, status, includeByDefault
+              SELECT id, validFromChapter, validUntilChapter, status, includeByDefault
               FROM EntityLink
               WHERE id IN (${byType.get('relationship')?.map(() => '?').join(', ')})
             `,
@@ -1009,7 +1035,7 @@ async function loadSourceTruthRows(rows: RetrievalDocSearchRow[]) {
       (byType.get('worldbuilding')?.length
         ? queryAll<SourceTruthRow>(
             `
-              SELECT id, COALESCE(validFromChapter, 0) AS validFromChapter, COALESCE(validToChapter, -1) AS validToChapter, status, 1 AS includeByDefault
+              SELECT id, validFromChapter, validUntilChapter, status, 1 AS includeByDefault
               FROM KnowledgeWorld
               WHERE id IN (${byType.get('worldbuilding')?.map(() => '?').join(', ')})
             `,
@@ -1021,7 +1047,7 @@ async function loadSourceTruthRows(rows: RetrievalDocSearchRow[]) {
       (byType.get('event_summary')?.length
         ? queryAll<SourceTruthRow>(
             `
-              SELECT id, chapterNo AS validFromChapter, -1 AS validToChapter, status, 1 AS includeByDefault
+              SELECT id, chapterNo AS validFromChapter, ${INF_CHAPTER} AS validUntilChapter, status, 1 AS includeByDefault
               FROM KnowledgeEvent
               WHERE id IN (${byType.get('event_summary')?.map(() => '?').join(', ')})
             `,
@@ -1033,7 +1059,7 @@ async function loadSourceTruthRows(rows: RetrievalDocSearchRow[]) {
       (byType.get('open_thread')?.length
         ? queryAll<SourceTruthRow>(
             `
-              SELECT id, COALESCE(validFromChapter, 0) AS validFromChapter, COALESCE(validToChapter, -1) AS validToChapter, status, 1 AS includeByDefault
+              SELECT id, validFromChapter, validUntilChapter, status, 1 AS includeByDefault
               FROM KnowledgeFact
               WHERE id IN (${byType.get('open_thread')?.map(() => '?').join(', ')})
             `,
@@ -1062,9 +1088,9 @@ function matchesSourceTruth(row: RetrievalDocSearchRow, maxChapterNo: number, so
   }
 
   if (current.includeByDefault !== 1) return false
-  if (current.status === 'rejected' || current.status === 'outdated') return false
+  if (current.status === 'rejected' || current.status === 'outdated' || current.status === 'potentially_stale') return false
   if (current.validFromChapter > maxChapterNo) return false
-  if (current.validToChapter >= 0 && current.validToChapter < maxChapterNo) return false
+  if (current.validUntilChapter <= maxChapterNo) return false
   return true
 }
 

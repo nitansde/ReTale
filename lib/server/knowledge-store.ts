@@ -258,21 +258,10 @@ export async function markKnowledgeStaleFromChapter(params: {
 
     execute(
       `
-        UPDATE ChapterSnapshot
-        SET status = 'stale', updatedAt = CURRENT_TIMESTAMP
-        WHERE novelId = ? AND branchId = ? AND chapterNo >= ?
-      `,
-      params.novelId,
-      params.branchId,
-      params.fromChapterNo
-    )
-
-    execute(
-      `
         UPDATE KnowledgeFact
         SET status = 'outdated', updatedAt = CURRENT_TIMESTAMP
         WHERE novelId = ? AND branchId = ?
-          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND validUntilChapter > ?
           AND status != 'user_confirmed'
       `,
       params.novelId,
@@ -285,7 +274,7 @@ export async function markKnowledgeStaleFromChapter(params: {
         UPDATE KnowledgeRelation
         SET status = 'outdated', updatedAt = CURRENT_TIMESTAMP
         WHERE novelId = ? AND branchId = ?
-          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND validUntilChapter > ?
           AND status != 'user_confirmed'
       `,
       params.novelId,
@@ -298,7 +287,7 @@ export async function markKnowledgeStaleFromChapter(params: {
         UPDATE EntityLink
         SET status = 'potentially_stale', updatedAt = CURRENT_TIMESTAMP
         WHERE novelId = ? AND branchId = ?
-          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND validUntilChapter > ?
           AND status != 'user_confirmed'
       `,
       params.novelId,
@@ -311,7 +300,7 @@ export async function markKnowledgeStaleFromChapter(params: {
         UPDATE EntityState
         SET status = 'potentially_stale', updatedAt = CURRENT_TIMESTAMP
         WHERE novelId = ? AND branchId = ?
-          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND validUntilChapter > ?
           AND status != 'user_confirmed'
       `,
       params.novelId,
@@ -349,7 +338,7 @@ export async function markKnowledgeStaleFromChapter(params: {
         UPDATE KnowledgeWorld
         SET status = 'outdated', updatedAt = CURRENT_TIMESTAMP
         WHERE novelId = ? AND branchId = ?
-          AND (validToChapter IS NULL OR validToChapter >= ?)
+          AND validUntilChapter > ?
           AND status != 'user_confirmed'
       `,
       params.novelId,
@@ -357,12 +346,6 @@ export async function markKnowledgeStaleFromChapter(params: {
       params.fromChapterNo
     )
 
-    execute(
-      'DELETE FROM GraphContextCache WHERE novelId = ? AND branchId = ? AND asOfChapter >= ?',
-      params.novelId,
-      params.branchId,
-      params.fromChapterNo
-    )
   })
 
   const { deleteBranchRetrievalIndexFromChapter } = await import('@/lib/server/retrieval-index')
