@@ -1,4 +1,6 @@
 import { defaultConstraints, defaultPresets } from '@/lib/data'
+import { createDefaultAISettings, normalizeAISettings } from '@/lib/ai-settings'
+import { normalizeCharacterRoleCardProfile } from '@/lib/story-knowledge'
 import type { PersistedNovelState } from '@/lib/types'
 import { normalizeLegacySingleParagraphHtml } from '@/lib/utils'
 
@@ -85,31 +87,13 @@ export function createEmptyWorkspaceState(): PersistedNovelState {
     presets: cloneDefaultPresets(),
     constraints: cloneDefaultConstraints(),
     focusMode: false,
-    aiSettings: {
-      rewriteProvider: 'openai-compatible',
-      knowledgeProvider: 'ollama',
-      baseUrl: 'https://api.openai.com/v1',
-      apiKey: '',
-      apiKeyConfigured: false,
-      apiKeyMasked: '',
-      model: 'gpt-4.1-mini',
-      configured: false,
-      ollamaBaseUrl: 'http://127.0.0.1:11434',
-      ollamaRewriteModel: '',
-      ollamaModel: '',
-      ollamaEmbeddingModel: '',
-    },
+    aiSettings: createDefaultAISettings(),
   }
 }
 
 export function normalizeWorkspaceState(input?: Partial<PersistedNovelState> | null): PersistedNovelState {
   const base = createEmptyWorkspaceState()
   if (!input) return base
-
-  const baseAISettings = base.aiSettings
-  if (!baseAISettings) {
-    return base
-  }
 
   const normalizedState = {
     ...base,
@@ -125,7 +109,10 @@ export function normalizeWorkspaceState(input?: Partial<PersistedNovelState> | n
         : chapter.originalContent,
     })),
     localOutlines: input.localOutlines ?? base.localOutlines,
-    localCharacters: input.localCharacters ?? base.localCharacters,
+    localCharacters: (input.localCharacters ?? base.localCharacters).map((character) => ({
+      ...character,
+      profile: character.profile ? normalizeCharacterRoleCardProfile(character.profile) : undefined,
+    })),
     localCharacterRelations: input.localCharacterRelations ?? base.localCharacterRelations,
     localWorldEntries: input.localWorldEntries ?? base.localWorldEntries,
     localTimelineEvents: input.localTimelineEvents ?? base.localTimelineEvents,
@@ -134,20 +121,7 @@ export function normalizeWorkspaceState(input?: Partial<PersistedNovelState> | n
     trajectories: input.trajectories ?? base.trajectories,
     presets: input.presets ?? base.presets,
     constraints: input.constraints ?? base.constraints,
-    aiSettings: {
-      rewriteProvider: input.aiSettings?.rewriteProvider ?? baseAISettings.rewriteProvider,
-      knowledgeProvider: input.aiSettings?.knowledgeProvider ?? baseAISettings.knowledgeProvider,
-      baseUrl: input.aiSettings?.baseUrl ?? baseAISettings.baseUrl,
-      apiKey: input.aiSettings?.apiKey ?? baseAISettings.apiKey,
-      apiKeyConfigured: input.aiSettings?.apiKeyConfigured ?? baseAISettings.apiKeyConfigured,
-      apiKeyMasked: input.aiSettings?.apiKeyMasked ?? baseAISettings.apiKeyMasked,
-      model: input.aiSettings?.model ?? baseAISettings.model,
-      configured: input.aiSettings?.configured ?? baseAISettings.configured,
-      ollamaBaseUrl: input.aiSettings?.ollamaBaseUrl ?? baseAISettings.ollamaBaseUrl,
-      ollamaRewriteModel: input.aiSettings?.ollamaRewriteModel ?? baseAISettings.ollamaRewriteModel,
-      ollamaModel: input.aiSettings?.ollamaModel ?? baseAISettings.ollamaModel,
-      ollamaEmbeddingModel: input.aiSettings?.ollamaEmbeddingModel ?? baseAISettings.ollamaEmbeddingModel,
-    },
+    aiSettings: normalizeAISettings(input.aiSettings ?? input),
   }
 
   return {

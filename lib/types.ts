@@ -61,6 +61,24 @@ export type Character = {
   goal: string
   trait: string
   note: string
+  profile?: CharacterRoleCardProfile
+}
+
+export type CharacterRoleCardFacet = {
+  summary: string
+  note?: string
+  evidence?: string
+}
+
+export type CharacterRoleCardProfile = {
+  personality?: CharacterRoleCardFacet
+  gender?: CharacterRoleCardFacet
+  identity?: CharacterRoleCardFacet
+  capability?: CharacterRoleCardFacet
+  appearance?: CharacterRoleCardFacet
+  clothing?: CharacterRoleCardFacet
+  speakingStyle?: CharacterRoleCardFacet
+  likes?: CharacterRoleCardFacet
 }
 
 export type CharacterRelation = {
@@ -181,20 +199,36 @@ export type RewriteSelection = {
   text: string
 }
 
-export type AISettings = {
-  rewriteProvider?: 'openai-compatible' | 'ollama'
-  knowledgeProvider?: 'openai-compatible' | 'ollama'
+export type AIProvider = 'openai-compatible' | 'ollama'
+
+export type OpenAICompatibleProviderSettings = {
   baseUrl: string
   apiKey: string
   apiKeyConfigured?: boolean
   apiKeyMasked?: string
   model: string
   configured?: boolean
-  ollamaBaseUrl?: string
-  ollamaRewriteModel?: string
-  ollamaModel?: string
-  ollamaEmbeddingModel?: string
 }
+
+export type OllamaProviderSettings = {
+  baseUrl: string
+  model: string
+  configured?: boolean
+}
+
+export type AIScenarioSettings = {
+  provider: AIProvider
+  openAICompatible: OpenAICompatibleProviderSettings
+  ollama: OllamaProviderSettings
+}
+
+export type AISettings = {
+  rewrite: AIScenarioSettings
+  knowledgeExtraction: AIScenarioSettings
+  embeddings: AIScenarioSettings
+}
+
+export type AIScenarioKey = keyof AISettings
 
 export type PersistedNovelState = {
   currentNovelId: string

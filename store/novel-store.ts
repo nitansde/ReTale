@@ -1,10 +1,7 @@
 "use client"
 
 import { create } from 'zustand'
-import {
-  defaultConstraints,
-  defaultPresets,
-} from '@/lib/data'
+import { normalizeAISettings } from '@/lib/ai-settings'
 import {
   countChineseFriendlyWords,
   formatNowLabel,
@@ -20,7 +17,6 @@ import type {
   Character,
   CharacterRelation,
   HelperTab,
-  LocalNovelMeta,
   OutlineItem,
   OutlineType,
   PersistedNovelState,
@@ -60,6 +56,14 @@ type KnowledgeRebuildStatus = {
   createdAt: string
   updatedAt: string
   etaMinutes: number | null
+  steps: Array<{
+    key: 'extract' | 'cleanup' | 'write' | 'snapshot' | 'index'
+    label: string
+    status: 'pending' | 'running' | 'paused' | 'completed'
+    progress: number
+    etaMinutes: number | null
+    detail: string | null
+  }>
 }
 
 type KnowledgeActionOutcome = 'completed' | 'paused' | 'aborted' | 'deleted' | 'idle'
@@ -313,7 +317,7 @@ type NovelStore = PersistedNovelState & {
   deleteStoryKnowledgeGraph: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   refreshKnowledgeProjection: (novelId?: string) => Promise<void>
 
-  setAISettingsField: (field: keyof AISettings, value: string | boolean) => void
+  setAISettings: (settings: AISettings) => void
   saveAISettings: () => Promise<void>
 }
 
@@ -688,8 +692,8 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), novelId),
     }))
   },
-  setAISettingsField: (field, value) =>
-    set((state) => ({ aiSettings: { ...(state.aiSettings ?? initialState.aiSettings), [field]: value } as AISettings })),
+  setAISettings: (settings) =>
+    set({ aiSettings: normalizeAISettings(settings) }),
   selectRewriteCandidate: (id) =>
     set((state) => ({
       rewriteCandidates: state.rewriteCandidates.map((item) => ({ ...item, selected: item.id === id })),
@@ -869,7 +873,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     set({
       ...normalizedWorkspace,
       ...normalizeKnowledgeProjection(projection),
-      aiSettings,
+      aiSettings: normalizeAISettings(aiSettings),
       isHydrated: true,
       backendLoaded: true,
     })
@@ -904,6 +908,6 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       throw new Error(error?.error || 'Failed to save AI settings')
     }
     const latest = await fetch('/api/settings/ai', { cache: 'no-store' }).then((res) => res.json())
-    set({ aiSettings: latest })
+    set({ aiSettings: normalizeAISettings(latest) })
   },
 }))
