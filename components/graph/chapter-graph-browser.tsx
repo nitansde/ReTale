@@ -212,7 +212,7 @@ export function ChapterGraphBrowser(props: {
       ) : null}
 
       {visibleGraph && visibleGraph.nodes.length ? (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.75fr)]">
+        <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.95fr)_minmax(340px,0.72fr)]">
           <GraphFlowCanvas
             nodes={visibleGraph.nodes}
             edges={visibleGraph.edges}

@@ -18,6 +18,11 @@ import type { GraphEdge, GraphNode } from '@/lib/server/graph-types'
 import type { GraphReviewControls } from '@/components/graph/types'
 
 const LOW_CONFIDENCE_THRESHOLD = 0.5
+const NODE_WIDTH = 252
+const NODE_MIN_HEIGHT = 96
+const COLUMN_X = [40, 356, 672]
+const ROW_Y_START = 52
+const ROW_GAP = 152
 
 function getNodeHop(nodeId: string, seedIds: Set<string>, edges: GraphEdge[]) {
   if (seedIds.has(nodeId)) return 0
@@ -64,51 +69,54 @@ function buildFlowNodes(nodes: GraphNode[], edges: GraphEdge[], seedIds: Set<str
     bucket.sort((left, right) => right.score - left.score || right.importance - left.importance)
   }
 
-  const columnX = [32, 290, 548]
-
   return nodes.map((node) => {
     const hop = getNodeHop(node.id, seedIds, edges)
     const bucket = buckets.get(hop) ?? [node]
     const index = Math.max(bucket.findIndex((item) => item.id === node.id), 0)
-    const y = 44 + index * 128
+    const y = ROW_Y_START + index * ROW_GAP
     const tone = getNodeTone(node, seedIds)
 
     return {
       id: node.id,
       position: {
-        x: columnX[Math.min(hop, columnX.length - 1)] ?? columnX[columnX.length - 1],
+        x: COLUMN_X[Math.min(hop, COLUMN_X.length - 1)] ?? COLUMN_X[COLUMN_X.length - 1],
         y,
       },
       draggable: true,
       data: {
         label: (
-          <div className="space-y-2">
-            <div className="flex items-start justify-between gap-2">
-              <p className="line-clamp-2 text-sm font-medium">{node.label}</p>
+          <div className="w-full rounded-[inherit] px-4 py-3.5">
+            <div className="flex items-start gap-2.5">
+              <div className="min-w-0 flex-1 space-y-2">
+                <p className="line-clamp-3 break-words text-[15px] font-medium leading-5 text-pretty">{node.label}</p>
+                <div className="flex flex-wrap gap-1.5 text-[10px] uppercase tracking-[0.14em] text-zinc-400">
+                  <span>{node.entityType}</span>
+                  <span>·</span>
+                  <span>{Math.round(node.confidence * 100)}%</span>
+                  <span>·</span>
+                  <span>score {node.score.toFixed(1)}</span>
+                </div>
+              </div>
               {seedIds.has(node.id) ? (
-                <span className="rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-amber-100">
+                <span className="shrink-0 rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-amber-100">
                   Seed
                 </span>
               ) : null}
-            </div>
-            <div className="flex flex-wrap gap-1.5 text-[10px] uppercase tracking-[0.14em] text-zinc-400">
-              <span>{node.entityType}</span>
-              <span>·</span>
-              <span>{Math.round(node.confidence * 100)}%</span>
-              <span>·</span>
-              <span>score {node.score.toFixed(1)}</span>
             </div>
           </div>
         ),
       },
       style: {
-        width: 210,
-        borderRadius: 22,
+        width: NODE_WIDTH,
+        minHeight: NODE_MIN_HEIGHT,
+        borderRadius: 24,
         border: `1px solid ${tone.borderColor}`,
         background: tone.background,
         color: tone.textColor,
         boxShadow: '0 16px 40px rgba(0, 0, 0, 0.28)',
         padding: 0,
+        overflow: 'hidden',
+        boxSizing: 'border-box',
       },
     }
   })
@@ -192,7 +200,7 @@ function GraphFlowInner(props: {
   }, [flowEdges, setEdges])
 
   return (
-    <div className="h-[420px] overflow-hidden rounded-[24px] border border-white/8 bg-[#090c12] sm:h-[500px]">
+    <div className="h-[500px] overflow-hidden rounded-[24px] border border-white/8 bg-[#090c12] sm:h-[580px] xl:h-[660px]">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -208,8 +216,8 @@ function GraphFlowInner(props: {
         }}
         onPaneClick={props.onClearSelection}
         fitView
-        fitViewOptions={{ padding: 0.24 }}
-        minZoom={0.45}
+        fitViewOptions={{ padding: 0.32 }}
+        minZoom={0.4}
         maxZoom={1.45}
         defaultEdgeOptions={{ zIndex: 1 }}
         proOptions={{ hideAttribution: true }}

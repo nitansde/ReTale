@@ -80,7 +80,7 @@ export function GraphReviewPanel(props: {
 
       {props.error ? <p className="mb-4 text-sm text-rose-300">{props.error}</p> : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.75fr)]">
+      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.9fr)_minmax(340px,0.74fr)]">
         <GraphFlowCanvas
           nodes={props.graphNodes}
           edges={props.graphEdges}
