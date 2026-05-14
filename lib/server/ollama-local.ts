@@ -33,6 +33,11 @@ type OllamaChatStreamChunk = {
   error?: string
 }
 
+type OllamaEmbedResponse = {
+  model?: string
+  embeddings?: number[][]
+}
+
 type OllamaConfig = {
   baseUrl: string
   model: string | null
@@ -89,10 +94,32 @@ export type OllamaModelOption = {
   modifiedAt?: string
 }
 
+export type OllamaEmbeddingResult = {
+  enabled: boolean
+  embeddings?: number[][]
+  model?: string
+  error?: string
+}
+
 const DEFAULT_BASE_URL = 'http://127.0.0.1:11434'
 const DEFAULT_TIMEOUT_MS = 600000
 const EXTRACTION_TOP_LEVEL_ARRAY_KEYS = ['relations', 'events', 'worldbuilding', 'open_threads'] as const
 const EXTRACTION_MAX_PROMPT_LINES = 60
+const GENERIC_RELATION_TYPE_VALUES = new Set([
+  '',
+  '关系',
+  '人物关系',
+  '角色关系',
+  '关联',
+  '联系',
+  '相关',
+  '有关联',
+  '互动',
+  '交集',
+  'relation',
+  'relationship',
+  'related',
+])
 export const EXTRACTION_SCHEMA = {
   type: 'object',
   properties: {
@@ -267,6 +294,55 @@ function normalizeEvidence(raw: unknown): KnowledgeEvidence[] {
     .filter((item): item is KnowledgeEvidence => Boolean(item))
 }
 
+function normalizeCompactText(value: string) {
+  return value.replace(/\s+/g, ' ').replace(/[：:]+$/g, '').trim()
+}
+
+function looksGenericRelationType(value: string) {
+  const normalized = normalizeCompactText(value).toLocaleLowerCase('en-US')
+  if (!normalized) return true
+  if (GENERIC_RELATION_TYPE_VALUES.has(normalized)) return true
+  if (/^(人物|角色|双方|两人|二人|彼此|互相)?关系$/.test(value.trim())) return true
+  if (/^(人物|角色)?(?:关联|联系|相关)$/.test(value.trim())) return true
+  return false
+}
+
+function stripGenericRelationSuffix(value: string) {
+  const trimmed = normalizeCompactText(value)
+  if (!trimmed.endsWith('关系')) return trimmed
+  const base = trimmed.slice(0, -2).trim()
+  if (!base || looksGenericRelationType(base)) return trimmed
+  return base
+}
+
+function normalizeRelationType(raw: unknown, fallback?: unknown) {
+  const primary = typeof raw === 'string' ? stripGenericRelationSuffix(raw) : ''
+  if (primary && !looksGenericRelationType(primary)) {
+    return primary
+  }
+
+  const secondary = typeof fallback === 'string' ? stripGenericRelationSuffix(fallback) : ''
+  if (secondary && !looksGenericRelationType(secondary)) {
+    return secondary
+  }
+
+  return ''
+}
+
+function normalizeWorldCategory(category: string) {
+  const normalized = category.trim().toLowerCase()
+  if (!normalized) return 'concept'
+  if (normalized === 'organization' || normalized === 'faction') return 'politics'
+  if (normalized === 'location') return 'geography'
+  if (normalized === 'magic_system' || normalized === 'rule') return 'rule'
+  return normalized
+}
+
+function isGenericWorldTerm(term: string) {
+  const normalized = term.trim()
+  return normalized === '世界状态' || normalized === '当前世界' || normalized === '本章设定' || normalized === '背景设定'
+}
+
 function toRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -395,17 +471,7 @@ function normalizeNarrativeProfileExtraction(record: Record<string, unknown>, ch
   }
 
   const worldStatus = toRecord(record.world_status)
-  if (worldStatus) {
-    const definition = stringifyLooseValue(worldStatus)
-    if (definition) {
-      worldbuilding.push({
-        term: '世界状态',
-        category: 'history',
-        definition,
-        evidence: topLevelEvidence,
-      })
-    }
-  }
+  void worldStatus
 
   if (Array.isArray(record.key_locations)) {
     for (const item of record.key_locations) {
@@ -499,6 +565,10 @@ function normalizeLooseArrayExtraction(items: unknown[], chapterNo: number): Cha
           evidence,
         })
       }
+      continue
+    }
+
+    if (!description) {
       continue
     }
 
@@ -616,11 +686,13 @@ export function normalizeKnowledgeExtraction(raw: unknown, chapterNo: number): C
             const source = typeof row.source === 'string' ? row.source.trim() : ''
             const target = typeof row.target === 'string' ? row.target.trim() : ''
             if (!source || !target) return null
+            const relationType = normalizeRelationType(row.type ?? row.link_type ?? row.linkType, row.label)
+            if (!relationType) return null
             const polarity = typeof row.polarity === 'string' ? row.polarity : 'neutral'
             return {
               source,
               target,
-              type: typeof row.type === 'string' ? row.type.trim() : '关系',
+              type: relationType,
               polarity: ['positive', 'negative', 'neutral', 'mixed'].includes(polarity) ? polarity as 'positive' | 'negative' | 'neutral' | 'mixed' : 'neutral',
               strength: Number.isFinite(Number(row.strength)) ? Math.max(1, Math.min(5, Math.trunc(Number(row.strength)))) : 3,
               change: typeof row.change === 'string' ? row.change.trim() : '',
@@ -675,11 +747,12 @@ export function normalizeKnowledgeExtraction(raw: unknown, chapterNo: number): C
             if (!item || typeof item !== 'object') return null
             const row = item as Record<string, unknown>
             const term = typeof row.term === 'string' ? row.term.trim() : ''
-            if (!term) return null
+            const definition = typeof row.definition === 'string' ? row.definition.trim() : ''
+            if (!term || !definition || isGenericWorldTerm(term)) return null
             return {
               term,
-              category: typeof row.category === 'string' ? row.category.trim() : 'concept',
-              definition: typeof row.definition === 'string' ? row.definition.trim() : '',
+              category: typeof row.category === 'string' ? normalizeWorldCategory(row.category) : 'concept',
+              definition,
               evidence: normalizeEvidence(row.evidence),
             }
           })
@@ -860,6 +933,137 @@ async function getOllamaRewriteConfig(): Promise<OllamaConfig> {
   return resolveOllamaTextConfig(stored.rewriteModel, 'No local Ollama rewrite model found')
 }
 
+async function getOllamaEmbeddingConfig(): Promise<OllamaConfig> {
+  const stored = getStoredOllamaSettings()
+  const baseUrl = stored.baseUrl
+  const timeoutMs = stored.timeoutMs
+
+  let detectedModels: OllamaModelOption[] = []
+  try {
+    const available = await listAvailableOllamaEmbeddingModels(baseUrl)
+    detectedModels = available.models
+  } catch {
+    return {
+      baseUrl,
+      model: null,
+      timeoutMs,
+      enabled: false,
+      reason: 'Ollama local server is not reachable',
+    }
+  }
+
+  const configuredModel = stored.embeddingModel.trim()
+  const preferredModel = configuredModel || detectedModels[0]?.id || null
+  if (!preferredModel) {
+    return {
+      baseUrl,
+      model: null,
+      timeoutMs,
+      enabled: false,
+      reason: 'No local Ollama embedding model found',
+    }
+  }
+
+  return {
+    baseUrl,
+    model: preferredModel,
+    timeoutMs,
+    enabled: true,
+  }
+}
+
+export async function embedTextsWithOllama(input: string | string[]): Promise<OllamaEmbeddingResult> {
+  const config = await getOllamaEmbeddingConfig()
+  if (!config.enabled || !config.model) {
+    return {
+      enabled: false,
+      error: config.reason,
+    }
+  }
+
+  const normalizedInput = (Array.isArray(input) ? input : [input])
+    .map((item) => item.trim())
+    .filter(Boolean)
+
+  if (!normalizedInput.length) {
+    return {
+      enabled: true,
+      embeddings: [],
+      model: config.model,
+    }
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs)
+  const requestBody = {
+    model: config.model,
+    input: Array.isArray(input) ? normalizedInput : normalizedInput[0],
+    truncate: true,
+  }
+
+  try {
+    let response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+
+    if (response.status === 404) {
+      response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/api/embeddings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+    }
+
+    if (!response.ok) {
+      const text = await response.text()
+      return {
+        enabled: false,
+        model: config.model,
+        error: `Ollama embedding HTTP ${response.status}: ${text.slice(0, 200)}`,
+      }
+    }
+
+    const data = await response.json() as OllamaEmbedResponse & { embedding?: number[] }
+    const embeddings = Array.isArray(data.embeddings)
+      ? data.embeddings
+      : Array.isArray(data.embedding)
+        ? [data.embedding]
+        : []
+
+    const validEmbeddings = embeddings.filter(
+      (vector): vector is number[] => Array.isArray(vector) && vector.length > 0 && vector.every((value) => Number.isFinite(value))
+    )
+
+    if (!validEmbeddings.length) {
+      return {
+        enabled: false,
+        model: config.model,
+        error: 'Ollama embedding response did not contain usable vectors',
+      }
+    }
+
+    return {
+      enabled: true,
+      embeddings: validEmbeddings,
+      model: data.model ?? config.model,
+    }
+  } catch (error) {
+    return {
+      enabled: false,
+      model: config.model,
+      error: error instanceof Error ? error.message : 'Failed to generate embeddings with Ollama',
+    }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 export function buildKnowledgeExtractionPrompt(
   chapterTitle: string,
   chapterNo: number,
@@ -882,6 +1086,8 @@ export function buildKnowledgeExtractionPrompt(
       '固定字段只能是：chapter_no、summary、characters、relations、events、worldbuilding、open_threads。',
       '本轮重点只抽取 relations、worldbuilding、open_threads。summary 可以简短；characters 和 events 若无必要一律返回空数组。',
       '结果必须精确、精简、可验证。不要把泛泛背景写成设定，不要把弱暗示写成关系，不要编造。',
+      'relations.type 必须是具体语义，不要输出“关系”“联系”“有关联”“相关”等泛化词。优先使用“同盟”“敌对”“同行”“救助”“雇佣”“师徒”“亲属”“隶属”“交易”“合作”等具体类型。',
+      'worldbuilding 只保留可复用的稳定设定、规则、地点、组织或物品。不要把“世界状态”“本章背景”或一次性剧情描写写成设定。definition 控制在一句话内。',
       'evidence 字段固定使用 quote、line_start、line_end。不要使用 text、content 或其他字段名。',
       truncated ? `本次仅提供前 ${EXTRACTION_MAX_PROMPT_LINES} 行节选。不要猜测未提供的后续内容。` : '本次提供完整章节内容。',
       '最小示例：',
@@ -1235,16 +1441,19 @@ export function hasUsableKnowledgeExtraction(
   extraction: ChapterKnowledgeExtraction,
   mode: KnowledgeExtractionPromptMode = 'full'
 ) {
+  const hasSpecificRelation = extraction.relations.some((relation) => !looksGenericRelationType(relation.type))
+  const hasUsefulWorldbuilding = extraction.worldbuilding.some((entry) => entry.term.trim() && entry.definition.trim() && !isGenericWorldTerm(entry.term))
+
   if (mode === 'focused') {
-    return extraction.relations.length > 0
-      || extraction.worldbuilding.length > 0
+    return hasSpecificRelation
+      || hasUsefulWorldbuilding
       || extraction.openThreads.length > 0
   }
 
   return extraction.characters.length > 0
-    || extraction.relations.length > 0
+    || hasSpecificRelation
     || extraction.events.length > 0
-    || extraction.worldbuilding.length > 0
+    || hasUsefulWorldbuilding
     || extraction.openThreads.length > 0
 }
 

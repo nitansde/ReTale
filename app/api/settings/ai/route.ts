@@ -3,8 +3,8 @@ import { normalizeOpenAICompatibleBaseUrl } from '@/lib/server/openai-compatible
 import { findAppSettings, upsertAppSettings } from '@/lib/server/persistence'
 
 const FALLBACK = {
-  rewriteProvider: (process.env.AI_REWRITE_PROVIDER === 'ollama' ? 'ollama' : 'openai-compatible') as 'openai-compatible' | 'ollama',
-  knowledgeProvider: (process.env.AI_KNOWLEDGE_PROVIDER === 'openai-compatible' ? 'openai-compatible' : 'ollama') as 'openai-compatible' | 'ollama',
+  rewriteProvider: 'openai-compatible' as const,
+  knowledgeProvider: 'ollama' as const,
   baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL ?? 'https://api.openai.com/v1',
   apiKey: process.env.OPENAI_COMPATIBLE_API_KEY ?? '',
   model: process.env.OPENAI_COMPATIBLE_MODEL ?? 'gpt-4.1-mini',
@@ -48,8 +48,8 @@ export async function GET() {
     ])
 
   const map = Object.fromEntries(entries.map((item) => [item.key, item.value]))
-  const rewriteProvider = map.AI_REWRITE_PROVIDER === 'ollama' ? 'ollama' : FALLBACK.rewriteProvider
-  const knowledgeProvider = map.AI_KNOWLEDGE_PROVIDER === 'openai-compatible' ? 'openai-compatible' : FALLBACK.knowledgeProvider
+  const rewriteProvider = FALLBACK.rewriteProvider
+  const knowledgeProvider = FALLBACK.knowledgeProvider
   const ollamaBaseUrl = map.OLLAMA_BASE_URL?.trim() || FALLBACK.ollamaBaseUrl
   const storedApiKey = (map.OPENAI_COMPATIBLE_API_KEY ?? FALLBACK.apiKey).trim()
   const storedModel = (map.OPENAI_COMPATIBLE_MODEL ?? FALLBACK.model).trim()
@@ -73,8 +73,8 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json() as Record<string, unknown>
-    const rewriteProvider = body.rewriteProvider === 'ollama' ? 'ollama' : 'openai-compatible'
-    const knowledgeProvider = body.knowledgeProvider === 'openai-compatible' ? 'openai-compatible' : 'ollama'
+    const rewriteProvider = FALLBACK.rewriteProvider
+    const knowledgeProvider = FALLBACK.knowledgeProvider
     const currentApiKey = findAppSettings(['OPENAI_COMPATIBLE_API_KEY'])[0]?.value?.trim() ?? ''
     const rawBaseUrl = normalizeOptionalText(body.baseUrl, 'Base URL', 2000)
     const normalizedBaseUrl = rawBaseUrl ? normalizeOpenAICompatibleBaseUrl(rawBaseUrl) : ''

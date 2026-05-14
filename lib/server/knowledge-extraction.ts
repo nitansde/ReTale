@@ -1,10 +1,8 @@
 import type { Chapter } from '@/lib/types'
 import { type ChapterKnowledgeExtraction } from '@/lib/story-knowledge'
-import { findAppSettings } from '@/lib/server/persistence'
 import { extractChapterKnowledgeWithOllama } from '@/lib/server/ollama-local'
-import { extractChapterKnowledgeWithOpenAICompatible } from '@/lib/server/openai-compatible'
 
-type KnowledgeProvider = 'ollama' | 'openai-compatible'
+type KnowledgeProvider = 'ollama'
 
 export type OfflineExtractionResult = {
   extraction: ChapterKnowledgeExtraction
@@ -72,28 +70,15 @@ function ensureTimelineCoverage(extraction: ChapterKnowledgeExtraction, rawText:
 }
 
 function getKnowledgeProvider(): KnowledgeProvider {
-  const [entry] = findAppSettings(['AI_KNOWLEDGE_PROVIDER'])
-  const configured = entry?.value?.trim()
-  if (configured === 'openai-compatible') {
-    return 'openai-compatible'
-  }
-  if (configured === 'ollama') {
-    return 'ollama'
-  }
-  return process.env.AI_KNOWLEDGE_PROVIDER === 'openai-compatible' ? 'openai-compatible' : 'ollama'
+  return 'ollama'
 }
 
 async function runProviderExtraction(params: {
-  provider: KnowledgeProvider
   chapterTitle: string
   chapterNo: number
   rawText: string
   mode: 'full' | 'focused'
 }) {
-  if (params.provider === 'openai-compatible') {
-    return await extractChapterKnowledgeWithOpenAICompatible(params)
-  }
-
   return await extractChapterKnowledgeWithOllama(params)
 }
 
@@ -111,6 +96,17 @@ function normalizeWorldbuildingKey(entry: ChapterKnowledgeExtraction['worldbuild
 
 function normalizeOpenThreadKey(thread: ChapterKnowledgeExtraction['openThreads'][number]) {
   return thread.name.trim().toLocaleLowerCase('en-US')
+}
+
+function chooseConciseText(existing: string, incoming: string) {
+  const left = existing.trim()
+  const right = incoming.trim()
+  if (!left) return right
+  if (!right) return left
+  if (left === right) return left
+  if (left.includes(right)) return right
+  if (right.includes(left)) return left
+  return left.length <= right.length ? left : right
 }
 
 function mergeEvidence(
@@ -148,7 +144,7 @@ function mergeFocusedKnowledge(
       ...existing,
       polarity: existing.polarity === 'neutral' ? relation.polarity : existing.polarity,
       strength: Math.max(existing.strength, relation.strength),
-      change: relation.change.length > existing.change.length ? relation.change : existing.change,
+      change: chooseConciseText(existing.change, relation.change),
       validFromChapter: Math.min(existing.validFromChapter, relation.validFromChapter),
       evidence: mergeEvidence(existing.evidence, relation.evidence),
     })
@@ -168,7 +164,7 @@ function mergeFocusedKnowledge(
 
     worldbuildingMap.set(key, {
       ...existing,
-      definition: entry.definition.length > existing.definition.length ? entry.definition : existing.definition,
+      definition: chooseConciseText(existing.definition, entry.definition),
       evidence: mergeEvidence(existing.evidence, entry.evidence),
     })
   }
@@ -187,7 +183,7 @@ function mergeFocusedKnowledge(
 
     openThreadMap.set(key, {
       ...existing,
-      description: thread.description.length > existing.description.length ? thread.description : existing.description,
+      description: chooseConciseText(existing.description, thread.description),
       evidence: mergeEvidence(existing.evidence, thread.evidence),
     })
   }
@@ -215,41 +211,20 @@ export async function extractChapterKnowledgeOffline(params: {
     .trim()
 
   const provider = getKnowledgeProvider()
-  const fallbackProvider: KnowledgeProvider = provider === 'openai-compatible' ? 'ollama' : 'openai-compatible'
   const primary = await runProviderExtraction({
-    provider,
     chapterTitle: params.chapter.title,
     chapterNo: params.chapterNo,
     rawText,
     mode: 'full',
   })
 
-  const chosen = primary.enabled && primary.extraction
-    ? { provider, result: primary }
-    : null
-
-  const rescue = chosen
-    ? null
-    : await runProviderExtraction({
-        provider: fallbackProvider,
-        chapterTitle: params.chapter.title,
-        chapterNo: params.chapterNo,
-        rawText,
-        mode: 'full',
-      })
-
-  const successful = chosen ?? (rescue?.enabled && rescue.extraction
-    ? { provider: fallbackProvider, result: rescue }
-    : null)
-
-  if (successful) {
-    const successfulExtraction = successful.result.extraction
+  if (primary.enabled && primary.extraction) {
+    const successfulExtraction = primary.extraction
     if (!successfulExtraction) {
       throw new Error('Knowledge extraction unexpectedly succeeded without extraction payload')
     }
 
     const focused = await runProviderExtraction({
-      provider: successful.provider,
       chapterTitle: params.chapter.title,
       chapterNo: params.chapterNo,
       rawText,
@@ -260,26 +235,24 @@ export async function extractChapterKnowledgeOffline(params: {
       extraction: ensureTimelineCoverage(focused.enabled && focused.extraction
         ? mergeFocusedKnowledge(successfulExtraction, focused.extraction)
         : successfulExtraction, rawText),
-      provider: successful.provider,
-      model: successful.result.model,
+      provider,
+      model: primary.model,
     }
   }
 
-  if (primary.error || rescue?.error) {
+  if (primary.error) {
     console.error('Knowledge extraction falling back to conservative projection', {
       chapterTitle: params.chapter.title,
       chapterNo: params.chapterNo,
-      error: primary.error || rescue?.error,
-      model: primary.model || rescue?.model,
+      error: primary.error,
+      model: primary.model,
       provider,
-      rescueProvider: rescue ? fallbackProvider : null,
-      rescueError: rescue?.error,
     })
   }
 
   return {
     extraction: buildFallbackExtraction(rawText, params.chapterNo),
     provider: 'fallback',
-    model: primary.model || rescue?.model,
+    model: primary.model,
   }
 }
