@@ -216,15 +216,29 @@ export type OllamaProviderSettings = {
   configured?: boolean
 }
 
+export type KnowledgeExtractionOpenAICompatibleProviderSettings = OpenAICompatibleProviderSettings & {
+  parallelism: number
+}
+
+export type KnowledgeExtractionOllamaProviderSettings = OllamaProviderSettings & {
+  parallelism: number
+}
+
 export type AIScenarioSettings = {
   provider: AIProvider
   openAICompatible: OpenAICompatibleProviderSettings
   ollama: OllamaProviderSettings
 }
 
+export type KnowledgeExtractionScenarioSettings = {
+  provider: AIProvider
+  openAICompatible: KnowledgeExtractionOpenAICompatibleProviderSettings
+  ollama: KnowledgeExtractionOllamaProviderSettings
+}
+
 export type AISettings = {
   rewrite: AIScenarioSettings
-  knowledgeExtraction: AIScenarioSettings
+  knowledgeExtraction: KnowledgeExtractionScenarioSettings
   embeddings: AIScenarioSettings
 }
 

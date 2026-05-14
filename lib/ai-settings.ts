@@ -3,6 +3,9 @@ import type {
   AISettings,
   AIScenarioKey,
   AIScenarioSettings,
+  KnowledgeExtractionOpenAICompatibleProviderSettings,
+  KnowledgeExtractionOllamaProviderSettings,
+  KnowledgeExtractionScenarioSettings,
   OllamaProviderSettings,
   OpenAICompatibleProviderSettings,
 } from '@/lib/types'
@@ -31,6 +34,9 @@ type PartialAISettings = Partial<{
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini'
 const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
+const DEFAULT_OPENAI_EXTRACTION_PARALLELISM = 5
+const DEFAULT_OLLAMA_EXTRACTION_PARALLELISM = 1
+const MAX_KNOWLEDGE_EXTRACTION_PARALLELISM = 20
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -46,6 +52,20 @@ function normalizeBoolean(value: unknown) {
 
 function normalizeProvider(value: unknown, fallback: AIProvider): AIProvider {
   return value === 'openai-compatible' || value === 'ollama' ? value : fallback
+}
+
+function normalizeParallelism(value: unknown, fallback: number) {
+  const parsed = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseInt(value.trim(), 10)
+      : Number.NaN
+
+  if (!Number.isFinite(parsed)) {
+    return fallback
+  }
+
+  return Math.max(1, Math.min(MAX_KNOWLEDGE_EXTRACTION_PARALLELISM, Math.floor(parsed)))
 }
 
 export function maskApiKey(apiKey: string) {
@@ -79,6 +99,20 @@ function createDefaultOllamaProviderSettings(): OllamaProviderSettings {
   }
 }
 
+function createDefaultKnowledgeExtractionOpenAICompatibleProviderSettings(): KnowledgeExtractionOpenAICompatibleProviderSettings {
+  return {
+    ...createDefaultOpenAICompatibleProviderSettings(),
+    parallelism: DEFAULT_OPENAI_EXTRACTION_PARALLELISM,
+  }
+}
+
+function createDefaultKnowledgeExtractionOllamaProviderSettings(): KnowledgeExtractionOllamaProviderSettings {
+  return {
+    ...createDefaultOllamaProviderSettings(),
+    parallelism: DEFAULT_OLLAMA_EXTRACTION_PARALLELISM,
+  }
+}
+
 export function createDefaultAISettings(): AISettings {
   return {
     rewrite: {
@@ -88,8 +122,8 @@ export function createDefaultAISettings(): AISettings {
     },
     knowledgeExtraction: {
       provider: 'ollama',
-      openAICompatible: createDefaultOpenAICompatibleProviderSettings(),
-      ollama: createDefaultOllamaProviderSettings(),
+      openAICompatible: createDefaultKnowledgeExtractionOpenAICompatibleProviderSettings(),
+      ollama: createDefaultKnowledgeExtractionOllamaProviderSettings(),
     },
     embeddings: {
       provider: 'ollama',
@@ -137,6 +171,32 @@ function normalizeOllamaProviderSettings(
   }
 }
 
+function normalizeKnowledgeExtractionOpenAICompatibleProviderSettings(
+  value: unknown,
+  fallback: KnowledgeExtractionOpenAICompatibleProviderSettings
+): KnowledgeExtractionOpenAICompatibleProviderSettings {
+  const record = isRecord(value) ? value : {}
+  const base = normalizeOpenAICompatibleProviderSettings(value, fallback)
+
+  return {
+    ...base,
+    parallelism: normalizeParallelism(record.parallelism, fallback.parallelism),
+  }
+}
+
+function normalizeKnowledgeExtractionOllamaProviderSettings(
+  value: unknown,
+  fallback: KnowledgeExtractionOllamaProviderSettings
+): KnowledgeExtractionOllamaProviderSettings {
+  const record = isRecord(value) ? value : {}
+  const base = normalizeOllamaProviderSettings(value, fallback)
+
+  return {
+    ...base,
+    parallelism: normalizeParallelism(record.parallelism, fallback.parallelism),
+  }
+}
+
 function buildLegacyScenarioDefaults(legacy: LegacyFlatAISettings, defaults: AISettings): AISettings {
   return {
     rewrite: {
@@ -162,7 +222,7 @@ function buildLegacyScenarioDefaults(legacy: LegacyFlatAISettings, defaults: AIS
     },
     knowledgeExtraction: {
       provider: normalizeProvider(legacy.knowledgeProvider, defaults.knowledgeExtraction.provider),
-      openAICompatible: normalizeOpenAICompatibleProviderSettings(
+      openAICompatible: normalizeKnowledgeExtractionOpenAICompatibleProviderSettings(
         {
           baseUrl: legacy.baseUrl,
           apiKey: legacy.apiKey,
@@ -173,7 +233,7 @@ function buildLegacyScenarioDefaults(legacy: LegacyFlatAISettings, defaults: AIS
         },
         defaults.knowledgeExtraction.openAICompatible
       ),
-      ollama: normalizeOllamaProviderSettings(
+      ollama: normalizeKnowledgeExtractionOllamaProviderSettings(
         {
           baseUrl: legacy.ollamaBaseUrl,
           model: legacy.ollamaModel,
@@ -202,6 +262,26 @@ function buildLegacyScenarioDefaults(legacy: LegacyFlatAISettings, defaults: AIS
         defaults.embeddings.ollama
       ),
     },
+  }
+}
+
+function normalizeKnowledgeExtractionScenarioSettings(
+  value: unknown,
+  fallback: KnowledgeExtractionScenarioSettings,
+  legacyFallback: KnowledgeExtractionScenarioSettings
+): KnowledgeExtractionScenarioSettings {
+  const record = isRecord(value) ? value : {}
+
+  return {
+    provider: normalizeProvider(record.provider, legacyFallback.provider),
+    openAICompatible: normalizeKnowledgeExtractionOpenAICompatibleProviderSettings(
+      record.openAICompatible,
+      legacyFallback.openAICompatible ?? fallback.openAICompatible
+    ),
+    ollama: normalizeKnowledgeExtractionOllamaProviderSettings(
+      record.ollama,
+      legacyFallback.ollama ?? fallback.ollama
+    ),
   }
 }
 
@@ -234,7 +314,7 @@ export function normalizeAISettings(value?: unknown): AISettings {
 
   return {
     rewrite: normalizeScenarioSettings(partial.rewrite, defaults.rewrite, legacyFallback.rewrite),
-    knowledgeExtraction: normalizeScenarioSettings(
+    knowledgeExtraction: normalizeKnowledgeExtractionScenarioSettings(
       partial.knowledgeExtraction,
       defaults.knowledgeExtraction,
       legacyFallback.knowledgeExtraction
@@ -266,9 +346,32 @@ export function sanitizeAISettingsForClient(settings: AISettings): AISettings {
     }
   }
 
+  const sanitizedKnowledgeExtraction: KnowledgeExtractionScenarioSettings = {
+    ...normalized.knowledgeExtraction,
+    openAICompatible: {
+      ...normalized.knowledgeExtraction.openAICompatible,
+      apiKey: '',
+      apiKeyConfigured: Boolean(
+        normalized.knowledgeExtraction.openAICompatible.apiKeyConfigured
+        || normalized.knowledgeExtraction.openAICompatible.apiKey
+      ),
+      apiKeyMasked: normalized.knowledgeExtraction.openAICompatible.apiKey
+        ? maskApiKey(normalized.knowledgeExtraction.openAICompatible.apiKey)
+        : normalized.knowledgeExtraction.openAICompatible.apiKeyMasked ?? '',
+      configured: Boolean(
+        normalized.knowledgeExtraction.openAICompatible.baseUrl
+        && normalized.knowledgeExtraction.openAICompatible.model
+        && (
+          normalized.knowledgeExtraction.openAICompatible.apiKey
+          || normalized.knowledgeExtraction.openAICompatible.apiKeyConfigured
+        )
+      ),
+    },
+  }
+
   return {
     rewrite: sanitizeScenario('rewrite'),
-    knowledgeExtraction: sanitizeScenario('knowledgeExtraction'),
+    knowledgeExtraction: sanitizedKnowledgeExtraction,
     embeddings: sanitizeScenario('embeddings'),
   }
 }
