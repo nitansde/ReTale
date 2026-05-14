@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 import { ChapterGraphBrowser } from '@/components/graph/chapter-graph-browser'
 import { GraphReviewPanel } from '@/components/graph/graph-review-panel'
+import { normalizeAISettings } from '@/lib/ai-settings'
 import type {
   ChapterGraphContextData,
   GraphContextSourceMeta,
@@ -40,7 +41,7 @@ import type {
 import type { GraphEdge } from '@/lib/server/graph-types'
 import { useNovelStore } from '@/store/novel-store'
 import { cn, countChineseFriendlyWords, htmlToPlainText, plainTextToHtml } from '@/lib/utils'
-import type { Chapter, CharacterRelation, OutlineType, WorldEntryType } from '@/lib/types'
+import type { AIProvider, AISettings, AIScenarioKey, Chapter, Character, CharacterRelation, OutlineType, WorldEntryType } from '@/lib/types'
 
 type ActionMode = 'rewrite' | 'roleplay' | 'expand'
 type CenterPaneView = 'body' | 'graph'
@@ -96,6 +97,14 @@ type KnowledgeRebuildStatus = {
   createdAt: string
   updatedAt: string
   etaMinutes: number | null
+  steps: Array<{
+    key: 'extract' | 'cleanup' | 'write' | 'snapshot' | 'index'
+    label: string
+    status: 'pending' | 'running' | 'paused' | 'completed'
+    progress: number
+    etaMinutes: number | null
+    detail: string | null
+  }>
 }
 
 type OllamaModelOption = {
@@ -109,6 +118,44 @@ type OllamaModelOption = {
 type OpenAICompatibleModelOption = {
   id: string
   label: string
+}
+
+const AI_SCENARIO_META: Record<AIScenarioKey, {
+  eyebrow: string
+  title: string
+  description: string
+  shortLabel: string
+  ollamaPurpose: 'text' | 'embedding'
+  openAIPlaceholder: string
+  ollamaPlaceholder: string
+}> = {
+  rewrite: {
+    eyebrow: 'Rewrite',
+    title: '改写模型场景',
+    description: '用于魔改、扩写和角色扮演生成。可以走在线 OpenAI-compatible API，也可以切到本地 Ollama。',
+    shortLabel: '改写',
+    ollamaPurpose: 'text',
+    openAIPlaceholder: 'deepseek-v4-flash',
+    ollamaPlaceholder: 'qwen3:8b',
+  },
+  knowledgeExtraction: {
+    eyebrow: 'Knowledge extraction',
+    title: '知识抽取场景',
+    description: '用于知识视图与图谱抽取。这里会按当前场景独立保存 provider、模型和连接信息。',
+    shortLabel: '知识',
+    ollamaPurpose: 'text',
+    openAIPlaceholder: 'gpt-4.1-mini',
+    ollamaPlaceholder: 'llama3.1:8b',
+  },
+  embeddings: {
+    eyebrow: 'Embeddings',
+    title: 'Embedding 场景',
+    description: '用于向量化与检索相关能力。支持 OpenAI-compatible embedding 模型，也支持本地 Ollama embedding 模型。',
+    shortLabel: '向量',
+    ollamaPurpose: 'embedding',
+    openAIPlaceholder: 'text-embedding-3-large',
+    ollamaPlaceholder: 'nomic-embed-text',
+  },
 }
 
 function WorkspaceStatusState(props: {
@@ -178,6 +225,13 @@ const RELATION_STATUS_LABELS: Record<CharacterRelation['status'], string> = {
   resolved: '已解决',
 }
 
+const KNOWLEDGE_STEP_STATUS_LABELS: Record<KnowledgeRebuildStatus['steps'][number]['status'], string> = {
+  pending: '待处理',
+  running: '进行中',
+  paused: '已暂停',
+  completed: '已完成',
+}
+
 const ACTION_META: Record<ActionMode, { label: string; title: string; description: string; icon: typeof Wand2 }> = {
   rewrite: {
     label: '魔改',
@@ -197,6 +251,46 @@ const ACTION_META: Record<ActionMode, { label: string; title: string; descriptio
     description: '不改变既有剧情走向，只增强描述、氛围、动作与感官细节。',
     icon: Sparkles,
   },
+}
+
+const CHARACTER_PROFILE_LABELS = {
+  personality: '性格',
+  gender: '性别',
+  identity: '身份 / 背景',
+  capability: '能力 / 战力',
+  appearance: '外形',
+  clothing: '衣着',
+  speakingStyle: '说话风格',
+  likes: '偏好',
+} as const
+
+const CHARACTER_PROFILE_ORDER = [
+  'identity',
+  'capability',
+  'personality',
+  'gender',
+  'appearance',
+  'clothing',
+  'speakingStyle',
+  'likes',
+] as const
+
+function hasCharacterProfile(profile: Character['profile']) {
+  return CHARACTER_PROFILE_ORDER.some((key) => Boolean(profile?.[key]?.summary?.trim()))
+}
+
+function buildCharacterProfileSections(profile: Character['profile']) {
+  return CHARACTER_PROFILE_ORDER.flatMap((key) => {
+    const facet = profile?.[key]
+    if (!facet?.summary?.trim()) return []
+    return [{
+      key,
+      label: CHARACTER_PROFILE_LABELS[key],
+      summary: facet.summary.trim(),
+      note: facet.note?.trim() || '',
+      evidence: facet.evidence?.trim() || '',
+    }]
+  })
 }
 
 const CHAPTER_PAGE_SIZE = 80
@@ -391,7 +485,7 @@ export function SelectionNovelStudio() {
   const deleteChapter = useNovelStore((state) => state.deleteChapter)
   const deleteNovel = useNovelStore((state) => state.deleteNovel)
   const aiSettings = useNovelStore((state) => state.aiSettings)
-  const setAISettingsField = useNovelStore((state) => state.setAISettingsField)
+  const setAISettings = useNovelStore((state) => state.setAISettings)
   const saveAISettings = useNovelStore((state) => state.saveAISettings)
   const rebuildStoryKnowledge = useNovelStore((state) => state.rebuildStoryKnowledge)
   const pauseStoryKnowledgeRebuild = useNovelStore((state) => state.pauseStoryKnowledgeRebuild)
@@ -486,12 +580,31 @@ export function SelectionNovelStudio() {
   const [knowledgeRebuildStatus, setKnowledgeRebuildStatus] = useState<KnowledgeRebuildStatus | null>(null)
   const [knowledgeActionLoading, setKnowledgeActionLoading] = useState<'pause' | 'abort' | 'delete' | null>(null)
   const [confirmDeleteKnowledge, setConfirmDeleteKnowledge] = useState(false)
-  const [ollamaTextModels, setOllamaTextModels] = useState<OllamaModelOption[]>([])
-  const [ollamaEmbeddingModels, setOllamaEmbeddingModels] = useState<OllamaModelOption[]>([])
-  const [ollamaModelsLoading, setOllamaModelsLoading] = useState(false)
-  const [ollamaModelsError, setOllamaModelsError] = useState('')
-  const [openAICompatibleModels, setOpenAICompatibleModels] = useState<OpenAICompatibleModelOption[]>([])
-  const [openAICompatibleModelsLoading, setOpenAICompatibleModelsLoading] = useState(false)
+  const [ollamaModelsByScenario, setOllamaModelsByScenario] = useState<Record<AIScenarioKey, OllamaModelOption[]>>({
+    rewrite: [],
+    knowledgeExtraction: [],
+    embeddings: [],
+  })
+  const [ollamaModelsLoading, setOllamaModelsLoading] = useState<Record<AIScenarioKey, boolean>>({
+    rewrite: false,
+    knowledgeExtraction: false,
+    embeddings: false,
+  })
+  const [ollamaModelsError, setOllamaModelsError] = useState<Record<AIScenarioKey, string>>({
+    rewrite: '',
+    knowledgeExtraction: '',
+    embeddings: '',
+  })
+  const [openAICompatibleModelsByScenario, setOpenAICompatibleModelsByScenario] = useState<Record<AIScenarioKey, OpenAICompatibleModelOption[]>>({
+    rewrite: [],
+    knowledgeExtraction: [],
+    embeddings: [],
+  })
+  const [openAICompatibleModelsLoading, setOpenAICompatibleModelsLoading] = useState<Record<AIScenarioKey, boolean>>({
+    rewrite: false,
+    knowledgeExtraction: false,
+    embeddings: false,
+  })
   const [editState, setEditState] = useState<{
     type: 'char' | 'outline' | 'world' | 'relation' | 'timeline' | null
     id: string | null
@@ -504,8 +617,54 @@ export function SelectionNovelStudio() {
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hydratedRef = useRef(false)
   const lastActiveKnowledgeJobIdRef = useRef<string | null>(null)
-  const openAICompatibleModelsRequestRef = useRef(0)
+  const openAICompatibleModelsRequestRef = useRef<Record<AIScenarioKey, number>>({
+    rewrite: 0,
+    knowledgeExtraction: 0,
+    embeddings: 0,
+  })
   const chapterGraphRequestRef = useRef(0)
+  const resolvedAISettings = useMemo(() => normalizeAISettings(aiSettings), [aiSettings])
+
+  const updateAISettings = useCallback((updater: (current: AISettings) => AISettings) => {
+    setAISettings(normalizeAISettings(updater(resolvedAISettings)))
+  }, [resolvedAISettings, setAISettings])
+
+  const updateScenarioProvider = useCallback((scenario: AIScenarioKey, provider: AIProvider) => {
+    updateAISettings((current) => ({
+      ...current,
+      [scenario]: {
+        ...current[scenario],
+        provider,
+      },
+    }))
+  }, [updateAISettings])
+
+  const updateScenarioOpenAIField = useCallback((scenario: AIScenarioKey, field: 'baseUrl' | 'apiKey' | 'model', value: string) => {
+    updateAISettings((current) => ({
+      ...current,
+      [scenario]: {
+        ...current[scenario],
+        openAICompatible: {
+          ...current[scenario].openAICompatible,
+          [field]: value,
+          ...(field === 'apiKey' && value.trim() ? { apiKeyConfigured: true } : {}),
+        },
+      },
+    }))
+  }, [updateAISettings])
+
+  const updateScenarioOllamaField = useCallback((scenario: AIScenarioKey, field: 'baseUrl' | 'model', value: string) => {
+    updateAISettings((current) => ({
+      ...current,
+      [scenario]: {
+        ...current[scenario],
+        ollama: {
+          ...current[scenario].ollama,
+          [field]: value,
+        },
+      },
+    }))
+  }, [updateAISettings])
 
   const showKnowledgeToast = (message: string, duration = 1800) => {
     setToast(message)
@@ -598,21 +757,78 @@ export function SelectionNovelStudio() {
   }, [currentNovelId, knowledgeActionLoading, knowledgeRebuilding, refreshKnowledgeProjection])
 
   useEffect(() => {
-    if (!settingsOpen) return
-    void loadOllamaModels(aiSettings?.ollamaBaseUrl)
-  }, [aiSettings?.ollamaBaseUrl, settingsOpen])
+    if (!settingsOpen || resolvedAISettings.rewrite.provider !== 'ollama') return
+    void loadOllamaModels('rewrite', resolvedAISettings.rewrite.ollama.baseUrl)
+  }, [resolvedAISettings.rewrite.ollama.baseUrl, resolvedAISettings.rewrite.provider, settingsOpen])
 
   useEffect(() => {
-    if (!settingsOpen || (aiSettings?.rewriteProvider ?? 'openai-compatible') !== 'openai-compatible') return
+    if (!settingsOpen || resolvedAISettings.knowledgeExtraction.provider !== 'ollama') return
+    void loadOllamaModels('knowledgeExtraction', resolvedAISettings.knowledgeExtraction.ollama.baseUrl)
+  }, [resolvedAISettings.knowledgeExtraction.ollama.baseUrl, resolvedAISettings.knowledgeExtraction.provider, settingsOpen])
+
+  useEffect(() => {
+    if (!settingsOpen || resolvedAISettings.embeddings.provider !== 'ollama') return
+    void loadOllamaModels('embeddings', resolvedAISettings.embeddings.ollama.baseUrl)
+  }, [resolvedAISettings.embeddings.ollama.baseUrl, resolvedAISettings.embeddings.provider, settingsOpen])
+
+  useEffect(() => {
+    if (!settingsOpen || resolvedAISettings.rewrite.provider !== 'openai-compatible') return
 
     const timer = window.setTimeout(() => {
-      void loadOpenAICompatibleModels(aiSettings?.baseUrl, aiSettings?.apiKey)
+      void loadOpenAICompatibleModels('rewrite', resolvedAISettings.rewrite.openAICompatible.baseUrl, resolvedAISettings.rewrite.openAICompatible.apiKey)
     }, 250)
 
     return () => {
       window.clearTimeout(timer)
     }
-  }, [aiSettings?.apiKey, aiSettings?.baseUrl, aiSettings?.rewriteProvider, settingsOpen])
+  }, [
+    resolvedAISettings.rewrite.openAICompatible.apiKey,
+    resolvedAISettings.rewrite.openAICompatible.baseUrl,
+    resolvedAISettings.rewrite.provider,
+    settingsOpen,
+  ])
+
+  useEffect(() => {
+    if (!settingsOpen || resolvedAISettings.knowledgeExtraction.provider !== 'openai-compatible') return
+
+    const timer = window.setTimeout(() => {
+      void loadOpenAICompatibleModels(
+        'knowledgeExtraction',
+        resolvedAISettings.knowledgeExtraction.openAICompatible.baseUrl,
+        resolvedAISettings.knowledgeExtraction.openAICompatible.apiKey
+      )
+    }, 250)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [
+    resolvedAISettings.knowledgeExtraction.openAICompatible.apiKey,
+    resolvedAISettings.knowledgeExtraction.openAICompatible.baseUrl,
+    resolvedAISettings.knowledgeExtraction.provider,
+    settingsOpen,
+  ])
+
+  useEffect(() => {
+    if (!settingsOpen || resolvedAISettings.embeddings.provider !== 'openai-compatible') return
+
+    const timer = window.setTimeout(() => {
+      void loadOpenAICompatibleModels(
+        'embeddings',
+        resolvedAISettings.embeddings.openAICompatible.baseUrl,
+        resolvedAISettings.embeddings.openAICompatible.apiKey
+      )
+    }, 250)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [
+    resolvedAISettings.embeddings.openAICompatible.apiKey,
+    resolvedAISettings.embeddings.openAICompatible.baseUrl,
+    resolvedAISettings.embeddings.provider,
+    settingsOpen,
+  ])
 
   const novelVolumes = useMemo(
     () => localVolumes.filter((volume) => volume.novelId === currentNovelId).slice().sort((a, b) => a.order - b.order),
@@ -725,6 +941,7 @@ export function SelectionNovelStudio() {
   const knowledgeRebuildEtaMinutes = useMemo(() => {
     return knowledgeRebuildStatus?.etaMinutes ?? null
   }, [knowledgeRebuildStatus])
+  const knowledgeRebuildSteps = useMemo(() => knowledgeRebuildStatus?.steps ?? [], [knowledgeRebuildStatus])
   const knowledgeRebuildPaused = knowledgeRebuildStatus?.status === 'paused'
   const knowledgeRebuildActive = knowledgeRebuildStatus?.status === 'running' || knowledgeRebuildStatus?.status === 'queued'
 
@@ -1026,19 +1243,21 @@ export function SelectionNovelStudio() {
 
   const selectedRewriteCandidate = rewriteFlow.candidates[rewriteFlow.selectedIndex]
   const activeGraphContext = graphContext ?? generationContext?.graphContext ?? null
-  const selectedOpenAICompatibleModel = openAICompatibleModels.some((model) => model.id === (aiSettings?.model ?? ''))
-    ? (aiSettings?.model ?? '')
-    : ''
-  const hasRealModel = Boolean(aiSettings?.configured && aiSettings?.model)
-  const providerLabel = hasRealModel
-    ? `${aiSettings?.model} · 已连接`
-    : 'OpenAI-compatible 未配置'
-  const knowledgeProviderLabel = `${aiSettings?.ollamaModel || 'Ollama 自动选择'} · 本地`
+  const scenarioStatusLabels = (Object.keys(AI_SCENARIO_META) as AIScenarioKey[]).map((scenario) => {
+    const meta = AI_SCENARIO_META[scenario]
+    const settings = resolvedAISettings[scenario]
 
-  useEffect(() => {
-    if (!settingsOpen) return
-    void loadOpenAICompatibleModels(aiSettings?.baseUrl, aiSettings?.apiKey)
-  }, [aiSettings?.apiKey, aiSettings?.baseUrl, settingsOpen])
+    if (settings.provider === 'openai-compatible') {
+      return settings.openAICompatible.configured && settings.openAICompatible.model
+        ? `${meta.shortLabel} ${settings.openAICompatible.model} · 在线`
+        : `${meta.shortLabel} OpenAI 未配置`
+    }
+
+    return settings.ollama.configured && settings.ollama.model
+      ? `${meta.shortLabel} ${settings.ollama.model} · 本地`
+      : `${meta.shortLabel} Ollama 未配置`
+  })
+  const providerLabel = scenarioStatusLabels[0] ?? '改写 OpenAI 未配置'
 
   const getInstructionForMode = (mode: ActionMode) => {
     if (mode === 'rewrite') return rewritePrompt
@@ -1306,87 +1525,264 @@ export function SelectionNovelStudio() {
     setSettingsOpen(false)
   }
 
-  async function loadOllamaModels(baseUrl?: string) {
-    setOllamaModelsLoading(true)
-    setOllamaModelsError('')
+  async function loadOllamaModels(scenario: AIScenarioKey, baseUrl?: string) {
+    const purpose = AI_SCENARIO_META[scenario].ollamaPurpose
+
+    setOllamaModelsLoading((current) => ({ ...current, [scenario]: true }))
+    setOllamaModelsError((current) => ({ ...current, [scenario]: '' }))
     try {
-      const query = baseUrl?.trim() ? `?baseUrl=${encodeURIComponent(baseUrl.trim())}` : ''
-      const [textResponse, embeddingResponse] = await Promise.all([
-        fetch(`/api/settings/ai/ollama-models${query}${query ? '&' : '?'}purpose=text`, { cache: 'no-store' }),
-        fetch(`/api/settings/ai/ollama-models${query}${query ? '&' : '?'}purpose=embedding`, { cache: 'no-store' }),
-      ])
-      const textData = (await textResponse.json()) as {
+      const query = new URLSearchParams({ purpose })
+      if (baseUrl?.trim()) {
+        query.set('baseUrl', baseUrl.trim())
+      }
+
+      const response = await fetch(`/api/settings/ai/ollama-models?${query.toString()}`, { cache: 'no-store' })
+      const data = (await response.json()) as {
         ok?: boolean
         error?: string
         models?: OllamaModelOption[]
       }
-      const embeddingData = (await embeddingResponse.json()) as {
-        ok?: boolean
-        error?: string
-        models?: OllamaModelOption[]
+
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || `无法读取本地 Ollama ${purpose === 'embedding' ? 'embedding' : '文本'}模型`)
       }
 
-      if (!textResponse.ok || !textData.ok) {
-        throw new Error(textData.error || '无法读取本地 Ollama 文本模型')
-      }
-
-      if (!embeddingResponse.ok || !embeddingData.ok) {
-        throw new Error(embeddingData.error || '无法读取本地 Ollama embedding 模型')
-      }
-
-      setOllamaTextModels(textData.models ?? [])
-      setOllamaEmbeddingModels(embeddingData.models ?? [])
+      setOllamaModelsByScenario((current) => ({ ...current, [scenario]: data.models ?? [] }))
     } catch (error) {
-      setOllamaTextModels([])
-      setOllamaEmbeddingModels([])
-      setOllamaModelsError(error instanceof Error ? error.message : '无法读取本地 Ollama 模型')
+      setOllamaModelsByScenario((current) => ({ ...current, [scenario]: [] }))
+      setOllamaModelsError((current) => ({
+        ...current,
+        [scenario]: error instanceof Error ? error.message : '无法读取本地 Ollama 模型',
+      }))
     } finally {
-      setOllamaModelsLoading(false)
+      setOllamaModelsLoading((current) => ({ ...current, [scenario]: false }))
     }
   }
 
-  async function loadOpenAICompatibleModels(baseUrl?: string, apiKey?: string) {
-    const requestId = openAICompatibleModelsRequestRef.current + 1
-    openAICompatibleModelsRequestRef.current = requestId
+  async function loadOpenAICompatibleModels(scenario: AIScenarioKey, baseUrl?: string, apiKey?: string) {
+    const requestId = openAICompatibleModelsRequestRef.current[scenario] + 1
+    openAICompatibleModelsRequestRef.current[scenario] = requestId
     const trimmedBaseUrl = baseUrl?.trim() ?? ''
+
     if (!trimmedBaseUrl) {
-      setOpenAICompatibleModels([])
-      setOpenAICompatibleModelsLoading(false)
+      setOpenAICompatibleModelsByScenario((current) => ({ ...current, [scenario]: [] }))
+      setOpenAICompatibleModelsLoading((current) => ({ ...current, [scenario]: false }))
       return
     }
 
-    setOpenAICompatibleModelsLoading(true)
+    setOpenAICompatibleModelsLoading((current) => ({ ...current, [scenario]: true }))
 
     try {
       const response = await fetch('/api/settings/ai/openai-models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baseUrl: trimmedBaseUrl, apiKey: apiKey?.trim() ?? '' }),
+        body: JSON.stringify({ baseUrl: trimmedBaseUrl, apiKey: apiKey?.trim() ?? '', scenario }),
       })
       const data = (await response.json()) as {
         ok?: boolean
         models?: OpenAICompatibleModelOption[]
       }
 
-      if (openAICompatibleModelsRequestRef.current !== requestId) {
+      if (openAICompatibleModelsRequestRef.current[scenario] !== requestId) {
         return
       }
 
       if (!response.ok || !data.ok) {
-        setOpenAICompatibleModels([])
+        setOpenAICompatibleModelsByScenario((current) => ({ ...current, [scenario]: [] }))
         return
       }
 
-      setOpenAICompatibleModels(data.models ?? [])
+      setOpenAICompatibleModelsByScenario((current) => ({ ...current, [scenario]: data.models ?? [] }))
     } catch {
-      if (openAICompatibleModelsRequestRef.current === requestId) {
-        setOpenAICompatibleModels([])
+      if (openAICompatibleModelsRequestRef.current[scenario] === requestId) {
+        setOpenAICompatibleModelsByScenario((current) => ({ ...current, [scenario]: [] }))
       }
     } finally {
-      if (openAICompatibleModelsRequestRef.current === requestId) {
-        setOpenAICompatibleModelsLoading(false)
+      if (openAICompatibleModelsRequestRef.current[scenario] === requestId) {
+        setOpenAICompatibleModelsLoading((current) => ({ ...current, [scenario]: false }))
       }
     }
+  }
+
+  const renderOpenAICompatibleFields = (scenario: AIScenarioKey) => {
+    const scenarioSettings = resolvedAISettings[scenario]
+    const currentModels = openAICompatibleModelsByScenario[scenario]
+    const loading = openAICompatibleModelsLoading[scenario]
+    const selectedModel = currentModels.some((model) => model.id === scenarioSettings.openAICompatible.model)
+      ? scenarioSettings.openAICompatible.model
+      : ''
+
+    return (
+      <div className="mt-4 rounded-[22px] border border-white/8 bg-black/20 p-4">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">OpenAI-compatible API</p>
+            <p className="mt-1 text-sm text-zinc-300">当前场景会保存独立的 Base URL、API Key 与模型名。</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              void loadOpenAICompatibleModels(
+                scenario,
+                scenarioSettings.openAICompatible.baseUrl,
+                scenarioSettings.openAICompatible.apiKey
+              )
+            }}
+            className="shrink-0 rounded-2xl border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/[0.06]"
+          >
+            {loading ? '刷新中…' : '刷新模型'}
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <label className="block">
+            <span className="mb-2 block text-sm text-zinc-300">Base URL</span>
+            <input
+              value={scenarioSettings.openAICompatible.baseUrl}
+              onChange={(event) => updateScenarioOpenAIField(scenario, 'baseUrl', event.target.value)}
+              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+              placeholder="https://api.openai.com/v1"
+            />
+            <p className="mt-2 text-xs leading-5 text-zinc-500">
+              模型发现会尝试读取当前 Base URL 下的 <code className="rounded bg-white/5 px-1 py-0.5 text-[11px] text-zinc-300">/models</code>；如果服务不支持，仍可继续手动填写 Model。
+            </p>
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-sm text-zinc-300">API Key</span>
+            <input
+              value={scenarioSettings.openAICompatible.apiKey}
+              onChange={(event) => updateScenarioOpenAIField(scenario, 'apiKey', event.target.value)}
+              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+              placeholder={scenarioSettings.openAICompatible.apiKeyMasked || 'sk-...'}
+            />
+            {scenarioSettings.openAICompatible.apiKeyConfigured && !scenarioSettings.openAICompatible.apiKey ? (
+              <p className="mt-2 text-xs leading-5 text-zinc-500">当前已保存 API Key。留空保存会保持现有 key，不会自动清除。</p>
+            ) : null}
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-sm text-zinc-300">Model</span>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <p className="text-xs leading-5 text-zinc-500">
+                {loading
+                  ? '正在读取当前 Base URL 的可用模型…'
+                  : currentModels.length > 0
+                    ? `已发现 ${currentModels.length} 个可用模型，可直接选择，也可继续手动输入。`
+                    : '可手动输入模型名；如果当前服务支持 /models，这里会自动补全建议。'}
+              </p>
+            </div>
+            <select
+              value={selectedModel}
+              onChange={(event) => updateScenarioOpenAIField(scenario, 'model', event.target.value)}
+              disabled={loading || currentModels.length === 0}
+              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <option value="">
+                {loading
+                  ? '正在读取可用模型…'
+                  : currentModels.length > 0
+                    ? '从已发现模型中选择'
+                    : '当前没有可选模型，继续手动填写'}
+              </option>
+              {currentModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-2 text-xs leading-5 text-zinc-500">选择后会直接回填到下方 Model 输入框；如果列表为空，继续手动填写即可。</p>
+            <input
+              value={scenarioSettings.openAICompatible.model}
+              onChange={(event) => updateScenarioOpenAIField(scenario, 'model', event.target.value)}
+              className="mt-3 w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+              placeholder={AI_SCENARIO_META[scenario].openAIPlaceholder}
+            />
+          </label>
+
+          {!loading && scenarioSettings.openAICompatible.baseUrl.trim() && currentModels.length === 0 ? (
+            <p className="text-sm text-zinc-500">当前没有发现可用的 OpenAI-compatible 模型；你仍然可以继续手动填写 Model。</p>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
+
+  const renderOllamaFields = (scenario: AIScenarioKey) => {
+    const scenarioSettings = resolvedAISettings[scenario]
+    const currentModels = ollamaModelsByScenario[scenario]
+    const loading = ollamaModelsLoading[scenario]
+    const error = ollamaModelsError[scenario]
+    const purpose = AI_SCENARIO_META[scenario].ollamaPurpose
+
+    return (
+      <div className="mt-4 rounded-[22px] border border-white/8 bg-black/20 p-4">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Ollama local</p>
+            <p className="mt-1 text-sm text-zinc-300">
+              {purpose === 'embedding'
+                ? '当前场景会读取本地可用的 embedding 模型。'
+                : '当前场景会读取本地可用的文本生成模型。'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              void loadOllamaModels(scenario, scenarioSettings.ollama.baseUrl)
+            }}
+            className="rounded-2xl border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/[0.06]"
+          >
+            {loading ? '刷新中…' : '刷新本地模型'}
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <label className="block">
+            <span className="mb-2 block text-sm text-zinc-300">Ollama Base URL</span>
+            <input
+              value={scenarioSettings.ollama.baseUrl}
+              onChange={(event) => updateScenarioOllamaField(scenario, 'baseUrl', event.target.value)}
+              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+              placeholder="http://127.0.0.1:11434"
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-sm text-zinc-300">Model</span>
+            <select
+              value={scenarioSettings.ollama.model}
+              onChange={(event) => updateScenarioOllamaField(scenario, 'model', event.target.value)}
+              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+            >
+              <option value="">
+                {purpose === 'embedding' ? '自动选择首个可用 embedding 模型' : '自动选择首个可用文本模型'}
+              </option>
+              {currentModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.label}
+                </option>
+              ))}
+            </select>
+            <input
+              value={scenarioSettings.ollama.model}
+              onChange={(event) => updateScenarioOllamaField(scenario, 'model', event.target.value)}
+              className="mt-3 w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+              placeholder={AI_SCENARIO_META[scenario].ollamaPlaceholder}
+            />
+          </label>
+
+          {error ? <p className="text-sm text-rose-300">{error}</p> : null}
+          {!error && !loading && currentModels.length === 0 ? (
+            <p className="text-sm text-zinc-500">
+              {purpose === 'embedding'
+                ? '当前没有发现可用于 embedding 的本地 Ollama 模型。'
+                : '当前没有发现可用于文本生成的本地 Ollama 模型。'}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    )
   }
 
   const handleDeleteChapter = async (chapter: Chapter) => {
@@ -1711,7 +2107,7 @@ export function SelectionNovelStudio() {
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(129,140,248,0.12),_transparent_30%),#0a0c12] text-zinc-100">
-      <div className="mx-auto flex min-h-screen max-w-[1600px] flex-col px-3 pb-10 pt-3 sm:px-5 lg:px-6">
+      <div className="mx-auto flex min-h-screen max-w-[1720px] flex-col px-3 pb-10 pt-3 sm:px-5 lg:px-6">
         <header className="sticky top-0 z-30 mb-4 rounded-[28px] border border-white/10 bg-[#0d1017]/92 px-4 py-3 shadow-[0_20px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
@@ -1753,7 +2149,7 @@ export function SelectionNovelStudio() {
           </div>
         </header>
 
-        <div className="grid flex-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)_420px]">
+        <div className="grid flex-1 gap-4 lg:grid-cols-[264px_minmax(0,1.28fr)_376px] 2xl:grid-cols-[280px_minmax(0,1.32fr)_392px]">
           <aside
             className={cn(
               'fixed inset-y-0 left-0 z-40 w-[86vw] max-w-[320px] overflow-y-auto border-r border-white/10 bg-[#0d1017] p-4 shadow-[0_24px_90px_rgba(0,0,0,0.5)] transition lg:static lg:w-auto lg:max-w-none lg:rounded-[30px] lg:border lg:bg-[#11141d] lg:shadow-[0_24px_70px_rgba(0,0,0,0.3)]',
@@ -2006,6 +2402,40 @@ export function SelectionNovelStudio() {
                   <p className="mt-1 text-[11px] leading-5 text-zinc-500">
                     预估剩余：{knowledgeRebuildPaused ? '已暂停' : knowledgeRebuildEtaMinutes ? `约 ${knowledgeRebuildEtaMinutes} 分钟` : '计算中'}
                   </p>
+                  {knowledgeRebuildSteps.length > 0 ? (
+                    <div className="mt-3 space-y-2">
+                      {knowledgeRebuildSteps.map((step) => {
+                        const stepProgress = Math.max(0, Math.min(100, Math.round((step.progress ?? 0) * 100)))
+                        const isActive = step.status === 'running' || step.status === 'paused'
+
+                        return (
+                          <div key={step.key} className="rounded-xl border border-white/8 bg-white/[0.03] px-2.5 py-2">
+                            <div className="flex items-center justify-between gap-2 text-[11px]">
+                              <span className="text-zinc-200">{step.label}</span>
+                              <span className="text-zinc-500">{KNOWLEDGE_STEP_STATUS_LABELS[step.status]}</span>
+                            </div>
+                            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
+                              <div
+                                className={cn(
+                                  'h-full rounded-full transition-all',
+                                  step.status === 'completed'
+                                    ? 'bg-emerald-400'
+                                    : isActive
+                                      ? 'bg-violet-400'
+                                      : 'bg-white/20'
+                                )}
+                                style={{ width: `${step.status === 'pending' ? 0 : Math.max(step.status === 'running' || step.status === 'paused' ? 8 : 0, stepProgress)}%` }}
+                              />
+                            </div>
+                            <div className="mt-1 flex items-center justify-between gap-2 text-[10px] leading-4 text-zinc-500">
+                              <span className="truncate">{step.detail ?? `${stepProgress}%`}</span>
+                              <span>{step.status === 'running' && step.etaMinutes ? `约 ${step.etaMinutes} 分钟` : step.status === 'paused' ? '已暂停' : `${stepProgress}%`}</span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : null}
                   <div className="mt-3 grid grid-cols-2 gap-2">
                     {knowledgeRebuildPaused ? (
                       <button
@@ -2161,6 +2591,8 @@ export function SelectionNovelStudio() {
                     const isEditing = editState.type === 'char' && editState.id === char.id
                     const ef = editState.form
                     const setF = (key: string, val: string) => setEditState((s) => ({ ...s, form: { ...s.form, [key]: val } }))
+                    const profileSections = buildCharacterProfileSections(char.profile)
+                    const showProfile = hasCharacterProfile(char.profile)
                     return (
                       <div key={char.id} className="rounded-2xl border border-white/8 bg-black/20 p-3">
                         {isEditing ? (
@@ -2183,7 +2615,7 @@ export function SelectionNovelStudio() {
                             <div className="flex items-center justify-between gap-2 mb-2">
                               <div>
                                 <p className="text-sm font-medium text-zinc-100">{char.name}</p>
-                                <p className="text-xs text-violet-300">{char.role}</p>
+                                <p className="text-xs text-violet-300">{showProfile ? (char.profile?.identity?.summary || char.role) : char.role}</p>
                               </div>
                               {!knowledgePanelReadOnly ? (
                                 <div className="flex gap-1">
@@ -2192,11 +2624,34 @@ export function SelectionNovelStudio() {
                                 </div>
                               ) : null}
                             </div>
-                            <div className="space-y-1 text-xs leading-5 text-zinc-400">
-                              <p><span className="text-zinc-500">目标</span> {char.goal}</p>
-                              <p><span className="text-zinc-500">性格</span> {char.trait}</p>
-                              {char.note && <p className="line-clamp-2"><span className="text-zinc-500">备注</span> {char.note}</p>}
-                            </div>
+                            {showProfile ? (
+                              <div className="space-y-2">
+                                <div className="flex flex-wrap gap-2">
+                                  {char.profile?.gender?.summary ? <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{char.profile.gender.summary}</span> : null}
+                                  {char.profile?.capability?.summary ? <span className="rounded-full border border-violet-300/20 bg-violet-500/10 px-2 py-0.5 text-[10px] text-violet-200">{char.profile.capability.summary}</span> : null}
+                                  {char.profile?.speakingStyle?.summary ? <span className="rounded-full border border-sky-300/20 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-200">{char.profile.speakingStyle.summary}</span> : null}
+                                </div>
+                                <div className="space-y-2 text-xs leading-5 text-zinc-300">
+                                  {profileSections.map((section) => (
+                                    <div key={section.key} className="rounded-xl border border-white/8 bg-white/[0.03] px-2.5 py-2">
+                                      <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">{section.label}</p>
+                                      <p className="mt-1 text-zinc-200">{section.summary}</p>
+                                      {section.note ? <p className="mt-1 text-zinc-400">注：{section.note}</p> : null}
+                                      {section.evidence ? <p className="mt-1 line-clamp-2 text-zinc-500">证：{section.evidence}</p> : null}
+                                    </div>
+                                  ))}
+                                </div>
+                                {char.note && char.note !== char.profile?.identity?.summary ? (
+                                  <p className="text-xs leading-5 text-zinc-500">补充：{char.note}</p>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <div className="space-y-1 text-xs leading-5 text-zinc-400">
+                                <p><span className="text-zinc-500">目标</span> {char.goal}</p>
+                                <p><span className="text-zinc-500">性格</span> {char.trait}</p>
+                                {char.note && <p className="line-clamp-2"><span className="text-zinc-500">备注</span> {char.note}</p>}
+                              </div>
+                            )}
                           </>
                         )}
                       </div>
@@ -2629,179 +3084,64 @@ export function SelectionNovelStudio() {
               <div>
                 <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">AI settings</p>
                 <h3 className="mt-1 text-xl font-semibold text-zinc-100">模型服务配置</h3>
-                <p className="mt-2 text-sm leading-6 text-zinc-400">这里会配置改写模型，以及知识抽取时使用的提供方与模型。</p>
+                <p className="mt-2 text-sm leading-6 text-zinc-400">这里会分别配置改写、知识抽取和 embeddings 三个场景，各自保存 provider、连接信息与模型。</p>
               </div>
               <button onClick={() => setSettingsOpen(false)} className="rounded-2xl border border-white/10 p-2 text-zinc-300 hover:bg-white/[0.06]"><X className="h-4 w-4" /></button>
             </div>
 
             <div className="space-y-6">
-              <div className="rounded-[24px] border border-white/10 bg-[#0b0d12] p-4">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Rewrite model</p>
-                <h4 className="mt-2 text-sm font-medium text-zinc-100">改写模型提供方</h4>
-                <p className="mt-1 text-xs leading-5 text-zinc-500">用于魔改、扩写和角色扮演生成。当前阶段固定使用 OpenAI-compatible API，避免在线路径回退到本地模型。</p>
-                <div className="mt-4 space-y-4">
-                  <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-100">
-                    当前在线生成固定走 OpenAI-compatible API。这里保留的是 API 连接信息与模型选择，不再提供本地改写开关。
-                  </div>
-                  <label className="block">
-                    <span className="mb-2 block text-sm text-zinc-300">Base URL</span>
-                    <input
-                      value={aiSettings?.baseUrl ?? ''}
-                      onChange={(event) => setAISettingsField('baseUrl', event.target.value)}
-                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                      placeholder="https://api.openai.com/v1"
-                    />
-                    <p className="mt-2 text-xs leading-5 text-zinc-500">
-                      模型发现会尝试读取当前 Base URL 下的 <code className="rounded bg-white/5 px-1 py-0.5 text-[11px] text-zinc-300">/models</code>；如果服务不支持，仍可继续手动填写 Model。
-                    </p>
-                  </label>
-                  <label className="block">
-                    <span className="mb-2 block text-sm text-zinc-300">API Key</span>
-                    <input
-                      value={aiSettings?.apiKey ?? ''}
-                      onChange={(event) => setAISettingsField('apiKey', event.target.value)}
-                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                      placeholder={aiSettings?.apiKeyMasked || 'sk-...'}
-                    />
-                    {aiSettings?.apiKeyConfigured && !aiSettings?.apiKey ? (
-                      <p className="mt-2 text-xs leading-5 text-zinc-500">当前已保存 API Key。留空保存会保持现有 key，不会自动清除。</p>
-                    ) : null}
-                  </label>
-                  <label className="block">
-                    <span className="mb-2 block text-sm text-zinc-300">Model</span>
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <p className="text-xs leading-5 text-zinc-500">
-                        {openAICompatibleModelsLoading
-                          ? '正在读取当前 Base URL 的可用模型…'
-                          : openAICompatibleModels.length > 0
-                            ? `已发现 ${openAICompatibleModels.length} 个可用模型，可直接选择，也可继续手动输入。`
-                            : '可手动输入模型名；如果当前服务支持 /models，这里会自动补全建议。'}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void loadOpenAICompatibleModels(aiSettings?.baseUrl, aiSettings?.apiKey)
-                        }}
-                        className="shrink-0 rounded-2xl border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/[0.06]"
-                      >
-                        {openAICompatibleModelsLoading ? '刷新中…' : '刷新模型'}
-                      </button>
+              {(Object.keys(AI_SCENARIO_META) as AIScenarioKey[]).map((scenario) => {
+                const meta = AI_SCENARIO_META[scenario]
+                const scenarioSettings = resolvedAISettings[scenario]
+                const scenarioStatus = scenarioStatusLabels.find((label) => label.startsWith(meta.shortLabel)) ?? ''
+
+                return (
+                  <div key={scenario} className="rounded-[24px] border border-white/10 bg-[#0b0d12] p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="max-w-2xl">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{meta.eyebrow}</p>
+                        <h4 className="mt-2 text-sm font-medium text-zinc-100">{meta.title}</h4>
+                        <p className="mt-1 text-xs leading-5 text-zinc-500">{meta.description}</p>
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
+                        {scenarioStatus}
+                      </span>
                     </div>
-                    <select
-                      value={selectedOpenAICompatibleModel}
-                      onChange={(event) => setAISettingsField('model', event.target.value)}
-                      disabled={openAICompatibleModelsLoading || openAICompatibleModels.length === 0}
-                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <option value="">
-                        {openAICompatibleModelsLoading
-                          ? '正在读取可用模型…'
-                          : openAICompatibleModels.length > 0
-                            ? '从已发现模型中选择'
-                            : '当前没有可选模型，继续手动填写'}
-                      </option>
-                      {openAICompatibleModels.map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {model.label}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-2 text-xs leading-5 text-zinc-500">选择后会直接回填到下方 Model 输入框；如果列表为空，继续手动填写即可。</p>
-                    <input
-                      value={aiSettings?.model ?? ''}
-                      onChange={(event) => setAISettingsField('model', event.target.value)}
-                      className="mt-3 w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                      placeholder="deepseek-v4-flash"
-                    />
-                  </label>
-                  {!openAICompatibleModelsLoading && aiSettings?.baseUrl?.trim() && openAICompatibleModels.length === 0 ? (
-                    <p className="text-sm text-zinc-500">当前没有发现可用的 OpenAI-compatible 模型；你仍然可以继续手动填写 Model。</p>
-                  ) : null}
-                </div>
-              </div>
 
-              <div className="rounded-[24px] border border-white/10 bg-[#0b0d12] p-4">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Knowledge extraction</p>
-                <h4 className="mt-2 text-sm font-medium text-zinc-100">知识抽取提供方</h4>
-                <p className="mt-1 text-xs leading-5 text-zinc-500">离线知识图谱重建固定使用本地 Ollama，避免后台构建误走远端 API。</p>
-                <div className="mt-4 space-y-4">
-                  <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-100">
-                    当前知识抽取固定使用下方配置的 Ollama Base URL、知识抽取模型与 embedding 模型。
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {([
+                        ['openai-compatible', 'OpenAI-compatible API'],
+                        ['ollama', 'Ollama'],
+                      ] as Array<[AIProvider, string]>).map(([provider, label]) => {
+                        const active = scenarioSettings.provider === provider
+                        return (
+                          <button
+                            key={provider}
+                            type="button"
+                            onClick={() => updateScenarioProvider(scenario, provider)}
+                            className={cn(
+                              'rounded-full border px-3 py-2 text-xs transition',
+                              active
+                                ? 'border-violet-300/30 bg-violet-500/15 text-violet-100'
+                                : 'border-white/10 bg-black/20 text-zinc-300 hover:bg-white/[0.06]'
+                            )}
+                          >
+                            {label}
+                          </button>
+                        )
+                      })}
+                    </div>
+
+                    {scenarioSettings.provider === 'openai-compatible'
+                      ? renderOpenAICompatibleFields(scenario)
+                      : renderOllamaFields(scenario)}
                   </div>
-                </div>
-              </div>
-
-              <div className="rounded-[24px] border border-white/10 bg-[#0b0d12] p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Ollama local</p>
-                    <h4 className="mt-2 text-sm font-medium text-zinc-100">Ollama 本地模型</h4>
-                    <p className="mt-1 text-xs leading-5 text-zinc-500">当知识抽取 provider 选择 Ollama 时，会使用这里的语言模型；embedding 模型继续保留给后续 RAG。</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void loadOllamaModels(aiSettings?.ollamaBaseUrl)
-                    }}
-                    className="rounded-2xl border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/[0.06]"
-                  >
-                    {ollamaModelsLoading ? '刷新中…' : '刷新本地模型'}
-                  </button>
-                </div>
-
-                <div className="mt-4 space-y-4">
-                  <label className="block">
-                    <span className="mb-2 block text-sm text-zinc-300">Ollama Base URL</span>
-                    <input
-                      value={aiSettings?.ollamaBaseUrl ?? ''}
-                      onChange={(event) => setAISettingsField('ollamaBaseUrl', event.target.value)}
-                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                      placeholder="http://127.0.0.1:11434"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="mb-2 block text-sm text-zinc-300">知识抽取模型</span>
-                    <select
-                      value={aiSettings?.ollamaModel ?? ''}
-                      onChange={(event) => setAISettingsField('ollamaModel', event.target.value)}
-                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                    >
-                      <option value="">自动选择首个可用文本模型</option>
-                      {ollamaTextModels.map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {model.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block">
-                    <span className="mb-2 block text-sm text-zinc-300">Embedding 模型</span>
-                    <select
-                      value={aiSettings?.ollamaEmbeddingModel ?? ''}
-                      onChange={(event) => setAISettingsField('ollamaEmbeddingModel', event.target.value)}
-                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                    >
-                      <option value="">未指定 embedding 模型</option>
-                      {ollamaEmbeddingModels.map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {model.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {ollamaModelsError ? <p className="text-sm text-rose-300">{ollamaModelsError}</p> : null}
-                  {!ollamaModelsError && !ollamaModelsLoading && ollamaTextModels.length === 0 ? (
-                    <p className="text-sm text-zinc-500">当前没有发现可用于文本生成的本地 Ollama 语言模型。</p>
-                  ) : null}
-                  {!ollamaModelsError && !ollamaModelsLoading && ollamaEmbeddingModels.length === 0 ? (
-                    <p className="text-sm text-zinc-500">当前没有发现可用于 embedding 的本地 Ollama 模型。</p>
-                  ) : null}
-                </div>
-              </div>
+                )
+              })}
             </div>
 
             <div className="mt-6 flex items-center justify-between gap-3">
-              <p className="text-sm text-zinc-500">当前状态：改写 {providerLabel} / 知识 {knowledgeProviderLabel}</p>
+              <p className="text-sm text-zinc-500">当前状态：{scenarioStatusLabels.join(' / ')}</p>
               <div className="flex gap-2">
                 <button onClick={() => setSettingsOpen(false)} className="rounded-2xl border border-white/10 px-4 py-2 text-sm text-zinc-300 hover:bg-white/[0.06]">取消</button>
                 <button onClick={saveSettings} className="rounded-2xl bg-violet-500 px-4 py-2 text-sm font-medium text-white hover:bg-violet-400">保存设置</button>
