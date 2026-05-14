@@ -40,7 +40,6 @@ export type GenerationContextBuildData = {
   branchId: string
   chapterId: string
   chapterNo: number
-  snapshotStatus: string
   selectedLineStart: number | null
   selectedLineEnd: number | null
   warnings: string[]
@@ -59,7 +58,7 @@ export type GraphEdgeEditDraft = {
   polarity: '' | 'positive' | 'negative' | 'neutral' | 'mixed'
   strength: number
   validFromChapter: number
-  validToChapter: string
+  validUntilChapter: string
   includeByDefault: boolean
 }
 
@@ -79,7 +78,6 @@ export type ChapterGraphContextData = {
   chapterId: string
   chapterNo: number
   chapterTitle: string
-  snapshotStatus: string
   warnings: string[]
   graphContext: GraphAwareResult
   lanceEvidence: GenerationContextEvidence[]

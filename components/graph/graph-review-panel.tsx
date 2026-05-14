@@ -60,7 +60,6 @@ export function GraphReviewPanel(props: {
 
       <div className="mb-4 flex flex-wrap gap-2 text-[11px] text-zinc-400">
         <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">第 {props.context.chapterNo} 章</span>
-        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">快照：{props.context.snapshotStatus}</span>
         {props.context.sourceMeta?.mode === 'inherited-parent' ? (
           <span className="rounded-full border border-fuchsia-300/20 bg-fuchsia-500/10 px-3 py-1 text-fuchsia-100">
             图谱继承自主线第 {props.context.sourceMeta.chapterNo} 章

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Ban, Check, Pencil, Save, X } from 'lucide-react'
 import type { GraphEdge, GraphNode } from '@/lib/server/graph-types'
 import type { GraphEdgeEditDraft, GraphNodeGenerationState, GraphSelection } from '@/components/graph/types'
+import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 
 const STATUS_LABELS: Record<string, string> = {
   ai_generated: 'AI 推断',
@@ -31,7 +32,7 @@ function buildEdgeEditDraft(edge: GraphEdge): GraphEdgeEditDraft {
     polarity: edge.polarity ?? '',
     strength: edge.strength,
     validFromChapter: edge.validFromChapter,
-    validToChapter: edge.validToChapter ? String(edge.validToChapter) : '',
+    validUntilChapter: edge.validUntilChapter >= INF_CHAPTER ? '' : String(edge.validUntilChapter),
     includeByDefault: edge.includeInPrompt,
   }
 }
@@ -129,7 +130,10 @@ function EdgeInspector(props: {
         <Metric label="Confidence" value={`${Math.round(edge.confidence * 100)}%`} />
         <Metric label="Strength" value={edge.strength.toFixed(1)} />
         <Metric label="Valid from" value={`第 ${edge.validFromChapter} 章`} />
-        <Metric label="Valid to" value={edge.validToChapter ? `第 ${edge.validToChapter} 章` : '当前仍有效'} />
+        <Metric
+          label="Valid until"
+          value={edge.validUntilChapter >= INF_CHAPTER ? '当前仍有效' : `第 ${edge.validUntilChapter} 章前有效`}
+        />
         <Metric label="Prompt" value={edge.includeInPrompt ? '默认纳入' : '默认排除'} />
         <Metric label="Generation" value={props.excluded ? '本次排除' : '本次纳入'} />
       </div>
@@ -246,12 +250,12 @@ function EdgeInspector(props: {
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-[11px] uppercase tracking-[0.14em] text-zinc-500">Valid to</span>
+                  <span className="mb-1 block text-[11px] uppercase tracking-[0.14em] text-zinc-500">Valid until</span>
                   <input
                     type="number"
                     min={1}
-                    value={draft.validToChapter}
-                    onChange={(event) => setDraft((current) => ({ ...current, validToChapter: event.target.value }))}
+                    value={draft.validUntilChapter}
+                    onChange={(event) => setDraft((current) => ({ ...current, validUntilChapter: event.target.value }))}
                     className="w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none"
                     placeholder="留空表示仍有效"
                   />

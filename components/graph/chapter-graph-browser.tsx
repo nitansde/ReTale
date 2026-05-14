@@ -135,7 +135,6 @@ export function ChapterGraphBrowser(props: {
             <div className="flex flex-wrap gap-2">
               <Pill label="browse-only" tone="violet" />
               {inheritedFromParent ? <Pill label={`继承主线 ${sourceMeta.chapterNo}`} tone="rose" /> : null}
-              <Pill label={`快照 ${props.data?.snapshotStatus ?? 'loading'}`} />
               <Pill label={`${visibleGraph?.seedEntities.length ?? 0} seeds`} tone="amber" />
               <Pill label={`${visibleGraph?.nodes.length ?? 0} nodes`} tone="sky" />
               <Pill label={`${visibleGraph?.edges.length ?? 0} edges`} />
@@ -162,7 +161,7 @@ export function ChapterGraphBrowser(props: {
                 Branch inherits parent graph
               </div>
               <p className="mt-3 text-sm leading-7 text-zinc-300">
-                这条分支还没有独立图谱快照，所以浏览模式直接复用主线第 {sourceMeta.chapterNo} 章《{sourceMeta.chapterTitle}》的图谱与证据，避免落到“图谱不可用”的死胡同。
+                这条分支还没有独立图谱结果，所以浏览模式直接复用主线第 {sourceMeta.chapterNo} 章《{sourceMeta.chapterTitle}》的图谱与证据，避免落到“图谱不可用”的死胡同。
               </p>
             </div>
             {props.parentChapter ? (
