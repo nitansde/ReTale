@@ -98,7 +98,7 @@ type KnowledgeRebuildStatus = {
   updatedAt: string
   etaMinutes: number | null
   steps: Array<{
-    key: 'extract' | 'cleanup' | 'write' | 'snapshot' | 'index'
+    key: 'extract' | 'cleanup' | 'write' | 'index'
     label: string
     status: 'pending' | 'running' | 'paused' | 'completed'
     progress: number
@@ -733,7 +733,13 @@ export function SelectionNovelStudio() {
 
     const syncRebuildStatus = async () => {
       try {
-        const response = await fetch(`/api/knowledge-view?novelId=${encodeURIComponent(currentNovelId)}`, { cache: 'no-store' })
+        const searchParams = new URLSearchParams({ novelId: currentNovelId })
+        const selectedChapterOrder = localChapters.find((chapter) => chapter.id === currentChapterId)?.order
+        if (typeof selectedChapterOrder === 'number' && Number.isFinite(selectedChapterOrder) && selectedChapterOrder >= 1) {
+          searchParams.set('asOfChapter', String(selectedChapterOrder))
+        }
+
+        const response = await fetch(`/api/knowledge-view?${searchParams.toString()}`, { cache: 'no-store' })
         const data = (await response.json()) as {
           ok?: boolean
           knowledgeRebuildStatus?: KnowledgeRebuildStatus | null
@@ -753,7 +759,7 @@ export function SelectionNovelStudio() {
 
         if (hadActiveJob) {
           lastActiveKnowledgeJobIdRef.current = null
-          await refreshKnowledgeProjection(currentNovelId)
+          await refreshKnowledgeProjection(currentNovelId, selectedChapterOrder)
           if (!cancelled && !knowledgeRebuilding && !knowledgeActionLoading) {
             showKnowledgeToast('知识视图已更新')
           }
@@ -772,7 +778,7 @@ export function SelectionNovelStudio() {
       window.clearTimeout(confirmResetTimer)
       window.clearInterval(timer)
     }
-  }, [currentNovelId, knowledgeActionLoading, knowledgeRebuilding, refreshKnowledgeProjection])
+  }, [currentChapterId, currentNovelId, knowledgeActionLoading, knowledgeRebuilding, localChapters, refreshKnowledgeProjection])
 
   useEffect(() => {
     if (!settingsOpen || resolvedAISettings.rewrite.provider !== 'ollama') return
@@ -867,6 +873,18 @@ export function SelectionNovelStudio() {
     () => sortedChapters.find((chapter) => chapter.id === currentChapterId) ?? sortedChapters[0],
     [sortedChapters, currentChapterId]
   )
+
+  useEffect(() => {
+    if (!backendLoaded || !currentNovelId || !currentChapter) return
+    const timer = window.setTimeout(() => {
+      void refreshKnowledgeProjection(currentNovelId, currentChapter.order).catch(() => undefined)
+    }, 0)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [backendLoaded, currentChapter, currentNovelId, refreshKnowledgeProjection])
+
   const parentChapter = useMemo(
     () => (currentChapter?.parentChapterId ? sortedChapters.find((chapter) => chapter.id === currentChapter.parentChapterId) ?? null : null),
     [currentChapter?.parentChapterId, sortedChapters]
@@ -1179,7 +1197,6 @@ export function SelectionNovelStudio() {
         !data.chapterId ||
         !data.branchId ||
         !data.chapterTitle ||
-        !data.snapshotStatus ||
         !data.chapterNo ||
         !data.novelId
       ) {
@@ -1496,7 +1513,7 @@ export function SelectionNovelStudio() {
       polarity: draft.polarity || null,
       strength: draft.strength,
       validFromChapter: draft.validFromChapter,
-      validToChapter: draft.validToChapter.trim() ? Number(draft.validToChapter.trim()) : null,
+      validUntilChapter: draft.validUntilChapter.trim() ? Number(draft.validUntilChapter.trim()) : null,
       includeByDefault: draft.includeByDefault,
     }))
   }
@@ -2011,7 +2028,7 @@ export function SelectionNovelStudio() {
           ? [
               {
                 title: '流式版本',
-                summary: '基于章节快照与证据装配生成。',
+                summary: '基于当前章节知识状态与证据装配生成。',
                 content: finalText,
               },
             ]
@@ -2536,7 +2553,7 @@ export function SelectionNovelStudio() {
                 </div>
                 {confirmDeleteKnowledge ? (
                   <div className="mt-3 rounded-xl border border-rose-400/15 bg-black/20 p-3">
-                    <p className="text-[11px] leading-5 text-rose-100">请再次确认：这会清空当前小说的人物、关系、设定、时间线和章节快照投影数据。</p>
+                    <p className="text-[11px] leading-5 text-rose-100">请再次确认：这会清空当前小说的人物、关系、设定、时间线与章节态知识投影数据。</p>
                     <div className="mt-3 flex gap-2">
                       <button
                         onClick={() => {

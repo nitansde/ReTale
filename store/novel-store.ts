@@ -57,7 +57,7 @@ type KnowledgeRebuildStatus = {
   updatedAt: string
   etaMinutes: number | null
   steps: Array<{
-    key: 'extract' | 'cleanup' | 'write' | 'snapshot' | 'index'
+    key: 'extract' | 'cleanup' | 'write' | 'index'
     label: string
     status: 'pending' | 'running' | 'paused' | 'completed'
     progress: number
@@ -93,10 +93,12 @@ function normalizeKnowledgeProjectionResult(data: Partial<KnowledgeProjectionRes
 
 async function fetchKnowledgeProjection(options?: {
   novelId?: string
+  asOfChapter?: number
   method?: 'GET' | 'POST'
   action?: 'rebuild' | 'pause' | 'abort' | 'delete-knowledge'
 }): Promise<KnowledgeProjectionResult> {
   const novelId = options?.novelId
+  const asOfChapter = options?.asOfChapter
   const method = options?.method ?? 'GET'
   const action = options?.action ?? 'rebuild'
 
@@ -114,7 +116,12 @@ async function fetchKnowledgeProjection(options?: {
     return normalizeKnowledgeProjectionResult(data)
   }
 
-  const search = novelId ? `?novelId=${encodeURIComponent(novelId)}` : ''
+  const searchParams = new URLSearchParams()
+  if (novelId) searchParams.set('novelId', novelId)
+  if (typeof asOfChapter === 'number' && Number.isFinite(asOfChapter) && asOfChapter >= 1) {
+    searchParams.set('asOfChapter', String(asOfChapter))
+  }
+  const search = searchParams.size ? `?${searchParams.toString()}` : ''
   const response = await fetch(`/api/knowledge-view${search}`, { cache: 'no-store' })
   const data = (await response.json()) as Partial<KnowledgeProjectionResult> & { ok?: boolean; error?: string }
   if (!response.ok || !data.ok) {
@@ -139,6 +146,19 @@ function mergeKnowledgeProjection(state: PersistedNovelState, projection: Knowle
     localWorldEntries: [...state.localWorldEntries.filter((item) => item.novelId !== novelId), ...projection.localWorldEntries],
     localTimelineEvents: [...state.localTimelineEvents.filter((item) => item.novelId !== novelId), ...projection.localTimelineEvents],
   }
+}
+
+function resolveCurrentChapterOrder(state: Pick<PersistedNovelState, 'currentNovelId' | 'currentChapterId' | 'localChapters'>, novelId?: string) {
+  const targetNovelId = novelId ?? state.currentNovelId
+  if (!targetNovelId) return undefined
+
+  const activeChapter = state.localChapters.find((chapter) => chapter.id === state.currentChapterId && chapter.novelId === targetNovelId)
+  if (activeChapter) return activeChapter.order
+
+  return state.localChapters
+    .filter((chapter) => chapter.novelId === targetNovelId && !chapter.parentChapterId)
+    .slice()
+    .sort((left, right) => left.order - right.order)[0]?.order
 }
 
 function collectChapterSubtreeIds(chapters: Chapter[], rootChapterId: string) {
@@ -316,7 +336,7 @@ type NovelStore = PersistedNovelState & {
   pauseStoryKnowledgeRebuild: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   abortStoryKnowledgeRebuild: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   deleteStoryKnowledgeGraph: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
-  refreshKnowledgeProjection: (novelId?: string) => Promise<void>
+  refreshKnowledgeProjection: (novelId?: string, asOfChapter?: number) => Promise<void>
 
   setAISettings: (settings: AISettings) => void
   saveAISettings: () => Promise<void>
@@ -703,8 +723,8 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     }))
     return result
   },
-  refreshKnowledgeProjection: async (novelId) => {
-    const result = await fetchKnowledgeProjection({ novelId, method: 'GET' })
+  refreshKnowledgeProjection: async (novelId, asOfChapter) => {
+    const result = await fetchKnowledgeProjection({ novelId, asOfChapter, method: 'GET' })
     set((current) => ({
       ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), novelId),
     }))
@@ -880,6 +900,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
   resetWorkspace: () => set({ ...initialState }),
   loadFromBackend: async () => {
     set({ backendLoadError: '' })
+    let restoredWorkspace = initialState
 
     try {
       const workspaceResponse = await fetch('/api/workspace', { cache: 'no-store' })
@@ -892,6 +913,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         throw new Error('Workspace endpoint returned invalid JSON')
       })
       const normalizedWorkspace = normalizeWorkspaceState(workspace)
+      restoredWorkspace = normalizedWorkspace
 
       set({
         ...normalizedWorkspace,
@@ -918,7 +940,10 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         }
         return response.json()
       }),
-      fetchKnowledgeProjection(),
+      fetchKnowledgeProjection({
+        novelId: restoredWorkspace.currentNovelId || undefined,
+        asOfChapter: resolveCurrentChapterOrder(restoredWorkspace, restoredWorkspace.currentNovelId || undefined),
+      }),
     ])
 
     const nextState: Partial<NovelStore> = {}
@@ -948,7 +973,10 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         body: JSON.stringify(serializeState(state)),
       })
       try {
-        const projection = await fetchKnowledgeProjection()
+        const projection = await fetchKnowledgeProjection({
+          novelId: state.currentNovelId || undefined,
+          asOfChapter: resolveCurrentChapterOrder(state, state.currentNovelId || undefined),
+        })
         set(() => ({
           ...normalizeKnowledgeProjection(projection),
         }))
