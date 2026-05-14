@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import {
@@ -24,15 +24,38 @@ import {
   Wand2,
   X,
 } from 'lucide-react'
+import { ChapterGraphBrowser } from '@/components/graph/chapter-graph-browser'
+import { GraphReviewPanel } from '@/components/graph/graph-review-panel'
+import type {
+  ChapterGraphContextData,
+  GraphContextSourceMeta,
+  GraphEdgeEditDraft,
+  ChapterGraphContextResponse,
+  GenerationContextBuildData,
+  GenerationContextResponse,
+  GraphReviewControls,
+  GraphSelection,
+  GraphSubgraphResponse,
+} from '@/components/graph/types'
+import type { GraphEdge } from '@/lib/server/graph-types'
 import { useNovelStore } from '@/store/novel-store'
 import { cn, countChineseFriendlyWords, htmlToPlainText, plainTextToHtml } from '@/lib/utils'
 import type { Chapter, CharacterRelation, OutlineType, WorldEntryType } from '@/lib/types'
 
 type ActionMode = 'rewrite' | 'roleplay' | 'expand'
+type CenterPaneView = 'body' | 'graph'
 
 type FloatingPosition = {
   top: number
   left: number
+}
+
+type PendingSourceJump = {
+  chapterId: string
+  chapterNo: number
+  lineStart: number | null
+  lineEnd: number | null
+  searchText: string
 }
 
 const TOOLBAR_EDGE_PADDING = 12
@@ -62,23 +85,6 @@ type RewriteFlowState = {
   provider: string
   candidates: RewriteApiCandidate[]
   selectedIndex: number
-}
-
-type ContextPreviewBlock = {
-  id: string
-  label: string
-  enabled: boolean
-  priority: 'highest' | 'high' | 'medium'
-  content: string
-}
-
-type ContextPreviewData = {
-  chapterNo: number
-  snapshotStatus: string
-  selectedLineStart: number | null
-  selectedLineEnd: number | null
-  warnings: string[]
-  blocks: ContextPreviewBlock[]
 }
 
 type KnowledgeRebuildStatus = {
@@ -195,6 +201,51 @@ const ACTION_META: Record<ActionMode, { label: string; title: string; descriptio
 
 const CHAPTER_PAGE_SIZE = 80
 
+const DEFAULT_GRAPH_REVIEW_CONTROLS: GraphReviewControls = {
+  maxHops: 1,
+  hideLowConfidence: true,
+  confirmedOnly: false,
+  showPotentiallyStale: true,
+}
+
+function normalizeSourceSearchText(value: string) {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function buildChapterLineExcerpt(chapter: Chapter, lineStart: number | null, lineEnd: number | null) {
+  if (lineStart === null || lineStart < 1) return ''
+
+  const lines = htmlToPlainText(chapter.content)
+    .split('\n')
+    .map((line) => line.trim())
+
+  const startIndex = Math.max(0, lineStart - 1)
+  const endIndex = Math.max(startIndex, (lineEnd ?? lineStart) - 1)
+  return lines.slice(startIndex, endIndex + 1).join(' ').trim()
+}
+
+function findSourceBlock(root: HTMLElement, searchText: string) {
+  const normalizedSearchText = normalizeSourceSearchText(searchText)
+  if (!normalizedSearchText) return null
+
+  const blocks = Array.from(root.querySelectorAll<HTMLElement>('p, li, blockquote, h1, h2, h3, h4, h5, h6'))
+  const probes = [120, 80, 48, 24]
+
+  for (const length of probes) {
+    const probe = normalizedSearchText.slice(0, Math.min(length, normalizedSearchText.length))
+    if (!probe) continue
+
+    const match = blocks.find((block) => {
+      const text = normalizeSourceSearchText(block.textContent ?? '')
+      return text.includes(probe) || probe.includes(text)
+    })
+
+    if (match) return match
+  }
+
+  return null
+}
+
 function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
 }
@@ -232,13 +283,61 @@ function buildRoleplayReply(input: string, selectionText: string, chapterTitle: 
   ].join('\n')
 }
 
-async function callContextPreviewApi(payload: Record<string, unknown>): Promise<{ ok: boolean; preview?: ContextPreviewData; error?: string }> {
-  const response = await fetch('/api/context-preview', {
+async function callGenerationContextApi(payload: Record<string, unknown>): Promise<GenerationContextResponse> {
+  const response = await fetch('/api/rag/build-generation-context', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
   return response.json()
+}
+
+async function callGraphSubgraphApi(url: string): Promise<GraphSubgraphResponse> {
+  const response = await fetch(url, { cache: 'no-store' })
+  return response.json()
+}
+
+async function callChapterGraphContextApi(url: string): Promise<ChapterGraphContextResponse> {
+  const response = await fetch(url, { cache: 'no-store' })
+  return response.json()
+}
+
+async function callGraphEdgeConfirmApi(edgeId: string) {
+  const response = await fetch(`/api/graph/edge/${edgeId}/confirm`, { method: 'POST' })
+  return response.json()
+}
+
+async function callGraphEdgeRejectApi(edgeId: string) {
+  const response = await fetch(`/api/graph/edge/${edgeId}/reject`, { method: 'POST' })
+  return response.json()
+}
+
+async function callGraphEdgeEditApi(edgeId: string, payload: Record<string, unknown>) {
+  const response = await fetch(`/api/graph/edge/${edgeId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return response.json()
+}
+
+function resolveGraphSelection(graph: GenerationContextBuildData['graphContext'], selection: GraphSelection) {
+  if (selection?.type === 'node') {
+    const nextNode = graph.nodes.find((node) => node.id === selection.node.id) ?? graph.seedEntities.find((node) => node.id === selection.node.id)
+    if (nextNode) return { type: 'node', node: nextNode } satisfies GraphSelection
+  }
+
+  if (selection?.type === 'edge') {
+    const nextEdge = graph.edges.find((edge) => edge.id === selection.edge.id)
+    if (nextEdge) return { type: 'edge', edge: nextEdge } satisfies GraphSelection
+  }
+
+  const defaultNode = graph.seedEntities[0] ?? graph.nodes[0] ?? null
+  return defaultNode ? ({ type: 'node', node: defaultNode } satisfies GraphSelection) : null
+}
+
+function getConnectedGraphEdgeIds(nodeId: string, edges: GraphEdge[]) {
+  return edges.filter((edge) => edge.source === nodeId || edge.target === nodeId).map((edge) => edge.id)
 }
 
 async function streamRewriteApi(
@@ -340,6 +439,7 @@ export function SelectionNovelStudio() {
   )
 
   const [leftPanelOpen, setLeftPanelOpen] = useState(false)
+  const [centerPaneView, setCenterPaneView] = useState<CenterPaneView>('body')
   const [selectionText, setSelectionText] = useState('')
   const [lockedSelectionText, setLockedSelectionText] = useState('')
   const [toolbarPos, setToolbarPos] = useState<FloatingPosition | null>(null)
@@ -355,10 +455,25 @@ export function SelectionNovelStudio() {
     candidates: [],
     selectedIndex: 0,
   })
-  const [contextPreview, setContextPreview] = useState<ContextPreviewData | null>(null)
+  const [generationContext, setGenerationContext] = useState<GenerationContextBuildData | null>(null)
+  const [graphContext, setGraphContext] = useState<GenerationContextBuildData['graphContext'] | null>(null)
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false)
   const [contextPreviewError, setContextPreviewError] = useState('')
+  const [graphReviewLoading, setGraphReviewLoading] = useState(false)
+  const [graphReviewControls, setGraphReviewControls] = useState<GraphReviewControls>(DEFAULT_GRAPH_REVIEW_CONTROLS)
+  const [graphSelection, setGraphSelection] = useState<GraphSelection>(null)
+  const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false)
   const [disabledContextBlockIds, setDisabledContextBlockIds] = useState<string[]>([])
+  const [excludedGraphEdgeIds, setExcludedGraphEdgeIds] = useState<string[]>([])
+  const [excludedEvidenceIds, setExcludedEvidenceIds] = useState<string[]>([])
+  const [graphMutationPendingId, setGraphMutationPendingId] = useState<string | null>(null)
+  const [graphMutationError, setGraphMutationError] = useState('')
+  const [chapterGraphData, setChapterGraphData] = useState<ChapterGraphContextData | null>(null)
+  const [chapterGraphLoading, setChapterGraphLoading] = useState(false)
+  const [chapterGraphError, setChapterGraphError] = useState('')
+  const [chapterGraphControls, setChapterGraphControls] = useState<GraphReviewControls>(DEFAULT_GRAPH_REVIEW_CONTROLS)
+  const [chapterGraphSelection, setChapterGraphSelection] = useState<GraphSelection>(null)
+  const [pendingSourceJump, setPendingSourceJump] = useState<PendingSourceJump | null>(null)
   const [roleplayInput, setRoleplayInput] = useState('')
   const [roleplayDraft, setRoleplayDraft] = useState('')
   const [roleplayTurns, setRoleplayTurns] = useState<RoleplayTurn[]>([])
@@ -390,6 +505,7 @@ export function SelectionNovelStudio() {
   const hydratedRef = useRef(false)
   const lastActiveKnowledgeJobIdRef = useRef<string | null>(null)
   const openAICompatibleModelsRequestRef = useRef(0)
+  const chapterGraphRequestRef = useRef(0)
 
   const showKnowledgeToast = (message: string, duration = 1800) => {
     setToast(message)
@@ -423,12 +539,18 @@ export function SelectionNovelStudio() {
 
   useEffect(() => {
     if (!currentNovelId) {
-      setKnowledgeRebuildStatus(null)
+      const resetTimer = window.setTimeout(() => {
+        setKnowledgeRebuildStatus(null)
+      }, 0)
       lastActiveKnowledgeJobIdRef.current = null
-      return
+      return () => {
+        window.clearTimeout(resetTimer)
+      }
     }
 
-    setConfirmDeleteKnowledge(false)
+    const confirmResetTimer = window.setTimeout(() => {
+      setConfirmDeleteKnowledge(false)
+    }, 0)
 
     let cancelled = false
 
@@ -470,6 +592,7 @@ export function SelectionNovelStudio() {
 
     return () => {
       cancelled = true
+      window.clearTimeout(confirmResetTimer)
       window.clearInterval(timer)
     }
   }, [currentNovelId, knowledgeActionLoading, knowledgeRebuilding, refreshKnowledgeProjection])
@@ -477,7 +600,7 @@ export function SelectionNovelStudio() {
   useEffect(() => {
     if (!settingsOpen) return
     void loadOllamaModels(aiSettings?.ollamaBaseUrl)
-  }, [settingsOpen])
+  }, [aiSettings?.ollamaBaseUrl, settingsOpen])
 
   useEffect(() => {
     if (!settingsOpen || (aiSettings?.rewriteProvider ?? 'openai-compatible') !== 'openai-compatible') return
@@ -510,6 +633,23 @@ export function SelectionNovelStudio() {
     () => sortedChapters.find((chapter) => chapter.id === currentChapterId) ?? sortedChapters[0],
     [sortedChapters, currentChapterId]
   )
+  const parentChapter = useMemo(
+    () => (currentChapter?.parentChapterId ? sortedChapters.find((chapter) => chapter.id === currentChapter.parentChapterId) ?? null : null),
+    [currentChapter?.parentChapterId, sortedChapters]
+  )
+  const effectiveGraphSourceChapter = useMemo(
+    () => (currentChapter?.parentChapterId ? parentChapter ?? currentChapter : currentChapter ?? null),
+    [currentChapter, parentChapter]
+  )
+  const graphSourceMeta = useMemo<GraphContextSourceMeta | undefined>(() => {
+    if (!currentChapter || !effectiveGraphSourceChapter) return undefined
+    return {
+      mode: currentChapter.parentChapterId ? 'inherited-parent' : 'direct',
+      chapterId: effectiveGraphSourceChapter.id,
+      chapterNo: effectiveGraphSourceChapter.order,
+      chapterTitle: effectiveGraphSourceChapter.title,
+    }
+  }, [currentChapter, effectiveGraphSourceChapter])
 
   const chapterListLimit = chapterListState[currentNovelId] ?? CHAPTER_PAGE_SIZE
 
@@ -528,6 +668,60 @@ export function SelectionNovelStudio() {
   }, [chapterIndex, chapterListLimit, sortedChapters.length])
 
   const chapterText = currentChapter ? htmlToPlainText(currentChapter.content) : ''
+
+  const resolveSourceChapter = (source: { chapterId?: string | null; chapterNo: number | null }) => {
+    if (source.chapterId) {
+      const byId = sortedChapters.find((chapter) => chapter.id === source.chapterId)
+      if (byId) return byId
+    }
+
+    if (source.chapterNo === null) return null
+
+    const mainlineMatch = sortedChapters.find((chapter) => !chapter.parentChapterId && chapter.order === source.chapterNo)
+    if (mainlineMatch) return mainlineMatch
+
+    return sortedChapters.find((chapter) => chapter.order === source.chapterNo) ?? null
+  }
+
+  const jumpToGraphSource = (target: PendingSourceJump) => {
+    const targetChapter = sortedChapters.find((chapter) => chapter.id === target.chapterId)
+    if (!targetChapter) return
+
+    setPendingSourceJump(target)
+    setCenterPaneView('body')
+    setCurrentChapterId(targetChapter.id)
+    resetContextForChapter(targetChapter)
+    setLeftPanelOpen(false)
+  }
+
+  const resolveEdgeSourceJumpTarget = (edge: GraphEdge) => {
+    const location = edge.evidenceLocation
+    if (!location) return null
+
+    const targetChapter = resolveSourceChapter({ chapterNo: location.chapterNo })
+    if (!targetChapter) return null
+
+    return {
+      chapterId: targetChapter.id,
+      chapterNo: targetChapter.order,
+      lineStart: location.lineStart ?? null,
+      lineEnd: location.lineEnd ?? null,
+      searchText: normalizeSourceSearchText(edge.evidenceQuote ?? buildChapterLineExcerpt(targetChapter, location.lineStart ?? null, location.lineEnd ?? null)),
+    } satisfies PendingSourceJump
+  }
+
+  const resolveEvidenceSourceJumpTarget = (item: GenerationContextBuildData['lanceEvidence'][number]) => {
+    const targetChapter = resolveSourceChapter({ chapterId: item.chapterId, chapterNo: item.chapterNo })
+    if (!targetChapter) return null
+
+    return {
+      chapterId: targetChapter.id,
+      chapterNo: targetChapter.order,
+      lineStart: item.lineStart,
+      lineEnd: item.lineEnd,
+      searchText: normalizeSourceSearchText(item.text || buildChapterLineExcerpt(targetChapter, item.lineStart, item.lineEnd)),
+    } satisfies PendingSourceJump
+  }
   const knowledgeRebuildEtaMinutes = useMemo(() => {
     return knowledgeRebuildStatus?.etaMinutes ?? null
   }, [knowledgeRebuildStatus])
@@ -558,6 +752,49 @@ export function SelectionNovelStudio() {
   }, [editor, currentChapter])
 
   useEffect(() => {
+    if (centerPaneView !== 'body' || !currentChapter || !pendingSourceJump) return
+    if (pendingSourceJump.chapterId !== currentChapter.id) return
+
+    const timer = window.setTimeout(() => {
+      const root = editorRef.current
+      const target = root ? findSourceBlock(root, pendingSourceJump.searchText) : null
+
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      } else {
+        const lineLabel = pendingSourceJump.lineStart !== null
+          ? pendingSourceJump.lineEnd !== null && pendingSourceJump.lineEnd !== pendingSourceJump.lineStart
+            ? `第 ${pendingSourceJump.lineStart}-${pendingSourceJump.lineEnd} 行`
+            : `第 ${pendingSourceJump.lineStart} 行`
+          : '对应原文位置'
+        showKnowledgeToast(`已跳到第 ${pendingSourceJump.chapterNo} 章，请查看${lineLabel}`)
+      }
+
+      setPendingSourceJump(null)
+    }, 120)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [centerPaneView, currentChapter, pendingSourceJump])
+
+  useEffect(() => {
+    if (centerPaneView === 'body') return
+    const timer = window.setTimeout(() => {
+      setToolbarPos(null)
+      setSelectionText('')
+      setLockedSelectionText('')
+      if (activeMode) {
+        closePanel()
+      }
+    }, 0)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [activeMode, centerPaneView])
+
+  useEffect(() => {
     if (editor) {
       editorRef.current = editor.view.dom as HTMLDivElement
     }
@@ -574,6 +811,11 @@ export function SelectionNovelStudio() {
 
   useEffect(() => {
     const handler = () => {
+      if (centerPaneView !== 'body') {
+        setSelectionText('')
+        setToolbarPos(null)
+        return
+      }
       const selection = extractSelection(editorRef.current)
       if (!selection) {
         if (activeMode) {
@@ -599,7 +841,7 @@ export function SelectionNovelStudio() {
       window.removeEventListener('resize', handler)
       window.removeEventListener('scroll', handler, true)
     }
-  }, [activeMode])
+  }, [activeMode, centerPaneView])
 
   useEffect(() => {
     if (!toolbarPos || activeMode || !toolbarRef.current) return
@@ -625,9 +867,17 @@ export function SelectionNovelStudio() {
     setRoleplayDraft(nextText)
     setSelectionText('')
     setLockedSelectionText('')
-    setContextPreview(null)
+    setGenerationContext(null)
+    setGraphContext(null)
     setContextPreviewError('')
+    setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
+    setGraphSelection(null)
+    setEvidenceDrawerOpen(false)
     setDisabledContextBlockIds([])
+    setExcludedGraphEdgeIds([])
+    setExcludedEvidenceIds([])
+    setGraphMutationPendingId(null)
+    setGraphMutationError('')
     setToolbarPos(null)
     setActiveMode(null)
   }
@@ -635,33 +885,160 @@ export function SelectionNovelStudio() {
   const closePanel = () => {
     setActiveMode(null)
     setLockedSelectionText('')
-    setContextPreview(null)
+    setGenerationContext(null)
+    setGraphContext(null)
     setContextPreviewError('')
+    setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
+    setGraphSelection(null)
+    setEvidenceDrawerOpen(false)
     setDisabledContextBlockIds([])
+    setExcludedGraphEdgeIds([])
+    setExcludedEvidenceIds([])
+    setGraphMutationPendingId(null)
+    setGraphMutationError('')
     setRewriteState((current) => ({ ...current, error: '' }))
     setExpandState((current) => ({ ...current, error: '' }))
   }
 
+  const loadChapterGraph = useCallback(async (chapter: Chapter, controls = chapterGraphControls, preserveData = false) => {
+    const requestId = chapterGraphRequestRef.current + 1
+    chapterGraphRequestRef.current = requestId
+
+    const sourceChapter = chapter.parentChapterId ? parentChapter ?? null : chapter
+
+    if (!currentNovelId || !sourceChapter) {
+      setChapterGraphData(null)
+      setChapterGraphSelection(null)
+      setChapterGraphError('')
+      setChapterGraphLoading(false)
+      return
+    }
+
+    const novelId = currentNovelId
+
+    if (!preserveData) {
+      setChapterGraphData(null)
+      setChapterGraphSelection(null)
+    }
+
+    setChapterGraphLoading(true)
+    setChapterGraphError('')
+
+    try {
+      const params = new URLSearchParams({
+        novelId,
+        chapterId: sourceChapter.id,
+        hops: String(controls.maxHops),
+        includeLowConfidence: String(!controls.hideLowConfidence),
+        confirmedOnly: String(controls.confirmedOnly),
+      })
+      const data = await callChapterGraphContextApi(`/api/rag/graph-context?${params.toString()}`)
+
+      if (chapterGraphRequestRef.current !== requestId) {
+        return
+      }
+
+      if (
+        !data.ok ||
+        !data.graphContext ||
+        !data.chapterId ||
+        !data.branchId ||
+        !data.chapterTitle ||
+        !data.snapshotStatus ||
+        !data.chapterNo ||
+        !data.novelId
+      ) {
+        throw new Error(data.error || '章节图谱加载失败')
+      }
+
+      const nextData = {
+        ...(data as ChapterGraphContextData),
+        sourceMeta: chapter.parentChapterId
+          ? {
+              mode: 'inherited-parent',
+              chapterId: sourceChapter.id,
+              chapterNo: sourceChapter.order,
+              chapterTitle: sourceChapter.title,
+            }
+          : {
+              mode: 'direct',
+              chapterId: sourceChapter.id,
+              chapterNo: sourceChapter.order,
+              chapterTitle: sourceChapter.title,
+            },
+      } satisfies ChapterGraphContextData
+      setChapterGraphData(nextData)
+      const defaultNode = nextData.graphContext.seedEntities[0] ?? nextData.graphContext.nodes[0] ?? null
+      setChapterGraphSelection(defaultNode ? { type: 'node', node: defaultNode } : null)
+    } catch (error) {
+      if (chapterGraphRequestRef.current !== requestId) {
+        return
+      }
+
+      setChapterGraphError(error instanceof Error ? error.message : '章节图谱加载失败')
+      if (!preserveData) {
+        setChapterGraphData(null)
+        setChapterGraphSelection(null)
+      }
+    } finally {
+      if (chapterGraphRequestRef.current === requestId) {
+        setChapterGraphLoading(false)
+      }
+    }
+  }, [chapterGraphControls, currentNovelId, parentChapter])
+
+  useEffect(() => {
+    if (centerPaneView !== 'graph' || !currentChapter) return
+    if (currentChapter.parentChapterId && !parentChapter) {
+      chapterGraphRequestRef.current += 1
+      const timer = window.setTimeout(() => {
+        setChapterGraphData(null)
+        setChapterGraphSelection(null)
+        setChapterGraphError('当前分支没有可继承的父章节图谱。')
+        setChapterGraphLoading(false)
+      }, 0)
+      return () => {
+        window.clearTimeout(timer)
+      }
+    }
+
+    const timer = window.setTimeout(() => {
+      void loadChapterGraph(currentChapter, chapterGraphControls)
+    }, 0)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [centerPaneView, chapterGraphControls, currentChapter, loadChapterGraph, parentChapter])
+
+  const handleChapterGraphControlChange = async (nextControls: GraphReviewControls) => {
+    const requiresReload = nextControls.maxHops !== chapterGraphControls.maxHops
+      || nextControls.hideLowConfidence !== chapterGraphControls.hideLowConfidence
+      || nextControls.confirmedOnly !== chapterGraphControls.confirmedOnly
+    setChapterGraphControls(nextControls)
+
+    if (!requiresReload || centerPaneView !== 'graph' || !currentChapter) {
+      return
+    }
+
+    await loadChapterGraph(currentChapter, nextControls, true)
+  }
+
   const selectedRewriteCandidate = rewriteFlow.candidates[rewriteFlow.selectedIndex]
-  const rewriteProvider = aiSettings?.rewriteProvider ?? 'openai-compatible'
-  const knowledgeProvider = aiSettings?.knowledgeProvider ?? 'ollama'
+  const activeGraphContext = graphContext ?? generationContext?.graphContext ?? null
   const selectedOpenAICompatibleModel = openAICompatibleModels.some((model) => model.id === (aiSettings?.model ?? ''))
     ? (aiSettings?.model ?? '')
     : ''
   const hasRealModel = Boolean(aiSettings?.configured && aiSettings?.model)
-  const providerLabel = rewriteProvider === 'ollama'
-    ? `${aiSettings?.ollamaRewriteModel || 'Ollama 自动选择'} · 本地`
-    : hasRealModel
-      ? `${aiSettings?.model} · 已连接`
-      : 'Fallback 模式'
-  const knowledgeProviderLabel = knowledgeProvider === 'openai-compatible'
-    ? (hasRealModel ? `${aiSettings?.model} · OpenAI-compatible` : 'OpenAI-compatible 未配置')
-    : `${aiSettings?.ollamaModel || 'Ollama 自动选择'} · 本地`
+  const providerLabel = hasRealModel
+    ? `${aiSettings?.model} · 已连接`
+    : 'OpenAI-compatible 未配置'
+  const knowledgeProviderLabel = `${aiSettings?.ollamaModel || 'Ollama 自动选择'} · 本地`
 
   useEffect(() => {
-    if (!settingsOpen || rewriteProvider !== 'openai-compatible') return
+    if (!settingsOpen) return
     void loadOpenAICompatibleModels(aiSettings?.baseUrl, aiSettings?.apiKey)
-  }, [rewriteProvider, settingsOpen])
+  }, [aiSettings?.apiKey, aiSettings?.baseUrl, settingsOpen])
 
   const getInstructionForMode = (mode: ActionMode) => {
     if (mode === 'rewrite') return rewritePrompt
@@ -669,35 +1046,118 @@ export function SelectionNovelStudio() {
     return roleplayInput.trim() || '围绕当前选区继续推进剧情。'
   }
 
-  const loadContextPreview = async (mode: ActionMode, instructionOverride?: string) => {
+  const loadContextPreview = async (
+    mode: ActionMode,
+    instructionOverride?: string,
+    options?: {
+      preserveDisabledBlocks?: boolean
+      excludedGraphEdgeIds?: string[]
+      excludedEvidenceIds?: string[]
+    }
+  ) => {
     if (!currentChapter) return null
+    const sourceChapter = currentChapter.parentChapterId ? parentChapter ?? null : currentChapter
+    if (!sourceChapter) {
+      setContextPreviewError('当前分支没有可继承的父章节图谱。')
+      return null
+    }
     const targetSelection = (lockedSelectionText || selectionText).trim()
     if (!targetSelection) return null
 
     setContextPreviewLoading(true)
     setContextPreviewError('')
     try {
-      const data = await callContextPreviewApi({
+      const data = await callGenerationContextApi({
         novelId: currentNovelId,
-        chapterId: currentChapter.id,
+        chapterId: sourceChapter.id,
         selectedText: targetSelection,
         operationType: mode,
         userInstruction: instructionOverride ?? getInstructionForMode(mode),
+        excludedGraphEdgeIds: options?.excludedGraphEdgeIds ?? excludedGraphEdgeIds,
+        excludedEvidenceIds: options?.excludedEvidenceIds ?? excludedEvidenceIds,
       })
 
-      if (!data.ok || !data.preview) {
+      if (!data.ok || !data.graphContext || !data.promptBlocks || !data.lanceEvidence) {
         throw new Error(data.error || '上下文预览生成失败')
       }
 
-      setContextPreview(data.preview)
-      setDisabledContextBlockIds([])
-      return data.preview
+      const nextContext = {
+        ...(data as GenerationContextBuildData),
+        sourceMeta: currentChapter.parentChapterId
+          ? {
+              mode: 'inherited-parent',
+              chapterId: sourceChapter.id,
+              chapterNo: sourceChapter.order,
+              chapterTitle: sourceChapter.title,
+            }
+          : {
+              mode: 'direct',
+              chapterId: sourceChapter.id,
+              chapterNo: sourceChapter.order,
+              chapterTitle: sourceChapter.title,
+            },
+      } satisfies GenerationContextBuildData
+      setGenerationContext(nextContext)
+      setGraphContext(nextContext.graphContext)
+      setGraphSelection((current) => resolveGraphSelection(nextContext.graphContext, current))
+      setEvidenceDrawerOpen(Boolean(nextContext.lanceEvidence.length))
+      setDisabledContextBlockIds((current) => (options?.preserveDisabledBlocks ? current : []))
+      setGraphMutationError('')
+      return nextContext
     } catch (error) {
-      setContextPreview(null)
+      setGenerationContext(null)
+      setGraphContext(null)
+      setGraphSelection(null)
       setContextPreviewError(error instanceof Error ? error.message : '上下文预览生成失败')
       return null
     } finally {
       setContextPreviewLoading(false)
+    }
+  }
+
+  const syncGraphReview = async (nextControls: GraphReviewControls, fallbackContext?: GenerationContextBuildData | null) => {
+    const sourceContext = fallbackContext ?? generationContext
+    if (!sourceContext?.graphContext.seedEntities.length || !currentNovelId) {
+      setGraphReviewControls(nextControls)
+      return
+    }
+
+    const params = new URLSearchParams({
+      novelId: currentNovelId,
+      branchId: sourceContext.branchId,
+      chapterNo: String(sourceContext.chapterNo),
+      hops: String(nextControls.maxHops),
+      includeLowConfidence: String(!nextControls.hideLowConfidence),
+      confirmedOnly: String(nextControls.confirmedOnly),
+      entityId: sourceContext.graphContext.seedEntities.map((node) => node.id).join(','),
+    })
+
+      setGraphReviewLoading(true)
+      setContextPreviewError('')
+      setGraphReviewControls(nextControls)
+
+    try {
+      const data = await callGraphSubgraphApi(`/api/graph/subgraph?${params.toString()}`)
+      if (!data.ok || !data.nodes || !data.edges || !data.seedEntities || !data.status) {
+        throw new Error(data.error || '图谱装配失败')
+      }
+
+      const nextGraphContext: GenerationContextBuildData['graphContext'] = {
+        seedEntities: data.seedEntities,
+        nodes: data.nodes,
+        edges: data.edges,
+        contextText: data.contextText ?? '',
+        warnings: data.warnings ?? [],
+        tokenEstimate: data.tokenEstimate ?? 0,
+        status: data.status,
+      }
+
+      setGraphContext(nextGraphContext)
+      setGraphSelection((current) => resolveGraphSelection(nextGraphContext, current))
+    } catch (error) {
+      setContextPreviewError(error instanceof Error ? error.message : '图谱装配失败')
+    } finally {
+      setGraphReviewLoading(false)
     }
   }
 
@@ -706,9 +1166,17 @@ export function SelectionNovelStudio() {
     if (!nextSelection) return
     setLockedSelectionText(nextSelection)
     setToolbarPos(null)
-    setContextPreview(null)
+    setGenerationContext(null)
+    setGraphContext(null)
     setContextPreviewError('')
+    setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
+    setGraphSelection(null)
+    setEvidenceDrawerOpen(false)
     setDisabledContextBlockIds([])
+    setExcludedGraphEdgeIds([])
+    setExcludedEvidenceIds([])
+    setGraphMutationPendingId(null)
+    setGraphMutationError('')
     if (mode === 'rewrite') {
       setRewriteFlow({
         loading: false,
@@ -722,6 +1190,91 @@ export function SelectionNovelStudio() {
     window.setTimeout(() => {
       void loadContextPreview(mode)
     }, 0)
+  }
+
+  const handleRefreshContextReview = async (options?: {
+    excludedGraphEdgeIds?: string[]
+    excludedEvidenceIds?: string[]
+    preserveDisabledBlocks?: boolean
+  }) => {
+    if (!activeMode) return
+    const nextContext = await loadContextPreview(activeMode, undefined, {
+      preserveDisabledBlocks: options?.preserveDisabledBlocks ?? true,
+      excludedGraphEdgeIds: options?.excludedGraphEdgeIds,
+      excludedEvidenceIds: options?.excludedEvidenceIds,
+    })
+    if (!nextContext) return
+    if (
+      graphReviewControls.maxHops !== DEFAULT_GRAPH_REVIEW_CONTROLS.maxHops ||
+      graphReviewControls.hideLowConfidence !== DEFAULT_GRAPH_REVIEW_CONTROLS.hideLowConfidence ||
+      graphReviewControls.confirmedOnly !== DEFAULT_GRAPH_REVIEW_CONTROLS.confirmedOnly
+    ) {
+      await syncGraphReview(graphReviewControls, nextContext)
+    }
+  }
+
+  const handleExcludedGenerationContextChange = async (next: {
+    excludedGraphEdgeIds: string[]
+    excludedEvidenceIds: string[]
+  }) => {
+    setExcludedGraphEdgeIds(next.excludedGraphEdgeIds)
+    setExcludedEvidenceIds(next.excludedEvidenceIds)
+    await handleRefreshContextReview({
+      excludedGraphEdgeIds: next.excludedGraphEdgeIds,
+      excludedEvidenceIds: next.excludedEvidenceIds,
+      preserveDisabledBlocks: true,
+    })
+  }
+
+  const handleGraphEdgeMutation = async (edgeId: string, request: () => Promise<{ ok?: boolean; error?: string }>) => {
+    setGraphMutationPendingId(edgeId)
+    setGraphMutationError('')
+    try {
+      const result = await request()
+      if (!result.ok) {
+        throw new Error(result.error || '图谱关系更新失败')
+      }
+
+      await handleRefreshContextReview({ preserveDisabledBlocks: true })
+    } catch (error) {
+      setGraphMutationError(error instanceof Error ? error.message : '图谱关系更新失败')
+    } finally {
+      setGraphMutationPendingId(null)
+    }
+  }
+
+  const handleConfirmGraphEdge = async (edgeId: string) => {
+    await handleGraphEdgeMutation(edgeId, () => callGraphEdgeConfirmApi(edgeId))
+  }
+
+  const handleRejectGraphEdge = async (edgeId: string) => {
+    await handleGraphEdgeMutation(edgeId, () => callGraphEdgeRejectApi(edgeId))
+  }
+
+  const handleSaveGraphEdgeEdit = async (edgeId: string, draft: GraphEdgeEditDraft) => {
+    await handleGraphEdgeMutation(edgeId, () => callGraphEdgeEditApi(edgeId, {
+      linkType: draft.linkType.trim(),
+      label: draft.label.trim() || null,
+      description: draft.description.trim() || null,
+      polarity: draft.polarity || null,
+      strength: draft.strength,
+      validFromChapter: draft.validFromChapter,
+      validToChapter: draft.validToChapter.trim() ? Number(draft.validToChapter.trim()) : null,
+      includeByDefault: draft.includeByDefault,
+    }))
+  }
+
+  const handleGraphControlChange = async (nextControls: GraphReviewControls) => {
+    if (
+      nextControls.maxHops === graphReviewControls.maxHops &&
+      nextControls.hideLowConfidence === graphReviewControls.hideLowConfidence &&
+      nextControls.confirmedOnly === graphReviewControls.confirmedOnly
+    ) {
+      setGraphReviewControls(nextControls)
+      return
+    }
+
+    await syncGraphReview(nextControls)
   }
 
   const copyText = async (mode: 'rewrite' | 'expand' | 'roleplay', text: string) => {
@@ -753,7 +1306,7 @@ export function SelectionNovelStudio() {
     setSettingsOpen(false)
   }
 
-  const loadOllamaModels = async (baseUrl?: string) => {
+  async function loadOllamaModels(baseUrl?: string) {
     setOllamaModelsLoading(true)
     setOllamaModelsError('')
     try {
@@ -792,7 +1345,7 @@ export function SelectionNovelStudio() {
     }
   }
 
-  const loadOpenAICompatibleModels = async (baseUrl?: string, apiKey?: string) => {
+  async function loadOpenAICompatibleModels(baseUrl?: string, apiKey?: string) {
     const requestId = openAICompatibleModelsRequestRef.current + 1
     openAICompatibleModelsRequestRef.current = requestId
     const trimmedBaseUrl = baseUrl?.trim() ?? ''
@@ -985,6 +1538,8 @@ export function SelectionNovelStudio() {
           operationType: 'rewrite',
           userInstruction: rewritePrompt,
           disabledBlockIds: disabledContextBlockIds,
+          excludedGraphEdgeIds,
+          excludedEvidenceIds,
           scope: 'chapter',
           mode: 'heavy',
           tone: 'dramatic',
@@ -1040,6 +1595,8 @@ export function SelectionNovelStudio() {
           operationType: 'expand',
           userInstruction: expandPrompt,
           disabledBlockIds: disabledContextBlockIds,
+          excludedGraphEdgeIds,
+          excludedEvidenceIds,
           scope: 'chapter',
           mode: 'medium',
           tone: 'cinematic',
@@ -1082,6 +1639,8 @@ export function SelectionNovelStudio() {
           operationType: 'roleplay',
           userInstruction: userTurn.content,
           disabledBlockIds: disabledContextBlockIds,
+          excludedGraphEdgeIds,
+          excludedEvidenceIds,
           scope: 'chapter',
           mode: 'continue',
           tone: 'dramatic',
@@ -1330,23 +1889,89 @@ export function SelectionNovelStudio() {
             <div className="border-b border-white/8 px-5 py-4 sm:px-7">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Chapter body first</p>
+                  <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">{centerPaneView === 'body' ? 'Chapter body first' : 'Chapter graph browser'}</p>
                   <h2 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-100">{currentChapter.title}</h2>
                   <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-                    先选章节，再在正文里直接选中想处理的文本。选区上方会弹出浮动入口，展开三种模式：魔改、角色扮演、智能扩写。
+                    {centerPaneView === 'body'
+                      ? '先选章节，再在正文里直接选中想处理的文本。选区上方会弹出浮动入口，展开三种模式：魔改、角色扮演、智能扩写。'
+                      : '切到图谱后会持续停留在这个浏览视角；你从左侧切换章节时，中心面板会直接换成对应章节的已检索图谱。'}
                   </p>
                 </div>
-                <div className="rounded-[22px] border border-white/10 bg-black/20 px-4 py-3 text-xs leading-6 text-zinc-400">
-                  <div className="flex items-center gap-2"><BookOpen className="h-4 w-4 text-violet-300" /> 当前选区：{(lockedSelectionText || selectionText) ? `${(lockedSelectionText || selectionText).slice(0, 24)}${(lockedSelectionText || selectionText).length > 24 ? '…' : ''}` : '未选择'}</div>
+                <div className="flex flex-wrap items-center justify-end gap-3">
+                  <div className="inline-flex rounded-[22px] border border-white/10 bg-black/20 p-1 text-sm text-zinc-400">
+                    {(['body', 'graph'] as CenterPaneView[]).map((view) => (
+                      <button
+                        key={view}
+                        type="button"
+                        onClick={() => setCenterPaneView(view)}
+                        className={cn(
+                          'rounded-[18px] px-4 py-2 transition',
+                          centerPaneView === view ? 'bg-white/10 text-zinc-100 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'
+                        )}
+                      >
+                        {view === 'body' ? 'Body' : 'Graph'}
+                      </button>
+                    ))}
+                  </div>
+                    <div className="rounded-[22px] border border-white/10 bg-black/20 px-4 py-3 text-xs leading-6 text-zinc-400">
+      <div className="flex items-center gap-2">
+        {centerPaneView === 'body' ? <BookOpen className="h-4 w-4 text-violet-300" /> : <Globe className="h-4 w-4 text-sky-300" />}
+        {centerPaneView === 'body'
+          ? `当前选区：${(lockedSelectionText || selectionText) ? `${(lockedSelectionText || selectionText).slice(0, 24)}${(lockedSelectionText || selectionText).length > 24 ? '…' : ''}` : '未选择'}`
+          : `当前浏览：${graphSourceMeta?.mode === 'inherited-parent' ? `分支图谱（继承主线第 ${graphSourceMeta.chapterNo} 章）` : '章节图谱'}`}
+      </div>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="px-4 py-4 sm:px-7 sm:py-6">
-              <div className="min-h-[62vh] rounded-[28px] border border-white/8 bg-[#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-                <EditorContent editor={editor} />
+            {centerPaneView === 'body' ? (
+              <div className="px-4 py-4 sm:px-7 sm:py-6">
+                <div className="min-h-[62vh] rounded-[28px] border border-white/8 bg-[#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+                  <EditorContent editor={editor} />
+                </div>
               </div>
-            </div>
+            ) : (
+              <ChapterGraphBrowser
+                chapter={currentChapter}
+                parentChapter={parentChapter}
+                data={chapterGraphData}
+                sourceMeta={graphSourceMeta}
+                controls={chapterGraphControls}
+                selection={chapterGraphSelection}
+                loading={chapterGraphLoading}
+                error={chapterGraphError}
+                onSelectNode={(node) => setChapterGraphSelection({ type: 'node', node })}
+                onSelectEdge={(edge) => setChapterGraphSelection({ type: 'edge', edge })}
+                onClearSelection={() => setChapterGraphSelection(null)}
+                onChangeControls={(controls) => {
+                  void handleChapterGraphControlChange(controls)
+                }}
+                onRefresh={() => {
+                  if (!currentChapter) return
+                  void loadChapterGraph(currentChapter, chapterGraphControls, true)
+                }}
+                onJumpToEdgeSource={(edge) => {
+                  const target = resolveEdgeSourceJumpTarget(edge)
+                  if (target) jumpToGraphSource(target)
+                }}
+                canJumpToEdgeSource={(edge) => Boolean(resolveEdgeSourceJumpTarget(edge))}
+                onJumpToEvidenceSource={(item) => {
+                  const target = resolveEvidenceSourceJumpTarget(item)
+                  if (target) jumpToGraphSource(target)
+                }}
+                canJumpToEvidenceSource={(item) => Boolean(resolveEvidenceSourceJumpTarget(item))}
+                onJumpToParent={
+                  parentChapter
+                    ? () => {
+                        setCurrentChapterId(parentChapter.id)
+                        resetContextForChapter(parentChapter)
+                        setLeftPanelOpen(false)
+                      }
+                    : undefined
+                }
+              />
+            )}
           </section>
 
           <aside className="rounded-[30px] border border-white/10 bg-[#11141d] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.35)] sm:p-5">
@@ -1960,7 +2585,7 @@ export function SelectionNovelStudio() {
         </div>
       </div>
 
-      {toolbarPos && selectionText && !activeMode ? (
+      {centerPaneView === 'body' && toolbarPos && selectionText && !activeMode ? (
         <div
           ref={toolbarRef}
           className="pointer-events-none fixed z-40"
@@ -2013,147 +2638,96 @@ export function SelectionNovelStudio() {
               <div className="rounded-[24px] border border-white/10 bg-[#0b0d12] p-4">
                 <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Rewrite model</p>
                 <h4 className="mt-2 text-sm font-medium text-zinc-100">改写模型提供方</h4>
-                <p className="mt-1 text-xs leading-5 text-zinc-500">用于魔改、扩写和角色扮演生成。现在可以在 OpenAI-compatible 和本地 Ollama 之间切换。</p>
+                <p className="mt-1 text-xs leading-5 text-zinc-500">用于魔改、扩写和角色扮演生成。当前阶段固定使用 OpenAI-compatible API，避免在线路径回退到本地模型。</p>
                 <div className="mt-4 space-y-4">
+                  <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-100">
+                    当前在线生成固定走 OpenAI-compatible API。这里保留的是 API 连接信息与模型选择，不再提供本地改写开关。
+                  </div>
                   <label className="block">
-                    <span className="mb-2 block text-sm text-zinc-300">Provider</span>
-                    <select
-                      value={rewriteProvider}
-                      onChange={(event) => setAISettingsField('rewriteProvider', event.target.value)}
+                    <span className="mb-2 block text-sm text-zinc-300">Base URL</span>
+                    <input
+                      value={aiSettings?.baseUrl ?? ''}
+                      onChange={(event) => setAISettingsField('baseUrl', event.target.value)}
                       className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                    >
-                      <option value="openai-compatible">OpenAI-compatible</option>
-                      <option value="ollama">Ollama 本地模型</option>
-                    </select>
+                      placeholder="https://api.openai.com/v1"
+                    />
+                    <p className="mt-2 text-xs leading-5 text-zinc-500">
+                      模型发现会尝试读取当前 Base URL 下的 <code className="rounded bg-white/5 px-1 py-0.5 text-[11px] text-zinc-300">/models</code>；如果服务不支持，仍可继续手动填写 Model。
+                    </p>
                   </label>
-
-                  {rewriteProvider === 'openai-compatible' ? (
-                    <>
-                      <label className="block">
-                        <span className="mb-2 block text-sm text-zinc-300">Base URL</span>
-                        <input
-                          value={aiSettings?.baseUrl ?? ''}
-                          onChange={(event) => setAISettingsField('baseUrl', event.target.value)}
-                          className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                          placeholder="https://api.openai.com/v1"
-                        />
-                        <p className="mt-2 text-xs leading-5 text-zinc-500">
-                          模型发现会尝试读取当前 Base URL 下的 <code className="rounded bg-white/5 px-1 py-0.5 text-[11px] text-zinc-300">/models</code>；如果服务不支持，仍可继续手动填写 Model。
-                        </p>
-                      </label>
-                      <label className="block">
-                        <span className="mb-2 block text-sm text-zinc-300">API Key</span>
-                        <input
-                          value={aiSettings?.apiKey ?? ''}
-                          onChange={(event) => setAISettingsField('apiKey', event.target.value)}
-                          className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                          placeholder={aiSettings?.apiKeyMasked || 'sk-...'}
-                        />
-                        {aiSettings?.apiKeyConfigured && !aiSettings?.apiKey ? (
-                          <p className="mt-2 text-xs leading-5 text-zinc-500">当前已保存 API Key。留空保存会保持现有 key，不会自动清除。</p>
-                        ) : null}
-                      </label>
-                      <label className="block">
-                        <span className="mb-2 block text-sm text-zinc-300">Model</span>
-                        <div className="mb-2 flex items-center justify-between gap-3">
-                          <p className="text-xs leading-5 text-zinc-500">
-                            {openAICompatibleModelsLoading
-                              ? '正在读取当前 Base URL 的可用模型…'
-                              : openAICompatibleModels.length > 0
-                                ? `已发现 ${openAICompatibleModels.length} 个可用模型，可直接选择，也可继续手动输入。`
-                                : '可手动输入模型名；如果当前服务支持 /models，这里会自动补全建议。'}
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void loadOpenAICompatibleModels(aiSettings?.baseUrl, aiSettings?.apiKey)
-                            }}
-                            className="shrink-0 rounded-2xl border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/[0.06]"
-                          >
-                            {openAICompatibleModelsLoading ? '刷新中…' : '刷新模型'}
-                          </button>
-                        </div>
-                        <select
-                          value={selectedOpenAICompatibleModel}
-                          onChange={(event) => setAISettingsField('model', event.target.value)}
-                          disabled={openAICompatibleModelsLoading || openAICompatibleModels.length === 0}
-                          className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          <option value="">
-                            {openAICompatibleModelsLoading
-                              ? '正在读取可用模型…'
-                              : openAICompatibleModels.length > 0
-                                ? '从已发现模型中选择'
-                                : '当前没有可选模型，继续手动填写'}
-                          </option>
-                          {openAICompatibleModels.map((model) => (
-                            <option key={model.id} value={model.id}>
-                              {model.label}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="mt-2 text-xs leading-5 text-zinc-500">选择后会直接回填到下方 Model 输入框；如果列表为空，继续手动填写即可。</p>
-                        <input
-                          value={aiSettings?.model ?? ''}
-                          onChange={(event) => setAISettingsField('model', event.target.value)}
-                          className="mt-3 w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                          placeholder="deepseek-v4-flash"
-                        />
-                      </label>
-                      {!openAICompatibleModelsLoading && aiSettings?.baseUrl?.trim() && openAICompatibleModels.length === 0 ? (
-                        <p className="text-sm text-zinc-500">当前没有发现可用的 OpenAI-compatible 模型；你仍然可以继续手动填写 Model。</p>
-                      ) : null}
-                    </>
-                  ) : (
-                    <>
-                      <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-zinc-400">
-                        改写会复用下方配置的 Ollama Base URL，并使用这里单独选择的本地语言模型。
-                      </div>
-                      <label className="block">
-                        <span className="mb-2 block text-sm text-zinc-300">Ollama 改写模型</span>
-                        <select
-                          value={aiSettings?.ollamaRewriteModel ?? ''}
-                          onChange={(event) => setAISettingsField('ollamaRewriteModel', event.target.value)}
-                          className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                        >
-                          <option value="">自动选择首个可用文本模型</option>
-                          {ollamaTextModels.map((model) => (
-                            <option key={model.id} value={model.id}>
-                              {model.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </>
-                  )}
+                  <label className="block">
+                    <span className="mb-2 block text-sm text-zinc-300">API Key</span>
+                    <input
+                      value={aiSettings?.apiKey ?? ''}
+                      onChange={(event) => setAISettingsField('apiKey', event.target.value)}
+                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+                      placeholder={aiSettings?.apiKeyMasked || 'sk-...'}
+                    />
+                    {aiSettings?.apiKeyConfigured && !aiSettings?.apiKey ? (
+                      <p className="mt-2 text-xs leading-5 text-zinc-500">当前已保存 API Key。留空保存会保持现有 key，不会自动清除。</p>
+                    ) : null}
+                  </label>
+                  <label className="block">
+                    <span className="mb-2 block text-sm text-zinc-300">Model</span>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <p className="text-xs leading-5 text-zinc-500">
+                        {openAICompatibleModelsLoading
+                          ? '正在读取当前 Base URL 的可用模型…'
+                          : openAICompatibleModels.length > 0
+                            ? `已发现 ${openAICompatibleModels.length} 个可用模型，可直接选择，也可继续手动输入。`
+                            : '可手动输入模型名；如果当前服务支持 /models，这里会自动补全建议。'}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void loadOpenAICompatibleModels(aiSettings?.baseUrl, aiSettings?.apiKey)
+                        }}
+                        className="shrink-0 rounded-2xl border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/[0.06]"
+                      >
+                        {openAICompatibleModelsLoading ? '刷新中…' : '刷新模型'}
+                      </button>
+                    </div>
+                    <select
+                      value={selectedOpenAICompatibleModel}
+                      onChange={(event) => setAISettingsField('model', event.target.value)}
+                      disabled={openAICompatibleModelsLoading || openAICompatibleModels.length === 0}
+                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <option value="">
+                        {openAICompatibleModelsLoading
+                          ? '正在读取可用模型…'
+                          : openAICompatibleModels.length > 0
+                            ? '从已发现模型中选择'
+                            : '当前没有可选模型，继续手动填写'}
+                      </option>
+                      {openAICompatibleModels.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-2 text-xs leading-5 text-zinc-500">选择后会直接回填到下方 Model 输入框；如果列表为空，继续手动填写即可。</p>
+                    <input
+                      value={aiSettings?.model ?? ''}
+                      onChange={(event) => setAISettingsField('model', event.target.value)}
+                      className="mt-3 w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+                      placeholder="deepseek-v4-flash"
+                    />
+                  </label>
+                  {!openAICompatibleModelsLoading && aiSettings?.baseUrl?.trim() && openAICompatibleModels.length === 0 ? (
+                    <p className="text-sm text-zinc-500">当前没有发现可用的 OpenAI-compatible 模型；你仍然可以继续手动填写 Model。</p>
+                  ) : null}
                 </div>
               </div>
 
               <div className="rounded-[24px] border border-white/10 bg-[#0b0d12] p-4">
                 <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Knowledge extraction</p>
                 <h4 className="mt-2 text-sm font-medium text-zinc-100">知识抽取提供方</h4>
-                <p className="mt-1 text-xs leading-5 text-zinc-500">知识图谱重建可以使用 OpenAI-compatible API，或继续使用本地 Ollama。OpenAI-compatible 会复用上方的 Base URL、API Key 和 Model。</p>
+                <p className="mt-1 text-xs leading-5 text-zinc-500">离线知识图谱重建固定使用本地 Ollama，避免后台构建误走远端 API。</p>
                 <div className="mt-4 space-y-4">
-                  <label className="block">
-                    <span className="mb-2 block text-sm text-zinc-300">Provider</span>
-                    <select
-                      value={knowledgeProvider}
-                      onChange={(event) => setAISettingsField('knowledgeProvider', event.target.value)}
-                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                    >
-                      <option value="ollama">Ollama 本地模型</option>
-                      <option value="openai-compatible">OpenAI-compatible</option>
-                    </select>
-                  </label>
-                  {knowledgeProvider === 'openai-compatible' ? (
-                    <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-zinc-400">
-                      当前知识抽取将复用上方的 OpenAI-compatible Base URL、API Key 与 Model。
-                    </div>
-                  ) : (
-                    <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-zinc-400">
-                      当前知识抽取将使用下方配置的 Ollama Base URL 与知识抽取模型。
-                    </div>
-                  )}
+                  <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-100">
+                    当前知识抽取固定使用下方配置的 Ollama Base URL、知识抽取模型与 embedding 模型。
+                  </div>
                 </div>
               </div>
 
@@ -2254,71 +2828,97 @@ export function SelectionNovelStudio() {
               <p className="whitespace-pre-wrap text-sm leading-7 text-zinc-300">{lockedSelectionText || selectionText}</p>
             </div>
 
-            <div className="mb-4 rounded-[24px] border border-amber-400/20 bg-amber-500/10 p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-amber-200/70">Context preview</p>
-                  <p className="mt-1 text-sm text-zinc-300">只会把当前章节及以前的知识送入生成。你可以临时关闭某些上下文块。</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => activeMode && void loadContextPreview(activeMode)}
-                  className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-white/[0.06]"
-                >
-                  刷新上下文
-                </button>
-              </div>
+            {contextPreviewLoading && !generationContext ? (
+              <div className="mb-4 rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">正在装配图谱上下文与证据…</div>
+            ) : null}
 
-              {contextPreviewLoading ? <p className="text-sm text-zinc-400">正在装配上下文…</p> : null}
-              {contextPreviewError ? <p className="text-sm text-rose-300">{contextPreviewError}</p> : null}
+            {generationContext && activeGraphContext ? (
+              <GraphReviewPanel
+                context={{ ...generationContext, graphContext: activeGraphContext }}
+                graphNodes={activeGraphContext.nodes}
+                graphEdges={activeGraphContext.edges}
+                controls={graphReviewControls}
+                loading={contextPreviewLoading || graphReviewLoading}
+                error={contextPreviewError}
+                selection={graphSelection}
+                evidenceDrawerOpen={evidenceDrawerOpen}
+                disabledBlockIds={disabledContextBlockIds}
+                excludedEdgeIds={excludedGraphEdgeIds}
+                excludedEvidenceIds={excludedEvidenceIds}
+                edgeMutationPending={Boolean(graphMutationPendingId && graphSelection?.type === 'edge' && graphSelection.edge.id === graphMutationPendingId)}
+                edgeMutationError={graphMutationError}
+                onTogglePromptBlock={(blockId, enabled) => {
+                  setDisabledContextBlockIds((current) => (enabled ? current.filter((item) => item !== blockId) : [...current, blockId]))
+                }}
+                onToggleEvidenceDrawer={() => setEvidenceDrawerOpen((current) => !current)}
+                onSelectNode={(node) => setGraphSelection({ type: 'node', node })}
+                onSelectEdge={(edge) => {
+                  setGraphSelection({ type: 'edge', edge })
+                  if (edge.evidenceQuote || edge.evidenceLocation) {
+                    setEvidenceDrawerOpen(true)
+                  }
+                }}
+                onClearSelection={() => setGraphSelection(null)}
+                onConfirmEdge={(edge) => {
+                  void handleConfirmGraphEdge(edge.id)
+                }}
+                onRejectEdge={(edge) => {
+                  void handleRejectGraphEdge(edge.id)
+                }}
+                onSaveEdgeEdit={(edge, draft) => {
+                  void handleSaveGraphEdgeEdit(edge.id, draft)
+                }}
+                onToggleNodeExcluded={(node, excluded) => {
+                  const connectedEdgeIds = getConnectedGraphEdgeIds(node.id, activeGraphContext.edges)
+                  if (!connectedEdgeIds.length) return
+                  const nextExcludedGraphEdgeIds = excluded
+                    ? Array.from(new Set([...excludedGraphEdgeIds, ...connectedEdgeIds]))
+                    : excludedGraphEdgeIds.filter((item) => !connectedEdgeIds.includes(item))
+                  void handleExcludedGenerationContextChange({
+                    excludedGraphEdgeIds: nextExcludedGraphEdgeIds,
+                    excludedEvidenceIds,
+                  })
+                }}
+                onToggleEdgeExcluded={(edge, excluded) => {
+                  const nextExcludedGraphEdgeIds = excluded
+                    ? Array.from(new Set([...excludedGraphEdgeIds, edge.id]))
+                    : excludedGraphEdgeIds.filter((item) => item !== edge.id)
+                  void handleExcludedGenerationContextChange({
+                    excludedGraphEdgeIds: nextExcludedGraphEdgeIds,
+                    excludedEvidenceIds,
+                  })
+                }}
+                onToggleEvidenceExcluded={(itemId, excluded) => {
+                  const nextExcludedEvidenceIds = excluded
+                    ? Array.from(new Set([...excludedEvidenceIds, itemId]))
+                    : excludedEvidenceIds.filter((item) => item !== itemId)
+                  void handleExcludedGenerationContextChange({
+                    excludedGraphEdgeIds,
+                    excludedEvidenceIds: nextExcludedEvidenceIds,
+                  })
+                }}
+                onChangeControls={(controls) => {
+                  void handleGraphControlChange(controls)
+                }}
+                onJumpToEdgeSource={(edge) => {
+                  const target = resolveEdgeSourceJumpTarget(edge)
+                  if (target) jumpToGraphSource(target)
+                }}
+                canJumpToEdgeSource={(edge) => Boolean(resolveEdgeSourceJumpTarget(edge))}
+                onJumpToEvidenceSource={(item) => {
+                  const target = resolveEvidenceSourceJumpTarget(item)
+                  if (target) jumpToGraphSource(target)
+                }}
+                canJumpToEvidenceSource={(item) => Boolean(resolveEvidenceSourceJumpTarget(item))}
+                onRefresh={() => {
+                  void handleRefreshContextReview()
+                }}
+              />
+            ) : null}
 
-              {contextPreview ? (
-                <div className="space-y-3">
-                  <div className="flex flex-wrap gap-2 text-[11px] text-zinc-400">
-                    <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">第 {contextPreview.chapterNo} 章</span>
-                    <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">快照：{contextPreview.snapshotStatus}</span>
-                    <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">
-                      选中行：{contextPreview.selectedLineStart ?? '?'} - {contextPreview.selectedLineEnd ?? '?'}
-                    </span>
-                  </div>
-
-                  {contextPreview.warnings.length ? (
-                    <div className="rounded-2xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
-                      {contextPreview.warnings.map((warning) => (
-                        <p key={warning}>{warning}</p>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {contextPreview.blocks.map((block) => {
-                      const enabled = !disabledContextBlockIds.includes(block.id)
-                      return (
-                        <label key={block.id} className={cn('rounded-2xl border px-3 py-3 text-left transition', enabled ? 'border-amber-300/25 bg-white/[0.04]' : 'border-white/8 bg-black/20 opacity-60')}>
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-medium text-zinc-100">{block.label}</p>
-                              <p className="mt-1 text-[11px] uppercase tracking-[0.12em] text-zinc-500">{block.priority}</p>
-                            </div>
-                            <input
-                              type="checkbox"
-                              checked={enabled}
-                              onChange={(event) => {
-                                setDisabledContextBlockIds((current) =>
-                                  event.target.checked ? current.filter((item) => item !== block.id) : [...current, block.id]
-                                )
-                              }}
-                              className="mt-1 h-4 w-4 rounded border-white/20 bg-black/20 text-amber-400"
-                            />
-                          </div>
-                          <p className="mt-3 line-clamp-4 whitespace-pre-wrap text-xs leading-6 text-zinc-400">{block.content}</p>
-                        </label>
-                      )
-                    })}
-                  </div>
-                </div>
-              ) : null}
-            </div>
+            {!contextPreviewLoading && !generationContext && contextPreviewError ? (
+              <div className="mb-4 rounded-[24px] border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-200">{contextPreviewError}</div>
+            ) : null}
 
             {activeMode === 'rewrite' ? (
               <div className="space-y-4">
