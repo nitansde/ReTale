@@ -4,6 +4,14 @@ import type { GraphAwareResult } from '@/lib/server/graph-types'
 import { estimateTokenCount, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { searchLanceEvidence, type RetrievalDocSourceType } from '@/lib/server/retrieval-index'
 import { queryAll, queryOne } from '@/lib/server/sqlite'
+import {
+  buildCharacterDescriptionDelta,
+  buildCharacterRoleCardLines,
+  hasCharacterRoleCardProfile,
+  mergeCharacterRoleCardProfiles,
+  normalizeCharacterRoleCardProfile,
+  type CharacterRoleCardProfile,
+} from '@/lib/story-knowledge'
 
 export type GenerationContextRequest = {
   novelId: string
@@ -94,6 +102,7 @@ type EntityRow = {
   description: string | null
   status: string | null
   aliases: Array<{ alias: string }>
+  profile?: CharacterRoleCardProfile
 }
 
 type FactRow = {
@@ -116,6 +125,7 @@ type SnapshotCharacter = {
   aliases?: string[]
   status?: string
   lastSeenChapter?: number
+  profile?: CharacterRoleCardProfile
 }
 
 type SnapshotRelationship = {
@@ -243,6 +253,47 @@ function buildNeighborhoodExcerpt(text: string, maxLines = 10) {
     .join(' ')
 }
 
+function loadCharacterProfilesByEntityId(params: {
+  novelId: string
+  branchId: string
+  entityIds: string[]
+  chapterNo: number
+}) {
+  if (!params.entityIds.length) return new Map<string, CharacterRoleCardProfile>()
+  const rows = queryAll<{ subjectEntityId: string | null; valueJson: string | null; sourceChapter: number }>(
+    `
+      SELECT subjectEntityId, valueJson, sourceChapter
+      FROM KnowledgeFact
+      WHERE novelId = ? AND branchId = ? AND factType = 'character_profile'
+        AND subjectEntityId IN (${params.entityIds.map(() => '?').join(', ')})
+        AND validFromChapter <= ?
+        AND (validToChapter IS NULL OR validToChapter >= ?)
+        AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+      ORDER BY validFromChapter ASC, sourceChapter ASC
+    `,
+    params.novelId,
+    params.branchId,
+    ...params.entityIds,
+    params.chapterNo,
+    params.chapterNo,
+  )
+
+  const profileByEntityId = new Map<string, CharacterRoleCardProfile>()
+  for (const row of rows) {
+    const entityId = row.subjectEntityId?.trim()
+    if (!entityId || !row.valueJson) continue
+    try {
+      const parsed = JSON.parse(row.valueJson) as { profile?: unknown }
+      const profile = normalizeCharacterRoleCardProfile(parsed.profile)
+      if (!hasCharacterRoleCardProfile(profile)) continue
+      profileByEntityId.set(entityId, mergeCharacterRoleCardProfiles(profileByEntityId.get(entityId), profile))
+    } catch {
+    }
+  }
+
+  return profileByEntityId
+}
+
 function renderSnapshotForPrompt(snapshot: ParsedSnapshot) {
   const lines: string[] = []
 
@@ -252,7 +303,11 @@ function renderSnapshotForPrompt(snapshot: ParsedSnapshot) {
       ? snapshot.major_characters.slice(0, 8).map((character) => {
           const aliasText = character.aliases?.length ? `｜别名：${character.aliases.slice(0, 3).join('、')}` : ''
           const chapterText = typeof character.lastSeenChapter === 'number' ? `｜最近出现：第 ${character.lastSeenChapter} 章` : ''
-          return `- ${character.name}｜状态：${character.status?.trim() || '未知'}${aliasText}${chapterText}`
+          const profile = character.profile
+          const profileText = profile && hasCharacterRoleCardProfile(profile)
+            ? `｜${buildCharacterRoleCardLines(profile, { includeEvidence: false, includeNotes: true }).slice(0, 4).join('｜')}`
+            : ''
+          return `- ${character.name}｜状态：${character.status?.trim() || '未知'}${aliasText}${chapterText}${profileText}`
         })
       : ['- 暂无人物状态。'])
   )
@@ -440,10 +495,17 @@ function loadEntitiesWithAliases(novelId: string, branchId: string, chapterNo: n
     current.push({ alias: alias.alias })
     aliasesByEntityId.set(alias.entityId, current)
   }
+  const profileByEntityId = loadCharacterProfilesByEntityId({
+    novelId,
+    branchId,
+    entityIds,
+    chapterNo,
+  })
 
   return entities.map((entity) => ({
     ...entity,
     aliases: aliasesByEntityId.get(entity.id) ?? [],
+    profile: profileByEntityId.get(entity.id),
   }))
 }
 
@@ -721,7 +783,12 @@ export async function buildGenerationContext(request: GenerationContextRequest):
         matchedEntities.length
           ? matchedEntities.map((entity) => {
               const state = latestStateByEntityId.get(entity.id)
-              return `- ${entity.canonicalName}｜状态：${state?.stateValue ?? '未知'}｜描述：${state?.description?.trim() || '待从图谱状态补充'}`
+              const compactDescription = buildCharacterDescriptionDelta(entity.profile ?? {}, state?.description?.trim() || entity.description?.trim() || '')
+              const profile = entity.profile
+              const profileText = profile && hasCharacterRoleCardProfile(profile)
+                ? buildCharacterRoleCardLines(profile, { includeEvidence: false, includeNotes: true }).slice(0, 5).join('｜')
+                : compactDescription || '待从图谱状态补充'
+              return `- ${entity.canonicalName}｜状态：${state?.stateValue ?? '未知'}｜${profileText}`
             })
           : ['- 未命中明确人物。']
       ),

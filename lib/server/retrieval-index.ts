@@ -2,8 +2,18 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import * as lancedb from '@lancedb/lancedb'
 import { estimateTokenCount, type TextSpanInput } from '@/lib/server/knowledge-store'
+import { loadStoredAISettings } from '@/lib/server/ai-settings'
+import { embedTextsWithOpenAICompatible } from '@/lib/server/openai-compatible'
 import { embedTextsWithOllama } from '@/lib/server/ollama-local'
 import { queryAll } from '@/lib/server/sqlite'
+import {
+  buildCharacterDescriptionDelta,
+  buildCharacterRoleCardLines,
+  hasCharacterRoleCardProfile,
+  mergeCharacterRoleCardProfiles,
+  normalizeCharacterRoleCardProfile,
+  type CharacterRoleCardProfile,
+} from '@/lib/story-knowledge'
 
 export type RetrievalDocSourceType =
   | 'text_span'
@@ -180,12 +190,15 @@ function buildRetrievalEmbeddingText(row: RetrievalDocSeedRow) {
 async function embedRetrievalRows(rows: RetrievalDocSeedRow[]) {
   if (!rows.length) return [] as RetrievalDocRow[]
 
+  const settings = loadStoredAISettings().embeddings
   const vectors: number[][] = []
   for (let index = 0; index < rows.length; index += EMBEDDING_BATCH_SIZE) {
     const batch = rows.slice(index, index + EMBEDDING_BATCH_SIZE)
-    const result = await embedTextsWithOllama(batch.map(buildRetrievalEmbeddingText))
+    const result = settings.provider === 'openai-compatible'
+      ? await embedTextsWithOpenAICompatible(batch.map(buildRetrievalEmbeddingText), settings.openAICompatible)
+      : await embedTextsWithOllama(batch.map(buildRetrievalEmbeddingText), settings.ollama)
     if (!result.enabled || !result.embeddings) {
-      throw new Error(result.error || 'Failed to generate retrieval embeddings with Ollama')
+      throw new Error(result.error || 'Failed to generate retrieval embeddings')
     }
     if (result.embeddings.length !== batch.length) {
       throw new Error(`Ollama returned ${result.embeddings.length} embeddings for ${batch.length} retrieval rows`)
@@ -205,9 +218,12 @@ async function embedRetrievalRows(rows: RetrievalDocSeedRow[]) {
 }
 
 async function embedRetrievalQuery(query: string) {
-  const result = await embedTextsWithOllama(query)
+  const settings = loadStoredAISettings().embeddings
+  const result = settings.provider === 'openai-compatible'
+    ? await embedTextsWithOpenAICompatible(query, settings.openAICompatible)
+    : await embedTextsWithOllama(query, settings.ollama)
   if (!result.enabled || !result.embeddings?.[0]) {
-    throw new Error(result.error || 'Failed to generate LanceDB query embedding with Ollama')
+    throw new Error(result.error || 'Failed to generate LanceDB query embedding')
   }
   return result.embeddings[0]
 }
@@ -396,48 +412,128 @@ function loadBranchEntityProfileDocs(novelId: string, branchId: string) {
     current.push(alias.alias)
     aliasesByEntityId.set(alias.entityId, current)
   }
+  const profileRows = queryAll<{ subjectEntityId: string | null; valueJson: string | null; sourceChapter: number; validFromChapter: number | null }>(
+    `
+      SELECT subjectEntityId, valueJson, sourceChapter, validFromChapter
+      FROM KnowledgeFact
+      WHERE novelId = ? AND branchId = ? AND factType = 'character_profile'
+        AND subjectEntityId IN (${entityIds.map(() => '?').join(', ')})
+        AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+      ORDER BY validFromChapter ASC, sourceChapter ASC
+    `,
+    novelId,
+    branchId,
+    ...entityIds,
+  )
+  const profileRowsByEntityId = new Map<string, Array<{ valueJson: string; sourceChapter: number; validFromChapter: number }>>()
+  for (const row of profileRows) {
+    const entityId = row.subjectEntityId?.trim()
+    if (!entityId || !row.valueJson) continue
+    const current = profileRowsByEntityId.get(entityId) ?? []
+    current.push({
+      valueJson: row.valueJson,
+      sourceChapter: row.sourceChapter,
+      validFromChapter: row.validFromChapter ?? row.sourceChapter,
+    })
+    profileRowsByEntityId.set(entityId, current)
+  }
 
-  return entities.map((entity) => {
+  return entities.flatMap((entity) => {
     const aliasList = uniqueStrings(aliasesByEntityId.get(entity.id) ?? [])
-    const text = [
-      `实体：${entity.canonicalName}`,
-      `类型：${entity.entityType}`,
-      entity.description?.trim() ? `描述：${entity.description.trim()}` : null,
-      aliasList.length ? `别名：${aliasList.join('、')}` : null,
-    ].filter(Boolean).join('\n')
-
-    const chapterNo = entity.firstSeenChapter ?? entity.lastSeenChapter ?? 0
-
-    return {
-      id: `entity-profile:${entity.id}`,
-      branchId,
-      sourceType: 'entity_profile' as const,
-      sourceId: entity.id,
-      chapterId: '',
-      chapterNo,
-      validFromChapter: chapterNo,
-      validToChapter: -1,
-      lineStart: -1,
-      lineEnd: -1,
-      spanType: '',
-      title: entity.canonicalName,
-      sourceLabel: '人物卡',
-      relatedEntityNames: serializeTerms([entity.canonicalName, ...aliasList]),
-      relatedEventNames: '',
-      relatedTerms: serializeTerms([entity.canonicalName, entity.entityType, ...aliasList]),
-      text,
-      status: 'ready',
-      includeByDefault: 1,
-      tokenEstimate: estimateTokenCount(text),
-      contentHash: buildContentHash([
-        entity.id,
-        entity.entityType,
-        entity.canonicalName,
-        entity.description,
-        entity.firstSeenChapter,
-        aliasList.join('|'),
-      ]),
+    const rows = profileRowsByEntityId.get(entity.id) ?? []
+    if (!rows.length) {
+      const text = [
+        `实体：${entity.canonicalName}`,
+        `类型：${entity.entityType}`,
+        aliasList.length ? `别名：${aliasList.join('、')}` : null,
+      ].filter(Boolean).join('\n')
+      const chapterNo = entity.firstSeenChapter ?? entity.lastSeenChapter ?? 0
+      return [{
+        id: `entity-profile:${entity.id}:base`,
+        branchId,
+        sourceType: 'entity_profile' as const,
+        sourceId: entity.id,
+        chapterId: '',
+        chapterNo,
+        validFromChapter: chapterNo,
+        validToChapter: -1,
+        lineStart: -1,
+        lineEnd: -1,
+        spanType: '',
+        title: entity.canonicalName,
+        sourceLabel: '人物卡',
+        relatedEntityNames: serializeTerms([entity.canonicalName, ...aliasList]),
+        relatedEventNames: '',
+        relatedTerms: serializeTerms([entity.canonicalName, entity.entityType, ...aliasList]),
+        text,
+        status: 'ready',
+        includeByDefault: 1,
+        tokenEstimate: estimateTokenCount(text),
+        contentHash: buildContentHash([entity.id, entity.entityType, entity.canonicalName, aliasList.join('|'), 'base']),
+      }]
     }
+
+    let cumulativeProfile: CharacterRoleCardProfile = {}
+    return rows.flatMap((row, index) => {
+      try {
+        const parsed = JSON.parse(row.valueJson) as { profile?: unknown }
+        const profile = normalizeCharacterRoleCardProfile(parsed.profile)
+        if (!hasCharacterRoleCardProfile(profile)) return []
+        cumulativeProfile = mergeCharacterRoleCardProfiles(cumulativeProfile, profile)
+        const profileLines = buildCharacterRoleCardLines(cumulativeProfile, { includeEvidence: true, includeNotes: true })
+        const compactDescription = buildCharacterDescriptionDelta(cumulativeProfile, '')
+        const nextRow = rows[index + 1]
+        const validFromChapter = Math.max(0, row.validFromChapter || row.sourceChapter)
+        const validToChapter = nextRow ? Math.max(validFromChapter, nextRow.validFromChapter - 1) : -1
+        const text = [
+          `实体：${entity.canonicalName}`,
+          `类型：${entity.entityType}`,
+          compactDescription ? `描述：${compactDescription}` : null,
+          aliasList.length ? `别名：${aliasList.join('、')}` : null,
+          ...profileLines,
+        ].filter(Boolean).join('\n')
+
+        return [{
+          id: `entity-profile:${entity.id}:${validFromChapter}:${index}`,
+          branchId,
+          sourceType: 'entity_profile' as const,
+          sourceId: entity.id,
+          chapterId: '',
+          chapterNo: validFromChapter,
+          validFromChapter,
+          validToChapter,
+          lineStart: -1,
+          lineEnd: -1,
+          spanType: '',
+          title: entity.canonicalName,
+          sourceLabel: '人物卡',
+          relatedEntityNames: serializeTerms([entity.canonicalName, ...aliasList]),
+          relatedEventNames: '',
+          relatedTerms: serializeTerms([
+            entity.canonicalName,
+            entity.entityType,
+            ...aliasList,
+            compactDescription,
+            ...profileLines,
+          ]),
+          text,
+          status: 'ready',
+          includeByDefault: 1,
+          tokenEstimate: estimateTokenCount(text),
+          contentHash: buildContentHash([
+            entity.id,
+            entity.entityType,
+            entity.canonicalName,
+            validFromChapter,
+            validToChapter,
+            aliasList.join('|'),
+            JSON.stringify(cumulativeProfile),
+          ]),
+        }]
+      } catch {
+        return []
+      }
+    })
   })
 }
 
