@@ -145,7 +145,7 @@ CREATE TABLE IF NOT EXISTS EntityLink (
   weight REAL NOT NULL DEFAULT 1,
   sourceChapter INTEGER NOT NULL,
   validFromChapter INTEGER NOT NULL,
-  validToChapter INTEGER,
+  validUntilChapter INTEGER NOT NULL,
   evidenceSpanId TEXT,
   evidenceQuote TEXT,
   confidence REAL NOT NULL DEFAULT 0.7,
@@ -170,7 +170,7 @@ CREATE TABLE IF NOT EXISTS EntityState (
   description TEXT,
   sourceChapter INTEGER NOT NULL,
   validFromChapter INTEGER NOT NULL,
-  validToChapter INTEGER,
+  validUntilChapter INTEGER NOT NULL,
   evidenceSpanId TEXT,
   evidenceQuote TEXT,
   confidence REAL NOT NULL DEFAULT 0.7,
@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS KnowledgeFact (
   valueJson TEXT,
   sourceChapter INTEGER NOT NULL,
   validFromChapter INTEGER NOT NULL,
-  validToChapter INTEGER,
+  validUntilChapter INTEGER NOT NULL,
   confidence REAL NOT NULL DEFAULT 0.7,
   status TEXT NOT NULL DEFAULT 'ai_generated',
   createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -231,7 +231,7 @@ CREATE TABLE IF NOT EXISTS KnowledgeRelation (
   strength INTEGER NOT NULL DEFAULT 3,
   sourceChapter INTEGER NOT NULL,
   validFromChapter INTEGER NOT NULL,
-  validToChapter INTEGER,
+  validUntilChapter INTEGER NOT NULL,
   evidenceSpanId TEXT,
   confidence REAL NOT NULL DEFAULT 0.7,
   status TEXT NOT NULL DEFAULT 'ai_generated',
@@ -308,7 +308,7 @@ CREATE TABLE IF NOT EXISTS KnowledgeWorld (
   definition TEXT NOT NULL,
   firstSeenChapter INTEGER,
   validFromChapter INTEGER,
-  validToChapter INTEGER,
+  validUntilChapter INTEGER NOT NULL,
   evidenceSpanId TEXT,
   status TEXT NOT NULL DEFAULT 'ai_generated',
   confidence REAL NOT NULL DEFAULT 0.7,
@@ -318,41 +318,6 @@ CREATE TABLE IF NOT EXISTS KnowledgeWorld (
   FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE,
   FOREIGN KEY (evidenceSpanId) REFERENCES TextSpan(id) ON DELETE SET NULL,
   UNIQUE (branchId, term, category)
-);
-
-CREATE TABLE IF NOT EXISTS ChapterSnapshot (
-  id TEXT PRIMARY KEY,
-  novelId TEXT NOT NULL,
-  branchId TEXT NOT NULL,
-  chapterId TEXT,
-  chapterNo INTEGER NOT NULL,
-  snapshotJson TEXT NOT NULL,
-  sourceRevisionHash TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'ready',
-  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (novelId) REFERENCES NovelRecord(id) ON DELETE CASCADE,
-  FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE,
-  FOREIGN KEY (chapterId) REFERENCES KnowledgeChapter(id) ON DELETE SET NULL,
-  UNIQUE (novelId, branchId, chapterNo)
-);
-
-CREATE TABLE IF NOT EXISTS GraphContextCache (
-  id TEXT PRIMARY KEY,
-  novelId TEXT NOT NULL,
-  branchId TEXT NOT NULL,
-  cacheKey TEXT NOT NULL,
-  asOfChapter INTEGER NOT NULL,
-  seedEntityIdsJson TEXT NOT NULL,
-  graphNodesJson TEXT NOT NULL,
-  graphEdgesJson TEXT NOT NULL,
-  contextText TEXT NOT NULL,
-  sourceHash TEXT NOT NULL,
-  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (novelId) REFERENCES NovelRecord(id) ON DELETE CASCADE,
-  FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE,
-  UNIQUE (branchId, cacheKey, asOfChapter)
 );
 
 CREATE TABLE IF NOT EXISTS KnowledgeJob (
@@ -375,21 +340,19 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_chapter_branch_no ON KnowledgeChapter(b
 CREATE INDEX IF NOT EXISTS idx_text_span_branch_chapter ON TextSpan(branchId, chapterNo);
 CREATE INDEX IF NOT EXISTS idx_text_span_chapter_type ON TextSpan(chapterId, spanType);
 CREATE INDEX IF NOT EXISTS idx_knowledge_entity_branch_name ON KnowledgeEntity(branchId, entityType, canonicalName);
-CREATE INDEX IF NOT EXISTS idx_entity_link_source_valid ON EntityLink(branchId, sourceEntityId, validFromChapter, validToChapter);
-CREATE INDEX IF NOT EXISTS idx_entity_link_target_valid ON EntityLink(branchId, targetEntityId, validFromChapter, validToChapter);
+CREATE INDEX IF NOT EXISTS idx_entity_link_source_valid_until ON EntityLink(branchId, sourceEntityId, validFromChapter, validUntilChapter);
+CREATE INDEX IF NOT EXISTS idx_entity_link_target_valid_until ON EntityLink(branchId, targetEntityId, validFromChapter, validUntilChapter);
 CREATE INDEX IF NOT EXISTS idx_entity_link_chapter ON EntityLink(branchId, sourceChapter);
 CREATE INDEX IF NOT EXISTS idx_entity_link_status ON EntityLink(branchId, status);
-CREATE INDEX IF NOT EXISTS idx_entity_state_entity_valid ON EntityState(branchId, entityId, validFromChapter, validToChapter);
+CREATE INDEX IF NOT EXISTS idx_entity_state_entity_valid_until ON EntityState(branchId, entityId, validFromChapter, validUntilChapter);
 CREATE INDEX IF NOT EXISTS idx_entity_state_status ON EntityState(branchId, status);
 CREATE INDEX IF NOT EXISTS idx_knowledge_fact_branch_source ON KnowledgeFact(branchId, sourceChapter);
-CREATE INDEX IF NOT EXISTS idx_knowledge_relation_branch_valid ON KnowledgeRelation(branchId, validFromChapter, validToChapter);
+CREATE INDEX IF NOT EXISTS idx_knowledge_relation_branch_valid_until ON KnowledgeRelation(branchId, validFromChapter, validUntilChapter);
 CREATE INDEX IF NOT EXISTS idx_knowledge_event_branch_chapter ON KnowledgeEvent(branchId, chapterNo, importance);
 CREATE INDEX IF NOT EXISTS idx_event_link_source_valid ON EventLink(branchId, sourceEventId, validFromChapter);
 CREATE INDEX IF NOT EXISTS idx_event_link_target_valid ON EventLink(branchId, targetEventId, validFromChapter);
 CREATE INDEX IF NOT EXISTS idx_event_link_status ON EventLink(branchId, status);
-CREATE INDEX IF NOT EXISTS idx_knowledge_world_branch_valid ON KnowledgeWorld(branchId, validFromChapter, validToChapter);
-CREATE INDEX IF NOT EXISTS idx_graph_context_cache_branch_chapter ON GraphContextCache(branchId, asOfChapter);
-CREATE INDEX IF NOT EXISTS idx_snapshot_branch_chapter_status ON ChapterSnapshot(branchId, chapterNo, status);
+CREATE INDEX IF NOT EXISTS idx_knowledge_world_branch_valid_until ON KnowledgeWorld(branchId, validFromChapter, validUntilChapter);
 CREATE INDEX IF NOT EXISTS idx_job_novel_status ON KnowledgeJob(novelId, status);
 CREATE INDEX IF NOT EXISTS idx_job_branch_status ON KnowledgeJob(branchId, status);
 `
