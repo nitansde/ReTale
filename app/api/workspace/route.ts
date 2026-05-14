@@ -4,9 +4,14 @@ import { syncWorkspacePayloadToKnowledgeStore } from '@/lib/server/knowledge-reb
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
 
 export async function GET() {
-  const workspaceState = findWorkspaceState('singleton')
-  const payload = normalizeWorkspaceState(workspaceState ? JSON.parse(workspaceState.payload) : undefined)
-  return NextResponse.json(payload)
+  try {
+    const workspaceState = findWorkspaceState('singleton')
+    const payload = normalizeWorkspaceState(workspaceState ? JSON.parse(workspaceState.payload) : undefined)
+    return NextResponse.json(payload)
+  } catch (error) {
+    console.error('Failed to restore workspace payload:', error)
+    return NextResponse.json({ ok: false, error: 'Failed to restore saved workspace payload' }, { status: 500 })
+  }
 }
 
 export async function POST(request: Request) {

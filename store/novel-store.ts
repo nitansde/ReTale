@@ -253,6 +253,7 @@ type NovelStore = PersistedNovelState & {
   isHydrated: boolean
   isSaving: boolean
   backendLoaded: boolean
+  backendLoadError: string
 
   getNovels: () => Array<{ id: string; title: string; summary: string; tags: string[]; updatedAt: string; wordCount: number; chapterCount: number }>
   importNovelFromText: (input: { title: string; text: string; summary?: string }) => string | null
@@ -398,10 +399,16 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
   isHydrated: false,
   isSaving: false,
   backendLoaded: false,
+  backendLoadError: '',
 
   getNovels: () => {
     const state = get()
-    return Array.from(new Set(state.localChapters.map((chapter) => chapter.novelId))).map((novelId) => {
+    const novelIds = Array.from(new Set([
+      ...state.localNovels.map((novel) => novel.id),
+      ...state.localChapters.map((chapter) => chapter.novelId),
+    ]))
+
+    return novelIds.map((novelId) => {
       const chapters = state.localChapters
         .filter((chapter) => chapter.novelId === novelId && !chapter.parentChapterId)
         .slice()
@@ -513,7 +520,17 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     return novelId
   },
   setHydrated: (value) => set({ isHydrated: value }),
-  setCurrentNovelId: (id) => set({ currentNovelId: id }),
+  setCurrentNovelId: (id) => set((state) => {
+    const sortedChapters = state.localChapters
+      .filter((chapter) => chapter.novelId === id && !chapter.parentChapterId)
+      .slice()
+      .sort((left, right) => left.order - right.order)
+    const currentChapterBelongsToNovel = sortedChapters.some((chapter) => chapter.id === state.currentChapterId)
+    return {
+      currentNovelId: id,
+      currentChapterId: currentChapterBelongsToNovel ? state.currentChapterId : (sortedChapters[0]?.id ?? ''),
+    }
+  }),
   setCurrentChapterId: (id) => set({ currentChapterId: id }),
   setCurrentTab: (tab) => set({ currentTab: tab }),
   setHelperTab: (tab) => set({ helperTab: tab }),
@@ -862,21 +879,64 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
   })),
   resetWorkspace: () => set({ ...initialState }),
   loadFromBackend: async () => {
-    const [workspaceResponse, aiResponse] = await Promise.all([
-      fetch('/api/workspace', { cache: 'no-store' }),
-      fetch('/api/settings/ai', { cache: 'no-store' }),
+    set({ backendLoadError: '' })
+
+    try {
+      const workspaceResponse = await fetch('/api/workspace', { cache: 'no-store' })
+      if (!workspaceResponse.ok) {
+        const error = await workspaceResponse.json().catch(() => null) as { error?: string } | null
+        throw new Error(error?.error || 'Failed to restore workspace')
+      }
+
+      const workspace = await workspaceResponse.json().catch(() => {
+        throw new Error('Workspace endpoint returned invalid JSON')
+      })
+      const normalizedWorkspace = normalizeWorkspaceState(workspace)
+
+      set({
+        ...normalizedWorkspace,
+        isHydrated: true,
+        backendLoaded: true,
+        backendLoadError: '',
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to restore workspace'
+      console.error('Workspace restore failed:', error)
+      set({
+        backendLoaded: true,
+        isHydrated: true,
+        backendLoadError: message,
+      })
+      return
+    }
+
+    const [aiResult, projectionResult] = await Promise.allSettled([
+      fetch('/api/settings/ai', { cache: 'no-store' }).then(async (response) => {
+        if (!response.ok) {
+          const error = await response.json().catch(() => null) as { error?: string } | null
+          throw new Error(error?.error || 'Failed to load AI settings')
+        }
+        return response.json()
+      }),
+      fetchKnowledgeProjection(),
     ])
-    const workspace = await workspaceResponse.json()
-    const aiSettings = await aiResponse.json()
-    const projection = await fetchKnowledgeProjection()
-    const normalizedWorkspace = normalizeWorkspaceState(workspace)
-    set({
-      ...normalizedWorkspace,
-      ...normalizeKnowledgeProjection(projection),
-      aiSettings: normalizeAISettings(aiSettings),
-      isHydrated: true,
-      backendLoaded: true,
-    })
+
+    const nextState: Partial<NovelStore> = {}
+    if (aiResult.status === 'fulfilled') {
+      nextState.aiSettings = normalizeAISettings(aiResult.value)
+    } else {
+      console.error('AI settings restore failed:', aiResult.reason)
+    }
+
+    if (projectionResult.status === 'fulfilled') {
+      Object.assign(nextState, normalizeKnowledgeProjection(projectionResult.value))
+    } else {
+      console.error('Knowledge projection restore failed:', projectionResult.reason)
+    }
+
+    if (Object.keys(nextState).length) {
+      set(nextState)
+    }
   },
   saveToBackend: async () => {
     const state = get()
@@ -887,10 +947,14 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(serializeState(state)),
       })
-      const projection = await fetchKnowledgeProjection()
-      set(() => ({
-        ...normalizeKnowledgeProjection(projection),
-      }))
+      try {
+        const projection = await fetchKnowledgeProjection()
+        set(() => ({
+          ...normalizeKnowledgeProjection(projection),
+        }))
+      } catch (error) {
+        console.error('Knowledge projection refresh failed after save:', error)
+      }
     } finally {
       set({ isSaving: false })
     }

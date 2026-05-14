@@ -9,6 +9,7 @@ export function ProjectGrid() {
   const router = useRouter()
   const fileRef = useRef<HTMLInputElement | null>(null)
   const {
+    backendLoadError,
     getNovels,
     localChapters,
     backendLoaded,
@@ -36,8 +37,14 @@ export function ProjectGrid() {
       : localChapters
           .filter((item) => item.novelId === novelId && !item.parentChapterId)
           .sort((a, b) => a.order - b.order)[0]
+
+    if (!chapter) {
+      setImportMessage('这个小说当前没有可用章节，请刷新后重试，或重新导入一次。')
+      return
+    }
+
     setCurrentNovelId(novelId)
-    if (chapter) setCurrentChapterId(chapter.id)
+    setCurrentChapterId(chapter.id)
     router.push('/workspace')
   }
 
@@ -126,6 +133,11 @@ export function ProjectGrid() {
   return (
     <>
       <div className="mb-6 flex flex-col items-end gap-3">
+        {backendLoadError ? (
+          <div className="w-full max-w-xl rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+            读取已保存工作区时遇到问题：{backendLoadError}。你仍然可以继续导入 TXT 进行恢复。
+          </div>
+        ) : null}
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
