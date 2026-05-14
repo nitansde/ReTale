@@ -666,6 +666,24 @@ export function SelectionNovelStudio() {
     }))
   }, [updateAISettings])
 
+  const updateKnowledgeExtractionParallelism = useCallback((provider: AIProvider, value: string) => {
+    updateAISettings((current) => {
+      const parsed = Number.parseInt(value, 10)
+      const nextParallelism = Number.isFinite(parsed) ? Math.max(1, Math.min(20, parsed)) : provider === 'openai-compatible' ? 5 : 1
+
+      return {
+        ...current,
+        knowledgeExtraction: {
+          ...current.knowledgeExtraction,
+          [provider === 'openai-compatible' ? 'openAICompatible' : 'ollama']: {
+            ...current.knowledgeExtraction[provider === 'openai-compatible' ? 'openAICompatible' : 'ollama'],
+            parallelism: nextParallelism,
+          },
+        },
+      }
+    })
+  }, [updateAISettings])
+
   const showKnowledgeToast = (message: string, duration = 1800) => {
     setToast(message)
     window.setTimeout(() => setToast(''), duration)
@@ -1606,6 +1624,7 @@ export function SelectionNovelStudio() {
 
   const renderOpenAICompatibleFields = (scenario: AIScenarioKey) => {
     const scenarioSettings = resolvedAISettings[scenario]
+    const knowledgeExtractionSettings = scenario === 'knowledgeExtraction' ? resolvedAISettings.knowledgeExtraction : null
     const currentModels = openAICompatibleModelsByScenario[scenario]
     const loading = openAICompatibleModelsLoading[scenario]
     const selectedModel = currentModels.some((model) => model.id === scenarioSettings.openAICompatible.model)
@@ -1703,6 +1722,21 @@ export function SelectionNovelStudio() {
           {!loading && scenarioSettings.openAICompatible.baseUrl.trim() && currentModels.length === 0 ? (
             <p className="text-sm text-zinc-500">当前没有发现可用的 OpenAI-compatible 模型；你仍然可以继续手动填写 Model。</p>
           ) : null}
+
+          {scenario === 'knowledgeExtraction' ? (
+            <label className="block">
+              <span className="mb-2 block text-sm text-zinc-300">并发请求数</span>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={knowledgeExtractionSettings?.openAICompatible.parallelism ?? 5}
+                onChange={(event) => updateKnowledgeExtractionParallelism('openai-compatible', event.target.value)}
+                className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+              />
+              <p className="mt-2 text-xs leading-5 text-zinc-500">知识抽取时最多同时发送多少个 API 请求。默认 5；遇到限流或空响应时会共享退避并串行重试。</p>
+            </label>
+          ) : null}
         </div>
       </div>
     )
@@ -1710,6 +1744,7 @@ export function SelectionNovelStudio() {
 
   const renderOllamaFields = (scenario: AIScenarioKey) => {
     const scenarioSettings = resolvedAISettings[scenario]
+    const knowledgeExtractionSettings = scenario === 'knowledgeExtraction' ? resolvedAISettings.knowledgeExtraction : null
     const currentModels = ollamaModelsByScenario[scenario]
     const loading = ollamaModelsLoading[scenario]
     const error = ollamaModelsError[scenario]
@@ -1779,6 +1814,21 @@ export function SelectionNovelStudio() {
                 ? '当前没有发现可用于 embedding 的本地 Ollama 模型。'
                 : '当前没有发现可用于文本生成的本地 Ollama 模型。'}
             </p>
+          ) : null}
+
+          {scenario === 'knowledgeExtraction' ? (
+            <label className="block">
+              <span className="mb-2 block text-sm text-zinc-300">并发请求数</span>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={knowledgeExtractionSettings?.ollama.parallelism ?? 1}
+                onChange={(event) => updateKnowledgeExtractionParallelism('ollama', event.target.value)}
+                className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+              />
+              <p className="mt-2 text-xs leading-5 text-zinc-500">知识抽取时最多同时发送多少个本地 Ollama 请求。默认 1；慢模型建议保持较低并发。</p>
+            </label>
           ) : null}
         </div>
       </div>

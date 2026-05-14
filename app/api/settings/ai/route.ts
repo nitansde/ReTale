@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server'
 import { normalizeAISettings, sanitizeAISettingsForClient } from '@/lib/ai-settings'
-import type { AISettings, AIScenarioKey, AIScenarioSettings } from '@/lib/types'
+import type { AISettings, AIScenarioKey } from '@/lib/types'
 import { loadStoredAISettings, saveStoredAISettings } from '@/lib/server/ai-settings'
 import { normalizeOpenAICompatibleBaseUrl } from '@/lib/server/openai-compatible'
+
+const MAX_KNOWLEDGE_EXTRACTION_PARALLELISM = 20
 
 function normalizeOptionalText(value: unknown, field: string, maxLength: number) {
   const normalized = typeof value === 'string' ? value.trim() : ''
@@ -12,11 +14,29 @@ function normalizeOptionalText(value: unknown, field: string, maxLength: number)
   return normalized
 }
 
-function normalizeScenarioPayload(
-  scenario: AIScenarioKey,
+function normalizeOptionalParallelism(value: unknown, field: string) {
+  if (value === undefined || value === null || value === '') {
+    return undefined
+  }
+
+  const parsed = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseInt(value.trim(), 10)
+      : Number.NaN
+
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > MAX_KNOWLEDGE_EXTRACTION_PARALLELISM) {
+    throw new Error(`${field} must be an integer between 1 and ${MAX_KNOWLEDGE_EXTRACTION_PARALLELISM}`)
+  }
+
+  return Math.floor(parsed)
+}
+
+function normalizeScenarioPayload<K extends AIScenarioKey>(
+  scenario: K,
   value: unknown,
   current: AISettings,
-): AIScenarioSettings {
+): AISettings[K] {
   const fallback = current[scenario]
   const record = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -38,6 +58,18 @@ function normalizeScenarioPayload(
   const provider = record.provider === 'openai-compatible' || record.provider === 'ollama'
     ? record.provider
     : fallback.provider
+  const knowledgeExtractionParallelism = scenario === 'knowledgeExtraction'
+    ? {
+        openAICompatible: normalizeOptionalParallelism(
+          openAIRecord.parallelism,
+          'knowledgeExtraction OpenAI parallelism'
+        ) ?? current.knowledgeExtraction.openAICompatible.parallelism,
+        ollama: normalizeOptionalParallelism(
+          ollamaRecord.parallelism,
+          'knowledgeExtraction Ollama parallelism'
+        ) ?? current.knowledgeExtraction.ollama.parallelism,
+      }
+    : null
 
   return normalizeAISettings({
     [scenario]: {
@@ -46,13 +78,15 @@ function normalizeScenarioPayload(
         baseUrl: openAIBaseUrl,
         apiKey: openAIApiKey,
         model: openAIModel,
+        ...(knowledgeExtractionParallelism ? { parallelism: knowledgeExtractionParallelism.openAICompatible } : {}),
       },
       ollama: {
         baseUrl: ollamaBaseUrl,
         model: ollamaModel,
+        ...(knowledgeExtractionParallelism ? { parallelism: knowledgeExtractionParallelism.ollama } : {}),
       },
     },
-  })[scenario]
+  })[scenario] as AISettings[K]
 }
 
 export async function GET() {
