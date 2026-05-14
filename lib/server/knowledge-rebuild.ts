@@ -1,4 +1,5 @@
-import type { Chapter } from '@/lib/types'
+import type { Chapter, KnowledgeExtractionScenarioSettings } from '@/lib/types'
+import { normalizeAISettings } from '@/lib/ai-settings'
 import {
   buildCharacterDescriptionDelta,
   hasCharacterRoleCardProfile,
@@ -8,6 +9,7 @@ import {
   type CharacterRoleCardProfile,
 } from '@/lib/story-knowledge'
 import { extractChapterKnowledgeOffline } from '@/lib/server/knowledge-extraction'
+import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import {
   buildTextSpansFromLines,
   enqueueKnowledgeJob,
@@ -19,6 +21,7 @@ import {
 import {
   deleteBranchRetrievalIndex,
   rebuildBranchRetrievalIndex,
+  type RetrievalIndexBuildProgress,
 } from '@/lib/server/retrieval-index'
 import { execute, queryAll, queryOne, type SqlParam, withTransaction } from '@/lib/server/sqlite'
 import { htmlToPlainText, plainTextToHtml, uid } from '@/lib/utils'
@@ -107,6 +110,8 @@ export type KnowledgeRebuildPayloadStep = {
   detail: string | null
 }
 
+type KnowledgeRebuildIndexProgress = RetrievalIndexBuildProgress
+
 type KnowledgeRebuildJobPayload = {
   branchId: string
   phase?: KnowledgeRebuildStepKey
@@ -117,6 +122,8 @@ type KnowledgeRebuildJobPayload = {
   processedChapterWeight?: number
   extractedChapters?: KnowledgeRebuildPayloadChapter[]
   totalChapterCount?: number
+  extractionSettings?: KnowledgeExtractionScenarioSettings
+  indexProgress?: KnowledgeRebuildIndexProgress
   stageStartedAtByKey?: Partial<Record<KnowledgeRebuildStepKey, string>>
   steps?: KnowledgeRebuildPayloadStep[]
 }
@@ -345,8 +352,62 @@ function estimateStageEtaMinutes(progress: number, stageStartedAt: string | unde
   return Math.max(1, Math.ceil(remainingMs / 60000))
 }
 
-function estimateIndexStageTotalMs(totalChapterCount: number) {
-  return Math.max(30_000, 12_000 + totalChapterCount * 4_000)
+function getKnowledgeExtractionSettingsSnapshot(payload: KnowledgeRebuildJobPayload) {
+  if (payload.extractionSettings) {
+    return normalizeAISettings({ knowledgeExtraction: payload.extractionSettings }).knowledgeExtraction
+  }
+
+  return loadStoredAISettings().knowledgeExtraction
+}
+
+function getKnowledgeExtractionParallelism(settings: KnowledgeExtractionScenarioSettings) {
+  return settings.provider === 'openai-compatible'
+    ? settings.openAICompatible.parallelism
+    : settings.ollama.parallelism
+}
+
+function getIndexProgressValue(progress?: KnowledgeRebuildIndexProgress) {
+  if (!progress) return 0
+
+  switch (progress.phase) {
+    case 'loading':
+      return 0.04
+    case 'embedding': {
+      const totalBatches = Math.max(1, progress.totalBatches)
+      return 0.08 + clampProgress(progress.completedBatches / totalBatches) * 0.62
+    }
+    case 'creating_table':
+      return 0.76
+    case 'building_text_index':
+      return 0.88
+    case 'building_vector_index':
+      return 0.96
+    case 'completed':
+      return 1
+    default:
+      return 0
+  }
+}
+
+function getIndexCurrentStep(progress?: KnowledgeRebuildIndexProgress) {
+  if (!progress) return '构建 Lance 检索索引'
+
+  switch (progress.phase) {
+    case 'loading':
+      return '整理 Lance 检索文档'
+    case 'embedding':
+      return `生成检索向量（${progress.completedBatches}/${Math.max(progress.totalBatches, 1)} 批）`
+    case 'creating_table':
+      return '写入 Lance 检索表'
+    case 'building_text_index':
+      return '构建 Lance 全文索引'
+    case 'building_vector_index':
+      return '构建 Lance 向量索引'
+    case 'completed':
+      return '构建 Lance 检索索引'
+    default:
+      return '构建 Lance 检索索引'
+  }
 }
 
 function buildKnowledgeRebuildSteps(payload: KnowledgeRebuildJobPayload, runtime: {
@@ -363,6 +424,7 @@ function buildKnowledgeRebuildSteps(payload: KnowledgeRebuildJobPayload, runtime
     payload.totalChapterCount
       ?? ((payload.pendingChapterIds?.length ?? 0) + extractedChapters.length)
   )
+  const indexProgress = payload.indexProgress
   const stageStartedAtByKey = payload.stageStartedAtByKey ?? {}
   const currentPhaseIndex = KNOWLEDGE_REBUILD_STEP_ORDER.indexOf(phase)
   const currentPhaseOrder = currentPhaseIndex >= 0 ? currentPhaseIndex : 0
@@ -378,14 +440,10 @@ function buildKnowledgeRebuildSteps(payload: KnowledgeRebuildJobPayload, runtime
       ? clampProgress(runtime.progress)
       : 0
   const indexStartedAt = stageStartedAtByKey.index
-  const indexTotalMs = estimateIndexStageTotalMs(totalChapterCount)
-  const indexElapsedMs = Number.isFinite(parseStageStartedAt(indexStartedAt))
-    ? Math.max(0, Date.now() - parseStageStartedAt(indexStartedAt))
-    : 0
-  const activeIndexProgress = clampProgress(indexElapsedMs / indexTotalMs)
+  const activeIndexProgress = getIndexProgressValue(indexProgress)
   const activeIndexEtaMinutes = runtime.status === 'paused'
     ? null
-    : Math.max(1, Math.ceil(Math.max(0, indexTotalMs - indexElapsedMs) / 60000))
+    : estimateStageEtaMinutes(activeIndexProgress, indexStartedAt)
 
   return KNOWLEDGE_REBUILD_STEP_ORDER.map((key, index) => {
     const isCurrent = index === currentPhaseOrder
@@ -564,6 +622,39 @@ function setCurrentKnowledgeJobChapter(jobId: string, chapterId: string | null) 
     payload: {
       ...state.payload,
       currentChapterId: chapterId,
+    },
+  }
+}
+
+function setKnowledgeRebuildJobIndexProgress(jobId: string, indexProgress: KnowledgeRebuildIndexProgress) {
+  const state = getKnowledgeRebuildJobState(jobId)
+  if (!state) {
+    return null
+  }
+
+  const nextProgress = getIndexProgressValue(indexProgress)
+  updateKnowledgeJob(jobId, {
+    currentStep: getIndexCurrentStep(indexProgress),
+    progress: 0.96 + nextProgress * 0.04,
+    payload: {
+      ...state.payload,
+      phase: state.phase,
+      currentChapterId: state.payload.currentChapterId ?? null,
+      pendingChapterIds: state.pendingChapterIds,
+      chapterWeightsById: state.chapterWeightsById,
+      totalChapterWeight: state.totalChapterWeight,
+      processedChapterWeight: state.processedChapterWeight,
+      extractedChapters: state.extractedChapters,
+      extractionSettings: state.payload.extractionSettings,
+      indexProgress,
+    },
+  })
+
+  return {
+    ...state,
+    payload: {
+      ...state.payload,
+      indexProgress,
     },
   }
 }
@@ -1730,6 +1821,7 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
     if (!isKnowledgeRebuildJobStateInitialized(jobState)) {
       const chapterWeightsById = Object.fromEntries(chapters.map((chapter) => [chapter.id, getChapterProgressWeight(chapter.rawText)]))
       const totalChapterWeight = chapters.reduce((sum, chapter) => sum + (chapterWeightsById[chapter.id] ?? 0), 0)
+      const extractionSettings = loadStoredAISettings().knowledgeExtraction
 
       initializeKnowledgeRebuildJobState(job.id, {
         branchId,
@@ -1740,8 +1832,24 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
         totalChapterCount: chapters.length,
         processedChapterWeight: 0,
         extractedChapters: [],
+        extractionSettings,
+        indexProgress: undefined,
         stageStartedAtByKey: {
           extract: new Date().toISOString(),
+        },
+      })
+      jobState = getKnowledgeRebuildJobState(job.id)
+    } else if (jobState && !jobState.payload.extractionSettings) {
+      updateKnowledgeJob(job.id, {
+        payload: {
+          ...jobState.payload,
+          phase: jobState.phase,
+          pendingChapterIds: jobState.pendingChapterIds,
+          chapterWeightsById: jobState.chapterWeightsById,
+          totalChapterWeight: jobState.totalChapterWeight,
+          processedChapterWeight: jobState.processedChapterWeight,
+          extractedChapters: jobState.extractedChapters,
+          extractionSettings: loadStoredAISettings().knowledgeExtraction,
         },
       })
       jobState = getKnowledgeRebuildJobState(job.id)
@@ -1779,44 +1887,85 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
           continue
         }
 
-        const chapter = remainingChapters[0]
-        const stateWithCurrentChapter = setCurrentKnowledgeJobChapter(job.id, chapter.id)
+        const extractionSettings = getKnowledgeExtractionSettingsSnapshot(currentJobState.payload)
+        const parallelism = Math.max(1, getKnowledgeExtractionParallelism(extractionSettings))
+        const extractionBatch = remainingChapters.slice(0, parallelism)
+        const stateWithCurrentChapter = setCurrentKnowledgeJobChapter(job.id, extractionBatch[0]?.id ?? null)
+        const batchLabel = extractionBatch.length > 1
+          ? `并行抽取第 ${extractionBatch[0]?.chapterNo ?? 0} 至 ${extractionBatch[extractionBatch.length - 1]?.chapterNo ?? 0} 章`
+          : `抽取第 ${extractionBatch[0]?.chapterNo ?? 0} 章`
 
         updateKnowledgeJob(job.id, {
-          currentStep: `抽取第 ${chapter.chapterNo} 章`,
+          currentStep: batchLabel,
           progress: getKnowledgeExtractionProgress(stateWithCurrentChapter ?? jobState),
         })
 
-        const chapterLike = toChapterLike({
-          chapterId: chapter.id,
-          novelId: params.novelId,
-          title: chapter.title ?? `第${chapter.chapterNo}章`,
-          chapterNo: chapter.chapterNo,
-          rawText: chapter.rawText,
-        })
-        const extractionResult = await extractChapterKnowledgeOffline({
-          chapter: chapterLike,
-          chapterNo: chapter.chapterNo,
-        })
+        const extractionResults = await Promise.all(extractionBatch.map(async (chapter) => {
+          const chapterLike = toChapterLike({
+            chapterId: chapter.id,
+            novelId: params.novelId,
+            title: chapter.title ?? `第${chapter.chapterNo}章`,
+            chapterNo: chapter.chapterNo,
+            rawText: chapter.rawText,
+          })
+
+          try {
+            const extractionResult = await extractChapterKnowledgeOffline({
+              chapter: chapterLike,
+              chapterNo: chapter.chapterNo,
+              settings: extractionSettings,
+              assertCanContinue: () => assertKnowledgeRebuildContinues(job.id),
+            })
+
+            return {
+              chapter,
+              extractionResult,
+            }
+          } catch (error) {
+            return {
+              chapter,
+              error,
+            }
+          }
+        }))
 
         assertKnowledgeRebuildContinues(job.id)
+        setCurrentKnowledgeJobChapter(job.id, null)
 
-        if (!chapterStillExists(chapter.id)) {
-          removePendingChaptersFromKnowledgeJob(job.id, [chapter.id])
-          continue
+        let firstError: unknown = null
+        let lastCompletedState = stateWithCurrentChapter ?? jobState
+        let completedCount = 0
+
+        for (const result of extractionResults) {
+          if ('error' in result) {
+            firstError ??= result.error
+            continue
+          }
+
+          if (!chapterStillExists(result.chapter.id)) {
+            removePendingChaptersFromKnowledgeJob(job.id, [result.chapter.id])
+            continue
+          }
+
+          appendExtractedChapterToKnowledgeJob(job.id, {
+            chapterId: result.chapter.id,
+            chapterNo: result.chapter.chapterNo,
+            extraction: result.extractionResult.extraction,
+          })
+          lastCompletedState = completePendingChapterInKnowledgeJob(job.id, result.chapter.id) ?? lastCompletedState
+          completedCount += 1
         }
 
-        appendExtractedChapterToKnowledgeJob(job.id, {
-          chapterId: chapter.id,
-          chapterNo: chapter.chapterNo,
-          extraction: extractionResult.extraction,
-        })
-        const completedState = completePendingChapterInKnowledgeJob(job.id, chapter.id)
-
         updateKnowledgeJob(job.id, {
-          currentStep: `抽取第 ${chapter.chapterNo} 章（${extractionResult.provider}${extractionResult.model ? `: ${extractionResult.model}` : ''}）`,
-          progress: getKnowledgeExtractionProgress(completedState ?? stateWithCurrentChapter ?? jobState),
+          currentStep: extractionBatch.length > 1
+            ? `已完成 ${completedCount}/${extractionBatch.length} 个章节抽取`
+            : `抽取第 ${extractionBatch[0]?.chapterNo ?? 0} 章完成`,
+          progress: getKnowledgeExtractionProgress(lastCompletedState),
         })
+
+        if (firstError) {
+          throw firstError
+        }
         continue
       }
 
@@ -1872,9 +2021,20 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
     }
 
     setKnowledgeRebuildJobPhase(job.id, 'index')
-    updateKnowledgeJob(job.id, { currentStep: '构建 Lance 检索索引', progress: 0.96 })
+    setKnowledgeRebuildJobIndexProgress(job.id, {
+      phase: 'loading',
+      totalRows: 0,
+      embeddedRows: 0,
+      totalBatches: 0,
+      completedBatches: 0,
+    })
     assertKnowledgeRebuildContinues(job.id)
-    await rebuildBranchRetrievalIndex(params.novelId, branchId)
+    await rebuildBranchRetrievalIndex(params.novelId, branchId, {
+      onProgress: async (indexProgress) => {
+        assertKnowledgeRebuildContinues(job.id)
+        setKnowledgeRebuildJobIndexProgress(job.id, indexProgress)
+      },
+    })
 
     updateKnowledgeJob(job.id, { status: 'succeeded', currentStep: '完成', progress: 1 })
 
@@ -1900,6 +2060,8 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
           totalChapterCount: 0,
           processedChapterWeight: 0,
           extractedChapters: [],
+          extractionSettings: loadStoredAISettings().knowledgeExtraction,
+          indexProgress: undefined,
           stageStartedAtByKey: {},
         },
       })

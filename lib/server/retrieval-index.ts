@@ -91,6 +91,21 @@ type SourceTruthRow = {
   includeByDefault: number
 }
 
+export type RetrievalIndexBuildPhase = 'loading' | 'embedding' | 'creating_table' | 'building_text_index' | 'building_vector_index' | 'completed'
+
+export type RetrievalIndexBuildProgress = {
+  phase: RetrievalIndexBuildPhase
+  totalRows: number
+  embeddedRows: number
+  totalBatches: number
+  completedBatches: number
+}
+
+export type RetrievalIndexBuildResult = {
+  rowCount: number
+  embeddingBatchCount: number
+}
+
 const LANCEDB_DIR = process.env.LANCEDB_DIR?.trim() || path.join(process.cwd(), '.lancedb')
 const TABLE_PREFIX = 'retrieval_docs_'
 const EMBEDDING_BATCH_SIZE = 16
@@ -187,11 +202,15 @@ function buildRetrievalEmbeddingText(row: RetrievalDocSeedRow) {
   ].filter(Boolean).join('\n')
 }
 
-async function embedRetrievalRows(rows: RetrievalDocSeedRow[]) {
+async function embedRetrievalRows(
+  rows: RetrievalDocSeedRow[],
+  onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
+) {
   if (!rows.length) return [] as RetrievalDocRow[]
 
   const settings = loadStoredAISettings().embeddings
   const vectors: number[][] = []
+  const totalBatches = Math.ceil(rows.length / EMBEDDING_BATCH_SIZE)
   for (let index = 0; index < rows.length; index += EMBEDDING_BATCH_SIZE) {
     const batch = rows.slice(index, index + EMBEDDING_BATCH_SIZE)
     const result = settings.provider === 'openai-compatible'
@@ -204,6 +223,13 @@ async function embedRetrievalRows(rows: RetrievalDocSeedRow[]) {
       throw new Error(`Ollama returned ${result.embeddings.length} embeddings for ${batch.length} retrieval rows`)
     }
     vectors.push(...result.embeddings)
+    await onProgress?.({
+      phase: 'embedding',
+      totalRows: rows.length,
+      embeddedRows: vectors.length,
+      totalBatches,
+      completedBatches: Math.ceil(vectors.length / EMBEDDING_BATCH_SIZE),
+    })
   }
 
   const dimension = vectors[0]?.length ?? 0
@@ -287,6 +313,7 @@ async function ensureTextIndex(table: Awaited<ReturnType<typeof openBranchTable>
   try {
     await table.createIndex('text', {
       config: lancedb.Index.fts(),
+      waitTimeoutSeconds: 3600,
     })
   } catch {
   }
@@ -294,7 +321,7 @@ async function ensureTextIndex(table: Awaited<ReturnType<typeof openBranchTable>
 
 async function ensureVectorIndex(table: Awaited<ReturnType<typeof openBranchTable>> extends infer T ? Exclude<T, null> : never) {
   try {
-    await table.createIndex('vector')
+    await table.createIndex('vector', { waitTimeoutSeconds: 3600 })
   } catch {
   }
 }
@@ -317,11 +344,37 @@ async function hasUsableVectorColumn(table: Awaited<ReturnType<typeof openBranch
   }
 }
 
-async function createOrReplaceBranchTable(branchId: string, rows: RetrievalDocSeedRow[]) {
+async function createOrReplaceBranchTable(
+  branchId: string,
+  rows: RetrievalDocSeedRow[],
+  onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
+) {
   const database = await getDatabase()
-  const embeddedRows = await embedRetrievalRows(rows)
+  const totalBatches = Math.ceil(rows.length / EMBEDDING_BATCH_SIZE)
+  const embeddedRows = await embedRetrievalRows(rows, onProgress)
+  await onProgress?.({
+    phase: 'creating_table',
+    totalRows: rows.length,
+    embeddedRows: rows.length,
+    totalBatches,
+    completedBatches: totalBatches,
+  })
   const table = await database.createTable(getBranchTableName(branchId), embeddedRows, { mode: 'overwrite' })
+  await onProgress?.({
+    phase: 'building_text_index',
+    totalRows: rows.length,
+    embeddedRows: rows.length,
+    totalBatches,
+    completedBatches: totalBatches,
+  })
   await ensureTextIndex(table)
+  await onProgress?.({
+    phase: 'building_vector_index',
+    totalRows: rows.length,
+    embeddedRows: rows.length,
+    totalBatches,
+    completedBatches: totalBatches,
+  })
   await ensureVectorIndex(table)
   return table
 }
@@ -1128,11 +1181,46 @@ export async function replaceChapterRetrievalIndex(spans: TextSpanInput[]) {
   await rebuildBranchRetrievalIndex(novelId, branchId)
 }
 
-export async function rebuildBranchRetrievalIndex(novelId: string, branchId: string) {
+export async function rebuildBranchRetrievalIndex(
+  novelId: string,
+  branchId: string,
+  options?: { onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void> }
+): Promise<RetrievalIndexBuildResult> {
+  await options?.onProgress?.({
+    phase: 'loading',
+    totalRows: 0,
+    embeddedRows: 0,
+    totalBatches: 0,
+    completedBatches: 0,
+  })
   const rows = loadBranchRetrievalDocs(novelId, branchId)
+  const totalBatches = Math.ceil(rows.length / EMBEDDING_BATCH_SIZE)
+  await options?.onProgress?.({
+    phase: rows.length ? 'embedding' : 'completed',
+    totalRows: rows.length,
+    embeddedRows: 0,
+    totalBatches,
+    completedBatches: 0,
+  })
   await deleteBranchRetrievalIndex(branchId)
-  if (!rows.length) return
-  await createOrReplaceBranchTable(branchId, rows)
+  if (!rows.length) {
+    return {
+      rowCount: 0,
+      embeddingBatchCount: 0,
+    }
+  }
+  await createOrReplaceBranchTable(branchId, rows, options?.onProgress)
+  await options?.onProgress?.({
+    phase: 'completed',
+    totalRows: rows.length,
+    embeddedRows: rows.length,
+    totalBatches,
+    completedBatches: totalBatches,
+  })
+  return {
+    rowCount: rows.length,
+    embeddingBatchCount: totalBatches,
+  }
 }
 
 export async function deleteBranchRetrievalIndex(branchId: string) {
