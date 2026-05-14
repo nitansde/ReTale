@@ -37,7 +37,6 @@ export type GenerationContextPreview = {
   branchId: string
   chapterId: string
   chapterNo: number
-  snapshotStatus: string
   selectedLineStart: number | null
   selectedLineEnd: number | null
   warnings: string[]
@@ -64,7 +63,6 @@ export type GenerationContextBuildResult = {
   branchId: string
   chapterId: string
   chapterNo: number
-  snapshotStatus: string
   selectedLineStart: number | null
   selectedLineEnd: number | null
   warnings: string[]
@@ -89,7 +87,6 @@ export type ChapterGraphContextResult = {
   chapterId: string
   chapterNo: number
   chapterTitle: string
-  snapshotStatus: string
   warnings: string[]
   graphContext: GraphAwareResult
   lanceEvidence: GenerationContextEvidence[]
@@ -99,8 +96,6 @@ export type ChapterGraphContextResult = {
 type EntityRow = {
   id: string
   canonicalName: string
-  description: string | null
-  status: string | null
   aliases: Array<{ alias: string }>
   profile?: CharacterRoleCardProfile
 }
@@ -120,7 +115,7 @@ type EntityStatePreviewRow = {
   description: string | null
 }
 
-type SnapshotCharacter = {
+type ChapterStateCharacter = {
   name: string
   aliases?: string[]
   status?: string
@@ -128,7 +123,7 @@ type SnapshotCharacter = {
   profile?: CharacterRoleCardProfile
 }
 
-type SnapshotRelationship = {
+type ChapterStateRelationship = {
   source: string
   target: string
   type: string
@@ -137,29 +132,29 @@ type SnapshotRelationship = {
   evidenceChapter?: number
 }
 
-type SnapshotEvent = {
+type ChapterStateEvent = {
   chapter: number
   name: string
   summary: string
 }
 
-type SnapshotRule = {
+type ChapterStateRule = {
   term: string
   definition: string
   firstSeenChapter?: number
 }
 
-type SnapshotThread = {
+type ChapterStateThread = {
   name: string
   description: string
 }
 
-type ParsedSnapshot = {
-  major_characters: SnapshotCharacter[]
-  active_relationships: SnapshotRelationship[]
-  recent_events: SnapshotEvent[]
-  world_rules: SnapshotRule[]
-  open_threads: SnapshotThread[]
+type ChapterStatePromptData = {
+  major_characters: ChapterStateCharacter[]
+  active_relationships: ChapterStateRelationship[]
+  recent_events: ChapterStateEvent[]
+  world_rules: ChapterStateRule[]
+  open_threads: ChapterStateThread[]
   forbidden_future_facts: string
 }
 
@@ -263,12 +258,12 @@ function loadCharacterProfilesByEntityId(params: {
   const rows = queryAll<{ subjectEntityId: string | null; valueJson: string | null; sourceChapter: number }>(
     `
       SELECT subjectEntityId, valueJson, sourceChapter
-      FROM KnowledgeFact
-      WHERE novelId = ? AND branchId = ? AND factType = 'character_profile'
-        AND subjectEntityId IN (${params.entityIds.map(() => '?').join(', ')})
-        AND validFromChapter <= ?
-        AND (validToChapter IS NULL OR validToChapter >= ?)
-        AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+        FROM KnowledgeFact
+        WHERE novelId = ? AND branchId = ? AND factType = 'character_profile'
+          AND subjectEntityId IN (${params.entityIds.map(() => '?').join(', ')})
+          AND validFromChapter <= ?
+          AND validUntilChapter > ?
+          AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
       ORDER BY validFromChapter ASC, sourceChapter ASC
     `,
     params.novelId,
@@ -294,13 +289,13 @@ function loadCharacterProfilesByEntityId(params: {
   return profileByEntityId
 }
 
-function renderSnapshotForPrompt(snapshot: ParsedSnapshot) {
+function renderChapterStateForPrompt(chapterState: ChapterStatePromptData) {
   const lines: string[] = []
 
   lines.push('人物状态：')
   lines.push(
-    ...(snapshot.major_characters.length
-      ? snapshot.major_characters.slice(0, 8).map((character) => {
+    ...(chapterState.major_characters.length
+      ? chapterState.major_characters.slice(0, 8).map((character) => {
           const aliasText = character.aliases?.length ? `｜别名：${character.aliases.slice(0, 3).join('、')}` : ''
           const chapterText = typeof character.lastSeenChapter === 'number' ? `｜最近出现：第 ${character.lastSeenChapter} 章` : ''
           const profile = character.profile
@@ -314,8 +309,8 @@ function renderSnapshotForPrompt(snapshot: ParsedSnapshot) {
 
   lines.push('', '关键关系：')
   lines.push(
-    ...(snapshot.active_relationships.length
-      ? snapshot.active_relationships.slice(0, 8).map((relation) => {
+    ...(chapterState.active_relationships.length
+      ? chapterState.active_relationships.slice(0, 8).map((relation) => {
           const polarity = relation.polarity?.trim() ? `｜${relation.polarity}` : ''
           const chapterText = typeof relation.validFromChapter === 'number' ? `｜起始：第 ${relation.validFromChapter} 章` : ''
           return `- ${relation.source} ↔ ${relation.target}｜${relation.type}${polarity}${chapterText}`
@@ -325,28 +320,28 @@ function renderSnapshotForPrompt(snapshot: ParsedSnapshot) {
 
   lines.push('', '近期事件：')
   lines.push(
-    ...(snapshot.recent_events.length
-      ? snapshot.recent_events.slice(0, 6).map((event) => `- 第 ${event.chapter} 章｜${event.name}｜${event.summary}`)
+    ...(chapterState.recent_events.length
+      ? chapterState.recent_events.slice(0, 6).map((event) => `- 第 ${event.chapter} 章｜${event.name}｜${event.summary}`)
       : ['- 暂无近期事件。'])
   )
 
   lines.push('', '世界设定：')
   lines.push(
-    ...(snapshot.world_rules.length
-      ? snapshot.world_rules.slice(0, 8).map((rule) => `- ${rule.term}｜${rule.definition}`)
+    ...(chapterState.world_rules.length
+      ? chapterState.world_rules.slice(0, 8).map((rule) => `- ${rule.term}｜${rule.definition}`)
       : ['- 暂无稳定设定。'])
   )
 
   lines.push('', '未解线索：')
   lines.push(
-    ...(snapshot.open_threads.length
-      ? snapshot.open_threads.slice(0, 6).map((thread) => `- ${thread.name}｜${thread.description}`)
+    ...(chapterState.open_threads.length
+      ? chapterState.open_threads.slice(0, 6).map((thread) => `- ${thread.name}｜${thread.description}`)
       : ['- 暂无线索。'])
   )
 
-  lines.push('', `未来章节限制：${snapshot.forbidden_future_facts}`)
+  lines.push('', `未来章节限制：${chapterState.forbidden_future_facts}`)
 
-  return renderBlock('截至当前章节的世界状态', lines)
+  return renderBlock('截至当前章节的知识状态', lines)
 }
 
 function buildEnrichedEvidenceQuery(params: {
@@ -466,11 +461,9 @@ function loadEntitiesWithAliases(novelId: string, branchId: string, chapterNo: n
   const entities = queryAll<{
     id: string
     canonicalName: string
-    description: string | null
-    status: string | null
   }>(
     `
-      SELECT id, canonicalName, description, status
+      SELECT id, canonicalName
       FROM KnowledgeEntity
       WHERE novelId = ? AND branchId = ? AND firstSeenChapter <= ?
       ORDER BY importance DESC, canonicalName ASC
@@ -524,7 +517,7 @@ export async function buildGenerationContext(request: GenerationContextRequest):
     throw new Error('Chapter not found in knowledge store')
   }
 
-  const [lines, recentChapters, snapshotRow, entities, facts, events, worlds] = await Promise.all([
+  const [lines, recentChapters, entities, facts, events, worlds] = await Promise.all([
     Promise.resolve(
       queryAll<{ lineNo: number; text: string }>(
         'SELECT lineNo, text FROM ChapterLine WHERE chapterId = ? ORDER BY lineNo ASC',
@@ -545,19 +538,6 @@ export async function buildGenerationContext(request: GenerationContextRequest):
         chapter.chapterNo
       )
     ),
-    Promise.resolve(
-      queryOne<{ snapshotJson: string; status: string }>(
-        `
-          SELECT snapshotJson, status
-          FROM ChapterSnapshot
-          WHERE novelId = ? AND branchId = ? AND chapterNo = ?
-          LIMIT 1
-        `,
-        request.novelId,
-        branchId,
-        chapter.chapterNo
-      )
-    ),
     Promise.resolve(loadEntitiesWithAliases(request.novelId, branchId, chapter.chapterNo)),
     Promise.resolve(
       queryAll<FactRow & { sourceChapter: number }>(
@@ -565,11 +545,11 @@ export async function buildGenerationContext(request: GenerationContextRequest):
           SELECT f.subjectEntityId, f.objectEntityId, f.predicate, f.valueJson, f.sourceChapter,
                  se.canonicalName as subjectCanonicalName,
                  oe.canonicalName as objectCanonicalName
-          FROM KnowledgeFact f
-          LEFT JOIN KnowledgeEntity se ON se.id = f.subjectEntityId
-          LEFT JOIN KnowledgeEntity oe ON oe.id = f.objectEntityId
-          WHERE f.novelId = ? AND f.branchId = ? AND f.validFromChapter <= ?
-            AND (f.validToChapter IS NULL OR f.validToChapter >= ?)
+           FROM KnowledgeFact f
+           LEFT JOIN KnowledgeEntity se ON se.id = f.subjectEntityId
+           LEFT JOIN KnowledgeEntity oe ON oe.id = f.objectEntityId
+           WHERE f.novelId = ? AND f.branchId = ? AND f.validFromChapter <= ?
+            AND f.validUntilChapter > ?
             AND f.status NOT IN ('rejected', 'outdated', 'potentially_stale')
           ORDER BY f.sourceChapter DESC
           LIMIT 30
@@ -598,10 +578,10 @@ export async function buildGenerationContext(request: GenerationContextRequest):
     Promise.resolve(
       queryAll<{ term: string; category: string | null; definition: string }>(
         `
-          SELECT term, category, definition
-          FROM KnowledgeWorld
-          WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
-            AND (validToChapter IS NULL OR validToChapter >= ?)
+           SELECT term, category, definition
+           FROM KnowledgeWorld
+           WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
+            AND validUntilChapter > ?
             AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
           ORDER BY firstSeenChapter ASC
           LIMIT 12
@@ -627,15 +607,6 @@ export async function buildGenerationContext(request: GenerationContextRequest):
     includeLowConfidence: false,
   })
   const currentSummary = chapter.summary?.trim() || '当前章节尚未生成摘要。'
-  const snapshot = parseJsonObject<ParsedSnapshot>(snapshotRow?.snapshotJson ?? null, {
-    major_characters: [],
-    active_relationships: [],
-    recent_events: [],
-    world_rules: [],
-    open_threads: [],
-    forbidden_future_facts: `Do not use any facts from chapters > ${chapter.chapterNo}.`,
-  })
-
   const entityContext = `${request.selectedText}\n${neighborhoodText}`
   const matchedEntities = entities.filter((entity) => {
     if (entityContext.includes(entity.canonicalName)) return true
@@ -673,6 +644,44 @@ export async function buildGenerationContext(request: GenerationContextRequest):
   const relatedWorlds = worlds.filter((world) => {
     return request.selectedText.includes(world.term) || neighborhoodText.includes(world.term)
   }).slice(0, 8)
+
+  const chapterState: ChapterStatePromptData = {
+    major_characters: matchedEntities.slice(0, 8).map((entity) => ({
+      name: entity.canonicalName,
+      aliases: entity.aliases.map((alias) => alias.alias),
+      status: latestStateByEntityId.get(entity.id)?.stateValue ?? '未知',
+      lastSeenChapter: chapter.chapterNo,
+      profile: entity.profile,
+    })),
+    active_relationships: graphContext.edges
+      .filter((edge) => edge.includeInPrompt && !excludedGraphEdgeIds.has(edge.id))
+      .slice(0, 10)
+      .map((edge) => ({
+        source: graphContext.nodes.find((node) => node.id === edge.source)?.label ?? edge.source,
+        target: graphContext.nodes.find((node) => node.id === edge.target)?.label ?? edge.target,
+        type: edge.linkType,
+        polarity: edge.polarity,
+        validFromChapter: edge.validFromChapter,
+        evidenceChapter: edge.evidenceLocation?.chapterNo,
+      })),
+    recent_events: events
+      .slice(0, 6)
+      .map((event) => ({ chapter: event.chapterNo, name: event.name, summary: event.summary })),
+    world_rules: worlds
+      .slice(0, 8)
+      .map((world) => ({ term: world.term, definition: world.definition })),
+    open_threads: facts
+      .filter((fact) => fact.predicate.trim())
+      .slice(0, 6)
+      .map((fact) => {
+        const parsed = parseJsonObject<{ description?: unknown }>(fact.valueJson, {})
+        return {
+          name: fact.predicate,
+          description: typeof parsed.description === 'string' ? parsed.description : fact.predicate,
+        }
+      }),
+    forbidden_future_facts: `Do not use any facts from chapters > ${chapter.chapterNo}.`,
+  }
 
   const graphContextText = buildFilteredGraphContextText({
     graphContext,
@@ -712,9 +721,6 @@ export async function buildGenerationContext(request: GenerationContextRequest):
   }
   const promptEvidence = lanceEvidence.filter((item) => !excludedEvidenceIds.has(item.id))
 
-  if (!snapshotRow || snapshotRow.status !== 'ready') {
-    warnings.push('当前章节快照不是 ready，生成可能基于部分旧知识。')
-  }
   warnings.push(...graphContext.warnings)
 
   const blocks: GenerationContextBlock[] = [
@@ -760,11 +766,11 @@ export async function buildGenerationContext(request: GenerationContextRequest):
       ),
     },
     {
-      id: 'snapshot',
-      label: '世界快照',
+      id: 'chapter-state',
+      label: '截至当前章节的知识状态',
       enabled: true,
       priority: 'high',
-      content: renderSnapshotForPrompt(snapshot),
+      content: renderChapterStateForPrompt(chapterState),
     },
     {
       id: 'graph-context',
@@ -783,7 +789,7 @@ export async function buildGenerationContext(request: GenerationContextRequest):
         matchedEntities.length
           ? matchedEntities.map((entity) => {
               const state = latestStateByEntityId.get(entity.id)
-              const compactDescription = buildCharacterDescriptionDelta(entity.profile ?? {}, state?.description?.trim() || entity.description?.trim() || '')
+              const compactDescription = buildCharacterDescriptionDelta(entity.profile ?? {}, state?.description?.trim() || '')
               const profile = entity.profile
               const profileText = profile && hasCharacterRoleCardProfile(profile)
                 ? buildCharacterRoleCardLines(profile, { includeEvidence: false, includeNotes: true }).slice(0, 5).join('｜')
@@ -861,7 +867,6 @@ export async function buildGenerationContext(request: GenerationContextRequest):
     branchId,
     chapterId: request.chapterId,
     chapterNo: chapter.chapterNo,
-    snapshotStatus: snapshotRow?.status ?? 'missing',
     selectedLineStart: selectionRange.lineStart,
     selectedLineEnd: selectionRange.lineEnd,
     warnings,
@@ -889,18 +894,6 @@ export async function buildChapterGraphContext(request: ChapterGraphContextReque
     throw new Error('Chapter not found in knowledge store')
   }
 
-  const snapshot = queryOne<{ status: string }>(
-    `
-      SELECT status
-      FROM ChapterSnapshot
-      WHERE novelId = ? AND branchId = ? AND chapterNo = ?
-      LIMIT 1
-    `,
-    request.novelId,
-    chapter.branchId,
-    chapter.chapterNo
-  )
-
   const graphContext = await buildChapterScopedGraphContext({
     novelId: request.novelId,
     branchId: chapter.branchId,
@@ -913,9 +906,6 @@ export async function buildChapterGraphContext(request: ChapterGraphContextReque
   const chapterTitle = chapter.title?.trim() || `第 ${chapter.chapterNo} 章`
   const chapterSummary = chapter.summary?.trim() || ''
   const warnings = [...graphContext.warnings]
-  if (!snapshot || snapshot.status !== 'ready') {
-    warnings.unshift('当前章节快照不是 ready，图谱可能还没有完全同步。')
-  }
   const evidenceQuery = buildChapterGraphEvidenceQuery({
     chapterTitle,
     chapterSummary,
@@ -943,7 +933,6 @@ export async function buildChapterGraphContext(request: ChapterGraphContextReque
     chapterId: chapter.id,
     chapterNo: chapter.chapterNo,
     chapterTitle,
-    snapshotStatus: snapshot?.status ?? 'missing',
     warnings,
     graphContext: graphContext.nodes.length || graphContext.edges.length || graphContext.seedEntities.length
       ? graphContext
@@ -962,7 +951,6 @@ export async function buildGenerationContextPreview(request: GenerationContextRe
     branchId: result.branchId,
     chapterId: result.chapterId,
     chapterNo: result.chapterNo,
-    snapshotStatus: result.snapshotStatus,
     selectedLineStart: result.selectedLineStart,
     selectedLineEnd: result.selectedLineEnd,
     warnings: result.warnings,

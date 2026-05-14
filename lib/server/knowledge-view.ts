@@ -176,8 +176,7 @@ function toRelationStrength(strength: number) {
   return 'medium' as const
 }
 
-function toRelationStatus(validToChapter: number | null, polarity: string | null) {
-  if (validToChapter !== null) return 'resolved' as const
+function toRelationStatus(polarity: string | null) {
   if (polarity === 'negative') return 'strained' as const
   if (polarity === 'mixed') return 'hidden' as const
   return 'active' as const
@@ -192,8 +191,11 @@ function dedupeById<T extends { id: string }>(items: T[]) {
   })
 }
 
-function loadCharacterProfilesByEntityId(entityIds: string[]) {
+function loadCharacterProfilesByEntityId(entityIds: string[], asOfChapter?: number) {
   if (!entityIds.length) return new Map<string, CharacterRoleCardProfile>()
+  const chapterFilter = typeof asOfChapter === 'number'
+    ? `AND validFromChapter <= ? AND validUntilChapter > ?`
+    : ''
   const rows = queryAll<{ subjectEntityId: string | null; valueJson: string | null; sourceChapter: number }>(
     `
       SELECT subjectEntityId, valueJson, sourceChapter
@@ -201,9 +203,11 @@ function loadCharacterProfilesByEntityId(entityIds: string[]) {
       WHERE factType = 'character_profile'
         AND subjectEntityId IN (${entityIds.map(() => '?').join(', ')})
         AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+        ${chapterFilter}
       ORDER BY validFromChapter ASC, sourceChapter ASC
     `,
     ...entityIds,
+    ...(typeof asOfChapter === 'number' ? [asOfChapter, asOfChapter] : []),
   )
 
   const profileByEntityId = new Map<string, CharacterRoleCardProfile>()
@@ -222,18 +226,59 @@ function loadCharacterProfilesByEntityId(entityIds: string[]) {
   return profileByEntityId
 }
 
-function projectCharacterCompatibilityFields(profile: CharacterRoleCardProfile | undefined, status: string | null, description: string | null, importance: number) {
+type CharacterStatePreview = {
+  entityId: string
+  stateValue: string
+  description: string | null
+}
+
+function loadCharacterStatesByEntityId(entityIds: string[], asOfChapter?: number) {
+  if (!entityIds.length || typeof asOfChapter !== 'number') {
+    return new Map<string, CharacterStatePreview>()
+  }
+
+  const rows = queryAll<CharacterStatePreview & { sourceChapter: number }>(
+    `
+      SELECT entityId, stateValue, description, sourceChapter
+      FROM EntityState
+      WHERE stateType = 'character_status'
+        AND entityId IN (${entityIds.map(() => '?').join(', ')})
+        AND validFromChapter <= ?
+        AND validUntilChapter > ?
+        AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+      ORDER BY validFromChapter DESC, sourceChapter DESC, confidence DESC
+    `,
+    ...entityIds,
+    asOfChapter,
+    asOfChapter,
+  )
+
+  const stateByEntityId = new Map<string, CharacterStatePreview>()
+  for (const row of rows) {
+    if (!stateByEntityId.has(row.entityId)) {
+      stateByEntityId.set(row.entityId, row)
+    }
+  }
+
+  return stateByEntityId
+}
+
+function projectCharacterCompatibilityFields(
+  profile: CharacterRoleCardProfile | undefined,
+  state: CharacterStatePreview | undefined,
+  importance: number,
+) {
   const role = profile?.identity?.summary?.trim() || (importance >= 4 ? '主要人物' : '角色')
   const goal = profile?.capability?.summary?.trim() || profile?.likes?.summary?.trim() || '待补充'
-  const trait = profile?.personality?.summary?.trim() || (status ? `状态：${status}` : '待补充')
+  const trait = profile?.personality?.summary?.trim() || (state?.stateValue ? `状态：${state.stateValue}` : '待补充')
   const safeProfile = profile
   const note = safeProfile && hasCharacterRoleCardProfile(safeProfile)
     ? buildCharacterRoleCardLines(safeProfile, { includeEvidence: false, includeNotes: true }).slice(3).join('｜')
-    : (description?.trim() || '')
+    : (state?.description?.trim() || '')
   return { role, goal, trait, note }
 }
 
-export async function buildKnowledgeProjection(novelIds?: string[]): Promise<KnowledgeViewPayload> {
+export async function buildKnowledgeProjection(novelIds?: string[], asOfChapter?: number): Promise<KnowledgeViewPayload> {
   const novels = novelIds?.length
     ? queryAll<{ id: string }>(
         `SELECT id FROM NovelRecord WHERE id IN (${novelIds.map(() => '?').join(', ')})`,
@@ -249,6 +294,7 @@ export async function buildKnowledgeProjection(novelIds?: string[]): Promise<Kno
   }
 
   const branchIds = novels.map((novel) => getMainBranchId(novel.id))
+  const applyAsOfChapter = typeof asOfChapter === 'number' && Number.isFinite(asOfChapter) && novels.length === 1
 
   const placeholders = branchIds.map(() => '?').join(', ')
   const [chapters, entities, relations, worlds, events, openThreadFacts] = await Promise.all([
@@ -271,43 +317,49 @@ export async function buildKnowledgeProjection(novelIds?: string[]): Promise<Kno
           SELECT id, novelId, canonicalName, description, status, importance
           FROM KnowledgeEntity
           WHERE branchId IN (${placeholders}) AND entityType = 'character'
+            ${applyAsOfChapter ? 'AND (firstSeenChapter IS NULL OR firstSeenChapter <= ?)' : ''}
           ORDER BY importance DESC, canonicalName ASC
         `,
-        ...branchIds
+        ...branchIds,
+        ...(applyAsOfChapter ? [asOfChapter!] : [])
       )
     ),
     Promise.resolve(
-      queryAll<{
-        id: string
-        sourceEntityId: string
-        targetEntityId: string
-        relationType: string
-        strength: number
-        validToChapter: number | null
-        polarity: string | null
-        sourceChapter: number
-        sourceNovelId: string
-      }>(
-        `
-          SELECT r.id, r.sourceEntityId, r.targetEntityId, r.relationType, r.strength, r.validToChapter, r.polarity, r.sourceChapter,
-                 se.novelId as sourceNovelId
-          FROM KnowledgeRelation r
-          JOIN KnowledgeEntity se ON se.id = r.sourceEntityId
-          WHERE r.branchId IN (${placeholders}) AND r.status != 'rejected'
-          ORDER BY r.sourceChapter ASC, r.strength DESC
-        `,
-        ...branchIds
-      )
-    ),
+        queryAll<{
+          id: string
+          sourceEntityId: string
+          targetEntityId: string
+          relationType: string
+          strength: number
+          validUntilChapter: number
+          polarity: string | null
+          sourceChapter: number
+          sourceNovelId: string
+        }>(
+          `
+            SELECT r.id, r.sourceEntityId, r.targetEntityId, r.relationType, r.strength, r.validUntilChapter, r.polarity, r.sourceChapter,
+                   se.novelId as sourceNovelId
+            FROM KnowledgeRelation r
+            JOIN KnowledgeEntity se ON se.id = r.sourceEntityId
+            WHERE r.branchId IN (${placeholders}) AND r.status NOT IN ('rejected', 'outdated', 'potentially_stale')
+              ${applyAsOfChapter ? `AND r.validFromChapter <= ? AND r.validUntilChapter > ?` : ''}
+            ORDER BY r.sourceChapter ASC, r.strength DESC
+          `,
+          ...branchIds,
+          ...(applyAsOfChapter ? [asOfChapter!, asOfChapter!] : [])
+        )
+      ),
     Promise.resolve(
       queryAll<{ id: string; novelId: string; term: string; category: string | null; definition: string }>(
         `
           SELECT id, novelId, term, category, definition
           FROM KnowledgeWorld
-          WHERE branchId IN (${placeholders}) AND status != 'rejected'
+          WHERE branchId IN (${placeholders}) AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+            ${applyAsOfChapter ? `AND validFromChapter <= ? AND validUntilChapter > ?` : ''}
           ORDER BY firstSeenChapter ASC, term ASC
         `,
-        ...branchIds
+        ...branchIds,
+        ...(applyAsOfChapter ? [asOfChapter!, asOfChapter!] : [])
       )
     ),
     Promise.resolve(
@@ -315,10 +367,12 @@ export async function buildKnowledgeProjection(novelIds?: string[]): Promise<Kno
         `
           SELECT id, novelId, name, summary, chapterNo
           FROM KnowledgeEvent
-          WHERE branchId IN (${placeholders}) AND status != 'rejected'
+          WHERE branchId IN (${placeholders}) AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+            ${applyAsOfChapter ? 'AND chapterNo <= ?' : ''}
           ORDER BY chapterNo ASC, importance DESC
         `,
-        ...branchIds
+        ...branchIds,
+        ...(applyAsOfChapter ? [asOfChapter!] : [])
       )
     ),
     Promise.resolve(
@@ -326,10 +380,12 @@ export async function buildKnowledgeProjection(novelIds?: string[]): Promise<Kno
         `
           SELECT id, novelId, predicate, valueJson, sourceChapter
           FROM KnowledgeFact
-          WHERE branchId IN (${placeholders}) AND factType = 'open_thread' AND status != 'rejected'
+          WHERE branchId IN (${placeholders}) AND factType = 'open_thread' AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+            ${applyAsOfChapter ? `AND validFromChapter <= ? AND validUntilChapter > ?` : ''}
           ORDER BY sourceChapter ASC
         `,
-        ...branchIds
+        ...branchIds,
+        ...(applyAsOfChapter ? [asOfChapter!, asOfChapter!] : [])
       )
     ),
   ])
@@ -339,11 +395,13 @@ export async function buildKnowledgeProjection(novelIds?: string[]): Promise<Kno
     chapterIdByNovelAndNo.set(`${chapter.novelId}:${chapter.chapterNo}`, chapter.id)
   }
 
-  const characterProfileByEntityId = loadCharacterProfilesByEntityId(entities.map((entity) => entity.id))
+  const characterProfileByEntityId = loadCharacterProfilesByEntityId(entities.map((entity) => entity.id), applyAsOfChapter ? asOfChapter : undefined)
+  const characterStateByEntityId = loadCharacterStatesByEntityId(entities.map((entity) => entity.id), applyAsOfChapter ? asOfChapter : undefined)
 
   const localCharacters: Character[] = entities.map((entity) => {
     const profile = characterProfileByEntityId.get(entity.id)
-    const projected = projectCharacterCompatibilityFields(profile, entity.status, entity.description, entity.importance)
+    const state = characterStateByEntityId.get(entity.id)
+    const projected = projectCharacterCompatibilityFields(profile, state, entity.importance)
     return {
       id: entity.id,
       novelId: entity.novelId,
@@ -351,7 +409,7 @@ export async function buildKnowledgeProjection(novelIds?: string[]): Promise<Kno
       role: projected.role,
       goal: projected.goal,
       trait: projected.trait,
-      note: projected.note || buildCharacterDescriptionDelta(profile ?? {}, entity.description ?? ''),
+      note: projected.note || buildCharacterDescriptionDelta(profile ?? {}, state?.description ?? ''),
       profile,
     }
   })
@@ -366,7 +424,7 @@ export async function buildKnowledgeProjection(novelIds?: string[]): Promise<Kno
         toCharacterId: relation.targetEntityId,
         label: relation.relationType,
         strength: toRelationStrength(relation.strength),
-        status: toRelationStatus(relation.validToChapter, relation.polarity),
+        status: toRelationStatus(relation.polarity),
         note: relation.polarity ? `极性：${relation.polarity}` : '',
         chapterIds: chapterIdByNovelAndNo.get(`${relation.sourceNovelId}:${relation.sourceChapter}`)
           ? [chapterIdByNovelAndNo.get(`${relation.sourceNovelId}:${relation.sourceChapter}`)!]
