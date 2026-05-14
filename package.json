@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "verify:workspace-import": "node scripts/verify-workspace-import.mjs"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.27.2",
