@@ -1,8 +1,17 @@
 import type { Character, CharacterRelation, OutlineItem, TimelineEvent, WorldEntry, WorldEntryType } from '@/lib/types'
 import {
+  buildCharacterDescriptionDelta,
+  buildCharacterRoleCardLines,
+  hasCharacterRoleCardProfile,
+  mergeCharacterRoleCardProfiles,
+  normalizeCharacterRoleCardProfile,
+  type CharacterRoleCardProfile,
+} from '@/lib/story-knowledge'
+import {
   abortKnowledgeRebuildForNovel,
   deleteKnowledgeGraphForNovel,
   type KnowledgeRebuildJobOutcome,
+  type KnowledgeRebuildPayloadStep,
   pauseKnowledgeRebuildForNovel,
   rebuildKnowledgeForNovel,
 } from '@/lib/server/knowledge-rebuild'
@@ -39,6 +48,7 @@ export type KnowledgeRebuildStatus = {
   createdAt: string
   updatedAt: string
   etaMinutes: number | null
+  steps: KnowledgeRebuildPayloadStep[]
 }
 
 export type KnowledgeViewPayload = KnowledgeProjectionPayload & {
@@ -61,7 +71,33 @@ function createEmptyProjection(): KnowledgeProjectionPayload {
   }
 }
 
-type KnowledgeRebuildStatusRow = Omit<KnowledgeRebuildStatus, 'etaMinutes'>
+type KnowledgeRebuildStatusRow = Omit<KnowledgeRebuildStatus, 'etaMinutes' | 'steps'> & {
+  payloadJson: string | null
+}
+
+function isKnowledgeRebuildPayloadStep(value: unknown): value is KnowledgeRebuildPayloadStep {
+  if (!value || typeof value !== 'object') return false
+
+  const candidate = value as Record<string, unknown>
+  return typeof candidate.key === 'string'
+    && typeof candidate.label === 'string'
+    && typeof candidate.status === 'string'
+    && typeof candidate.progress === 'number'
+    && (candidate.etaMinutes === null || typeof candidate.etaMinutes === 'number')
+    && (candidate.detail === null || typeof candidate.detail === 'string')
+}
+
+function parseKnowledgeRebuildSteps(payloadJson: string | null) {
+  if (!payloadJson) return [] as KnowledgeRebuildPayloadStep[]
+
+  try {
+    const payload = JSON.parse(payloadJson) as { steps?: unknown }
+    if (!Array.isArray(payload.steps)) return []
+    return payload.steps.filter(isKnowledgeRebuildPayloadStep)
+  } catch {
+    return [] as KnowledgeRebuildPayloadStep[]
+  }
+}
 
 function parseSqliteUtcTimestamp(value: string) {
   const normalized = value.trim().replace(' ', 'T')
@@ -92,6 +128,7 @@ function getKnowledgeRebuildStatus(novelIds?: string[]): KnowledgeRebuildStatus 
   const status = queryAll<KnowledgeRebuildStatusRow>(
     `
       SELECT id as jobId, novelId, status, progress, currentStep, createdAt, updatedAt
+           , payloadJson
       FROM KnowledgeJob
       WHERE novelId = ? AND jobType = 'extract_chapter_knowledge' AND status IN ('queued', 'running', 'paused')
       ORDER BY updatedAt DESC, createdAt DESC
@@ -104,9 +141,15 @@ function getKnowledgeRebuildStatus(novelIds?: string[]): KnowledgeRebuildStatus 
     return null
   }
 
+  const steps = parseKnowledgeRebuildSteps(status.payloadJson)
+  const activeStep = steps.find((step) => step.status === 'running' || step.status === 'paused') ?? null
+
   return {
     ...status,
-    etaMinutes: status.status === 'paused' ? null : estimateRebuildEtaMinutes(status.progress, status.createdAt),
+    etaMinutes: status.status === 'paused'
+      ? null
+      : activeStep?.etaMinutes ?? estimateRebuildEtaMinutes(status.progress, status.createdAt),
+    steps,
   }
 }
 
@@ -147,6 +190,47 @@ function dedupeById<T extends { id: string }>(items: T[]) {
     seen.add(item.id)
     return true
   })
+}
+
+function loadCharacterProfilesByEntityId(entityIds: string[]) {
+  if (!entityIds.length) return new Map<string, CharacterRoleCardProfile>()
+  const rows = queryAll<{ subjectEntityId: string | null; valueJson: string | null; sourceChapter: number }>(
+    `
+      SELECT subjectEntityId, valueJson, sourceChapter
+      FROM KnowledgeFact
+      WHERE factType = 'character_profile'
+        AND subjectEntityId IN (${entityIds.map(() => '?').join(', ')})
+        AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+      ORDER BY validFromChapter ASC, sourceChapter ASC
+    `,
+    ...entityIds,
+  )
+
+  const profileByEntityId = new Map<string, CharacterRoleCardProfile>()
+  for (const row of rows) {
+    const entityId = row.subjectEntityId?.trim()
+    if (!entityId || !row.valueJson) continue
+    try {
+      const parsed = JSON.parse(row.valueJson) as { profile?: unknown }
+      const profile = normalizeCharacterRoleCardProfile(parsed.profile)
+      if (!hasCharacterRoleCardProfile(profile)) continue
+      profileByEntityId.set(entityId, mergeCharacterRoleCardProfiles(profileByEntityId.get(entityId), profile))
+    } catch {
+    }
+  }
+
+  return profileByEntityId
+}
+
+function projectCharacterCompatibilityFields(profile: CharacterRoleCardProfile | undefined, status: string | null, description: string | null, importance: number) {
+  const role = profile?.identity?.summary?.trim() || (importance >= 4 ? '主要人物' : '角色')
+  const goal = profile?.capability?.summary?.trim() || profile?.likes?.summary?.trim() || '待补充'
+  const trait = profile?.personality?.summary?.trim() || (status ? `状态：${status}` : '待补充')
+  const safeProfile = profile
+  const note = safeProfile && hasCharacterRoleCardProfile(safeProfile)
+    ? buildCharacterRoleCardLines(safeProfile, { includeEvidence: false, includeNotes: true }).slice(3).join('｜')
+    : (description?.trim() || '')
+  return { role, goal, trait, note }
 }
 
 export async function buildKnowledgeProjection(novelIds?: string[]): Promise<KnowledgeViewPayload> {
@@ -255,15 +339,22 @@ export async function buildKnowledgeProjection(novelIds?: string[]): Promise<Kno
     chapterIdByNovelAndNo.set(`${chapter.novelId}:${chapter.chapterNo}`, chapter.id)
   }
 
-  const localCharacters: Character[] = entities.map((entity) => ({
-    id: entity.id,
-    novelId: entity.novelId,
-    name: entity.canonicalName,
-    role: entity.importance >= 4 ? '主要人物' : '角色',
-    goal: '待从知识库中补充',
-    trait: entity.status ? `状态：${entity.status}` : '待补充',
-    note: entity.description ?? '',
-  }))
+  const characterProfileByEntityId = loadCharacterProfilesByEntityId(entities.map((entity) => entity.id))
+
+  const localCharacters: Character[] = entities.map((entity) => {
+    const profile = characterProfileByEntityId.get(entity.id)
+    const projected = projectCharacterCompatibilityFields(profile, entity.status, entity.description, entity.importance)
+    return {
+      id: entity.id,
+      novelId: entity.novelId,
+      name: entity.canonicalName,
+      role: projected.role,
+      goal: projected.goal,
+      trait: projected.trait,
+      note: projected.note || buildCharacterDescriptionDelta(profile ?? {}, entity.description ?? ''),
+      profile,
+    }
+  })
 
   const localCharacterRelations: CharacterRelation[] = dedupeById(
     relations

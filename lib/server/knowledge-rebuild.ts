@@ -1,5 +1,12 @@
 import type { Chapter } from '@/lib/types'
-import { type ChapterKnowledgeExtraction } from '@/lib/story-knowledge'
+import {
+  buildCharacterDescriptionDelta,
+  hasCharacterRoleCardProfile,
+  mergeCharacterRoleCardProfiles,
+  normalizeCharacterRoleCardProfile,
+  type ChapterKnowledgeExtraction,
+  type CharacterRoleCardProfile,
+} from '@/lib/story-knowledge'
 import { extractChapterKnowledgeOffline } from '@/lib/server/knowledge-extraction'
 import {
   buildTextSpansFromLines,
@@ -29,6 +36,7 @@ type SnapshotCharacter = {
   aliases: string[]
   status: string
   lastSeenChapter: number
+  profile?: CharacterRoleCardProfile
 }
 
 type SnapshotRelation = {
@@ -86,15 +94,31 @@ type KnowledgeRebuildPayloadChapter = {
   extraction: ChapterKnowledgeExtraction
 }
 
+type KnowledgeRebuildStepKey = 'extract' | 'cleanup' | 'write' | 'snapshot' | 'index'
+
+type KnowledgeRebuildStepStatus = 'pending' | 'running' | 'paused' | 'completed'
+
+export type KnowledgeRebuildPayloadStep = {
+  key: KnowledgeRebuildStepKey
+  label: string
+  status: KnowledgeRebuildStepStatus
+  progress: number
+  etaMinutes: number | null
+  detail: string | null
+}
+
 type KnowledgeRebuildJobPayload = {
   branchId: string
-  phase?: 'extract' | 'cleanup' | 'write' | 'snapshot'
+  phase?: KnowledgeRebuildStepKey
   currentChapterId?: string | null
   pendingChapterIds?: string[]
   chapterWeightsById?: Record<string, number>
   totalChapterWeight?: number
   processedChapterWeight?: number
   extractedChapters?: KnowledgeRebuildPayloadChapter[]
+  totalChapterCount?: number
+  stageStartedAtByKey?: Partial<Record<KnowledgeRebuildStepKey, string>>
+  steps?: KnowledgeRebuildPayloadStep[]
 }
 
 type KnowledgeRebuildJobState = {
@@ -105,6 +129,16 @@ type KnowledgeRebuildJobState = {
   processedChapterWeight: number
   extractedChapters: KnowledgeRebuildPayloadChapter[]
   phase: KnowledgeRebuildJobPayload['phase']
+}
+
+const KNOWLEDGE_REBUILD_STEP_ORDER: KnowledgeRebuildStepKey[] = ['extract', 'cleanup', 'write', 'snapshot', 'index']
+
+const KNOWLEDGE_REBUILD_STEP_LABELS: Record<KnowledgeRebuildStepKey, string> = {
+  extract: '抽取章节知识',
+  cleanup: '清理旧知识',
+  write: '写入结构化知识',
+  snapshot: '构建章节快照',
+  index: '构建 Lance 检索索引',
 }
 
 export type KnowledgeRebuildJobOutcome = 'completed' | 'paused' | 'aborted'
@@ -159,6 +193,51 @@ function chooseConciseKnowledgeText(existing: string | null | undefined, incomin
   return left.length <= right.length ? left : right
 }
 
+function loadCharacterProfilesByEntityId(params: {
+  novelId: string
+  branchId: string
+  entityIds: string[]
+  maxChapterNo?: number
+}) {
+  if (!params.entityIds.length) {
+    return new Map<string, CharacterRoleCardProfile>()
+  }
+
+  const chapterFilter = typeof params.maxChapterNo === 'number'
+    ? 'AND validFromChapter <= ? AND (validToChapter IS NULL OR validToChapter >= ?)'
+    : ''
+  const rows = queryAll<{ subjectEntityId: string | null; valueJson: string | null; sourceChapter: number }>(
+    `
+      SELECT subjectEntityId, valueJson, sourceChapter
+      FROM KnowledgeFact
+      WHERE novelId = ? AND branchId = ? AND factType = 'character_profile'
+        AND subjectEntityId IN (${params.entityIds.map(() => '?').join(', ')})
+        AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+        ${chapterFilter}
+      ORDER BY validFromChapter ASC, sourceChapter ASC
+    `,
+    params.novelId,
+    params.branchId,
+    ...params.entityIds,
+    ...(typeof params.maxChapterNo === 'number' ? [params.maxChapterNo, params.maxChapterNo] : [])
+  )
+
+  const profileByEntityId = new Map<string, CharacterRoleCardProfile>()
+  for (const row of rows) {
+    const entityId = row.subjectEntityId?.trim()
+    if (!entityId || !row.valueJson) continue
+    try {
+      const parsed = JSON.parse(row.valueJson) as { profile?: unknown }
+      const profile = normalizeCharacterRoleCardProfile(parsed.profile)
+      if (!hasCharacterRoleCardProfile(profile)) continue
+      profileByEntityId.set(entityId, mergeCharacterRoleCardProfiles(profileByEntityId.get(entityId), profile))
+    } catch {
+    }
+  }
+
+  return profileByEntityId
+}
+
 function isGenericSnapshotRelationType(value: string) {
   const normalized = value.trim().toLocaleLowerCase('en-US')
   return !normalized
@@ -198,17 +277,180 @@ function updateKnowledgeJob(
     errorMessage?: string | null
   }
 ) {
+  let nextPayloadJson: string | null | undefined
+  if (fields.status !== undefined || fields.currentStep !== undefined || fields.progress !== undefined || fields.payload !== undefined) {
+    const currentRow = queryOne<{ status: string; currentStep: string | null; progress: number; payloadJson: string | null }>(
+      'SELECT status, currentStep, progress, payloadJson FROM KnowledgeJob WHERE id = ?',
+      jobId
+    )
+    const basePayload = fields.payload === undefined
+      ? parseKnowledgeRebuildJobPayload(currentRow?.payloadJson ?? null)
+      : normalizeKnowledgeRebuildJobPayload(fields.payload)
+
+    if (basePayload) {
+      nextPayloadJson = JSON.stringify(syncKnowledgeRebuildPayload(basePayload, {
+        status: fields.status ?? currentRow?.status ?? 'queued',
+        currentStep: fields.currentStep ?? currentRow?.currentStep ?? null,
+        progress: fields.progress ?? currentRow?.progress ?? 0,
+      }))
+    } else if (fields.payload === null) {
+      nextPayloadJson = null
+    }
+  }
+
   const entries = Object.entries(fields).flatMap<[string, SqlParam]>(([key, value]) => {
     if (value === undefined) return []
-    if (key === 'payload') return [['payloadJson', value === null ? null : JSON.stringify(value)]]
+    if (key === 'payload') return nextPayloadJson === undefined ? [] : [['payloadJson', nextPayloadJson]]
     return [[key, value as SqlParam]]
   })
+  if (fields.payload === undefined && nextPayloadJson !== undefined) {
+    entries.push(['payloadJson', nextPayloadJson])
+  }
   if (!entries.length) return
   execute(
     `UPDATE KnowledgeJob SET ${entries.map(([key]) => `${key} = ?`).join(', ')}, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
     ...entries.map(([, value]) => value ?? null),
     jobId
   )
+}
+
+function clampProgress(value: number) {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(1, value))
+}
+
+function normalizeKnowledgeRebuildJobPayload(payload: unknown) {
+  if (!payload || typeof payload !== 'object' || typeof (payload as { branchId?: unknown }).branchId !== 'string') {
+    return null
+  }
+  return payload as KnowledgeRebuildJobPayload
+}
+
+function parseStageStartedAt(value: string | undefined) {
+  if (!value) return Number.NaN
+  return Date.parse(value)
+}
+
+function estimateStageEtaMinutes(progress: number, stageStartedAt: string | undefined) {
+  if (progress <= 0.02 || progress >= 0.999) return null
+
+  const startedAt = parseStageStartedAt(stageStartedAt)
+  if (!Number.isFinite(startedAt)) return null
+
+  const elapsedMs = Date.now() - startedAt
+  if (elapsedMs <= 0) return null
+
+  const estimatedTotalMs = elapsedMs / progress
+  const remainingMs = Math.max(0, estimatedTotalMs - elapsedMs)
+  return Math.max(1, Math.ceil(remainingMs / 60000))
+}
+
+function estimateIndexStageTotalMs(totalChapterCount: number) {
+  return Math.max(30_000, 12_000 + totalChapterCount * 4_000)
+}
+
+function buildKnowledgeRebuildSteps(payload: KnowledgeRebuildJobPayload, runtime: {
+  status: string
+  currentStep: string | null
+  progress: number
+}): KnowledgeRebuildPayloadStep[] {
+  const phase = payload.phase ?? 'extract'
+  const totalChapterWeight = Math.max(0, payload.totalChapterWeight ?? 0)
+  const processedChapterWeight = Math.max(0, payload.processedChapterWeight ?? 0)
+  const extractedChapters = Array.isArray(payload.extractedChapters) ? payload.extractedChapters : []
+  const totalChapterCount = Math.max(
+    0,
+    payload.totalChapterCount
+      ?? ((payload.pendingChapterIds?.length ?? 0) + extractedChapters.length)
+  )
+  const stageStartedAtByKey = payload.stageStartedAtByKey ?? {}
+  const currentPhaseIndex = KNOWLEDGE_REBUILD_STEP_ORDER.indexOf(phase)
+  const currentPhaseOrder = currentPhaseIndex >= 0 ? currentPhaseIndex : 0
+  const extractProgress = totalChapterWeight > 0
+    ? clampProgress(processedChapterWeight / totalChapterWeight)
+    : phase === 'extract'
+      ? clampProgress(runtime.progress)
+      : 0
+  const writeCompletedCount = Math.max(0, totalChapterCount - extractedChapters.length)
+  const writeProgress = totalChapterCount > 0
+    ? clampProgress(writeCompletedCount / totalChapterCount)
+    : phase === 'write'
+      ? clampProgress(runtime.progress)
+      : 0
+  const indexStartedAt = stageStartedAtByKey.index
+  const indexTotalMs = estimateIndexStageTotalMs(totalChapterCount)
+  const indexElapsedMs = Number.isFinite(parseStageStartedAt(indexStartedAt))
+    ? Math.max(0, Date.now() - parseStageStartedAt(indexStartedAt))
+    : 0
+  const activeIndexProgress = clampProgress(indexElapsedMs / indexTotalMs)
+  const activeIndexEtaMinutes = runtime.status === 'paused'
+    ? null
+    : Math.max(1, Math.ceil(Math.max(0, indexTotalMs - indexElapsedMs) / 60000))
+
+  return KNOWLEDGE_REBUILD_STEP_ORDER.map((key, index) => {
+    const isCurrent = index === currentPhaseOrder
+    let status: KnowledgeRebuildStepStatus = 'pending'
+    if (runtime.status === 'succeeded' || index < currentPhaseOrder) {
+      status = 'completed'
+    } else if (isCurrent) {
+      status = runtime.status === 'paused' ? 'paused' : 'running'
+    }
+
+    let progress = 0
+    let etaMinutes: number | null = null
+    if (key === 'extract') {
+      progress = status === 'completed' ? 1 : extractProgress
+      etaMinutes = status === 'running' ? estimateStageEtaMinutes(progress, stageStartedAtByKey.extract) : null
+    } else if (key === 'cleanup') {
+      progress = status === 'completed' ? 1 : (phase === 'cleanup' ? 0.35 : 0)
+    } else if (key === 'write') {
+      progress = status === 'completed' ? 1 : writeProgress
+      etaMinutes = status === 'running' ? estimateStageEtaMinutes(progress, stageStartedAtByKey.write) : null
+    } else if (key === 'snapshot') {
+      progress = status === 'completed' ? 1 : (phase === 'snapshot' ? 0.55 : 0)
+    } else if (key === 'index') {
+      progress = status === 'completed' ? 1 : (phase === 'index' ? activeIndexProgress : 0)
+      etaMinutes = status === 'running' ? activeIndexEtaMinutes : null
+    }
+
+    return {
+      key,
+      label: KNOWLEDGE_REBUILD_STEP_LABELS[key],
+      status,
+      progress: clampProgress(progress),
+      etaMinutes,
+      detail: isCurrent ? runtime.currentStep : null,
+    }
+  })
+}
+
+function syncKnowledgeRebuildPayload(payload: KnowledgeRebuildJobPayload, runtime: {
+  status: string
+  currentStep: string | null
+  progress: number
+}) {
+  const phase = payload.phase ?? 'extract'
+  const stageStartedAtByKey = {
+    ...(payload.stageStartedAtByKey ?? {}),
+  }
+  if (!stageStartedAtByKey[phase]) {
+    stageStartedAtByKey[phase] = new Date().toISOString()
+  }
+
+  const syncedPayload: KnowledgeRebuildJobPayload = {
+    ...payload,
+    phase,
+    totalChapterWeight: Math.max(0, payload.totalChapterWeight ?? 0),
+    processedChapterWeight: Math.max(0, payload.processedChapterWeight ?? 0),
+    totalChapterCount: Math.max(
+      0,
+      payload.totalChapterCount
+        ?? ((payload.pendingChapterIds?.length ?? 0) + (payload.extractedChapters?.length ?? 0))
+    ),
+    stageStartedAtByKey,
+  }
+  syncedPayload.steps = buildKnowledgeRebuildSteps(syncedPayload, runtime)
+  return syncedPayload
 }
 
 function getChapterProgressWeight(rawText: string | null) {
@@ -220,11 +462,7 @@ function parseKnowledgeRebuildJobPayload(payloadJson: string | null) {
   if (!payloadJson) return null
 
   try {
-    const payload = JSON.parse(payloadJson) as KnowledgeRebuildJobPayload
-    if (!payload || typeof payload !== 'object' || typeof payload.branchId !== 'string') {
-      return null
-    }
-    return payload
+    return normalizeKnowledgeRebuildJobPayload(JSON.parse(payloadJson))
   } catch {
     return null
   }
@@ -290,9 +528,14 @@ function initializeKnowledgeRebuildJobState(jobId: string, payload: KnowledgeReb
       pendingChapterIds,
       chapterWeightsById,
       totalChapterWeight,
+      totalChapterCount: Math.max(0, payload.totalChapterCount ?? pendingChapterIds.length),
       currentChapterId: payload.currentChapterId ?? null,
       processedChapterWeight: Math.max(0, payload.processedChapterWeight ?? 0),
       extractedChapters: payload.extractedChapters ?? [],
+      stageStartedAtByKey: {
+        ...(payload.stageStartedAtByKey ?? {}),
+        [payload.phase ?? 'extract']: (payload.stageStartedAtByKey ?? {})[payload.phase ?? 'extract'] ?? new Date().toISOString(),
+      },
     },
   })
 }
@@ -438,6 +681,11 @@ function setKnowledgeRebuildJobPhase(jobId: string, phase: NonNullable<Knowledge
       totalChapterWeight: state.totalChapterWeight,
       processedChapterWeight: state.processedChapterWeight,
       extractedChapters: state.extractedChapters,
+      totalChapterCount: state.payload.totalChapterCount ?? (state.pendingChapterIds.length + state.extractedChapters.length),
+      stageStartedAtByKey: {
+        ...(state.payload.stageStartedAtByKey ?? {}),
+        [phase]: (state.payload.stageStartedAtByKey ?? {})[phase] ?? new Date().toISOString(),
+      },
     },
   })
 
@@ -886,6 +1134,27 @@ async function persistChapterExtraction(params: {
       params.chapterNo,
       params.chapterNo
     )
+
+    if (hasCharacterRoleCardProfile(item.profile)) {
+      execute(
+        `
+          INSERT INTO KnowledgeFact (
+            id, novelId, branchId, factType, subjectEntityId, predicate, valueJson, sourceChapter, validFromChapter
+          )
+          VALUES (?, ?, ?, 'character_profile', ?, 'role_card', ?, ?, ?)
+        `,
+        uid('fact-profile'),
+        params.novelId,
+        params.branchId,
+        entityId,
+        JSON.stringify({
+          profile: item.profile,
+          descriptionDelta: buildCharacterDescriptionDelta(item.profile, item.descriptionDelta),
+        }),
+        params.chapterNo,
+        params.chapterNo
+      )
+    }
   }
 
   for (const relation of params.extraction.relations) {
@@ -1224,6 +1493,12 @@ async function buildSnapshotsForNovel(params: { novelId: string; branchId: strin
       current.push(alias.alias)
       aliasesByEntityId.set(alias.entityId, current)
     }
+    const profileByEntityId = loadCharacterProfilesByEntityId({
+      novelId: params.novelId,
+      branchId: params.branchId,
+      entityIds,
+      maxChapterNo: chapter.chapterNo,
+    })
 
     const activeStates = entityIds.length
       ? queryAll<{
@@ -1333,6 +1608,7 @@ async function buildSnapshotsForNovel(params: { novelId: string; branchId: strin
       aliases: aliasesByEntityId.get(entity.id) ?? [],
       status: latestStateByEntityId.get(entity.id) ?? '活跃',
       lastSeenChapter: entity.lastSeenChapter ? Math.min(entity.lastSeenChapter, chapter.chapterNo) : chapter.chapterNo,
+      profile: hasCharacterRoleCardProfile(profileByEntityId.get(entity.id)) ? profileByEntityId.get(entity.id) : undefined,
     }))
     const dedupedRelations = new Map<string, SnapshotRelation>()
     for (const relation of relations) {
@@ -1461,8 +1737,12 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
         pendingChapterIds: chapters.map((chapter) => chapter.id),
         chapterWeightsById,
         totalChapterWeight,
+        totalChapterCount: chapters.length,
         processedChapterWeight: 0,
         extractedChapters: [],
+        stageStartedAtByKey: {
+          extract: new Date().toISOString(),
+        },
       })
       jobState = getKnowledgeRebuildJobState(job.id)
     }
@@ -1591,6 +1871,7 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
       break
     }
 
+    setKnowledgeRebuildJobPhase(job.id, 'index')
     updateKnowledgeJob(job.id, { currentStep: '构建 Lance 检索索引', progress: 0.96 })
     assertKnowledgeRebuildContinues(job.id)
     await rebuildBranchRetrievalIndex(params.novelId, branchId)
@@ -1616,8 +1897,10 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
           pendingChapterIds: [],
           chapterWeightsById: {},
           totalChapterWeight: 0,
+          totalChapterCount: 0,
           processedChapterWeight: 0,
           extractedChapters: [],
+          stageStartedAtByKey: {},
         },
       })
       return { jobId: job.id, outcome: 'aborted' as const }
