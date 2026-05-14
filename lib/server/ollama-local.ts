@@ -1,4 +1,13 @@
-import type { ChapterKnowledgeExtraction, KnowledgeEvidence } from '@/lib/story-knowledge'
+import {
+  buildCharacterDescriptionDelta,
+  normalizeCharacterRoleCardProfile,
+  type ChapterKnowledgeExtraction,
+  type CharacterRoleCardFacet,
+  type CharacterRoleCardProfile,
+  type KnowledgeEvidence,
+} from '@/lib/story-knowledge'
+import type { AIScenarioKey, OllamaProviderSettings } from '@/lib/types'
+import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { findAppSettings } from '@/lib/server/persistence'
 
 type OllamaTagsResponse = {
@@ -134,6 +143,83 @@ export const EXTRACTION_SCHEMA = {
           aliases: { type: 'array', items: { type: 'string' } },
           status: { type: 'string' },
           description_delta: { type: 'string' },
+          profile: {
+            type: 'object',
+            properties: {
+              personality: {
+                type: 'object',
+                properties: {
+                  summary: { type: 'string' },
+                  note: { type: 'string' },
+                  evidence: { type: 'string' },
+                },
+                required: ['summary'],
+              },
+              gender: {
+                type: 'object',
+                properties: {
+                  summary: { type: 'string' },
+                  note: { type: 'string' },
+                  evidence: { type: 'string' },
+                },
+                required: ['summary'],
+              },
+              identity: {
+                type: 'object',
+                properties: {
+                  summary: { type: 'string' },
+                  note: { type: 'string' },
+                  evidence: { type: 'string' },
+                },
+                required: ['summary'],
+              },
+              capability: {
+                type: 'object',
+                properties: {
+                  summary: { type: 'string' },
+                  note: { type: 'string' },
+                  evidence: { type: 'string' },
+                },
+                required: ['summary'],
+              },
+              appearance: {
+                type: 'object',
+                properties: {
+                  summary: { type: 'string' },
+                  note: { type: 'string' },
+                  evidence: { type: 'string' },
+                },
+                required: ['summary'],
+              },
+              clothing: {
+                type: 'object',
+                properties: {
+                  summary: { type: 'string' },
+                  note: { type: 'string' },
+                  evidence: { type: 'string' },
+                },
+                required: ['summary'],
+              },
+              speakingStyle: {
+                type: 'object',
+                properties: {
+                  summary: { type: 'string' },
+                  note: { type: 'string' },
+                  evidence: { type: 'string' },
+                },
+                required: ['summary'],
+              },
+              likes: {
+                type: 'object',
+                properties: {
+                  summary: { type: 'string' },
+                  note: { type: 'string' },
+                  evidence: { type: 'string' },
+                },
+                required: ['summary'],
+              },
+            },
+          },
           evidence: {
             type: 'array',
             items: {
@@ -147,7 +233,7 @@ export const EXTRACTION_SCHEMA = {
             },
           },
         },
-        required: ['name', 'aliases', 'status', 'description_delta', 'evidence'],
+        required: ['name', 'aliases', 'status', 'description_delta', 'profile', 'evidence'],
       },
     },
     relations: {
@@ -370,6 +456,77 @@ function stringifyLooseValue(value: unknown): string {
   return ''
 }
 
+function buildFacet(summary: string, note?: string, evidence?: string): CharacterRoleCardFacet | undefined {
+  const normalizedSummary = summary.trim()
+  if (!normalizedSummary) return undefined
+  const normalizedNote = note?.trim() || ''
+  const normalizedEvidence = evidence?.trim() || ''
+  return {
+    summary: normalizedSummary,
+    note: normalizedNote || undefined,
+    evidence: normalizedEvidence || undefined,
+  }
+}
+
+function buildEvidenceSnippet(evidence: KnowledgeEvidence[]) {
+  return evidence[0]?.quote?.trim() || ''
+}
+
+function normasecondSampleProfileFacet(raw: unknown): CharacterRoleCardFacet | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const record = raw as Record<string, unknown>
+  const summary = typeof record.summary === 'string' ? record.summary.trim() : ''
+  const note = typeof record.note === 'string' ? record.note.trim() : ''
+  const evidence = typeof record.evidence === 'string' ? record.evidence.trim() : ''
+  return buildFacet(summary, note, evidence)
+}
+
+function buildProfileFromLooseRecord(record: Record<string, unknown>, evidence: KnowledgeEvidence[]): CharacterRoleCardProfile {
+  const evidenceSnippet = buildEvidenceSnippet(evidence)
+  return normalizeCharacterRoleCardProfile({
+    personality: buildFacet(
+      stringifyLooseValue(record.personality ?? record.personality_traits ?? record.traits),
+      stringifyLooseValue(record.personality_note),
+      evidenceSnippet,
+    ),
+    gender: buildFacet(
+      stringifyLooseValue(record.gender ?? record.sex),
+      stringifyLooseValue(record.gender_note),
+      evidenceSnippet,
+    ),
+    identity: buildFacet(
+      stringifyLooseValue(record.identity ?? record.role ?? record.background ?? record.title ?? record.guild_name),
+      stringifyLooseValue(record.identity_note ?? record.background_note),
+      evidenceSnippet,
+    ),
+    capability: buildFacet(
+      stringifyLooseValue(record.capability ?? record.special_ability ?? record.power ?? record.abilities ?? record.achievements),
+      stringifyLooseValue(record.capability_note ?? record.power_note),
+      evidenceSnippet,
+    ),
+    appearance: buildFacet(
+      stringifyLooseValue(record.appearance ?? record.looks),
+      stringifyLooseValue(record.appearance_note),
+      evidenceSnippet,
+    ),
+    clothing: buildFacet(
+      stringifyLooseValue(record.clothing ?? record.outfit ?? record.dress),
+      stringifyLooseValue(record.clothing_note),
+      evidenceSnippet,
+    ),
+    speakingStyle: buildFacet(
+      stringifyLooseValue(record.speaking_style ?? record.speakingStyle ?? record.voice ?? record.dialogue_style),
+      stringifyLooseValue(record.speaking_style_note ?? record.voice_note),
+      evidenceSnippet,
+    ),
+    likes: buildFacet(
+      stringifyLooseValue(record.likes ?? record.preferences ?? record.hobbies),
+      stringifyLooseValue(record.likes_note ?? record.preferences_note),
+      evidenceSnippet,
+    ),
+  })
+}
+
 function isLikelyCharacterCategory(category: string) {
   const normalized = category.trim().toLowerCase()
   return normalized.includes('人物')
@@ -432,20 +589,13 @@ function normalizeNarrativeProfileExtraction(record: Record<string, unknown>, ch
   if (mainCharacter) {
     const name = typeof mainCharacter.name === 'string' ? mainCharacter.name.trim() : ''
     if (name) {
+      const profile = buildProfileFromLooseRecord(mainCharacter, topLevelEvidence)
       characters.push({
         name,
         aliases: [],
         status: '活跃',
-        descriptionDelta: stringifyLooseValue({
-          role: mainCharacter.role,
-          guild_name: mainCharacter.guild_name,
-          title: mainCharacter.title,
-          identity: mainCharacter.identity,
-          special_ability: mainCharacter.special_ability,
-          achievements: mainCharacter.achievements,
-          appearance: mainCharacter.appearance,
-          personality_traits: mainCharacter.personality_traits,
-        }),
+        descriptionDelta: buildCharacterDescriptionDelta(profile, stringifyLooseValue(mainCharacter.identity ?? mainCharacter.role)),
+        profile,
         evidence: topLevelEvidence,
       })
     }
@@ -573,11 +723,13 @@ function normalizeLooseArrayExtraction(items: unknown[], chapterNo: number): Cha
     }
 
     if (isLikelyCharacterCategory(category)) {
+      const profile = buildProfileFromLooseRecord(row, evidence)
       characters.push({
         name,
         aliases: [],
         status: typeof row.status === 'string' ? row.status.trim() : '活跃',
-        descriptionDelta: description,
+        descriptionDelta: buildCharacterDescriptionDelta(profile, description),
+        profile,
         evidence,
       })
       continue
@@ -662,6 +814,22 @@ export function normalizeKnowledgeExtraction(raw: unknown, chapterNo: number): C
             const row = item as Record<string, unknown>
             const name = typeof row.name === 'string' ? row.name.trim() : ''
             if (!name) return null
+            const evidence = normalizeEvidence(row.evidence)
+            const profileRecord = row.profile && typeof row.profile === 'object' && !Array.isArray(row.profile)
+              ? row.profile as Record<string, unknown>
+              : {}
+            const profile = normalizeCharacterRoleCardProfile({
+              personality: normasecondSampleProfileFacet(profileRecord.personality ?? row.personality),
+              gender: normasecondSampleProfileFacet(profileRecord.gender ?? row.gender),
+              identity: normasecondSampleProfileFacet(profileRecord.identity ?? row.identity),
+              capability: normasecondSampleProfileFacet(profileRecord.capability ?? row.capability),
+              appearance: normasecondSampleProfileFacet(profileRecord.appearance ?? row.appearance),
+              clothing: normasecondSampleProfileFacet(profileRecord.clothing ?? row.clothing),
+              speakingStyle: normasecondSampleProfileFacet(profileRecord.speakingStyle ?? row.speaking_style ?? row.speakingStyle),
+              likes: normasecondSampleProfileFacet(profileRecord.likes ?? row.likes),
+            })
+            const looseProfile = buildProfileFromLooseRecord(row, evidence)
+            const finalProfile = normalizeCharacterRoleCardProfile({ ...looseProfile, ...profile })
             return {
               name,
               aliases: Array.isArray(row.aliases) ? row.aliases.map((alias) => String(alias).trim()).filter(Boolean) : [],
@@ -672,8 +840,9 @@ export function normalizeKnowledgeExtraction(raw: unknown, chapterNo: number): C
                   ? row.descriptionDelta.trim()
                   : typeof row.description === 'string'
                     ? row.description.trim()
-                  : '',
-              evidence: normalizeEvidence(row.evidence),
+                  : buildCharacterDescriptionDelta(finalProfile),
+              profile: finalProfile,
+              evidence,
             }
           })
           .filter((item): item is ChapterKnowledgeExtraction['characters'][number] => Boolean(item))
@@ -776,21 +945,17 @@ export function normalizeKnowledgeExtraction(raw: unknown, chapterNo: number): C
   }
 }
 
-function getStoredOllamaSettings() {
-  const entries = findAppSettings([
-    'OLLAMA_BASE_URL',
-    'OLLAMA_REWRITE_MODEL',
-    'OLLAMA_MODEL',
-    'OLLAMA_EMBEDDING_MODEL',
-    'OLLAMA_TIMEOUT_MS',
-  ])
-  const map = Object.fromEntries(entries.map((item) => [item.key, item.value]))
+function getStoredOllamaTimeout() {
+  const timeoutEntry = findAppSettings(['OLLAMA_TIMEOUT_MS'])[0]?.value
+  return parsePositiveInt(timeoutEntry ?? process.env.OLLAMA_TIMEOUT_MS, DEFAULT_TIMEOUT_MS)
+}
+
+function getStoredOllamaSettings(scenario: AIScenarioKey = 'knowledgeExtraction') {
+  const settings = loadStoredAISettings()[scenario].ollama
   return {
-    baseUrl: map.OLLAMA_BASE_URL?.trim() || process.env.OLLAMA_BASE_URL?.trim() || DEFAULT_BASE_URL,
-    rewriteModel: (map.OLLAMA_REWRITE_MODEL ?? process.env.OLLAMA_REWRITE_MODEL ?? '').trim(),
-    model: (map.OLLAMA_MODEL ?? process.env.OLLAMA_MODEL ?? '').trim(),
-    embeddingModel: (map.OLLAMA_EMBEDDING_MODEL ?? process.env.OLLAMA_EMBEDDING_MODEL ?? '').trim(),
-    timeoutMs: parsePositiveInt(map.OLLAMA_TIMEOUT_MS ?? process.env.OLLAMA_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
+    baseUrl: settings.baseUrl.trim() || DEFAULT_BASE_URL,
+    model: settings.model.trim(),
+    timeoutMs: getStoredOllamaTimeout(),
   }
 }
 
@@ -823,7 +988,7 @@ async function listAvailableOllamaModels(
   baseUrlOverride?: string,
   purpose: 'text' | 'embedding' = 'text'
 ): Promise<{ baseUrl: string; models: OllamaModelOption[] }> {
-  const stored = getStoredOllamaSettings()
+  const stored = getStoredOllamaSettings(purpose === 'embedding' ? 'embeddings' : 'knowledgeExtraction')
   const baseUrl = (baseUrlOverride?.trim() || stored.baseUrl).replace(/\/$/, '')
   const tags = await fetchOllamaTags(baseUrl)
   const candidates = (tags.models ?? [])
@@ -875,10 +1040,12 @@ export async function listAvailableOllamaEmbeddingModels(baseUrlOverride?: strin
   return listAvailableOllamaModels(baseUrlOverride, 'embedding')
 }
 
-async function resolveOllamaTextConfig(configuredModel: string | null | undefined, emptyReason: string): Promise<OllamaConfig> {
-  const stored = getStoredOllamaSettings()
-  const baseUrl = stored.baseUrl
-  const timeoutMs = stored.timeoutMs
+async function resolveOllamaTextConfig(
+  baseUrl: string,
+  timeoutMs: number,
+  configuredModel: string | null | undefined,
+  emptyReason: string
+): Promise<OllamaConfig> {
 
   let detectedModels: string[] = []
   try {
@@ -923,19 +1090,29 @@ async function resolveOllamaTextConfig(configuredModel: string | null | undefine
   }
 }
 
-async function getOllamaExtractionConfig(): Promise<OllamaConfig> {
-  const stored = getStoredOllamaSettings()
-  return resolveOllamaTextConfig(stored.model, 'No local Ollama text generation model found')
+async function getOllamaExtractionConfig(configOverride?: Partial<OllamaProviderSettings>): Promise<OllamaConfig> {
+  const stored = getStoredOllamaSettings('knowledgeExtraction')
+  return resolveOllamaTextConfig(
+    configOverride?.baseUrl?.trim() || stored.baseUrl,
+    stored.timeoutMs,
+    configOverride?.model ?? stored.model,
+    'No local Ollama text generation model found'
+  )
 }
 
-async function getOllamaRewriteConfig(): Promise<OllamaConfig> {
-  const stored = getStoredOllamaSettings()
-  return resolveOllamaTextConfig(stored.rewriteModel, 'No local Ollama rewrite model found')
+async function getOllamaRewriteConfig(configOverride?: Partial<OllamaProviderSettings>): Promise<OllamaConfig> {
+  const stored = getStoredOllamaSettings('rewrite')
+  return resolveOllamaTextConfig(
+    configOverride?.baseUrl?.trim() || stored.baseUrl,
+    stored.timeoutMs,
+    configOverride?.model ?? stored.model,
+    'No local Ollama rewrite model found'
+  )
 }
 
-async function getOllamaEmbeddingConfig(): Promise<OllamaConfig> {
-  const stored = getStoredOllamaSettings()
-  const baseUrl = stored.baseUrl
+async function getOllamaEmbeddingConfig(configOverride?: Partial<OllamaProviderSettings>): Promise<OllamaConfig> {
+  const stored = getStoredOllamaSettings('embeddings')
+  const baseUrl = configOverride?.baseUrl?.trim() || stored.baseUrl
   const timeoutMs = stored.timeoutMs
 
   let detectedModels: OllamaModelOption[] = []
@@ -952,7 +1129,7 @@ async function getOllamaEmbeddingConfig(): Promise<OllamaConfig> {
     }
   }
 
-  const configuredModel = stored.embeddingModel.trim()
+  const configuredModel = (configOverride?.model ?? stored.model).trim()
   const preferredModel = configuredModel || detectedModels[0]?.id || null
   if (!preferredModel) {
     return {
@@ -972,8 +1149,11 @@ async function getOllamaEmbeddingConfig(): Promise<OllamaConfig> {
   }
 }
 
-export async function embedTextsWithOllama(input: string | string[]): Promise<OllamaEmbeddingResult> {
-  const config = await getOllamaEmbeddingConfig()
+export async function embedTextsWithOllama(
+  input: string | string[],
+  configOverride?: Partial<OllamaProviderSettings>
+): Promise<OllamaEmbeddingResult> {
+  const config = await getOllamaEmbeddingConfig(configOverride)
   if (!config.enabled || !config.model) {
     return {
       enabled: false,
@@ -1080,8 +1260,8 @@ export function buildKnowledgeExtractionPrompt(
     .join('\n')
 
   if (mode === 'focused') {
-    return [
-      `任务：只基于第 ${chapterNo} 章内容，补充抽取人物关系、世界设定和未解决线索。`,
+      return [
+        `任务：只基于第 ${chapterNo} 章内容，补充抽取人物关系、世界设定和未解决线索。`,
       '只返回 1 个 JSON 对象。不要返回顶层数组。不要解释。不要输出 markdown。',
       '固定字段只能是：chapter_no、summary、characters、relations、events、worldbuilding、open_threads。',
       '本轮重点只抽取 relations、worldbuilding、open_threads。summary 可以简短；characters 和 events 若无必要一律返回空数组。',
@@ -1103,10 +1283,13 @@ export function buildKnowledgeExtractionPrompt(
     '只返回 1 个 JSON 对象。不要返回顶层数组。不要解释。不要输出 markdown。',
     '固定字段只能是：chapter_no、summary、characters、relations、events、worldbuilding、open_threads。',
     '如果某一类无法确定，就返回空数组，不要编造。',
+    'characters.profile 必须是精简的人物角色卡。只保留文本中能直接支持的要点；不要写成长段；不确定就省略该字段。',
+    'characters.profile 可包含：personality、gender、identity、capability、appearance、clothing、speakingStyle、likes。每个字段都是 { summary, note?, evidence? }；summary 最多一句短语，note/evidence 仅在有必要时填写。',
+    '优先抽取身份背景、能力/战力、外形、衣着、说话风格与偏好，保持精确、克制、可用于后续人物扮演。',
     'evidence 字段固定使用 quote、line_start、line_end。不要使用 text、content 或其他字段名。',
     truncated ? `本次仅提供前 ${EXTRACTION_MAX_PROMPT_LINES} 行节选。不要猜测未提供的后续内容。` : '本次提供完整章节内容。',
     '最小示例：',
-    '{"chapter_no":1,"summary":"一句话总结","characters":[{"name":"林澄","aliases":[],"status":"活跃","description_delta":"主角","evidence":[{"quote":"林澄开口说话。","line_start":1,"line_end":1}]}],"relations":[],"events":[],"worldbuilding":[],"open_threads":[]}',
+    '{"chapter_no":1,"summary":"一句话总结","characters":[{"name":"林澄","aliases":[],"status":"活跃","description_delta":"没落家族出身的学徒｜擅长火系法术","profile":{"identity":{"summary":"没落家族出身的学徒"},"capability":{"summary":"擅长火系法术"},"speakingStyle":{"summary":"说话直接克制","evidence":"林澄压低声音，只说重点。"}},"evidence":[{"quote":"林澄压低声音，只说重点。","line_start":1,"line_end":1}]}],"relations":[],"events":[],"worldbuilding":[],"open_threads":[]}',
     `章节标题：${chapterTitle}`,
     '章节正文（带行号）：',
     numberedLines,
@@ -1565,8 +1748,8 @@ export async function extractChapterKnowledgeWithOllama(params: {
   chapterNo: number
   rawText: string
   mode?: KnowledgeExtractionPromptMode
-}): Promise<OllamaExtractionResult> {
-  const config = await getOllamaExtractionConfig()
+}, configOverride?: Partial<OllamaProviderSettings>): Promise<OllamaExtractionResult> {
+  const config = await getOllamaExtractionConfig(configOverride)
   if (!config.enabled || !config.model) {
     return {
       enabled: false,
@@ -1646,19 +1829,6 @@ export async function extractChapterKnowledgeWithOllama(params: {
     model: config.model,
     error: lastError,
   }
-}
-
-function chunkTextStream(text: string) {
-  const encoder = new TextEncoder()
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      const chunks = text.split(/(。|！|？|\n)/).filter(Boolean)
-      for (const chunk of chunks) {
-        controller.enqueue(encoder.encode(chunk))
-      }
-      controller.close()
-    },
-  })
 }
 
 function buildOllamaChatRequestBody(params: {
@@ -1744,8 +1914,11 @@ async function requestOllamaChatStream(params: {
   }
 }
 
-export async function generateRewriteWithOllama(input: OllamaRewriteRequest): Promise<OllamaRewriteResult> {
-  const config = await getOllamaRewriteConfig()
+export async function generateRewriteWithOllama(
+  input: OllamaRewriteRequest,
+  configOverride?: Partial<OllamaProviderSettings>
+): Promise<OllamaRewriteResult> {
+  const config = await getOllamaRewriteConfig(configOverride)
   if (!config.enabled || !config.model) {
     return { enabled: false, error: config.reason ?? 'Ollama rewrite config not set' }
   }
@@ -1819,8 +1992,11 @@ export async function generateRewriteWithOllama(input: OllamaRewriteRequest): Pr
   }
 }
 
-export async function streamRewriteWithOllama(input: OllamaStreamRewriteRequest): Promise<OllamaStreamRewriteResult> {
-  const config = await getOllamaRewriteConfig()
+export async function streamRewriteWithOllama(
+  input: OllamaStreamRewriteRequest,
+  configOverride?: Partial<OllamaProviderSettings>
+): Promise<OllamaStreamRewriteResult> {
+  const config = await getOllamaRewriteConfig(configOverride)
   if (!config.enabled || !config.model) {
     return { enabled: false, error: config.reason ?? 'Ollama rewrite config not set' }
   }

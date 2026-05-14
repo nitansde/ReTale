@@ -1,5 +1,6 @@
-import { findAppSettings } from '@/lib/server/persistence'
+import type { AIScenarioKey, OpenAICompatibleProviderSettings } from '@/lib/types'
 import type { ChapterKnowledgeExtraction } from '@/lib/story-knowledge'
+import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import {
   buildKnowledgeExtractionPrompt,
   hasUsableKnowledgeExtraction,
@@ -67,6 +68,20 @@ type OpenAICompatibleModelsResponse = {
   data?: unknown
 }
 
+type OpenAICompatibleEmbeddingsResponse = {
+  data?: Array<{
+    embedding?: unknown
+  }>
+  model?: string
+}
+
+export type OpenAICompatibleEmbeddingResult = {
+  enabled: boolean
+  embeddings?: number[][]
+  model?: string
+  error?: string
+}
+
 export function normalizeOpenAICompatibleBaseUrl(input: string) {
   const trimmed = input.trim().replace(/\/$/, '')
   if (!trimmed) {
@@ -103,14 +118,14 @@ export function normalizeOpenAICompatibleBaseUrl(input: string) {
   throw new Error('Remote OpenAI-compatible Base URL must use HTTPS')
 }
 
-async function getConfig() {
-  const entries = findAppSettings(['OPENAI_COMPATIBLE_BASE_URL', 'OPENAI_COMPATIBLE_API_KEY', 'OPENAI_COMPATIBLE_MODEL'])
-
-  const map = Object.fromEntries(entries.map((item) => [item.key, item.value]))
-
-  const rawBaseUrl = (map.OPENAI_COMPATIBLE_BASE_URL ?? process.env.OPENAI_COMPATIBLE_BASE_URL ?? '').trim()
-  const apiKey = (map.OPENAI_COMPATIBLE_API_KEY ?? process.env.OPENAI_COMPATIBLE_API_KEY ?? '').trim()
-  const model = (map.OPENAI_COMPATIBLE_MODEL ?? process.env.OPENAI_COMPATIBLE_MODEL ?? '').trim()
+function getConfig(
+  scenario: AIScenarioKey,
+  override?: Partial<OpenAICompatibleProviderSettings>
+) {
+  const stored = loadStoredAISettings()[scenario].openAICompatible
+  const rawBaseUrl = (override?.baseUrl?.trim() || stored.baseUrl || '').trim()
+  const apiKey = (override?.apiKey?.trim() || stored.apiKey || '').trim()
+  const model = (override?.model?.trim() || stored.model || '').trim()
   let baseUrl = ''
 
   try {
@@ -150,8 +165,9 @@ function normalizeOpenAICompatibleModelItem(item: unknown): OpenAICompatibleMode
 export async function listAvailableOpenAICompatibleModels(
   baseUrlOverride?: string,
   apiKeyOverride?: string,
+  scenario: AIScenarioKey = 'rewrite',
 ): Promise<{ baseUrl: string; models: OpenAICompatibleModelOption[] }> {
-  const stored = await getConfig()
+  const stored = getConfig(scenario)
   const rawBaseUrl = baseUrlOverride?.trim() || stored.baseUrl
   if (!rawBaseUrl) {
     return { baseUrl: '', models: [] }
@@ -260,8 +276,8 @@ export async function extractChapterKnowledgeWithOpenAICompatible(params: {
   chapterNo: number
   rawText: string
   mode?: KnowledgeExtractionPromptMode
-}): Promise<OpenAICompatibleExtractionResult> {
-  const config = await getConfig()
+}, configOverride?: Partial<OpenAICompatibleProviderSettings>): Promise<OpenAICompatibleExtractionResult> {
+  const config = getConfig('knowledgeExtraction', configOverride)
   if (!config.enabled) {
     return { enabled: false, error: 'OpenAI-compatible config not set' }
   }
@@ -345,8 +361,11 @@ export async function extractChapterKnowledgeWithOpenAICompatible(params: {
   }
 }
 
-export async function generateRewriteWithOpenAICompatible(input: RewriteRequest): Promise<RewriteResult> {
-  const config = await getConfig()
+export async function generateRewriteWithOpenAICompatible(
+  input: RewriteRequest,
+  configOverride?: Partial<OpenAICompatibleProviderSettings>
+): Promise<RewriteResult> {
+  const config = getConfig('rewrite', configOverride)
   if (!config.enabled) {
     return { enabled: false, error: 'OpenAI-compatible config not set' }
   }
@@ -433,8 +452,11 @@ export async function generateRewriteWithOpenAICompatible(input: RewriteRequest)
   }
 }
 
-export async function streamRewriteWithOpenAICompatible(input: StreamRewriteRequest): Promise<StreamRewriteResult> {
-  const config = await getConfig()
+export async function streamRewriteWithOpenAICompatible(
+  input: StreamRewriteRequest,
+  configOverride?: Partial<OpenAICompatibleProviderSettings>
+): Promise<StreamRewriteResult> {
+  const config = getConfig('rewrite', configOverride)
   if (!config.enabled) {
     return { enabled: false, error: 'OpenAI-compatible config not set' }
   }
@@ -549,4 +571,79 @@ export async function streamRewriteWithOpenAICompatible(input: StreamRewriteRequ
 
 export function buildFallbackRewriteStream(text: string) {
   return chunkTextStream(text)
+}
+
+export async function embedTextsWithOpenAICompatible(
+  input: string | string[],
+  configOverride?: Partial<OpenAICompatibleProviderSettings>
+): Promise<OpenAICompatibleEmbeddingResult> {
+  const config = getConfig('embeddings', configOverride)
+  if (!config.enabled) {
+    return { enabled: false, error: 'OpenAI-compatible config not set' }
+  }
+
+  const normalizedInput = (Array.isArray(input) ? input : [input])
+    .map((item) => item.trim())
+    .filter(Boolean)
+
+  if (!normalizedInput.length) {
+    return {
+      enabled: true,
+      embeddings: [],
+      model: config.model,
+    }
+  }
+
+  const controller = new AbortController()
+  const timeoutMs = 30000
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/embeddings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.model,
+        input: Array.isArray(input) ? normalizedInput : normalizedInput[0],
+        encoding_format: 'float',
+      }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      return { enabled: true, model: config.model, error: `HTTP ${response.status}` }
+    }
+
+    const data = await response.json() as OpenAICompatibleEmbeddingsResponse
+    const embeddings = Array.isArray(data.data)
+      ? data.data
+          .map((item) => (Array.isArray(item?.embedding) ? item.embedding : null))
+          .filter((vector): vector is number[] => Array.isArray(vector) && vector.length > 0 && vector.every((value) => Number.isFinite(value)))
+      : []
+
+    if (!embeddings.length) {
+      return {
+        enabled: true,
+        model: config.model,
+        error: 'OpenAI-compatible embedding response did not contain usable vectors',
+      }
+    }
+
+    return {
+      enabled: true,
+      embeddings,
+      model: data.model ?? config.model,
+    }
+  } catch (error) {
+    return {
+      enabled: true,
+      model: config.model,
+      error: error instanceof Error ? error.message : 'Failed to generate embeddings with OpenAI-compatible API',
+    }
+  } finally {
+    clearTimeout(timeout)
+  }
 }

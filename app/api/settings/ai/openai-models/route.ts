@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import type { AIScenarioKey } from '@/lib/types'
 import { listAvailableOpenAICompatibleModels } from '@/lib/server/openai-compatible'
 
 export async function POST(request: Request) {
@@ -6,9 +7,13 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({})) as {
       baseUrl?: string
       apiKey?: string
+      scenario?: AIScenarioKey
     }
 
-    const result = await listAvailableOpenAICompatibleModels(body.baseUrl, body.apiKey)
+    const scenario = body.scenario === 'knowledgeExtraction' || body.scenario === 'embeddings' || body.scenario === 'rewrite'
+      ? body.scenario
+      : 'rewrite'
+    const result = await listAvailableOpenAICompatibleModels(body.baseUrl, body.apiKey, scenario)
 
     return NextResponse.json({ ok: true, ...result })
   } catch (error) {

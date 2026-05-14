@@ -1,8 +1,10 @@
 import type { Chapter } from '@/lib/types'
 import { type ChapterKnowledgeExtraction } from '@/lib/story-knowledge'
+import { loadStoredAISettings } from '@/lib/server/ai-settings'
+import { extractChapterKnowledgeWithOpenAICompatible } from '@/lib/server/openai-compatible'
 import { extractChapterKnowledgeWithOllama } from '@/lib/server/ollama-local'
 
-type KnowledgeProvider = 'ollama'
+type KnowledgeProvider = 'openai-compatible' | 'ollama'
 
 export type OfflineExtractionResult = {
   extraction: ChapterKnowledgeExtraction
@@ -70,7 +72,7 @@ function ensureTimelineCoverage(extraction: ChapterKnowledgeExtraction, rawText:
 }
 
 function getKnowledgeProvider(): KnowledgeProvider {
-  return 'ollama'
+  return loadStoredAISettings().knowledgeExtraction.provider
 }
 
 async function runProviderExtraction(params: {
@@ -79,7 +81,11 @@ async function runProviderExtraction(params: {
   rawText: string
   mode: 'full' | 'focused'
 }) {
-  return await extractChapterKnowledgeWithOllama(params)
+  const settings = loadStoredAISettings().knowledgeExtraction
+  if (settings.provider === 'openai-compatible') {
+    return await extractChapterKnowledgeWithOpenAICompatible(params, settings.openAICompatible)
+  }
+  return await extractChapterKnowledgeWithOllama(params, settings.ollama)
 }
 
 function normalizeRelationKey(relation: ChapterKnowledgeExtraction['relations'][number]) {

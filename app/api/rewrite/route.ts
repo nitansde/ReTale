@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server'
 import { buildGenerationContext } from '@/lib/server/context-builder'
+import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import {
   buildFallbackRewriteStream,
   generateRewriteWithOpenAICompatible,
   streamRewriteWithOpenAICompatible,
 } from '@/lib/server/openai-compatible'
+import { generateRewriteWithOllama, streamRewriteWithOllama } from '@/lib/server/ollama-local'
 
 function fallbackCandidates(sourceText: string, mode: string, tone: string, prompt: string) {
   const base = sourceText.trim()
@@ -78,7 +80,8 @@ function buildUserPrompt(params: {
 
 export async function POST(request: Request) {
   const body = await request.json()
-  const rewriteProvider = 'openai-compatible'
+  const rewriteSettings = loadStoredAISettings().rewrite
+  const rewriteProvider = rewriteSettings.provider
 
   const sourceText = String(body.sourceText ?? '')
   const selectedText = String(body.selectedText ?? body.sourceText ?? '')
@@ -119,10 +122,12 @@ export async function POST(request: Request) {
       }),
       temperature: body.tone === 'keep' ? 0.7 : 0.9,
     }
-    const result = await streamRewriteWithOpenAICompatible(promptPayload)
+    const streamResult = rewriteProvider === 'openai-compatible'
+      ? await streamRewriteWithOpenAICompatible(promptPayload, rewriteSettings.openAICompatible)
+      : await streamRewriteWithOllama(promptPayload, rewriteSettings.ollama)
 
-    if (result.enabled && result.stream) {
-      return new Response(result.stream, {
+    if (streamResult.enabled && streamResult.stream) {
+      return new Response(streamResult.stream, {
         headers: {
           'Content-Type': 'text/plain; charset=utf-8',
           'Cache-Control': 'no-cache, no-transform',
@@ -131,7 +136,7 @@ export async function POST(request: Request) {
     }
 
     const fallback = buildFallbackText(sourceText || selectedText, String(body.mode ?? ''), String(body.tone ?? ''), String(body.prompt ?? ''))
-    return new Response(result.error ? buildFallbackRewriteStream(`${fallback}\n`) : buildFallbackRewriteStream(fallback), {
+    return new Response(streamResult.error ? buildFallbackRewriteStream(`${fallback}\n`) : buildFallbackRewriteStream(fallback), {
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
@@ -151,14 +156,16 @@ export async function POST(request: Request) {
     autoContinue: Boolean(body.autoContinue),
     thoughtLevel: body.thoughtLevel,
   }
-  const result = await generateRewriteWithOpenAICompatible(rewriteInput)
+  const result = rewriteProvider === 'openai-compatible'
+    ? await generateRewriteWithOpenAICompatible(rewriteInput, rewriteSettings.openAICompatible)
+    : await generateRewriteWithOllama(rewriteInput, rewriteSettings.ollama)
 
   if (result.enabled && result.content?.length) {
     return NextResponse.json({
       provider: rewriteProvider,
       candidates: result.content.map((content, index) => ({
         title: `候选 ${String.fromCharCode(65 + index)}`,
-        summary: '来自 OpenAI-compatible API',
+        summary: rewriteProvider === 'openai-compatible' ? '来自 OpenAI-compatible API' : '来自 Ollama 本地模型',
         content,
       })),
     })
