@@ -5,6 +5,7 @@ import { loadStoredAISettings, saveStoredAISettings } from '@/lib/server/ai-sett
 import { normalizeOpenAICompatibleBaseUrl } from '@/lib/server/openai-compatible'
 
 const MAX_KNOWLEDGE_EXTRACTION_PARALLELISM = 20
+const MAX_EMBEDDING_BATCH_SIZE = 128
 
 function normalizeOptionalText(value: unknown, field: string, maxLength: number) {
   const normalized = typeof value === 'string' ? value.trim() : ''
@@ -27,6 +28,24 @@ function normalizeOptionalParallelism(value: unknown, field: string) {
 
   if (!Number.isFinite(parsed) || parsed < 1 || parsed > MAX_KNOWLEDGE_EXTRACTION_PARALLELISM) {
     throw new Error(`${field} must be an integer between 1 and ${MAX_KNOWLEDGE_EXTRACTION_PARALLELISM}`)
+  }
+
+  return Math.floor(parsed)
+}
+
+function normalizeOptionalEmbeddingBatchSize(value: unknown, field: string) {
+  if (value === undefined || value === null || value === '') {
+    return undefined
+  }
+
+  const parsed = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseInt(value.trim(), 10)
+      : Number.NaN
+
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > MAX_EMBEDDING_BATCH_SIZE) {
+    throw new Error(`${field} must be an integer between 1 and ${MAX_EMBEDDING_BATCH_SIZE}`)
   }
 
   return Math.floor(parsed)
@@ -70,6 +89,12 @@ function normalizeScenarioPayload<K extends AIScenarioKey>(
         ) ?? current.knowledgeExtraction.ollama.parallelism,
       }
     : null
+  const embeddingBatchSize = scenario === 'embeddings'
+    ? normalizeOptionalEmbeddingBatchSize(
+        record.embeddingBatchSize,
+        'embeddings embedding batch size'
+      ) ?? current.embeddings.embeddingBatchSize
+    : null
 
   return normalizeAISettings({
     [scenario]: {
@@ -85,6 +110,7 @@ function normalizeScenarioPayload<K extends AIScenarioKey>(
         model: ollamaModel,
         ...(knowledgeExtractionParallelism ? { parallelism: knowledgeExtractionParallelism.ollama } : {}),
       },
+      ...(embeddingBatchSize ? { embeddingBatchSize } : {}),
     },
   })[scenario] as AISettings[K]
 }

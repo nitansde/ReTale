@@ -3,6 +3,7 @@ import type {
   AISettings,
   AIScenarioKey,
   AIScenarioSettings,
+  EmbeddingsScenarioSettings,
   KnowledgeExtractionOpenAICompatibleProviderSettings,
   KnowledgeExtractionOllamaProviderSettings,
   KnowledgeExtractionScenarioSettings,
@@ -37,6 +38,8 @@ const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
 const DEFAULT_OPENAI_EXTRACTION_PARALLELISM = 5
 const DEFAULT_OLLAMA_EXTRACTION_PARALLELISM = 1
 const MAX_KNOWLEDGE_EXTRACTION_PARALLELISM = 20
+const DEFAULT_EMBEDDING_BATCH_SIZE = 16
+const MAX_EMBEDDING_BATCH_SIZE = 128
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -66,6 +69,20 @@ function normalizeParallelism(value: unknown, fallback: number) {
   }
 
   return Math.max(1, Math.min(MAX_KNOWLEDGE_EXTRACTION_PARALLELISM, Math.floor(parsed)))
+}
+
+function normalizeEmbeddingBatchSize(value: unknown, fallback: number) {
+  const parsed = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseInt(value.trim(), 10)
+      : Number.NaN
+
+  if (!Number.isFinite(parsed)) {
+    return fallback
+  }
+
+  return Math.max(1, Math.min(MAX_EMBEDDING_BATCH_SIZE, Math.floor(parsed)))
 }
 
 export function maskApiKey(apiKey: string) {
@@ -113,6 +130,15 @@ function createDefaultKnowledgeExtractionOllamaProviderSettings(): KnowledgeExtr
   }
 }
 
+function createDefaultEmbeddingsScenarioSettings(): EmbeddingsScenarioSettings {
+  return {
+    provider: 'ollama',
+    openAICompatible: createDefaultOpenAICompatibleProviderSettings(),
+    ollama: createDefaultOllamaProviderSettings(),
+    embeddingBatchSize: DEFAULT_EMBEDDING_BATCH_SIZE,
+  }
+}
+
 export function createDefaultAISettings(): AISettings {
   return {
     rewrite: {
@@ -125,11 +151,7 @@ export function createDefaultAISettings(): AISettings {
       openAICompatible: createDefaultKnowledgeExtractionOpenAICompatibleProviderSettings(),
       ollama: createDefaultKnowledgeExtractionOllamaProviderSettings(),
     },
-    embeddings: {
-      provider: 'ollama',
-      openAICompatible: createDefaultOpenAICompatibleProviderSettings(),
-      ollama: createDefaultOllamaProviderSettings(),
-    },
+    embeddings: createDefaultEmbeddingsScenarioSettings(),
   }
 }
 
@@ -261,6 +283,7 @@ function buildLegacyScenarioDefaults(legacy: LegacyFlatAISettings, defaults: AIS
         },
         defaults.embeddings.ollama
       ),
+      embeddingBatchSize: defaults.embeddings.embeddingBatchSize,
     },
   }
 }
@@ -302,6 +325,20 @@ function normalizeScenarioSettings(
   }
 }
 
+function normalizeEmbeddingsScenarioSettings(
+  value: unknown,
+  fallback: EmbeddingsScenarioSettings,
+  legacyFallback: EmbeddingsScenarioSettings
+): EmbeddingsScenarioSettings {
+  const record = isRecord(value) ? value : {}
+  const base = normalizeScenarioSettings(value, fallback, legacyFallback)
+
+  return {
+    ...base,
+    embeddingBatchSize: normalizeEmbeddingBatchSize(record.embeddingBatchSize, legacyFallback.embeddingBatchSize),
+  }
+}
+
 export function normalizeAISettings(value?: unknown): AISettings {
   const defaults = createDefaultAISettings()
   if (!isRecord(value)) {
@@ -319,7 +356,7 @@ export function normalizeAISettings(value?: unknown): AISettings {
       defaults.knowledgeExtraction,
       legacyFallback.knowledgeExtraction
     ),
-    embeddings: normalizeScenarioSettings(partial.embeddings, defaults.embeddings, legacyFallback.embeddings),
+    embeddings: normalizeEmbeddingsScenarioSettings(partial.embeddings, defaults.embeddings, legacyFallback.embeddings),
   }
 }
 
@@ -369,9 +406,14 @@ export function sanitizeAISettingsForClient(settings: AISettings): AISettings {
     },
   }
 
+  const sanitizedEmbeddings: EmbeddingsScenarioSettings = {
+    ...(sanitizeScenario('embeddings') as EmbeddingsScenarioSettings),
+    embeddingBatchSize: normalized.embeddings.embeddingBatchSize,
+  }
+
   return {
     rewrite: sanitizeScenario('rewrite'),
     knowledgeExtraction: sanitizedKnowledgeExtraction,
-    embeddings: sanitizeScenario('embeddings'),
+    embeddings: sanitizedEmbeddings,
   }
 }

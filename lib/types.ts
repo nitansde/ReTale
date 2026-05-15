@@ -236,10 +236,14 @@ export type KnowledgeExtractionScenarioSettings = {
   ollama: KnowledgeExtractionOllamaProviderSettings
 }
 
+export type EmbeddingsScenarioSettings = AIScenarioSettings & {
+  embeddingBatchSize: number
+}
+
 export type AISettings = {
   rewrite: AIScenarioSettings
   knowledgeExtraction: KnowledgeExtractionScenarioSettings
-  embeddings: AIScenarioSettings
+  embeddings: EmbeddingsScenarioSettings
 }
 
 export type AIScenarioKey = keyof AISettings

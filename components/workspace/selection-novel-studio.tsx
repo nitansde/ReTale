@@ -684,6 +684,21 @@ export function SelectionNovelStudio() {
     })
   }, [updateAISettings])
 
+  const updateEmbeddingBatchSize = useCallback((value: string) => {
+    updateAISettings((current) => {
+      const parsed = Number.parseInt(value, 10)
+      const nextEmbeddingBatchSize = Number.isFinite(parsed) ? Math.max(1, Math.min(128, parsed)) : 16
+
+      return {
+        ...current,
+        embeddings: {
+          ...current.embeddings,
+          embeddingBatchSize: nextEmbeddingBatchSize,
+        },
+      }
+    })
+  }, [updateAISettings])
+
   const showKnowledgeToast = (message: string, duration = 1800) => {
     setToast(message)
     window.setTimeout(() => setToast(''), duration)
@@ -3199,9 +3214,26 @@ export function SelectionNovelStudio() {
                       })}
                     </div>
 
-                    {scenarioSettings.provider === 'openai-compatible'
-                      ? renderOpenAICompatibleFields(scenario)
-                      : renderOllamaFields(scenario)}
+                     {scenarioSettings.provider === 'openai-compatible'
+                       ? renderOpenAICompatibleFields(scenario)
+                       : renderOllamaFields(scenario)}
+
+                    {scenario === 'embeddings' ? (
+                      <div className="mt-4 rounded-[22px] border border-white/8 bg-black/20 p-4">
+                        <label className="block">
+                          <span className="mb-2 block text-sm text-zinc-300">Embedding 批处理数量</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={128}
+                            value={resolvedAISettings.embeddings.embeddingBatchSize}
+                            onChange={(event) => updateEmbeddingBatchSize(event.target.value)}
+                            className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+                          />
+                          <p className="mt-2 text-xs leading-5 text-zinc-500">默认 16；16GB Mac 推荐优先从 16 或 32 开始，避免本地 embedding 时占用过高内存。</p>
+                        </label>
+                      </div>
+                    ) : null}
                   </div>
                 )
               })}
