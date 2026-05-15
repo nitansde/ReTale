@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import * as lancedb from '@lancedb/lancedb'
+import type { EmbeddingsScenarioSettings } from '@/lib/types'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 import { estimateTokenCount, type TextSpanInput } from '@/lib/server/knowledge-store'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
@@ -109,8 +110,13 @@ export type RetrievalIndexBuildResult = {
 
 const LANCEDB_DIR = process.env.LANCEDB_DIR?.trim() || path.join(process.cwd(), '.lancedb')
 const TABLE_PREFIX = 'retrieval_docs_'
-const EMBEDDING_BATCH_SIZE = 16
+const DEFAULT_EMBEDDING_BATCH_SIZE = 16
+const LANCEDB_WRITE_BATCH_SIZE = 1000
+const LANCEDB_INDEX_LOG_PREFIX = '[LanceDB Index]'
 const LANCE_INDEX_UNAVAILABLE_WARNING = 'Lance retrieval index is missing or stale for this branch; rebuild knowledge to refresh retrieval evidence.'
+const PACKABLE_TEXT_SPAN_TYPES = new Set(['paragraph', 'evidence', 'summary'])
+const MAX_PACKED_TEXT_SPAN_TOKENS = 320
+const MAX_PACKED_TEXT_SPAN_ITEMS = 8
 
 const SOURCE_TYPE_PRIORITY: Record<RetrievalDocSourceType, number> = {
   text_span: 1,
@@ -192,6 +198,101 @@ function getTextSpanSourceLabel(spanType: string) {
   return '原文证据'
 }
 
+function getTextSpanTokenEstimate(span: TextSpanInput) {
+  return span.tokenEstimate ?? estimateTokenCount(span.text)
+}
+
+function shouldPackTextSpan(span: TextSpanInput) {
+  if (!PACKABLE_TEXT_SPAN_TYPES.has(span.spanType)) {
+    return false
+  }
+
+  if (!span.text.trim()) {
+    return false
+  }
+
+  return true
+}
+
+function buildPackedTextSpan(spans: TextSpanInput[]) {
+  const first = spans[0]
+  const last = spans[spans.length - 1]
+  const text = spans.map((span) => span.text.trim()).filter(Boolean).join('\n\n')
+  const tokenEstimate = estimateTokenCount(text)
+  const contentHash = buildContentHash([
+    first.branchId,
+    first.chapterId,
+    first.spanType,
+    first.lineStart,
+    last.lineEnd,
+    ...spans.map((span) => span.id),
+    ...spans.map((span) => span.text),
+  ])
+
+  return {
+    id: `packed-span:${contentHash.slice(0, 24)}`,
+    novelId: first.novelId,
+    branchId: first.branchId,
+    chapterId: first.chapterId,
+    chapterNo: first.chapterNo,
+    lineStart: Math.min(...spans.map((span) => span.lineStart)),
+    lineEnd: Math.max(...spans.map((span) => span.lineEnd)),
+    charStart: spans[0]?.charStart ?? null,
+    charEnd: spans[spans.length - 1]?.charEnd ?? null,
+    text,
+    spanType: first.spanType,
+    tokenEstimate,
+  } satisfies TextSpanInput
+}
+
+function loadPackedBranchTextSpans(novelId: string, branchId: string) {
+  const spans = loadBranchTextSpans(novelId, branchId)
+  const packed: TextSpanInput[] = []
+  const packableGroups = new Map<string, TextSpanInput[]>()
+
+  for (const span of spans) {
+    if (!shouldPackTextSpan(span)) {
+      packed.push(span)
+      continue
+    }
+
+    const groupKey = [span.branchId, span.chapterId, span.chapterNo, span.spanType].join('::')
+    const current = packableGroups.get(groupKey) ?? []
+    current.push(span)
+    packableGroups.set(groupKey, current)
+  }
+
+  for (const group of packableGroups.values()) {
+    let currentPack: TextSpanInput[] = []
+    let currentPackTokens = 0
+
+    const flushPack = () => {
+      if (!currentPack.length) return
+      packed.push(currentPack.length === 1 ? currentPack[0] : buildPackedTextSpan(currentPack))
+      currentPack = []
+      currentPackTokens = 0
+    }
+
+    for (const span of group) {
+      const spanTokens = getTextSpanTokenEstimate(span)
+      const canAppend = currentPack.length > 0
+        && currentPackTokens + spanTokens <= MAX_PACKED_TEXT_SPAN_TOKENS
+        && currentPack.length < MAX_PACKED_TEXT_SPAN_ITEMS
+
+      if (!canAppend) {
+        flushPack()
+      }
+
+      currentPack.push(span)
+      currentPackTokens += spanTokens
+    }
+
+    flushPack()
+  }
+
+  return packed.sort((left, right) => left.chapterNo - right.chapterNo || left.lineStart - right.lineStart || left.lineEnd - right.lineEnd || left.spanType.localeCompare(right.spanType))
+}
+
 function buildRetrievalEmbeddingText(row: RetrievalDocSeedRow) {
   return [
     row.sourceLabel,
@@ -203,44 +304,43 @@ function buildRetrievalEmbeddingText(row: RetrievalDocSeedRow) {
   ].filter(Boolean).join('\n')
 }
 
-async function embedRetrievalRows(
+function formatElapsed(elapsedMs: number) {
+  return `${(elapsedMs / 1000).toFixed(1)}s`
+}
+
+function logLanceIndex(message: string) {
+  console.log(`${LANCEDB_INDEX_LOG_PREFIX} ${message}`)
+}
+
+function getEmbeddingBatchSize(settings: EmbeddingsScenarioSettings) {
+  return Math.max(1, Math.floor(settings.embeddingBatchSize || DEFAULT_EMBEDDING_BATCH_SIZE))
+}
+
+async function embedRetrievalRowBatch(
   rows: RetrievalDocSeedRow[],
-  onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
+  settings: EmbeddingsScenarioSettings,
 ) {
   if (!rows.length) return [] as RetrievalDocRow[]
 
-  const settings = loadStoredAISettings().embeddings
-  const vectors: number[][] = []
-  const totalBatches = Math.ceil(rows.length / EMBEDDING_BATCH_SIZE)
-  for (let index = 0; index < rows.length; index += EMBEDDING_BATCH_SIZE) {
-    const batch = rows.slice(index, index + EMBEDDING_BATCH_SIZE)
-    const result = settings.provider === 'openai-compatible'
-      ? await embedTextsWithOpenAICompatible(batch.map(buildRetrievalEmbeddingText), settings.openAICompatible)
-      : await embedTextsWithOllama(batch.map(buildRetrievalEmbeddingText), settings.ollama)
-    if (!result.enabled || !result.embeddings) {
-      throw new Error(result.error || 'Failed to generate retrieval embeddings')
-    }
-    if (result.embeddings.length !== batch.length) {
-      throw new Error(`Ollama returned ${result.embeddings.length} embeddings for ${batch.length} retrieval rows`)
-    }
-    vectors.push(...result.embeddings)
-    await onProgress?.({
-      phase: 'embedding',
-      totalRows: rows.length,
-      embeddedRows: vectors.length,
-      totalBatches,
-      completedBatches: Math.ceil(vectors.length / EMBEDDING_BATCH_SIZE),
-    })
+  const result = settings.provider === 'openai-compatible'
+    ? await embedTextsWithOpenAICompatible(rows.map(buildRetrievalEmbeddingText), settings.openAICompatible)
+    : await embedTextsWithOllama(rows.map(buildRetrievalEmbeddingText), settings.ollama)
+  if (!result.enabled || !result.embeddings) {
+    throw new Error(result.error || 'Failed to generate retrieval embeddings')
+  }
+  const embeddings = result.embeddings
+  if (embeddings.length !== rows.length) {
+    throw new Error(`Embedding provider returned ${embeddings.length} embeddings for ${rows.length} retrieval rows`)
   }
 
-  const dimension = vectors[0]?.length ?? 0
-  if (!dimension || vectors.some((vector) => vector.length !== dimension)) {
-    throw new Error('Retrieval embedding dimensions are inconsistent across LanceDB rows')
+  const dimension = embeddings[0]?.length ?? 0
+  if (!dimension || embeddings.some((vector) => vector.length !== dimension)) {
+    throw new Error('Retrieval embedding dimensions are inconsistent within an embedding batch')
   }
 
   return rows.map((row, index) => ({
     ...row,
-    vector: vectors[index],
+    vector: embeddings[index],
   }))
 }
 
@@ -316,14 +416,20 @@ async function ensureTextIndex(table: Awaited<ReturnType<typeof openBranchTable>
       config: lancedb.Index.fts(),
       waitTimeoutSeconds: 3600,
     })
-  } catch {
+    await table.waitForIndex(['text_idx'], 3600)
+    return null
+  } catch (error) {
+    return error instanceof Error ? error.message : 'unknown LanceDB FTS index error'
   }
 }
 
 async function ensureVectorIndex(table: Awaited<ReturnType<typeof openBranchTable>> extends infer T ? Exclude<T, null> : never) {
   try {
     await table.createIndex('vector', { waitTimeoutSeconds: 3600 })
-  } catch {
+    await table.waitForIndex(['vector_idx'], 3600)
+    return null
+  } catch (error) {
+    return error instanceof Error ? error.message : 'unknown LanceDB vector index error'
   }
 }
 
@@ -348,35 +454,123 @@ async function hasUsableVectorColumn(table: Awaited<ReturnType<typeof openBranch
 async function createOrReplaceBranchTable(
   branchId: string,
   rows: RetrievalDocSeedRow[],
+  embeddingSettings: EmbeddingsScenarioSettings,
+  embeddingBatchSize: number,
   onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
 ) {
   const database = await getDatabase()
-  const totalBatches = Math.ceil(rows.length / EMBEDDING_BATCH_SIZE)
-  const embeddedRows = await embedRetrievalRows(rows, onProgress)
+  const totalBatches = Math.ceil(rows.length / embeddingBatchSize)
+  const embeddingStartedAt = Date.now()
+  let embeddingElapsedMs = 0
+  let writeElapsedMs = 0
+  let writeStartedAt: number | null = null
+  let completedBatches = 0
+  let embeddedRowsCount = 0
+  let writtenRowsCount = 0
+  let expectedVectorDimension: number | null = null
+  let table: lancedb.Table | null = null
+  const writeBuffer: RetrievalDocRow[] = []
+
+  logLanceIndex(`embedding started: docs=${rows.length}, batchSize=${embeddingBatchSize}`)
+
+  const flushWriteBuffer = async (force = false) => {
+    while (writeBuffer.length >= LANCEDB_WRITE_BATCH_SIZE || (force && writeBuffer.length > 0)) {
+      const nextBatchSize = force ? Math.min(writeBuffer.length, LANCEDB_WRITE_BATCH_SIZE) : LANCEDB_WRITE_BATCH_SIZE
+      const rowsBatch = writeBuffer.splice(0, nextBatchSize)
+      if (!rowsBatch.length) return
+
+      if (writeStartedAt === null) {
+        writeStartedAt = Date.now()
+        logLanceIndex(`LanceDB write started: rows=${rows.length}, writeBatchSize=${LANCEDB_WRITE_BATCH_SIZE}`)
+      }
+
+      const writeBatchStartedAt = Date.now()
+      if (!table) {
+        table = await database.createTable(getBranchTableName(branchId), rowsBatch, { mode: 'overwrite' })
+      } else {
+        await table.add(rowsBatch)
+      }
+      writeElapsedMs += Date.now() - writeBatchStartedAt
+
+      writtenRowsCount += rowsBatch.length
+    }
+  }
+
+  for (let index = 0; index < rows.length; index += embeddingBatchSize) {
+    const batch = rows.slice(index, index + embeddingBatchSize)
+    const embeddingBatchStartedAt = Date.now()
+    const embeddedBatch = await embedRetrievalRowBatch(batch, embeddingSettings)
+    embeddingElapsedMs += Date.now() - embeddingBatchStartedAt
+    const batchDimension = embeddedBatch[0]?.vector.length ?? 0
+
+    if (!batchDimension || embeddedBatch.some((row) => row.vector.length !== batchDimension)) {
+      throw new Error('Retrieval embedding dimensions are inconsistent within a LanceDB write batch')
+    }
+    if (expectedVectorDimension === null) {
+      expectedVectorDimension = batchDimension
+    } else if (expectedVectorDimension !== batchDimension) {
+      throw new Error('Retrieval embedding dimensions are inconsistent across LanceDB batches')
+    }
+
+    writeBuffer.push(...embeddedBatch)
+    embeddedRowsCount += embeddedBatch.length
+    completedBatches += 1
+    await flushWriteBuffer()
+
+    const embeddingWallElapsedMs = Date.now() - embeddingStartedAt
+    const docsPerSec = embeddingWallElapsedMs > 0
+      ? (embeddedRowsCount / (embeddingWallElapsedMs / 1000)).toFixed(1)
+      : '0.0'
+
+    logLanceIndex(`embedding progress: embedded=${embeddedRowsCount}/${rows.length}, docsPerSec=${docsPerSec}`)
+    await onProgress?.({
+      phase: 'embedding',
+      totalRows: rows.length,
+      embeddedRows: embeddedRowsCount,
+      totalBatches,
+      completedBatches,
+    })
+  }
+
+  await flushWriteBuffer(true)
+  logLanceIndex(`embedding done: elapsed=${formatElapsed(embeddingElapsedMs)}`)
+  logLanceIndex(`LanceDB write done: elapsed=${formatElapsed(writeElapsedMs)}`)
+
+  if (!table) {
+    throw new Error('Failed to create LanceDB retrieval table during batched rebuild')
+  }
+
   await onProgress?.({
     phase: 'creating_table',
     totalRows: rows.length,
-    embeddedRows: rows.length,
+    embeddedRows: writtenRowsCount,
     totalBatches,
     completedBatches: totalBatches,
   })
-  const table = await database.createTable(getBranchTableName(branchId), embeddedRows, { mode: 'overwrite' })
+
+  const textIndexStartedAt = Date.now()
+  logLanceIndex('create FTS index started')
   await onProgress?.({
     phase: 'building_text_index',
     totalRows: rows.length,
-    embeddedRows: rows.length,
+    embeddedRows: writtenRowsCount,
     totalBatches,
     completedBatches: totalBatches,
   })
-  await ensureTextIndex(table)
+  const textIndexError = await ensureTextIndex(table)
+  logLanceIndex(`create FTS index done: elapsed=${formatElapsed(Date.now() - textIndexStartedAt)}${textIndexError ? `, warning=${textIndexError}` : ''}`)
+
+  const vectorIndexStartedAt = Date.now()
+  logLanceIndex('create vector index started')
   await onProgress?.({
     phase: 'building_vector_index',
     totalRows: rows.length,
-    embeddedRows: rows.length,
+    embeddedRows: writtenRowsCount,
     totalBatches,
     completedBatches: totalBatches,
   })
-  await ensureVectorIndex(table)
+  const vectorIndexError = await ensureVectorIndex(table)
+  logLanceIndex(`create vector index done: elapsed=${formatElapsed(Date.now() - vectorIndexStartedAt)}${vectorIndexError ? `, warning=${vectorIndexError}` : ''}`)
   return table
 }
 
@@ -930,7 +1124,7 @@ function loadBranchOpenThreadDocs(novelId: string, branchId: string) {
 
 function loadBranchRetrievalDocs(novelId: string, branchId: string) {
   return [
-    ...loadBranchTextSpans(novelId, branchId).map(toRetrievalDocRow),
+    ...loadPackedBranchTextSpans(novelId, branchId).map(toRetrievalDocRow),
     ...loadBranchChapterSummaryDocs(novelId, branchId),
     ...loadBranchEntityProfileDocs(novelId, branchId),
     ...loadBranchEventSummaryDocs(novelId, branchId),
@@ -1212,6 +1406,7 @@ export async function rebuildBranchRetrievalIndex(
   branchId: string,
   options?: { onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void> }
 ): Promise<RetrievalIndexBuildResult> {
+  const totalStartedAt = Date.now()
   await options?.onProgress?.({
     phase: 'loading',
     totalRows: 0,
@@ -1219,8 +1414,14 @@ export async function rebuildBranchRetrievalIndex(
     totalBatches: 0,
     completedBatches: 0,
   })
+  logLanceIndex('build retrieval docs started')
+  const docBuildStartedAt = Date.now()
   const rows = loadBranchRetrievalDocs(novelId, branchId)
-  const totalBatches = Math.ceil(rows.length / EMBEDDING_BATCH_SIZE)
+  logLanceIndex(`build retrieval docs done: docs=${rows.length}, elapsed=${formatElapsed(Date.now() - docBuildStartedAt)}`)
+
+  const embeddingSettings = loadStoredAISettings().embeddings
+  const embeddingBatchSize = getEmbeddingBatchSize(embeddingSettings)
+  const totalBatches = Math.ceil(rows.length / embeddingBatchSize)
   await options?.onProgress?.({
     phase: rows.length ? 'embedding' : 'completed',
     totalRows: rows.length,
@@ -1230,12 +1431,13 @@ export async function rebuildBranchRetrievalIndex(
   })
   await deleteBranchRetrievalIndex(branchId)
   if (!rows.length) {
+    logLanceIndex(`rebuild done: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
     return {
       rowCount: 0,
       embeddingBatchCount: 0,
     }
   }
-  await createOrReplaceBranchTable(branchId, rows, options?.onProgress)
+  await createOrReplaceBranchTable(branchId, rows, embeddingSettings, embeddingBatchSize, options?.onProgress)
   await options?.onProgress?.({
     phase: 'completed',
     totalRows: rows.length,
@@ -1243,6 +1445,7 @@ export async function rebuildBranchRetrievalIndex(
     totalBatches,
     completedBatches: totalBatches,
   })
+  logLanceIndex(`rebuild done: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
   return {
     rowCount: rows.length,
     embeddingBatchCount: totalBatches,
