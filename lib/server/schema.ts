@@ -373,6 +373,146 @@ CREATE TABLE IF NOT EXISTS KnowledgeJob (
   FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS story_timeline_nodes (
+  id TEXT PRIMARY KEY,
+  novel_id TEXT NOT NULL,
+  branch_id TEXT NOT NULL,
+  node_type TEXT NOT NULL,
+  label_index INTEGER NOT NULL,
+  anchor_chapter_no INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  subtitle TEXT,
+  parent_node_id TEXT,
+  source_chapter_no INTEGER,
+  target_chapter_no INTEGER,
+  chapter_id TEXT,
+  what_if_session_id TEXT,
+  future_jump_run_id TEXT,
+  lane_index INTEGER DEFAULT 0,
+  color_token TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (parent_node_id) REFERENCES story_timeline_nodes(id) ON DELETE SET NULL,
+  FOREIGN KEY (chapter_id) REFERENCES KnowledgeChapter(id) ON DELETE SET NULL,
+  FOREIGN KEY (what_if_session_id) REFERENCES what_if_sessions(id) ON DELETE SET NULL,
+  FOREIGN KEY (future_jump_run_id) REFERENCES future_jump_runs(id) ON DELETE SET NULL,
+  UNIQUE (novel_id, branch_id, node_type, label_index),
+  UNIQUE (what_if_session_id),
+  UNIQUE (future_jump_run_id)
+);
+
+CREATE TABLE IF NOT EXISTS what_if_sessions (
+  id TEXT PRIMARY KEY,
+  novel_id TEXT NOT NULL,
+  base_branch_id TEXT NOT NULL,
+  source_chapter_no INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  premise TEXT NOT NULL,
+  selected_text TEXT NOT NULL,
+  original_text TEXT NOT NULL,
+  generated_text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (base_branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS what_if_deltas (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  delta_type TEXT NOT NULL,
+  subject_name TEXT,
+  target_name TEXT,
+  subject_entity_id TEXT,
+  target_entity_id TEXT,
+  key TEXT NOT NULL,
+  old_value TEXT,
+  new_value TEXT,
+  valid_from_chapter INTEGER,
+  description TEXT NOT NULL,
+  confidence REAL DEFAULT 0.8,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (session_id) REFERENCES what_if_sessions(id) ON DELETE CASCADE,
+  FOREIGN KEY (subject_entity_id) REFERENCES KnowledgeEntity(id) ON DELETE SET NULL,
+  FOREIGN KEY (target_entity_id) REFERENCES KnowledgeEntity(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS outline_nodes (
+  id TEXT PRIMARY KEY,
+  novel_id TEXT NOT NULL,
+  branch_id TEXT NOT NULL,
+  chapter_no INTEGER,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  original_outcome TEXT,
+  track_key TEXT NOT NULL,
+  phase_label TEXT,
+  source_type TEXT NOT NULL,
+  confidence REAL,
+  involved_entities_json TEXT NOT NULL,
+  key_events_json TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS outline_node_chapters (
+  id TEXT PRIMARY KEY,
+  outline_node_id TEXT NOT NULL,
+  chapter_no INTEGER NOT NULL,
+  chapter_id TEXT,
+  chapter_title TEXT,
+  is_primary INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (outline_node_id) REFERENCES outline_nodes(id) ON DELETE CASCADE,
+  FOREIGN KEY (chapter_id) REFERENCES KnowledgeChapter(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS future_jump_runs (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  base_branch_id TEXT NOT NULL,
+  parent_timeline_node_id TEXT,
+  target_outline_node_id TEXT NOT NULL,
+  target_outline_chapter_id TEXT NOT NULL,
+  source_chapter_no INTEGER NOT NULL,
+  target_chapter_no INTEGER NOT NULL,
+  user_direction TEXT NOT NULL DEFAULT '',
+  bridge_summary TEXT NOT NULL,
+  generated_target_text TEXT NOT NULL,
+  latest_revision_no INTEGER NOT NULL DEFAULT 1,
+  error_message TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (session_id) REFERENCES what_if_sessions(id) ON DELETE CASCADE,
+  FOREIGN KEY (base_branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (parent_timeline_node_id) REFERENCES story_timeline_nodes(id) ON DELETE SET NULL,
+  FOREIGN KEY (target_outline_node_id) REFERENCES outline_nodes(id) ON DELETE RESTRICT,
+  FOREIGN KEY (target_outline_chapter_id) REFERENCES outline_node_chapters(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS future_jump_revisions (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  revision_no INTEGER NOT NULL,
+  revision_kind TEXT NOT NULL,
+  user_feedback TEXT,
+  bridge_summary TEXT NOT NULL,
+  generated_target_text TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (run_id) REFERENCES future_jump_runs(id) ON DELETE CASCADE,
+  UNIQUE (run_id, revision_no)
+);
+
 CREATE INDEX IF NOT EXISTS idx_knowledge_chapter_branch_no ON KnowledgeChapter(branchId, chapterNo);
 CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_order ON chapter_extraction_candidates(branch_id, chapter_no, status);
 CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_chapter ON chapter_extraction_candidates(branch_id, chapter_id, chapter_source_hash);
@@ -396,4 +536,22 @@ CREATE INDEX IF NOT EXISTS idx_event_link_status ON EventLink(branchId, status);
 CREATE INDEX IF NOT EXISTS idx_knowledge_world_branch_valid_until ON KnowledgeWorld(branchId, validFromChapter, validUntilChapter);
 CREATE INDEX IF NOT EXISTS idx_job_novel_status ON KnowledgeJob(novelId, status);
 CREATE INDEX IF NOT EXISTS idx_job_branch_status ON KnowledgeJob(branchId, status);
+CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_label_scope ON story_timeline_nodes(novel_id, branch_id, node_type, label_index);
+CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_anchor_chapter ON story_timeline_nodes(novel_id, branch_id, anchor_chapter_no);
+CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_parent ON story_timeline_nodes(parent_node_id);
+CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_session ON story_timeline_nodes(what_if_session_id);
+CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_run ON story_timeline_nodes(future_jump_run_id);
+CREATE INDEX IF NOT EXISTS idx_what_if_sessions_branch_source ON what_if_sessions(base_branch_id, source_chapter_no);
+CREATE INDEX IF NOT EXISTS idx_what_if_deltas_session ON what_if_deltas(session_id);
+CREATE INDEX IF NOT EXISTS idx_outline_nodes_branch_track_sort ON outline_nodes(novel_id, branch_id, track_key, sort_order);
+CREATE INDEX IF NOT EXISTS idx_outline_nodes_branch_chapter ON outline_nodes(novel_id, branch_id, chapter_no);
+CREATE INDEX IF NOT EXISTS idx_outline_nodes_source_type ON outline_nodes(branch_id, source_type);
+CREATE INDEX IF NOT EXISTS idx_outline_node_chapters_outline_primary_sort ON outline_node_chapters(outline_node_id, is_primary, sort_order);
+CREATE INDEX IF NOT EXISTS idx_outline_node_chapters_chapter_anchor ON outline_node_chapters(chapter_no, chapter_id);
+CREATE INDEX IF NOT EXISTS idx_future_jump_runs_session ON future_jump_runs(session_id);
+CREATE INDEX IF NOT EXISTS idx_future_jump_runs_parent_node ON future_jump_runs(parent_timeline_node_id);
+CREATE INDEX IF NOT EXISTS idx_future_jump_runs_target_outline ON future_jump_runs(target_outline_node_id);
+CREATE INDEX IF NOT EXISTS idx_future_jump_runs_target_outline_chapter ON future_jump_runs(target_outline_chapter_id);
+CREATE INDEX IF NOT EXISTS idx_future_jump_runs_branch_target_chapter ON future_jump_runs(base_branch_id, target_chapter_no);
+CREATE INDEX IF NOT EXISTS idx_future_jump_revisions_run ON future_jump_revisions(run_id);
 `
