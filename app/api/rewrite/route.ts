@@ -82,6 +82,7 @@ export async function POST(request: Request) {
   const body = await request.json()
   const rewriteSettings = loadStoredAISettings().rewrite
   const rewriteProvider = rewriteSettings.provider
+  const userInstruction = String(body.userInstruction ?? body.prompt ?? '')
 
   const sourceText = String(body.sourceText ?? '')
   const selectedText = String(body.selectedText ?? body.sourceText ?? '')
@@ -96,9 +97,11 @@ export async function POST(request: Request) {
         chapterId: String(body.chapterId),
         selectedText,
         operationType,
-        userInstruction: String(body.userInstruction ?? body.prompt ?? ''),
+        userInstruction,
         excludedGraphEdgeIds,
         excludedEvidenceIds,
+        whatIfSessionId: body.whatIfSessionId ? String(body.whatIfSessionId) : undefined,
+        futureJumpRunId: body.futureJumpRunId ? String(body.futureJumpRunId) : undefined,
       })
     : null
   const assembledContext = context
@@ -113,7 +116,7 @@ export async function POST(request: Request) {
       systemPrompt: buildSystemPrompt(),
       userPrompt: buildUserPrompt({
         operationType,
-        userInstruction: String(body.userInstruction ?? body.prompt ?? ''),
+        userInstruction,
         chapterNo: context?.chapterNo,
         selectedLineStart: context?.selectedLineStart,
         selectedLineEnd: context?.selectedLineEnd,
