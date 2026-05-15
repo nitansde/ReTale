@@ -1,4 +1,4 @@
-import type { Chapter, KnowledgeExtractionScenarioSettings, PersistedNovelState } from '@/lib/types'
+import type { AIProvider, Chapter, KnowledgeExtractionScenarioSettings, PersistedNovelState } from '@/lib/types'
 import {
   buildCharacterDescriptionDelta,
   hasCharacterRoleCardProfile,
@@ -18,7 +18,9 @@ import {
 } from '@/lib/server/knowledge-store'
 import {
   deleteBranchRetrievalIndex,
+  precomputeRawTextEmbeddingCache,
   rebuildBranchRetrievalIndex,
+  type RawTextEmbeddingPrecomputeResult,
   type RetrievalIndexBuildProgress,
 } from '@/lib/server/retrieval-index'
 import { execute, queryAll, queryOne, type SqlParam, withTransaction } from '@/lib/server/sqlite'
@@ -102,6 +104,18 @@ export type KnowledgeRebuildPayloadStep = {
 
 type KnowledgeRebuildIndexProgress = RetrievalIndexBuildProgress
 
+type KnowledgeRebuildEmbeddingSettingsSnapshot = {
+  provider: AIProvider
+  model: string
+  embeddingBatchSize: number
+}
+
+type KnowledgeRebuildTelemetryUpdate = {
+  rawTextEmbeddingProgress?: number
+  rawTextEmbeddingCacheHitRate?: number
+  stageTimingsMs?: Record<string, number>
+}
+
 type KnowledgeRebuildJobPayload = {
   branchId: string
   rebuildStartChapter?: number
@@ -115,6 +129,10 @@ type KnowledgeRebuildJobPayload = {
   extractedChapters?: KnowledgeRebuildPayloadChapter[]
   totalChapterCount?: number
   extractionSettings?: KnowledgeExtractionScenarioSettings
+  rawTextEmbeddingProgress?: number
+  rawTextEmbeddingCacheHitRate?: number
+  stageTimingsMs?: Record<string, number>
+  embeddingSettingsSnapshot?: KnowledgeRebuildEmbeddingSettingsSnapshot
   indexProgress?: KnowledgeRebuildIndexProgress
   stageStartedAtByKey?: Partial<Record<KnowledgeRebuildStepKey, string>>
   steps?: KnowledgeRebuildPayloadStep[]
@@ -130,7 +148,14 @@ type KnowledgeRebuildJobState = {
   phase: KnowledgeRebuildJobPayload['phase']
 }
 
+type RawTextEmbeddingPrecomputeRun = {
+  promise: Promise<RawTextEmbeddingPrecomputeResult>
+}
+
 const KNOWLEDGE_REBUILD_STEP_ORDER: KnowledgeRebuildStepKey[] = ['extract', 'cleanup', 'write', 'index']
+
+const RAW_TEXT_PRECOMPUTE_STAGE_KEY = 'raw_text_precompute'
+const rawTextEmbeddingPrecomputeRuns = new Map<string, RawTextEmbeddingPrecomputeRun>()
 
 const KNOWLEDGE_REBUILD_STEP_LABELS: Record<KnowledgeRebuildStepKey, string> = {
   extract: '抽取章节知识',
@@ -260,9 +285,32 @@ function normalizeKnowledgeRebuildJobPayload(payload: unknown) {
       ? rawPhase
       : undefined
 
+  const embeddingSettingsSnapshot = candidate.embeddingSettingsSnapshot
+  const normalizedSnapshot =
+    embeddingSettingsSnapshot
+    && typeof embeddingSettingsSnapshot.provider === 'string'
+    && typeof embeddingSettingsSnapshot.model === 'string'
+    && typeof embeddingSettingsSnapshot.embeddingBatchSize === 'number'
+      ? {
+          provider: embeddingSettingsSnapshot.provider,
+          model: embeddingSettingsSnapshot.model,
+          embeddingBatchSize: Math.max(1, Math.floor(embeddingSettingsSnapshot.embeddingBatchSize)),
+        }
+      : undefined
+
   return {
     ...candidate,
     phase: normalizedPhase,
+    rawTextEmbeddingProgress: typeof candidate.rawTextEmbeddingProgress === 'number'
+      ? clampProgress(candidate.rawTextEmbeddingProgress)
+      : undefined,
+    rawTextEmbeddingCacheHitRate: typeof candidate.rawTextEmbeddingCacheHitRate === 'number'
+      ? clampProgress(candidate.rawTextEmbeddingCacheHitRate)
+      : undefined,
+    stageTimingsMs: {
+      ...((candidate.stageTimingsMs && typeof candidate.stageTimingsMs === 'object') ? candidate.stageTimingsMs : {}),
+    },
+    embeddingSettingsSnapshot: normalizedSnapshot,
     stageStartedAtByKey: { ...(candidate.stageStartedAtByKey ?? {}) },
   }
 }
@@ -289,6 +337,86 @@ function estimateStageEtaMinutes(progress: number, stageStartedAt: string | unde
 function getKnowledgeExtractionSettingsSnapshot(payload: KnowledgeRebuildJobPayload) {
   void payload
   return loadStoredAISettings().knowledgeExtraction
+}
+
+function buildEmbeddingSettingsSnapshot(): KnowledgeRebuildEmbeddingSettingsSnapshot {
+  const { embeddings } = loadStoredAISettings()
+  return {
+    provider: embeddings.provider,
+    model: embeddings.provider === 'openai-compatible' ? embeddings.openAICompatible.model : embeddings.ollama.model,
+    embeddingBatchSize: Math.max(1, Math.floor(embeddings.embeddingBatchSize || 1)),
+  }
+}
+
+function getOrCreateEmbeddingSettingsSnapshot(payload: KnowledgeRebuildJobPayload) {
+  return payload.embeddingSettingsSnapshot ?? buildEmbeddingSettingsSnapshot()
+}
+
+function isKnowledgeJobActivelyRunning(jobId: string) {
+  const status = getKnowledgeJobRow(jobId)?.status
+  return status === 'queued' || status === 'running'
+}
+
+function buildRawTextEmbeddingTelemetryUpdate(result: RawTextEmbeddingPrecomputeResult): KnowledgeRebuildTelemetryUpdate {
+  const hasDocs = result.totalDocs > 0
+  return {
+    rawTextEmbeddingProgress: hasDocs ? result.completedDocs / result.totalDocs : 1,
+    rawTextEmbeddingCacheHitRate: hasDocs ? result.cacheHits / result.totalDocs : 1,
+    stageTimingsMs: {
+      [RAW_TEXT_PRECOMPUTE_STAGE_KEY]: result.durationMs,
+    },
+  }
+}
+
+function ensureRawTextEmbeddingPrecomputeStarted(params: {
+  jobId: string
+  novelId: string
+  branchId: string
+  embeddingSettingsSnapshot: KnowledgeRebuildEmbeddingSettingsSnapshot
+}) {
+  const activeRun = rawTextEmbeddingPrecomputeRuns.get(params.jobId)
+  if (activeRun) {
+    return activeRun.promise
+  }
+
+  const startedAt = Date.now()
+  const promise = precomputeRawTextEmbeddingCache({
+    novelId: params.novelId,
+    branchId: params.branchId,
+    settingsSnapshot: params.embeddingSettingsSnapshot,
+    maxConcurrentBatches: 2,
+    shouldContinue: () => isKnowledgeJobActivelyRunning(params.jobId),
+    onProgress: async (progress) => {
+      updateKnowledgeRebuildJobTelemetry(params.jobId, {
+        rawTextEmbeddingProgress: progress.totalDocs > 0 ? progress.completedDocs / progress.totalDocs : 1,
+        rawTextEmbeddingCacheHitRate: progress.totalDocs > 0 ? progress.cacheHits / progress.totalDocs : 1,
+      })
+    },
+  }).catch(() => ({
+    totalDocs: 0,
+    completedDocs: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+    failedDocs: 0,
+    totalBatches: 0,
+    completedBatches: 0,
+    degraded: true,
+    cancelled: false,
+    durationMs: Date.now() - startedAt,
+  })).then((result) => {
+    updateKnowledgeRebuildJobTelemetry(params.jobId, buildRawTextEmbeddingTelemetryUpdate(result))
+    return result
+  }).finally(() => {
+    rawTextEmbeddingPrecomputeRuns.delete(params.jobId)
+  })
+
+  rawTextEmbeddingPrecomputeRuns.set(params.jobId, { promise })
+  return promise
+}
+
+async function waitForRawTextEmbeddingPrecompute(jobId: string) {
+  const run = rawTextEmbeddingPrecomputeRuns.get(jobId)
+  return run ? run.promise : null
 }
 
 function getKnowledgeExtractionParallelism(settings: KnowledgeExtractionScenarioSettings) {
@@ -553,12 +681,75 @@ function initializeKnowledgeRebuildJobState(jobId: string, payload: KnowledgeReb
       currentChapterId: payload.currentChapterId ?? null,
       processedChapterWeight: Math.max(0, payload.processedChapterWeight ?? 0),
       extractedChapters: payload.extractedChapters ?? [],
+      embeddingSettingsSnapshot: getOrCreateEmbeddingSettingsSnapshot(payload),
       stageStartedAtByKey: {
         ...(payload.stageStartedAtByKey ?? {}),
         [payload.phase ?? 'extract']: (payload.stageStartedAtByKey ?? {})[payload.phase ?? 'extract'] ?? new Date().toISOString(),
       },
     },
   })
+}
+
+export function mergeKnowledgeRebuildTelemetryPayloadForTesting(
+  payload: KnowledgeRebuildJobPayload,
+  telemetry: KnowledgeRebuildTelemetryUpdate
+): KnowledgeRebuildJobPayload {
+  return {
+    ...payload,
+    rawTextEmbeddingProgress: telemetry.rawTextEmbeddingProgress ?? payload.rawTextEmbeddingProgress,
+    rawTextEmbeddingCacheHitRate: telemetry.rawTextEmbeddingCacheHitRate ?? payload.rawTextEmbeddingCacheHitRate,
+    stageTimingsMs: {
+      ...(payload.stageTimingsMs ?? {}),
+      ...(telemetry.stageTimingsMs ?? {}),
+    },
+    embeddingSettingsSnapshot: getOrCreateEmbeddingSettingsSnapshot(payload),
+  }
+}
+
+export function updateKnowledgeRebuildJobTelemetry(jobId: string, telemetry: KnowledgeRebuildTelemetryUpdate) {
+  const row = queryOne<{ branchId: string | null; payloadJson: string | null }>(
+    'SELECT branchId, payloadJson FROM KnowledgeJob WHERE id = ?',
+    jobId
+  )
+  const parsedPayload = parseKnowledgeRebuildJobPayload(row?.payloadJson ?? null)
+  const basePayload: KnowledgeRebuildJobPayload | null = parsedPayload ?? (typeof row?.branchId === 'string' ? { branchId: row.branchId } : null)
+  if (!basePayload) return null
+
+  const mergedPayload = mergeKnowledgeRebuildTelemetryPayloadForTesting(basePayload, telemetry)
+  const pendingChapterIds = Array.isArray(basePayload.pendingChapterIds) ? basePayload.pendingChapterIds : []
+  const chapterWeightsById = basePayload.chapterWeightsById ?? {}
+  const extractedChapters = Array.isArray(basePayload.extractedChapters) ? basePayload.extractedChapters : []
+  const phase = basePayload.phase ?? 'extract'
+  const totalChapterWeight = typeof basePayload.totalChapterWeight === 'number'
+    ? Math.max(0, basePayload.totalChapterWeight)
+    : 0
+  const processedChapterWeight = typeof basePayload.processedChapterWeight === 'number'
+    ? Math.max(0, basePayload.processedChapterWeight)
+    : 0
+
+  updateKnowledgeJob(jobId, {
+    payload: {
+      ...mergedPayload,
+      phase,
+      currentChapterId: basePayload.currentChapterId ?? null,
+      pendingChapterIds,
+      chapterWeightsById,
+      totalChapterWeight,
+      processedChapterWeight,
+      extractedChapters,
+      totalChapterCount: basePayload.totalChapterCount ?? (pendingChapterIds.length + extractedChapters.length),
+    },
+  })
+
+  return {
+    phase,
+    pendingChapterIds,
+    chapterWeightsById,
+    totalChapterWeight,
+    processedChapterWeight,
+    extractedChapters,
+    payload: mergedPayload,
+  }
 }
 
 function setKnowledgeRebuildJobIndexProgress(jobId: string, indexProgress: KnowledgeRebuildIndexProgress) {
@@ -581,6 +772,10 @@ function setKnowledgeRebuildJobIndexProgress(jobId: string, indexProgress: Knowl
       processedChapterWeight: state.processedChapterWeight,
       extractedChapters: state.extractedChapters,
       extractionSettings: state.payload.extractionSettings,
+      rawTextEmbeddingProgress: state.payload.rawTextEmbeddingProgress,
+      rawTextEmbeddingCacheHitRate: state.payload.rawTextEmbeddingCacheHitRate,
+      stageTimingsMs: state.payload.stageTimingsMs,
+      embeddingSettingsSnapshot: getOrCreateEmbeddingSettingsSnapshot(state.payload),
       indexProgress,
     },
   })
@@ -819,6 +1014,11 @@ async function waitForKnowledgeJobCompletion(jobId: string, options?: { timeoutM
     await new Promise((resolve) => setTimeout(resolve, pollMs))
   }
 
+  updateKnowledgeJob(jobId, {
+    status: 'failed',
+    currentStep: '超时',
+    errorMessage: 'Knowledge rebuild timed out',
+  })
   throw new Error('Knowledge rebuild timed out')
 }
 
@@ -900,6 +1100,39 @@ function insertTextSpans(spans: ReturnType<typeof buildTextSpansFromLines>) {
       span.tokenEstimate ?? null
     )
   }
+}
+
+async function deleteNovelProjectionArtifacts(novelId: string, branchId: string) {
+  await withTransaction(async () => {
+    execute(
+      `
+        DELETE FROM future_jump_revisions
+        WHERE run_id IN (
+          SELECT id FROM future_jump_runs
+          WHERE base_branch_id = ?
+             OR session_id IN (SELECT id FROM what_if_sessions WHERE novel_id = ?)
+        )
+      `,
+      branchId,
+      novelId
+    )
+    execute(
+      `
+        DELETE FROM future_jump_runs
+        WHERE base_branch_id = ?
+           OR session_id IN (SELECT id FROM what_if_sessions WHERE novel_id = ?)
+      `,
+      branchId,
+      novelId
+    )
+    execute('DELETE FROM story_timeline_nodes WHERE novel_id = ?', novelId)
+    execute('DELETE FROM what_if_sessions WHERE novel_id = ?', novelId)
+    execute('DELETE FROM outline_node_chapters WHERE outline_node_id IN (SELECT id FROM outline_nodes WHERE novel_id = ?)', novelId)
+    execute('DELETE FROM outline_nodes WHERE novel_id = ?', novelId)
+    execute('DELETE FROM chapter_extraction_candidates WHERE novel_id = ?', novelId)
+    execute('DELETE FROM KnowledgeJob WHERE novelId = ?', novelId)
+    execute('DELETE FROM NovelRecord WHERE id = ?', novelId)
+  })
 }
 
 async function clearKnowledgeGraphData(novelId: string, branchId: string) {
@@ -2104,6 +2337,7 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
         totalChapterCount: defaultRebuildChapters.length,
         processedChapterWeight: 0,
         extractedChapters: [],
+        embeddingSettingsSnapshot: buildEmbeddingSettingsSnapshot(),
         indexProgress: undefined,
         stageStartedAtByKey: {
           extract: new Date().toISOString(),
@@ -2150,6 +2384,13 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
           const remainingChapters = currentChapters
             .filter((chapter) => chapter.chapterNo >= rebuildStartChapter && currentJobState.pendingChapterIds.includes(chapter.id))
             .sort((left, right) => left.chapterNo - right.chapterNo)
+
+          ensureRawTextEmbeddingPrecomputeStarted({
+            jobId: job.id,
+            novelId: params.novelId,
+            branchId,
+            embeddingSettingsSnapshot: getOrCreateEmbeddingSettingsSnapshot(currentJobState.payload),
+          })
 
           if (!remainingChapters.length) {
             setWriteQueueInKnowledgeJob(
@@ -2327,6 +2568,9 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
 
     }
 
+    assertKnowledgeRebuildContinues(job.id)
+    await waitForRawTextEmbeddingPrecompute(job.id)
+    assertKnowledgeRebuildContinues(job.id)
     setKnowledgeRebuildJobPhase(job.id, 'index')
     setKnowledgeRebuildJobIndexProgress(job.id, {
       phase: 'loading',
@@ -2335,7 +2579,6 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
       totalBatches: 0,
       completedBatches: 0,
     })
-    assertKnowledgeRebuildContinues(job.id)
     await rebuildDerivedIndexes({
       novelId: params.novelId,
       branchId,
@@ -2369,6 +2612,7 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
           totalChapterCount: 0,
           processedChapterWeight: 0,
           extractedChapters: [],
+          embeddingSettingsSnapshot: getOrCreateEmbeddingSettingsSnapshot({ branchId }),
           indexProgress: undefined,
           stageStartedAtByKey: {},
         },
@@ -2505,13 +2749,17 @@ export async function persistImportedNovelToKnowledgeStore(params: PersistImport
   }
 }
 
-export async function syncWorkspacePayloadToKnowledgeStore(payload: {
+type WorkspaceKnowledgeSyncPayload = {
   localNovels?: Array<{ id: string; title: string; summary: string; tags: string[] }>
   localChapters?: Chapter[]
   localOutlines?: PersistedNovelState['localOutlines']
   localTimelineEvents?: PersistedNovelState['localTimelineEvents']
   currentNovelId?: string
-}) {
+}
+
+let workspaceKnowledgeSyncQueue: Promise<void> = Promise.resolve()
+
+async function performWorkspacePayloadToKnowledgeStoreSync(payload: WorkspaceKnowledgeSyncPayload) {
   const novelMetaById = new Map((payload.localNovels ?? []).map((item) => [item.id, item]))
   const chapters = (payload.localChapters ?? [])
     .filter((chapter) => !chapter.parentChapterId)
@@ -2538,14 +2786,12 @@ export async function syncWorkspacePayloadToKnowledgeStore(payload: {
       )
 
       if (activeJob?.id) {
-        await waitForKnowledgeJobCompletion(activeJob.id)
+        await abortKnowledgeRebuildForNovel({ novelId: novel.id, branchId })
       }
 
       await deleteBranchRetrievalIndex(branchId)
 
-      await withTransaction(async () => {
-        execute('DELETE FROM NovelRecord WHERE id = ?', novel.id)
-      })
+      await deleteNovelProjectionArtifacts(novel.id, branchId)
     }
   }
 
@@ -2709,14 +2955,9 @@ export async function syncWorkspacePayloadToKnowledgeStore(payload: {
         })
       }
 
-      if (activeJob?.status === 'paused') {
-        continue
-      }
-
       if (activeJob?.id) {
-        await waitForKnowledgeJobCompletion(activeJob.id)
+        await abortKnowledgeRebuildForNovel({ novelId, branchId })
       }
-      await rebuildKnowledgeForNovel({ novelId, branchId })
     }
 
     await bootstrapOutlineNodesForFutureMap({
@@ -2725,4 +2966,10 @@ export async function syncWorkspacePayloadToKnowledgeStore(payload: {
       workspaceState: payload,
     })
   }
+}
+
+export async function syncWorkspacePayloadToKnowledgeStore(payload: WorkspaceKnowledgeSyncPayload) {
+  const run = workspaceKnowledgeSyncQueue.then(() => performWorkspacePayloadToKnowledgeStoreSync(payload))
+  workspaceKnowledgeSyncQueue = run.catch(() => undefined)
+  return run
 }

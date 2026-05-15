@@ -57,10 +57,7 @@ export async function POST(request: Request) {
     })
 
     upsertWorkspaceState('singleton', JSON.stringify(nextState))
-
-    void syncWorkspacePayloadToKnowledgeStore(nextState).catch((error) => {
-      console.error('Import workspace sync failed:', error)
-    })
+    await syncWorkspacePayloadToKnowledgeStore(nextState)
 
     return NextResponse.json({
       ok: true,

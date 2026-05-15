@@ -49,6 +49,14 @@ export type KnowledgeRebuildStatus = {
   updatedAt: string
   etaMinutes: number | null
   steps: KnowledgeRebuildPayloadStep[]
+  rawTextEmbeddingProgress?: number
+  rawTextEmbeddingCacheHitRate?: number
+  stageTimingsMs?: Record<string, number>
+  embeddingSettingsSnapshot?: {
+    provider: string
+    model: string
+    embeddingBatchSize: number
+  }
 }
 
 export type KnowledgeViewPayload = KnowledgeProjectionPayload & {
@@ -99,6 +107,66 @@ function parseKnowledgeRebuildSteps(payloadJson: string | null) {
   }
 }
 
+type KnowledgeRebuildTelemetryStatusFields = Pick<
+  KnowledgeRebuildStatus,
+  'rawTextEmbeddingProgress' | 'rawTextEmbeddingCacheHitRate' | 'stageTimingsMs' | 'embeddingSettingsSnapshot'
+>
+
+function parseKnowledgeRebuildTelemetryStatusFields(payloadJson: string | null): KnowledgeRebuildTelemetryStatusFields {
+  if (!payloadJson) return {}
+
+  try {
+    const payload = JSON.parse(payloadJson) as {
+      rawTextEmbeddingProgress?: unknown
+      rawTextEmbeddingCacheHitRate?: unknown
+      stageTimingsMs?: unknown
+      embeddingSettingsSnapshot?: unknown
+    }
+
+    const telemetry: KnowledgeRebuildTelemetryStatusFields = {}
+
+    if (typeof payload.rawTextEmbeddingProgress === 'number' && Number.isFinite(payload.rawTextEmbeddingProgress)) {
+      telemetry.rawTextEmbeddingProgress = payload.rawTextEmbeddingProgress
+    }
+
+    if (typeof payload.rawTextEmbeddingCacheHitRate === 'number' && Number.isFinite(payload.rawTextEmbeddingCacheHitRate)) {
+      telemetry.rawTextEmbeddingCacheHitRate = payload.rawTextEmbeddingCacheHitRate
+    }
+
+    if (payload.stageTimingsMs && typeof payload.stageTimingsMs === 'object') {
+      const safeTimings = Object.fromEntries(
+        Object.entries(payload.stageTimingsMs as Record<string, unknown>)
+          .filter((entry): entry is [string, number] => (
+            typeof entry[1] === 'number' && Number.isFinite(entry[1])
+          ))
+      )
+      if (Object.keys(safeTimings).length) {
+        telemetry.stageTimingsMs = safeTimings
+      }
+    }
+
+    if (payload.embeddingSettingsSnapshot && typeof payload.embeddingSettingsSnapshot === 'object') {
+      const snapshot = payload.embeddingSettingsSnapshot as Record<string, unknown>
+      if (
+        typeof snapshot.provider === 'string'
+        && typeof snapshot.model === 'string'
+        && typeof snapshot.embeddingBatchSize === 'number'
+        && Number.isFinite(snapshot.embeddingBatchSize)
+      ) {
+        telemetry.embeddingSettingsSnapshot = {
+          provider: snapshot.provider,
+          model: snapshot.model,
+          embeddingBatchSize: Math.max(1, Math.floor(snapshot.embeddingBatchSize)),
+        }
+      }
+    }
+
+    return telemetry
+  } catch {
+    return {}
+  }
+}
+
 function parseSqliteUtcTimestamp(value: string) {
   const normalized = value.trim().replace(' ', 'T')
   const withZone = /(?:Z|[+-]\d{2}:\d{2})$/.test(normalized) ? normalized : `${normalized}Z`
@@ -142,6 +210,7 @@ function getKnowledgeRebuildStatus(novelIds?: string[]): KnowledgeRebuildStatus 
   }
 
   const steps = parseKnowledgeRebuildSteps(status.payloadJson)
+  const telemetry = parseKnowledgeRebuildTelemetryStatusFields(status.payloadJson)
   const activeStep = steps.find((step) => step.status === 'running' || step.status === 'paused') ?? null
 
   return {
@@ -150,6 +219,7 @@ function getKnowledgeRebuildStatus(novelIds?: string[]): KnowledgeRebuildStatus 
       ? null
       : activeStep?.etaMinutes ?? estimateRebuildEtaMinutes(status.progress, status.createdAt),
     steps,
+    ...telemetry,
   }
 }
 

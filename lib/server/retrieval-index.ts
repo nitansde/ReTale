@@ -1,12 +1,20 @@
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import * as lancedb from '@lancedb/lancedb'
-import type { EmbeddingsScenarioSettings } from '@/lib/types'
+import type { AIProvider, EmbeddingsScenarioSettings } from '@/lib/types'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 import { estimateTokenCount, type TextSpanInput } from '@/lib/server/knowledge-store'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { embedTextsWithOpenAICompatible } from '@/lib/server/openai-compatible'
 import { embedTextsWithOllama } from '@/lib/server/ollama-local'
+import {
+  buildCanonicalRetrievalEmbeddingInput,
+  buildEmbeddingInputHash,
+  deleteRawTextEmbeddingCacheEntries,
+  garbageCollectRawTextEmbeddingCacheEntries,
+  lookupRawTextEmbeddingCacheEntries,
+  upsertRawTextEmbeddingCacheEntries,
+} from '@/lib/server/retrieval-embedding-cache'
 import {
   loadExplicitAuthoredContext,
   hasExplicitAuthoredContextSelection,
@@ -62,6 +70,14 @@ type RetrievalDocRow = RetrievalDocSeedRow & {
   vector: number[]
 }
 
+type RetrievalDocEmbeddingPlanRow = {
+  row: RetrievalDocSeedRow
+  rowIndex: number
+  embeddingInput: string
+  embeddingInputHash: string
+  cachedVector: number[] | null
+}
+
 type RetrievalDocSearchRow = RetrievalDocSeedRow & {
   vector?: number[] | Float32Array
   _score?: number
@@ -114,6 +130,28 @@ export type RetrievalIndexBuildProgress = {
 export type RetrievalIndexBuildResult = {
   rowCount: number
   embeddingBatchCount: number
+}
+
+export type RawTextEmbeddingPrecomputeSettingsSnapshot = {
+  provider: AIProvider
+  model: string
+  embeddingBatchSize: number
+}
+
+export type RawTextEmbeddingPrecomputeProgress = {
+  totalDocs: number
+  completedDocs: number
+  cacheHits: number
+  cacheMisses: number
+  failedDocs: number
+  totalBatches: number
+  completedBatches: number
+  degraded: boolean
+}
+
+export type RawTextEmbeddingPrecomputeResult = RawTextEmbeddingPrecomputeProgress & {
+  cancelled: boolean
+  durationMs: number
 }
 
 const LANCEDB_DIR = process.env.LANCEDB_DIR?.trim() || path.join(process.cwd(), '.lancedb')
@@ -366,14 +404,199 @@ function loadPackedBranchTextSpans(novelId: string, branchId: string) {
 }
 
 function buildRetrievalEmbeddingText(row: RetrievalDocSeedRow) {
-  return [
-    row.sourceLabel,
-    row.title,
-    row.relatedEntityNames.replace(/\n/g, ' '),
-    row.relatedEventNames.replace(/\n/g, ' '),
-    row.relatedTerms.replace(/\n/g, ' '),
-    row.text,
-  ].filter(Boolean).join('\n')
+  return buildCanonicalRetrievalEmbeddingInput({
+    sourceLabel: row.sourceLabel,
+    title: row.title,
+    relatedEntityNames: row.relatedEntityNames,
+    relatedEventNames: row.relatedEventNames,
+    relatedTerms: row.relatedTerms,
+    text: row.text,
+  })
+}
+
+function buildRetrievalEmbeddingInput(row: RetrievalDocSeedRow) {
+  const text = buildRetrievalEmbeddingText(row)
+  return {
+    text,
+    embeddingInputHash: buildEmbeddingInputHash(text),
+  }
+}
+
+export function buildRawTextRetrievalEmbeddingInput(row: RetrievalDocSeedRow) {
+  return buildRetrievalEmbeddingInput(row)
+}
+
+async function embedTextsForRawTextPrecompute(
+  embeddingInputs: string[],
+  settingsSnapshot: RawTextEmbeddingPrecomputeSettingsSnapshot,
+) {
+  const result = settingsSnapshot.provider === 'openai-compatible'
+    ? await embedTextsWithOpenAICompatible(embeddingInputs, { model: settingsSnapshot.model })
+    : await embedTextsWithOllama(embeddingInputs, { model: settingsSnapshot.model })
+
+  if (!result.enabled || !result.embeddings) {
+    throw new Error(result.error || 'Failed to generate raw-text precompute embeddings')
+  }
+
+  if (result.embeddings.length !== embeddingInputs.length) {
+    throw new Error(`Embedding provider returned ${result.embeddings.length} embeddings for ${embeddingInputs.length} raw-text docs`)
+  }
+
+  const dimension = result.embeddings[0]?.length ?? 0
+  if (!dimension || result.embeddings.some((vector) => vector.length !== dimension)) {
+    throw new Error('Raw-text precompute embedding dimensions are inconsistent within an embedding batch')
+  }
+
+  return result.embeddings
+}
+
+async function waitForRawTextPrecomputeRetry(delayMs: number, shouldContinue?: () => boolean | Promise<boolean>) {
+  if (shouldContinue && !(await shouldContinue())) {
+    return false
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, delayMs))
+
+  if (shouldContinue && !(await shouldContinue())) {
+    return false
+  }
+
+  return true
+}
+
+export async function precomputeRawTextEmbeddingCache(params: {
+  novelId: string
+  branchId: string
+  settingsSnapshot: RawTextEmbeddingPrecomputeSettingsSnapshot
+  maxConcurrentBatches?: number
+  shouldContinue?: () => boolean | Promise<boolean>
+  onProgress?: (progress: RawTextEmbeddingPrecomputeProgress) => void | Promise<void>
+}): Promise<RawTextEmbeddingPrecomputeResult> {
+  const startedAt = Date.now()
+  const maxConcurrentBatches = Math.max(1, Math.floor(params.maxConcurrentBatches ?? 2))
+  const cacheScope = {
+    novelId: params.novelId,
+    branchId: params.branchId,
+    provider: params.settingsSnapshot.provider,
+    model: params.settingsSnapshot.model,
+  }
+  const rawTextDocs = loadRawTextRetrievalDocs(params.novelId, params.branchId)
+  const docsWithInputs = rawTextDocs.map((row) => ({
+    row,
+    ...buildRawTextRetrievalEmbeddingInput(row),
+  }))
+  const reachableEmbeddingInputHashes = docsWithInputs.map((item) => item.embeddingInputHash)
+  const hits = await lookupRawTextEmbeddingCacheEntries({
+    scope: cacheScope,
+    embeddingInputHashes: reachableEmbeddingInputHashes,
+    touchOnHit: true,
+  })
+
+  const hitHashes = new Set(hits.map((entry) => entry.embeddingInputHash))
+  const hitDocsCount = docsWithInputs.filter((item) => hitHashes.has(item.embeddingInputHash)).length
+  const missingDocs = docsWithInputs.filter((item) => !hitHashes.has(item.embeddingInputHash))
+  const batchSize = Math.max(1, Math.floor(params.settingsSnapshot.embeddingBatchSize || DEFAULT_EMBEDDING_BATCH_SIZE))
+  const missingBatches = Array.from(
+    { length: Math.ceil(missingDocs.length / batchSize) },
+    (_, index) => missingDocs.slice(index * batchSize, (index + 1) * batchSize),
+  ).filter((batch) => batch.length > 0)
+
+  const progress: RawTextEmbeddingPrecomputeProgress = {
+    totalDocs: docsWithInputs.length,
+    completedDocs: hitDocsCount,
+    cacheHits: hitDocsCount,
+    cacheMisses: missingDocs.length,
+    failedDocs: 0,
+    totalBatches: missingBatches.length,
+    completedBatches: 0,
+    degraded: false,
+  }
+  let cancelled = false
+
+  const finalizeReachableCacheSet = async () => {
+    if (cancelled) {
+      return
+    }
+
+    await garbageCollectRawTextEmbeddingCacheEntries({
+      scope: cacheScope,
+      reachableEmbeddingInputHashes,
+    })
+  }
+
+  await params.onProgress?.({ ...progress })
+
+  if (!missingBatches.length) {
+    await finalizeReachableCacheSet()
+    return {
+      ...progress,
+      cancelled: false,
+      durationMs: Date.now() - startedAt,
+    }
+  }
+
+  let nextBatchIndex = 0
+
+  const runBatch = async (batch: typeof missingBatches[number]) => {
+    const embeddingInputs = batch.map((item) => item.text)
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const embeddings = await embedTextsForRawTextPrecompute(embeddingInputs, params.settingsSnapshot)
+        await upsertRawTextEmbeddingCacheEntries({
+          scope: cacheScope,
+          entries: batch.map((item, index) => ({
+            embeddingInput: item.text,
+            vector: embeddings[index],
+          })),
+        })
+        progress.completedDocs += batch.length
+        return
+      } catch (error) {
+        if (attempt >= 2) {
+          progress.failedDocs += batch.length
+          progress.degraded = true
+          return
+        }
+
+        const shouldRetry = await waitForRawTextPrecomputeRetry(attempt === 0 ? 500 : 1500, params.shouldContinue)
+        if (!shouldRetry) {
+          cancelled = true
+          return
+        }
+      }
+    }
+  }
+
+  const worker = async () => {
+    while (nextBatchIndex < missingBatches.length) {
+      if (params.shouldContinue && !(await params.shouldContinue())) {
+        cancelled = true
+        return
+      }
+
+      const batchIndex = nextBatchIndex
+      nextBatchIndex += 1
+      const batch = missingBatches[batchIndex]
+      await runBatch(batch)
+      progress.completedBatches += 1
+      await params.onProgress?.({ ...progress })
+      if (cancelled) {
+        return
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(maxConcurrentBatches, missingBatches.length) }, () => worker())
+  )
+  await finalizeReachableCacheSet()
+
+  return {
+    ...progress,
+    cancelled,
+    durationMs: Date.now() - startedAt,
+  }
 }
 
 function formatElapsed(elapsedMs: number) {
@@ -389,14 +612,15 @@ function getEmbeddingBatchSize(settings: EmbeddingsScenarioSettings) {
 }
 
 async function embedRetrievalRowBatch(
-  rows: RetrievalDocSeedRow[],
+  rows: Array<Pick<RetrievalDocEmbeddingPlanRow, 'row' | 'embeddingInput'>>,
   settings: EmbeddingsScenarioSettings,
 ) {
   if (!rows.length) return [] as RetrievalDocRow[]
 
+  const embeddingInputs = rows.map((item) => item.embeddingInput)
   const result = settings.provider === 'openai-compatible'
-    ? await embedTextsWithOpenAICompatible(rows.map(buildRetrievalEmbeddingText), settings.openAICompatible)
-    : await embedTextsWithOllama(rows.map(buildRetrievalEmbeddingText), settings.ollama)
+    ? await embedTextsWithOpenAICompatible(embeddingInputs, settings.openAICompatible)
+    : await embedTextsWithOllama(embeddingInputs, settings.ollama)
   if (!result.enabled || !result.embeddings) {
     throw new Error(result.error || 'Failed to generate retrieval embeddings')
   }
@@ -410,10 +634,62 @@ async function embedRetrievalRowBatch(
     throw new Error('Retrieval embedding dimensions are inconsistent within an embedding batch')
   }
 
-  return rows.map((row, index) => ({
+  return rows.map(({ row }, index) => ({
     ...row,
     vector: embeddings[index],
   }))
+}
+
+function getEmbeddingModel(settings: EmbeddingsScenarioSettings) {
+  return settings.provider === 'openai-compatible'
+    ? settings.openAICompatible.model
+    : settings.ollama.model
+}
+
+function buildRawTextEmbeddingCacheScope(novelId: string, branchId: string, settings: EmbeddingsScenarioSettings) {
+  return {
+    novelId,
+    branchId,
+    provider: settings.provider,
+    model: getEmbeddingModel(settings),
+  }
+}
+
+async function buildRetrievalEmbeddingPlan(params: {
+  novelId: string
+  branchId: string
+  rows: RetrievalDocSeedRow[]
+  embeddingSettings: EmbeddingsScenarioSettings
+}) {
+  const plannedRows = params.rows.map<RetrievalDocEmbeddingPlanRow>((row, rowIndex) => {
+    const { text, embeddingInputHash } = buildRetrievalEmbeddingInput(row)
+    return {
+      row,
+      rowIndex,
+      embeddingInput: text,
+      embeddingInputHash,
+      cachedVector: null,
+    }
+  })
+
+  const rawTextRows = plannedRows.filter((item) => item.row.sourceType === 'text_span')
+  if (!rawTextRows.length) {
+    return plannedRows
+  }
+
+  const cacheScope = buildRawTextEmbeddingCacheScope(params.novelId, params.branchId, params.embeddingSettings)
+  const cacheHits = await lookupRawTextEmbeddingCacheEntries({
+    scope: cacheScope,
+    embeddingInputHashes: rawTextRows.map((item) => item.embeddingInputHash),
+    touchOnHit: true,
+  })
+  const cacheHitVectors = new Map(cacheHits.map((entry) => [entry.embeddingInputHash, entry.vector]))
+
+  for (const item of rawTextRows) {
+    item.cachedVector = cacheHitVectors.get(item.embeddingInputHash) ?? null
+  }
+
+  return plannedRows
 }
 
 async function embedRetrievalQuery(query: string) {
@@ -525,12 +801,15 @@ async function hasUsableVectorColumn(table: Awaited<ReturnType<typeof openBranch
 
 async function createOrReplaceBranchTable(
   branchId: string,
-  rows: RetrievalDocSeedRow[],
+  rows: RetrievalDocEmbeddingPlanRow[],
+  novelId: string,
   embeddingSettings: EmbeddingsScenarioSettings,
   embeddingBatchSize: number,
   onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
 ) {
   const database = await getDatabase()
+  const rawTextCacheScope = buildRawTextEmbeddingCacheScope(novelId, branchId, embeddingSettings)
+  const liveRows = rows.filter((item) => item.row.sourceType !== 'text_span' || !item.cachedVector)
   const totalBatches = Math.ceil(rows.length / embeddingBatchSize)
   const embeddingStartedAt = Date.now()
   let embeddingElapsedMs = 0
@@ -542,6 +821,26 @@ async function createOrReplaceBranchTable(
   let expectedVectorDimension: number | null = null
   let table: lancedb.Table | null = null
   const writeBuffer: RetrievalDocRow[] = []
+  const resolvedRows = Array<RetrievalDocRow | null>(rows.length).fill(null)
+  const deferredRawTextRows: RetrievalDocEmbeddingPlanRow[] = []
+
+  const assignResolvedRow = (plannedRow: RetrievalDocEmbeddingPlanRow, vector: number[]) => {
+    if (!vector.length) {
+      throw new Error('Retrieval embedding vector must be non-empty during LanceDB rebuild')
+    }
+    if (vector.some((value) => !Number.isFinite(value))) {
+      throw new Error('Retrieval embedding vector contains a non-finite value during LanceDB rebuild')
+    }
+    if (expectedVectorDimension === null) {
+      expectedVectorDimension = vector.length
+    } else if (expectedVectorDimension !== vector.length) {
+      throw new Error('Retrieval embedding dimensions are inconsistent across cached and live LanceDB rows')
+    }
+    resolvedRows[plannedRow.rowIndex] = {
+      ...plannedRow.row,
+      vector,
+    }
+  }
 
   logLanceIndex(`embedding started: docs=${rows.length}, batchSize=${embeddingBatchSize}`)
 
@@ -568,8 +867,8 @@ async function createOrReplaceBranchTable(
     }
   }
 
-  for (let index = 0; index < rows.length; index += embeddingBatchSize) {
-    const batch = rows.slice(index, index + embeddingBatchSize)
+  for (let index = 0; index < liveRows.length; index += embeddingBatchSize) {
+    const batch = liveRows.slice(index, index + embeddingBatchSize)
     const embeddingBatchStartedAt = Date.now()
     const embeddedBatch = await embedRetrievalRowBatch(batch, embeddingSettings)
     embeddingElapsedMs += Date.now() - embeddingBatchStartedAt
@@ -584,10 +883,25 @@ async function createOrReplaceBranchTable(
       throw new Error('Retrieval embedding dimensions are inconsistent across LanceDB batches')
     }
 
-    writeBuffer.push(...embeddedBatch)
-    embeddedRowsCount += embeddedBatch.length
+    for (const [batchIndex, embeddedRow] of embeddedBatch.entries()) {
+      assignResolvedRow(batch[batchIndex], embeddedRow.vector)
+    }
+
+    const rawTextBatch = batch
+      .map((item, itemIndex) => ({ item, vector: embeddedBatch[itemIndex]?.vector }))
+      .filter((entry): entry is { item: RetrievalDocEmbeddingPlanRow; vector: number[] } => entry.item.row.sourceType === 'text_span' && Array.isArray(entry.vector))
+    if (rawTextBatch.length) {
+      await upsertRawTextEmbeddingCacheEntries({
+        scope: rawTextCacheScope,
+        entries: rawTextBatch.map(({ item, vector }) => ({
+          embeddingInput: item.embeddingInput,
+          vector,
+        })),
+      })
+    }
+
+    embeddedRowsCount = resolvedRows.filter(Boolean).length
     completedBatches += 1
-    await flushWriteBuffer()
 
     const embeddingWallElapsedMs = Date.now() - embeddingStartedAt
     const docsPerSec = embeddingWallElapsedMs > 0
@@ -603,6 +917,82 @@ async function createOrReplaceBranchTable(
       completedBatches,
     })
   }
+
+  for (const item of rows) {
+    if (item.row.sourceType !== 'text_span' || !item.cachedVector) {
+      continue
+    }
+
+    if (expectedVectorDimension !== null && item.cachedVector.length !== expectedVectorDimension) {
+      deferredRawTextRows.push({
+        ...item,
+        cachedVector: null,
+      })
+      continue
+    }
+
+    assignResolvedRow(item, item.cachedVector)
+  }
+
+  if (deferredRawTextRows.length) {
+    await deleteRawTextEmbeddingCacheEntries({
+      scope: rawTextCacheScope,
+      embeddingInputHashes: deferredRawTextRows.map((item) => item.embeddingInputHash),
+    })
+
+    for (let index = 0; index < deferredRawTextRows.length; index += embeddingBatchSize) {
+      const batch = deferredRawTextRows.slice(index, index + embeddingBatchSize)
+      const embeddingBatchStartedAt = Date.now()
+      const embeddedBatch = await embedRetrievalRowBatch(batch, embeddingSettings)
+      embeddingElapsedMs += Date.now() - embeddingBatchStartedAt
+
+      const batchDimension = embeddedBatch[0]?.vector.length ?? 0
+      if (!batchDimension || embeddedBatch.some((row) => row.vector.length !== batchDimension)) {
+        throw new Error('Retrieval embedding dimensions are inconsistent within a LanceDB write batch')
+      }
+      if (expectedVectorDimension === null) {
+        expectedVectorDimension = batchDimension
+      } else if (expectedVectorDimension !== batchDimension) {
+        throw new Error('Retrieval embedding dimensions are inconsistent across cached and live LanceDB rows')
+      }
+
+      for (const [batchIndex, embeddedRow] of embeddedBatch.entries()) {
+        assignResolvedRow(batch[batchIndex], embeddedRow.vector)
+      }
+
+      await upsertRawTextEmbeddingCacheEntries({
+        scope: rawTextCacheScope,
+        entries: batch.map((item, itemIndex) => ({
+          embeddingInput: item.embeddingInput,
+          vector: embeddedBatch[itemIndex].vector,
+        })),
+      })
+
+      embeddedRowsCount = resolvedRows.filter(Boolean).length
+      completedBatches += 1
+
+      const embeddingWallElapsedMs = Date.now() - embeddingStartedAt
+      const docsPerSec = embeddingWallElapsedMs > 0
+        ? (embeddedRowsCount / (embeddingWallElapsedMs / 1000)).toFixed(1)
+        : '0.0'
+
+      logLanceIndex(`embedding progress: embedded=${embeddedRowsCount}/${rows.length}, docsPerSec=${docsPerSec}`)
+      await onProgress?.({
+        phase: 'embedding',
+        totalRows: rows.length,
+        embeddedRows: embeddedRowsCount,
+        totalBatches,
+        completedBatches,
+      })
+    }
+  }
+
+  const finalRows = resolvedRows.filter((row): row is RetrievalDocRow => Boolean(row))
+  if (finalRows.length !== rows.length) {
+    throw new Error(`Failed to resolve all retrieval rows for LanceDB rebuild: expected ${rows.length} but received ${finalRows.length}`)
+  }
+
+  writeBuffer.push(...finalRows)
 
   await flushWriteBuffer(true)
   logLanceIndex(`embedding done: elapsed=${formatElapsed(embeddingElapsedMs)}`)
@@ -1194,15 +1584,25 @@ function loadBranchOpenThreadDocs(novelId: string, branchId: string) {
   })
 }
 
-function loadBranchRetrievalDocs(novelId: string, branchId: string) {
+export function loadRawTextRetrievalDocs(novelId: string, branchId: string) {
+  return loadPackedBranchTextSpans(novelId, branchId).map(toRetrievalDocRow)
+}
+
+export function loadKnowledgeDerivedRetrievalDocs(novelId: string, branchId: string) {
   return [
-    ...loadPackedBranchTextSpans(novelId, branchId).map(toRetrievalDocRow),
     ...loadBranchChapterSummaryDocs(novelId, branchId),
     ...loadBranchEntityProfileDocs(novelId, branchId),
     ...loadBranchEventSummaryDocs(novelId, branchId),
     ...loadBranchWorldbuildingDocs(novelId, branchId),
     ...loadBranchRelationshipDocs(novelId, branchId),
     ...loadBranchOpenThreadDocs(novelId, branchId),
+  ]
+}
+
+export function loadBranchRetrievalDocs(novelId: string, branchId: string) {
+  return [
+    ...loadRawTextRetrievalDocs(novelId, branchId),
+    ...loadKnowledgeDerivedRetrievalDocs(novelId, branchId),
   ]
 }
 
@@ -1493,11 +1893,17 @@ export async function rebuildBranchRetrievalIndex(
 
   const embeddingSettings = loadStoredAISettings().embeddings
   const embeddingBatchSize = getEmbeddingBatchSize(embeddingSettings)
+  const plannedRows = await buildRetrievalEmbeddingPlan({
+    novelId,
+    branchId,
+    rows,
+    embeddingSettings,
+  })
   const totalBatches = Math.ceil(rows.length / embeddingBatchSize)
   await options?.onProgress?.({
     phase: rows.length ? 'embedding' : 'completed',
     totalRows: rows.length,
-    embeddedRows: 0,
+    embeddedRows: plannedRows.filter((item) => item.row.sourceType === 'text_span' && item.cachedVector).length,
     totalBatches,
     completedBatches: 0,
   })
@@ -1509,7 +1915,7 @@ export async function rebuildBranchRetrievalIndex(
       embeddingBatchCount: 0,
     }
   }
-  await createOrReplaceBranchTable(branchId, rows, embeddingSettings, embeddingBatchSize, options?.onProgress)
+  await createOrReplaceBranchTable(branchId, plannedRows, novelId, embeddingSettings, embeddingBatchSize, options?.onProgress)
   await options?.onProgress?.({
     phase: 'completed',
     totalRows: rows.length,

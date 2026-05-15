@@ -33,6 +33,12 @@ function seedIsolationFixture(database: DatabaseSync) {
 
   database.prepare('INSERT INTO ChapterLine (id, chapterId, lineNo, text) VALUES (?, ?, ?, ?)').run('line-10-1', 'chapter-10', 1, '男主和女主暂时结盟，准备一起行动。')
   database.prepare('INSERT INTO ChapterLine (id, chapterId, lineNo, text) VALUES (?, ?, ?, ?)').run('line-10-2', 'chapter-10', 2, '他们都还相信对方。')
+  database.prepare(
+    `INSERT INTO TextSpan (
+      id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
+      charStart, charEnd, text, spanType, tokenEstimate
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('span-10-mainline', 'novel-001', 'novel-001:main', 'chapter-10', 10, 1, 2, 0, 27, '男主和女主暂时结盟，准备一起行动。\n他们都还相信对方。', 'scene', 24)
 
   database.prepare(
     `INSERT INTO what_if_sessions (
@@ -82,6 +88,21 @@ function seedIsolationFixture(database: DatabaseSync) {
   ).run('future-jump-revision-002', 'jump-run-001', 2, 'revise', '更虐一点', '新的桥接摘要', '新的未来节点正文')
 }
 
+function createMockAISettings() {
+  return {
+    embeddings: {
+      provider: 'ollama',
+      embeddingBatchSize: 16,
+      openAICompatible: {
+        model: 'unused-openai-model',
+      },
+      ollama: {
+        model: 'branch-isolation-embedding-model',
+      },
+    },
+  }
+}
+
 afterEach(() => {
   if (globalForSqlite.sqlite) {
     try {
@@ -106,6 +127,51 @@ describe('branch-isolation-mainline', () => {
     seedIsolationFixture(database)
 
     vi.resetModules()
+    const aiSettings = createMockAISettings()
+    const embedTextsWithOllama = vi.fn(async (input: string | string[]) => {
+      const values = Array.isArray(input) ? input : [input]
+      return {
+        enabled: true,
+        embeddings: values.map(() => [2, 2, 2]),
+        model: aiSettings.embeddings.ollama.model,
+      }
+    })
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/ollama-local', () => ({
+      embedTextsWithOllama,
+    }))
+
+    const { precomputeRawTextEmbeddingCache } = await import('@/lib/server/retrieval-index')
+    await expect(precomputeRawTextEmbeddingCache({
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      settingsSnapshot: {
+        provider: 'ollama',
+        model: aiSettings.embeddings.ollama.model,
+        embeddingBatchSize: aiSettings.embeddings.embeddingBatchSize,
+      },
+    })).resolves.toMatchObject({
+      totalDocs: 1,
+      completedDocs: 1,
+      cacheHits: 0,
+    })
+    await expect(precomputeRawTextEmbeddingCache({
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      settingsSnapshot: {
+        provider: 'ollama',
+        model: aiSettings.embeddings.ollama.model,
+        embeddingBatchSize: aiSettings.embeddings.embeddingBatchSize,
+      },
+    })).resolves.toMatchObject({
+      totalDocs: 1,
+      completedDocs: 1,
+      cacheHits: 1,
+    })
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+
     const [{ buildGenerationContext }, { searchLanceEvidence }] = await Promise.all([
       import('@/lib/server/context-builder'),
       import('@/lib/server/retrieval-index'),
@@ -134,5 +200,8 @@ describe('branch-isolation-mainline', () => {
 
     expect(retrieval.matches).toEqual([])
     expect(retrieval.matches.some((match) => match.sourceType === 'authored_delta' || match.sourceType === 'future_jump_revision')).toBe(false)
+    expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
+      count: 1,
+    })
   })
 })

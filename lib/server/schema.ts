@@ -373,6 +373,20 @@ CREATE TABLE IF NOT EXISTS KnowledgeJob (
   FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS RawTextEmbeddingCache (
+  branchId TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  embeddingInputHash TEXT NOT NULL,
+  vectorJson TEXT NOT NULL,
+  vectorDimension INTEGER NOT NULL,
+  lastSeenAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (branchId, provider, model, embeddingInputHash),
+  FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS story_timeline_nodes (
   id TEXT PRIMARY KEY,
   novel_id TEXT NOT NULL,

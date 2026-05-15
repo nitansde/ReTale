@@ -1,0 +1,489 @@
+import { DatabaseSync } from 'node:sqlite'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { initializeDatabase } from '@/lib/server/sqlite'
+import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
+
+const cleanups: Array<() => void> = []
+const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+
+function seedRetrievalFixture(database: DatabaseSync) {
+  database.prepare(
+    `INSERT INTO NovelRecord (id, title, author, sourceType)
+     VALUES (?, ?, ?, ?)`
+  ).run('novel-001', 'Fixture Novel', 'Fixture Author', 'txt')
+
+  database.prepare(
+    `INSERT INTO StoryBranch (id, novelId, name, baseBranchId)
+     VALUES (?, ?, ?, ?)`
+  ).run('novel-001:main', 'novel-001', 'main', null)
+
+  database.prepare(
+    `INSERT INTO KnowledgeChapter (
+      id, novelId, branchId, chapterNo, title, rawText, summary,
+      revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('chapter-1', 'novel-001', 'novel-001:main', 1, '第1章', '第1章原文', '第1章摘要', 1, 0, null, 'hash-1', 'ready')
+
+  const insertTextSpan = database.prepare(
+    `INSERT INTO TextSpan (
+      id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
+      charStart, charEnd, text, spanType, tokenEstimate
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+
+  insertTextSpan.run('span-1', 'novel-001', 'novel-001:main', 'chapter-1', 1, 1, 1, 0, 9, '第一段原文内容。', 'paragraph', 8)
+  insertTextSpan.run('span-2', 'novel-001', 'novel-001:main', 'chapter-1', 1, 2, 2, 10, 19, '第二段原文内容。', 'paragraph', 8)
+  insertTextSpan.run('span-3', 'novel-001', 'novel-001:main', 'chapter-1', 1, 3, 4, 20, 39, '场景证据原文内容。', 'scene', 12)
+}
+
+function createMockAISettings() {
+  return {
+    embeddings: {
+      provider: 'ollama',
+      embeddingBatchSize: 16,
+      openAICompatible: {
+        model: 'unused-openai-model',
+      },
+      ollama: {
+        model: 'unit-test-embedding-model',
+      },
+    },
+  }
+}
+
+function createMockLanceDb() {
+  type StoredRow = Record<string, unknown>
+  type MockTable = {
+    rows: StoredRow[]
+    add: ReturnType<typeof vi.fn>
+    createIndex: ReturnType<typeof vi.fn>
+    waitForIndex: ReturnType<typeof vi.fn>
+    query: () => {
+      limit: () => {
+        toArray: () => Promise<StoredRow[]>
+      }
+    }
+  }
+
+  const tables = new Map<string, MockTable>()
+
+  const createTableInstance = (initialRows: StoredRow[]) => {
+    const table: MockTable = {
+      rows: [...initialRows],
+      add: vi.fn(async (nextRows: StoredRow[]) => {
+        table.rows.push(...nextRows)
+      }),
+      createIndex: vi.fn(async () => undefined),
+      waitForIndex: vi.fn(async () => undefined),
+      query: () => ({
+        limit: () => ({
+          toArray: async () => table.rows.slice(0, 1),
+        }),
+      }),
+    }
+    return table
+  }
+
+  const database = {
+    tableNames: vi.fn(async () => Array.from(tables.keys())),
+    createTable: vi.fn(async (name: string, rows: StoredRow[]) => {
+      const table = createTableInstance(rows)
+      tables.set(name, table)
+      return table
+    }),
+    openTable: vi.fn(async (name: string) => tables.get(name) ?? null),
+    dropTable: vi.fn(async (name: string) => {
+      tables.delete(name)
+    }),
+  }
+
+  return {
+    connect: vi.fn(async () => database),
+    database,
+    tables,
+  }
+}
+
+async function createRetrievalIndexHarness(testName: string) {
+  const tempDatabase = createTempDatabaseCopy(testName)
+  cleanups.push(tempDatabase.cleanup)
+
+  const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+  globalForSqlite.sqlite = database
+  seedRetrievalFixture(database)
+
+  const aiSettings = createMockAISettings()
+  const mockLanceDb = createMockLanceDb()
+  const embedTextsWithOllama = vi.fn(async (input: string | string[]) => {
+    const values = Array.isArray(input) ? input : [input]
+    return {
+      enabled: true,
+      embeddings: values.map((text) => {
+        if (text.includes('章节摘要')) return [4, 4, 4]
+        if (text.includes('场景证据原文内容')) return [3, 3, 3]
+        return [2, 2, 2]
+      }),
+      model: aiSettings.embeddings.ollama.model,
+    }
+  })
+
+  vi.resetModules()
+  vi.doMock('@/lib/server/ai-settings', () => ({
+    loadStoredAISettings: () => aiSettings,
+  }))
+  vi.doMock('@/lib/server/ollama-local', () => ({
+    embedTextsWithOllama,
+  }))
+  vi.doMock('@lancedb/lancedb', () => ({
+    connect: mockLanceDb.connect,
+    Index: {
+      fts: () => ({}) ,
+    },
+  }))
+
+  const retrievalIndex = await import('@/lib/server/retrieval-index')
+  const retrievalCache = await import('@/lib/server/retrieval-embedding-cache')
+
+  return {
+    database,
+    embedTextsWithOllama,
+    mockLanceDb,
+    retrievalIndex,
+    retrievalCache,
+  }
+}
+
+afterEach(() => {
+  if (globalForSqlite.sqlite) {
+    try {
+      globalForSqlite.sqlite.close()
+    } catch {
+    }
+    delete globalForSqlite.sqlite
+  }
+
+  while (cleanups.length) {
+    cleanups.pop()?.()
+  }
+})
+
+describe('retrieval-index cache reuse helpers', () => {
+  it('partitions raw-text and knowledge-derived retrieval docs', async () => {
+    const tempDatabase = createTempDatabaseCopy('chatbook-retrieval-index-cache-reuse-partition')
+    cleanups.push(tempDatabase.cleanup)
+
+    const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+    globalForSqlite.sqlite = database
+    seedRetrievalFixture(database)
+
+    vi.resetModules()
+    const {
+      loadBranchRetrievalDocs,
+      loadKnowledgeDerivedRetrievalDocs,
+      loadRawTextRetrievalDocs,
+    } = await import('@/lib/server/retrieval-index')
+
+    const rawTextDocs = loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+    const knowledgeDerivedDocs = loadKnowledgeDerivedRetrievalDocs('novel-001', 'novel-001:main')
+    const mergedDocs = loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+
+    expect(rawTextDocs.length).toBeGreaterThan(0)
+    expect(rawTextDocs.every((row) => row.sourceType === 'text_span')).toBe(true)
+
+    expect(knowledgeDerivedDocs.length).toBeGreaterThan(0)
+    expect(knowledgeDerivedDocs.some((row) => row.sourceType === 'chapter_summary')).toBe(true)
+    expect(knowledgeDerivedDocs.some((row) => row.sourceType === 'text_span')).toBe(false)
+
+    expect(mergedDocs).toEqual([...rawTextDocs, ...knowledgeDerivedDocs])
+  })
+
+  it('reuses embeddingInputHash when packed text is unchanged', async () => {
+    const tempDatabase = createTempDatabaseCopy('chatbook-retrieval-index-cache-reuse-hash')
+    cleanups.push(tempDatabase.cleanup)
+
+    const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+    globalForSqlite.sqlite = database
+    seedRetrievalFixture(database)
+
+    vi.resetModules()
+    const {
+      buildRawTextRetrievalEmbeddingInput,
+      loadRawTextRetrievalDocs,
+    } = await import('@/lib/server/retrieval-index')
+
+    const rawTextDocs = loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+    const packedDoc = rawTextDocs.find((row) => row.id.startsWith('packed-span:'))
+    expect(packedDoc).toBeTruthy()
+
+    const packedDocRegeneratedId = {
+      ...packedDoc!,
+      id: `${packedDoc!.id}:regenerated`,
+      sourceId: `${packedDoc!.sourceId}:regenerated`,
+      contentHash: `${packedDoc!.contentHash}:regenerated`,
+    }
+
+    const originalEmbeddingInput = buildRawTextRetrievalEmbeddingInput(packedDoc!)
+    const regeneratedEmbeddingInput = buildRawTextRetrievalEmbeddingInput(packedDocRegeneratedId)
+
+    expect(regeneratedEmbeddingInput.text).toBe(originalEmbeddingInput.text)
+    expect(regeneratedEmbeddingInput.embeddingInputHash).toBe(originalEmbeddingInput.embeddingInputHash)
+  })
+
+  it('reuses cached text-span vectors during final rebuild', async () => {
+    const {
+      embedTextsWithOllama,
+      mockLanceDb,
+      retrievalCache,
+      retrievalIndex,
+    } = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-final-rebuild-hit')
+
+    const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+    const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    const packedDoc = rawTextDocs.find((row) => row.id.startsWith('packed-span:'))
+    expect(packedDoc).toBeTruthy()
+
+    const cachedEmbeddingInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(packedDoc!).text
+    const cachedVector = [9, 9, 9]
+    await retrievalCache.upsertRawTextEmbeddingCacheEntries({
+      scope: {
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        provider: 'ollama',
+        model: 'unit-test-embedding-model',
+      },
+      entries: [{
+        embeddingInput: cachedEmbeddingInput,
+        vector: cachedVector,
+      }],
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: mergedDocs.length,
+    })
+
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(embedTextsWithOllama.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
+      expect.stringContaining('章节摘要'),
+      expect.stringContaining('场景证据原文内容'),
+    ]))
+    expect(embedTextsWithOllama.mock.calls[0]?.[0]).not.toContain(cachedEmbeddingInput)
+
+    const storedRows = mockLanceDb.database.createTable.mock.calls[0]?.[1] as Array<{ id: string; vector: number[] }>
+    expect(storedRows.map((row) => row.id)).toEqual(mergedDocs.map((row) => row.id))
+    expect(storedRows.find((row) => row.id === packedDoc!.id)?.vector).toEqual(cachedVector)
+  })
+
+  it('preserves overlap and final rebuild correctness', async () => {
+    const {
+      database,
+      embedTextsWithOllama,
+      mockLanceDb,
+      retrievalCache,
+      retrievalIndex,
+    } = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-broader-final-rebuild')
+
+    const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+    const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    const packedDoc = rawTextDocs.find((row) => row.id.startsWith('packed-span:'))
+    const sceneDoc = rawTextDocs.find((row) => row.id === 'span-3')
+    expect(packedDoc).toBeTruthy()
+    expect(sceneDoc).toBeTruthy()
+
+    const packedInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(packedDoc!).text
+    const sceneInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(sceneDoc!).text
+    const packedHash = retrievalCache.buildEmbeddingInputHash(packedInput)
+    const sceneHash = retrievalCache.buildEmbeddingInputHash(sceneInput)
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: mergedDocs.length,
+    })
+
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.createTable.mock.calls[0]?.[1].map((row: { id: string }) => row.id)).toEqual(mergedDocs.map((row) => row.id))
+    expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
+      count: rawTextDocs.length,
+    })
+
+    await retrievalCache.upsertRawTextEmbeddingCacheEntries({
+      scope: {
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        provider: 'ollama',
+        model: 'unit-test-embedding-model',
+      },
+      entries: [
+        {
+          embeddingInput: packedInput,
+          vector: [9, 9, 9],
+        },
+        {
+          embeddingInput: sceneInput,
+          vector: [8, 8, 8],
+        },
+      ],
+    })
+
+    embedTextsWithOllama.mockClear()
+    mockLanceDb.database.createTable.mockClear()
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: mergedDocs.length,
+    })
+
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(embedTextsWithOllama.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
+      expect.stringContaining('章节摘要'),
+    ]))
+    expect(embedTextsWithOllama.mock.calls[0]?.[0]).not.toContain(packedInput)
+    expect(embedTextsWithOllama.mock.calls[0]?.[0]).not.toContain(sceneInput)
+
+    const warmStoredRows = mockLanceDb.database.createTable.mock.calls[0]?.[1] as Array<{ id: string; vector: number[] }>
+    expect(warmStoredRows.map((row) => row.id)).toEqual(mergedDocs.map((row) => row.id))
+    expect(warmStoredRows.find((row) => row.id === packedDoc!.id)?.vector).toEqual([9, 9, 9])
+    expect(warmStoredRows.find((row) => row.id === sceneDoc!.id)?.vector).toEqual([8, 8, 8])
+
+    database.prepare('DELETE FROM RawTextEmbeddingCache WHERE embeddingInputHash = ?').run(packedHash)
+    database.prepare('UPDATE RawTextEmbeddingCache SET vectorJson = ?, vectorDimension = ? WHERE embeddingInputHash = ?')
+      .run(JSON.stringify([1, 1]), 2, sceneHash)
+
+    embedTextsWithOllama.mockClear()
+    mockLanceDb.database.createTable.mockClear()
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: mergedDocs.length,
+    })
+
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(2)
+    expect(embedTextsWithOllama.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
+      packedInput,
+      expect.stringContaining('章节摘要'),
+    ]))
+    expect(embedTextsWithOllama.mock.calls[0]?.[0]).not.toContain(sceneInput)
+    expect(embedTextsWithOllama.mock.calls[1]?.[0]).toEqual([sceneInput])
+
+    const repairedSceneRow = database.prepare(
+      'SELECT vectorJson, vectorDimension FROM RawTextEmbeddingCache WHERE embeddingInputHash = ?'
+    ).get(sceneHash) as { vectorJson: string; vectorDimension: number } | undefined
+    expect(repairedSceneRow).toBeTruthy()
+    expect(repairedSceneRow?.vectorDimension).toBe(3)
+    expect(JSON.parse(repairedSceneRow!.vectorJson)).toEqual([3, 3, 3])
+
+    const repairedPackedRow = database.prepare(
+      'SELECT vectorJson, vectorDimension FROM RawTextEmbeddingCache WHERE embeddingInputHash = ?'
+    ).get(packedHash) as { vectorJson: string; vectorDimension: number } | undefined
+    expect(repairedPackedRow).toBeTruthy()
+    expect(repairedPackedRow?.vectorDimension).toBe(3)
+
+    const degradedStoredRows = mockLanceDb.database.createTable.mock.calls[0]?.[1] as Array<{ id: string; vector: number[] }>
+    expect(degradedStoredRows.map((row) => row.id)).toEqual(mergedDocs.map((row) => row.id))
+  })
+
+  it('rebuilds correctly with empty or partial raw-text cache', async () => {
+    const emptyHarness = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-empty-cache')
+    const emptyRawTextDocs = emptyHarness.retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+
+    await expect(emptyHarness.retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: emptyHarness.retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+
+    expect(emptyHarness.embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    const emptyCacheRows = emptyHarness.database.prepare(
+      'SELECT embeddingInputHash, vectorJson, vectorDimension FROM RawTextEmbeddingCache ORDER BY embeddingInputHash ASC'
+    ).all() as Array<{ embeddingInputHash: string; vectorJson: string; vectorDimension: number }>
+    expect(emptyCacheRows).toHaveLength(emptyRawTextDocs.length)
+    expect(emptyCacheRows.every((row) => row.vectorDimension === 3)).toBe(true)
+
+    const degradedHarness = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-partial-cache')
+    const degradedRawTextDocs = degradedHarness.retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+    const packedDoc = degradedRawTextDocs.find((row) => row.id.startsWith('packed-span:'))
+    const sceneDoc = degradedRawTextDocs.find((row) => row.id === 'span-3')
+    expect(packedDoc).toBeTruthy()
+    expect(sceneDoc).toBeTruthy()
+
+    const packedInput = degradedHarness.retrievalIndex.buildRawTextRetrievalEmbeddingInput(packedDoc!).text
+    const sceneInput = degradedHarness.retrievalIndex.buildRawTextRetrievalEmbeddingInput(sceneDoc!).text
+    await degradedHarness.retrievalCache.upsertRawTextEmbeddingCacheEntries({
+      scope: {
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        provider: 'ollama',
+        model: 'unit-test-embedding-model',
+      },
+      entries: [{
+        embeddingInput: packedInput,
+        vector: [8, 8, 8],
+      }],
+    })
+    const sceneHash = degradedHarness.retrievalCache.buildEmbeddingInputHash(sceneInput)
+    degradedHarness.database.prepare(
+      `INSERT INTO RawTextEmbeddingCache (
+        branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension, lastSeenAt, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    ).run('novel-001:main', 'ollama', 'unit-test-embedding-model', sceneHash, JSON.stringify([1, 1]), 2)
+
+    await expect(degradedHarness.retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: degradedHarness.retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+
+    expect(degradedHarness.embedTextsWithOllama).toHaveBeenCalledTimes(2)
+    expect(degradedHarness.embedTextsWithOllama.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
+      expect.stringContaining('章节摘要'),
+    ]))
+    expect(degradedHarness.embedTextsWithOllama.mock.calls[0]?.[0]).not.toContain(packedInput)
+    expect(degradedHarness.embedTextsWithOllama.mock.calls[0]?.[0]).not.toContain(sceneInput)
+    expect(degradedHarness.embedTextsWithOllama.mock.calls[1]?.[0]).toEqual([sceneInput])
+
+    const repairedSceneRow = degradedHarness.database.prepare(
+      'SELECT vectorJson, vectorDimension FROM RawTextEmbeddingCache WHERE embeddingInputHash = ?'
+    ).get(sceneHash) as { vectorJson: string; vectorDimension: number } | undefined
+    expect(repairedSceneRow).toBeTruthy()
+    expect(repairedSceneRow?.vectorDimension).toBe(3)
+    expect(JSON.parse(repairedSceneRow!.vectorJson)).toEqual([3, 3, 3])
+  })
+
+  it('garbage collects unreachable raw-text cache rows during precompute', async () => {
+    const { database, retrievalCache, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-precompute-gc')
+
+    const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+    const packedDoc = rawTextDocs.find((row) => row.id.startsWith('packed-span:'))
+    expect(packedDoc).toBeTruthy()
+
+    const retainedInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(packedDoc!).text
+    const staleInput = `${retainedInput}\n[stale-cache-entry]`
+    const retainedHash = retrievalCache.buildEmbeddingInputHash(retainedInput)
+    const staleHash = retrievalCache.buildEmbeddingInputHash(staleInput)
+
+    await retrievalCache.upsertRawTextEmbeddingCacheEntries({
+      scope: {
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        provider: 'ollama',
+        model: 'unit-test-embedding-model',
+      },
+      entries: [
+        { embeddingInput: retainedInput, vector: [9, 9, 9] },
+        { embeddingInput: staleInput, vector: [7, 7, 7] },
+      ],
+    })
+
+    await expect(retrievalIndex.precomputeRawTextEmbeddingCache({
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      settingsSnapshot: {
+        provider: 'ollama',
+        model: 'unit-test-embedding-model',
+        embeddingBatchSize: 16,
+      },
+    })).resolves.toMatchObject({
+      totalDocs: rawTextDocs.length,
+      cacheHits: 1,
+      cacheMisses: rawTextDocs.length - 1,
+      completedDocs: rawTextDocs.length,
+    })
+
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
+    ).get('novel-001:main', retainedHash)).toMatchObject({ count: 1 })
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
+    ).get('novel-001:main', staleHash)).toMatchObject({ count: 0 })
+  })
+})

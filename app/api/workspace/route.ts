@@ -15,12 +15,18 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const payload = await request.json()
-  const saved = upsertWorkspaceState('singleton', JSON.stringify(payload))
+  try {
+    const payload = await request.json()
+    const saved = upsertWorkspaceState('singleton', JSON.stringify(payload))
 
-  void syncWorkspacePayloadToKnowledgeStore(payload).catch((error) => {
+    await syncWorkspacePayloadToKnowledgeStore(payload)
+
+    return NextResponse.json({ ok: true, updatedAt: saved?.updatedAt ?? null })
+  } catch (error) {
     console.error('Workspace sync failed during save:', error)
-  })
-
-  return NextResponse.json({ ok: true, updatedAt: saved?.updatedAt ?? null })
+    return NextResponse.json(
+      { ok: false, error: error instanceof Error ? error.message : 'Failed to save workspace payload' },
+      { status: 500 }
+    )
+  }
 }
