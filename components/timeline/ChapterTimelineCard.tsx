@@ -19,7 +19,7 @@ export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
   const chapterSelected = props.activeChapterId === props.chapter.chapterId
 
   return (
-    <article data-testid={`timeline-chapter-${props.chapter.chapterNo}`} className="relative z-10 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(240px,0.88fr)] lg:items-start">
+    <article data-testid={`timeline-chapter-${props.chapter.chapterNo}`} className="relative z-10 space-y-3">
       <div className="space-y-2">
         <div className="flex items-start gap-2">
           <button
@@ -77,7 +77,11 @@ export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
         ) : null}
       </div>
 
-      {props.branchArtifacts ? <div className="space-y-2">{props.branchArtifacts}</div> : <div />}
+      {props.branchArtifacts ? (
+        <div className="ml-4 border-l border-white/10 pl-4">
+          <div className="space-y-2">{props.branchArtifacts}</div>
+        </div>
+      ) : null}
     </article>
   )
 })

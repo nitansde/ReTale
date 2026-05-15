@@ -1,7 +1,7 @@
 "use client"
 
 import { forwardRef } from 'react'
-import { GitBranch, Sparkles } from 'lucide-react'
+import { GitBranch, LoaderCircle, Sparkles, Trash2 } from 'lucide-react'
 import type { StoryTimelineBranchNode } from '@/lib/story-branch-types'
 import { cn } from '@/lib/utils'
 
@@ -16,27 +16,31 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
   selected: boolean
   highlighted: boolean
   disabled?: boolean
+  deleting?: boolean
   onSelect: () => void
+  onDelete?: () => void
   onHoverChange: (hovered: boolean) => void
 }>((props, ref) => {
   const isWhatIf = props.node.nodeType === 'what_if'
   const Icon = isWhatIf ? GitBranch : Sparkles
 
   return (
-    <div className={resolveIndentClass(props.node.laneIndex)}>
+    <div
+      className={cn('flex items-start gap-2', resolveIndentClass(props.node.laneIndex))}
+      onMouseEnter={() => props.onHoverChange(true)}
+      onMouseLeave={() => props.onHoverChange(false)}
+    >
       <button
         ref={ref}
         type="button"
-        disabled={props.disabled}
+        disabled={props.disabled || props.deleting}
         data-testid={`timeline-node-${props.node.id}`}
         data-active={props.selected ? 'true' : 'false'}
         data-highlighted={props.highlighted ? 'true' : 'false'}
         data-node-type={props.node.nodeType}
         onClick={props.onSelect}
-        onMouseEnter={() => props.onHoverChange(true)}
-        onMouseLeave={() => props.onHoverChange(false)}
         className={cn(
-          'w-full rounded-[22px] border px-3 py-3 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition disabled:cursor-not-allowed disabled:opacity-60',
+          'flex-1 rounded-[22px] border px-3 py-3 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition disabled:cursor-not-allowed disabled:opacity-60',
           isWhatIf
             ? 'border-violet-300/20 bg-[linear-gradient(135deg,rgba(109,40,217,0.22),rgba(17,20,29,0.94))] text-zinc-100 hover:border-violet-300/30 hover:bg-[linear-gradient(135deg,rgba(124,58,237,0.28),rgba(17,20,29,0.98))]'
             : 'border-sky-300/20 bg-[linear-gradient(135deg,rgba(59,130,246,0.20),rgba(76,29,149,0.90))] text-zinc-100 hover:border-sky-300/32 hover:bg-[linear-gradient(135deg,rgba(96,165,250,0.28),rgba(91,33,182,0.96))]',
@@ -67,6 +71,17 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
           </div>
         </div>
       </button>
+      {props.onDelete ? (
+        <button
+          type="button"
+          disabled={props.deleting}
+          onClick={props.onDelete}
+          className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-2 text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+          aria-label={`删除 ${isWhatIf ? 'What-if' : 'Future jump'} 节点 ${props.node.title}`}
+        >
+          {props.deleting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+        </button>
+      ) : null}
     </div>
   )
 })

@@ -9,7 +9,7 @@ type NodePosition = {
 }
 
 function buildFoldedPath(from: NodePosition, to: NodePosition) {
-  const trunkX = Math.min(from.x, to.x) - 18
+  const trunkX = Math.max(from.x, to.x) + 18
   return `M ${from.x} ${from.y} H ${trunkX} V ${to.y} H ${to.x}`
 }
 

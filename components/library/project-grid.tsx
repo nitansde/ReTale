@@ -5,13 +5,31 @@ import { useRouter } from 'next/navigation'
 import { ProjectCard } from './project-card'
 import { useNovelStore } from '@/store/novel-store'
 
+export function resolveOpenNovelChapter(
+  localChapters: Array<{
+    id: string
+    novelId: string | null
+    parentChapterId?: string | null
+    order: number
+  }>,
+  novelId: string,
+  chapterId?: string,
+) {
+  if (chapterId) {
+    return localChapters.find((item) => item.id === chapterId) ?? null
+  }
+
+  return localChapters
+    .filter((item) => item.novelId === novelId && !item.parentChapterId)
+    .sort((a, b) => a.order - b.order)[0] ?? null
+}
+
 export function ProjectGrid() {
   const router = useRouter()
   const fileRef = useRef<HTMLInputElement | null>(null)
   const {
     backendLoadError,
     getNovels,
-    localChapters,
     backendLoaded,
     loadFromBackend,
     saveToBackend,
@@ -32,11 +50,7 @@ export function ProjectGrid() {
   }, [backendLoaded, loadFromBackend])
 
   const openNovel = (novelId: string, chapterId?: string) => {
-    const chapter = chapterId
-      ? localChapters.find((item) => item.id === chapterId)
-      : localChapters
-          .filter((item) => item.novelId === novelId && !item.parentChapterId)
-          .sort((a, b) => a.order - b.order)[0]
+    const chapter = resolveOpenNovelChapter(useNovelStore.getState().localChapters, novelId, chapterId)
 
     if (!chapter) {
       setImportMessage('这个小说当前没有可用章节，请刷新后重试，或重新导入一次。')

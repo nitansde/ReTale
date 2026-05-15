@@ -123,6 +123,9 @@ describe('StoryTimeline', () => {
         onSelectionChange={() => undefined}
         onDeleteChapter={() => undefined}
         onDeleteBranchChapter={() => undefined}
+        deletingBranchNodeId={null}
+        onDeleteWhatIfSession={() => undefined}
+        onDeleteFutureJumpRun={() => undefined}
       />
     )
 
@@ -156,6 +159,9 @@ describe('StoryTimeline', () => {
         onSelectionChange={onSelectionChange}
         onDeleteChapter={() => undefined}
         onDeleteBranchChapter={() => undefined}
+        deletingBranchNodeId={null}
+        onDeleteWhatIfSession={() => undefined}
+        onDeleteFutureJumpRun={() => undefined}
       />
     )
 

@@ -25,6 +25,9 @@ export function WorkspaceChapterNav(props: {
   branchChaptersByParentId: Map<string, Chapter[]>
   onSelectionChange: (selection: TimelineSelection) => void
   onDeleteChapter: (chapterId: string) => void
+  deletingBranchNodeId: string | null
+  onDeleteWhatIfSession: (nodeId: string) => void
+  onDeleteFutureJumpRun: (nodeId: string) => void
 }) {
   return (
     <aside
@@ -90,6 +93,9 @@ export function WorkspaceChapterNav(props: {
                   onSelectionChange={props.onSelectionChange}
                   onDeleteChapter={props.onDeleteChapter}
                   onDeleteBranchChapter={props.onDeleteChapter}
+                  deletingBranchNodeId={props.deletingBranchNodeId}
+                  onDeleteWhatIfSession={(node) => props.onDeleteWhatIfSession(node.id)}
+                  onDeleteFutureJumpRun={(node) => props.onDeleteFutureJumpRun(node.id)}
                 />
                 {hiddenCount > 0 ? (
                   <button

@@ -45,6 +45,9 @@ export function StoryTimeline(props: {
   onSelectionChange: (selection: TimelineSelection) => void
   onDeleteChapter: (chapterId: string) => void
   onDeleteBranchChapter: (chapterId: string) => void
+  deletingBranchNodeId: string | null
+  onDeleteWhatIfSession: (node: StoryTimelineBranchNode) => void
+  onDeleteFutureJumpRun: (node: StoryTimelineBranchNode) => void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chapterRefs = useRef(new Map<string, HTMLButtonElement | null>())
@@ -79,14 +82,14 @@ export function StoryTimeline(props: {
     const bounds = container.getBoundingClientRect()
     const nodePositions: Record<string, NodePosition> = {}
 
-    nodeRefs.current.forEach((element, nodeId) => {
-      if (!element) return
-      const rect = element.getBoundingClientRect()
-      nodePositions[nodeId] = {
-        x: rect.left - bounds.left,
-        y: rect.top - bounds.top + rect.height / 2,
-      }
-    })
+      nodeRefs.current.forEach((element, nodeId) => {
+        if (!element) return
+        const rect = element.getBoundingClientRect()
+        nodePositions[nodeId] = {
+          x: rect.right - bounds.left,
+          y: rect.top - bounds.top + rect.height / 2,
+        }
+      })
 
     setLayout({
       width: bounds.width,
@@ -164,10 +167,20 @@ export function StoryTimeline(props: {
                       node={node}
                       selected={selectedNodeId === node.id}
                       highlighted={highlighted}
+                      deleting={props.deletingBranchNodeId === node.id}
                       disabled={!selection}
                       onSelect={() => {
                         if (selection) props.onSelectionChange(selection)
                       }}
+                      onDelete={
+                        node.nodeType === 'what_if'
+                          ? node.whatIfSessionId
+                            ? () => props.onDeleteWhatIfSession(node)
+                            : undefined
+                          : node.futureJumpRunId
+                            ? () => props.onDeleteFutureJumpRun(node)
+                            : undefined
+                      }
                       onHoverChange={(hovered) => {
                         setHoveredNodeId((current) => (hovered ? node.id : current === node.id ? null : current))
                       }}

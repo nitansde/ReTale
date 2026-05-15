@@ -1,5 +1,5 @@
 import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
-import { findStoryTimelineNodeByFutureJumpRunId } from '@/lib/server/story-timeline-store'
+import { deleteStoryTimelineNodesByIds, findStoryTimelineNodeByFutureJumpRunId } from '@/lib/server/story-timeline-store'
 import type {
   FutureJumpRevisionHistoryItem,
   FutureJumpRevisionRecord,
@@ -114,6 +114,15 @@ export function findFutureJumpRunById(id: string, db: Db = defaultDb): FutureJum
     revisionHistory: revisions.map(toFutureJumpRevisionHistoryItem),
     revisions,
   }
+}
+
+export function listFutureJumpRunsBySessionId(sessionId: string, db: Db = defaultDb) {
+  const rows = db.queryAll<FutureJumpRunRow>(
+    'SELECT * FROM future_jump_runs WHERE session_id = ? ORDER BY created_at ASC, id ASC',
+    sessionId
+  )
+
+  return rows.map(toFutureJumpRunRecord)
 }
 
 export function createFutureJumpRun(input: Omit<FutureJumpRunRecord, 'createdAt' | 'updatedAt'>, db: Db = defaultDb) {
@@ -238,4 +247,19 @@ export function markFutureJumpRunFailed(runId: string, errorMessage: string, db:
   )
 
   return findFutureJumpRunById(runId, db)
+}
+
+export async function deleteFutureJumpRun(runId: string, db: Db = defaultDb) {
+  const run = findFutureJumpRunById(runId, db)
+  if (!run) return null
+
+  await db.withTransaction(async () => {
+    if (run.timelineNodeId) {
+      deleteStoryTimelineNodesByIds([run.timelineNodeId], db)
+    }
+
+    db.execute('DELETE FROM future_jump_runs WHERE id = ?', runId)
+  })
+
+  return run
 }

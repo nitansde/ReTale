@@ -59,7 +59,16 @@ import type {
 import type { GraphEdge } from '@/lib/server/graph-types'
 import { useNovelStore } from '@/store/novel-store'
 import { cn, countChineseFriendlyWords, htmlToPlainText, plainTextToHtml } from '@/lib/utils'
-import type { ChapterTimelineItem, FutureJumpMutationResponse, FutureJumpRunDetail, StoryTimelineResponse, TimelineSelection, WhatIfCreateResponse, WhatIfSessionDetail } from '@/lib/story-branch-types'
+import type {
+  ChapterTimelineItem,
+  FutureJumpMutationResponse,
+  FutureJumpRunDetail,
+  StoryTimelineBranchNode,
+  StoryTimelineResponse,
+  TimelineSelection,
+  WhatIfCreateResponse,
+  WhatIfSessionDetail,
+} from '@/lib/story-branch-types'
 import type { AIProvider, AISettings, AIScenarioKey, Chapter, Character, CharacterRelation, OutlineType, WorldEntryType } from '@/lib/types'
 
 const TOOLBAR_EDGE_PADDING = 12
@@ -537,6 +546,53 @@ export function SelectionNovelStudio() {
       currentNovelId: state.currentNovelId,
       currentChapterId: state.currentChapterId,
       currentTab: state.currentTab,
+async function callDeleteWhatIfSessionApi(sessionId: string, novelId: string, branchId: string) {
+  const searchParams = new URLSearchParams({ novelId, branchId })
+  const response = await fetch(`/api/what-if/sessions/${sessionId}?${searchParams.toString()}`, {
+    method: 'DELETE',
+  })
+
+  const data = await response.json() as { ok?: boolean; error?: string }
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || '删除 What-if 失败')
+  }
+}
+
+async function callDeleteFutureJumpRunApi(runId: string, branchId: string) {
+  const searchParams = new URLSearchParams({ branchId })
+  const response = await fetch(`/api/future-jump/runs/${runId}?${searchParams.toString()}`, {
+    method: 'DELETE',
+  })
+
+  const data = await response.json() as { ok?: boolean; error?: string }
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || '删除 Future jump 失败')
+  }
+}
+
+function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelection | null {
+  if (node.nodeType === 'what_if') {
+    return node.whatIfSessionId
+      ? {
+          kind: 'what_if',
+          nodeId: node.id,
+          sessionId: node.whatIfSessionId,
+          anchorChapterNo: node.anchorChapterNo,
+        }
+      : null
+  }
+
+  return node.futureJumpRunId && node.sourceChapterNo !== null && node.targetChapterNo !== null
+    ? {
+        kind: 'future_jump',
+        nodeId: node.id,
+        runId: node.futureJumpRunId,
+        sourceChapterNo: node.sourceChapterNo,
+        targetChapterNo: node.targetChapterNo,
+      }
+    : null
+}
+
       helperTab: state.helperTab,
       expandedVolumeIds: state.expandedVolumeIds,
       localNovels: state.localNovels,
@@ -658,6 +714,7 @@ export function SelectionNovelStudio() {
     knowledgeExtraction: false,
     embeddings: false,
   })
+  const [deletingBranchNodeId, setDeletingBranchNodeId] = useState<string | null>(null)
   const [editState, setEditState] = useState<{
     type: 'char' | 'outline' | 'world' | 'relation' | 'timeline' | null
     id: string | null
@@ -2241,6 +2298,88 @@ export function SelectionNovelStudio() {
     if (!currentNovelId || (!knowledgeRebuildStatus && !knowledgeRebuilding) || knowledgeActionLoading) return
     setKnowledgeActionLoading('abort')
     try {
+  const resolveTimelineSelectionAfterBranchDelete = useCallback((
+    deletedNode: StoryTimelineBranchNode,
+    previousSelection: TimelineSelection,
+    refreshedTimeline: StoryTimelineResponse | null
+  ) => {
+    if (!currentChapter) return previousSelection
+
+    const nextTimelineNodes = refreshedTimeline?.branchNodes ?? []
+
+    if (previousSelection.kind !== 'chapter' && previousSelection.nodeId === deletedNode.id) {
+      if (deletedNode.nodeType === 'future_jump' && deletedNode.parentNodeId) {
+        const parentNode = nextTimelineNodes.find((node) => node.id === deletedNode.parentNodeId)
+        const parentSelection = parentNode ? toBranchTimelineSelection(parentNode) : null
+        if (parentSelection) return parentSelection
+      }
+
+      const fallbackChapterNo = deletedNode.nodeType === 'future_jump'
+        ? deletedNode.sourceChapterNo ?? deletedNode.anchorChapterNo
+        : deletedNode.anchorChapterNo
+      const fallbackChapter = sortedChapters.find((chapter) => !chapter.parentChapterId && chapter.order === fallbackChapterNo)
+      return fallbackChapter ? toChapterTimelineSelection(fallbackChapter) : toChapterTimelineSelection(currentChapter)
+    }
+
+    return resolveWorkspaceSelection({
+      currentSelection: previousSelection,
+      currentChapter,
+      branchNodes: nextTimelineNodes,
+    }) ?? toChapterTimelineSelection(currentChapter)
+  }, [currentChapter, sortedChapters])
+
+  const handleDeleteWhatIfNode = useCallback(async (nodeId: string) => {
+    const targetNode = resolvedStoryTimeline.branchNodes.find((node) => node.id === nodeId && node.nodeType === 'what_if')
+    if (!targetNode?.whatIfSessionId || !currentNovelId || deletingBranchNodeId) return
+
+    if (!window.confirm(`确认删除 What-if《${targetNode.title}》吗？这会同时删除它派生出的 Future Jump。`)) {
+      return
+    }
+
+    const previousSelection = workspaceSelection ?? toChapterTimelineSelection(currentChapter)
+    setDeletingBranchNodeId(targetNode.id)
+    try {
+      await callDeleteWhatIfSessionApi(targetNode.whatIfSessionId, currentNovelId, storyTimelineBranchId)
+      const refreshed = await loadStoryTimeline()
+      const nextSelection = resolveTimelineSelectionAfterBranchDelete(targetNode, previousSelection, refreshed)
+      handleTimelineSelection(nextSelection)
+      setToast(`已删除 ${targetNode.title}`)
+      window.setTimeout(() => setToast(''), 2000)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '删除 What-if 失败'
+      setToast(message)
+      window.setTimeout(() => setToast(''), 2400)
+    } finally {
+      setDeletingBranchNodeId(null)
+    }
+  }, [currentChapter, currentNovelId, deletingBranchNodeId, handleTimelineSelection, loadStoryTimeline, resolveTimelineSelectionAfterBranchDelete, resolvedStoryTimeline.branchNodes, storyTimelineBranchId, workspaceSelection])
+
+  const handleDeleteFutureJumpNode = useCallback(async (nodeId: string) => {
+    const targetNode = resolvedStoryTimeline.branchNodes.find((node) => node.id === nodeId && node.nodeType === 'future_jump')
+    if (!targetNode?.futureJumpRunId || deletingBranchNodeId) return
+
+    if (!window.confirm(`确认删除 Future Jump《${targetNode.title}》吗？这会移除它的时间线节点和全部修订。`)) {
+      return
+    }
+
+    const previousSelection = workspaceSelection ?? toChapterTimelineSelection(currentChapter)
+    setDeletingBranchNodeId(targetNode.id)
+    try {
+      await callDeleteFutureJumpRunApi(targetNode.futureJumpRunId, storyTimelineBranchId)
+      const refreshed = await loadStoryTimeline()
+      const nextSelection = resolveTimelineSelectionAfterBranchDelete(targetNode, previousSelection, refreshed)
+      handleTimelineSelection(nextSelection)
+      setToast(`已删除 ${targetNode.title}`)
+      window.setTimeout(() => setToast(''), 2000)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '删除 Future jump 失败'
+      setToast(message)
+      window.setTimeout(() => setToast(''), 2400)
+    } finally {
+      setDeletingBranchNodeId(null)
+    }
+  }, [currentChapter, deletingBranchNodeId, handleTimelineSelection, loadStoryTimeline, resolveTimelineSelectionAfterBranchDelete, resolvedStoryTimeline.branchNodes, storyTimelineBranchId, workspaceSelection])
+
       const result = await abortStoryKnowledgeRebuild(currentNovelId)
       if (!result) return
 
@@ -3029,6 +3168,9 @@ export function SelectionNovelStudio() {
                   relations: { label: '关系', icon: GitBranch },
                   outline: { label: '大纲', icon: ScrollText },
                   world: { label: '设定', icon: Globe },
+            deletingBranchNodeId={deletingBranchNodeId}
+            onDeleteWhatIfSession={handleDeleteWhatIfNode}
+            onDeleteFutureJumpRun={handleDeleteFutureJumpNode}
                   timeline: { label: '时间线', icon: ScrollText },
                 }[tab]
                 const TabIcon = tabMeta.icon

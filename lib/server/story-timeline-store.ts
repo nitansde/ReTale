@@ -125,6 +125,26 @@ export function findStoryTimelineNodeByFutureJumpRunId(futureJumpRunId: string, 
   return row ? toStoryTimelineNodeRecord(row) : null
 }
 
+export function findStoryTimelineNodeByWhatIfSessionId(whatIfSessionId: string, db: Db = defaultDb) {
+  const row = db.queryOne<StoryTimelineNodeRow>(
+    'SELECT * FROM story_timeline_nodes WHERE what_if_session_id = ? LIMIT 1',
+    whatIfSessionId
+  )
+  return row ? toStoryTimelineNodeRecord(row) : null
+}
+
+export function listStoryTimelineNodesByFutureJumpRunIds(futureJumpRunIds: string[], db: Db = defaultDb) {
+  if (!futureJumpRunIds.length) return []
+
+  const placeholders = futureJumpRunIds.map(() => '?').join(', ')
+  const rows = db.queryAll<StoryTimelineNodeRow>(
+    `SELECT * FROM story_timeline_nodes WHERE future_jump_run_id IN (${placeholders}) ORDER BY anchor_chapter_no ASC, lane_index ASC, label_index ASC`,
+    ...futureJumpRunIds
+  )
+
+  return rows.map(toStoryTimelineNodeRecord)
+}
+
 export function listStoryTimelineNodes(novelId: string, branchId: string, db: Db = defaultDb) {
   const rows = db.queryAll<StoryTimelineNodeRow>(
     `SELECT * FROM story_timeline_nodes
@@ -135,6 +155,39 @@ export function listStoryTimelineNodes(novelId: string, branchId: string, db: Db
   )
 
   return rows.map(toStoryTimelineNodeRecord)
+}
+
+export function listStoryTimelineDescendantNodeIds(rootNodeId: string, nodes: StoryTimelineNodeRecord[]) {
+  const childrenByParentId = new Map<string, string[]>()
+  for (const node of nodes) {
+    if (!node.parentNodeId) continue
+    const current = childrenByParentId.get(node.parentNodeId) ?? []
+    current.push(node.id)
+    childrenByParentId.set(node.parentNodeId, current)
+  }
+
+  const ordered: string[] = []
+  const visited = new Set<string>()
+
+  const visit = (nodeId: string) => {
+    if (visited.has(nodeId)) return
+    visited.add(nodeId)
+
+    for (const childId of childrenByParentId.get(nodeId) ?? []) {
+      visit(childId)
+    }
+
+    ordered.push(nodeId)
+  }
+
+  visit(rootNodeId)
+  return ordered
+}
+
+export function deleteStoryTimelineNodesByIds(nodeIds: string[], db: Db = defaultDb) {
+  for (const nodeId of nodeIds) {
+    db.execute('DELETE FROM story_timeline_nodes WHERE id = ?', nodeId)
+  }
 }
 
 export function updateStoryTimelineNodeStatus(id: string, status: string, db: Db = defaultDb) {

@@ -1,13 +1,22 @@
-import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
+import {
+  deleteStoryTimelineNodesByIds,
+  findStoryTimelineNodeByWhatIfSessionId,
+  listStoryTimelineDescendantNodeIds,
+  listStoryTimelineNodes,
+  listStoryTimelineNodesByFutureJumpRunIds,
+} from '@/lib/server/story-timeline-store'
+import { listFutureJumpRunsBySessionId } from '@/lib/server/future-jump-store'
 import type { WhatIfDeltaRecord, WhatIfSessionDetail, WhatIfSessionRecord } from '@/lib/story-branch-types'
 
 type Db = {
   execute: typeof execute
   queryAll: typeof queryAll
   queryOne: typeof queryOne
+  withTransaction: typeof withTransaction
 }
 
-const defaultDb: Db = { execute, queryAll, queryOne }
+const defaultDb: Db = { execute, queryAll, queryOne, withTransaction }
 
 type WhatIfSessionRow = {
   id: string
@@ -150,4 +159,37 @@ export function updateWhatIfSessionGeneratedText(id: string, generatedText: stri
   )
 
   return findWhatIfSessionById(id, db)
+}
+
+export async function deleteWhatIfSession(sessionId: string, db: Db = defaultDb) {
+  const session = findWhatIfSessionById(sessionId, db)
+  if (!session) return null
+
+  await db.withTransaction(async () => {
+    const futureJumpRuns = listFutureJumpRunsBySessionId(sessionId, db)
+    const futureJumpRunIds = futureJumpRuns.map((run) => run.id)
+    const sessionTimelineNode = findStoryTimelineNodeByWhatIfSessionId(sessionId, db)
+    const allTimelineNodes = listStoryTimelineNodes(session.novelId, session.baseBranchId, db)
+    const orderedNodeIds = new Set<string>()
+
+    if (sessionTimelineNode) {
+      for (const nodeId of listStoryTimelineDescendantNodeIds(sessionTimelineNode.id, allTimelineNodes)) {
+        orderedNodeIds.add(nodeId)
+      }
+    }
+
+    for (const node of listStoryTimelineNodesByFutureJumpRunIds(futureJumpRunIds, db)) {
+      if (!orderedNodeIds.has(node.id)) {
+        for (const nodeId of listStoryTimelineDescendantNodeIds(node.id, allTimelineNodes)) {
+          orderedNodeIds.add(nodeId)
+        }
+      }
+    }
+
+    deleteStoryTimelineNodesByIds(Array.from(orderedNodeIds), db)
+    db.execute('DELETE FROM future_jump_runs WHERE session_id = ?', sessionId)
+    db.execute('DELETE FROM what_if_sessions WHERE id = ?', sessionId)
+  })
+
+  return session
 }
