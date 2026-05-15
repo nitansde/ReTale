@@ -134,6 +134,14 @@ type KnowledgeRebuildStatus = {
     etaMinutes: number | null
     detail: string | null
   }>
+  rawTextEmbeddingProgress?: number
+  rawTextEmbeddingCacheHitRate?: number
+  stageTimingsMs?: Record<string, number>
+  embeddingSettingsSnapshot?: {
+    provider: string
+    model: string
+    embeddingBatchSize: number
+  }
 }
 
 type OllamaModelOption = {
@@ -259,6 +267,31 @@ const KNOWLEDGE_STEP_STATUS_LABELS: Record<KnowledgeRebuildStatus['steps'][numbe
   running: '进行中',
   paused: '已暂停',
   completed: '已完成',
+}
+
+const RAW_TEXT_PRECOMPUTE_STAGE_KEY = 'raw_text_precompute'
+
+function toProgressPercent(value: number | null | undefined) {
+  return Math.max(0, Math.min(100, Math.round((value ?? 0) * 100)))
+}
+
+function formatStageDuration(ms: number) {
+  if (ms < 1000) return `${Math.max(1, Math.round(ms))}ms`
+
+  const totalSeconds = ms / 1000
+  if (totalSeconds < 60) {
+    return `${totalSeconds >= 10 ? Math.round(totalSeconds) : totalSeconds.toFixed(1)} 秒`
+  }
+
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = Math.round(totalSeconds % 60)
+  return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分`
+}
+
+function formatEmbeddingProviderLabel(provider: string) {
+  if (provider === 'openai-compatible') return 'OpenAI-compatible'
+  if (provider === 'ollama') return 'Ollama'
+  return provider
 }
 
 const ACTION_META: Record<WorkspaceActionMode, { label: string; title: string; description: string; icon: typeof Wand2 }> = {
@@ -513,39 +546,6 @@ async function callCreateWhatIfSessionApi(payload: Record<string, unknown>): Pro
   return data
 }
 
-export function SelectionNovelStudio() {
-  const router = useRouter()
-  const loadFromBackend = useNovelStore((state) => state.loadFromBackend)
-  const saveToBackend = useNovelStore((state) => state.saveToBackend)
-  const backendLoaded = useNovelStore((state) => state.backendLoaded)
-  const currentNovelId = useNovelStore((state) => state.currentNovelId)
-  const localNovels = useNovelStore((state) => state.localNovels)
-  const localVolumes = useNovelStore((state) => state.localVolumes)
-  const localChapters = useNovelStore((state) => state.localChapters)
-  const currentChapterId = useNovelStore((state) => state.currentChapterId)
-  const setCurrentChapterId = useNovelStore((state) => state.setCurrentChapterId)
-  const updateChapterContent = useNovelStore((state) => state.updateChapterContent)
-  const createNewChapter = useNovelStore((state) => state.createNewChapter)
-  const deleteChapter = useNovelStore((state) => state.deleteChapter)
-  const deleteNovel = useNovelStore((state) => state.deleteNovel)
-  const aiSettings = useNovelStore((state) => state.aiSettings)
-  const setAISettings = useNovelStore((state) => state.setAISettings)
-  const saveAISettings = useNovelStore((state) => state.saveAISettings)
-  const rebuildStoryKnowledge = useNovelStore((state) => state.rebuildStoryKnowledge)
-  const pauseStoryKnowledgeRebuild = useNovelStore((state) => state.pauseStoryKnowledgeRebuild)
-  const abortStoryKnowledgeRebuild = useNovelStore((state) => state.abortStoryKnowledgeRebuild)
-  const deleteStoryKnowledgeGraph = useNovelStore((state) => state.deleteStoryKnowledgeGraph)
-  const refreshKnowledgeProjection = useNovelStore((state) => state.refreshKnowledgeProjection)
-  const localCharacters = useNovelStore((state) => state.localCharacters)
-  const localCharacterRelations = useNovelStore((state) => state.localCharacterRelations)
-  const localWorldEntries = useNovelStore((state) => state.localWorldEntries)
-  const localTimelineEvents = useNovelStore((state) => state.localTimelineEvents)
-  const localOutlines = useNovelStore((state) => state.localOutlines)
-  const autosaveSignature = useNovelStore((state) =>
-    JSON.stringify({
-      currentNovelId: state.currentNovelId,
-      currentChapterId: state.currentChapterId,
-      currentTab: state.currentTab,
 async function callDeleteWhatIfSessionApi(sessionId: string, novelId: string, branchId: string) {
   const searchParams = new URLSearchParams({ novelId, branchId })
   const response = await fetch(`/api/what-if/sessions/${sessionId}?${searchParams.toString()}`, {
@@ -593,6 +593,39 @@ function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelec
     : null
 }
 
+export function SelectionNovelStudio() {
+  const router = useRouter()
+  const loadFromBackend = useNovelStore((state) => state.loadFromBackend)
+  const saveToBackend = useNovelStore((state) => state.saveToBackend)
+  const backendLoaded = useNovelStore((state) => state.backendLoaded)
+  const currentNovelId = useNovelStore((state) => state.currentNovelId)
+  const localNovels = useNovelStore((state) => state.localNovels)
+  const localVolumes = useNovelStore((state) => state.localVolumes)
+  const localChapters = useNovelStore((state) => state.localChapters)
+  const currentChapterId = useNovelStore((state) => state.currentChapterId)
+  const setCurrentChapterId = useNovelStore((state) => state.setCurrentChapterId)
+  const updateChapterContent = useNovelStore((state) => state.updateChapterContent)
+  const createNewChapter = useNovelStore((state) => state.createNewChapter)
+  const deleteChapter = useNovelStore((state) => state.deleteChapter)
+  const deleteNovel = useNovelStore((state) => state.deleteNovel)
+  const aiSettings = useNovelStore((state) => state.aiSettings)
+  const setAISettings = useNovelStore((state) => state.setAISettings)
+  const saveAISettings = useNovelStore((state) => state.saveAISettings)
+  const rebuildStoryKnowledge = useNovelStore((state) => state.rebuildStoryKnowledge)
+  const pauseStoryKnowledgeRebuild = useNovelStore((state) => state.pauseStoryKnowledgeRebuild)
+  const abortStoryKnowledgeRebuild = useNovelStore((state) => state.abortStoryKnowledgeRebuild)
+  const deleteStoryKnowledgeGraph = useNovelStore((state) => state.deleteStoryKnowledgeGraph)
+  const refreshKnowledgeProjection = useNovelStore((state) => state.refreshKnowledgeProjection)
+  const localCharacters = useNovelStore((state) => state.localCharacters)
+  const localCharacterRelations = useNovelStore((state) => state.localCharacterRelations)
+  const localWorldEntries = useNovelStore((state) => state.localWorldEntries)
+  const localTimelineEvents = useNovelStore((state) => state.localTimelineEvents)
+  const localOutlines = useNovelStore((state) => state.localOutlines)
+  const autosaveSignature = useNovelStore((state) =>
+    JSON.stringify({
+      currentNovelId: state.currentNovelId,
+      currentChapterId: state.currentChapterId,
+      currentTab: state.currentTab,
       helperTab: state.helperTab,
       expandedVolumeIds: state.expandedVolumeIds,
       localNovels: state.localNovels,
@@ -681,6 +714,7 @@ function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelec
   const [toast, setToast] = useState('')
   const [whatIfCreating, setWhatIfCreating] = useState(false)
   const [whatIfCreateError, setWhatIfCreateError] = useState('')
+  const [deletingBranchNodeId, setDeletingBranchNodeId] = useState<string | null>(null)
   const [pendingWhatIfRewriteLaunch, setPendingWhatIfRewriteLaunch] = useState<PendingWhatIfRewriteLaunch | null>(null)
   const [pendingFutureJumpRewriteLaunch, setPendingFutureJumpRewriteLaunch] = useState<PendingFutureJumpRewriteLaunch | null>(null)
   const [rewriteLaunchSource, setRewriteLaunchSource] = useState<RewriteLaunchSource>('chapter')
@@ -714,7 +748,6 @@ function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelec
     knowledgeExtraction: false,
     embeddings: false,
   })
-  const [deletingBranchNodeId, setDeletingBranchNodeId] = useState<string | null>(null)
   const [editState, setEditState] = useState<{
     type: 'char' | 'outline' | 'world' | 'relation' | 'timeline' | null
     id: string | null
@@ -1228,6 +1261,48 @@ function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelec
   const knowledgeRebuildSteps = useMemo(() => knowledgeRebuildStatus?.steps ?? [], [knowledgeRebuildStatus])
   const knowledgeRebuildPaused = knowledgeRebuildStatus?.status === 'paused'
   const knowledgeRebuildActive = knowledgeRebuildStatus?.status === 'running' || knowledgeRebuildStatus?.status === 'queued'
+  const knowledgeRebuildOverallPercent = useMemo(
+    () => toProgressPercent(knowledgeRebuildStatus?.progress),
+    [knowledgeRebuildStatus]
+  )
+  const rawTextEmbeddingProgress = knowledgeRebuildStatus?.rawTextEmbeddingProgress
+  const rawTextEmbeddingPercent = useMemo(
+    () => rawTextEmbeddingProgress === undefined ? null : toProgressPercent(rawTextEmbeddingProgress),
+    [rawTextEmbeddingProgress]
+  )
+  const rawTextEmbeddingCacheHitRatePercent = useMemo(
+    () => knowledgeRebuildStatus?.rawTextEmbeddingCacheHitRate === undefined
+      ? null
+      : toProgressPercent(knowledgeRebuildStatus.rawTextEmbeddingCacheHitRate),
+    [knowledgeRebuildStatus]
+  )
+  const rawTextEmbeddingTimingLabel = useMemo(() => {
+    const duration = knowledgeRebuildStatus?.stageTimingsMs?.[RAW_TEXT_PRECOMPUTE_STAGE_KEY]
+    return typeof duration === 'number' && Number.isFinite(duration) ? formatStageDuration(duration) : null
+  }, [knowledgeRebuildStatus])
+  const rawTextEmbeddingSettingsLine = useMemo(() => {
+    const snapshot = knowledgeRebuildStatus?.embeddingSettingsSnapshot
+    if (!snapshot) return null
+    return `${formatEmbeddingProviderLabel(snapshot.provider)} · ${snapshot.model} · batch ${snapshot.embeddingBatchSize}`
+  }, [knowledgeRebuildStatus])
+  const rawTextEmbeddingStatusLine = useMemo(() => {
+    if (knowledgeRebuildPaused) {
+      return rawTextEmbeddingPercent !== null ? '原文预计算已暂停，等待继续。' : '原文预计算已暂停，尚未收到进度遥测。'
+    }
+
+    if (knowledgeRebuildActive) {
+      if (rawTextEmbeddingPercent !== null) {
+        return '与章节抽取并行进行，优先预热原文向量缓存。'
+      }
+      return '会与章节抽取并行启动；当前还在等待进度遥测。'
+    }
+
+    if (rawTextEmbeddingPercent !== null && rawTextEmbeddingPercent >= 100) {
+      return '原文向量预计算已完成。'
+    }
+
+    return '原文向量预计算尚未开始。'
+  }, [knowledgeRebuildActive, knowledgeRebuildPaused, rawTextEmbeddingPercent])
 
   const editor = useEditor({
     extensions: [StarterKit],
@@ -2223,81 +2298,6 @@ function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelec
     }
   }, [handleDeleteChapter, sortedChapters])
 
-  const handleDeleteNovel = async () => {
-    if (!currentNovelId) return
-
-    const title = currentNovelMeta?.title ?? '当前小说'
-    if (!window.confirm(`确认删除小说《${title}》吗？这会同时删除全部章节和本地知识数据。`)) {
-      return
-    }
-
-    deleteNovel(currentNovelId)
-    try {
-      await saveToBackend()
-      setToast(`已删除《${title}》`)
-      window.setTimeout(() => setToast(''), 1800)
-    } catch {
-      await loadFromBackend()
-      setToast(`删除《${title}》失败，已恢复本地状态。`)
-      window.setTimeout(() => setToast(''), 2400)
-    }
-  }
-
-  const handleRebuildKnowledge = async () => {
-    if (!currentNovelId || knowledgeRebuilding || knowledgeActionLoading) return
-    setKnowledgeRebuilding(true)
-    try {
-      const result = await rebuildStoryKnowledge(currentNovelId)
-      if (!result) return
-
-      setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
-
-      if (result.knowledgeRebuildStatus?.jobId) {
-        lastActiveKnowledgeJobIdRef.current = result.knowledgeRebuildStatus.jobId
-      } else {
-        lastActiveKnowledgeJobIdRef.current = null
-      }
-
-      if (result.jobOutcome === 'paused') {
-        showKnowledgeToast('知识重建已暂停')
-      } else if (result.jobOutcome === 'aborted') {
-        lastActiveKnowledgeJobIdRef.current = null
-        setKnowledgeRebuildStatus(null)
-        showKnowledgeToast('知识重建已终止')
-      } else if (result.jobOutcome === 'completed') {
-        showKnowledgeToast('知识视图已更新')
-      }
-    } catch {
-      showKnowledgeToast('知识视图重建失败', 2200)
-    } finally {
-      setKnowledgeRebuilding(false)
-    }
-  }
-
-  const handlePauseKnowledge = async () => {
-    if (!currentNovelId || !knowledgeRebuildActive || knowledgeActionLoading) return
-    setKnowledgeActionLoading('pause')
-    try {
-      const result = await pauseStoryKnowledgeRebuild(currentNovelId)
-      if (!result) return
-
-      setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
-      if (result.knowledgeRebuildStatus?.jobId) {
-        lastActiveKnowledgeJobIdRef.current = result.knowledgeRebuildStatus.jobId
-      }
-
-      showKnowledgeToast(result.jobOutcome === 'paused' ? '知识重建已暂停' : '当前没有进行中的知识重建任务')
-    } catch {
-      showKnowledgeToast('暂停知识重建失败', 2200)
-    } finally {
-      setKnowledgeActionLoading(null)
-    }
-  }
-
-  const handleAbortKnowledge = async () => {
-    if (!currentNovelId || (!knowledgeRebuildStatus && !knowledgeRebuilding) || knowledgeActionLoading) return
-    setKnowledgeActionLoading('abort')
-    try {
   const resolveTimelineSelectionAfterBranchDelete = useCallback((
     deletedNode: StoryTimelineBranchNode,
     previousSelection: TimelineSelection,
@@ -2380,6 +2380,81 @@ function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelec
     }
   }, [currentChapter, deletingBranchNodeId, handleTimelineSelection, loadStoryTimeline, resolveTimelineSelectionAfterBranchDelete, resolvedStoryTimeline.branchNodes, storyTimelineBranchId, workspaceSelection])
 
+  const handleDeleteNovel = async () => {
+    if (!currentNovelId) return
+
+    const title = currentNovelMeta?.title ?? '当前小说'
+    if (!window.confirm(`确认删除小说《${title}》吗？这会同时删除全部章节和本地知识数据。`)) {
+      return
+    }
+
+    deleteNovel(currentNovelId)
+    try {
+      await saveToBackend()
+      setToast(`已删除《${title}》`)
+      window.setTimeout(() => setToast(''), 1800)
+    } catch {
+      await loadFromBackend()
+      setToast(`删除《${title}》失败，已恢复本地状态。`)
+      window.setTimeout(() => setToast(''), 2400)
+    }
+  }
+
+  const handleRebuildKnowledge = async () => {
+    if (!currentNovelId || knowledgeRebuilding || knowledgeActionLoading) return
+    setKnowledgeRebuilding(true)
+    try {
+      const result = await rebuildStoryKnowledge(currentNovelId)
+      if (!result) return
+
+      setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+
+      if (result.knowledgeRebuildStatus?.jobId) {
+        lastActiveKnowledgeJobIdRef.current = result.knowledgeRebuildStatus.jobId
+      } else {
+        lastActiveKnowledgeJobIdRef.current = null
+      }
+
+      if (result.jobOutcome === 'paused') {
+        showKnowledgeToast('知识重建已暂停')
+      } else if (result.jobOutcome === 'aborted') {
+        lastActiveKnowledgeJobIdRef.current = null
+        setKnowledgeRebuildStatus(null)
+        showKnowledgeToast('知识重建已终止')
+      } else if (result.jobOutcome === 'completed') {
+        showKnowledgeToast('知识视图已更新')
+      }
+    } catch {
+      showKnowledgeToast('知识视图重建失败', 2200)
+    } finally {
+      setKnowledgeRebuilding(false)
+    }
+  }
+
+  const handlePauseKnowledge = async () => {
+    if (!currentNovelId || !knowledgeRebuildActive || knowledgeActionLoading) return
+    setKnowledgeActionLoading('pause')
+    try {
+      const result = await pauseStoryKnowledgeRebuild(currentNovelId)
+      if (!result) return
+
+      setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      if (result.knowledgeRebuildStatus?.jobId) {
+        lastActiveKnowledgeJobIdRef.current = result.knowledgeRebuildStatus.jobId
+      }
+
+      showKnowledgeToast(result.jobOutcome === 'paused' ? '知识重建已暂停' : '当前没有进行中的知识重建任务')
+    } catch {
+      showKnowledgeToast('暂停知识重建失败', 2200)
+    } finally {
+      setKnowledgeActionLoading(null)
+    }
+  }
+
+  const handleAbortKnowledge = async () => {
+    if (!currentNovelId || (!knowledgeRebuildStatus && !knowledgeRebuilding) || knowledgeActionLoading) return
+    setKnowledgeActionLoading('abort')
+    try {
       const result = await abortStoryKnowledgeRebuild(currentNovelId)
       if (!result) return
 
@@ -2865,12 +2940,12 @@ function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelec
         <div className="mt-3 rounded-2xl border border-violet-300/15 bg-black/20 px-3 py-3 text-xs text-zinc-300">
           <div className="mb-2 flex items-center justify-between gap-3">
             <span>{knowledgeRebuildPaused ? '本地知识图谱已暂停' : '本地知识图谱重建中'}</span>
-            <span>{Math.max(0, Math.min(100, Math.round((knowledgeRebuildStatus.progress ?? 0) * 100)))}%</span>
+            <span>{knowledgeRebuildOverallPercent}%</span>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-white/10">
             <div
               className="h-full rounded-full bg-violet-400 transition-all"
-              style={{ width: `${Math.max(6, Math.min(100, Math.round((knowledgeRebuildStatus.progress ?? 0) * 100)))}%` }}
+              style={{ width: `${Math.max(6, Math.min(100, knowledgeRebuildOverallPercent))}%` }}
             />
           </div>
           <p className="mt-2 text-[11px] leading-5 text-zinc-400">
@@ -2879,10 +2954,46 @@ function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelec
           <p className="mt-1 text-[11px] leading-5 text-zinc-500">
             预估剩余：{knowledgeRebuildPaused ? '已暂停' : knowledgeRebuildEtaMinutes ? `约 ${knowledgeRebuildEtaMinutes} 分钟` : '计算中'}
           </p>
+          <div className="mt-3 rounded-xl border border-violet-300/15 bg-violet-500/[0.08] px-3 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <p className="text-[11px] font-medium text-violet-100">原文 Embedding 预计算</p>
+                <p className="mt-1 text-[10px] leading-4 text-violet-100/75">{rawTextEmbeddingStatusLine}</p>
+              </div>
+              {knowledgeRebuildActive ? (
+                <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">
+                  与抽取并行
+                </span>
+              ) : null}
+            </div>
+            {rawTextEmbeddingPercent !== null ? (
+              <>
+                <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-zinc-300">
+                  <span>缓存预热进度</span>
+                  <span className="text-violet-100">{rawTextEmbeddingPercent}%</span>
+                </div>
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full rounded-full bg-violet-300 transition-all"
+                    style={{ width: `${Math.max(rawTextEmbeddingPercent > 0 ? 8 : 0, Math.min(100, rawTextEmbeddingPercent))}%` }}
+                  />
+                </div>
+              </>
+            ) : null}
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] leading-4 text-zinc-400">
+              <span>
+                缓存命中率：{rawTextEmbeddingCacheHitRatePercent !== null ? `${rawTextEmbeddingCacheHitRatePercent}%` : '暂未返回'}
+              </span>
+              {rawTextEmbeddingTimingLabel ? <span>阶段耗时：{rawTextEmbeddingTimingLabel}</span> : null}
+            </div>
+            {rawTextEmbeddingSettingsLine ? (
+              <p className="mt-1 truncate text-[10px] leading-4 text-zinc-500">{rawTextEmbeddingSettingsLine}</p>
+            ) : null}
+          </div>
           {knowledgeRebuildSteps.length > 0 ? (
             <div className="mt-3 space-y-2">
               {knowledgeRebuildSteps.map((step) => {
-                const stepProgress = Math.max(0, Math.min(100, Math.round((step.progress ?? 0) * 100)))
+                const stepProgress = toProgressPercent(step.progress)
                 const isActive = step.status === 'running' || step.status === 'paused'
 
                 return (
@@ -3057,6 +3168,9 @@ function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelec
             branchChaptersByParentId={branchChaptersByParentId}
             onSelectionChange={handleTimelineSelection}
             onDeleteChapter={handleTimelineDeleteChapter}
+            deletingBranchNodeId={deletingBranchNodeId}
+            onDeleteWhatIfSession={handleDeleteWhatIfNode}
+            onDeleteFutureJumpRun={handleDeleteFutureJumpNode}
           />
 
           <WorkspaceCenterPane
@@ -3168,9 +3282,6 @@ function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelec
                   relations: { label: '关系', icon: GitBranch },
                   outline: { label: '大纲', icon: ScrollText },
                   world: { label: '设定', icon: Globe },
-            deletingBranchNodeId={deletingBranchNodeId}
-            onDeleteWhatIfSession={handleDeleteWhatIfNode}
-            onDeleteFutureJumpRun={handleDeleteFutureJumpNode}
                   timeline: { label: '时间线', icon: ScrollText },
                 }[tab]
                 const TabIcon = tabMeta.icon
