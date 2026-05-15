@@ -147,6 +147,7 @@ async function performProviderExtraction(params: {
   chapterTitle: string
   chapterNo: number
   rawText: string
+  storyStateText?: string
   mode: 'full' | 'focused'
   settings: KnowledgeExtractionScenarioSettings
 }) {
@@ -160,6 +161,7 @@ async function runProviderExtraction(params: {
   chapterTitle: string
   chapterNo: number
   rawText: string
+  storyStateText?: string
   mode: 'full' | 'focused'
   settings: KnowledgeExtractionScenarioSettings
   assertCanContinue?: () => void | Promise<void>
@@ -317,6 +319,7 @@ function mergeFocusedKnowledge(
 export async function extractChapterKnowledgeOffline(params: {
   chapter: Chapter
   chapterNo: number
+  storyStateText?: string
   settings: KnowledgeExtractionScenarioSettings
   assertCanContinue?: () => void | Promise<void>
 }): Promise<OfflineExtractionResult> {
@@ -334,6 +337,7 @@ export async function extractChapterKnowledgeOffline(params: {
     chapterTitle: params.chapter.title,
     chapterNo: params.chapterNo,
     rawText,
+    storyStateText: params.storyStateText,
     mode: 'full',
     settings: params.settings,
     assertCanContinue: params.assertCanContinue,
@@ -349,6 +353,7 @@ export async function extractChapterKnowledgeOffline(params: {
       chapterTitle: params.chapter.title,
       chapterNo: params.chapterNo,
       rawText,
+      storyStateText: params.storyStateText,
       mode: 'focused',
       settings: params.settings,
       assertCanContinue: params.assertCanContinue,

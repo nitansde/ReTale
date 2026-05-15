@@ -1248,7 +1248,8 @@ export function buildKnowledgeExtractionPrompt(
   chapterTitle: string,
   chapterNo: number,
   rawText: string,
-  mode: KnowledgeExtractionPromptMode = 'full'
+   mode: KnowledgeExtractionPromptMode = 'full',
+   storyStateText?: string
 ) {
   const sourceLines = rawText
     .replace(/\r\n?/g, '\n')
@@ -1258,6 +1259,17 @@ export function buildKnowledgeExtractionPrompt(
   const numberedLines = excerptLines
     .map((line, index) => `${index + 1}: ${line}`)
     .join('\n')
+  const normalizedStoryStateText = storyStateText?.trim() ?? ''
+  const storyStateBlock = normalizedStoryStateText
+    ? ['已知前情故事状态（仅截至上一章，不包含本章）：', normalizedStoryStateText].join('\n\n')
+    : ''
+  const storyStateRules = normalizedStoryStateText
+    ? [
+        '若本章提到已知人物的公开名、别名、称呼，优先按前情中的已有角色理解。',
+        '“他 / 她 / 它 / 那人 / 这人 / 对方”等代词或泛称不得直接当作新人物名。',
+        '如果无法根据本章证据或前情中的已有别名唯一定位人物，就不要把它写成新的 characters 条目。',
+      ]
+    : []
 
   if (mode === 'focused') {
       return [
@@ -1266,12 +1278,14 @@ export function buildKnowledgeExtractionPrompt(
       '固定字段只能是：chapter_no、summary、characters、relations、events、worldbuilding、open_threads。',
       '本轮重点只抽取 relations、worldbuilding、open_threads。summary 可以简短；characters 和 events 若无必要一律返回空数组。',
       '结果必须精确、精简、可验证。不要把泛泛背景写成设定，不要把弱暗示写成关系，不要编造。',
+      ...storyStateRules,
       'relations.type 必须是具体语义，不要输出“关系”“联系”“有关联”“相关”等泛化词。优先使用“同盟”“敌对”“同行”“救助”“雇佣”“师徒”“亲属”“隶属”“交易”“合作”等具体类型。',
       'worldbuilding 只保留可复用的稳定设定、规则、地点、组织或物品。不要把“世界状态”“本章背景”或一次性剧情描写写成设定。definition 控制在一句话内。',
       'evidence 字段固定使用 quote、line_start、line_end。不要使用 text、content 或其他字段名。',
       truncated ? `本次仅提供前 ${EXTRACTION_MAX_PROMPT_LINES} 行节选。不要猜测未提供的后续内容。` : '本次提供完整章节内容。',
       '最小示例：',
       '{"chapter_no":1,"summary":"","characters":[],"relations":[{"source":"甲","target":"乙","type":"同伴","polarity":"positive","strength":3,"change":"合作开始","valid_from_chapter":1,"evidence":[{"quote":"甲与乙决定同行。","line_start":3,"line_end":3}]}],"events":[],"worldbuilding":[{"term":"黑塔","category":"organization","definition":"一座负责训练学徒的组织。","evidence":[{"quote":"黑塔每年招收学徒。","line_start":8,"line_end":8}]}],"open_threads":[{"name":"失踪的导师","description":"导师去向未明，后续仍需解释。","evidence":[{"quote":"导师至今没有回来。","line_start":12,"line_end":12}]}]}',
+      storyStateBlock,
       `章节标题：${chapterTitle}`,
       '章节正文（带行号）：',
       numberedLines,
@@ -1283,6 +1297,7 @@ export function buildKnowledgeExtractionPrompt(
     '只返回 1 个 JSON 对象。不要返回顶层数组。不要解释。不要输出 markdown。',
     '固定字段只能是：chapter_no、summary、characters、relations、events、worldbuilding、open_threads。',
     '如果某一类无法确定，就返回空数组，不要编造。',
+    ...storyStateRules,
     'characters.profile 必须是精简的人物角色卡。只保留文本中能直接支持的要点；不要写成长段；不确定就省略该字段。',
     'characters.profile 可包含：personality、gender、identity、capability、appearance、clothing、speakingStyle、likes。每个字段都是 { summary, note?, evidence? }；summary 最多一句短语，note/evidence 仅在有必要时填写。',
     '优先抽取身份背景、能力/战力、外形、衣着、说话风格与偏好，保持精确、克制、可用于后续人物扮演。',
@@ -1290,6 +1305,7 @@ export function buildKnowledgeExtractionPrompt(
     truncated ? `本次仅提供前 ${EXTRACTION_MAX_PROMPT_LINES} 行节选。不要猜测未提供的后续内容。` : '本次提供完整章节内容。',
     '最小示例：',
     '{"chapter_no":1,"summary":"一句话总结","characters":[{"name":"林澄","aliases":[],"status":"活跃","description_delta":"没落家族出身的学徒｜擅长火系法术","profile":{"identity":{"summary":"没落家族出身的学徒"},"capability":{"summary":"擅长火系法术"},"speakingStyle":{"summary":"说话直接克制","evidence":"林澄压低声音，只说重点。"}},"evidence":[{"quote":"林澄压低声音，只说重点。","line_start":1,"line_end":1}]}],"relations":[],"events":[],"worldbuilding":[],"open_threads":[]}',
+    storyStateBlock,
     `章节标题：${chapterTitle}`,
     '章节正文（带行号）：',
     numberedLines,
@@ -1747,6 +1763,7 @@ export async function extractChapterKnowledgeWithOllama(params: {
   chapterTitle: string
   chapterNo: number
   rawText: string
+  storyStateText?: string
   mode?: KnowledgeExtractionPromptMode
 }, configOverride?: Partial<OllamaProviderSettings>): Promise<OllamaExtractionResult> {
   const config = await getOllamaExtractionConfig(configOverride)
@@ -1758,7 +1775,13 @@ export async function extractChapterKnowledgeWithOllama(params: {
   }
 
   const mode = params.mode ?? 'full'
-  const prompt = buildKnowledgeExtractionPrompt(params.chapterTitle, params.chapterNo, params.rawText, mode)
+  const prompt = buildKnowledgeExtractionPrompt(
+    params.chapterTitle,
+    params.chapterNo,
+    params.rawText,
+    mode,
+    params.storyStateText,
+  )
   let lastError = 'Failed to parse Ollama JSON'
   let lastContent = ''
 

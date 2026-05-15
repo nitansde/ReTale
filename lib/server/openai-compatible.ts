@@ -275,6 +275,7 @@ export async function extractChapterKnowledgeWithOpenAICompatible(params: {
   chapterTitle: string
   chapterNo: number
   rawText: string
+  storyStateText?: string
   mode?: KnowledgeExtractionPromptMode
 }, configOverride?: Partial<OpenAICompatibleProviderSettings>): Promise<OpenAICompatibleExtractionResult> {
   const config = getConfig('knowledgeExtraction', configOverride)
@@ -283,7 +284,13 @@ export async function extractChapterKnowledgeWithOpenAICompatible(params: {
   }
 
   const mode = params.mode ?? 'full'
-  const prompt = buildKnowledgeExtractionPrompt(params.chapterTitle, params.chapterNo, params.rawText, mode)
+  const prompt = buildKnowledgeExtractionPrompt(
+    params.chapterTitle,
+    params.chapterNo,
+    params.rawText,
+    mode,
+    params.storyStateText,
+  )
   const timeoutMs = 120000
   let lastError = 'Failed to parse OpenAI-compatible JSON'
   let lastContent = ''
