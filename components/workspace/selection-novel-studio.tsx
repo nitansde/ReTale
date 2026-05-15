@@ -9,7 +9,6 @@ import {
   ArrowLeft,
   BookOpen,
   Check,
-  ChevronDown,
   Globe,
   GitBranch,
   LoaderCircle,
@@ -24,12 +23,31 @@ import {
   Wand2,
   X,
 } from 'lucide-react'
+import { FutureJumpView, type FutureJumpContinueContext } from '@/components/future-jump/FutureJumpView'
 import { ChapterGraphBrowser } from '@/components/graph/chapter-graph-browser'
 import { GraphReviewPanel } from '@/components/graph/graph-review-panel'
+import { FutureMapOverlay } from '@/components/what-if/FutureMapOverlay'
+import { WhatIfSessionView } from '@/components/what-if/WhatIfSessionView'
+import { WorkspaceCenterPane } from '@/components/workspace/WorkspaceCenterPane'
+import { WorkspaceChapterNav } from '@/components/workspace/WorkspaceChapterNav'
+import { WorkspaceReferencePanel } from '@/components/workspace/WorkspaceReferencePanel'
+import {
+  type PendingSourceJump,
+  useWorkspaceChapterSelection,
+  type WorkspaceActionMode,
+  type WorkspaceFloatingPosition,
+  type WorkspaceRoleplayTurn,
+} from '@/components/workspace/use-workspace-chapter-selection'
+import { useWorkspacePaneState } from '@/components/workspace/use-workspace-pane-state'
+import {
+  readWorkspaceSelectionFromSearchParams,
+  resolveWorkspaceSelection,
+  toChapterTimelineSelection,
+  writeWorkspaceSelectionToSearchParams,
+} from '@/components/workspace/workspace-selection'
 import { normalizeAISettings } from '@/lib/ai-settings'
 import type {
   ChapterGraphContextData,
-  GraphContextSourceMeta,
   GraphEdgeEditDraft,
   ChapterGraphContextResponse,
   GenerationContextBuildData,
@@ -41,32 +59,11 @@ import type {
 import type { GraphEdge } from '@/lib/server/graph-types'
 import { useNovelStore } from '@/store/novel-store'
 import { cn, countChineseFriendlyWords, htmlToPlainText, plainTextToHtml } from '@/lib/utils'
+import type { ChapterTimelineItem, FutureJumpMutationResponse, FutureJumpRunDetail, StoryTimelineResponse, TimelineSelection, WhatIfCreateResponse, WhatIfSessionDetail } from '@/lib/story-branch-types'
 import type { AIProvider, AISettings, AIScenarioKey, Chapter, Character, CharacterRelation, OutlineType, WorldEntryType } from '@/lib/types'
-
-type ActionMode = 'rewrite' | 'roleplay' | 'expand'
-type CenterPaneView = 'body' | 'graph'
-
-type FloatingPosition = {
-  top: number
-  left: number
-}
-
-type PendingSourceJump = {
-  chapterId: string
-  chapterNo: number
-  lineStart: number | null
-  lineEnd: number | null
-  searchText: string
-}
 
 const TOOLBAR_EDGE_PADDING = 12
 const TOOLBAR_OFFSET_Y = 56
-
-type RoleplayTurn = {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-}
 
 type GenerationState = {
   loading: boolean
@@ -86,6 +83,29 @@ type RewriteFlowState = {
   provider: string
   candidates: RewriteApiCandidate[]
   selectedIndex: number
+}
+
+type PendingWhatIfRewriteLaunch = {
+  detail: WhatIfSessionDetail
+  targetChapterId: string
+  variant: 'regenerate' | 'continue'
+}
+
+type PendingFutureJumpRewriteLaunch = {
+  detail: FutureJumpRunDetail
+  targetChapterId: string
+  targetTitle: string
+}
+
+type RewriteLaunchSource = 'chapter' | 'what_if' | 'future_jump'
+
+type FutureMapLaunchState = {
+  novelId: string
+  branchId: string
+  sessionId: string
+  sourceChapterNo: number
+  title: string
+  parentTimelineNodeId: string | null
 }
 
 type KnowledgeRebuildStatus = {
@@ -232,7 +252,7 @@ const KNOWLEDGE_STEP_STATUS_LABELS: Record<KnowledgeRebuildStatus['steps'][numbe
   completed: '已完成',
 }
 
-const ACTION_META: Record<ActionMode, { label: string; title: string; description: string; icon: typeof Wand2 }> = {
+const ACTION_META: Record<WorkspaceActionMode, { label: string; title: string; description: string; icon: typeof Wand2 }> = {
   rewrite: {
     label: '魔改',
     title: '魔改 · 全章重写',
@@ -469,6 +489,21 @@ async function streamRewriteApi(
   }
 }
 
+async function callCreateWhatIfSessionApi(payload: Record<string, unknown>): Promise<WhatIfCreateResponse> {
+  const response = await fetch('/api/what-if/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  const data = await response.json() as WhatIfCreateResponse & { error?: string }
+  if (!response.ok) {
+    throw new Error(data.error || '创建 What-if 失败')
+  }
+
+  return data
+}
+
 export function SelectionNovelStudio() {
   const router = useRouter()
   const loadFromBackend = useNovelStore((state) => state.loadFromBackend)
@@ -532,12 +567,24 @@ export function SelectionNovelStudio() {
     })
   )
 
-  const [leftPanelOpen, setLeftPanelOpen] = useState(false)
-  const [centerPaneView, setCenterPaneView] = useState<CenterPaneView>('body')
+  const {
+    leftPanelOpen,
+    setLeftPanelOpen,
+    chapterListState,
+    setChapterListState,
+    centerPaneView,
+    setCenterPaneView,
+    refTab,
+    setRefTab,
+    settingsOpen,
+    setSettingsOpen,
+    confirmDeleteKnowledge,
+    setConfirmDeleteKnowledge,
+  } = useWorkspacePaneState()
   const [selectionText, setSelectionText] = useState('')
   const [lockedSelectionText, setLockedSelectionText] = useState('')
-  const [toolbarPos, setToolbarPos] = useState<FloatingPosition | null>(null)
-  const [activeMode, setActiveMode] = useState<ActionMode | null>(null)
+  const [toolbarPos, setToolbarPos] = useState<WorkspaceFloatingPosition | null>(null)
+  const [activeMode, setActiveMode] = useState<WorkspaceActionMode | null>(null)
   const [rewritePrompt, setRewritePrompt] = useState('保留核心剧情，围绕选中部分做更大胆、更有戏剧张力的整章重写。')
   const [expandPrompt, setExpandPrompt] = useState('不改变剧情和信息顺序，只补足环境、动作、心理和感官描写。')
   const [rewriteState, setRewriteState] = useState<GenerationState>({ loading: false, result: '', error: '' })
@@ -568,18 +615,24 @@ export function SelectionNovelStudio() {
   const [chapterGraphControls, setChapterGraphControls] = useState<GraphReviewControls>(DEFAULT_GRAPH_REVIEW_CONTROLS)
   const [chapterGraphSelection, setChapterGraphSelection] = useState<GraphSelection>(null)
   const [pendingSourceJump, setPendingSourceJump] = useState<PendingSourceJump | null>(null)
+  const [workspaceSelection, setWorkspaceSelection] = useState<TimelineSelection | null>(null)
+  const [storyTimelineData, setStoryTimelineData] = useState<StoryTimelineResponse | null>(null)
+  const [storyTimelineError, setStoryTimelineError] = useState('')
   const [roleplayInput, setRoleplayInput] = useState('')
   const [roleplayDraft, setRoleplayDraft] = useState('')
-  const [roleplayTurns, setRoleplayTurns] = useState<RoleplayTurn[]>([])
+  const [roleplayTurns, setRoleplayTurns] = useState<WorkspaceRoleplayTurn[]>([])
   const [copied, setCopied] = useState<'rewrite' | 'expand' | 'roleplay' | null>(null)
   const [toast, setToast] = useState('')
-  const [chapterListState, setChapterListState] = useState<Record<string, number>>({})
-  const [refTab, setRefTab] = useState<'characters' | 'relations' | 'outline' | 'world' | 'timeline'>('characters')
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [whatIfCreating, setWhatIfCreating] = useState(false)
+  const [whatIfCreateError, setWhatIfCreateError] = useState('')
+  const [pendingWhatIfRewriteLaunch, setPendingWhatIfRewriteLaunch] = useState<PendingWhatIfRewriteLaunch | null>(null)
+  const [pendingFutureJumpRewriteLaunch, setPendingFutureJumpRewriteLaunch] = useState<PendingFutureJumpRewriteLaunch | null>(null)
+  const [rewriteLaunchSource, setRewriteLaunchSource] = useState<RewriteLaunchSource>('chapter')
+  const [rewriteSourceTextOverride, setRewriteSourceTextOverride] = useState('')
+  const [futureMapLaunch, setFutureMapLaunch] = useState<FutureMapLaunchState | null>(null)
   const [knowledgeRebuilding, setKnowledgeRebuilding] = useState(false)
   const [knowledgeRebuildStatus, setKnowledgeRebuildStatus] = useState<KnowledgeRebuildStatus | null>(null)
   const [knowledgeActionLoading, setKnowledgeActionLoading] = useState<'pause' | 'abort' | 'delete' | null>(null)
-  const [confirmDeleteKnowledge, setConfirmDeleteKnowledge] = useState(false)
   const [ollamaModelsByScenario, setOllamaModelsByScenario] = useState<Record<AIScenarioKey, OllamaModelOption[]>>({
     rewrite: [],
     knowledgeExtraction: [],
@@ -616,6 +669,7 @@ export function SelectionNovelStudio() {
   const toolbarRef = useRef<HTMLDivElement | null>(null)
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hydratedRef = useRef(false)
+  const workspaceSelectionHydratedRef = useRef(false)
   const lastActiveKnowledgeJobIdRef = useRef<string | null>(null)
   const openAICompatibleModelsRequestRef = useRef<Record<AIScenarioKey, number>>({
     rewrite: 0,
@@ -623,6 +677,7 @@ export function SelectionNovelStudio() {
     embeddings: 0,
   })
   const chapterGraphRequestRef = useRef(0)
+  const storyTimelineRequestRef = useRef(0)
   const resolvedAISettings = useMemo(() => normalizeAISettings(aiSettings), [aiSettings])
 
   const updateAISettings = useCallback((updater: (current: AISettings) => AISettings) => {
@@ -793,7 +848,7 @@ export function SelectionNovelStudio() {
       window.clearTimeout(confirmResetTimer)
       window.clearInterval(timer)
     }
-  }, [currentChapterId, currentNovelId, knowledgeActionLoading, knowledgeRebuilding, localChapters, refreshKnowledgeProjection])
+  }, [currentChapterId, currentNovelId, knowledgeActionLoading, knowledgeRebuilding, localChapters, refreshKnowledgeProjection, setConfirmDeleteKnowledge])
 
   useEffect(() => {
     if (!settingsOpen || resolvedAISettings.rewrite.provider !== 'ollama') return
@@ -878,16 +933,98 @@ export function SelectionNovelStudio() {
     [localNovels, currentNovelId]
   )
 
-  const sortedChapters = useMemo(
-    () => localChapters.filter((chapter) => chapter.novelId === currentNovelId).slice().sort((a, b) => a.order - b.order),
-    [localChapters, currentNovelId]
-  )
+  const {
+    sortedChapters,
+    currentChapter,
+    parentChapter,
+    graphSourceMeta,
+    selectChapter,
+    resolveSourceChapter,
+    jumpToGraphSource,
+  } = useWorkspaceChapterSelection({
+    localChapters,
+    currentNovelId,
+    currentChapterId,
+    setCurrentChapterId,
+    setCenterPaneView,
+    setPendingSourceJump,
+    setLeftPanelOpen,
+    htmlToPlainText,
+    resetControls: {
+      defaultGraphReviewControls: DEFAULT_GRAPH_REVIEW_CONTROLS,
+      setRoleplayTurns,
+      setRoleplayDraft,
+      setSelectionText,
+      setLockedSelectionText,
+      setGenerationContext,
+      setGraphContext,
+      setContextPreviewError,
+      setGraphReviewControls,
+      setGraphSelection,
+      setEvidenceDrawerOpen,
+      setDisabledContextBlockIds,
+      setExcludedGraphEdgeIds,
+      setExcludedEvidenceIds,
+      setGraphMutationPendingId,
+      setGraphMutationError,
+      setToolbarPos,
+      setActiveMode,
+    },
+  })
   const hasWorkspaceContent = localChapters.length > 0
-
-  const currentChapter = useMemo(
-    () => sortedChapters.find((chapter) => chapter.id === currentChapterId) ?? sortedChapters[0],
-    [sortedChapters, currentChapterId]
+  const mainlineChapters = useMemo(
+    () => sortedChapters.filter((chapter) => !chapter.parentChapterId),
+    [sortedChapters]
   )
+  const branchChaptersByParentId = useMemo(() => {
+    const grouped = new Map<string, Chapter[]>()
+    for (const chapter of sortedChapters) {
+      if (!chapter.parentChapterId) continue
+      const current = grouped.get(chapter.parentChapterId) ?? []
+      current.push(chapter)
+      grouped.set(chapter.parentChapterId, current)
+    }
+    return grouped
+  }, [sortedChapters])
+  const storyTimelineBranchId = currentNovelId ? `${currentNovelId}:main` : ''
+  const fallbackStoryTimeline = useMemo<StoryTimelineResponse>(() => ({
+    novelId: currentNovelId,
+    branchId: storyTimelineBranchId,
+    chapters: mainlineChapters.map<ChapterTimelineItem>((chapter) => ({
+      type: 'chapter',
+      chapterNo: chapter.order,
+      chapterId: chapter.id,
+      title: chapter.title,
+      wordCount: chapter.wordCount,
+    })),
+    branchNodes: [],
+    edges: [],
+  }), [currentNovelId, mainlineChapters, storyTimelineBranchId])
+  const resolvedStoryTimeline = storyTimelineData?.novelId === currentNovelId ? storyTimelineData : fallbackStoryTimeline
+  const timelineChapterById = useMemo(
+    () => new Map(resolvedStoryTimeline.chapters.map((chapter) => [chapter.chapterId, chapter] as const)),
+    [resolvedStoryTimeline.chapters]
+  )
+  const timelineNodeById = useMemo(
+    () => new Map(resolvedStoryTimeline.branchNodes.map((node) => [node.id, node] as const)),
+    [resolvedStoryTimeline.branchNodes]
+  )
+
+  const handleTimelineSelection = useCallback((selection: TimelineSelection) => {
+    setWorkspaceSelection(selection)
+    setActiveMode(null)
+    setToolbarPos(null)
+
+    if (selection.kind === 'chapter') {
+      const selectedChapter = sortedChapters.find((chapter) => chapter.id === selection.chapterId)
+      if (selectedChapter) {
+        selectChapter(selectedChapter)
+        return
+      }
+    }
+
+    setLeftPanelOpen(false)
+  }, [selectChapter, setActiveMode, setLeftPanelOpen, setToolbarPos, sortedChapters])
 
   useEffect(() => {
     if (!backendLoaded || !currentNovelId || !currentChapter) return
@@ -900,23 +1037,87 @@ export function SelectionNovelStudio() {
     }
   }, [backendLoaded, currentChapter, currentNovelId, refreshKnowledgeProjection])
 
-  const parentChapter = useMemo(
-    () => (currentChapter?.parentChapterId ? sortedChapters.find((chapter) => chapter.id === currentChapter.parentChapterId) ?? null : null),
-    [currentChapter?.parentChapterId, sortedChapters]
-  )
-  const effectiveGraphSourceChapter = useMemo(
-    () => (currentChapter?.parentChapterId ? parentChapter ?? currentChapter : currentChapter ?? null),
-    [currentChapter, parentChapter]
-  )
-  const graphSourceMeta = useMemo<GraphContextSourceMeta | undefined>(() => {
-    if (!currentChapter || !effectiveGraphSourceChapter) return undefined
-    return {
-      mode: currentChapter.parentChapterId ? 'inherited-parent' : 'direct',
-      chapterId: effectiveGraphSourceChapter.id,
-      chapterNo: effectiveGraphSourceChapter.order,
-      chapterTitle: effectiveGraphSourceChapter.title,
+  useEffect(() => {
+    workspaceSelectionHydratedRef.current = false
+  }, [currentNovelId])
+
+  useEffect(() => {
+    if (!backendLoaded || !currentChapter || workspaceSelectionHydratedRef.current) return
+
+    const requestedSelection = readWorkspaceSelectionFromSearchParams(new URLSearchParams(window.location.search))
+    if (requestedSelection && requestedSelection.kind !== 'chapter' && !storyTimelineData) return
+
+    setWorkspaceSelection(resolveWorkspaceSelection({
+      currentSelection: requestedSelection,
+      currentChapter,
+      branchNodes: resolvedStoryTimeline.branchNodes,
+    }))
+    workspaceSelectionHydratedRef.current = true
+  }, [backendLoaded, currentChapter, resolvedStoryTimeline.branchNodes, storyTimelineData])
+
+  useEffect(() => {
+    if (!backendLoaded || !currentChapter || !workspaceSelectionHydratedRef.current) return
+
+    const currentUrl = new URL(window.location.href)
+    const currentSearch = currentUrl.searchParams.toString()
+    const nextSearchParams = writeWorkspaceSelectionToSearchParams(
+      currentUrl.searchParams,
+      workspaceSelection ?? toChapterTimelineSelection(currentChapter)
+    )
+    const nextSearch = nextSearchParams.toString()
+    if (nextSearch === currentSearch) return
+
+    const nextUrl = `${currentUrl.pathname}${nextSearch ? `?${nextSearch}` : ''}${currentUrl.hash}`
+    window.history.replaceState(window.history.state, '', nextUrl)
+  }, [backendLoaded, currentChapter, workspaceSelection])
+
+  useEffect(() => {
+    setWorkspaceSelection((current) => resolveWorkspaceSelection({
+      currentSelection: current,
+      currentChapter,
+      branchNodes: resolvedStoryTimeline.branchNodes,
+    }))
+  }, [currentChapter, resolvedStoryTimeline.branchNodes])
+
+  const loadStoryTimeline = useCallback(async () => {
+    if (!currentNovelId) {
+      setStoryTimelineData(null)
+      setStoryTimelineError('')
+      return null
     }
-  }, [currentChapter, effectiveGraphSourceChapter])
+
+    const requestId = storyTimelineRequestRef.current + 1
+    storyTimelineRequestRef.current = requestId
+
+    try {
+      const searchParams = new URLSearchParams({
+        novelId: currentNovelId,
+        branchId: storyTimelineBranchId,
+      })
+      const response = await fetch(`/api/story-timeline?${searchParams.toString()}`, { cache: 'no-store' })
+      const data = await response.json().catch(() => null) as (StoryTimelineResponse & { error?: string }) | null
+
+      if (storyTimelineRequestRef.current !== requestId) return null
+      if (!response.ok || !data) {
+        setStoryTimelineData(null)
+        setStoryTimelineError(data?.error ?? '故事时间线加载失败')
+        return null
+      }
+
+      setStoryTimelineData(data)
+      setStoryTimelineError('')
+      return data
+    } catch {
+      if (storyTimelineRequestRef.current !== requestId) return null
+      setStoryTimelineData(null)
+      setStoryTimelineError('故事时间线加载失败')
+      return null
+    }
+  }, [currentNovelId, storyTimelineBranchId])
+
+  useEffect(() => {
+    void loadStoryTimeline()
+  }, [loadStoryTimeline])
 
   const chapterListLimit = chapterListState[currentNovelId] ?? CHAPTER_PAGE_SIZE
 
@@ -935,31 +1136,6 @@ export function SelectionNovelStudio() {
   }, [chapterIndex, chapterListLimit, sortedChapters.length])
 
   const chapterText = currentChapter ? htmlToPlainText(currentChapter.content) : ''
-
-  const resolveSourceChapter = (source: { chapterId?: string | null; chapterNo: number | null }) => {
-    if (source.chapterId) {
-      const byId = sortedChapters.find((chapter) => chapter.id === source.chapterId)
-      if (byId) return byId
-    }
-
-    if (source.chapterNo === null) return null
-
-    const mainlineMatch = sortedChapters.find((chapter) => !chapter.parentChapterId && chapter.order === source.chapterNo)
-    if (mainlineMatch) return mainlineMatch
-
-    return sortedChapters.find((chapter) => chapter.order === source.chapterNo) ?? null
-  }
-
-  const jumpToGraphSource = (target: PendingSourceJump) => {
-    const targetChapter = sortedChapters.find((chapter) => chapter.id === target.chapterId)
-    if (!targetChapter) return
-
-    setPendingSourceJump(target)
-    setCenterPaneView('body')
-    setCurrentChapterId(targetChapter.id)
-    resetContextForChapter(targetChapter)
-    setLeftPanelOpen(false)
-  }
 
   const resolveEdgeSourceJumpTarget = (edge: GraphEdge) => {
     const location = edge.evidenceLocation
@@ -1129,30 +1305,12 @@ export function SelectionNovelStudio() {
     }
   }, [activeMode, toolbarPos])
 
-  const resetContextForChapter = (chapter: Chapter) => {
-    const nextText = htmlToPlainText(chapter.content)
-    setRoleplayTurns([])
-    setRoleplayDraft(nextText)
-    setSelectionText('')
-    setLockedSelectionText('')
-    setGenerationContext(null)
-    setGraphContext(null)
-    setContextPreviewError('')
-    setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
-    setGraphSelection(null)
-    setEvidenceDrawerOpen(false)
-    setDisabledContextBlockIds([])
-    setExcludedGraphEdgeIds([])
-    setExcludedEvidenceIds([])
-    setGraphMutationPendingId(null)
-    setGraphMutationError('')
-    setToolbarPos(null)
-    setActiveMode(null)
-  }
-
   const closePanel = () => {
     setActiveMode(null)
     setLockedSelectionText('')
+    setWhatIfCreateError('')
+    setRewriteLaunchSource('chapter')
+    setRewriteSourceTextOverride('')
     setGenerationContext(null)
     setGraphContext(null)
     setContextPreviewError('')
@@ -1309,14 +1467,14 @@ export function SelectionNovelStudio() {
   })
   const providerLabel = scenarioStatusLabels[0] ?? '改写 OpenAI 未配置'
 
-  const getInstructionForMode = (mode: ActionMode) => {
+  const getInstructionForMode = useCallback((mode: WorkspaceActionMode) => {
     if (mode === 'rewrite') return rewritePrompt
     if (mode === 'expand') return expandPrompt
     return roleplayInput.trim() || '围绕当前选区继续推进剧情。'
-  }
+  }, [expandPrompt, roleplayInput, rewritePrompt])
 
-  const loadContextPreview = async (
-    mode: ActionMode,
+  const loadContextPreview = useCallback(async (
+    mode: WorkspaceActionMode,
     instructionOverride?: string,
     options?: {
       preserveDisabledBlocks?: boolean
@@ -1382,7 +1540,115 @@ export function SelectionNovelStudio() {
     } finally {
       setContextPreviewLoading(false)
     }
-  }
+  }, [
+    currentChapter,
+    currentNovelId,
+    excludedEvidenceIds,
+    excludedGraphEdgeIds,
+    getInstructionForMode,
+    lockedSelectionText,
+    parentChapter,
+    selectionText,
+  ])
+
+  useEffect(() => {
+    if (!pendingWhatIfRewriteLaunch || !currentChapter || currentChapter.id !== pendingWhatIfRewriteLaunch.targetChapterId) return
+
+    const { detail, variant } = pendingWhatIfRewriteLaunch
+    const instruction = variant === 'continue'
+      ? `${detail.premise.trim() || '沿着当前 What-if 前提继续推进。'}\n\n继续沿着这个 What-if 分支扩展新的整章版本，不要回写主线正文。`
+      : detail.premise.trim() || '沿着当前 What-if 前提重新生成候选版本。'
+
+    setSelectionText(detail.selectedText)
+    setLockedSelectionText(detail.selectedText)
+    setToolbarPos(null)
+    setGenerationContext(null)
+    setGraphContext(null)
+    setContextPreviewError('')
+    setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
+    setGraphSelection(null)
+    setEvidenceDrawerOpen(false)
+    setDisabledContextBlockIds([])
+    setExcludedGraphEdgeIds([])
+    setExcludedEvidenceIds([])
+    setGraphMutationPendingId(null)
+    setGraphMutationError('')
+    setRewritePrompt(instruction)
+    setRewriteLaunchSource('what_if')
+    setRewriteSourceTextOverride(detail.generatedText)
+    setRewriteState({ loading: false, result: detail.generatedText, error: '' })
+    setRewriteFlow({
+      loading: false,
+      error: '',
+      provider: 'what-if-session',
+      candidates: [
+        {
+          title: variant === 'continue' ? '当前分支版本' : '当前 What-if 版本',
+          summary: variant === 'continue'
+            ? '从已持久化的 What-if 会话继续衍生分支版本。'
+            : '从已持久化的 What-if 会话重新进入改写流程。',
+          content: detail.generatedText,
+        },
+      ],
+      selectedIndex: 0,
+    })
+    setActiveMode('rewrite')
+    setPendingWhatIfRewriteLaunch(null)
+
+    window.setTimeout(() => {
+      void loadContextPreview('rewrite', instruction)
+    }, 0)
+  }, [currentChapter, pendingWhatIfRewriteLaunch, loadContextPreview])
+
+  useEffect(() => {
+    if (!pendingFutureJumpRewriteLaunch || !currentChapter || currentChapter.id !== pendingFutureJumpRewriteLaunch.targetChapterId) return
+
+    const { detail, targetTitle } = pendingFutureJumpRewriteLaunch
+    const instruction = [
+      detail.userDirection.trim() ? `原始方向：${detail.userDirection.trim()}` : '',
+      `目标未来节点：${targetTitle}`,
+      `最新桥接摘要：${detail.bridgeSummary}`,
+      '继续沿着这个 Future Jump 的最新版本扩展新的整章候选，不要默认回写主线正文。',
+    ].filter(Boolean).join('\n\n')
+
+    setSelectionText(detail.generatedTargetText)
+    setLockedSelectionText(detail.generatedTargetText)
+    setToolbarPos(null)
+    setGenerationContext(null)
+    setGraphContext(null)
+    setContextPreviewError('')
+    setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
+    setGraphSelection(null)
+    setEvidenceDrawerOpen(false)
+    setDisabledContextBlockIds([])
+    setExcludedGraphEdgeIds([])
+    setExcludedEvidenceIds([])
+    setGraphMutationPendingId(null)
+    setGraphMutationError('')
+    setRewritePrompt(instruction)
+    setRewriteLaunchSource('future_jump')
+    setRewriteSourceTextOverride(detail.generatedTargetText)
+    setRewriteState({ loading: false, result: detail.generatedTargetText, error: '' })
+    setRewriteFlow({
+      loading: false,
+      error: '',
+      provider: 'future-jump-run',
+      candidates: [
+        {
+          title: '当前 Future 版本',
+          summary: '从已持久化的 Future Jump 最新修订继续推进，不默认回写主线章节。',
+          content: detail.generatedTargetText,
+        },
+      ],
+      selectedIndex: 0,
+    })
+    setActiveMode('rewrite')
+    setPendingFutureJumpRewriteLaunch(null)
+
+    window.setTimeout(() => {
+      void loadContextPreview('rewrite', instruction)
+    }, 0)
+  }, [currentChapter, pendingFutureJumpRewriteLaunch, loadContextPreview])
 
   const syncGraphReview = async (nextControls: GraphReviewControls, fallbackContext?: GenerationContextBuildData | null) => {
     const sourceContext = fallbackContext ?? generationContext
@@ -1430,7 +1696,7 @@ export function SelectionNovelStudio() {
     }
   }
 
-  const openActionMode = (mode: ActionMode) => {
+  const openActionMode = (mode: WorkspaceActionMode) => {
     const nextSelection = selectionText.trim()
     if (!nextSelection) return
     setLockedSelectionText(nextSelection)
@@ -1447,6 +1713,8 @@ export function SelectionNovelStudio() {
     setGraphMutationPendingId(null)
     setGraphMutationError('')
     if (mode === 'rewrite') {
+      setRewriteLaunchSource('chapter')
+      setRewriteSourceTextOverride('')
       setRewriteFlow({
         loading: false,
         error: '',
@@ -1867,7 +2135,7 @@ export function SelectionNovelStudio() {
     )
   }
 
-  const handleDeleteChapter = async (chapter: Chapter) => {
+  const handleDeleteChapter = useCallback(async (chapter: Chapter) => {
     const branchCount = localChapters.filter((item) => item.parentChapterId === chapter.id).length
     const prompt = chapter.parentChapterId
       ? `确认删除章节《${chapter.title}》吗？`
@@ -1889,7 +2157,14 @@ export function SelectionNovelStudio() {
       setToast(`删除《${chapter.title}》失败，已恢复本地状态。`)
       window.setTimeout(() => setToast(''), 2400)
     }
-  }
+  }, [deleteChapter, loadFromBackend, localChapters, saveToBackend])
+
+  const handleTimelineDeleteChapter = useCallback((chapterId: string) => {
+    const targetChapter = sortedChapters.find((chapter) => chapter.id === chapterId)
+    if (targetChapter) {
+      void handleDeleteChapter(targetChapter)
+    }
+  }, [handleDeleteChapter, sortedChapters])
 
   const handleDeleteNovel = async () => {
     if (!currentNovelId) return
@@ -2012,7 +2287,7 @@ export function SelectionNovelStudio() {
           novelId: currentNovelId,
           chapterId: currentChapter.id,
           selectedText: targetSelection,
-          sourceText: chapterText,
+          sourceText: rewriteSourceTextOverride.trim() || chapterText,
           operationType: 'rewrite',
           userInstruction: rewritePrompt,
           disabledBlockIds: disabledContextBlockIds,
@@ -2054,6 +2329,60 @@ export function SelectionNovelStudio() {
       const message = error instanceof Error ? error.message : 'Rewrite failed.'
       setRewriteState({ loading: false, result: '', error: message })
       setRewriteFlow({ loading: false, error: message, provider: '', candidates: [], selectedIndex: 0 })
+    }
+  }
+
+  const handleCreateWhatIf = async () => {
+    const targetSelection = lockedSelectionText.trim() || selectionText.trim()
+    const selectedCandidate = selectedRewriteCandidate?.content?.trim() || ''
+    if (!currentNovelId || !currentChapter || !targetSelection || !selectedCandidate || whatIfCreating) return
+
+    setWhatIfCreating(true)
+    setWhatIfCreateError('')
+    try {
+      const result = await callCreateWhatIfSessionApi({
+        novelId: currentNovelId,
+        branchId: generationContext?.branchId ?? `${currentNovelId}:main`,
+        sourceChapterNo: currentChapter.order,
+        selectedText: targetSelection,
+        originalText: chapterText,
+        generatedText: selectedCandidate,
+        userInstruction: rewritePrompt.trim(),
+        titleHint: rewritePrompt.trim().slice(0, 24),
+      })
+
+      const refreshed = await loadStoryTimeline()
+      const matchingNode = refreshed?.branchNodes.find(
+        (node) => node.id === result.timelineNodeId || node.whatIfSessionId === result.sessionId
+      )
+
+      closePanel()
+      setWorkspaceSelection(
+        matchingNode?.whatIfSessionId
+          ? {
+              kind: 'what_if',
+              nodeId: matchingNode.id,
+              sessionId: matchingNode.whatIfSessionId,
+              anchorChapterNo: matchingNode.anchorChapterNo,
+            }
+          : {
+              kind: 'what_if',
+              nodeId: result.timelineNodeId,
+              sessionId: result.sessionId,
+              anchorChapterNo: currentChapter.order,
+            }
+      )
+      setLeftPanelOpen(false)
+
+      setToast(`已创建 ${result.title}`)
+      window.setTimeout(() => setToast(''), 2200)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '创建 What-if 失败'
+      setWhatIfCreateError(message)
+      setToast(message)
+      window.setTimeout(() => setToast(''), 2400)
+    } finally {
+      setWhatIfCreating(false)
     }
   }
 
@@ -2099,7 +2428,7 @@ export function SelectionNovelStudio() {
   const handleRoleplayTurn = async () => {
     const targetSelection = lockedSelectionText.trim() || selectionText.trim()
     if (!currentChapter || !targetSelection || !roleplayInput.trim()) return
-    const userTurn: RoleplayTurn = { id: uid('rp-user'), role: 'user', content: roleplayInput.trim() }
+  const userTurn: WorkspaceRoleplayTurn = { id: uid('rp-user'), role: 'user', content: roleplayInput.trim() }
     const baseline = roleplayDraft.trim() || chapterText
     setRoleplayTurns((current) => [...current, userTurn])
     setRoleplayInput('')
@@ -2187,6 +2516,342 @@ export function SelectionNovelStudio() {
     )
   }
 
+  const activeWorkspaceSelection = workspaceSelection ?? toChapterTimelineSelection(currentChapter)
+  const selectedTimelineNode = activeWorkspaceSelection.kind === 'chapter'
+    ? null
+    : timelineNodeById.get(activeWorkspaceSelection.nodeId) ?? null
+  const workspaceHeaderTitle = selectedTimelineNode?.title ?? currentChapter.title
+  const chapterSelectionSummary = (lockedSelectionText || selectionText)
+    ? `当前选区：${(lockedSelectionText || selectionText).slice(0, 24)}${(lockedSelectionText || selectionText).length > 24 ? '…' : ''}`
+    : '当前选区：未选择'
+  const chapterGraphSummary = `当前浏览：${graphSourceMeta?.mode === 'inherited-parent' ? `分支图谱（继承主线第 ${graphSourceMeta.chapterNo} 章）` : '章节图谱'}`
+  const openChapterWorkspace = (chapter: Chapter) => {
+    setWorkspaceSelection(toChapterTimelineSelection(chapter))
+    setCenterPaneView('body')
+    selectChapter(chapter)
+  }
+  function reopenWhatIfRewriteFlow(detail: WhatIfSessionDetail, variant: 'regenerate' | 'continue') {
+    const sourceChapter = resolveSourceChapter({ chapterId: null, chapterNo: detail.sourceChapterNo })
+    if (!sourceChapter) {
+      setToast(`找不到第 ${detail.sourceChapterNo} 章，无法重新打开 What-if 改写流`)
+      window.setTimeout(() => setToast(''), 2400)
+      return
+    }
+
+    setCenterPaneView('body')
+    setLeftPanelOpen(false)
+    setPendingWhatIfRewriteLaunch({ detail, targetChapterId: sourceChapter.id, variant })
+    setCurrentChapterId(sourceChapter.id)
+  }
+
+  function launchFutureMapFromWhatIf(detail: WhatIfSessionDetail) {
+    setFutureMapLaunch({
+      novelId: detail.novelId,
+      branchId: detail.baseBranchId,
+      sessionId: detail.id,
+      sourceChapterNo: detail.sourceChapterNo,
+      title: detail.title,
+      parentTimelineNodeId: activeWorkspaceSelection.kind === 'what_if' ? activeWorkspaceSelection.nodeId : null,
+    })
+  }
+
+  async function handleFutureJumpCreated(
+    result: FutureJumpMutationResponse,
+    context: { sourceChapterNo: number; targetChapterNo: number }
+  ) {
+    if (!result.timelineNodeId) {
+      throw new Error('Future jump created without timeline node')
+    }
+
+    setFutureMapLaunch(null)
+
+    const refreshed = await loadStoryTimeline()
+    const matchingNode = refreshed?.branchNodes.find(
+      (node) => node.id === result.timelineNodeId || node.futureJumpRunId === result.runId
+    )
+
+    setWorkspaceSelection(
+      matchingNode?.futureJumpRunId && matchingNode.sourceChapterNo !== null && matchingNode.targetChapterNo !== null
+        ? {
+            kind: 'future_jump',
+            nodeId: matchingNode.id,
+            runId: matchingNode.futureJumpRunId,
+            sourceChapterNo: matchingNode.sourceChapterNo,
+            targetChapterNo: matchingNode.targetChapterNo,
+          }
+        : {
+            kind: 'future_jump',
+            nodeId: result.timelineNodeId,
+            runId: result.runId,
+            sourceChapterNo: context.sourceChapterNo,
+            targetChapterNo: context.targetChapterNo,
+          }
+    )
+    setLeftPanelOpen(false)
+  }
+
+  function reopenFutureJumpRewriteFlow(context: FutureJumpContinueContext) {
+    const targetChapter = resolveSourceChapter({
+      chapterId: context.targetChapter?.chapterId ?? null,
+      chapterNo: context.targetChapter?.chapterNo ?? context.detail.targetChapterNo,
+    })
+    if (!targetChapter) {
+      setToast(`找不到第 ${context.detail.targetChapterNo} 章，无法继续这条 Future Jump 改写流`)
+      window.setTimeout(() => setToast(''), 2400)
+      return
+    }
+
+    setCenterPaneView('body')
+    setLeftPanelOpen(false)
+    setPendingFutureJumpRewriteLaunch({
+      detail: context.detail,
+      targetChapterId: targetChapter.id,
+      targetTitle: context.targetChapter?.chapterTitle?.trim() || context.targetEvent?.title?.trim() || `第 ${context.detail.targetChapterNo} 章未来版本`,
+    })
+    setCurrentChapterId(targetChapter.id)
+  }
+
+  const selectionActions = activeWorkspaceSelection.kind === 'chapter' ? (
+    <div className="mb-4 rounded-[24px] border border-violet-400/20 bg-violet-500/10 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.22em] text-violet-200/70">Chapter actions</p>
+          <p className="mt-1 text-sm text-zinc-300">正文与图谱浏览继续沿用原来的章节工作流；这里仍然只在章节模式下暴露选区操作。</p>
+        </div>
+        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] text-zinc-300">第 {currentChapter.order} 章</span>
+      </div>
+      <div className="mt-3 grid gap-2">
+        {(['rewrite', 'roleplay', 'expand'] as const).map((mode) => {
+          const meta = ACTION_META[mode]
+          const Icon = meta.icon
+          return (
+            <button
+              key={mode}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                if (!selectionText.trim()) return
+                openActionMode(mode)
+              }}
+              className={cn(
+                'flex items-center gap-3 rounded-2xl border px-4 py-3 text-left transition',
+                activeMode === mode
+                  ? 'border-violet-300/30 bg-white/[0.08]'
+                  : 'border-white/8 bg-black/20 hover:bg-white/[0.06]',
+                !selectionText.trim() && 'cursor-not-allowed opacity-50'
+              )}
+            >
+              <div className="rounded-xl bg-white/10 p-2 text-violet-200"><Icon className="h-4 w-4" /></div>
+              <div>
+                <p className="text-sm font-medium text-zinc-100">{meta.label}</p>
+                <p className="mt-1 text-xs leading-5 text-zinc-400">{meta.description}</p>
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  ) : activeWorkspaceSelection.kind === 'what_if' ? (
+    <div className="mb-4 rounded-[24px] border border-fuchsia-400/20 bg-fuchsia-500/10 p-4" data-testid="workspace-what-if-actions">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">What-if actions</p>
+          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineNode?.title ?? 'What-if session'}</h3>
+          <p className="mt-2 text-xs leading-6 text-zinc-300">当前会话详情已经在中心面板按持久化结果加载。这里保留回到锚点章节的快捷入口，避免在 IF / 主章节之间来回迷路。</p>
+        </div>
+        <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{activeWorkspaceSelection.sessionId}</span>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            const anchorChapter = resolveSourceChapter({ chapterId: null, chapterNo: activeWorkspaceSelection.anchorChapterNo })
+            if (anchorChapter) openChapterWorkspace(anchorChapter)
+          }}
+          className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]"
+        >
+          返回锚点章节
+        </button>
+      </div>
+    </div>
+  ) : (
+    <div className="mb-4 rounded-[24px] border border-sky-400/20 bg-sky-500/10 p-4" data-testid="workspace-future-jump-actions">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.22em] text-sky-200/70">Future jump actions</p>
+          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineNode?.title ?? 'Future jump run'}</h3>
+          <p className="mt-2 text-xs leading-6 text-zinc-300">中心面板会直接读取持久化的 run 详情、最新修订与继续改写入口；右侧保留源/目标章节跳转，方便在主线与未来节点之间对照。</p>
+        </div>
+        <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1 text-[11px] text-sky-100">{activeWorkspaceSelection.runId}</span>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            const sourceChapter = resolveSourceChapter({ chapterId: null, chapterNo: activeWorkspaceSelection.sourceChapterNo })
+            if (sourceChapter) openChapterWorkspace(sourceChapter)
+          }}
+          className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]"
+        >
+          打开源章节
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const targetChapter = resolveSourceChapter({ chapterId: null, chapterNo: activeWorkspaceSelection.targetChapterNo })
+            if (targetChapter) openChapterWorkspace(targetChapter)
+          }}
+          className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]"
+        >
+          打开目标章节
+        </button>
+      </div>
+    </div>
+  )
+
+  const knowledgeControls = (
+    <div className="mb-4 rounded-[24px] border border-violet-400/20 bg-violet-500/10 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] uppercase tracking-[0.22em] text-violet-200/70">Knowledge controls</p>
+        <button
+          onClick={() => {
+            void handleRebuildKnowledge()
+          }}
+          disabled={knowledgeRebuilding || knowledgeRebuildActive || knowledgeActionLoading === 'pause' || knowledgeActionLoading === 'abort' || knowledgeActionLoading === 'delete'}
+          className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {knowledgeRebuilding ? '处理中…' : knowledgeRebuildPaused ? '继续知识视图重建' : '重建知识视图'}
+        </button>
+      </div>
+      {knowledgeRebuildStatus ? (
+        <div className="mt-3 rounded-2xl border border-violet-300/15 bg-black/20 px-3 py-3 text-xs text-zinc-300">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <span>{knowledgeRebuildPaused ? '本地知识图谱已暂停' : '本地知识图谱重建中'}</span>
+            <span>{Math.max(0, Math.min(100, Math.round((knowledgeRebuildStatus.progress ?? 0) * 100)))}%</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-white/10">
+            <div
+              className="h-full rounded-full bg-violet-400 transition-all"
+              style={{ width: `${Math.max(6, Math.min(100, Math.round((knowledgeRebuildStatus.progress ?? 0) * 100)))}%` }}
+            />
+          </div>
+          <p className="mt-2 text-[11px] leading-5 text-zinc-400">
+            {knowledgeRebuildStatus.currentStep || (knowledgeRebuildPaused ? '等待继续重建…' : '正在准备知识重建…')}
+          </p>
+          <p className="mt-1 text-[11px] leading-5 text-zinc-500">
+            预估剩余：{knowledgeRebuildPaused ? '已暂停' : knowledgeRebuildEtaMinutes ? `约 ${knowledgeRebuildEtaMinutes} 分钟` : '计算中'}
+          </p>
+          {knowledgeRebuildSteps.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {knowledgeRebuildSteps.map((step) => {
+                const stepProgress = Math.max(0, Math.min(100, Math.round((step.progress ?? 0) * 100)))
+                const isActive = step.status === 'running' || step.status === 'paused'
+
+                return (
+                  <div key={step.key} className="rounded-xl border border-white/8 bg-white/[0.03] px-2.5 py-2">
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                      <span className="text-zinc-200">{step.label}</span>
+                      <span className="text-zinc-500">{KNOWLEDGE_STEP_STATUS_LABELS[step.status]}</span>
+                    </div>
+                    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
+                      <div
+                        className={cn(
+                          'h-full rounded-full transition-all',
+                          step.status === 'completed'
+                            ? 'bg-emerald-400'
+                            : isActive
+                              ? 'bg-violet-400'
+                              : 'bg-white/20'
+                        )}
+                        style={{ width: `${step.status === 'pending' ? 0 : Math.max(step.status === 'running' || step.status === 'paused' ? 8 : 0, stepProgress)}%` }}
+                      />
+                    </div>
+                    <div className="mt-1 flex items-center justify-between gap-2 text-[10px] leading-4 text-zinc-500">
+                      <span className="truncate">{step.detail ?? `${stepProgress}%`}</span>
+                      <span>{step.status === 'running' && step.etaMinutes ? `约 ${step.etaMinutes} 分钟` : step.status === 'paused' ? '已暂停' : `${stepProgress}%`}</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : null}
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {knowledgeRebuildPaused ? (
+              <button
+                onClick={() => {
+                  void handleRebuildKnowledge()
+                }}
+                disabled={Boolean(knowledgeActionLoading) || knowledgeRebuilding}
+                className="rounded-xl border border-violet-400/30 bg-violet-500/15 px-3 py-2 text-[11px] font-medium text-violet-100 transition hover:bg-violet-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {knowledgeRebuilding ? '继续中…' : '继续重建'}
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  void handlePauseKnowledge()
+                }}
+                disabled={!knowledgeRebuildActive || Boolean(knowledgeActionLoading)}
+                className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {knowledgeActionLoading === 'pause' ? '暂停中…' : '暂停重建'}
+              </button>
+            )}
+            <button
+              onClick={() => {
+                void handleAbortKnowledge()
+              }}
+              disabled={Boolean(knowledgeActionLoading)}
+              className="rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {knowledgeActionLoading === 'abort' ? '终止中…' : '终止当前任务'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      <div className="mt-3 rounded-2xl border border-rose-400/15 bg-rose-500/[0.06] px-3 py-3 text-xs text-zinc-300">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.18em] text-rose-200/70">Danger zone</p>
+            <p className="mt-1 leading-5 text-zinc-400">只清空当前小说在 SQLite 中投影出的知识图谱数据，不会删除正文章节。</p>
+          </div>
+          <button
+            onClick={() => setConfirmDeleteKnowledge((current) => !current)}
+            disabled={knowledgeActionLoading === 'delete'}
+            className="rounded-full border border-rose-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            删除知识图谱
+          </button>
+        </div>
+        {confirmDeleteKnowledge ? (
+          <div className="mt-3 rounded-xl border border-rose-400/15 bg-black/20 p-3">
+            <p className="text-[11px] leading-5 text-rose-100">请再次确认：这会清空当前小说的人物、关系、设定、时间线与章节态知识投影数据。</p>
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={() => {
+                  void handleDeleteKnowledgeGraph()
+                }}
+                disabled={Boolean(knowledgeActionLoading)}
+                className="flex-1 rounded-xl border border-rose-400/20 bg-rose-500/15 px-3 py-2 text-[11px] text-rose-100 transition hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {knowledgeActionLoading === 'delete' ? '删除中…' : '确认删除当前小说知识图谱'}
+              </button>
+              <button
+                onClick={() => setConfirmDeleteKnowledge(false)}
+                disabled={knowledgeActionLoading === 'delete'}
+                className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <p className="mt-3 rounded-2xl border border-white/8 bg-black/20 px-3 py-2 text-xs leading-5 text-zinc-400">
+        右侧内容现在来自 SQLite 知识库投影，当前阶段先保持只读，避免把本地临时编辑误认为已写回 authoritative KB。
+      </p>
+    </div>
+  )
+
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(129,140,248,0.12),_transparent_30%),#0a0c12] text-zinc-100">
       <div className="mx-auto flex min-h-screen max-w-[1720px] flex-col px-3 pb-10 pt-3 sm:px-5 lg:px-6">
@@ -2204,7 +2869,7 @@ export function SelectionNovelStudio() {
               </button>
               <div>
                 <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Selection-first novel flow</p>
-                <h1 className="mt-1 text-xl font-semibold tracking-tight text-zinc-100">{currentChapter.title}</h1>
+                <h1 className="mt-1 text-xl font-semibold tracking-tight text-zinc-100">{workspaceHeaderTitle}</h1>
               </div>
             </div>
 
@@ -2232,184 +2897,44 @@ export function SelectionNovelStudio() {
         </header>
 
         <div className="grid flex-1 gap-4 lg:grid-cols-[264px_minmax(0,1.28fr)_376px] 2xl:grid-cols-[280px_minmax(0,1.32fr)_392px]">
-          <aside
-            className={cn(
-              'fixed inset-y-0 left-0 z-40 w-[86vw] max-w-[320px] overflow-y-auto border-r border-white/10 bg-[#0d1017] p-4 shadow-[0_24px_90px_rgba(0,0,0,0.5)] transition lg:static lg:w-auto lg:max-w-none lg:rounded-[30px] lg:border lg:bg-[#11141d] lg:shadow-[0_24px_70px_rgba(0,0,0,0.3)]',
-              leftPanelOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-            )}
-          >
-            <div className="mb-4 flex items-center justify-between lg:block">
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Novel</p>
-                <h2 className="mt-1 text-lg font-semibold text-zinc-100">章节导航</h2>
-              </div>
-              <button onClick={() => setLeftPanelOpen(false)} className="rounded-2xl border border-white/10 p-2 text-zinc-300 lg:hidden">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+          <WorkspaceChapterNav
+            leftPanelOpen={leftPanelOpen}
+            onClose={() => setLeftPanelOpen(false)}
+            onCreateChapter={() => {
+              createNewChapter()
+              setLeftPanelOpen(false)
+            }}
+            novelVolumes={novelVolumes}
+            sortedChapters={sortedChapters}
+            chapterListTarget={chapterListTarget}
+            currentNovelId={currentNovelId}
+            setChapterListState={setChapterListState}
+            storyTimelineError={storyTimelineError}
+            branchNodes={resolvedStoryTimeline.branchNodes}
+            edges={resolvedStoryTimeline.edges}
+            timelineChapterById={timelineChapterById}
+            currentChapterId={currentChapter.id}
+            activeSelection={activeWorkspaceSelection}
+            branchChaptersByParentId={branchChaptersByParentId}
+            onSelectionChange={handleTimelineSelection}
+            onDeleteChapter={handleTimelineDeleteChapter}
+          />
 
-            <button
-              onClick={() => {
-                createNewChapter()
-                setLeftPanelOpen(false)
-              }}
-              className="mb-4 w-full rounded-2xl bg-violet-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-400"
-            >
-              + 新建章节
-            </button>
-
-            <div className="space-y-3">
-              {novelVolumes.map((volume) => {
-                const chaptersInVolume = sortedChapters.filter((chapter) => chapter.volumeId === volume.id && !chapter.parentChapterId)
-                const visibleChapters = chaptersInVolume.slice(0, chapterListTarget)
-                const hiddenCount = Math.max(0, chaptersInVolume.length - visibleChapters.length)
-                return (
-                  <section key={volume.id} className="rounded-[24px] border border-white/8 bg-white/[0.03] p-3">
-                    <div className="flex w-full items-center justify-between gap-3 rounded-2xl px-2 py-2 text-left">
-                      <div>
-                        <p className="text-sm font-medium text-zinc-100">{volume.title}</p>
-                        <p className="mt-1 text-xs text-zinc-500">{chaptersInVolume.length} 章</p>
-                      </div>
-                      <ChevronDown className="h-4 w-4 text-zinc-500" />
-                    </div>
-                    <div className="mt-2 space-y-2">
-                      {visibleChapters.map((chapter) => {
-                        const branches = sortedChapters.filter((item) => item.parentChapterId === chapter.id)
-                        return (
-                          <div key={chapter.id} className="space-y-2">
-                            <div className="flex items-start gap-2">
-                              <button
-                                onClick={() => {
-                                  setCurrentChapterId(chapter.id)
-                                  resetContextForChapter(chapter)
-                                  setLeftPanelOpen(false)
-                                }}
-                                className={cn(
-                                  'flex-1 rounded-[22px] border px-3 py-3 text-left transition',
-                                  currentChapter.id === chapter.id
-                                    ? 'border-violet-400/30 bg-violet-500/12'
-                                    : 'border-white/8 bg-black/20 hover:bg-white/[0.06]'
-                                )}
-                              >
-                                <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Chapter {chapter.order}</p>
-                                <p className="mt-1 text-sm font-medium text-zinc-100">{chapter.title}</p>
-                                <p className="mt-2 text-xs text-zinc-500">{chapter.wordCount} 字 · {chapter.updatedAt}</p>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  void handleDeleteChapter(chapter)
-                                }}
-                                className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-2 text-rose-200 transition hover:bg-rose-500/20"
-                                aria-label={`删除章节 ${chapter.title}`}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            </div>
-                            {branches.length ? (
-                              <div className="ml-3 border-l border-white/10 pl-3">
-                                {branches.map((branch) => (
-                                  <div key={branch.id} className="mt-2 flex items-start gap-2">
-                                    <button
-                                      onClick={() => {
-                                        setCurrentChapterId(branch.id)
-                                        resetContextForChapter(branch)
-                                        setLeftPanelOpen(false)
-                                      }}
-                                      className={cn(
-                                        'flex-1 rounded-2xl border px-3 py-3 text-left transition',
-                                        currentChapter.id === branch.id
-                                          ? 'border-fuchsia-400/30 bg-fuchsia-500/12'
-                                          : 'border-white/8 bg-black/20 hover:bg-white/[0.06]'
-                                      )}
-                                    >
-                                      <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Branch {branch.branchLabel ?? 'B'}</p>
-                                      <p className="mt-1 text-sm font-medium text-zinc-100">{branch.title}</p>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        void handleDeleteChapter(branch)
-                                      }}
-                                      className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-2 text-rose-200 transition hover:bg-rose-500/20"
-                                      aria-label={`删除章节 ${branch.title}`}
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : null}
-                          </div>
-                        )
-                      })}
-                      {hiddenCount > 0 ? (
-                        <button
-                          onClick={() =>
-                            setChapterListState((current) => ({
-                              ...current,
-                              [currentNovelId]: Math.min(chaptersInVolume.length, (current[currentNovelId] ?? CHAPTER_PAGE_SIZE) + CHAPTER_PAGE_SIZE),
-                            }))
-                          }
-                          className="w-full rounded-2xl border border-dashed border-white/10 bg-black/20 px-3 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06]"
-                        >
-                          显示更多章节（剩余 {hiddenCount} 章）
-                        </button>
-                      ) : null}
-                    </div>
-                  </section>
-                )
-              })}
-            </div>
-          </aside>
-
-          <section className="min-w-0 rounded-[30px] border border-white/10 bg-[#11141d] shadow-[0_28px_90px_rgba(0,0,0,0.35)]">
-            <div className="border-b border-white/8 px-5 py-4 sm:px-7">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">{centerPaneView === 'body' ? 'Chapter body first' : 'Chapter graph browser'}</p>
-                  <h2 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-100">{currentChapter.title}</h2>
-                  <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-                    {centerPaneView === 'body'
-                      ? '先选章节，再在正文里直接选中想处理的文本。选区上方会弹出浮动入口，展开三种模式：魔改、角色扮演、智能扩写。'
-                      : '切到图谱后会持续停留在这个浏览视角；你从左侧切换章节时，中心面板会直接换成对应章节的已检索图谱。'}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-3">
-                  <div className="inline-flex rounded-[22px] border border-white/10 bg-black/20 p-1 text-sm text-zinc-400">
-                    {(['body', 'graph'] as CenterPaneView[]).map((view) => (
-                      <button
-                        key={view}
-                        type="button"
-                        onClick={() => setCenterPaneView(view)}
-                        className={cn(
-                          'rounded-[18px] px-4 py-2 transition',
-                          centerPaneView === view ? 'bg-white/10 text-zinc-100 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'
-                        )}
-                      >
-                        {view === 'body' ? 'Body' : 'Graph'}
-                      </button>
-                    ))}
-                  </div>
-                    <div className="rounded-[22px] border border-white/10 bg-black/20 px-4 py-3 text-xs leading-6 text-zinc-400">
-      <div className="flex items-center gap-2">
-        {centerPaneView === 'body' ? <BookOpen className="h-4 w-4 text-violet-300" /> : <Globe className="h-4 w-4 text-sky-300" />}
-        {centerPaneView === 'body'
-          ? `当前选区：${(lockedSelectionText || selectionText) ? `${(lockedSelectionText || selectionText).slice(0, 24)}${(lockedSelectionText || selectionText).length > 24 ? '…' : ''}` : '未选择'}`
-          : `当前浏览：${graphSourceMeta?.mode === 'inherited-parent' ? `分支图谱（继承主线第 ${graphSourceMeta.chapterNo} 章）` : '章节图谱'}`}
-      </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {centerPaneView === 'body' ? (
-              <div className="px-4 py-4 sm:px-7 sm:py-6">
+          <WorkspaceCenterPane
+            selection={activeWorkspaceSelection}
+            chapterTitle={currentChapter.title}
+            centerPaneView={centerPaneView}
+            onCenterPaneViewChange={setCenterPaneView}
+            chapterSelectionSummary={chapterSelectionSummary}
+            chapterGraphSummary={chapterGraphSummary}
+            chapterBodyView={
+              <div className="px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-chapter-body-view">
                 <div className="min-h-[62vh] rounded-[28px] border border-white/8 bg-[#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                   <EditorContent editor={editor} />
                 </div>
               </div>
-            ) : (
+            }
+            chapterGraphView={
               <ChapterGraphBrowser
                 chapter={currentChapter}
                 parentChapter={parentChapter}
@@ -2426,7 +2951,6 @@ export function SelectionNovelStudio() {
                   void handleChapterGraphControlChange(controls)
                 }}
                 onRefresh={() => {
-                  if (!currentChapter) return
                   void loadChapterGraph(currentChapter, chapterGraphControls, true)
                 }}
                 onJumpToEdgeSource={(edge) => {
@@ -2442,187 +2966,48 @@ export function SelectionNovelStudio() {
                 onJumpToParent={
                   parentChapter
                     ? () => {
-                        setCurrentChapterId(parentChapter.id)
-                        resetContextForChapter(parentChapter)
-                        setLeftPanelOpen(false)
+                        selectChapter(parentChapter)
                       }
                     : undefined
                 }
               />
-            )}
-          </section>
+            }
+            whatIfView={
+              activeWorkspaceSelection.kind === 'what_if' ? (
+                <WhatIfSessionView
+                  novelId={currentNovelId ?? ''}
+                  branchId={storyTimelineBranchId}
+                  sessionId={activeWorkspaceSelection.sessionId}
+                  anchorChapterNo={activeWorkspaceSelection.anchorChapterNo}
+                  nodeTitle={selectedTimelineNode?.title ?? null}
+                  nodeSubtitle={selectedTimelineNode?.subtitle ?? null}
+                  onJumpToFuture={launchFutureMapFromWhatIf}
+                  onRegenerateWhatIf={(detail) => reopenWhatIfRewriteFlow(detail, 'regenerate')}
+                  onContinueInBranch={(detail) => reopenWhatIfRewriteFlow(detail, 'continue')}
+                />
+              ) : null
+            }
+            futureJumpView={
+              activeWorkspaceSelection.kind === 'future_jump' ? (
+                <FutureJumpView
+                  novelId={currentNovelId ?? ''}
+                  branchId={storyTimelineBranchId}
+                  runId={activeWorkspaceSelection.runId}
+                  sourceChapterNo={activeWorkspaceSelection.sourceChapterNo}
+                  targetChapterNo={activeWorkspaceSelection.targetChapterNo}
+                  nodeTitle={selectedTimelineNode?.title ?? null}
+                  onContinueInFuture={reopenFutureJumpRewriteFlow}
+                />
+              ) : null
+            }
+          />
 
-          <aside className="rounded-[30px] border border-white/10 bg-[#11141d] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.35)] sm:p-5">
-            <div className="mb-4 rounded-[24px] border border-violet-400/20 bg-violet-500/10 p-4">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-[11px] uppercase tracking-[0.22em] text-violet-200/70">Primary actions</p>
-                <button
-                  onClick={() => {
-                    void handleRebuildKnowledge()
-                  }}
-                  disabled={knowledgeRebuilding || knowledgeRebuildActive || knowledgeActionLoading === 'pause' || knowledgeActionLoading === 'abort' || knowledgeActionLoading === 'delete'}
-                  className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {knowledgeRebuilding ? '处理中…' : knowledgeRebuildPaused ? '继续知识视图重建' : '重建知识视图'}
-                </button>
-              </div>
-              {knowledgeRebuildStatus ? (
-                <div className="mt-3 rounded-2xl border border-violet-300/15 bg-black/20 px-3 py-3 text-xs text-zinc-300">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <span>{knowledgeRebuildPaused ? '本地知识图谱已暂停' : '本地知识图谱重建中'}</span>
-                    <span>{Math.max(0, Math.min(100, Math.round((knowledgeRebuildStatus.progress ?? 0) * 100)))}%</span>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-white/10">
-                    <div
-                      className="h-full rounded-full bg-violet-400 transition-all"
-                      style={{ width: `${Math.max(6, Math.min(100, Math.round((knowledgeRebuildStatus.progress ?? 0) * 100)))}%` }}
-                    />
-                  </div>
-                  <p className="mt-2 text-[11px] leading-5 text-zinc-400">
-                    {knowledgeRebuildStatus.currentStep || (knowledgeRebuildPaused ? '等待继续重建…' : '正在准备知识重建…')}
-                  </p>
-                  <p className="mt-1 text-[11px] leading-5 text-zinc-500">
-                    预估剩余：{knowledgeRebuildPaused ? '已暂停' : knowledgeRebuildEtaMinutes ? `约 ${knowledgeRebuildEtaMinutes} 分钟` : '计算中'}
-                  </p>
-                  {knowledgeRebuildSteps.length > 0 ? (
-                    <div className="mt-3 space-y-2">
-                      {knowledgeRebuildSteps.map((step) => {
-                        const stepProgress = Math.max(0, Math.min(100, Math.round((step.progress ?? 0) * 100)))
-                        const isActive = step.status === 'running' || step.status === 'paused'
-
-                        return (
-                          <div key={step.key} className="rounded-xl border border-white/8 bg-white/[0.03] px-2.5 py-2">
-                            <div className="flex items-center justify-between gap-2 text-[11px]">
-                              <span className="text-zinc-200">{step.label}</span>
-                              <span className="text-zinc-500">{KNOWLEDGE_STEP_STATUS_LABELS[step.status]}</span>
-                            </div>
-                            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
-                              <div
-                                className={cn(
-                                  'h-full rounded-full transition-all',
-                                  step.status === 'completed'
-                                    ? 'bg-emerald-400'
-                                    : isActive
-                                      ? 'bg-violet-400'
-                                      : 'bg-white/20'
-                                )}
-                                style={{ width: `${step.status === 'pending' ? 0 : Math.max(step.status === 'running' || step.status === 'paused' ? 8 : 0, stepProgress)}%` }}
-                              />
-                            </div>
-                            <div className="mt-1 flex items-center justify-between gap-2 text-[10px] leading-4 text-zinc-500">
-                              <span className="truncate">{step.detail ?? `${stepProgress}%`}</span>
-                              <span>{step.status === 'running' && step.etaMinutes ? `约 ${step.etaMinutes} 分钟` : step.status === 'paused' ? '已暂停' : `${stepProgress}%`}</span>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  ) : null}
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    {knowledgeRebuildPaused ? (
-                      <button
-                        onClick={() => {
-                          void handleRebuildKnowledge()
-                        }}
-                        disabled={Boolean(knowledgeActionLoading) || knowledgeRebuilding}
-                        className="rounded-xl border border-violet-400/30 bg-violet-500/15 px-3 py-2 text-[11px] font-medium text-violet-100 transition hover:bg-violet-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {knowledgeRebuilding ? '继续中…' : '继续重建'}
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          void handlePauseKnowledge()
-                        }}
-                        disabled={!knowledgeRebuildActive || Boolean(knowledgeActionLoading)}
-                        className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {knowledgeActionLoading === 'pause' ? '暂停中…' : '暂停重建'}
-                      </button>
-                    )}
-                    <button
-                      onClick={() => {
-                        void handleAbortKnowledge()
-                      }}
-                      disabled={Boolean(knowledgeActionLoading)}
-                      className="rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {knowledgeActionLoading === 'abort' ? '终止中…' : '终止当前任务'}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-              <div className="mt-3 rounded-2xl border border-rose-400/15 bg-rose-500/[0.06] px-3 py-3 text-xs text-zinc-300">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-rose-200/70">Danger zone</p>
-                    <p className="mt-1 leading-5 text-zinc-400">只清空当前小说在 SQLite 中投影出的知识图谱数据，不会删除正文章节。</p>
-                  </div>
-                  <button
-                    onClick={() => setConfirmDeleteKnowledge((current) => !current)}
-                    disabled={knowledgeActionLoading === 'delete'}
-                    className="rounded-full border border-rose-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    删除知识图谱
-                  </button>
-                </div>
-                {confirmDeleteKnowledge ? (
-                  <div className="mt-3 rounded-xl border border-rose-400/15 bg-black/20 p-3">
-                    <p className="text-[11px] leading-5 text-rose-100">请再次确认：这会清空当前小说的人物、关系、设定、时间线与章节态知识投影数据。</p>
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        onClick={() => {
-                          void handleDeleteKnowledgeGraph()
-                        }}
-                        disabled={Boolean(knowledgeActionLoading)}
-                        className="flex-1 rounded-xl border border-rose-400/20 bg-rose-500/15 px-3 py-2 text-[11px] text-rose-100 transition hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {knowledgeActionLoading === 'delete' ? '删除中…' : '确认删除当前小说知识图谱'}
-                      </button>
-                      <button
-                        onClick={() => setConfirmDeleteKnowledge(false)}
-                        disabled={knowledgeActionLoading === 'delete'}
-                        className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        取消
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-              <p className="mt-3 rounded-2xl border border-white/8 bg-black/20 px-3 py-2 text-xs leading-5 text-zinc-400">
-                右侧内容现在来自 SQLite 知识库投影，当前阶段先保持只读，避免把本地临时编辑误认为已写回 authoritative KB。
-              </p>
-              <div className="mt-3 grid gap-2">
-                {(['rewrite', 'roleplay', 'expand'] as ActionMode[]).map((mode) => {
-                  const meta = ACTION_META[mode]
-                  const Icon = meta.icon
-                  return (
-                    <button
-                      key={mode}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => {
-                        if (!selectionText.trim()) return
-                        openActionMode(mode)
-                      }}
-                      className={cn(
-                        'flex items-center gap-3 rounded-2xl border px-4 py-3 text-left transition',
-                        activeMode === mode
-                          ? 'border-violet-300/30 bg-white/[0.08]'
-                          : 'border-white/8 bg-black/20 hover:bg-white/[0.06]',
-                        !selectionText.trim() && 'cursor-not-allowed opacity-50'
-                      )}
-                    >
-                      <div className="rounded-xl bg-white/10 p-2 text-violet-200"><Icon className="h-4 w-4" /></div>
-                      <div>
-                        <p className="text-sm font-medium text-zinc-100">{meta.label}</p>
-                        <p className="mt-1 text-xs leading-5 text-zinc-400">{meta.description}</p>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
+          <WorkspaceReferencePanel
+            selection={activeWorkspaceSelection}
+            selectionActions={selectionActions}
+            knowledgeControls={knowledgeControls}
+            references={(
+              <>
 
             <div className="mb-3 grid grid-cols-2 gap-2 text-[11px] text-zinc-500">
               <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">人物 {currentNovelCharacters.length}</div>
@@ -3118,18 +3503,20 @@ export function SelectionNovelStudio() {
                 </>
               )}
             </div>
-          </aside>
+              </>
+            )}
+          />
         </div>
       </div>
 
-      {centerPaneView === 'body' && toolbarPos && selectionText && !activeMode ? (
+      {activeWorkspaceSelection.kind === 'chapter' && centerPaneView === 'body' && toolbarPos && selectionText && !activeMode ? (
         <div
           ref={toolbarRef}
           className="pointer-events-none fixed z-40"
           style={{ top: toolbarPos.top, left: toolbarPos.left, transform: 'translateX(-50%)' }}
         >
           <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-white/10 bg-[#090b10]/96 p-1 shadow-[0_18px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl">
-            {(['rewrite', 'roleplay', 'expand'] as ActionMode[]).map((mode) => {
+                {(['rewrite', 'roleplay', 'expand'] as const).map((mode) => {
               const meta = ACTION_META[mode]
               const Icon = meta.icon
               return (
@@ -3250,8 +3637,21 @@ export function SelectionNovelStudio() {
         </div>
       ) : null}
 
+      {futureMapLaunch ? (
+        <FutureMapOverlay
+          novelId={futureMapLaunch.novelId}
+          branchId={futureMapLaunch.branchId}
+          sessionId={futureMapLaunch.sessionId}
+          sourceChapterNo={futureMapLaunch.sourceChapterNo}
+          title={futureMapLaunch.title}
+          parentTimelineNodeId={futureMapLaunch.parentTimelineNodeId}
+          onClose={() => setFutureMapLaunch(null)}
+          onCreated={handleFutureJumpCreated}
+        />
+      ) : null}
+
       {activeMode ? (
-        <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm" onClick={closePanel}>
+        <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm" data-testid="workspace-action-overlay" onClick={closePanel}>
           <div className="absolute inset-x-0 bottom-0 mx-auto max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-t-[32px] border border-white/10 bg-[#0d1017] p-4 shadow-[0_-20px_80px_rgba(0,0,0,0.5)] sm:bottom-6 sm:rounded-[32px] sm:p-5" onClick={(event) => event.stopPropagation()}>
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
@@ -3365,11 +3765,21 @@ export function SelectionNovelStudio() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] uppercase tracking-[0.18em] text-violet-200/70">魔改工作台</p>
-                      <p className="mt-1 text-sm text-zinc-300">先描述你想怎么改，再生成多个完整章节候选。</p>
+                      <p className="mt-1 text-sm text-zinc-300">
+                        {rewriteLaunchSource === 'future_jump'
+                          ? '当前是从已持久化的 Future Jump 最新版本继续改写：会复用 rewrite 流，但不会默认开放主线正文替换。'
+                          : '先描述你想怎么改，再生成多个完整章节候选。'}
+                      </p>
                     </div>
                     <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-zinc-300">{rewriteFlow.provider || providerLabel}</span>
                   </div>
                 </div>
+
+                {rewriteLaunchSource === 'future_jump' ? (
+                  <div className="rounded-[22px] border border-amber-300/18 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100">
+                    这轮改写以最新 Future Jump 输出作为 source material 与初始候选，默认不把结果直接写回当前主线章节。你可以继续生成、筛选和复制版本，再决定后续如何落地。
+                  </div>
+                ) : null}
 
                 <label className="block">
                   <span className="mb-2 block text-sm text-zinc-300">魔改要求</span>
@@ -3380,8 +3790,11 @@ export function SelectionNovelStudio() {
                   <button onClick={handleRewrite} disabled={rewriteFlow.loading} className="inline-flex items-center gap-2 rounded-2xl bg-violet-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60">
                     {rewriteFlow.loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} 生成候选版本
                   </button>
-                  <button onClick={() => selectedRewriteCandidate && applyFullChapter(selectedRewriteCandidate.content)} disabled={!selectedRewriteCandidate} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
-                    替换正文
+                  <button onClick={handleCreateWhatIf} disabled={!selectedRewriteCandidate || whatIfCreating} className="rounded-2xl border border-violet-400/30 bg-violet-500/10 px-4 py-3 text-sm text-violet-100 transition hover:bg-violet-500/20 disabled:opacity-40">
+                    {whatIfCreating ? <span className="inline-flex items-center gap-2"><LoaderCircle className="h-4 w-4 animate-spin" /> 创建中</span> : '创建 What-if'}
+                  </button>
+                  <button onClick={() => selectedRewriteCandidate && applyFullChapter(selectedRewriteCandidate.content)} disabled={!selectedRewriteCandidate || rewriteLaunchSource === 'future_jump'} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
+                    {rewriteLaunchSource === 'future_jump' ? '默认不替换正文' : '替换正文'}
                   </button>
                   <button onClick={() => selectedRewriteCandidate && copyText('rewrite', selectedRewriteCandidate.content)} disabled={!selectedRewriteCandidate} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
                     {copied === 'rewrite' ? <span className="inline-flex items-center gap-2"><Check className="h-4 w-4" /> 已复制</span> : '复制版本'}
@@ -3391,6 +3804,7 @@ export function SelectionNovelStudio() {
                   </button>
                 </div>
 
+                {whatIfCreateError ? <p data-testid="what-if-create-error" className="text-sm text-rose-300">{whatIfCreateError}</p> : null}
                 {rewriteFlow.error ? <p className="text-sm text-rose-300">{rewriteFlow.error}</p> : null}
 
                 <div className="grid gap-3 lg:grid-cols-[0.9fr_1.4fr]">
