@@ -11,6 +11,8 @@ export async function POST(request: Request) {
       selectedText: String(body.selectedText ?? ''),
       operationType: body.operationType ?? 'expand',
       userInstruction: String(body.userInstruction ?? ''),
+      whatIfSessionId: body.whatIfSessionId ? String(body.whatIfSessionId) : undefined,
+      futureJumpRunId: body.futureJumpRunId ? String(body.futureJumpRunId) : undefined,
     })
 
     return NextResponse.json({ ok: true, preview })

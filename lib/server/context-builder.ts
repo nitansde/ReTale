@@ -1,4 +1,5 @@
 import { buildChapterScopedGraphContext, buildGraphAwareContext } from '@/lib/server/graph-context'
+import { loadExplicitAuthoredContext, type ExplicitAuthoredContext } from '@/lib/server/authored-context'
 import { loadEntityStatesByEntityIds } from '@/lib/server/graph-store'
 import type { GraphAwareResult } from '@/lib/server/graph-types'
 import { estimateTokenCount, normalizeBranchId } from '@/lib/server/knowledge-store'
@@ -22,6 +23,8 @@ export type GenerationContextRequest = {
   userInstruction: string
   excludedGraphEdgeIds?: string[]
   excludedEvidenceIds?: string[]
+  whatIfSessionId?: string
+  futureJumpRunId?: string
 }
 
 export type GenerationContextBlock = {
@@ -234,6 +237,12 @@ function renderBlock(label: string, lines: string[]) {
   return [`# ${label}`, ...lines].join('\n')
 }
 
+function buildCompactExcerpt(text: string, maxLength = 280) {
+  const normalized = text.split(/\s+/).filter(Boolean).join(' ').trim()
+  if (!normalized) return ''
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength)}…`
+}
+
 function uniqueStrings(values: Array<string | null | undefined>) {
   const seen = new Set<string>()
   const next: string[] = []
@@ -256,6 +265,74 @@ function buildNeighborhoodExcerpt(text: string, maxLines = 10) {
     .filter(Boolean)
     .slice(0, maxLines)
     .join(' ')
+}
+
+function looksLikeRelationshipDelta(deltaType: string, key: string) {
+  return /relationship|bond|alliance|romance|trust/i.test(`${deltaType} ${key}`)
+}
+
+function looksLikeWorldDelta(deltaType: string, key: string) {
+  return /world|rule|setting|power|ability|artifact|location|faction/i.test(`${deltaType} ${key}`)
+}
+
+function looksLikeCharacterStateDelta(deltaType: string, key: string) {
+  return /state|status|identity|goal|stance|emotion|injury/i.test(`${deltaType} ${key}`)
+}
+
+function mergeExplicitAuthoredContextIntoChapterState(chapterState: ChapterStatePromptData, authoredContext: ExplicitAuthoredContext) {
+  for (const delta of authoredContext.whatIfSession?.deltas ?? []) {
+    const nextDescription = delta.description.trim() || delta.newValue?.trim() || delta.key.trim() || delta.deltaType.trim()
+    if (!nextDescription) continue
+
+    if (looksLikeRelationshipDelta(delta.deltaType, delta.key) && delta.subjectName?.trim() && delta.targetName?.trim()) {
+      chapterState.active_relationships.unshift({
+        source: delta.subjectName.trim(),
+        target: delta.targetName.trim(),
+        type: delta.key.trim() || delta.deltaType.trim(),
+        polarity: delta.newValue?.trim() || undefined,
+        validFromChapter: delta.validFromChapter ?? undefined,
+      })
+      continue
+    }
+
+    if (looksLikeWorldDelta(delta.deltaType, delta.key)) {
+      chapterState.world_rules.unshift({
+        term: delta.key.trim() || delta.subjectName?.trim() || delta.deltaType.trim(),
+        definition: delta.newValue?.trim() || nextDescription,
+        firstSeenChapter: delta.validFromChapter ?? undefined,
+      })
+      continue
+    }
+
+    if (looksLikeCharacterStateDelta(delta.deltaType, delta.key) && delta.subjectName?.trim()) {
+      chapterState.major_characters.unshift({
+        name: delta.subjectName.trim(),
+        status: delta.newValue?.trim() || nextDescription,
+        lastSeenChapter: delta.validFromChapter ?? undefined,
+      })
+      continue
+    }
+
+    chapterState.open_threads.unshift({
+      name: delta.key.trim() || delta.deltaType.trim() || 'speculative_delta',
+      description: nextDescription,
+    })
+  }
+
+  if (authoredContext.latestFutureJumpBridgeSummary) {
+    chapterState.open_threads.unshift({
+      name: 'future_jump_bridge_summary',
+      description: buildCompactExcerpt(authoredContext.latestFutureJumpBridgeSummary, 160),
+    })
+  }
+
+  if (authoredContext.latestFutureJumpRevisionText) {
+    chapterState.recent_events.unshift({
+      chapter: authoredContext.futureJumpRun?.targetChapterNo ?? 0,
+      name: 'Speculative future jump revision',
+      summary: buildCompactExcerpt(authoredContext.latestFutureJumpRevisionText, 160),
+    })
+  }
 }
 
 function loadCharacterProfilesByEntityId(params: {
@@ -712,6 +789,15 @@ export async function buildGenerationContext(request: GenerationContextRequest):
     throw new Error('Chapter not found in knowledge store')
   }
 
+  const authoredContext = (request.whatIfSessionId?.trim() || request.futureJumpRunId?.trim())
+    ? loadExplicitAuthoredContext({
+        novelId: request.novelId,
+        branchId,
+        whatIfSessionId: request.whatIfSessionId,
+        futureJumpRunId: request.futureJumpRunId,
+      })
+    : null
+
   const [lines, recentChapters, entities, facts, events, worlds] = await Promise.all([
     Promise.resolve(
       queryAll<{ lineNo: number; text: string }>(
@@ -878,6 +964,10 @@ export async function buildGenerationContext(request: GenerationContextRequest):
     forbidden_future_facts: `Do not use any facts from chapters > ${chapter.chapterNo}.`,
   }
 
+  if (authoredContext) {
+    mergeExplicitAuthoredContextIntoChapterState(chapterState, authoredContext)
+  }
+
   const graphContextText = buildFilteredGraphContextText({
     graphContext,
     excludedGraphEdgeIds,
@@ -909,6 +999,8 @@ export async function buildGenerationContext(request: GenerationContextRequest):
     queryTerms: evidenceQuery.queryTerms,
     graphTerms: evidenceQuery.graphTerms,
     limit: 10,
+    whatIfSessionId: request.whatIfSessionId,
+    futureJumpRunId: request.futureJumpRunId,
   })
   const lanceEvidence = lanceEvidenceResult.matches
   if (lanceEvidenceResult.warning) {
@@ -967,6 +1059,15 @@ export async function buildGenerationContext(request: GenerationContextRequest):
       priority: 'high',
       content: renderChapterStateForPrompt(chapterState),
     },
+    ...(authoredContext?.authoredPromptLines.length
+      ? [{
+          id: 'authored-branch-context',
+          label: '显式作者分支上下文',
+          enabled: true,
+          priority: 'highest' as const,
+          content: renderBlock('显式作者分支上下文', authoredContext.authoredPromptLines),
+        }]
+      : []),
     {
       id: 'graph-context',
       label: 'GraphRAG 图谱上下文',

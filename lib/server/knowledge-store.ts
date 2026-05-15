@@ -208,6 +208,13 @@ export async function ensureMainBranch(novelId: string) {
   )
 }
 
+export function findStoryBranch(id: string) {
+  return queryOne<{ id: string; novelId: string; name: string }>(
+    'SELECT id, novelId, name FROM StoryBranch WHERE id = ?',
+    id
+  )
+}
+
 export async function enqueueKnowledgeJob(params: {
   novelId: string
   branchId?: string | null

@@ -1,4 +1,4 @@
-import type { Chapter, KnowledgeExtractionScenarioSettings } from '@/lib/types'
+import type { Chapter, KnowledgeExtractionScenarioSettings, PersistedNovelState } from '@/lib/types'
 import {
   buildCharacterDescriptionDelta,
   hasCharacterRoleCardProfile,
@@ -23,6 +23,7 @@ import {
 } from '@/lib/server/retrieval-index'
 import { execute, queryAll, queryOne, type SqlParam, withTransaction } from '@/lib/server/sqlite'
 import { htmlToPlainText, plainTextToHtml, uid } from '@/lib/utils'
+import { bootstrapOutlineNodesForFutureMap } from '@/lib/server/outline-bootstrap'
 
 type PersistImportedNovelParams = {
   novelId: string
@@ -2507,6 +2508,8 @@ export async function persistImportedNovelToKnowledgeStore(params: PersistImport
 export async function syncWorkspacePayloadToKnowledgeStore(payload: {
   localNovels?: Array<{ id: string; title: string; summary: string; tags: string[] }>
   localChapters?: Chapter[]
+  localOutlines?: PersistedNovelState['localOutlines']
+  localTimelineEvents?: PersistedNovelState['localTimelineEvents']
   currentNovelId?: string
 }) {
   const novelMetaById = new Map((payload.localNovels ?? []).map((item) => [item.id, item]))
@@ -2715,5 +2718,11 @@ export async function syncWorkspacePayloadToKnowledgeStore(payload: {
       }
       await rebuildKnowledgeForNovel({ novelId, branchId })
     }
+
+    await bootstrapOutlineNodesForFutureMap({
+      novelId,
+      branchId,
+      workspaceState: payload,
+    })
   }
 }

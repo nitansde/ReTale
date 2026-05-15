@@ -36,6 +36,8 @@ export async function POST(request: Request) {
       userInstruction: String(body.userInstruction ?? ''),
       excludedGraphEdgeIds: normalizeStringArray(body.excludedGraphEdgeIds),
       excludedEvidenceIds: normalizeStringArray(body.excludedEvidenceIds),
+      whatIfSessionId: body.whatIfSessionId ? String(body.whatIfSessionId) : undefined,
+      futureJumpRunId: body.futureJumpRunId ? String(body.futureJumpRunId) : undefined,
     })
 
     return NextResponse.json({ ok: true, ...result })

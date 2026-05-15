@@ -7,6 +7,11 @@ import { estimateTokenCount, type TextSpanInput } from '@/lib/server/knowledge-s
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { embedTextsWithOpenAICompatible } from '@/lib/server/openai-compatible'
 import { embedTextsWithOllama } from '@/lib/server/ollama-local'
+import {
+  loadExplicitAuthoredContext,
+  hasExplicitAuthoredContextSelection,
+  type AuthoredRetrievalSeed,
+} from '@/lib/server/authored-context'
 import { queryAll } from '@/lib/server/sqlite'
 import {
   buildCharacterDescriptionDelta,
@@ -25,6 +30,9 @@ export type RetrievalDocSourceType =
   | 'worldbuilding'
   | 'relationship'
   | 'open_thread'
+  | 'authored_delta'
+  | 'future_jump_bridge'
+  | 'future_jump_revision'
 
 type RetrievalDocSeedRow = {
   id: string
@@ -126,6 +134,9 @@ const SOURCE_TYPE_PRIORITY: Record<RetrievalDocSourceType, number> = {
   worldbuilding: 0.72,
   chapter_summary: 0.64,
   open_thread: 0.58,
+  authored_delta: 0.91,
+  future_jump_bridge: 0.88,
+  future_jump_revision: 0.94,
 }
 
 const SOURCE_TYPE_LIMITS: Record<RetrievalDocSourceType, number> = {
@@ -136,6 +147,67 @@ const SOURCE_TYPE_LIMITS: Record<RetrievalDocSourceType, number> = {
   worldbuilding: 2,
   chapter_summary: 1,
   open_thread: 1,
+  authored_delta: 3,
+  future_jump_bridge: 1,
+  future_jump_revision: 1,
+}
+
+function scoreAuthoredRetrievalSeed(params: {
+  row: AuthoredRetrievalSeed
+  queryTerms: string[]
+  graphTerms: string[]
+}) {
+  const haystack = [params.row.title, params.row.text, params.row.sourceLabel].join('\n').toLowerCase()
+  const allTerms = Array.from(new Set([...params.queryTerms, ...params.graphTerms].map((term) => term.trim()).filter(Boolean)))
+  const matchedTerms = allTerms.filter((term) => haystack.includes(term.toLowerCase()))
+  const overlapScore = allTerms.length ? matchedTerms.length / allTerms.length : 0.4
+  const baseScore = params.row.sourceType === 'future_jump_revision'
+    ? 0.9
+    : params.row.sourceType === 'future_jump_bridge'
+      ? 0.82
+      : 0.78
+
+  return baseScore + overlapScore * 0.18
+}
+
+function buildExplicitAuthoredMatches(params: {
+  novelId: string
+  branchId: string
+  queryTerms: string[]
+  graphTerms: string[]
+  whatIfSessionId?: string
+  futureJumpRunId?: string
+}) {
+  if (!hasExplicitAuthoredContextSelection(params)) {
+    return [] as LanceEvidenceMatch[]
+  }
+
+  const authoredContext = loadExplicitAuthoredContext({
+    novelId: params.novelId,
+    branchId: params.branchId,
+    whatIfSessionId: params.whatIfSessionId,
+    futureJumpRunId: params.futureJumpRunId,
+  })
+
+  return authoredContext.retrievalSeeds
+    .map<LanceEvidenceMatch>((row) => ({
+      id: row.id,
+      sourceType: row.sourceType,
+      sourceId: row.sourceId,
+      chapterId: null,
+      chapterNo: row.chapterNo,
+      lineStart: null,
+      lineEnd: null,
+      title: row.title,
+      sourceLabel: row.sourceLabel,
+      text: row.text,
+      score: scoreAuthoredRetrievalSeed({
+        row,
+        queryTerms: params.queryTerms,
+        graphTerms: params.graphTerms,
+      }),
+    }))
+    .sort((left, right) => right.score - left.score || right.chapterNo - left.chapterNo)
 }
 
 function hashValue(value: string) {
@@ -1476,6 +1548,8 @@ export async function searchLanceEvidence(params: {
   queryTerms?: string[]
   graphTerms?: string[]
   limit?: number
+  whatIfSessionId?: string
+  futureJumpRunId?: string
 }): Promise<LanceEvidenceSearchResult> {
   const query = params.query.trim()
   if (!query) {
@@ -1487,6 +1561,14 @@ export async function searchLanceEvidence(params: {
   const queryTerms = extractQueryTerms(query, params.queryTerms ?? [])
   const graphTerms = extractQueryTerms((params.graphTerms ?? []).join('\n'), params.graphTerms ?? [])
   const searchLimit = Math.max((params.limit ?? 10) * 6, 40)
+  const explicitAuthoredMatches = buildExplicitAuthoredMatches({
+    novelId: params.novelId,
+    branchId: params.branchId,
+    queryTerms,
+    graphTerms,
+    whatIfSessionId: params.whatIfSessionId,
+    futureJumpRunId: params.futureJumpRunId,
+  })
 
   const runSearch = async () => {
     const { table, warning } = await openBranchSearchTable(params.branchId)
@@ -1538,7 +1620,7 @@ export async function searchLanceEvidence(params: {
 
   if (searchRows.warning) {
     return {
-      matches: [],
+      matches: pickDiverseEvidenceRows(explicitAuthoredMatches, params.limit ?? 10),
       warning: searchRows.warning,
     }
   }
@@ -1592,6 +1674,13 @@ export async function searchLanceEvidence(params: {
     )
 
   return {
-    matches: pickDiverseEvidenceRows(reranked, params.limit ?? 10),
+    matches: pickDiverseEvidenceRows(
+      [...reranked, ...explicitAuthoredMatches].sort(
+        (left, right) => right.score - left.score
+          || SOURCE_TYPE_PRIORITY[right.sourceType] - SOURCE_TYPE_PRIORITY[left.sourceType]
+          || right.chapterNo - left.chapterNo
+      ),
+      params.limit ?? 10
+    ),
   }
 }
