@@ -1,5 +1,4 @@
 import type { Chapter, KnowledgeExtractionScenarioSettings } from '@/lib/types'
-import { normalizeAISettings } from '@/lib/ai-settings'
 import {
   buildCharacterDescriptionDelta,
   hasCharacterRoleCardProfile,
@@ -8,6 +7,7 @@ import {
 import { extractChapterKnowledgeOffline } from '@/lib/server/knowledge-extraction'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
+import { buildKnowledgeExtractionStoryState } from '@/lib/server/context-builder'
 import {
   buildTextSpansFromLines,
   enqueueKnowledgeJob,
@@ -50,6 +50,39 @@ type KnowledgeChapterRow = {
 type KnowledgeRebuildPayloadChapter = {
   chapterId: string
   chapterNo: number
+}
+
+type ChapterExtractionCandidateStatus = 'queued' | 'extracting' | 'extracted' | 'resolving' | 'persisted' | 'failed' | 'stale'
+
+type ChapterExtractionCandidateRow = {
+  id: string
+  novelId: string
+  branchId: string
+  chapterId: string
+  chapterNo: number
+  chapterRevision: number | null
+  chapterSourceHash: string
+  extractionJson: string
+  status: ChapterExtractionCandidateStatus
+  provider: string | null
+  model: string | null
+  errorMessage: string | null
+}
+
+type ChapterExtractionCandidate = {
+  id: string
+  chapterId: string
+  chapterNo: number
+  chapterRevision: number | null
+  chapterSourceHash: string
+  extractionJson: string
+  status: ChapterExtractionCandidateStatus
+  provider: string | null
+  model: string | null
+  errorMessage: string | null
+}
+
+type ResolvedChapterKnowledge = {
   extraction: ChapterKnowledgeExtraction
 }
 
@@ -70,7 +103,9 @@ type KnowledgeRebuildIndexProgress = RetrievalIndexBuildProgress
 
 type KnowledgeRebuildJobPayload = {
   branchId: string
+  rebuildStartChapter?: number
   phase?: KnowledgeRebuildStepKey
+  inlineCleanupCompleted?: boolean
   currentChapterId?: string | null
   pendingChapterIds?: string[]
   chapterWeightsById?: Record<string, number>
@@ -251,17 +286,16 @@ function estimateStageEtaMinutes(progress: number, stageStartedAt: string | unde
 }
 
 function getKnowledgeExtractionSettingsSnapshot(payload: KnowledgeRebuildJobPayload) {
-  if (payload.extractionSettings) {
-    return normalizeAISettings({ knowledgeExtraction: payload.extractionSettings }).knowledgeExtraction
-  }
-
+  void payload
   return loadStoredAISettings().knowledgeExtraction
 }
 
 function getKnowledgeExtractionParallelism(settings: KnowledgeExtractionScenarioSettings) {
-  return settings.provider === 'openai-compatible'
+  const configuredParallelism = settings.provider === 'openai-compatible'
     ? settings.openAICompatible.parallelism
     : settings.ollama.parallelism
+
+  return Math.max(1, configuredParallelism)
 }
 
 function getIndexProgressValue(progress?: KnowledgeRebuildIndexProgress) {
@@ -430,12 +464,44 @@ function getKnowledgeExtractionProgress(state: { processedChapterWeight: number;
   return 0.1 + (state.processedChapterWeight / state.totalChapterWeight) * 0.7
 }
 
-function hasUsableExtractedKnowledge(extraction: ChapterKnowledgeExtraction) {
-  return extraction.characters.length > 0
-    || extraction.relations.length > 0
-    || extraction.events.length > 0
-    || extraction.worldbuilding.length > 0
-    || extraction.openThreads.length > 0
+function isKnowledgeRebuildControlError(error: unknown) {
+  return error instanceof KnowledgeRebuildPausedError || error instanceof KnowledgeRebuildAbortedError
+}
+
+function getRebuildStartChapter(chapters: KnowledgeChapterRow[]) {
+  const firstDirtyChapter = chapters.find((chapter) => chapter.isDirty || chapter.knowledgeStatus !== 'ready')
+  return firstDirtyChapter?.chapterNo ?? chapters[0]?.chapterNo ?? 1
+}
+
+function getRebuildChapters(chapters: KnowledgeChapterRow[], rebuildStartChapter: number) {
+  return chapters.filter((chapter) => chapter.chapterNo >= rebuildStartChapter)
+}
+
+function setWriteQueueInKnowledgeJob(jobId: string, chapters: Array<{ chapterId: string; chapterNo: number }>) {
+  const state = getKnowledgeRebuildJobState(jobId)
+  if (!state) return null
+
+  const extractedChapters = chapters.map((chapter) => ({
+    chapterId: chapter.chapterId,
+    chapterNo: chapter.chapterNo,
+  }))
+
+  updateKnowledgeJob(jobId, {
+    payload: {
+      ...state.payload,
+      phase: state.phase,
+      pendingChapterIds: state.pendingChapterIds,
+      chapterWeightsById: state.chapterWeightsById,
+      totalChapterWeight: state.totalChapterWeight,
+      processedChapterWeight: state.processedChapterWeight,
+      extractedChapters,
+    },
+  })
+
+  return {
+    ...state,
+    extractedChapters,
+  }
 }
 
 function getKnowledgeRebuildJobState(jobId: string): KnowledgeRebuildJobState | null {
@@ -492,34 +558,6 @@ function initializeKnowledgeRebuildJobState(jobId: string, payload: KnowledgeReb
       },
     },
   })
-}
-
-function setCurrentKnowledgeJobChapter(jobId: string, chapterId: string | null) {
-  const state = getKnowledgeRebuildJobState(jobId)
-  if (!state) {
-    return null
-  }
-
-  updateKnowledgeJob(jobId, {
-    payload: {
-      ...state.payload,
-      currentChapterId: chapterId,
-      phase: state.phase,
-      pendingChapterIds: state.pendingChapterIds,
-      chapterWeightsById: state.chapterWeightsById,
-      totalChapterWeight: state.totalChapterWeight,
-      processedChapterWeight: state.processedChapterWeight,
-      extractedChapters: state.extractedChapters,
-    },
-  })
-
-  return {
-    ...state,
-    payload: {
-      ...state.payload,
-      currentChapterId: chapterId,
-    },
-  }
 }
 
 function setKnowledgeRebuildJobIndexProgress(jobId: string, indexProgress: KnowledgeRebuildIndexProgress) {
@@ -679,29 +717,28 @@ function setKnowledgeRebuildJobPhase(jobId: string, phase: NonNullable<Knowledge
   return nextState
 }
 
-function appendExtractedChapterToKnowledgeJob(jobId: string, chapter: KnowledgeRebuildPayloadChapter) {
+function markInlineKnowledgeCleanupCompleted(jobId: string) {
   const state = getKnowledgeRebuildJobState(jobId)
   if (!state) return null
-
-  const extractedChapters = [...state.extractedChapters.filter((item) => item.chapterId !== chapter.chapterId), chapter]
-  const nextState: KnowledgeRebuildJobState = {
-    ...state,
-    extractedChapters,
-  }
 
   updateKnowledgeJob(jobId, {
     payload: {
       ...state.payload,
       phase: state.phase,
+      inlineCleanupCompleted: true,
       pendingChapterIds: state.pendingChapterIds,
       chapterWeightsById: state.chapterWeightsById,
       totalChapterWeight: state.totalChapterWeight,
       processedChapterWeight: state.processedChapterWeight,
-      extractedChapters,
+      extractedChapters: state.extractedChapters,
+      stageStartedAtByKey: {
+        ...(state.payload.stageStartedAtByKey ?? {}),
+        cleanup: (state.payload.stageStartedAtByKey ?? {}).cleanup ?? new Date().toISOString(),
+      },
     },
   })
 
-  return nextState
+  return getKnowledgeRebuildJobState(jobId)
 }
 
 function removeExtractedChapterFromKnowledgeJob(jobId: string, chapterId: string) {
@@ -864,69 +901,9 @@ function insertTextSpans(spans: ReturnType<typeof buildTextSpansFromLines>) {
   }
 }
 
-async function clearDerivedKnowledge(novelId: string, branchId: string) {
-  await withTransaction(async () => {
-    execute(
-      'DELETE FROM FactEvidence WHERE factId IN (SELECT id FROM KnowledgeFact WHERE novelId = ? AND branchId = ?)',
-      novelId,
-      branchId
-    )
-    execute(
-      "DELETE FROM KnowledgeFact WHERE novelId = ? AND branchId = ? AND status != 'user_confirmed'",
-      novelId,
-      branchId
-    )
-    execute(
-      "DELETE FROM KnowledgeRelation WHERE novelId = ? AND branchId = ? AND status != 'user_confirmed'",
-      novelId,
-      branchId
-    )
-    execute(
-      "DELETE FROM EntityLink WHERE novelId = ? AND branchId = ? AND status != 'user_confirmed'",
-      novelId,
-      branchId
-    )
-    execute(
-      "DELETE FROM EntityState WHERE novelId = ? AND branchId = ? AND status != 'user_confirmed'",
-      novelId,
-      branchId
-    )
-    execute(
-      'DELETE FROM EventParticipant WHERE eventId IN (SELECT id FROM KnowledgeEvent WHERE novelId = ? AND branchId = ?)',
-      novelId,
-      branchId
-    )
-    execute(
-      "DELETE FROM KnowledgeEvent WHERE novelId = ? AND branchId = ? AND status != 'user_confirmed'",
-      novelId,
-      branchId
-    )
-    execute(
-      "DELETE FROM EventLink WHERE novelId = ? AND branchId = ? AND status != 'user_confirmed'",
-      novelId,
-      branchId
-    )
-    execute(
-      "DELETE FROM KnowledgeWorld WHERE novelId = ? AND branchId = ? AND status != 'user_confirmed'",
-      novelId,
-      branchId
-    )
-    execute(
-      'DELETE FROM EntityAppearance WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ?)',
-      novelId,
-      branchId
-    )
-    execute(
-      'DELETE FROM EntityAlias WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ?)',
-      novelId,
-      branchId
-    )
-    execute('DELETE FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND userConfirmed = 0', novelId, branchId)
-  })
-}
-
 async function clearKnowledgeGraphData(novelId: string, branchId: string) {
   await withTransaction(async () => {
+    execute('DELETE FROM EntityMention WHERE novelId = ? AND branchId = ?', novelId, branchId)
     execute(
       'DELETE FROM FactEvidence WHERE factId IN (SELECT id FROM KnowledgeFact WHERE novelId = ? AND branchId = ?)',
       novelId,
@@ -958,6 +935,540 @@ async function clearKnowledgeGraphData(novelId: string, branchId: string) {
   })
 }
 
+async function clearExtractionCandidatesFromChapter(branchId: string, fromChapterNo: number) {
+  execute(
+    'DELETE FROM chapter_extraction_candidates WHERE branch_id = ? AND chapter_no >= ?',
+    branchId,
+    fromChapterNo
+  )
+}
+
+async function clearDerivedKnowledgeFromChapter(novelId: string, branchId: string, fromChapterNo: number) {
+  await withTransaction(async () => {
+    execute(
+      'DELETE FROM EntityMention WHERE novelId = ? AND branchId = ? AND chapterNo >= ?',
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      `
+        DELETE FROM FactEvidence
+        WHERE chapterNo >= ?
+           OR factId IN (
+             SELECT id FROM KnowledgeFact
+             WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'
+           )
+      `,
+      fromChapterNo,
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      "DELETE FROM KnowledgeFact WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'",
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      "DELETE FROM KnowledgeRelation WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'",
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      "DELETE FROM EntityLink WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'",
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      "DELETE FROM EntityState WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'",
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      'DELETE FROM EventParticipant WHERE eventId IN (SELECT id FROM KnowledgeEvent WHERE novelId = ? AND branchId = ? AND chapterNo >= ? AND status != \'user_confirmed\')',
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      "DELETE FROM KnowledgeEvent WHERE novelId = ? AND branchId = ? AND chapterNo >= ? AND status != 'user_confirmed'",
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      "DELETE FROM EventLink WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'",
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      "DELETE FROM KnowledgeWorld WHERE novelId = ? AND branchId = ? AND validFromChapter >= ? AND status != 'user_confirmed'",
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      'DELETE FROM EntityAppearance WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ?) AND chapterNo >= ?',
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      'DELETE FROM EntityAlias WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ?) AND sourceChapter >= ?',
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      'DELETE FROM EntityAlias WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND firstSeenChapter >= ? AND userConfirmed = 0)',
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      'DELETE FROM EntityAppearance WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND firstSeenChapter >= ? AND userConfirmed = 0)',
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      'DELETE FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND firstSeenChapter >= ? AND userConfirmed = 0',
+      novelId,
+      branchId,
+      fromChapterNo
+    )
+    execute(
+      `
+        UPDATE KnowledgeEntity
+        SET lastSeenChapter = COALESCE(
+              (
+                SELECT MAX(a.chapterNo)
+                FROM EntityAppearance a
+                WHERE a.entityId = KnowledgeEntity.id
+              ),
+              firstSeenChapter
+            ),
+            updatedAt = CURRENT_TIMESTAMP
+        WHERE novelId = ? AND branchId = ?
+      `,
+      novelId,
+      branchId
+    )
+    execute(
+      `
+        UPDATE KnowledgeChapter
+        SET summary = CASE WHEN chapterNo >= ? THEN NULL ELSE summary END,
+            knowledgeStatus = CASE WHEN chapterNo >= ? THEN 'stale' ELSE knowledgeStatus END,
+            updatedAt = CURRENT_TIMESTAMP
+        WHERE novelId = ? AND branchId = ?
+      `,
+      fromChapterNo,
+      fromChapterNo,
+      novelId,
+      branchId
+    )
+  })
+}
+
+function readChapterExtractionCandidate(row: ChapterExtractionCandidateRow | null | undefined): ChapterExtractionCandidate | null {
+  if (!row) return null
+
+  return {
+    id: row.id,
+    chapterId: row.chapterId,
+    chapterNo: row.chapterNo,
+    chapterRevision: row.chapterRevision,
+    chapterSourceHash: row.chapterSourceHash,
+    extractionJson: row.extractionJson,
+    status: row.status,
+    provider: row.provider,
+    model: row.model,
+    errorMessage: row.errorMessage,
+  }
+}
+
+function loadChapterExtractionCandidate(params: { branchId: string; chapterId: string; chapterSourceHash: string }) {
+  return readChapterExtractionCandidate(
+    queryOne<ChapterExtractionCandidateRow>(
+      `
+        SELECT id,
+               novel_id AS novelId,
+               branch_id AS branchId,
+               chapter_id AS chapterId,
+               chapter_no AS chapterNo,
+               chapter_revision AS chapterRevision,
+               chapter_source_hash AS chapterSourceHash,
+               extraction_json AS extractionJson,
+               status,
+               provider,
+               model,
+               error_message AS errorMessage
+        FROM chapter_extraction_candidates
+        WHERE branch_id = ? AND chapter_id = ? AND chapter_source_hash = ?
+        LIMIT 1
+      `,
+      params.branchId,
+      params.chapterId,
+      params.chapterSourceHash
+    )
+  )
+}
+
+function upsertChapterExtractionCandidate(params: {
+  novelId: string
+  branchId: string
+  chapterId: string
+  chapterNo: number
+  chapterRevision?: number | null
+  chapterSourceHash: string
+  extractionJson: string
+  status: ChapterExtractionCandidateStatus
+  provider?: string | null
+  model?: string | null
+  errorMessage?: string | null
+}) {
+  execute(
+    'UPDATE chapter_extraction_candidates SET status = \'stale\', updated_at = CURRENT_TIMESTAMP WHERE branch_id = ? AND chapter_id = ? AND chapter_source_hash != ?',
+    params.branchId,
+    params.chapterId,
+    params.chapterSourceHash
+  )
+
+  execute(
+    `
+      INSERT INTO chapter_extraction_candidates (
+        id,
+        novel_id,
+        branch_id,
+        chapter_id,
+        chapter_no,
+        chapter_revision,
+        chapter_source_hash,
+        extraction_json,
+        status,
+        provider,
+        model,
+        error_message
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(branch_id, chapter_id, chapter_source_hash) DO UPDATE SET
+        chapter_no = excluded.chapter_no,
+        chapter_revision = excluded.chapter_revision,
+        extraction_json = excluded.extraction_json,
+        status = excluded.status,
+        provider = excluded.provider,
+        model = excluded.model,
+        error_message = excluded.error_message,
+        updated_at = CURRENT_TIMESTAMP
+    `,
+    uid('candidate'),
+    params.novelId,
+    params.branchId,
+    params.chapterId,
+    params.chapterNo,
+    params.chapterRevision ?? null,
+    params.chapterSourceHash,
+    params.extractionJson,
+    params.status,
+    params.provider ?? null,
+    params.model ?? null,
+    params.errorMessage ?? null,
+  )
+}
+
+function updateChapterKnowledgeStatus(params: {
+  chapterId: string
+  knowledgeStatus: string
+  dirtyReason?: string | null
+}) {
+  execute(
+    `
+      UPDATE KnowledgeChapter
+      SET knowledgeStatus = ?,
+          dirtyReason = ?,
+          updatedAt = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `,
+    params.knowledgeStatus,
+    params.dirtyReason ?? null,
+    params.chapterId
+  )
+}
+
+function updateExistingChapterExtractionCandidate(params: {
+  candidateId: string
+  status: ChapterExtractionCandidateStatus
+  errorMessage?: string | null
+}) {
+  execute(
+    `
+      UPDATE chapter_extraction_candidates
+      SET status = ?,
+          error_message = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `,
+    params.status,
+    params.errorMessage ?? null,
+    params.candidateId
+  )
+}
+
+async function extractChapterCandidates(params: {
+  novelId: string
+  branchId: string
+  chapter: KnowledgeChapterRow
+  settings: KnowledgeExtractionScenarioSettings
+  assertCanContinue?: () => void | Promise<void>
+}) {
+  const existing = loadChapterExtractionCandidate({
+    branchId: params.branchId,
+    chapterId: params.chapter.id,
+    chapterSourceHash: params.chapter.sourceHash,
+  })
+  if (existing?.status === 'extracted' || existing?.status === 'persisted') {
+    return existing
+  }
+
+  upsertChapterExtractionCandidate({
+    novelId: params.novelId,
+    branchId: params.branchId,
+    chapterId: params.chapter.id,
+    chapterNo: params.chapter.chapterNo,
+    chapterRevision: params.chapter.revision,
+    chapterSourceHash: params.chapter.sourceHash,
+    extractionJson: existing?.extractionJson ?? '{}',
+    status: 'extracting',
+    errorMessage: null,
+  })
+
+  const chapterLike = toChapterLike({
+    chapterId: params.chapter.id,
+    novelId: params.novelId,
+    title: params.chapter.title ?? `第${params.chapter.chapterNo}章`,
+    chapterNo: params.chapter.chapterNo,
+    rawText: params.chapter.rawText,
+  })
+  const extractionResult = await extractChapterKnowledgeOffline({
+    chapter: chapterLike,
+    chapterNo: params.chapter.chapterNo,
+    settings: params.settings,
+    assertCanContinue: params.assertCanContinue,
+  })
+
+  upsertChapterExtractionCandidate({
+    novelId: params.novelId,
+    branchId: params.branchId,
+    chapterId: params.chapter.id,
+    chapterNo: params.chapter.chapterNo,
+    chapterRevision: params.chapter.revision,
+    chapterSourceHash: params.chapter.sourceHash,
+    extractionJson: JSON.stringify(extractionResult.extraction),
+    status: 'extracted',
+    provider: extractionResult.provider,
+    model: extractionResult.model,
+    errorMessage: null,
+  })
+
+  return loadChapterExtractionCandidate({
+    branchId: params.branchId,
+    chapterId: params.chapter.id,
+    chapterSourceHash: params.chapter.sourceHash,
+  })
+}
+
+function resolveChapterCandidate(params: {
+  candidate: ChapterExtractionCandidate
+  storyState: string
+}): ResolvedChapterKnowledge {
+  void params.storyState
+
+  const parsed = JSON.parse(params.candidate.extractionJson) as unknown
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(`Chapter ${params.candidate.chapterNo} candidate payload is invalid`)
+  }
+
+  return {
+    extraction: parsed as ChapterKnowledgeExtraction,
+  }
+}
+
+async function persistResolvedChapterKnowledge(params: {
+  novelId: string
+  branchId: string
+  chapterId: string
+  chapterNo: number
+  candidateId: string
+  resolved: ResolvedChapterKnowledge
+}) {
+  await withTransaction(async () => {
+    await persistChapterExtraction({
+      novelId: params.novelId,
+      branchId: params.branchId,
+      chapterId: params.chapterId,
+      chapterNo: params.chapterNo,
+      extraction: params.resolved.extraction,
+    })
+    updateExistingChapterExtractionCandidate({
+      candidateId: params.candidateId,
+      status: 'persisted',
+      errorMessage: null,
+    })
+  })
+}
+
+async function rebuildDerivedIndexes(params: {
+  novelId: string
+  branchId: string
+  onProgress?: (progress: KnowledgeRebuildIndexProgress) => void | Promise<void>
+}) {
+  await rebuildBranchRetrievalIndex(params.novelId, params.branchId, {
+    onProgress: params.onProgress,
+  })
+}
+
+const BLOCKED_CHARACTER_MENTIONS = new Set([
+  '他',
+  '她',
+  '它',
+  '他们',
+  '她们',
+  '它们',
+  '那人',
+  '这人',
+  '那位',
+  '这位',
+  '对方',
+  '某人',
+  '此人',
+  '别人',
+  '男人',
+  '女人',
+  '少女',
+  '少年',
+  '老者',
+])
+
+type CharacterEntityResolution =
+  | { kind: 'blocked' }
+  | { kind: 'ambiguous' }
+  | { kind: 'unresolved' }
+  | { kind: 'resolved'; entityId: string }
+
+function normalizeCharacterMentionName(name: string) {
+  return name.trim()
+}
+
+function isBlockedCharacterMention(name: string) {
+  return BLOCKED_CHARACTER_MENTIONS.has(normalizeCharacterMentionName(name))
+}
+
+function resolveCharacterEntityByName(params: {
+  branchId: string
+  name: string
+  chapterNo: number
+}): CharacterEntityResolution {
+  const normalizedName = normalizeCharacterMentionName(params.name)
+  if (!normalizedName || isBlockedCharacterMention(normalizedName)) {
+    return { kind: 'blocked' }
+  }
+
+  const rows = queryAll<{
+    id: string
+    matchSource: 'canonical' | 'alias'
+    userConfirmed: number
+  }>(
+    `
+      SELECT e.id AS id, 'canonical' AS matchSource, e.userConfirmed AS userConfirmed
+      FROM KnowledgeEntity e
+      WHERE e.branchId = ?
+        AND e.entityType = 'character'
+        AND e.canonicalName = ?
+        AND e.firstSeenChapter <= ?
+      UNION ALL
+      SELECT e.id AS id, 'alias' AS matchSource, e.userConfirmed AS userConfirmed
+      FROM EntityAlias a
+      JOIN KnowledgeEntity e ON e.id = a.entityId
+      WHERE e.branchId = ?
+        AND e.entityType = 'character'
+        AND a.alias = ?
+        AND a.sourceChapter <= ?
+    `,
+    params.branchId,
+    normalizedName,
+    params.chapterNo,
+    params.branchId,
+    normalizedName,
+    params.chapterNo,
+  )
+
+  const matches = rows.reduce<Array<{ id: string; matchSource: 'canonical' | 'alias'; userConfirmed: number }>>((acc, row) => {
+    if (acc.some((item) => item.id === row.id)) return acc
+    acc.push(row)
+    return acc
+  }, [])
+
+  if (!matches.length) {
+    return { kind: 'unresolved' }
+  }
+
+  if (matches.length === 1) {
+    return { kind: 'resolved', entityId: matches[0].id }
+  }
+
+  const canonicalMatches = matches.filter((match) => match.matchSource === 'canonical')
+  if (canonicalMatches.length === 1) {
+    return { kind: 'resolved', entityId: canonicalMatches[0].id }
+  }
+
+  return { kind: 'ambiguous' }
+}
+
+function findResolvedCharacterEntityId(params: {
+  branchId: string
+  name: string
+  chapterNo: number
+}) {
+  const resolution = resolveCharacterEntityByName(params)
+  return resolution.kind === 'resolved' ? resolution.entityId : null
+}
+
+function insertEntityMention(params: {
+  novelId: string
+  branchId: string
+  chapterId: string
+  chapterNo: number
+  entityId: string | null
+  mentionText: string
+  resolutionKind: 'resolved' | 'ambiguous' | 'blocked'
+  evidence?: { quote: string; lineStart: number; lineEnd: number } | null
+}) {
+  execute(
+    `
+      INSERT INTO EntityMention (
+        id, novelId, branchId, chapterId, chapterNo, entityId, mentionText, resolutionKind, evidenceSpanId, evidenceQuote
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    uid('mention'),
+    params.novelId,
+    params.branchId,
+    params.chapterId,
+    params.chapterNo,
+    params.entityId,
+    params.mentionText,
+    params.resolutionKind,
+    params.evidence ? findEvidenceSpanId(params.chapterId, params.evidence.lineStart, params.evidence.lineEnd) : null,
+    params.evidence?.quote ?? null,
+  )
+}
+
 async function getOrCreateCharacterEntity(params: {
   novelId: string
   branchId: string
@@ -966,16 +1477,20 @@ async function getOrCreateCharacterEntity(params: {
   status: string
   chapterNo: number
 }) {
-  const existing = queryOne<{ id: string }>(
-    `
-      SELECT id
-      FROM KnowledgeEntity
-      WHERE branchId = ? AND canonicalName = ? AND entityType = 'character'
-      LIMIT 1
-    `,
-    params.branchId,
-    params.name
-  )
+  const normalizedName = normalizeCharacterMentionName(params.name)
+  const resolution = resolveCharacterEntityByName({
+    branchId: params.branchId,
+    name: normalizedName,
+    chapterNo: params.chapterNo,
+  })
+
+  if (resolution.kind === 'blocked' || resolution.kind === 'ambiguous') {
+    return null
+  }
+
+  const existing = resolution.kind === 'resolved'
+    ? { id: resolution.entityId }
+    : null
 
   if (existing) {
     execute(
@@ -1003,26 +1518,13 @@ async function getOrCreateCharacterEntity(params: {
     id,
     params.novelId,
     params.branchId,
-    params.name,
+    normalizedName,
     params.description,
     params.chapterNo,
     params.chapterNo,
     params.status
   )
   return id
-}
-
-function findCharacterEntityIdByName(branchId: string, name: string) {
-  return queryOne<{ id: string }>(
-    `
-      SELECT id
-      FROM KnowledgeEntity
-      WHERE branchId = ? AND canonicalName = ? AND entityType = 'character'
-      LIMIT 1
-    `,
-    branchId,
-    name
-  )?.id ?? null
 }
 
 async function persistChapterExtraction(params: {
@@ -1035,17 +1537,55 @@ async function persistChapterExtraction(params: {
   const entityIdByName = new Map<string, string>()
 
   for (const item of params.extraction.characters) {
+    const normalizedItemName = normalizeCharacterMentionName(item.name)
+    const primaryEvidence = item.evidence[0] ?? null
+    const resolution = resolveCharacterEntityByName({
+      branchId: params.branchId,
+      name: normalizedItemName,
+      chapterNo: params.chapterNo,
+    })
+
+    if (resolution.kind === 'blocked' || resolution.kind === 'ambiguous') {
+      insertEntityMention({
+        novelId: params.novelId,
+        branchId: params.branchId,
+        chapterId: params.chapterId,
+        chapterNo: params.chapterNo,
+        entityId: null,
+        mentionText: normalizedItemName,
+        resolutionKind: resolution.kind,
+        evidence: primaryEvidence,
+      })
+      continue
+    }
+
     const entityId = await getOrCreateCharacterEntity({
       novelId: params.novelId,
       branchId: params.branchId,
-      name: item.name,
+      name: normalizedItemName,
       description: item.descriptionDelta,
       status: item.status,
       chapterNo: params.chapterNo,
     })
-    entityIdByName.set(item.name, entityId)
+    if (!entityId) continue
+
+    insertEntityMention({
+      novelId: params.novelId,
+      branchId: params.branchId,
+      chapterId: params.chapterId,
+      chapterNo: params.chapterNo,
+      entityId,
+      mentionText: normalizedItemName,
+      resolutionKind: 'resolved',
+      evidence: primaryEvidence,
+    })
+
+    entityIdByName.set(normalizedItemName, entityId)
 
     for (const alias of item.aliases) {
+      const normalizedAlias = normalizeCharacterMentionName(alias)
+      if (!normalizedAlias || isBlockedCharacterMention(normalizedAlias)) continue
+      entityIdByName.set(normalizedAlias, entityId)
       execute(
         `
           INSERT INTO EntityAlias (id, entityId, alias, sourceChapter)
@@ -1054,7 +1594,7 @@ async function persistChapterExtraction(params: {
         `,
         uid('alias'),
         entityId,
-        alias,
+        normalizedAlias,
         params.chapterNo
       )
     }
@@ -1075,7 +1615,6 @@ async function persistChapterExtraction(params: {
       )
     }
 
-    const primaryEvidence = item.evidence[0]
     const primaryEvidenceSpanId = primaryEvidence
       ? findEvidenceSpanId(params.chapterId, primaryEvidence.lineStart, primaryEvidence.lineEnd)
       : null
@@ -1190,11 +1729,21 @@ async function persistChapterExtraction(params: {
   }
 
   for (const relation of params.extraction.relations) {
-    const sourceEntityId = entityIdByName.get(relation.source) ?? findCharacterEntityIdByName(params.branchId, relation.source)
-    const targetEntityId = entityIdByName.get(relation.target) ?? findCharacterEntityIdByName(params.branchId, relation.target)
+    const normalizedSourceName = normalizeCharacterMentionName(relation.source)
+    const normalizedTargetName = normalizeCharacterMentionName(relation.target)
+    const sourceEntityId = entityIdByName.get(normalizedSourceName) ?? findResolvedCharacterEntityId({
+      branchId: params.branchId,
+      name: normalizedSourceName,
+      chapterNo: params.chapterNo,
+    })
+    const targetEntityId = entityIdByName.get(normalizedTargetName) ?? findResolvedCharacterEntityId({
+      branchId: params.branchId,
+      name: normalizedTargetName,
+      chapterNo: params.chapterNo,
+    })
     if (!sourceEntityId || !targetEntityId) continue
-    entityIdByName.set(relation.source, sourceEntityId)
-    entityIdByName.set(relation.target, targetEntityId)
+    entityIdByName.set(normalizedSourceName, sourceEntityId)
+    entityIdByName.set(normalizedTargetName, targetEntityId)
     const evidence = relation.evidence[0]
     const evidenceSpanId = evidence ? findEvidenceSpanId(params.chapterId, evidence.lineStart, evidence.lineEnd) : null
 
@@ -1385,8 +1934,14 @@ async function persistChapterExtraction(params: {
     )
 
     for (const participant of event.participants) {
-      const entityId = entityIdByName.get(participant.name)
+      const normalizedParticipantName = normalizeCharacterMentionName(participant.name)
+      const entityId = entityIdByName.get(normalizedParticipantName) ?? findResolvedCharacterEntityId({
+        branchId: params.branchId,
+        name: normalizedParticipantName,
+        chapterNo: params.chapterNo,
+      })
       if (!entityId) continue
+      entityIdByName.set(normalizedParticipantName, entityId)
       execute(
         'INSERT INTO EventParticipant (id, eventId, entityId, role) VALUES (?, ?, ?, ?)',
         uid('participant'),
@@ -1530,39 +2085,27 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
       params.novelId,
       branchId
     )
+    const defaultRebuildStartChapter = getRebuildStartChapter(chapters)
+    const defaultRebuildChapters = getRebuildChapters(chapters, defaultRebuildStartChapter)
     let jobState = getKnowledgeRebuildJobState(job.id)
     if (!isKnowledgeRebuildJobStateInitialized(jobState)) {
-      const chapterWeightsById = Object.fromEntries(chapters.map((chapter) => [chapter.id, getChapterProgressWeight(chapter.rawText)]))
-      const totalChapterWeight = chapters.reduce((sum, chapter) => sum + (chapterWeightsById[chapter.id] ?? 0), 0)
-      const extractionSettings = loadStoredAISettings().knowledgeExtraction
+      const chapterWeightsById = Object.fromEntries(defaultRebuildChapters.map((chapter) => [chapter.id, getChapterProgressWeight(chapter.rawText)]))
+      const totalChapterWeight = defaultRebuildChapters.reduce((sum, chapter) => sum + (chapterWeightsById[chapter.id] ?? 0), 0)
 
-      initializeKnowledgeRebuildJobState(job.id, {
-        branchId,
-        phase: 'extract',
-        pendingChapterIds: chapters.map((chapter) => chapter.id),
+        initializeKnowledgeRebuildJobState(job.id, {
+          branchId,
+          rebuildStartChapter: defaultRebuildStartChapter,
+          phase: 'extract',
+          inlineCleanupCompleted: false,
+          pendingChapterIds: defaultRebuildChapters.map((chapter) => chapter.id),
         chapterWeightsById,
         totalChapterWeight,
-        totalChapterCount: chapters.length,
+        totalChapterCount: defaultRebuildChapters.length,
         processedChapterWeight: 0,
         extractedChapters: [],
-        extractionSettings,
         indexProgress: undefined,
         stageStartedAtByKey: {
           extract: new Date().toISOString(),
-        },
-      })
-      jobState = getKnowledgeRebuildJobState(job.id)
-    } else if (jobState && !jobState.payload.extractionSettings) {
-      updateKnowledgeJob(job.id, {
-        payload: {
-          ...jobState.payload,
-          phase: jobState.phase,
-          pendingChapterIds: jobState.pendingChapterIds,
-          chapterWeightsById: jobState.chapterWeightsById,
-          totalChapterWeight: jobState.totalChapterWeight,
-          processedChapterWeight: jobState.processedChapterWeight,
-          extractedChapters: jobState.extractedChapters,
-          extractionSettings: loadStoredAISettings().knowledgeExtraction,
         },
       })
       jobState = getKnowledgeRebuildJobState(job.id)
@@ -1582,120 +2125,113 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
         throw new Error('Knowledge rebuild job state is missing')
       }
 
-      const currentJobState = jobState
+        const currentJobState = jobState
+        const rebuildStartChapter = currentJobState.payload.rebuildStartChapter ?? defaultRebuildStartChapter
 
-      if (currentJobState.phase === 'extract') {
-        const currentChapters = queryAll<KnowledgeChapterRow>(
-          'SELECT id, novelId, branchId, chapterNo, title, rawText, summary, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? ORDER BY chapterNo ASC',
-          params.novelId,
-          branchId
-        )
-        const remainingChapters = currentChapters.filter((chapter) => currentJobState.pendingChapterIds.includes(chapter.id))
-
-        if (!remainingChapters.length) {
-          if (!currentJobState.extractedChapters.some((chapter) => hasUsableExtractedKnowledge(chapter.extraction))) {
-            throw new Error('Knowledge rebuild aborted because structured extraction returned no usable knowledge')
+        if (currentJobState.phase === 'extract') {
+          if (!currentJobState.payload.inlineCleanupCompleted) {
+            updateKnowledgeJob(job.id, {
+              currentStep: '清理旧知识',
+              progress: 0.02,
+            })
+            assertKnowledgeRebuildContinues(job.id)
+            await clearExtractionCandidatesFromChapter(branchId, rebuildStartChapter)
+            await clearDerivedKnowledgeFromChapter(params.novelId, branchId, rebuildStartChapter)
+            markInlineKnowledgeCleanupCompleted(job.id)
+            continue
           }
-          setKnowledgeRebuildJobPhase(job.id, 'cleanup')
+
+          const currentChapters = queryAll<KnowledgeChapterRow>(
+          'SELECT id, novelId, branchId, chapterNo, title, rawText, summary, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? ORDER BY chapterNo ASC',
+            params.novelId,
+            branchId
+          )
+          const remainingChapters = currentChapters
+            .filter((chapter) => chapter.chapterNo >= rebuildStartChapter && currentJobState.pendingChapterIds.includes(chapter.id))
+            .sort((left, right) => left.chapterNo - right.chapterNo)
+
+          if (!remainingChapters.length) {
+            setWriteQueueInKnowledgeJob(
+              job.id,
+              getRebuildChapters(currentChapters, rebuildStartChapter).map((chapter) => ({
+                chapterId: chapter.id,
+                chapterNo: chapter.chapterNo,
+              }))
+            )
+            setKnowledgeRebuildJobPhase(job.id, 'write')
+            continue
+          }
+
+          const extractionSettings = getKnowledgeExtractionSettingsSnapshot(currentJobState.payload)
+          const configuredParallelism = getKnowledgeExtractionParallelism(extractionSettings)
+          const extractionBatch = remainingChapters.slice(0, Math.min(configuredParallelism, remainingChapters.length))
+          updateKnowledgeJob(job.id, {
+            currentStep: `并行抽取候选知识（剩余 ${remainingChapters.length} 章，本批 ${extractionBatch.length} 章，最大并发 ${configuredParallelism}）`,
+            progress: getKnowledgeExtractionProgress(currentJobState),
+          })
+
+          await Promise.all(
+            extractionBatch.map(async (chapter) => {
+              assertKnowledgeRebuildContinues(job.id)
+
+              if (!chapterStillExists(chapter.id)) {
+                removePendingChaptersFromKnowledgeJob(job.id, [chapter.id])
+                return
+              }
+
+              try {
+                await extractChapterCandidates({
+                  novelId: params.novelId,
+                  branchId,
+                  chapter,
+                  settings: extractionSettings,
+                  assertCanContinue: () => assertKnowledgeRebuildContinues(job.id),
+                })
+              } catch (error) {
+                if (isKnowledgeRebuildControlError(error)) {
+                  throw error
+                }
+
+                upsertChapterExtractionCandidate({
+                  novelId: params.novelId,
+                  branchId,
+                  chapterId: chapter.id,
+                  chapterNo: chapter.chapterNo,
+                  chapterRevision: chapter.revision,
+                  chapterSourceHash: chapter.sourceHash,
+                  extractionJson: '{}',
+                  status: 'failed',
+                  errorMessage: error instanceof Error ? error.message : `Chapter ${chapter.chapterNo} candidate extraction failed`,
+                })
+              } finally {
+                const nextState = completePendingChapterInKnowledgeJob(job.id, chapter.id) ?? getKnowledgeRebuildJobState(job.id)
+                updateKnowledgeJob(job.id, {
+                  currentStep: `并行抽取候选知识（已完成第 ${chapter.chapterNo} 章）`,
+                  progress: getKnowledgeExtractionProgress(nextState ?? currentJobState),
+                })
+              }
+            })
+          )
           continue
         }
 
-        const extractionSettings = getKnowledgeExtractionSettingsSnapshot(currentJobState.payload)
-        const parallelism = Math.max(1, getKnowledgeExtractionParallelism(extractionSettings))
-        const extractionBatch = remainingChapters.slice(0, parallelism)
-        const stateWithCurrentChapter = setCurrentKnowledgeJobChapter(job.id, extractionBatch[0]?.id ?? null)
-        const batchLabel = extractionBatch.length > 1
-          ? `并行抽取第 ${extractionBatch[0]?.chapterNo ?? 0} 至 ${extractionBatch[extractionBatch.length - 1]?.chapterNo ?? 0} 章`
-          : `抽取第 ${extractionBatch[0]?.chapterNo ?? 0} 章`
-
-        updateKnowledgeJob(job.id, {
-          currentStep: batchLabel,
-          progress: getKnowledgeExtractionProgress(stateWithCurrentChapter ?? jobState),
-        })
-
-        const extractionResults = await Promise.all(extractionBatch.map(async (chapter) => {
-          const chapterLike = toChapterLike({
-            chapterId: chapter.id,
-            novelId: params.novelId,
-            title: chapter.title ?? `第${chapter.chapterNo}章`,
-            chapterNo: chapter.chapterNo,
-            rawText: chapter.rawText,
-          })
-
-          try {
-            const extractionResult = await extractChapterKnowledgeOffline({
-              chapter: chapterLike,
-              chapterNo: chapter.chapterNo,
-              settings: extractionSettings,
-              assertCanContinue: () => assertKnowledgeRebuildContinues(job.id),
-            })
-
-            return {
-              chapter,
-              extractionResult,
-            }
-          } catch (error) {
-            return {
-              chapter,
-              error,
-            }
-          }
-        }))
-
-        assertKnowledgeRebuildContinues(job.id)
-        setCurrentKnowledgeJobChapter(job.id, null)
-
-        let firstError: unknown = null
-        let lastCompletedState = stateWithCurrentChapter ?? jobState
-        let completedCount = 0
-
-        for (const result of extractionResults) {
-          if ('error' in result) {
-            firstError ??= result.error
-            continue
-          }
-
-          if (!chapterStillExists(result.chapter.id)) {
-            removePendingChaptersFromKnowledgeJob(job.id, [result.chapter.id])
-            continue
-          }
-
-          appendExtractedChapterToKnowledgeJob(job.id, {
-            chapterId: result.chapter.id,
-            chapterNo: result.chapter.chapterNo,
-            extraction: result.extractionResult.extraction,
-          })
-          lastCompletedState = completePendingChapterInKnowledgeJob(job.id, result.chapter.id) ?? lastCompletedState
-          completedCount += 1
+        if (currentJobState.phase === 'cleanup') {
+          setKnowledgeRebuildJobPhase(job.id, 'extract')
+          continue
         }
 
-        updateKnowledgeJob(job.id, {
-          currentStep: extractionBatch.length > 1
-            ? `已完成 ${completedCount}/${extractionBatch.length} 个章节抽取`
-            : `抽取第 ${extractionBatch[0]?.chapterNo ?? 0} 章完成`,
-          progress: getKnowledgeExtractionProgress(lastCompletedState),
-        })
+        if (currentJobState.phase === 'write') {
+          const currentChapters = queryAll<KnowledgeChapterRow>(
+            'SELECT id, novelId, branchId, chapterNo, title, rawText, summary, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? ORDER BY chapterNo ASC',
+            params.novelId,
+            branchId
+          )
+          const chapterById = new Map(currentChapters.map((chapter) => [chapter.id, chapter]))
+          const writeQueue = currentJobState.extractedChapters
+            .filter((chapter) => chapterStillExists(chapter.chapterId))
+            .sort((left, right) => left.chapterNo - right.chapterNo)
 
-        if (firstError) {
-          throw firstError
-        }
-        continue
-      }
-
-      if (currentJobState.phase === 'cleanup') {
-        updateKnowledgeJob(job.id, { currentStep: '清理旧知识', progress: 0.8 })
-        assertKnowledgeRebuildContinues(job.id)
-        await clearDerivedKnowledge(params.novelId, branchId)
-        setKnowledgeRebuildJobPhase(job.id, 'write')
-        continue
-      }
-
-      if (currentJobState.phase === 'write') {
-        const writeQueue = currentJobState.extractedChapters
-          .filter((chapter) => chapterStillExists(chapter.chapterId))
-          .sort((left, right) => left.chapterNo - right.chapterNo)
-
-        if (writeQueue.length !== currentJobState.extractedChapters.length) {
+          if (writeQueue.length !== currentJobState.extractedChapters.length) {
           for (const chapter of currentJobState.extractedChapters) {
             if (!chapterStillExists(chapter.chapterId)) {
               removeExtractedChapterFromKnowledgeJob(job.id, chapter.chapterId)
@@ -1704,25 +2240,89 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
           continue
         }
 
-        if (!writeQueue.length) break
+          if (!writeQueue.length) break
 
-        const chapter = writeQueue[0]
-        updateKnowledgeJob(job.id, {
-          currentStep: `写入第 ${chapter.chapterNo} 章知识`,
-          progress: 0.82 + (1 / Math.max(1, writeQueue.length)) * 0.08,
-        })
+          const queuedChapter = writeQueue[0]
+          const chapter = chapterById.get(queuedChapter.chapterId)
+          if (!chapter) {
+            removeExtractedChapterFromKnowledgeJob(job.id, queuedChapter.chapterId)
+            continue
+          }
 
-        assertKnowledgeRebuildContinues(job.id)
-        await persistChapterExtraction({
-          novelId: params.novelId,
-          branchId,
-          chapterId: chapter.chapterId,
-          chapterNo: chapter.chapterNo,
-          extraction: chapter.extraction,
-        })
-        removeExtractedChapterFromKnowledgeJob(job.id, chapter.chapterId)
-        continue
-      }
+          updateKnowledgeJob(job.id, {
+            currentStep: `按章节顺序整理并写入第 ${chapter.chapterNo} 章知识`,
+            progress: currentJobState.payload.totalChapterCount
+              ? 0.82 + ((currentJobState.payload.totalChapterCount - writeQueue.length) / currentJobState.payload.totalChapterCount) * 0.14
+              : 0.82,
+          })
+
+          assertKnowledgeRebuildContinues(job.id)
+          const storyState = buildKnowledgeExtractionStoryState({
+            novelId: params.novelId,
+            branchId,
+            asOfChapter: Math.max(0, chapter.chapterNo - 1),
+            currentChapterText: chapter.rawText,
+          })
+          const candidate = loadChapterExtractionCandidate({
+            branchId,
+            chapterId: chapter.id,
+            chapterSourceHash: chapter.sourceHash,
+          })
+
+          if (candidate?.status === 'persisted' && chapter.knowledgeStatus === 'ready' && chapter.isDirty === 0) {
+            removeExtractedChapterFromKnowledgeJob(job.id, chapter.id)
+            continue
+          }
+
+          if (!candidate || candidate.status === 'failed' || candidate.status === 'stale') {
+            updateChapterKnowledgeStatus({
+              chapterId: chapter.id,
+              knowledgeStatus: 'degraded',
+              dirtyReason: candidate?.errorMessage ?? 'Candidate missing or unavailable for ordered apply',
+            })
+            removeExtractedChapterFromKnowledgeJob(job.id, chapter.id)
+            continue
+          }
+
+          try {
+            updateExistingChapterExtractionCandidate({
+              candidateId: candidate.id,
+              status: 'resolving',
+              errorMessage: null,
+            })
+
+            const resolved = resolveChapterCandidate({
+              candidate,
+              storyState,
+            })
+            await persistResolvedChapterKnowledge({
+              novelId: params.novelId,
+              branchId,
+              chapterId: chapter.id,
+              chapterNo: chapter.chapterNo,
+              candidateId: candidate.id,
+              resolved,
+            })
+          } catch (error) {
+            if (isKnowledgeRebuildControlError(error)) {
+              throw error
+            }
+
+            updateExistingChapterExtractionCandidate({
+              candidateId: candidate.id,
+              status: 'failed',
+              errorMessage: error instanceof Error ? error.message : `Chapter ${chapter.chapterNo} ordered apply failed`,
+            })
+            updateChapterKnowledgeStatus({
+              chapterId: chapter.id,
+              knowledgeStatus: 'degraded',
+              dirtyReason: error instanceof Error ? error.message : 'Ordered apply failed',
+            })
+          } finally {
+            removeExtractedChapterFromKnowledgeJob(job.id, chapter.id)
+          }
+          continue
+        }
 
     }
 
@@ -1735,7 +2335,9 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
       completedBatches: 0,
     })
     assertKnowledgeRebuildContinues(job.id)
-    await rebuildBranchRetrievalIndex(params.novelId, branchId, {
+    await rebuildDerivedIndexes({
+      novelId: params.novelId,
+      branchId,
       onProgress: async (indexProgress) => {
         assertKnowledgeRebuildContinues(job.id)
         setKnowledgeRebuildJobIndexProgress(job.id, indexProgress)
@@ -1766,7 +2368,6 @@ export async function rebuildKnowledgeForNovel(params: { novelId: string; branch
           totalChapterCount: 0,
           processedChapterWeight: 0,
           extractedChapters: [],
-          extractionSettings: loadStoredAISettings().knowledgeExtraction,
           indexProgress: undefined,
           stageStartedAtByKey: {},
         },

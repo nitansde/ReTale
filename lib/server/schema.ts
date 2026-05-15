@@ -55,6 +55,24 @@ CREATE TABLE IF NOT EXISTS KnowledgeChapter (
   UNIQUE (novelId, branchId, chapterNo)
 );
 
+CREATE TABLE IF NOT EXISTS chapter_extraction_candidates (
+  id TEXT PRIMARY KEY,
+  novel_id TEXT NOT NULL,
+  branch_id TEXT NOT NULL,
+  chapter_id TEXT NOT NULL,
+  chapter_no INTEGER NOT NULL,
+  chapter_revision INTEGER,
+  chapter_source_hash TEXT NOT NULL,
+  extraction_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'extracted',
+  provider TEXT,
+  model TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(branch_id, chapter_id, chapter_source_hash)
+);
+
 CREATE TABLE IF NOT EXISTS ChapterLine (
   id TEXT PRIMARY KEY,
   chapterId TEXT NOT NULL,
@@ -116,6 +134,25 @@ CREATE TABLE IF NOT EXISTS EntityAlias (
   FOREIGN KEY (entityId) REFERENCES KnowledgeEntity(id) ON DELETE CASCADE,
   FOREIGN KEY (evidenceSpanId) REFERENCES TextSpan(id) ON DELETE SET NULL,
   UNIQUE (entityId, alias)
+);
+
+CREATE TABLE IF NOT EXISTS EntityMention (
+  id TEXT PRIMARY KEY,
+  novelId TEXT NOT NULL,
+  branchId TEXT NOT NULL,
+  chapterId TEXT NOT NULL,
+  chapterNo INTEGER NOT NULL,
+  entityId TEXT,
+  mentionText TEXT NOT NULL,
+  resolutionKind TEXT NOT NULL,
+  evidenceSpanId TEXT,
+  evidenceQuote TEXT,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novelId) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (chapterId) REFERENCES KnowledgeChapter(id) ON DELETE CASCADE,
+  FOREIGN KEY (entityId) REFERENCES KnowledgeEntity(id) ON DELETE SET NULL,
+  FOREIGN KEY (evidenceSpanId) REFERENCES TextSpan(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS EntityAppearance (
@@ -337,9 +374,13 @@ CREATE TABLE IF NOT EXISTS KnowledgeJob (
 );
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_chapter_branch_no ON KnowledgeChapter(branchId, chapterNo);
+CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_order ON chapter_extraction_candidates(branch_id, chapter_no, status);
+CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_chapter ON chapter_extraction_candidates(branch_id, chapter_id, chapter_source_hash);
 CREATE INDEX IF NOT EXISTS idx_text_span_branch_chapter ON TextSpan(branchId, chapterNo);
 CREATE INDEX IF NOT EXISTS idx_text_span_chapter_type ON TextSpan(chapterId, spanType);
 CREATE INDEX IF NOT EXISTS idx_knowledge_entity_branch_name ON KnowledgeEntity(branchId, entityType, canonicalName);
+CREATE INDEX IF NOT EXISTS idx_entity_mention_branch_chapter ON EntityMention(branchId, chapterNo);
+CREATE INDEX IF NOT EXISTS idx_entity_mention_entity_chapter ON EntityMention(branchId, entityId, chapterNo);
 CREATE INDEX IF NOT EXISTS idx_entity_link_source_valid_until ON EntityLink(branchId, sourceEntityId, validFromChapter, validUntilChapter);
 CREATE INDEX IF NOT EXISTS idx_entity_link_target_valid_until ON EntityLink(branchId, targetEntityId, validFromChapter, validUntilChapter);
 CREATE INDEX IF NOT EXISTS idx_entity_link_chapter ON EntityLink(branchId, sourceChapter);

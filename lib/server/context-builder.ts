@@ -97,6 +97,7 @@ type EntityRow = {
   id: string
   canonicalName: string
   aliases: Array<{ alias: string }>
+  lastSeenChapter?: number | null
   profile?: CharacterRoleCardProfile
 }
 
@@ -156,6 +157,15 @@ type ChapterStatePromptData = {
   world_rules: ChapterStateRule[]
   open_threads: ChapterStateThread[]
   forbidden_future_facts: string
+}
+
+export type KnowledgeExtractionStoryStateRequest = {
+  novelId: string
+  branchId: string
+  asOfChapter: number
+  currentChapterText?: string
+  maxCharacters?: number
+  recentEventLimit?: number
 }
 
 function formatOutputConstraints(operationType: GenerationContextRequest['operationType']) {
@@ -289,7 +299,10 @@ function loadCharacterProfilesByEntityId(params: {
   return profileByEntityId
 }
 
-function renderChapterStateForPrompt(chapterState: ChapterStatePromptData) {
+function renderChapterStateForPrompt(
+  chapterState: ChapterStatePromptData,
+  options?: { title?: string }
+) {
   const lines: string[] = []
 
   lines.push('人物状态：')
@@ -341,7 +354,7 @@ function renderChapterStateForPrompt(chapterState: ChapterStatePromptData) {
 
   lines.push('', `未来章节限制：${chapterState.forbidden_future_facts}`)
 
-  return renderBlock('截至当前章节的知识状态', lines)
+  return renderBlock(options?.title?.trim() || '截至当前章节的知识状态', lines)
 }
 
 function buildEnrichedEvidenceQuery(params: {
@@ -457,29 +470,43 @@ function buildChapterGraphEvidenceQuery(params: {
   }
 }
 
-function loadEntitiesWithAliases(novelId: string, branchId: string, chapterNo: number) {
+function loadEntitiesWithAliases(
+  novelId: string,
+  branchId: string,
+  chapterNo: number,
+  options?: { entityLimit?: number }
+) {
+  const entityLimit = Math.max(1, Math.min(options?.entityLimit ?? 24, 64))
   const entities = queryAll<{
     id: string
     canonicalName: string
+    lastSeenChapter: number | null
   }>(
     `
-      SELECT id, canonicalName
+      SELECT id, canonicalName, lastSeenChapter
       FROM KnowledgeEntity
       WHERE novelId = ? AND branchId = ? AND firstSeenChapter <= ?
-      ORDER BY importance DESC, canonicalName ASC
-      LIMIT 24
+      ORDER BY importance DESC, lastSeenChapter DESC, canonicalName ASC
+      LIMIT ?
     `,
     novelId,
     branchId,
-    chapterNo
+    chapterNo,
+    entityLimit
   )
 
   if (!entities.length) return [] as EntityRow[]
 
   const entityIds = entities.map((entity) => entity.id)
   const aliases = queryAll<{ entityId: string; alias: string }>(
-    `SELECT entityId, alias FROM EntityAlias WHERE entityId IN (${entityIds.map(() => '?').join(', ')})`,
-    ...entityIds
+    `
+      SELECT entityId, alias
+      FROM EntityAlias
+      WHERE entityId IN (${entityIds.map(() => '?').join(', ')})
+        AND sourceChapter <= ?
+    `,
+    ...entityIds,
+    chapterNo
   )
 
   const aliasesByEntityId = new Map<string, Array<{ alias: string }>>()
@@ -500,6 +527,174 @@ function loadEntitiesWithAliases(novelId: string, branchId: string, chapterNo: n
     aliases: aliasesByEntityId.get(entity.id) ?? [],
     profile: profileByEntityId.get(entity.id),
   }))
+}
+
+function selectStoryStateEntities(params: {
+  entities: EntityRow[]
+  currentChapterText: string
+  maxCharacters: number
+}) {
+  const maxCharacters = Math.max(1, params.maxCharacters)
+  const normalizedText = params.currentChapterText.trim()
+  if (!normalizedText) {
+    return params.entities.slice(0, maxCharacters)
+  }
+
+  const matched = params.entities.filter((entity) => {
+    if (normalizedText.includes(entity.canonicalName)) return true
+    return entity.aliases.some((alias) => normalizedText.includes(alias.alias))
+  })
+  if (matched.length >= maxCharacters) {
+    return matched.slice(0, maxCharacters)
+  }
+
+  const matchedIds = new Set(matched.map((entity) => entity.id))
+  const remaining = params.entities.filter((entity) => !matchedIds.has(entity.id))
+  return [...matched, ...remaining].slice(0, maxCharacters)
+}
+
+export function buildKnowledgeExtractionStoryState(request: KnowledgeExtractionStoryStateRequest) {
+  if (request.asOfChapter <= 0) {
+    return renderChapterStateForPrompt({
+      major_characters: [],
+      active_relationships: [],
+      recent_events: [],
+      world_rules: [],
+      open_threads: [],
+      forbidden_future_facts: 'Do not use any facts from future chapters.',
+    })
+  }
+
+  const maxCharacters = Math.max(4, Math.min(request.maxCharacters ?? 10, 16))
+  const recentEventLimit = Math.max(1, Math.min(request.recentEventLimit ?? 6, 12))
+  const candidateEntities = loadEntitiesWithAliases(request.novelId, request.branchId, request.asOfChapter, {
+    entityLimit: Math.max(maxCharacters * 2, 24),
+  })
+  const selectedEntities = selectStoryStateEntities({
+    entities: candidateEntities,
+    currentChapterText: request.currentChapterText ?? '',
+    maxCharacters,
+  })
+  const entityIds = selectedEntities.map((entity) => entity.id)
+  const latestStateByEntityId = new Map<string, EntityStatePreviewRow>()
+
+  if (entityIds.length) {
+    const activeStates = loadEntityStatesByEntityIds({
+      novelId: request.novelId,
+      branchId: request.branchId,
+      chapterNo: request.asOfChapter,
+      includeLowConfidence: false,
+      entityIds,
+      limit: Math.max(entityIds.length * 2, 12),
+    })
+    for (const state of activeStates) {
+      if (latestStateByEntityId.has(state.entityId)) continue
+      latestStateByEntityId.set(state.entityId, state)
+    }
+  }
+
+  const activeRelationships = entityIds.length
+    ? queryAll<ChapterStateRelationship>(
+        `
+          SELECT se.canonicalName AS source,
+                 te.canonicalName AS target,
+                 kr.relationType AS type,
+                 kr.polarity,
+                 kr.validFromChapter
+          FROM KnowledgeRelation kr
+          JOIN KnowledgeEntity se ON se.id = kr.sourceEntityId
+          JOIN KnowledgeEntity te ON te.id = kr.targetEntityId
+          WHERE kr.novelId = ? AND kr.branchId = ?
+            AND kr.validFromChapter <= ?
+            AND kr.validUntilChapter > ?
+            AND kr.status NOT IN ('rejected', 'outdated', 'potentially_stale')
+            AND (kr.sourceEntityId IN (${entityIds.map(() => '?').join(', ')}) OR kr.targetEntityId IN (${entityIds.map(() => '?').join(', ')}))
+          ORDER BY kr.strength DESC, kr.sourceChapter DESC
+          LIMIT 10
+        `,
+        request.novelId,
+        request.branchId,
+        request.asOfChapter,
+        request.asOfChapter,
+        ...entityIds,
+        ...entityIds,
+      )
+    : []
+
+  const recentEvents = queryAll<ChapterStateEvent>(
+    `
+      SELECT chapterNo AS chapter, name, summary
+      FROM KnowledgeEvent
+      WHERE novelId = ? AND branchId = ? AND chapterNo <= ?
+        AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+      ORDER BY chapterNo DESC, importance DESC
+      LIMIT ?
+    `,
+    request.novelId,
+    request.branchId,
+    request.asOfChapter,
+    recentEventLimit,
+  )
+
+  const worldRules = queryAll<ChapterStateRule>(
+    `
+      SELECT term, definition, firstSeenChapter
+      FROM KnowledgeWorld
+      WHERE novelId = ? AND branchId = ?
+        AND validFromChapter <= ?
+        AND validUntilChapter > ?
+        AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+      ORDER BY firstSeenChapter DESC, term ASC
+      LIMIT 8
+    `,
+    request.novelId,
+    request.branchId,
+    request.asOfChapter,
+    request.asOfChapter,
+  )
+
+  const openThreads = queryAll<{ name: string; valueJson: string | null }>(
+    `
+      SELECT predicate AS name, valueJson
+      FROM KnowledgeFact
+      WHERE novelId = ? AND branchId = ?
+        AND factType = 'open_thread'
+        AND validFromChapter <= ?
+        AND validUntilChapter > ?
+        AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+      ORDER BY sourceChapter DESC
+      LIMIT 6
+    `,
+    request.novelId,
+    request.branchId,
+    request.asOfChapter,
+    request.asOfChapter,
+  ).map((thread) => {
+    const parsed = parseJsonObject<{ description?: unknown }>(thread.valueJson, {})
+    return {
+      name: thread.name,
+      description: typeof parsed.description === 'string' && parsed.description.trim()
+        ? parsed.description.trim()
+        : thread.name,
+    }
+  })
+
+  return renderChapterStateForPrompt({
+    major_characters: selectedEntities.map((entity) => ({
+      name: entity.canonicalName,
+      aliases: entity.aliases.map((alias) => alias.alias),
+      status: latestStateByEntityId.get(entity.id)?.stateValue ?? '未知',
+      lastSeenChapter: entity.lastSeenChapter ?? undefined,
+      profile: entity.profile,
+    })),
+    active_relationships: activeRelationships,
+    recent_events: recentEvents,
+    world_rules: worldRules,
+    open_threads: openThreads,
+    forbidden_future_facts: `Do not use any facts from chapters > ${request.asOfChapter}.`,
+  }, {
+    title: `截至第 ${request.asOfChapter} 章的故事状态`,
+  })
 }
 
 export async function buildGenerationContext(request: GenerationContextRequest): Promise<GenerationContextBuildResult> {
