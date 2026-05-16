@@ -1,0 +1,340 @@
+// @vitest-environment jsdom
+
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import React from 'react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { PresetCompatLibraryModal } from '@/components/workspace/PresetCompatLibraryModal'
+import { normalizePresetCompatPresetImport, normalizePresetCompatStandaloneRegexImport } from '@/lib/preset-compat/normalize'
+import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
+import type {
+  PresetCompatLibrary,
+  PresetCompatPresetRecord,
+  PresetCompatRegexRecord,
+} from '@/lib/preset-compat/types'
+import { useNovelStore } from '@/store/novel-store'
+
+function createPreset(id: string, overrides: Partial<PresetCompatPresetRecord> = {}): PresetCompatPresetRecord {
+  return {
+    id,
+    name: `Preset ${id}`,
+    sourceApiId: 'openai',
+    promptRules: [
+      {
+        id: `${id}-rule-1`,
+        name: 'Narration rule',
+        role: 'system',
+        content: 'Stay consistent.',
+        enabled: true,
+        marker: false,
+        injectAsSystemPrompt: true,
+        injectionPosition: 'before',
+        injectionDepth: null,
+        injectionOrder: 0,
+        injectionTrigger: null,
+        forbidOverrides: false,
+        condition: null,
+        passthrough: {},
+      },
+      {
+        id: `${id}-rule-2`,
+        name: 'Marker rule',
+        role: 'assistant',
+        content: 'Preserve me.',
+        enabled: true,
+        marker: true,
+        injectAsSystemPrompt: false,
+        injectionPosition: 'after',
+        injectionDepth: 2,
+        injectionOrder: 2,
+        injectionTrigger: 'manual',
+        forbidOverrides: true,
+        condition: null,
+        passthrough: {},
+      },
+    ],
+    promptOrderLists: {
+      rewrite: [`${id}-rule-1`, `${id}-rule-2`],
+      expand: [`${id}-rule-1`],
+      roleplay: [`${id}-rule-1`],
+      polish: [`${id}-rule-1`],
+      continue: [`${id}-rule-1`],
+      future_jump_rewrite: [`${id}-rule-1`],
+    },
+    embeddedRegexes: [
+      {
+        id: `${id}-embedded-1`,
+        name: 'Embedded regex',
+        pattern: 'foo',
+        replacement: 'bar',
+        flags: 'g',
+        disabled: false,
+        placements: ['assistant_output', 'md_display'],
+        trimStrings: [],
+        promptOnly: false,
+        markdownOnly: true,
+        minDepth: 1,
+        maxDepth: null,
+        substituteRegex: '0',
+        runOnEdit: true,
+        passthrough: {},
+      },
+    ],
+    attachedStandaloneRegexIds: [],
+    runtimeSampler: {
+      temperature: 1,
+      topP: 1,
+      topK: null,
+      minP: null,
+      presencePenalty: null,
+      frequencyPenalty: null,
+      repetitionPenalty: null,
+      maxTokens: null,
+    },
+    passthrough: {
+      root: {
+        top_a: 0.1,
+        show_thoughts: true,
+      },
+      extensions: {},
+      unknownPromptFields: {},
+    },
+    importWarnings: ['Imported field `show_thoughts` is preserved-only.'],
+    createdAt: '2026-05-15T00:00:00.000Z',
+    updatedAt: '2026-05-15T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
+function createRegex(id: string, overrides: Partial<PresetCompatRegexRecord> = {}): PresetCompatRegexRecord {
+  return {
+    id,
+    name: `Regex ${id}`,
+    pattern: 'hello',
+    replacement: 'world',
+    flags: 'g',
+    disabled: false,
+    placements: ['assistant_output'],
+    trimStrings: [],
+    promptOnly: false,
+    markdownOnly: false,
+    minDepth: null,
+    maxDepth: null,
+    substituteRegex: null,
+    runOnEdit: false,
+    passthrough: {},
+    ...overrides,
+  }
+}
+
+function createLibrary(overrides: Partial<PresetCompatLibrary> = {}): PresetCompatLibrary {
+  const library = createDefaultPresetCompatLibrary()
+  return {
+    ...library,
+    presets: {
+      'preset-1': createPreset('preset-1'),
+    },
+    standaloneRegexes: {
+      'regex-1': createRegex('regex-1'),
+    },
+    ...overrides,
+  }
+}
+
+function resetStore() {
+  useNovelStore.getState().resetWorkspace()
+  useNovelStore.setState({
+    isHydrated: false,
+    isSaving: false,
+    backendLoaded: false,
+    backendLoadError: '',
+    presetCompatLibrary: createDefaultPresetCompatLibrary(),
+    presetCompatLibraryLoading: false,
+    presetCompatLibraryError: '',
+  })
+}
+
+describe('PresetCompatLibraryModal', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    resetStore()
+    vi.stubGlobal('fetch', vi.fn())
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn(() => 'blob:mock'),
+      revokeObjectURL: vi.fn(),
+    })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+  })
+
+  it('renders warnings, binding selectors, edit toggles, standalone attachment, and export actions', async () => {
+    useNovelStore.setState({
+      presetCompatLibrary: createLibrary(),
+    })
+
+    render(<PresetCompatLibraryModal open onClose={vi.fn()} />)
+
+    expect(screen.getByTestId('preset-compat-library-modal')).toBeInTheDocument()
+    expect(screen.getByText('全局预设兼容库')).toBeInTheDocument()
+    expect(screen.getByText('预设列表')).toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-binding-rewrite')).toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-binding-future_jump_rewrite')).toBeInTheDocument()
+    expect(screen.getByText('Imported field `show_thoughts` is preserved-only.')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByTestId('preset-compat-binding-rewrite'), { target: { value: 'preset-1' } })
+    expect(useNovelStore.getState().presetCompatLibrary.surfaceBindings.rewrite.presetId).toBe('preset-1')
+
+    fireEvent.click(screen.getByTestId('preset-compat-rule-toggle-preset-1-rule-1'))
+    expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.promptRules[0]?.enabled).toBe(false)
+
+    fireEvent.change(screen.getByTestId('preset-compat-rule-content-preset-1-rule-1'), {
+      target: { value: 'Updated narrative instruction.' },
+    })
+    expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.promptRules[0]?.content).toBe('Updated narrative instruction.')
+
+    fireEvent.click(screen.getByTestId('preset-compat-standalone-regex-attach-regex-1'))
+    expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.attachedStandaloneRegexIds).toEqual(['regex-1'])
+
+    fireEvent.click(screen.getByTestId('preset-compat-preset-export-preset-1'))
+    await waitFor(() => {
+      expect(URL.createObjectURL).toHaveBeenCalled()
+    })
+
+    expect(screen.getByText('Marker prompts are preserved-only in MVP runtime.')).toBeInTheDocument()
+    expect(screen.getByText('Preserved-only placements: md_display')).toBeInTheDocument()
+    expect(screen.queryByText('`markdownOnly` is preserved for export and not applied in MVP runtime.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Depth gates are preserved-only in MVP runtime.')).not.toBeInTheDocument()
+    expect(screen.queryByText('`substituteRegex` metadata is preserved-only in MVP runtime.')).not.toBeInTheDocument()
+  })
+
+  it('deletes and saves the selected preset, clears matching surface bindings, and keeps standalone regexes intact', async () => {
+    const initialLibrary = createLibrary({
+      presets: {
+        'preset-1': createPreset('preset-1', { updatedAt: '2026-05-15T00:00:01.000Z' }),
+        'preset-2': createPreset('preset-2', { updatedAt: '2026-05-15T00:00:00.000Z' }),
+      },
+      surfaceBindings: {
+        ...createDefaultPresetCompatLibrary().surfaceBindings,
+        rewrite: {
+          ...createDefaultPresetCompatLibrary().surfaceBindings.rewrite,
+          presetId: 'preset-1',
+          enabled: true,
+        },
+        future_jump_rewrite: {
+          ...createDefaultPresetCompatLibrary().surfaceBindings.future_jump_rewrite,
+          presetId: 'preset-1',
+          enabled: true,
+        },
+      },
+    })
+
+    useNovelStore.setState({
+      presetCompatLibrary: initialLibrary,
+    })
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url !== '/api/settings/preset-compat' || init?.method !== 'POST') {
+        throw new Error(`Unexpected fetch: ${url}`)
+      }
+
+      const body = JSON.parse(String(init.body)) as { library: PresetCompatLibrary }
+      expect(body.library.presets['preset-1']).toBeUndefined()
+      expect(body.library.surfaceBindings.rewrite.presetId).toBeNull()
+      expect(body.library.surfaceBindings.future_jump_rewrite.presetId).toBeNull()
+      return new Response(JSON.stringify({
+        ok: true,
+        library: {
+          ...body.library,
+          revision: body.library.revision + 1,
+        },
+      }), { status: 200 })
+    })
+
+    render(<PresetCompatLibraryModal open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByTestId('preset-compat-preset-delete-preset-1'))
+
+    await waitFor(() => {
+      expect(screen.getByText('已删除预设“Preset preset-1”，并已保存。')).toBeInTheDocument()
+    })
+    expect(fetch).toHaveBeenCalledWith('/api/settings/preset-compat', expect.objectContaining({ method: 'POST' }))
+    expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']).toBeUndefined()
+    expect(useNovelStore.getState().presetCompatLibrary.surfaceBindings.rewrite.presetId).toBeNull()
+    expect(useNovelStore.getState().presetCompatLibrary.surfaceBindings.future_jump_rewrite.presetId).toBeNull()
+    expect(useNovelStore.getState().presetCompatLibrary.surfaceBindings.rewrite.enabled).toBe(false)
+    expect(useNovelStore.getState().presetCompatLibrary.standaloneRegexes['regex-1']).toBeDefined()
+    expect(screen.getByRole('heading', { name: 'Preset preset-2' })).toBeInTheDocument()
+  })
+
+  it('imports the golden fixture, keeps malformed regex imports non-destructive, and leaves existing library data visible', async () => {
+    const fixtureText = readFileSync(path.resolve(process.cwd(), 'external', 'resets_example.json'), 'utf8')
+    let currentLibrary = createDefaultPresetCompatLibrary()
+    const presetFile = new File([fixtureText], 'resets_example.json', { type: 'application/json' })
+    Object.defineProperty(presetFile, 'text', { value: () => Promise.resolve(fixtureText) })
+    const malformedRegexText = JSON.stringify({ regex_scripts: [null, { scriptName: 'Broken regex', replaceString: 'x' }] })
+    const malformedRegexFile = new File([malformedRegexText], 'broken-regex.json', { type: 'application/json' })
+    Object.defineProperty(malformedRegexFile, 'text', { value: () => Promise.resolve(malformedRegexText) })
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url !== '/api/settings/preset-compat/import') {
+        throw new Error(`Unexpected fetch: ${url}`)
+      }
+
+      const body = JSON.parse(String(init?.body)) as { kind: 'preset' | 'regex'; jsonText: string; nameHint?: string }
+      if (body.kind === 'preset') {
+        const { preset, warnings } = normalizePresetCompatPresetImport(JSON.parse(body.jsonText), {
+          nameHint: body.nameHint,
+          existingNames: Object.values(currentLibrary.presets).map((entry) => entry.name),
+          now: '2026-05-15T00:00:00.000Z',
+          idFactory: () => 'preset-import-001',
+        })
+        currentLibrary = {
+          ...currentLibrary,
+          presets: {
+            ...currentLibrary.presets,
+            [preset.id]: preset,
+          },
+          lastImportedAt: '2026-05-15T00:00:00.000Z',
+        }
+        return new Response(JSON.stringify({ ok: true, library: currentLibrary, importedIds: [preset.id], warnings }), { status: 200 })
+      }
+
+      const { regexes, warnings } = normalizePresetCompatStandaloneRegexImport(JSON.parse(body.jsonText), {
+        existingNames: Object.values(currentLibrary.standaloneRegexes).map((entry) => entry.name),
+      })
+      for (const regexRecord of regexes) {
+        currentLibrary = {
+          ...currentLibrary,
+          standaloneRegexes: {
+            ...currentLibrary.standaloneRegexes,
+            [regexRecord.id]: regexRecord,
+          },
+          lastImportedAt: '2026-05-15T00:00:00.000Z',
+        }
+      }
+      return new Response(JSON.stringify({ ok: true, library: currentLibrary, importedIds: regexes.map((entry) => entry.id), warnings }), { status: 200 })
+    }))
+
+    render(<PresetCompatLibraryModal open onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByTestId('preset-compat-preset-import-input'), {
+      target: { files: [presetFile] },
+    })
+
+    await waitFor(() => {
+      expect(screen.getAllByText('resets_example').length).toBeGreaterThan(0)
+    })
+
+    fireEvent.change(screen.getByTestId('preset-compat-regex-import-input'), {
+      target: { files: [malformedRegexFile] },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText(/Regex entry 1 was not an object and was skipped/)).toBeInTheDocument()
+    })
+
+    expect(screen.getAllByText('resets_example').length).toBeGreaterThan(0)
+    expect(Object.keys(useNovelStore.getState().presetCompatLibrary.presets)).toContain('preset-import-001')
+  })
+})
