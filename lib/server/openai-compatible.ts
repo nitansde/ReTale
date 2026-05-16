@@ -18,6 +18,15 @@ type RewriteRequest = {
   keepCanon: boolean
   autoContinue: boolean
   thoughtLevel: string
+  systemPrompt?: string
+  userPrompt?: string
+  requestOptions?: Partial<{
+    temperature: number
+    top_p: number
+    frequency_penalty: number
+    presence_penalty: number
+    max_tokens: number
+  }>
 }
 
 export type RewriteResult = {
@@ -30,6 +39,13 @@ export type StreamRewriteRequest = {
   systemPrompt: string
   userPrompt: string
   temperature?: number
+  requestOptions?: Partial<{
+    temperature: number
+    top_p: number
+    frequency_penalty: number
+    presence_penalty: number
+    max_tokens: number
+  }>
 }
 
 export type StreamRewriteResult = {
@@ -377,13 +393,6 @@ export async function generateRewriteWithOpenAICompatible(
     return { enabled: false, error: 'OpenAI-compatible config not set' }
   }
 
-  const system = [
-    'You are a novel rewriting assistant.',
-    'Return JSON only.',
-    'Produce exactly 3 rewrite candidates in Chinese.',
-    'Each candidate should be a coherent prose passage.',
-  ].join(' ')
-
   const user = {
     task: 'rewrite',
     mode: input.mode,
@@ -413,11 +422,24 @@ export async function generateRewriteWithOpenAICompatible(
       },
       body: JSON.stringify({
         model: config.model,
-        temperature: input.tone === 'keep' ? 0.7 : 0.9,
+        temperature: input.requestOptions?.temperature ?? (input.tone === 'keep' ? 0.7 : 0.9),
+        ...(typeof input.requestOptions?.top_p === 'number' ? { top_p: input.requestOptions.top_p } : {}),
+        ...(typeof input.requestOptions?.frequency_penalty === 'number' ? { frequency_penalty: input.requestOptions.frequency_penalty } : {}),
+        ...(typeof input.requestOptions?.presence_penalty === 'number' ? { presence_penalty: input.requestOptions.presence_penalty } : {}),
+        ...(typeof input.requestOptions?.max_tokens === 'number' ? { max_tokens: input.requestOptions.max_tokens } : {}),
         response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: JSON.stringify(user) },
+          {
+            role: 'system',
+            content: [
+              'You are a novel rewriting assistant.',
+              'Return JSON only.',
+              'Produce exactly 3 rewrite candidates in Chinese.',
+              'Each candidate should be a coherent prose passage.',
+            ].join(' '),
+          },
+          ...(input.systemPrompt?.trim() ? [{ role: 'system' as const, content: input.systemPrompt.trim() }] : []),
+          { role: 'user', content: input.userPrompt?.trim() || JSON.stringify(user) },
         ],
       }),
       signal: controller.signal,
@@ -482,7 +504,11 @@ export async function streamRewriteWithOpenAICompatible(
       },
       body: JSON.stringify({
         model: config.model,
-        temperature: input.temperature ?? 0.7,
+        temperature: input.requestOptions?.temperature ?? input.temperature ?? 0.7,
+        ...(typeof input.requestOptions?.top_p === 'number' ? { top_p: input.requestOptions.top_p } : {}),
+        ...(typeof input.requestOptions?.frequency_penalty === 'number' ? { frequency_penalty: input.requestOptions.frequency_penalty } : {}),
+        ...(typeof input.requestOptions?.presence_penalty === 'number' ? { presence_penalty: input.requestOptions.presence_penalty } : {}),
+        ...(typeof input.requestOptions?.max_tokens === 'number' ? { max_tokens: input.requestOptions.max_tokens } : {}),
         stream: true,
         messages: [
           { role: 'system', content: input.systemPrompt },

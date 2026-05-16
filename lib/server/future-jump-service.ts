@@ -10,6 +10,7 @@ import {
 import { findOutlineNodeById, listOutlineNodeChapters } from '@/lib/server/outline-node-store'
 import { parseKnowledgeExtractionCandidates } from '@/lib/server/ollama-local'
 import { normalizeOpenAICompatibleBaseUrl } from '@/lib/server/openai-compatible'
+import { applyPresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runtime'
 import {
   bridgeSummaryGenerationSchema,
   futureJumpCreateRequestSchema,
@@ -330,13 +331,42 @@ async function requestStructuredResponse(params: {
   stage: StageKey
   systemPrompt: string
   userPrompt: string
+  configOverride?: {
+    openAICompatible?: Partial<{
+      baseUrl: string
+      apiKey: string
+      model: string
+    }>
+    ollama?: Partial<{
+      baseUrl: string
+      model: string
+    }>
+  }
+  requestOptions?: {
+    openAICompatible?: Partial<{
+      temperature: number
+      top_p: number
+      frequency_penalty: number
+      presence_penalty: number
+      max_tokens: number
+    }>
+    ollama?: Partial<{
+      temperature: number
+      top_p: number
+      top_k: number
+      min_p: number
+      repeat_penalty: number
+      num_predict: number
+      seed: number
+    }>
+  }
 }) {
   const settings = loadStoredAISettings().rewrite
 
   if (settings.provider === 'openai-compatible') {
-    const baseUrl = normalizeOpenAICompatibleBaseUrl(settings.openAICompatible.baseUrl || '')
-    const apiKey = settings.openAICompatible.apiKey.trim()
-    const model = settings.openAICompatible.model.trim()
+    const baseUrl = normalizeOpenAICompatibleBaseUrl(params.configOverride?.openAICompatible?.baseUrl || settings.openAICompatible.baseUrl || '')
+    const apiKey = (params.configOverride?.openAICompatible?.apiKey || settings.openAICompatible.apiKey).trim()
+    const model = (params.configOverride?.openAICompatible?.model || settings.openAICompatible.model).trim()
 
     if (!baseUrl || !apiKey || !model) {
       throw new Error('OpenAI-compatible config not set')
@@ -350,7 +380,11 @@ async function requestStructuredResponse(params: {
       },
       body: JSON.stringify({
         model,
-        temperature: 0.7,
+        temperature: params.requestOptions?.openAICompatible?.temperature ?? 0.7,
+        ...(typeof params.requestOptions?.openAICompatible?.top_p === 'number' ? { top_p: params.requestOptions.openAICompatible.top_p } : {}),
+        ...(typeof params.requestOptions?.openAICompatible?.frequency_penalty === 'number' ? { frequency_penalty: params.requestOptions.openAICompatible.frequency_penalty } : {}),
+        ...(typeof params.requestOptions?.openAICompatible?.presence_penalty === 'number' ? { presence_penalty: params.requestOptions.openAICompatible.presence_penalty } : {}),
+        ...(typeof params.requestOptions?.openAICompatible?.max_tokens === 'number' ? { max_tokens: params.requestOptions.openAICompatible.max_tokens } : {}),
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: params.systemPrompt },
@@ -375,8 +409,8 @@ async function requestStructuredResponse(params: {
     } satisfies StructuredResponse
   }
 
-  const baseUrl = settings.ollama.baseUrl.trim() || 'http://127.0.0.1:11434'
-  const model = settings.ollama.model.trim()
+  const baseUrl = (params.configOverride?.ollama?.baseUrl || settings.ollama.baseUrl).trim() || 'http://127.0.0.1:11434'
+  const model = (params.configOverride?.ollama?.model || settings.ollama.model).trim()
   if (!model) {
     throw new Error('Ollama rewrite config not set')
   }
@@ -390,8 +424,16 @@ async function requestStructuredResponse(params: {
       think: false,
       keep_alive: '5m',
       format: buildOllamaFormat(params.stage),
-      options: { temperature: 0.7 },
-      messages: [
+        options: {
+          temperature: params.requestOptions?.ollama?.temperature ?? 0.7,
+          ...(typeof params.requestOptions?.ollama?.top_p === 'number' ? { top_p: params.requestOptions.ollama.top_p } : {}),
+          ...(typeof params.requestOptions?.ollama?.top_k === 'number' ? { top_k: params.requestOptions.ollama.top_k } : {}),
+          ...(typeof params.requestOptions?.ollama?.min_p === 'number' ? { min_p: params.requestOptions.ollama.min_p } : {}),
+          ...(typeof params.requestOptions?.ollama?.repeat_penalty === 'number' ? { repeat_penalty: params.requestOptions.ollama.repeat_penalty } : {}),
+          ...(typeof params.requestOptions?.ollama?.num_predict === 'number' ? { num_predict: params.requestOptions.ollama.num_predict } : {}),
+          ...(typeof params.requestOptions?.ollama?.seed === 'number' ? { seed: params.requestOptions.ollama.seed } : {}),
+        },
+        messages: [
         { role: 'system', content: params.systemPrompt },
         { role: 'user', content: params.userPrompt },
       ],
@@ -420,6 +462,36 @@ async function runValidatedStage<T>(params: {
   systemPrompt: string
   userPrompt: string
   validate: (value: unknown) => T
+  postProcess?: (value: T) => T
+  configOverride?: {
+    openAICompatible?: Partial<{
+      baseUrl: string
+      apiKey: string
+      model: string
+    }>
+    ollama?: Partial<{
+      baseUrl: string
+      model: string
+    }>
+  }
+  requestOptions?: {
+    openAICompatible?: Partial<{
+      temperature: number
+      top_p: number
+      frequency_penalty: number
+      presence_penalty: number
+      max_tokens: number
+    }>
+    ollama?: Partial<{
+      temperature: number
+      top_p: number
+      top_k: number
+      min_p: number
+      repeat_penalty: number
+      num_predict: number
+      seed: number
+    }>
+  }
 }) {
   let lastRaw = ''
   let lastError = 'Unknown parse or validation failure'
@@ -444,12 +516,15 @@ async function runValidatedStage<T>(params: {
             lastRaw,
           ].join('\n')
         : params.userPrompt,
+      configOverride: params.configOverride,
+      requestOptions: params.requestOptions,
     })
 
     lastRaw = response.raw
 
     try {
-      return params.validate(response.parsed)
+      const validated = params.validate(response.parsed)
+      return params.postProcess ? params.postProcess(validated) : validated
     } catch (error) {
       lastError = error instanceof Error ? error.message : 'Unknown parse or validation failure'
       if (!isRetry) {
@@ -681,8 +756,20 @@ export async function generateTargetNodeRewrite(params: {
   userDirection?: string
   userFeedback?: string
 }) {
-  return await runValidatedStage({
-    stage: 'rewrite',
+  const rewriteSettings = loadStoredAISettings().rewrite
+  const runtime = applyPresetCompatCreativeRuntime({
+    surfaceId: 'future_jump_rewrite',
+    providerDefaults: {
+      provider: rewriteSettings.provider,
+      openAICompatible: {
+        config: rewriteSettings.openAICompatible,
+        request: { temperature: 0.7 },
+      },
+      ollama: {
+        config: rewriteSettings.ollama,
+        request: { temperature: 0.7 },
+      },
+    },
     systemPrompt: buildRewriteSystemPrompt(),
     userPrompt: buildRewriteUserPrompt({
       context: params.context,
@@ -690,7 +777,25 @@ export async function generateTargetNodeRewrite(params: {
       userDirection: params.userDirection?.trim() || '',
       userFeedback: params.userFeedback,
     }),
+  })
+
+  return await runValidatedStage({
+    stage: 'rewrite',
+    systemPrompt: runtime.systemPrompt,
+    userPrompt: runtime.userPrompt,
     validate: validateTargetRewrite,
+    postProcess: (value) => ({
+      ...value,
+      generatedTargetText: runtime.applyOutputRuntime(value.generatedTargetText).value,
+      titleHint: value.titleHint ? runtime.applyOutputRuntime(value.titleHint).value : null,
+      subtitleHint: value.subtitleHint ? runtime.applyOutputRuntime(value.subtitleHint).value : null,
+    }),
+    requestOptions: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
+      ? { openAICompatible: runtime.resolvedRuntime.providerRuntime.request }
+      : { ollama: runtime.resolvedRuntime.providerRuntime.request.options },
+    configOverride: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
+      ? { openAICompatible: runtime.resolvedRuntime.providerRuntime.config }
+      : { ollama: runtime.resolvedRuntime.providerRuntime.config },
   })
 }
 

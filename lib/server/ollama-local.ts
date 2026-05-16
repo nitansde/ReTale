@@ -73,6 +73,17 @@ type OllamaRewriteRequest = {
   keepCanon: boolean
   autoContinue: boolean
   thoughtLevel: string
+  systemPrompt?: string
+  userPrompt?: string
+  requestOptions?: Partial<{
+    temperature: number
+    top_p: number
+    top_k: number
+    min_p: number
+    repeat_penalty: number
+    num_predict: number
+    seed: number
+  }>
 }
 
 type OllamaRewriteResult = {
@@ -85,6 +96,15 @@ type OllamaStreamRewriteRequest = {
   systemPrompt: string
   userPrompt: string
   temperature?: number
+  requestOptions?: Partial<{
+    temperature: number
+    top_p: number
+    top_k: number
+    min_p: number
+    repeat_penalty: number
+    num_predict: number
+    seed: number
+  }>
 }
 
 type OllamaStreamRewriteResult = {
@@ -1858,6 +1878,15 @@ function buildOllamaChatRequestBody(params: {
   model: string
   messages: Array<{ role: 'system' | 'user'; content: string }>
   temperature?: number
+  requestOptions?: Partial<{
+    temperature: number
+    top_p: number
+    top_k: number
+    min_p: number
+    repeat_penalty: number
+    num_predict: number
+    seed: number
+  }>
   format?: unknown
   stream: boolean
 }) {
@@ -1868,7 +1897,13 @@ function buildOllamaChatRequestBody(params: {
     keep_alive: '5m',
     format: params.format,
     options: {
-      temperature: params.temperature ?? 0.7,
+      temperature: params.requestOptions?.temperature ?? params.temperature ?? 0.7,
+      ...(typeof params.requestOptions?.top_p === 'number' ? { top_p: params.requestOptions.top_p } : {}),
+      ...(typeof params.requestOptions?.top_k === 'number' ? { top_k: params.requestOptions.top_k } : {}),
+      ...(typeof params.requestOptions?.min_p === 'number' ? { min_p: params.requestOptions.min_p } : {}),
+      ...(typeof params.requestOptions?.repeat_penalty === 'number' ? { repeat_penalty: params.requestOptions.repeat_penalty } : {}),
+      ...(typeof params.requestOptions?.num_predict === 'number' ? { num_predict: params.requestOptions.num_predict } : {}),
+      ...(typeof params.requestOptions?.seed === 'number' ? { seed: params.requestOptions.seed } : {}),
     },
     messages: params.messages,
   }
@@ -1880,6 +1915,15 @@ async function requestOllamaChat(params: {
   messages: Array<{ role: 'system' | 'user'; content: string }>
   timeoutMs: number
   temperature?: number
+  requestOptions?: Partial<{
+    temperature: number
+    top_p: number
+    top_k: number
+    min_p: number
+    repeat_penalty: number
+    num_predict: number
+    seed: number
+  }>
   format?: unknown
 }) {
   const controller = new AbortController()
@@ -1910,6 +1954,15 @@ async function requestOllamaChatStream(params: {
   messages: Array<{ role: 'system' | 'user'; content: string }>
   timeoutMs: number
   temperature?: number
+  requestOptions?: Partial<{
+    temperature: number
+    top_p: number
+    top_k: number
+    min_p: number
+    repeat_penalty: number
+    num_predict: number
+    seed: number
+  }>
 }) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), params.timeoutMs)
@@ -1989,8 +2042,10 @@ export async function generateRewriteWithOllama(
             'Each candidate should be a coherent prose passage.',
           ].join(' '),
         },
-        { role: 'user', content: JSON.stringify(user) },
+        ...(input.systemPrompt?.trim() ? [{ role: 'system' as const, content: input.systemPrompt.trim() }] : []),
+        { role: 'user', content: input.userPrompt?.trim() || JSON.stringify(user) },
       ],
+      requestOptions: input.requestOptions,
     })
 
     const raw = response.message?.content?.trim() ?? ''
@@ -2034,6 +2089,7 @@ export async function streamRewriteWithOllama(
         { role: 'system', content: input.systemPrompt },
         { role: 'user', content: input.userPrompt },
       ],
+      requestOptions: input.requestOptions,
     })
 
     const decoder = new TextDecoder()

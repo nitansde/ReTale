@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { buildGenerationContext } from '@/lib/server/context-builder'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
+import { applyPresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runtime'
+import { transformBufferedTextStream } from '@/lib/preset-compat/stream-buffer'
 import {
   buildFallbackRewriteStream,
   generateRewriteWithOpenAICompatible,
@@ -110,27 +112,52 @@ export async function POST(request: Request) {
         .map((block) => block.content)
         .join('\n\n')
     : String(body.prompt ?? '')
+  const baseSystemPrompt = buildSystemPrompt()
+  const baseUserPrompt = buildUserPrompt({
+    operationType,
+    userInstruction,
+    chapterNo: context?.chapterNo,
+    selectedLineStart: context?.selectedLineStart,
+    selectedLineEnd: context?.selectedLineEnd,
+    selectedText,
+    assembledContext,
+  })
+  const runtime = applyPresetCompatCreativeRuntime({
+    surfaceId: operationType,
+    providerDefaults: {
+      provider: rewriteProvider,
+      openAICompatible: {
+        config: rewriteSettings.openAICompatible,
+        request: { temperature: body.tone === 'keep' ? 0.7 : 0.9 },
+      },
+      ollama: {
+        config: rewriteSettings.ollama,
+        request: { temperature: body.tone === 'keep' ? 0.7 : 0.9 },
+      },
+    },
+    systemPrompt: baseSystemPrompt,
+    userPrompt: baseUserPrompt,
+  })
 
   if (body.stream) {
     const promptPayload = {
-      systemPrompt: buildSystemPrompt(),
-      userPrompt: buildUserPrompt({
-        operationType,
-        userInstruction,
-        chapterNo: context?.chapterNo,
-        selectedLineStart: context?.selectedLineStart,
-        selectedLineEnd: context?.selectedLineEnd,
-        selectedText,
-        assembledContext,
-      }),
+      systemPrompt: runtime.systemPrompt,
+      userPrompt: runtime.userPrompt,
       temperature: body.tone === 'keep' ? 0.7 : 0.9,
+      requestOptions: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
+        ? runtime.resolvedRuntime.providerRuntime.request
+        : runtime.resolvedRuntime.providerRuntime.request.options,
     }
-    const streamResult = rewriteProvider === 'openai-compatible'
-      ? await streamRewriteWithOpenAICompatible(promptPayload, rewriteSettings.openAICompatible)
-      : await streamRewriteWithOllama(promptPayload, rewriteSettings.ollama)
+    const streamResult = runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
+      ? await streamRewriteWithOpenAICompatible(promptPayload, runtime.resolvedRuntime.providerRuntime.config)
+      : await streamRewriteWithOllama(promptPayload, runtime.resolvedRuntime.providerRuntime.config)
 
     if (streamResult.enabled && streamResult.stream) {
-      return new Response(streamResult.stream, {
+      const responseStream = runtime.hasActiveOutputRegex
+        ? await transformBufferedTextStream(streamResult.stream, (value) => runtime.applyOutputRuntime(value).value)
+        : streamResult.stream
+
+      return new Response(responseStream, {
         headers: {
           'Content-Type': 'text/plain; charset=utf-8',
           'Cache-Control': 'no-cache, no-transform',
@@ -158,17 +185,24 @@ export async function POST(request: Request) {
     keepCanon: Boolean(body.keepCanon),
     autoContinue: Boolean(body.autoContinue),
     thoughtLevel: body.thoughtLevel,
+    systemPrompt: runtime.systemPrompt,
+    userPrompt: runtime.userPrompt,
+    requestOptions: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
+      ? runtime.resolvedRuntime.providerRuntime.request
+      : runtime.resolvedRuntime.providerRuntime.request.options,
   }
-  const result = rewriteProvider === 'openai-compatible'
-    ? await generateRewriteWithOpenAICompatible(rewriteInput, rewriteSettings.openAICompatible)
-    : await generateRewriteWithOllama(rewriteInput, rewriteSettings.ollama)
+  const result = runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
+    ? await generateRewriteWithOpenAICompatible(rewriteInput, runtime.resolvedRuntime.providerRuntime.config)
+    : await generateRewriteWithOllama(rewriteInput, runtime.resolvedRuntime.providerRuntime.config)
 
   if (result.enabled && result.content?.length) {
+    const candidates = result.content.map((content) => runtime.applyOutputRuntime(content).value)
+
     return NextResponse.json({
-      provider: rewriteProvider,
-      candidates: result.content.map((content, index) => ({
+      provider: runtime.resolvedRuntime.providerRuntime.provider,
+      candidates: candidates.map((content, index) => ({
         title: `候选 ${String.fromCharCode(65 + index)}`,
-        summary: rewriteProvider === 'openai-compatible' ? '来自 OpenAI-compatible API' : '来自 Ollama 本地模型',
+        summary: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible' ? '来自 OpenAI-compatible API' : '来自 Ollama 本地模型',
         content,
       })),
     })
