@@ -47,6 +47,7 @@ import {
   writeWorkspaceSelectionToSearchParams,
 } from '@/components/workspace/workspace-selection'
 import { normalizeAISettings } from '@/lib/ai-settings'
+import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import type {
   ChapterGraphContextData,
   GraphEdgeEditDraft,
@@ -594,6 +595,10 @@ function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelec
     : null
 }
 
+function toPresetCompatSessionSurfaceId(mode: WorkspaceActionMode): PresetCompatSurfaceId {
+  return mode
+}
+
 export function SelectionNovelStudio() {
   const router = useRouter()
   const loadFromBackend = useNovelStore((state) => state.loadFromBackend)
@@ -618,6 +623,9 @@ export function SelectionNovelStudio() {
   const abortStoryKnowledgeRebuild = useNovelStore((state) => state.abortStoryKnowledgeRebuild)
   const deleteStoryKnowledgeGraph = useNovelStore((state) => state.deleteStoryKnowledgeGraph)
   const refreshKnowledgeProjection = useNovelStore((state) => state.refreshKnowledgeProjection)
+  const setPresetCompatSessionPhase = useNovelStore((state) => state.setPresetCompatSessionPhase)
+  const clearPresetCompatSessionStateForSelection = useNovelStore((state) => state.clearPresetCompatSessionStateForSelection)
+  const resetPresetCompatSessionStateForSelection = useNovelStore((state) => state.resetPresetCompatSessionStateForSelection)
   const localCharacters = useNovelStore((state) => state.localCharacters)
   const localCharacterRelations = useNovelStore((state) => state.localCharacterRelations)
   const localWorldEntries = useNovelStore((state) => state.localWorldEntries)
@@ -655,6 +663,7 @@ export function SelectionNovelStudio() {
       presets: state.presets,
       constraints: state.constraints,
       focusMode: state.focusMode,
+      presetCompatSessionState: state.presetCompatSessionState,
     })
   )
 
@@ -1045,6 +1054,12 @@ export function SelectionNovelStudio() {
     htmlToPlainText,
     resetControls: {
       defaultGraphReviewControls: DEFAULT_GRAPH_REVIEW_CONTROLS,
+      resetPresetCompatSessionStateForChapter: (chapter) => {
+        resetPresetCompatSessionStateForSelection(
+          toChapterTimelineSelection(chapter),
+          ['rewrite', 'expand', 'roleplay']
+        )
+      },
       setRoleplayTurns,
       setRoleplayDraft,
       setSelectionText,
@@ -1104,6 +1119,10 @@ export function SelectionNovelStudio() {
   )
 
   const handleTimelineSelection = useCallback((selection: TimelineSelection) => {
+    if (currentChapter) {
+      clearPresetCompatSessionStateForSelection(workspaceSelection ?? toChapterTimelineSelection(currentChapter))
+    }
+
     setWorkspaceSelection(selection)
     setActiveMode(null)
     setToolbarPos(null)
@@ -1117,7 +1136,7 @@ export function SelectionNovelStudio() {
     }
 
     setLeftPanelOpen(false)
-  }, [selectChapter, setActiveMode, setLeftPanelOpen, setToolbarPos, sortedChapters])
+  }, [clearPresetCompatSessionStateForSelection, currentChapter, selectChapter, setActiveMode, setLeftPanelOpen, setToolbarPos, sortedChapters, workspaceSelection])
 
   useEffect(() => {
     if (!backendLoaded || !currentNovelId || !currentChapter) return
@@ -1441,6 +1460,13 @@ export function SelectionNovelStudio() {
   }, [activeMode, toolbarPos])
 
   const closePanel = () => {
+    if (activeMode && currentChapter) {
+      resetPresetCompatSessionStateForSelection(
+        workspaceSelection ?? toChapterTimelineSelection(currentChapter),
+        [toPresetCompatSessionSurfaceId(activeMode)]
+      )
+    }
+
     setActiveMode(null)
     setLockedSelectionText('')
     setWhatIfCreateError('')
@@ -1834,6 +1860,14 @@ export function SelectionNovelStudio() {
   const openActionMode = (mode: WorkspaceActionMode) => {
     const nextSelection = selectionText.trim()
     if (!nextSelection) return
+    if (!currentChapter) return
+
+    setPresetCompatSessionPhase(
+      workspaceSelection ?? toChapterTimelineSelection(currentChapter),
+      toPresetCompatSessionSurfaceId(mode),
+      'new_chat'
+    )
+
     setLockedSelectionText(nextSelection)
     setToolbarPos(null)
     setGenerationContext(null)
@@ -2645,8 +2679,13 @@ export function SelectionNovelStudio() {
   const handleRoleplayTurn = async () => {
     const targetSelection = lockedSelectionText.trim() || selectionText.trim()
     if (!currentChapter || !targetSelection || !roleplayInput.trim()) return
-  const userTurn: WorkspaceRoleplayTurn = { id: uid('rp-user'), role: 'user', content: roleplayInput.trim() }
+    const userTurn: WorkspaceRoleplayTurn = { id: uid('rp-user'), role: 'user', content: roleplayInput.trim() }
     const baseline = roleplayDraft.trim() || chapterText
+    setPresetCompatSessionPhase(
+      workspaceSelection ?? toChapterTimelineSelection(currentChapter),
+      'roleplay',
+      'continue'
+    )
     setRoleplayTurns((current) => [...current, userTurn])
     setRoleplayInput('')
 
@@ -2757,6 +2796,17 @@ export function SelectionNovelStudio() {
 
     setCenterPaneView('body')
     setLeftPanelOpen(false)
+    setPresetCompatSessionPhase(
+      {
+        kind: 'what_if',
+        nodeId: activeWorkspaceSelection.kind === 'what_if' ? activeWorkspaceSelection.nodeId : `what-if:${detail.id}`,
+        sessionId: detail.id,
+        anchorChapterNo: detail.sourceChapterNo,
+      },
+      'rewrite',
+      variant === 'continue' ? 'continue' : 'new_chat',
+      variant !== 'continue'
+    )
     setPendingWhatIfRewriteLaunch({ detail, targetChapterId: sourceChapter.id, variant })
     setCurrentChapterId(sourceChapter.id)
   }
@@ -2820,6 +2870,17 @@ export function SelectionNovelStudio() {
 
     setCenterPaneView('body')
     setLeftPanelOpen(false)
+    setPresetCompatSessionPhase(
+      {
+        kind: 'future_jump',
+        nodeId: activeWorkspaceSelection.kind === 'future_jump' ? activeWorkspaceSelection.nodeId : `future-jump:${context.detail.id}`,
+        runId: context.detail.id,
+        sourceChapterNo: context.detail.sourceChapterNo,
+        targetChapterNo: context.detail.targetChapterNo,
+      },
+      'rewrite',
+      'continue'
+    )
     setPendingFutureJumpRewriteLaunch({
       detail: context.detail,
       targetChapterId: targetChapter.id,
@@ -3905,7 +3966,12 @@ export function SelectionNovelStudio() {
         </div>
       ) : null}
 
-      <PresetCompatLibraryModal open={presetCompatLibraryOpen} onClose={() => setPresetCompatLibraryOpen(false)} />
+      <PresetCompatLibraryModal
+        activeSurfaceId={activeMode ? toPresetCompatSessionSurfaceId(activeMode) : null}
+        activeSelection={activeWorkspaceSelection}
+        open={presetCompatLibraryOpen}
+        onClose={() => setPresetCompatLibraryOpen(false)}
+      />
 
       {futureMapLaunch ? (
         <FutureMapOverlay

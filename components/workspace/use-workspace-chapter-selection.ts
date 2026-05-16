@@ -34,6 +34,7 @@ export type PendingSourceJump = {
 
 type ChapterResetControls = {
   defaultGraphReviewControls: GraphReviewControls
+  resetPresetCompatSessionStateForChapter: (chapter: Chapter) => void
   setRoleplayTurns: Dispatch<SetStateAction<WorkspaceRoleplayTurn[]>>
   setRoleplayDraft: Dispatch<SetStateAction<string>>
   setSelectionText: Dispatch<SetStateAction<string>>
@@ -111,6 +112,7 @@ export function useWorkspaceChapterSelection(options: UseWorkspaceChapterSelecti
 
   const resetContextForChapter = useCallback((chapter: Chapter) => {
     const nextText = htmlToPlainText(chapter.content)
+    resetControls.resetPresetCompatSessionStateForChapter(chapter)
     resetControls.setRoleplayTurns([])
     resetControls.setRoleplayDraft(nextText)
     resetControls.setSelectionText('')

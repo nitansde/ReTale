@@ -1,4 +1,12 @@
-import type { PresetCompatRegexRecord, PresetCompatSurfaceId } from '@/lib/preset-compat/types'
+import type {
+  PresetCompatPromptRuleRuntimeContext,
+  PresetCompatRegexRecord,
+  PresetCompatSurfaceId,
+} from '@/lib/preset-compat/types'
+import {
+  assemblePresetCompatPrompts,
+  type PresetCompatPromptAssemblyMetadata,
+} from '@/lib/preset-compat/prompt-assembly'
 import { runPresetCompatRegexRuntime } from '@/lib/preset-compat/regex-runtime'
 import {
   resolvePresetCompatRuntime,
@@ -7,14 +15,12 @@ import {
 } from '@/lib/preset-compat/resolve-runtime'
 import { loadStoredPresetCompatLibrary } from '@/lib/server/preset-compat-library'
 
-const IMPORTED_PRESET_USER_RULES_HEADING = '## Imported Preset User Rules'
-const IMPORTED_PRESET_SYSTEM_RULES_HEADING = '## Imported Preset System Rules'
-
 export type PresetCompatCreativeRuntime = {
   resolvedRuntime: PresetCompatResolvedRuntime
   systemPrompt: string
   userPrompt: string
   warnings: string[]
+  promptAssembly: PresetCompatPromptAssemblyMetadata
   hasActiveOutputRegex: boolean
   applyOutputRuntime: (value: string) => {
     value: string
@@ -22,15 +28,6 @@ export type PresetCompatCreativeRuntime = {
     appliedRuleIds: string[]
     skippedRuleIds: string[]
   }
-}
-
-function buildImportedRulesSection(heading: string, contents: string[]) {
-  const trimmedContents = contents.map((content) => content.trim()).filter(Boolean)
-  if (!trimmedContents.length) {
-    return ''
-  }
-
-  return [heading, ...trimmedContents].join('\n\n')
 }
 
 function hasActiveAssistantOutputRegex(rules: readonly PresetCompatRegexRecord[]) {
@@ -53,12 +50,14 @@ export function applyPresetCompatCreativeRuntime(params: {
   providerDefaults: PresetCompatRuntimeProviderDefaults
   systemPrompt: string
   userPrompt: string
+  promptRuleRuntimeContext?: PresetCompatPromptRuleRuntimeContext
 }) : PresetCompatCreativeRuntime {
   const library = loadStoredPresetCompatLibrary()
   const resolvedRuntime = resolvePresetCompatRuntime({
     library,
     surfaceId: params.surfaceId,
     providerDefaults: params.providerDefaults,
+    promptRuleRuntimeContext: params.promptRuleRuntimeContext,
   })
 
   const standalone = resolvedRuntime.activePreset
@@ -67,18 +66,34 @@ export function applyPresetCompatCreativeRuntime(params: {
         .filter((regex): regex is PresetCompatRegexRecord => Boolean(regex))
     : []
   const embedded = resolvedRuntime.activePreset?.embeddedRegexes ?? []
-  const systemRuleSection = buildImportedRulesSection(
-    IMPORTED_PRESET_SYSTEM_RULES_HEADING,
-    resolvedRuntime.promptRules.system.map((rule) => rule.content)
-  )
-  const userRuleSection = buildImportedRulesSection(
-    IMPORTED_PRESET_USER_RULES_HEADING,
-    resolvedRuntime.promptRules.user.map((rule) => rule.content)
-  )
-  const systemPrompt = [params.systemPrompt.trim(), systemRuleSection].filter(Boolean).join('\n\n')
-  const userPromptBeforeRegex = [userRuleSection, params.userPrompt.trim()].filter(Boolean).join('\n\n')
+  const assembledPrompts = assemblePresetCompatPrompts({
+    baseSystemPrompt: params.systemPrompt,
+    baseUserPrompt: params.userPrompt,
+    systemTemplateFragments: resolvedRuntime.templateFragments.system.map((fragment) => fragment.text),
+    userTemplateFragments: resolvedRuntime.templateFragments.user.map((fragment) => fragment.text),
+    surfaceContextBlocks: params.promptRuleRuntimeContext?.surfaceContextBlocks?.map((block) => ({
+      id: block.id,
+      content: block.content,
+      abstraction: block.abstraction,
+    })),
+    contextBlockFormats: resolvedRuntime.contextBlockFormats,
+    namesBehavior: resolvedRuntime.namesBehavior,
+    importedPromptRules: resolvedRuntime.promptRules.ordered.map((rule) => {
+      const placement = rule.channel === 'system'
+        ? 'append'
+        : rule.injectionPosition === 'after'
+          ? 'append'
+          : 'prepend'
+
+      return {
+        channel: rule.channel,
+        placement,
+        text: rule.content,
+      }
+    }),
+  })
   const inputRuntime = runPresetCompatRegexRuntime({
-    value: userPromptBeforeRegex,
+    value: assembledPrompts.userPromptBeforeRegex,
     phase: 'user_input',
     standalone,
     embedded,
@@ -87,9 +102,22 @@ export function applyPresetCompatCreativeRuntime(params: {
 
   return {
     resolvedRuntime,
-    systemPrompt,
+    systemPrompt: assembledPrompts.systemPrompt,
     userPrompt: inputRuntime.value,
     warnings: [...resolvedRuntime.warnings, ...inputRuntime.warnings],
+    promptAssembly: {
+      ...assembledPrompts.metadata,
+      user: {
+        ...assembledPrompts.metadata.user,
+        stages: assembledPrompts.metadata.user.stages.map((stage) => stage.stage === 'regex_processing'
+          ? {
+              stage: 'regex_processing',
+              status: 'applied',
+              segmentCount: inputRuntime.appliedRuleIds.length + inputRuntime.skippedRuleIds.length,
+            }
+          : stage),
+      },
+    },
     hasActiveOutputRegex: hasActiveAssistantOutputRegex([...standalone, ...embedded]),
     applyOutputRuntime(value: string) {
       return runPresetCompatRegexRuntime({

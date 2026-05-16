@@ -35,6 +35,8 @@ import type {
   OutlineItem,
   OutlineType,
   PersistedNovelState,
+  PresetCompatSessionPhase,
+  PresetCompatSessionWorkspaceSelection,
   RewriteCandidate,
   RewriteConstraint,
   RewriteHistoryEntry,
@@ -49,7 +51,13 @@ import type {
   WorldEntryType,
   WorkspaceTab,
 } from '@/lib/types'
-import { createEmptyWorkspaceState, normalizeWorkspaceState } from '@/lib/workspace-state'
+import {
+  clearPresetCompatSessionStateForSelection,
+  createEmptyWorkspaceState,
+  normalizeWorkspaceState,
+  resetPresetCompatSessionStateForSelection,
+  setPresetCompatSessionEntry,
+} from '@/lib/workspace-state'
 
 type GenerateRewriteParams = {
   prompt?: string
@@ -216,11 +224,20 @@ function pickNextAvailableChapter(chapters: Chapter[], preferredNovelId?: string
 
 function buildStateAfterNovelDeletion(state: PersistedNovelState, novelId: string) {
   const remainingChapters = state.localChapters.filter((chapter) => chapter.novelId !== novelId)
+  const removedChapters = state.localChapters.filter((chapter) => chapter.novelId === novelId)
   const remainingChapterIds = new Set(remainingChapters.map((chapter) => chapter.id))
   const nextCurrentChapter = state.currentNovelId === novelId
     ? pickNextAvailableChapter(remainingChapters)
     : remainingChapters.find((chapter) => chapter.id === state.currentChapterId) ?? pickNextAvailableChapter(remainingChapters, state.currentNovelId)
   const shouldResetChapterScopedState = !nextCurrentChapter || !remainingChapterIds.has(state.currentChapterId)
+
+  const nextPresetCompatSessionState = removedChapters.reduce(
+    (sessionState, chapter) => clearPresetCompatSessionStateForSelection(sessionState, {
+      kind: 'chapter',
+      chapterId: chapter.id,
+    }),
+    state.presetCompatSessionState
+  )
 
   return {
     currentNovelId: nextCurrentChapter?.novelId ?? '',
@@ -238,6 +255,7 @@ function buildStateAfterNovelDeletion(state: PersistedNovelState, novelId: strin
     trajectories: state.trajectories.filter((item) => remainingChapterIds.has(item.chapterId)),
     selectionText: shouldResetChapterScopedState ? '' : state.selectionText,
     selectedParagraphIndex: shouldResetChapterScopedState ? null : state.selectedParagraphIndex,
+    presetCompatSessionState: nextPresetCompatSessionState,
   }
 }
 
@@ -264,6 +282,14 @@ function buildStateAfterChapterDeletion(state: PersistedNovelState, chapterId: s
     ? pickNextAvailableChapter(remainingChapters, targetChapter.novelId)
     : remainingChapters.find((chapter) => chapter.id === state.currentChapterId) ?? pickNextAvailableChapter(remainingChapters, state.currentNovelId)
 
+  const nextPresetCompatSessionState = Array.from(removedChapterIds).reduce(
+    (sessionState, removedChapterId) => clearPresetCompatSessionStateForSelection(sessionState, {
+      kind: 'chapter',
+      chapterId: removedChapterId,
+    }),
+    state.presetCompatSessionState
+  )
+
   return {
     currentNovelId: nextCurrentChapter?.novelId ?? '',
     currentChapterId: nextCurrentChapter?.id ?? '',
@@ -286,6 +312,7 @@ function buildStateAfterChapterDeletion(state: PersistedNovelState, chapterId: s
     trajectories: state.trajectories.filter((item) => remainingChapterIds.has(item.chapterId)),
     selectionText: currentChapterRemoved ? '' : state.selectionText,
     selectedParagraphIndex: currentChapterRemoved ? null : state.selectedParagraphIndex,
+    presetCompatSessionState: nextPresetCompatSessionState,
   }
 }
 
@@ -335,6 +362,18 @@ type NovelStore = PersistedNovelState & {
   exportWorkspace: () => string
   importWorkspace: (payload: ImportPayload) => void
   resetWorkspace: () => void
+  setPresetCompatSessionPhase: (
+    selection: PresetCompatSessionWorkspaceSelection,
+    surfaceId: PresetCompatSurfaceId,
+    phase: PresetCompatSessionPhase,
+    resetPending?: boolean
+  ) => void
+  clearPresetCompatSessionStateForSelection: (selection: PresetCompatSessionWorkspaceSelection) => void
+  resetPresetCompatSessionStateForSelection: (
+    selection: PresetCompatSessionWorkspaceSelection,
+    surfaceIds: PresetCompatSurfaceId[],
+    phase?: PresetCompatSessionPhase
+  ) => void
   setHydrated: (value: boolean) => void
   loadFromBackend: () => Promise<void>
   saveToBackend: () => Promise<void>
@@ -412,6 +451,7 @@ function serializeState(state: NovelStore): PersistedNovelState {
     presets: state.presets,
     constraints: state.constraints,
     focusMode: state.focusMode,
+    presetCompatSessionState: state.presetCompatSessionState,
     aiSettings: state.aiSettings,
   }
 }
@@ -941,6 +981,26 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     presetCompatLibrary: state.presetCompatLibrary,
     presetCompatLibraryLoading: state.presetCompatLibraryLoading,
     presetCompatLibraryError: state.presetCompatLibraryError,
+  })),
+  setPresetCompatSessionPhase: (selection, surfaceId, phase, resetPending = false) => set((state) => ({
+    presetCompatSessionState: setPresetCompatSessionEntry(
+      state.presetCompatSessionState,
+      selection,
+      surfaceId,
+      phase,
+      resetPending
+    ),
+  })),
+  clearPresetCompatSessionStateForSelection: (selection) => set((state) => ({
+    presetCompatSessionState: clearPresetCompatSessionStateForSelection(state.presetCompatSessionState, selection),
+  })),
+  resetPresetCompatSessionStateForSelection: (selection, surfaceIds, phase = 'new_chat') => set((state) => ({
+    presetCompatSessionState: resetPresetCompatSessionStateForSelection(
+      state.presetCompatSessionState,
+      selection,
+      surfaceIds,
+      phase
+    ),
   })),
   loadPresetCompatLibrary: async () => {
     set({ presetCompatLibraryLoading: true, presetCompatLibraryError: '' })

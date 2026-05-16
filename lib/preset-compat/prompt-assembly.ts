@@ -1,0 +1,317 @@
+export const IMPORTED_PRESET_USER_RULES_HEADING = '## Imported Preset User Rules'
+export const IMPORTED_PRESET_SYSTEM_RULES_HEADING = '## Imported Preset System Rules'
+
+export const PRESET_COMPAT_PROMPT_ASSEMBLY_STAGE_ORDER = [
+  'base_prompt',
+  'template_fragments',
+  'imported_prompt_rules',
+  'metadata_insertions',
+  'regex_processing',
+] as const
+
+export type PresetCompatPromptAssemblyStage = (typeof PRESET_COMPAT_PROMPT_ASSEMBLY_STAGE_ORDER)[number]
+export type PresetCompatPromptAssemblyChannel = 'system' | 'user'
+export type PresetCompatPromptAssemblyPlacement = 'prepend' | 'append'
+
+export type PresetCompatPromptAssemblyContextBlock = {
+  id: string
+  content: string
+  abstraction?: 'world_info' | 'scenario' | 'personality' | 'named_transcript'
+}
+
+export type PresetCompatPromptAssemblyContextBlockFormat = {
+  field: 'wi_format' | 'scenario_format' | 'personality_format'
+  format: string
+  blockIds: string[]
+}
+
+export type PresetCompatPromptAssemblyNamesBehavior = {
+  mode: number
+  kind: 'chat' | 'roleplay'
+  userName: string
+  assistantName: string
+}
+
+export type PresetCompatPromptAssemblyImportedRule = {
+  channel: PresetCompatPromptAssemblyChannel
+  placement: PresetCompatPromptAssemblyPlacement
+  text: string
+}
+
+export type PresetCompatPromptAssemblySegment = {
+  channel: PresetCompatPromptAssemblyChannel
+  stage: Exclude<PresetCompatPromptAssemblyStage, 'regex_processing'>
+  placement: PresetCompatPromptAssemblyPlacement
+  text: string
+}
+
+export type PresetCompatPromptAssemblyStageStatus = {
+  stage: PresetCompatPromptAssemblyStage
+  status: 'applied' | 'empty' | 'pending'
+  segmentCount: number
+}
+
+export type PresetCompatPromptAssemblyMetadata = {
+  stageOrder: readonly PresetCompatPromptAssemblyStage[]
+  system: {
+    segments: PresetCompatPromptAssemblySegment[]
+    stages: PresetCompatPromptAssemblyStageStatus[]
+  }
+  user: {
+    segments: PresetCompatPromptAssemblySegment[]
+    stages: PresetCompatPromptAssemblyStageStatus[]
+  }
+}
+
+export type PresetCompatPromptAssemblyResult = {
+  systemPrompt: string
+  userPromptBeforeRegex: string
+  metadata: PresetCompatPromptAssemblyMetadata
+}
+
+type PresetCompatPromptAssemblyParams = {
+  baseSystemPrompt: string
+  baseUserPrompt: string
+  systemTemplateFragments?: readonly string[]
+  userTemplateFragments?: readonly string[]
+  importedPromptRules?: readonly PresetCompatPromptAssemblyImportedRule[]
+  importedSystemRuleContents?: readonly string[]
+  importedUserRuleContents?: readonly string[]
+  systemMetadataInsertions?: readonly string[]
+  userMetadataInsertions?: readonly string[]
+  surfaceContextBlocks?: readonly PresetCompatPromptAssemblyContextBlock[]
+  contextBlockFormats?: readonly PresetCompatPromptAssemblyContextBlockFormat[]
+  namesBehavior?: PresetCompatPromptAssemblyNamesBehavior | null
+}
+
+function normalizeText(value: string) {
+  return value.trim()
+}
+
+function normalizeTexts(values: readonly string[] | undefined) {
+  return (values ?? []).map((value) => value.trim()).filter(Boolean)
+}
+
+function buildImportedRulesSection(heading: string, contents: readonly string[]) {
+  const trimmedContents = contents.map((content) => content.trim()).filter(Boolean)
+  if (!trimmedContents.length) {
+    return ''
+  }
+
+  return [heading, ...trimmedContents].join('\n\n')
+}
+
+function appendSegment(
+  segments: PresetCompatPromptAssemblySegment[],
+  channel: PresetCompatPromptAssemblyChannel,
+  stage: Exclude<PresetCompatPromptAssemblyStage, 'regex_processing'>,
+  placement: PresetCompatPromptAssemblyPlacement,
+  text: string,
+) {
+  const trimmedText = normalizeText(text)
+  if (!trimmedText) {
+    return
+  }
+
+  segments.push({
+    channel,
+    stage,
+    placement,
+    text: trimmedText,
+  })
+}
+
+function buildChannelStages(segments: readonly PresetCompatPromptAssemblySegment[]) {
+  return PRESET_COMPAT_PROMPT_ASSEMBLY_STAGE_ORDER.map((stage) => {
+    if (stage === 'regex_processing') {
+      return {
+        stage,
+        status: 'pending',
+        segmentCount: 0,
+      } satisfies PresetCompatPromptAssemblyStageStatus
+    }
+
+    const segmentCount = segments.filter((segment) => segment.stage === stage).length
+    return {
+      stage,
+      status: segmentCount > 0 ? 'applied' : 'empty',
+      segmentCount,
+    } satisfies PresetCompatPromptAssemblyStageStatus
+  })
+}
+
+function finalizeSegments(segments: readonly PresetCompatPromptAssemblySegment[]) {
+  const prepended = segments.filter((segment) => segment.placement === 'prepend').map((segment) => segment.text)
+  const appended = segments.filter((segment) => segment.placement === 'append').map((segment) => segment.text)
+  return [...prepended, ...appended].join('\n\n')
+}
+
+function applyFirstReplacement(value: string, search: string, replacement: string) {
+  const index = value.indexOf(search)
+  if (index === -1) {
+    return value
+  }
+
+  return `${value.slice(0, index)}${replacement}${value.slice(index + search.length)}`
+}
+
+function applyFormatTemplate(format: string, content: string) {
+  const replacements = [
+    '{0}',
+    '{{scenario}}',
+    '{{personality}}',
+    '{{wi}}',
+    '{{world}}',
+    '{{world_info}}',
+  ]
+
+  let next = format
+  let replaced = false
+  for (const token of replacements) {
+    if (!next.includes(token)) {
+      continue
+    }
+    next = next.split(token).join(content)
+    replaced = true
+  }
+
+  return replaced ? next.trim() : [format.trim(), content].filter(Boolean).join('\n')
+}
+
+function applyNamesBehaviorToContent(content: string, namesBehavior: PresetCompatPromptAssemblyNamesBehavior | null | undefined) {
+  if (!namesBehavior) {
+    return content
+  }
+
+  return content
+    .replaceAll(/^USER:/gm, `${namesBehavior.userName}:`)
+    .replaceAll(/^ASSISTANT:/gm, `${namesBehavior.assistantName}:`)
+}
+
+function applyUserMetadataTransforms(params: {
+  baseUserPrompt: string
+  surfaceContextBlocks: readonly PresetCompatPromptAssemblyContextBlock[]
+  contextBlockFormats: readonly PresetCompatPromptAssemblyContextBlockFormat[]
+  namesBehavior: PresetCompatPromptAssemblyNamesBehavior | null | undefined
+}) {
+  const blockById = new Map(params.surfaceContextBlocks.map((block) => [block.id, block]))
+  let nextPrompt = params.baseUserPrompt
+
+  for (const directive of params.contextBlockFormats) {
+    for (const blockId of directive.blockIds) {
+      const block = blockById.get(blockId)
+      if (!block) {
+        continue
+      }
+
+      nextPrompt = applyFirstReplacement(nextPrompt, block.content, applyFormatTemplate(directive.format, block.content))
+    }
+  }
+
+  const namedTranscriptBlocks = params.surfaceContextBlocks.filter((block) => block.abstraction === 'named_transcript')
+  for (const block of namedTranscriptBlocks) {
+    const transformed = applyNamesBehaviorToContent(block.content, params.namesBehavior)
+    if (transformed === block.content) {
+      continue
+    }
+    nextPrompt = applyFirstReplacement(nextPrompt, block.content, transformed)
+  }
+
+  return nextPrompt
+}
+
+function appendStructuredImportedRuleSections(
+  segments: PresetCompatPromptAssemblySegment[],
+  channel: PresetCompatPromptAssemblyChannel,
+  heading: string,
+  rules: readonly PresetCompatPromptAssemblyImportedRule[]
+) {
+  for (const placement of ['prepend', 'append'] as const) {
+    const contents = rules
+      .filter((rule) => rule.channel === channel && rule.placement === placement)
+      .map((rule) => rule.text)
+
+    appendSegment(
+      segments,
+      channel,
+      'imported_prompt_rules',
+      placement,
+      buildImportedRulesSection(heading, normalizeTexts(contents))
+    )
+  }
+}
+
+export function assemblePresetCompatPrompts(params: PresetCompatPromptAssemblyParams): PresetCompatPromptAssemblyResult {
+  const systemSegments: PresetCompatPromptAssemblySegment[] = []
+  const userSegments: PresetCompatPromptAssemblySegment[] = []
+
+  const baseUserPrompt = applyUserMetadataTransforms({
+    baseUserPrompt: params.baseUserPrompt,
+    surfaceContextBlocks: params.surfaceContextBlocks ?? [],
+    contextBlockFormats: params.contextBlockFormats ?? [],
+    namesBehavior: params.namesBehavior,
+  })
+
+  appendSegment(systemSegments, 'system', 'base_prompt', 'append', params.baseSystemPrompt)
+  appendSegment(userSegments, 'user', 'base_prompt', 'append', baseUserPrompt)
+
+  for (const fragment of normalizeTexts(params.systemTemplateFragments)) {
+    appendSegment(systemSegments, 'system', 'template_fragments', 'append', fragment)
+  }
+  for (const fragment of normalizeTexts(params.userTemplateFragments)) {
+    appendSegment(userSegments, 'user', 'template_fragments', 'append', fragment)
+  }
+
+  if (params.importedPromptRules && params.importedPromptRules.length > 0) {
+    appendStructuredImportedRuleSections(
+      systemSegments,
+      'system',
+      IMPORTED_PRESET_SYSTEM_RULES_HEADING,
+      params.importedPromptRules
+    )
+    appendStructuredImportedRuleSections(
+      userSegments,
+      'user',
+      IMPORTED_PRESET_USER_RULES_HEADING,
+      params.importedPromptRules
+    )
+  } else {
+    appendSegment(
+      systemSegments,
+      'system',
+      'imported_prompt_rules',
+      'append',
+      buildImportedRulesSection(IMPORTED_PRESET_SYSTEM_RULES_HEADING, normalizeTexts(params.importedSystemRuleContents))
+    )
+    appendSegment(
+      userSegments,
+      'user',
+      'imported_prompt_rules',
+      'prepend',
+      buildImportedRulesSection(IMPORTED_PRESET_USER_RULES_HEADING, normalizeTexts(params.importedUserRuleContents))
+    )
+  }
+
+  for (const insertion of normalizeTexts(params.systemMetadataInsertions)) {
+    appendSegment(systemSegments, 'system', 'metadata_insertions', 'append', insertion)
+  }
+  for (const insertion of normalizeTexts(params.userMetadataInsertions)) {
+    appendSegment(userSegments, 'user', 'metadata_insertions', 'append', insertion)
+  }
+
+  return {
+    systemPrompt: finalizeSegments(systemSegments),
+    userPromptBeforeRegex: finalizeSegments(userSegments),
+    metadata: {
+      stageOrder: PRESET_COMPAT_PROMPT_ASSEMBLY_STAGE_ORDER,
+      system: {
+        segments: systemSegments,
+        stages: buildChannelStages(systemSegments),
+      },
+      user: {
+        segments: userSegments,
+        stages: buildChannelStages(userSegments),
+      },
+    },
+  }
+}

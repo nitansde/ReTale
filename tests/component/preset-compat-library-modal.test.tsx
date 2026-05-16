@@ -3,17 +3,24 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import React from 'react'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PresetCompatLibraryModal } from '@/components/workspace/PresetCompatLibraryModal'
 import { normalizePresetCompatPresetImport, normalizePresetCompatStandaloneRegexImport } from '@/lib/preset-compat/normalize'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
+import { createPresetCompatSessionStateKey } from '@/lib/workspace-state'
 import type {
   PresetCompatLibrary,
   PresetCompatPresetRecord,
   PresetCompatRegexRecord,
 } from '@/lib/preset-compat/types'
+import type { PresetCompatSessionWorkspaceSelection } from '@/lib/types'
 import { useNovelStore } from '@/store/novel-store'
+
+const chapterSelection: PresetCompatSessionWorkspaceSelection = {
+  kind: 'chapter',
+  chapterId: 'chapter-001',
+}
 
 function createPreset(id: string, overrides: Partial<PresetCompatPresetRecord> = {}): PresetCompatPresetRecord {
   return {
@@ -32,7 +39,7 @@ function createPreset(id: string, overrides: Partial<PresetCompatPresetRecord> =
         injectionPosition: 'before',
         injectionDepth: null,
         injectionOrder: 0,
-        injectionTrigger: null,
+        injectionTrigger: [],
         forbidOverrides: false,
         condition: null,
         passthrough: {},
@@ -48,7 +55,7 @@ function createPreset(id: string, overrides: Partial<PresetCompatPresetRecord> =
         injectionPosition: 'after',
         injectionDepth: 2,
         injectionOrder: 2,
-        injectionTrigger: 'manual',
+        injectionTrigger: ['manual'],
         forbidOverrides: true,
         condition: null,
         passthrough: {},
@@ -82,15 +89,58 @@ function createPreset(id: string, overrides: Partial<PresetCompatPresetRecord> =
       },
     ],
     attachedStandaloneRegexIds: [],
-    runtimeSampler: {
-      temperature: 1,
-      topP: 1,
-      topK: null,
-      minP: null,
-      presencePenalty: null,
-      frequencyPenalty: null,
-      repetitionPenalty: null,
-      maxTokens: null,
+      runtimeSampler: {
+        temperature: 1,
+        topP: 1,
+        topK: 40,
+        topA: 0.1,
+        minP: null,
+        presencePenalty: null,
+        frequencyPenalty: null,
+        repetitionPenalty: null,
+        openaiMaxContext: 8192,
+        maxTokens: null,
+        seed: null,
+        candidateCount: null,
+      },
+      promptTemplate: {
+        namesBehavior: null,
+        sendIfEmpty: null,
+        impersonationPrompt: null,
+        newChatPrompt: 'NEW CHAT TEMPLATE',
+        newGroupChatPrompt: null,
+        newExampleChatPrompt: null,
+        continueNudgePrompt: null,
+      wiFormat: null,
+      scenarioFormat: null,
+      personalityFormat: null,
+      groupNudgePrompt: null,
+      assistantPrefill: null,
+      assistantImpersonation: null,
+      continuePostfix: null,
+      legacyMainPrompt: null,
+      legacyNsfwPrompt: null,
+      legacyJailbreakPrompt: null,
+    },
+    transport: {
+      maxContextUnlocked: true,
+      streamOpenAI: false,
+      useSysprompt: null,
+      squashSystemMessages: null,
+      mediaInlining: null,
+      inlineImageQuality: null,
+      continuePrefill: null,
+      functionCalling: null,
+      showThoughts: null,
+      reasoningEffort: null,
+      verbosity: null,
+      enableWebSearch: null,
+      requestImages: null,
+      requestImageAspectRatio: null,
+      requestImageResolution: null,
+    },
+    preservedFields: {
+      biasPresetSelected: null,
     },
     passthrough: {
       root: {
@@ -170,16 +220,54 @@ describe('PresetCompatLibraryModal', () => {
   it('renders warnings, binding selectors, edit toggles, standalone attachment, and export actions', async () => {
     useNovelStore.setState({
       presetCompatLibrary: createLibrary(),
+      presetCompatSessionState: {
+        [createPresetCompatSessionStateKey(chapterSelection, 'rewrite')]: {
+          surfaceId: 'rewrite',
+          phase: 'continue',
+          resetPending: false,
+        },
+        [createPresetCompatSessionStateKey(chapterSelection, 'expand')]: {
+          surfaceId: 'expand',
+          phase: 'continue',
+          resetPending: false,
+        },
+        [createPresetCompatSessionStateKey(chapterSelection, 'continue')]: {
+          surfaceId: 'continue',
+          phase: 'continue',
+          resetPending: false,
+        },
+      },
     })
 
-    render(<PresetCompatLibraryModal open onClose={vi.fn()} />)
+    render(<PresetCompatLibraryModal activeSelection={chapterSelection} activeSurfaceId="rewrite" open onClose={vi.fn()} />)
 
     expect(screen.getByTestId('preset-compat-library-modal')).toBeInTheDocument()
     expect(screen.getByText('全局预设兼容库')).toBeInTheDocument()
     expect(screen.getByText('预设列表')).toBeInTheDocument()
     expect(screen.getByTestId('preset-compat-binding-rewrite')).toBeInTheDocument()
     expect(screen.getByTestId('preset-compat-binding-future_jump_rewrite')).toBeInTheDocument()
-    expect(screen.getByText('Imported field `show_thoughts` is preserved-only.')).toBeInTheDocument()
+    expect(screen.getByText('当前创作界面：Rewrite')).toBeInTheDocument()
+    const rewriteStatusCard = screen.getByTestId('preset-compat-status-surface-rewrite')
+    expect(rewriteStatusCard).toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-session-state-rewrite')).toHaveTextContent('会话阶段：continue · 正常')
+    expect(within(rewriteStatusCard).getByText('Max context：已解锁上限')).toBeInTheDocument()
+    expect(within(rewriteStatusCard).getByText('上下文窗口：8192 · route → contextWindow.maxContextTokens')).toBeInTheDocument()
+    expect(within(rewriteStatusCard).getByText('流式策略：关闭 · route → stream.enabled')).toBeInTheDocument()
+    expect(within(rewriteStatusCard).getAllByText('当前 provider 与界面已按兼容契约应用。').length).toBeGreaterThan(0)
+    expect(within(rewriteStatusCard).getAllByText('这个字段只在另一类 provider 上可直接生效。').length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getByTestId('preset-compat-session-reset-rewrite'))
+    expect(useNovelStore.getState().presetCompatSessionState[createPresetCompatSessionStateKey(chapterSelection, 'rewrite')]).toEqual({
+      surfaceId: 'rewrite',
+      phase: 'new_chat',
+      resetPending: true,
+    })
+    expect(screen.queryByTestId('preset-compat-session-reset-expand')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-session-reset-roleplay')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-session-reset-future_jump_bridge')).not.toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-session-state-rewrite')).toHaveTextContent('会话阶段：new_chat · 待重置')
+    expect(screen.getByTestId('preset-compat-session-state-expand')).toHaveTextContent('会话阶段：continue · 正常')
+    expect(screen.getByTestId('preset-compat-session-state-continue')).toHaveTextContent('会话阶段：continue · 正常')
 
     fireEvent.change(screen.getByTestId('preset-compat-binding-rewrite'), { target: { value: 'preset-1' } })
     expect(useNovelStore.getState().presetCompatLibrary.surfaceBindings.rewrite.presetId).toBe('preset-1')
@@ -250,7 +338,7 @@ describe('PresetCompatLibraryModal', () => {
       }), { status: 200 })
     })
 
-    render(<PresetCompatLibraryModal open onClose={vi.fn()} />)
+    render(<PresetCompatLibraryModal activeSelection={chapterSelection} open onClose={vi.fn()} />)
 
     fireEvent.click(screen.getByTestId('preset-compat-preset-delete-preset-1'))
 
@@ -316,7 +404,7 @@ describe('PresetCompatLibraryModal', () => {
       return new Response(JSON.stringify({ ok: true, library: currentLibrary, importedIds: regexes.map((entry) => entry.id), warnings }), { status: 200 })
     }))
 
-    render(<PresetCompatLibraryModal open onClose={vi.fn()} />)
+    render(<PresetCompatLibraryModal activeSelection={chapterSelection} open onClose={vi.fn()} />)
 
     fireEvent.change(screen.getByTestId('preset-compat-preset-import-input'), {
       target: { files: [presetFile] },

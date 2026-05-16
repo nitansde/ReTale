@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { deserializePresetCompatResponseMetadata } from '@/lib/preset-compat/runtime-integration'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import type { PresetCompatLibrary, PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import type { AISettings } from '@/lib/types'
@@ -124,7 +125,7 @@ function createCreativeLibrary(mode: 'default' | 'stream' = 'default'): PresetCo
           injectionPosition: 'before',
           injectionDepth: null,
           injectionOrder: 1,
-          injectionTrigger: null,
+          injectionTrigger: [],
           forbidOverrides: false,
           condition: null,
           passthrough: {},
@@ -140,7 +141,7 @@ function createCreativeLibrary(mode: 'default' | 'stream' = 'default'): PresetCo
           injectionPosition: 'before',
           injectionDepth: null,
           injectionOrder: 2,
-          injectionTrigger: null,
+          injectionTrigger: [],
           forbidOverrides: false,
           condition: null,
           passthrough: {},
@@ -155,15 +156,57 @@ function createCreativeLibrary(mode: 'default' | 'stream' = 'default'): PresetCo
         temperature: 0.41,
         topP: 0.82,
         topK: 44,
+        topA: null,
         minP: 0.06,
         presencePenalty: 0.33,
         frequencyPenalty: 0.27,
         repetitionPenalty: 1.19,
+        openaiMaxContext: null,
         maxTokens: 2222,
+        seed: 98765,
+        candidateCount: null,
+      },
+      promptTemplate: {
+        namesBehavior: null,
+        sendIfEmpty: null,
+        impersonationPrompt: null,
+        newChatPrompt: null,
+        newGroupChatPrompt: null,
+        newExampleChatPrompt: null,
+        continueNudgePrompt: null,
+        wiFormat: null,
+        scenarioFormat: null,
+        personalityFormat: null,
+        groupNudgePrompt: null,
+        assistantPrefill: null,
+        assistantImpersonation: null,
+        continuePostfix: null,
+        legacyMainPrompt: null,
+        legacyNsfwPrompt: null,
+        legacyJailbreakPrompt: null,
+      },
+      transport: {
+        maxContextUnlocked: null,
+        streamOpenAI: null,
+        useSysprompt: null,
+        squashSystemMessages: null,
+        mediaInlining: null,
+        inlineImageQuality: null,
+        continuePrefill: null,
+        functionCalling: null,
+        showThoughts: null,
+        reasoningEffort: null,
+        verbosity: null,
+        enableWebSearch: null,
+        requestImages: null,
+        requestImageAspectRatio: null,
+        requestImageResolution: null,
+      },
+      preservedFields: {
+        biasPresetSelected: null,
       },
       passthrough: {
         root: {
-          seed: 98765,
         },
       },
       importWarnings: [],
@@ -188,6 +231,67 @@ function createCreativeLibrary(mode: 'default' | 'stream' = 'default'): PresetCo
   return library
 }
 
+function createTemplateSurfaceLibrary(): PresetCompatLibrary {
+  const library = createCreativeLibrary()
+
+  library.presets['continue-preset'] = {
+    ...library.presets['continue-preset'],
+    promptTemplate: {
+      ...library.presets['continue-preset'].promptTemplate,
+      newChatPrompt: 'CONTINUE SHOULD NOT SEE NEW CHAT',
+      continueNudgePrompt: 'CONTINUE TEMPLATE FRAGMENT',
+    },
+  }
+
+  library.presets['roleplay-preset'] = {
+    ...library.presets['roleplay-preset'],
+    promptTemplate: {
+      ...library.presets['roleplay-preset'].promptTemplate,
+      impersonationPrompt: 'ROLEPLAY IMPERSONATION TEMPLATE',
+      newGroupChatPrompt: 'ROLEPLAY NEW GROUP TEMPLATE',
+      groupNudgePrompt: 'ROLEPLAY GROUP NUDGE TEMPLATE',
+    },
+  }
+
+  library.presets['rewrite-preset'] = {
+    ...library.presets['rewrite-preset'],
+    promptTemplate: {
+      ...library.presets['rewrite-preset'].promptTemplate,
+      newExampleChatPrompt: 'REWRITE NEW EXAMPLE TEMPLATE',
+      newChatPrompt: 'REWRITE SHOULD NOT SEE NEW CHAT',
+      wiFormat: '[WI]\n{0}\n[/WI]',
+      scenarioFormat: '[SCENARIO]\n{{scenario}}\n[/SCENARIO]',
+      personalityFormat: '[PERSONALITY]\n{{personality}}\n[/PERSONALITY]',
+      namesBehavior: 1,
+    },
+  }
+
+  return library
+}
+
+function createRouteEffectsLibrary(params: {
+  streamOpenAI?: boolean | null
+  openaiMaxContext?: number | null
+  maxContextUnlocked?: boolean | null
+} = {}): PresetCompatLibrary {
+  const library = createCreativeLibrary()
+
+  library.presets['rewrite-preset'] = {
+    ...library.presets['rewrite-preset'],
+    runtimeSampler: {
+      ...library.presets['rewrite-preset'].runtimeSampler,
+      openaiMaxContext: params.openaiMaxContext ?? null,
+    },
+    transport: {
+      ...library.presets['rewrite-preset'].transport,
+      streamOpenAI: params.streamOpenAI ?? null,
+      maxContextUnlocked: params.maxContextUnlocked ?? null,
+    },
+  }
+
+  return library
+}
+
 function createRequest(operationType: PresetCompatSurfaceId, body: Record<string, unknown>) {
   return new Request('http://localhost/api/rewrite', {
     method: 'POST',
@@ -204,6 +308,28 @@ function createRequest(operationType: PresetCompatSurfaceId, body: Record<string
       ...body,
     }),
   })
+}
+
+function readPresetCompatHeader(response: Response) {
+  const raw = response.headers.get('X-ChatBook-Preset-Compat')
+  expect(raw).toBeTruthy()
+  return JSON.parse(Buffer.from(String(raw), 'base64').toString('utf8')) as {
+    fieldStatuses: Array<{ field: string; status: string; reason: string }>
+    contextWindow: null | {
+      supported: boolean
+      requestedMaxContextTokens: number | null
+      effectiveMaxContextTokens: number | null
+      unlockMaximum: boolean
+      tokenEstimate: number | null
+      trimmedBlockIds: string[]
+    }
+    streamPolicy: null | {
+      supported: boolean
+      requested: boolean | null
+      effective: boolean
+      source: string
+    }
+  }
 }
 
 afterEach(() => {
@@ -240,6 +366,10 @@ describe('preset compat rewrite route runtime', () => {
     const payload = await response.json() as {
       provider: string
       candidates: Array<{ content: string }>
+      presetCompat: {
+        fieldStatuses: Array<{ field: string; status: string; reason: string }>
+        streamPolicy: { effective: boolean; source: string }
+      }
     }
     expect(payload.provider).toBe('openai-compatible')
     expect(payload.candidates.map((candidate) => candidate.content)).toEqual([
@@ -247,9 +377,15 @@ describe('preset compat rewrite route runtime', () => {
       'SECOND CLEAN OUTPUT',
       'THIRD CLEAN OUTPUT',
     ])
+    expect(payload.presetCompat.fieldStatuses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'openai_max_tokens', status: 'applied', reason: 'SUPPORTED_RUNTIME' }),
+      expect.objectContaining({ field: 'seed', status: 'degraded', reason: 'PROVIDER_ONLY' }),
+    ]))
+    expect(payload.presetCompat.streamPolicy).toMatchObject({ effective: false, source: 'explicit_request' })
 
     const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit
     const requestBody = JSON.parse(String(requestInit.body)) as {
+      seed?: number
       top_p?: number
       frequency_penalty?: number
       presence_penalty?: number
@@ -261,6 +397,7 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.frequency_penalty).toBe(0.27)
     expect(requestBody.presence_penalty).toBe(0.33)
     expect(requestBody.max_tokens).toBe(2222)
+    expect(requestBody.seed).toBeUndefined()
     expect(requestBody.messages[1]?.content).toContain('## Imported Preset System Rules')
     expect(requestBody.messages[1]?.content).toContain(`${surfaceId.toUpperCase()} SYSTEM RULE`)
     expect(requestBody.messages[1]?.content.trim().endsWith(`${surfaceId.toUpperCase()} SYSTEM RULE`)).toBe(true)
@@ -295,7 +432,14 @@ describe('preset compat rewrite route runtime', () => {
     const response = await POST(createRequest('rewrite', { stream: true }))
 
     expect(response.status).toBe(200)
+    expect(deserializePresetCompatResponseMetadata(String(response.headers.get('X-ChatBook-Preset-Compat'))).streamPolicy).toMatchObject({
+      supported: true,
+      effective: true,
+      source: 'explicit_request',
+    })
     await expect(response.text()).resolves.toBe('Omega')
+    const presetCompat = readPresetCompatHeader(response)
+    expect(presetCompat.streamPolicy).toMatchObject({ effective: true, source: 'explicit_request' })
 
     const requestInit = fetchMock.mock.calls[1]?.[1] as RequestInit
     const requestBody = JSON.parse(String(requestInit.body)) as {
@@ -315,5 +459,594 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.messages[1]?.content.startsWith('## Imported Preset User Rules')).toBe(true)
     expect(requestBody.messages[1]?.content).toContain('BETA')
     expect(requestBody.messages[1]?.content).not.toContain('ALPHA')
+  })
+
+  it('uses stream precedence explicit override > preset value > provider default and reports it in metadata', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createRouteEffectsLibrary({ streamOpenAI: true }),
+    }))
+
+    const firstStreamBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder()
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"流式结果一"}}]}\n'))
+        controller.enqueue(encoder.encode('data: [DONE]\n'))
+        controller.close()
+      },
+    })
+    const secondStreamBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder()
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"流式结果二"}}]}\n'))
+        controller.enqueue(encoder.encode('data: [DONE]\n'))
+        controller.close()
+      },
+    })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(firstStreamBody, { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT', 'RAW OUTPUT 2', 'RAW OUTPUT 3'] }) } }],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(secondStreamBody, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+
+    const presetDrivenResponse = await POST(createRequest('rewrite', {}))
+    expect(presetDrivenResponse.status).toBe(200)
+    expect(await presetDrivenResponse.text()).toBe('流式结果一')
+    expect(deserializePresetCompatResponseMetadata(String(presetDrivenResponse.headers.get('X-ChatBook-Preset-Compat'))).streamPolicy).toMatchObject({
+      supported: true,
+      requested: true,
+      effective: true,
+      source: 'preset',
+    })
+
+    const explicitOffResponse = await POST(createRequest('rewrite', { stream: false }))
+    expect(explicitOffResponse.status).toBe(200)
+    const explicitOffPayload = await explicitOffResponse.json() as {
+      presetCompat: {
+        streamPolicy: { source: string; effective: boolean; requested: boolean | null }
+      }
+    }
+    expect(explicitOffPayload.presetCompat.streamPolicy).toMatchObject({
+      source: 'explicit_request',
+      effective: false,
+      requested: true,
+    })
+
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createRouteEffectsLibrary({ streamOpenAI: false }),
+    }))
+    vi.resetModules()
+    const { POST: POSTWithDisabledPreset } = await import('@/app/api/rewrite/route')
+    const explicitOnResponse = await POSTWithDisabledPreset(createRequest('rewrite', { stream: true }))
+    expect(explicitOnResponse.status).toBe(200)
+    expect(await explicitOnResponse.text()).toBe('流式结果二')
+    expect(deserializePresetCompatResponseMetadata(String(explicitOnResponse.headers.get('X-ChatBook-Preset-Compat'))).streamPolicy).toMatchObject({
+      supported: true,
+      requested: false,
+      effective: true,
+      source: 'explicit_request',
+    })
+
+    const firstRequestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as { stream?: boolean }
+    const secondRequestBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as { stream?: boolean; response_format?: unknown }
+    const thirdRequestBody = JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body)) as { stream?: boolean }
+    expect(firstRequestBody.stream).toBe(true)
+    expect(secondRequestBody.stream).toBeUndefined()
+    expect(secondRequestBody.response_format).toEqual({ type: 'json_object' })
+    expect(thirdRequestBody.stream).toBe(true)
+  })
+
+  it('trims context blocks deterministically from lowest-priority tails when openai_max_context is applied', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createRouteEffectsLibrary({
+        openaiMaxContext: 8,
+        maxContextUnlocked: false,
+      }),
+    }))
+    vi.doMock('@/lib/server/knowledge-store', () => ({
+      estimateTokenCount: (text: string) => text.trim().split(/\s+/).filter(Boolean).length,
+    }))
+    vi.doMock('@/lib/server/context-builder', () => ({
+      buildGenerationContext: async () => ({
+        novelId: 'novel-budget',
+        branchId: 'novel-budget:main',
+        chapterId: 'chapter-budget',
+        chapterNo: 3,
+        selectedLineStart: 1,
+        selectedLineEnd: 2,
+        warnings: [],
+        promptBlocks: [
+          { id: 'highest-block', label: '最高优先级', enabled: true, priority: 'highest', content: 'H1 H2 H3 H4' },
+          { id: 'high-block', label: '高优先级', enabled: true, priority: 'high', content: 'A1 A2 A3 A4' },
+          { id: 'medium-block', label: '中优先级', enabled: true, priority: 'medium', content: 'M1 M2 M3 M4' },
+        ],
+        assembledContext: 'unused',
+        graphContext: { nodes: [], edges: [], seedEntities: [], contextText: '', warnings: [] },
+        lanceEvidence: [],
+        tokenEstimate: 12,
+      }),
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT', 'RAW OUTPUT 2', 'RAW OUTPUT 3'] }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', {
+      stream: false,
+      novelId: 'novel-budget',
+      chapterId: 'chapter-budget',
+    }))
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as {
+      presetCompat: {
+        contextWindow: {
+          supported: boolean
+          requestedMaxContextTokens: number | null
+          effectiveMaxContextTokens: number | null
+          tokenEstimate: number | null
+          trimmedBlockIds: string[]
+        } | null
+        fieldStatuses: Array<{ field: string; status: string; reason: string }>
+      }
+    }
+    expect(payload.presetCompat.contextWindow).toMatchObject({
+      supported: true,
+      requestedMaxContextTokens: 8,
+      effectiveMaxContextTokens: 8,
+      tokenEstimate: 8,
+      trimmedBlockIds: ['medium-block'],
+    })
+    expect(payload.presetCompat.fieldStatuses.find((status) => status.field === 'openai_max_context')).toMatchObject({
+      status: 'applied',
+      reason: 'SUPPORTED_RUNTIME',
+    })
+    expect(payload.presetCompat.fieldStatuses.find((status) => status.field === 'max_context_unlocked')).toMatchObject({
+      status: 'applied',
+      reason: 'SUPPORTED_RUNTIME',
+    })
+
+    const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    expect(requestBody.messages[2]?.content).toContain('H1 H2 H3 H4')
+    expect(requestBody.messages[2]?.content).toContain('A1 A2 A3 A4')
+    expect(requestBody.messages[2]?.content).not.toContain('M1 M2 M3 M4')
+  })
+
+  it('falls back invalid operation types to expand and keeps status surfaces deterministic', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createCreativeLibrary(),
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT', 'RAW OUTPUT 2', 'RAW OUTPUT 3'] }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', {
+      operationType: 'totally-unknown-mode',
+      stream: false,
+    }))
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as {
+      presetCompat: { fieldStatuses: Array<{ surface: string }> }
+    }
+    expect(payload.presetCompat.fieldStatuses.every((status) => status.surface === 'expand')).toBe(true)
+
+    const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    expect(requestBody.messages[1]?.content).toContain('EXPAND SYSTEM RULE')
+    expect(requestBody.messages[2]?.content).toContain('EXPAND USER RULE')
+  })
+
+  it('uses imported stream_openai when the request does not override streaming', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('ollama'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => {
+        const library = createCreativeLibrary('stream')
+        library.presets['rewrite-preset'] = {
+          ...library.presets['rewrite-preset'],
+          transport: {
+            ...library.presets['rewrite-preset'].transport,
+            streamOpenAI: true,
+          },
+        }
+        return library
+      },
+    }))
+
+    const streamBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder()
+        controller.enqueue(encoder.encode('{"message":{"content":"Alpha"},"done":false}\n'))
+        controller.enqueue(encoder.encode('{"message":{"content":"Beta"},"done":true}\n'))
+        controller.close()
+      },
+    })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ models: [{ model: 'ollama-model' }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(streamBody, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', {}))
+
+    expect(response.status).toBe(200)
+    await expect(response.text()).resolves.toBe('Omega')
+    expect(readPresetCompatHeader(response).streamPolicy).toMatchObject({
+      effective: true,
+      requested: true,
+      source: 'preset',
+    })
+  })
+
+  it('trims context blocks to the configured max-context budget and reports the effective budget', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => {
+        const library = createCreativeLibrary()
+        library.presets['rewrite-preset'] = {
+          ...library.presets['rewrite-preset'],
+          runtimeSampler: {
+            ...library.presets['rewrite-preset'].runtimeSampler,
+            openaiMaxContext: 20,
+          },
+          transport: {
+            ...library.presets['rewrite-preset'].transport,
+            maxContextUnlocked: true,
+          },
+        }
+        return library
+      },
+    }))
+    vi.doMock('@/lib/server/knowledge-store', () => ({
+      estimateTokenCount: (text: string) => text.trim().split(/\s+/).filter(Boolean).length,
+    }))
+    vi.doMock('@/lib/server/context-builder', () => ({
+      buildGenerationContext: async () => ({
+        novelId: 'novel-1',
+        branchId: 'novel-1:main',
+        chapterId: 'chapter-1',
+        chapterNo: 12,
+        selectedLineStart: 4,
+        selectedLineEnd: 5,
+        warnings: [],
+        promptBlocks: [
+          { id: 'current-summary', label: '当前章节摘要', enabled: true, priority: 'high', content: 'summary keep keep keep keep' },
+          { id: 'worldbuilding', label: '相关设定', enabled: true, priority: 'medium', content: 'world trim trim trim trim trim trim trim trim trim trim trim trim trim trim trim trim trim trim' },
+        ],
+        assembledContext: '',
+        graphContext: { nodes: [], edges: [], seedEntities: [], contextText: '', warnings: [] },
+        lanceEvidence: [],
+        tokenEstimate: 0,
+      }),
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT'] }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', {
+      stream: false,
+      novelId: 'novel-1',
+      chapterId: 'chapter-1',
+    }))
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as {
+      presetCompat: {
+        contextWindow: {
+          supported: boolean
+          requestedMaxContextTokens: number
+          effectiveMaxContextTokens: number
+          unlockMaximum: boolean
+          trimmedBlockIds: string[]
+        }
+        fieldStatuses: Array<{ field: string; status: string; reason: string }>
+      }
+    }
+    const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+
+    expect(payload.presetCompat.contextWindow).toMatchObject({
+      supported: true,
+      requestedMaxContextTokens: 20,
+      effectiveMaxContextTokens: 20,
+      unlockMaximum: true,
+      trimmedBlockIds: ['worldbuilding'],
+    })
+    expect(payload.presetCompat.fieldStatuses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'openai_max_context', status: 'applied', reason: 'SUPPORTED_RUNTIME' }),
+      expect.objectContaining({ field: 'max_context_unlocked', status: 'applied', reason: 'SUPPORTED_RUNTIME' }),
+    ]))
+    expect(requestBody.messages[2]?.content).toContain('summary keep keep keep keep')
+    expect(requestBody.messages[2]?.content).not.toContain('world trim trim trim')
+  })
+
+  it('degrades formatting statuses for context blocks removed by max-context trimming', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => {
+        const library = createTemplateSurfaceLibrary()
+        library.presets['rewrite-preset'] = {
+          ...library.presets['rewrite-preset'],
+          runtimeSampler: {
+            ...library.presets['rewrite-preset'].runtimeSampler,
+            openaiMaxContext: 8,
+          },
+          transport: {
+            ...library.presets['rewrite-preset'].transport,
+            maxContextUnlocked: true,
+          },
+        }
+        return library
+      },
+    }))
+    vi.doMock('@/lib/server/knowledge-store', () => ({
+      estimateTokenCount: (text: string) => text.trim().split(/\s+/).filter(Boolean).length,
+    }))
+    vi.doMock('@/lib/server/context-builder', () => ({
+      buildGenerationContext: async () => ({
+        novelId: 'novel-trim-format',
+        branchId: 'novel-trim-format:main',
+        chapterId: 'chapter-trim-format',
+        chapterNo: 8,
+        selectedLineStart: 2,
+        selectedLineEnd: 3,
+        warnings: [],
+        promptBlocks: [
+          { id: 'current-summary', label: '当前章节摘要', enabled: true, priority: 'high', content: 'summary keep keep keep keep' },
+          { id: 'worldbuilding', label: '相关设定', enabled: true, priority: 'medium', content: 'world trim trim trim trim trim trim trim trim trim trim trim trim trim trim trim trim trim trim' },
+        ],
+        assembledContext: '',
+        graphContext: { nodes: [], edges: [], seedEntities: [], contextText: '', warnings: [] },
+        lanceEvidence: [],
+        tokenEstimate: 0,
+      }),
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT'] }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', {
+      stream: false,
+      novelId: 'novel-trim-format',
+      chapterId: 'chapter-trim-format',
+    }))
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as {
+      presetCompat: {
+        fieldStatuses: Array<{ field: string; status: string; reason: string }>
+      }
+    }
+    const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+
+    expect(requestBody.messages[2]?.content).toContain('summary keep keep keep keep')
+    expect(requestBody.messages[2]?.content).not.toContain('world trim trim trim')
+    expect(requestBody.messages[2]?.content).not.toContain('[WI]')
+    expect(payload.presetCompat.fieldStatuses).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'wi_format',
+        status: 'degraded',
+        reason: 'WORLD_INFO_CONTEXT_REQUIRED',
+      }),
+    ]))
+  })
+
+  it('injects matching prompt-template fragments on continue, roleplay-group, and example-chat surfaces', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createTemplateSurfaceLibrary(),
+    }))
+
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              candidates: ['RAW OUTPUT'],
+            }),
+          },
+        },
+      ],
+    }), { status: 200 })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+
+    await POST(createRequest('continue', {
+      stream: false,
+      presetCompatRuntimeContext: {
+        sessionPhase: 'continue',
+      },
+    }))
+
+    await POST(createRequest('roleplay', {
+      stream: false,
+      presetCompatRuntimeContext: {
+        sessionPhase: 'new_group_chat',
+        hasGroupContext: true,
+        hasImpersonationContext: true,
+      },
+    }))
+
+    await POST(createRequest('rewrite', {
+      stream: false,
+      presetCompatRuntimeContext: {
+        sessionPhase: 'new_example_chat',
+        hasExampleContext: true,
+      },
+    }))
+
+    const continueBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    expect(continueBody.messages[1]?.content).toContain('CONTINUE TEMPLATE FRAGMENT')
+    expect(continueBody.messages[1]?.content).not.toContain('CONTINUE SHOULD NOT SEE NEW CHAT')
+
+    const roleplayBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    expect(roleplayBody.messages[1]?.content).toContain('ROLEPLAY NEW GROUP TEMPLATE')
+    expect(roleplayBody.messages[1]?.content).toContain('ROLEPLAY GROUP NUDGE TEMPLATE')
+    expect(roleplayBody.messages[1]?.content).toContain('ROLEPLAY IMPERSONATION TEMPLATE')
+
+    const exampleBody = JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    expect(exampleBody.messages[1]?.content).toContain('REWRITE NEW EXAMPLE TEMPLATE')
+    expect(exampleBody.messages[1]?.content).not.toContain('REWRITE SHOULD NOT SEE NEW CHAT')
+  })
+
+  it('wraps only matching context blocks for formatting fields and safely degrades names behavior without transcript names', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createTemplateSurfaceLibrary(),
+    }))
+    vi.doMock('@/lib/server/context-builder', () => ({
+      buildGenerationContext: async () => ({
+        novelId: 'novel-1',
+        branchId: 'novel-1:main',
+        chapterId: 'chapter-1',
+        chapterNo: 12,
+        selectedLineStart: 4,
+        selectedLineEnd: 5,
+        warnings: [],
+        promptBlocks: [
+          { id: 'current-summary', label: '当前章节摘要', enabled: true, priority: 'high', content: '# 当前章节摘要\n雨夜里的对峙一触即发。' },
+          { id: 'characters', label: '相关人物', enabled: true, priority: 'high', content: '# 相关人物\n- 林澈｜状态：克制｜话少但护短' },
+          { id: 'worldbuilding', label: '相关设定', enabled: true, priority: 'medium', content: '# 相关世界设定\n- 月海｜location｜银蓝潮汐会吞没码头' },
+          { id: 'output-constraints', label: '输出要求', enabled: true, priority: 'high', content: '# 输出要求\n- 只输出正文。' },
+        ],
+        assembledContext: [
+          '# 当前章节摘要\n雨夜里的对峙一触即发。',
+          '# 相关人物\n- 林澈｜状态：克制｜话少但护短',
+          '# 相关世界设定\n- 月海｜location｜银蓝潮汐会吞没码头',
+          '# 输出要求\n- 只输出正文。',
+        ].join('\n\n'),
+        graphContext: { nodes: [], edges: [], seedEntities: [], contextText: '', warnings: [] },
+        lanceEvidence: [],
+        tokenEstimate: 0,
+      }),
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT'] }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', {
+      stream: false,
+      novelId: 'novel-1',
+      chapterId: 'chapter-1',
+    }))
+
+    expect(response.status).toBe(200)
+    const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+
+    expect(requestBody.messages[2]?.content.match(/\[WI\]/g)?.length ?? 0).toBe(1)
+    expect(requestBody.messages[2]?.content.match(/\[SCENARIO\]/g)?.length ?? 0).toBe(1)
+    expect(requestBody.messages[2]?.content.match(/\[PERSONALITY\]/g)?.length ?? 0).toBe(1)
+    expect(requestBody.messages[2]?.content).toContain('[WI]\n# 相关世界设定\n- 月海｜location｜银蓝潮汐会吞没码头\n[/WI]')
+    expect(requestBody.messages[2]?.content).toContain('[SCENARIO]\n# 当前章节摘要\n雨夜里的对峙一触即发。\n[/SCENARIO]')
+    expect(requestBody.messages[2]?.content).toContain('[PERSONALITY]\n# 相关人物\n- 林澈｜状态：克制｜话少但护短\n[/PERSONALITY]')
+    expect(requestBody.messages[2]?.content).toContain('# 输出要求\n- 只输出正文。')
+    expect(requestBody.messages[2]?.content).not.toContain('USER:')
+  })
+
+  it('ignores disabled matching blocks for formatting so omitted blocks are not wrapped', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createTemplateSurfaceLibrary(),
+    }))
+    vi.doMock('@/lib/server/context-builder', () => ({
+      buildGenerationContext: async () => ({
+        novelId: 'novel-2',
+        branchId: 'novel-2:main',
+        chapterId: 'chapter-2',
+        chapterNo: 9,
+        selectedLineStart: 1,
+        selectedLineEnd: 2,
+        warnings: [],
+        promptBlocks: [
+          { id: 'current-summary', label: '当前章节摘要', enabled: true, priority: 'high', content: '# 当前章节摘要\n雨夜里的对峙一触即发。' },
+          { id: 'characters', label: '相关人物', enabled: true, priority: 'high', content: '# 相关人物\n- 林澈｜状态：克制｜话少但护短' },
+          { id: 'worldbuilding', label: '相关设定', enabled: true, priority: 'medium', content: '# 相关世界设定\n- 月海｜location｜银蓝潮汐会吞没码头' },
+        ],
+        assembledContext: [
+          '# 当前章节摘要\n雨夜里的对峙一触即发。',
+          '# 相关人物\n- 林澈｜状态：克制｜话少但护短',
+          '# 相关世界设定\n- 月海｜location｜银蓝潮汐会吞没码头',
+        ].join('\n\n'),
+        graphContext: { nodes: [], edges: [], seedEntities: [], contextText: '', warnings: [] },
+        lanceEvidence: [],
+        tokenEstimate: 0,
+      }),
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT'] }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', {
+      stream: false,
+      novelId: 'novel-2',
+      chapterId: 'chapter-2',
+      disabledBlockIds: ['worldbuilding'],
+    }))
+
+    expect(response.status).toBe(200)
+    const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+
+    expect(requestBody.messages[2]?.content).not.toContain('[WI]')
+    expect(requestBody.messages[2]?.content).not.toContain('# 相关世界设定')
+    expect(requestBody.messages[2]?.content).toContain('[SCENARIO]\n# 当前章节摘要\n雨夜里的对峙一触即发。\n[/SCENARIO]')
+    expect(requestBody.messages[2]?.content).toContain('[PERSONALITY]\n# 相关人物\n- 林澈｜状态：克制｜话少但护短\n[/PERSONALITY]')
   })
 })

@@ -51,6 +51,13 @@ function buildWorkspacePayload() {
     presets: [],
     constraints: [],
     focusMode: false,
+    presetCompatSessionState: {
+      'chapter:chapter-001::rewrite': {
+        surfaceId: 'rewrite',
+        phase: 'continue',
+        resetPending: false,
+      },
+    },
     aiSettings: {
       rewrite: {
         provider: 'openai-compatible',
@@ -72,7 +79,7 @@ function buildWorkspacePayload() {
   }
 }
 
-test('workspace preset-compat library modal imports fixture JSON, edits bindings, and exports JSON', async ({ page }) => {
+test('workspace preset-compat library modal imports fixture JSON, shows statuses, resets context state, edits bindings, and exports JSON', async ({ page }) => {
   fs.mkdirSync(evidenceDirectory, { recursive: true })
   const fixtureText = fs.readFileSync(fixturePath, 'utf8')
   let library = createDefaultPresetCompatLibrary()
@@ -193,7 +200,17 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
   const firstRuleId = importedPreset.promptRules[0]?.id
   expect(firstRuleId).toBeTruthy()
 
-  await expect(page.getByText(/Sampler field `top_a` is preserved/)).toBeVisible()
+  await expect(page.getByTestId('preset-compat-status-surface-rewrite')).toBeVisible()
+  const rewriteStatusCard = page.getByTestId('preset-compat-status-surface-rewrite')
+  await expect(rewriteStatusCard.getByText('字段', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('preset-compat-session-state-rewrite')).toHaveText(/会话阶段：continue · 正常/)
+  await expect(rewriteStatusCard.getByText(/上下文窗口：.*route → contextWindow.maxContextTokens/)).toBeVisible()
+  await expect(rewriteStatusCard.getByText(/流式策略：开启 · route → stream.enabled/)).toBeVisible()
+  await expect(page.getByTestId('preset-compat-session-reset-rewrite')).toBeVisible()
+  await expect(page.getByText('不提供重置').first()).toBeVisible()
+
+  await page.getByTestId('preset-compat-session-reset-rewrite').click()
+  await expect(page.getByTestId('preset-compat-session-state-rewrite')).toHaveText(/会话阶段：new_chat · 待重置/)
 
   await page.getByTestId('preset-compat-regex-import-input').setInputFiles({
     name: 'resets-example-regex.json',

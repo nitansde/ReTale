@@ -1,8 +1,144 @@
 import { defaultConstraints, defaultPresets } from '@/lib/data'
+import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import { createDefaultAISettings, normalizeAISettings } from '@/lib/ai-settings'
 import { normalizeCharacterRoleCardProfile } from '@/lib/story-knowledge'
-import type { PersistedNovelState } from '@/lib/types'
+import type {
+  PersistedNovelState,
+  PresetCompatSessionEntry,
+  PresetCompatSessionPhase,
+  PresetCompatSessionState,
+  PresetCompatSessionWorkspaceSelection,
+} from '@/lib/types'
 import { normalizeLegacySingleParagraphHtml } from '@/lib/utils'
+
+const PRESET_COMPAT_SESSION_PHASE_SET = new Set<PresetCompatSessionPhase>([
+  'new_chat',
+  'new_group_chat',
+  'new_example_chat',
+  'continue',
+])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function createEmptyPresetCompatSessionState(): PresetCompatSessionState {
+  return {}
+}
+
+function normalizePresetCompatSessionEntry(
+  entryKey: string,
+  input: unknown
+): PresetCompatSessionEntry | null {
+  if (!isRecord(input)) return null
+
+  const phase = input.phase
+  const surfaceId = input.surfaceId
+  const resetPending = input.resetPending
+
+  if (
+    typeof surfaceId !== 'string'
+    || typeof phase !== 'string'
+    || !PRESET_COMPAT_SESSION_PHASE_SET.has(phase as PresetCompatSessionPhase)
+    || typeof resetPending !== 'boolean'
+  ) {
+    return null
+  }
+
+  return {
+    surfaceId: surfaceId as PresetCompatSurfaceId,
+    phase: phase as PresetCompatSessionPhase,
+    resetPending,
+  }
+}
+
+export function normalizePresetCompatSessionState(input: unknown): PresetCompatSessionState {
+  if (!isRecord(input)) return createEmptyPresetCompatSessionState()
+
+  const normalizedEntries = Object.entries(input)
+    .map(([entryKey, value]) => {
+      const normalizedValue = normalizePresetCompatSessionEntry(entryKey, value)
+      return normalizedValue ? [entryKey, normalizedValue] as const : null
+    })
+    .filter((entry): entry is readonly [string, PresetCompatSessionEntry] => entry !== null)
+
+  return Object.fromEntries(normalizedEntries)
+}
+
+function encodePresetCompatSessionKeyPart(value: string | number) {
+  return encodeURIComponent(String(value))
+}
+
+export function createPresetCompatSessionSelectionKey(selection: PresetCompatSessionWorkspaceSelection) {
+  if (selection.kind === 'chapter') {
+    return `chapter:${encodePresetCompatSessionKeyPart(selection.chapterId)}`
+  }
+
+  if (selection.kind === 'what_if') {
+    return [
+      'what_if',
+      encodePresetCompatSessionKeyPart(selection.nodeId),
+      encodePresetCompatSessionKeyPart(selection.sessionId),
+      selection.anchorChapterNo,
+    ].join(':')
+  }
+
+  return [
+    'future_jump',
+    encodePresetCompatSessionKeyPart(selection.nodeId),
+    encodePresetCompatSessionKeyPart(selection.runId),
+    selection.sourceChapterNo,
+    selection.targetChapterNo,
+  ].join(':')
+}
+
+export function createPresetCompatSessionStateKey(
+  selection: PresetCompatSessionWorkspaceSelection,
+  surfaceId: PresetCompatSurfaceId
+) {
+  return `${createPresetCompatSessionSelectionKey(selection)}::${surfaceId}`
+}
+
+export function setPresetCompatSessionEntry(
+  state: PresetCompatSessionState,
+  selection: PresetCompatSessionWorkspaceSelection,
+  surfaceId: PresetCompatSurfaceId,
+  phase: PresetCompatSessionPhase,
+  resetPending = false
+): PresetCompatSessionState {
+  const entryKey = createPresetCompatSessionStateKey(selection, surfaceId)
+
+  return {
+    ...state,
+    [entryKey]: {
+      surfaceId,
+      phase,
+      resetPending,
+    },
+  }
+}
+
+export function clearPresetCompatSessionStateForSelection(
+  state: PresetCompatSessionState,
+  selection: PresetCompatSessionWorkspaceSelection
+): PresetCompatSessionState {
+  const selectionPrefix = `${createPresetCompatSessionSelectionKey(selection)}::`
+  return Object.fromEntries(
+    Object.entries(state).filter(([entryKey]) => !entryKey.startsWith(selectionPrefix))
+  )
+}
+
+export function resetPresetCompatSessionStateForSelection(
+  state: PresetCompatSessionState,
+  selection: PresetCompatSessionWorkspaceSelection,
+  surfaceIds: PresetCompatSurfaceId[],
+  phase: PresetCompatSessionPhase = 'new_chat'
+): PresetCompatSessionState {
+  return surfaceIds.reduce(
+    (nextState, surfaceId) => setPresetCompatSessionEntry(nextState, selection, surfaceId, phase, true),
+    state
+  )
+}
 
 function pickDeterministicChapter(
   chapters: PersistedNovelState['localChapters'],
@@ -87,6 +223,7 @@ export function createEmptyWorkspaceState(): PersistedNovelState {
     presets: cloneDefaultPresets(),
     constraints: cloneDefaultConstraints(),
     focusMode: false,
+    presetCompatSessionState: createEmptyPresetCompatSessionState(),
     aiSettings: createDefaultAISettings(),
   }
 }
@@ -121,6 +258,7 @@ export function normalizeWorkspaceState(input?: Partial<PersistedNovelState> | n
     trajectories: input.trajectories ?? base.trajectories,
     presets: input.presets ?? base.presets,
     constraints: input.constraints ?? base.constraints,
+    presetCompatSessionState: normalizePresetCompatSessionState(input.presetCompatSessionState),
     aiSettings: normalizeAISettings(input.aiSettings ?? input),
   }
 

@@ -36,6 +36,7 @@ function buildChapter(overrides: Partial<Chapter>): Chapter {
 function createResetControls() {
   return {
     defaultGraphReviewControls: DEFAULT_GRAPH_REVIEW_CONTROLS,
+    resetPresetCompatSessionStateForChapter: vi.fn<(chapter: Chapter) => void>(),
     setRoleplayTurns: vi.fn<(value: WorkspaceRoleplayTurn[]) => void>(),
     setRoleplayDraft: vi.fn<(value: string) => void>(),
     setSelectionText: vi.fn<(value: string) => void>(),
@@ -88,6 +89,7 @@ describe('useWorkspaceChapterSelection', () => {
     expect(setCurrentChapterId).toHaveBeenCalledWith(chapterTwo.id)
     expect(setLeftPanelOpen).toHaveBeenCalledWith(false)
     expect(htmlToPlainText).toHaveBeenCalledWith(chapterTwo.content)
+    expect(resetControls.resetPresetCompatSessionStateForChapter).toHaveBeenCalledWith(chapterTwo)
     expect(resetControls.setRoleplayTurns).toHaveBeenCalledWith([])
     expect(resetControls.setRoleplayDraft).toHaveBeenCalledWith('Beta body')
     expect(resetControls.setSelectionText).toHaveBeenCalledWith('')
@@ -147,6 +149,7 @@ describe('useWorkspaceChapterSelection', () => {
     expect(setCenterPaneView).toHaveBeenCalledWith('body')
     expect(setCurrentChapterId).toHaveBeenCalledWith(chapterTwo.id)
     expect(setLeftPanelOpen).toHaveBeenCalledWith(false)
+    expect(resetControls.resetPresetCompatSessionStateForChapter).toHaveBeenCalledWith(chapterTwo)
     expect(resetControls.setSelectionText).toHaveBeenCalledWith('')
     expect(resetControls.setLockedSelectionText).toHaveBeenCalledWith('')
     expect(resetControls.setToolbarPos).toHaveBeenCalledWith(null)

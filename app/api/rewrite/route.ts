@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server'
 import { buildGenerationContext } from '@/lib/server/context-builder'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { applyPresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runtime'
+import {
+  resolveCreativeRoutePresetCompatMetadata,
+  serializePresetCompatResponseMetadata,
+} from '@/lib/preset-compat/runtime-integration'
 import { transformBufferedTextStream } from '@/lib/preset-compat/stream-buffer'
 import {
   buildFallbackRewriteStream,
@@ -9,6 +13,81 @@ import {
   streamRewriteWithOpenAICompatible,
 } from '@/lib/server/openai-compatible'
 import { generateRewriteWithOllama, streamRewriteWithOllama } from '@/lib/server/ollama-local'
+import type { PresetCompatPromptRuleRuntimeContext, PresetCompatRuntimeContextBlock } from '@/lib/preset-compat/types'
+import type { GenerationContextBlock } from '@/lib/server/context-builder'
+
+function mapSurfaceContextBlocks(promptBlocks: readonly GenerationContextBlock[] | null): PresetCompatRuntimeContextBlock[] {
+  if (!promptBlocks) {
+    return []
+  }
+
+  return promptBlocks.flatMap((block) => {
+    const abstraction = block.id === 'worldbuilding'
+      ? 'world_info'
+      : block.id === 'characters'
+        ? 'personality'
+        : block.id === 'current-summary'
+          || block.id === 'recent-summaries'
+          || block.id === 'chapter-state'
+          || block.id === 'authored-branch-context'
+          || block.id === 'graph-context'
+          || block.id === 'facts'
+          || block.id === 'events'
+            ? 'scenario'
+            : null
+
+    if (!abstraction) {
+      return []
+    }
+
+    return [{
+      id: block.id,
+      label: block.label,
+      content: block.content,
+      abstraction,
+    } satisfies PresetCompatRuntimeContextBlock]
+  })
+}
+
+function normalizePresetCompatRuntimeContext(
+  body: Record<string, unknown>,
+  operationType: string,
+  promptBlocks: readonly GenerationContextBlock[] | null
+): PresetCompatPromptRuleRuntimeContext {
+  const rawContext = body.presetCompatRuntimeContext
+  const runtimeContext = rawContext && typeof rawContext === 'object' && !Array.isArray(rawContext)
+    ? rawContext as Record<string, unknown>
+    : {}
+  const sessionPhase = typeof runtimeContext.sessionPhase === 'string'
+    ? runtimeContext.sessionPhase
+    : operationType === 'continue'
+      ? 'continue'
+      : null
+  const namedTranscript = runtimeContext.namedTranscript && typeof runtimeContext.namedTranscript === 'object' && !Array.isArray(runtimeContext.namedTranscript)
+    ? runtimeContext.namedTranscript as Record<string, unknown>
+    : null
+
+  return {
+    sessionPhase: sessionPhase === 'new_chat'
+      || sessionPhase === 'new_group_chat'
+      || sessionPhase === 'new_example_chat'
+      || sessionPhase === 'continue'
+      ? sessionPhase
+      : null,
+    hasGroupContext: runtimeContext.hasGroupContext === true,
+    hasExampleContext: runtimeContext.hasExampleContext === true,
+    hasImpersonationContext: runtimeContext.hasImpersonationContext === true,
+    supportsVirtualDepth: false,
+    surfaceContextBlocks: mapSurfaceContextBlocks(promptBlocks),
+    namedTranscript: namedTranscript
+      ? {
+          kind: namedTranscript.kind === 'roleplay' ? 'roleplay' : 'chat',
+          userName: typeof namedTranscript.userName === 'string' ? namedTranscript.userName : null,
+          assistantName: typeof namedTranscript.assistantName === 'string' ? namedTranscript.assistantName : null,
+        }
+      : null,
+  }
+}
 
 function fallbackCandidates(sourceText: string, mode: string, tone: string, prompt: string) {
   const base = sourceText.trim()
@@ -80,6 +159,22 @@ function buildUserPrompt(params: {
   ].join('\n')
 }
 
+function getExplicitStreamOverride(body: Record<string, unknown>) {
+  return Object.prototype.hasOwnProperty.call(body, 'stream')
+    ? { present: true, value: body.stream === true }
+    : { present: false, value: null }
+}
+
+function buildRouteContextBlocks(promptBlocks: readonly GenerationContextBlock[] | null) {
+  return promptBlocks
+    ? promptBlocks.map((block) => ({
+        id: block.id,
+        priority: block.priority,
+        content: block.content,
+      }))
+    : null
+}
+
 export async function POST(request: Request) {
   const body = await request.json()
   const rewriteSettings = loadStoredAISettings().rewrite
@@ -106,23 +201,14 @@ export async function POST(request: Request) {
         futureJumpRunId: body.futureJumpRunId ? String(body.futureJumpRunId) : undefined,
       })
     : null
-  const assembledContext = context
-    ? context.promptBlocks
-        .filter((block) => !disabledBlockIds.includes(block.id))
-        .map((block) => block.content)
-        .join('\n\n')
-    : String(body.prompt ?? '')
+  const activePromptBlocks = context
+    ? context.promptBlocks.filter((block) => !disabledBlockIds.includes(block.id))
+    : null
   const baseSystemPrompt = buildSystemPrompt()
-  const baseUserPrompt = buildUserPrompt({
-    operationType,
-    userInstruction,
-    chapterNo: context?.chapterNo,
-    selectedLineStart: context?.selectedLineStart,
-    selectedLineEnd: context?.selectedLineEnd,
-    selectedText,
-    assembledContext,
-  })
-  const runtime = applyPresetCompatCreativeRuntime({
+  const buildRuntime = (
+    assembledContext: string,
+    promptBlocks: readonly GenerationContextBlock[] | null,
+  ) => applyPresetCompatCreativeRuntime({
     surfaceId: operationType,
     providerDefaults: {
       provider: rewriteProvider,
@@ -136,10 +222,55 @@ export async function POST(request: Request) {
       },
     },
     systemPrompt: baseSystemPrompt,
-    userPrompt: baseUserPrompt,
+    userPrompt: buildUserPrompt({
+      operationType,
+      userInstruction,
+      chapterNo: context?.chapterNo,
+      selectedLineStart: context?.selectedLineStart,
+      selectedLineEnd: context?.selectedLineEnd,
+      selectedText,
+      assembledContext,
+    }),
+    promptRuleRuntimeContext: normalizePresetCompatRuntimeContext(
+      body as Record<string, unknown>,
+      operationType,
+      promptBlocks,
+    ),
   })
+  const initialAssembledContext = activePromptBlocks
+    ? activePromptBlocks.map((block) => block.content).join('\n\n')
+    : String(body.prompt ?? '')
+  const initialRuntime = buildRuntime(initialAssembledContext, activePromptBlocks)
+  const requestStreamOverride = getExplicitStreamOverride(body as Record<string, unknown>)
+  const initialRouteMetadata = resolveCreativeRoutePresetCompatMetadata({
+    runtime: initialRuntime,
+    blocks: buildRouteContextBlocks(activePromptBlocks),
+    requestOverride: requestStreamOverride,
+    providerDefaultEnabled: false,
+    streamSupported: true,
+  })
+  const trimmedPromptBlocks = activePromptBlocks
+    ? activePromptBlocks.filter((block) => !initialRouteMetadata.contextWindow?.trimmedBlockIds.includes(block.id))
+    : null
+  const assembledContext = activePromptBlocks
+    ? (trimmedPromptBlocks ?? []).map((block) => block.content)
+        .join('\n\n')
+    : String(body.prompt ?? '')
+  const runtime = buildRuntime(assembledContext, trimmedPromptBlocks)
+  const routeMetadata = resolveCreativeRoutePresetCompatMetadata({
+    runtime,
+    blocks: buildRouteContextBlocks(trimmedPromptBlocks),
+    requestOverride: requestStreamOverride,
+    providerDefaultEnabled: false,
+    streamSupported: true,
+  })
+  const presetCompatMetadata = {
+    ...routeMetadata.metadata,
+    contextWindow: initialRouteMetadata.contextWindow,
+  }
+  const presetCompatHeader = serializePresetCompatResponseMetadata(presetCompatMetadata)
 
-  if (body.stream) {
+  if (routeMetadata.streamPolicy?.effective) {
     const promptPayload = {
       systemPrompt: runtime.systemPrompt,
       userPrompt: runtime.userPrompt,
@@ -161,6 +292,7 @@ export async function POST(request: Request) {
         headers: {
           'Content-Type': 'text/plain; charset=utf-8',
           'Cache-Control': 'no-cache, no-transform',
+          'X-ChatBook-Preset-Compat': presetCompatHeader,
         },
       })
     }
@@ -170,6 +302,7 @@ export async function POST(request: Request) {
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
+        'X-ChatBook-Preset-Compat': presetCompatHeader,
       },
     })
   }
@@ -205,6 +338,11 @@ export async function POST(request: Request) {
         summary: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible' ? '来自 OpenAI-compatible API' : '来自 Ollama 本地模型',
         content,
       })),
+      presetCompat: presetCompatMetadata,
+    }, {
+      headers: {
+        'X-ChatBook-Preset-Compat': presetCompatHeader,
+      },
     })
   }
 
@@ -212,5 +350,10 @@ export async function POST(request: Request) {
     provider: result.enabled ? 'fallback-after-error' : 'fallback-no-config',
     error: result.error,
     candidates: fallbackCandidates(body.sourceText, body.mode, body.tone, body.prompt),
+    presetCompat: presetCompatMetadata,
+  }, {
+    headers: {
+      'X-ChatBook-Preset-Compat': presetCompatHeader,
+    },
   })
 }

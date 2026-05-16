@@ -171,7 +171,7 @@ describe('preset compat library app-setting store', () => {
           injectionPosition: 'none',
           injectionDepth: null,
           injectionOrder: null,
-          injectionTrigger: null,
+          injectionTrigger: [],
           forbidOverrides: false,
           condition: null,
           passthrough: {
@@ -208,14 +208,80 @@ describe('preset compat library app-setting store', () => {
         temperature: 0.8,
         topP: 0.95,
         topK: null,
+        topA: 0.42,
         minP: null,
         presencePenalty: null,
         frequencyPenalty: null,
         repetitionPenalty: null,
+        openaiMaxContext: 65536,
         maxTokens: 2048,
+        seed: 777,
+        candidateCount: 3,
+      },
+      promptTemplate: {
+        namesBehavior: 1,
+        sendIfEmpty: 'reuse last',
+        impersonationPrompt: 'impersonate',
+        newChatPrompt: 'start fresh',
+        newGroupChatPrompt: 'start group',
+        newExampleChatPrompt: 'start example',
+        continueNudgePrompt: 'continue here',
+        wiFormat: '<wi>{{text}}</wi>',
+        scenarioFormat: '<scenario>{{text}}</scenario>',
+        personalityFormat: '<persona>{{text}}</persona>',
+        groupNudgePrompt: 'group nudge',
+        assistantPrefill: 'prefill',
+        assistantImpersonation: 'assistant mode',
+        continuePostfix: '...',
+        legacyMainPrompt: 'legacy main',
+        legacyNsfwPrompt: 'legacy nsfw',
+        legacyJailbreakPrompt: 'legacy jailbreak',
+      },
+      transport: {
+        maxContextUnlocked: true,
+        streamOpenAI: false,
+        useSysprompt: true,
+        squashSystemMessages: false,
+        mediaInlining: true,
+        inlineImageQuality: 'high',
+        continuePrefill: true,
+        functionCalling: true,
+        showThoughts: false,
+        reasoningEffort: 'medium',
+        verbosity: 'low',
+        enableWebSearch: false,
+        requestImages: true,
+        requestImageAspectRatio: '1:1',
+        requestImageResolution: '1024x1024',
+      },
+      preservedFields: {
+        biasPresetSelected: 'Default (none)',
       },
       passthrough: {
-        presetSource: passthroughPayload,
+        root: {
+          presetSource: passthroughPayload,
+          main_prompt: 'Legacy main prompt content',
+          use_sysprompt: true,
+          post_history: 'Keep post_history verbatim',
+        },
+        extensions: {
+          SPreset: {
+            RegexBinding: {
+              regexes: [{ preserved: true }],
+            },
+          },
+          tavern_helper: {
+            helper: 'keep',
+          },
+        },
+        unknownPromptFields: {
+          'rule-001': {
+            sourcePrompt: passthroughPayload,
+          },
+        },
+        legacyFlatPrompts: {
+          main: 'main_prompt',
+        },
       },
       importWarnings: [],
       createdAt: '2026-05-15T00:00:00.000Z',
@@ -254,7 +320,53 @@ describe('preset compat library app-setting store', () => {
     expect(saved.revision).toBe(1)
     expect(reloaded).toEqual(saved)
     expect(reloaded.presets['preset-001']?.passthrough).toEqual({
-      presetSource: passthroughPayload,
+      root: {
+        presetSource: passthroughPayload,
+        main_prompt: 'Legacy main prompt content',
+        use_sysprompt: true,
+        post_history: 'Keep post_history verbatim',
+      },
+      extensions: {
+        SPreset: {
+          RegexBinding: {
+            regexes: [{ preserved: true }],
+          },
+        },
+        tavern_helper: {
+          helper: 'keep',
+        },
+      },
+      unknownPromptFields: {
+        'rule-001': {
+          sourcePrompt: passthroughPayload,
+        },
+      },
+      legacyFlatPrompts: {
+        main: 'main_prompt',
+      },
+    })
+    expect(reloaded.presets['preset-001']?.runtimeSampler).toMatchObject({
+      topA: 0.42,
+      openaiMaxContext: 65536,
+      seed: 777,
+      candidateCount: 3,
+    })
+    expect(reloaded.presets['preset-001']?.promptTemplate).toMatchObject({
+      namesBehavior: 1,
+      sendIfEmpty: 'reuse last',
+      assistantPrefill: 'prefill',
+      legacyMainPrompt: 'legacy main',
+      legacyNsfwPrompt: 'legacy nsfw',
+      legacyJailbreakPrompt: 'legacy jailbreak',
+    })
+    expect(reloaded.presets['preset-001']?.transport).toMatchObject({
+      maxContextUnlocked: true,
+      useSysprompt: true,
+      mediaInlining: true,
+      requestImages: true,
+    })
+    expect(reloaded.presets['preset-001']?.preservedFields).toEqual({
+      biasPresetSelected: 'Default (none)',
     })
     expect(reloaded.presets['preset-001']?.promptRules[0]?.passthrough).toEqual({
       sourcePrompt: passthroughPayload,
@@ -264,6 +376,87 @@ describe('preset compat library app-setting store', () => {
     })
     expect(reloaded.standaloneRegexes['standalone-001']?.passthrough).toEqual({
       standaloneSource: passthroughPayload,
+    })
+  })
+
+  it('uses preset-level passthrough normalization only for presets and keeps prompt-rule passthrough plain', async () => {
+    const database = await createTestDatabase('chatbook-preset-compat-library-normalizer-split')
+    deleteAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1')
+    writeAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1', JSON.stringify({
+      revision: 0,
+      presets: {
+        'preset-split': {
+          id: 'preset-split',
+          name: 'Split normalization preset',
+          sourceApiId: 'openai',
+          promptRules: [
+            {
+              id: 'rule-split',
+              name: 'Prompt passthrough stays plain',
+              role: 'system',
+              content: 'Keep prompt passthrough untouched.',
+              enabled: true,
+              marker: false,
+              injectAsSystemPrompt: true,
+              injectionPosition: 'before',
+              injectionDepth: null,
+              injectionOrder: null,
+              injectionTrigger: 'rewrite',
+              forbidOverrides: false,
+              condition: null,
+              passthrough: {
+                unknownPromptFields: ['keep-array-shape'],
+              },
+            },
+          ],
+          promptOrderLists: {
+            rewrite: ['rule-split'],
+          },
+          embeddedRegexes: [],
+          attachedStandaloneRegexIds: [],
+          runtimeSampler: {},
+          promptTemplate: {},
+          transport: {},
+          preservedFields: {},
+          passthrough: {
+            root: ['not-a-record'],
+            extensions: 'not-a-record',
+            unknownPromptFields: {
+              'rule-split': ['drop-invalid-entry'],
+            },
+            legacyFlatPrompts: {
+              main: 'main_prompt',
+              broken: 'not_a_legacy_key',
+            },
+            keepTopLevel: true,
+          },
+          importWarnings: [],
+          createdAt: '2026-05-16T00:00:00.000Z',
+          updatedAt: '2026-05-16T00:00:00.000Z',
+        },
+      },
+      standaloneRegexes: {},
+      surfaceBindings: {},
+      lastImportedAt: null,
+      lastExportedAt: null,
+    }))
+    vi.resetModules()
+
+    const { loadStoredPresetCompatLibrary } = await import('@/lib/server/preset-compat-library')
+    const reloaded = loadStoredPresetCompatLibrary()
+
+    expect(reloaded.presets['preset-split']?.passthrough).toEqual({
+      root: {},
+      extensions: {},
+      unknownPromptFields: {},
+      legacyFlatPrompts: {
+        main: 'main_prompt',
+      },
+      keepTopLevel: true,
+    })
+    expect(reloaded.presets['preset-split']?.promptRules[0]?.injectionTrigger).toEqual(['rewrite'])
+    expect(reloaded.presets['preset-split']?.promptRules[0]?.passthrough).toEqual({
+      unknownPromptFields: ['keep-array-shape'],
     })
   })
 })

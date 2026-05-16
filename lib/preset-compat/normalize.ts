@@ -1,8 +1,12 @@
 import {
   PRESET_COMPAT_CREATIVE_SURFACE_IDS,
+  PRESET_COMPAT_LEGACY_FLAT_PROMPT_KEYS,
   PRESET_COMPAT_SOURCE_API_ID,
+  type PresetCompatLegacyFlatPromptKey,
+  type PresetCompatPresetPassthrough,
   type PresetCompatPresetRecord,
   type PresetCompatPromptRule,
+  type PresetCompatPromptRuleInjectionTrigger,
   type PresetCompatRegexPlacement,
   type PresetCompatRegexRecord,
 } from '@/lib/preset-compat/types'
@@ -72,6 +76,33 @@ type RawPromptOrderEntry = {
   [key: string]: unknown
 }
 
+const LEGACY_FLAT_PROMPT_CONFIG: Record<
+  PresetCompatLegacyFlatPromptKey,
+  Pick<PresetCompatPromptRule, 'id' | 'name' | 'role' | 'injectAsSystemPrompt' | 'forbidOverrides'>
+> = {
+  main_prompt: {
+    id: 'main',
+    name: 'Main Prompt',
+    role: 'user',
+    injectAsSystemPrompt: true,
+    forbidOverrides: false,
+  },
+  nsfw_prompt: {
+    id: 'nsfw',
+    name: 'NSFW Prompt',
+    role: 'system',
+    injectAsSystemPrompt: true,
+    forbidOverrides: false,
+  },
+  jailbreak_prompt: {
+    id: 'jailbreak',
+    name: 'Jailbreak Prompt',
+    role: 'system',
+    injectAsSystemPrompt: true,
+    forbidOverrides: false,
+  },
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
@@ -84,12 +115,30 @@ function asString(value: unknown, fallback = '') {
   return typeof value === 'string' ? value : fallback
 }
 
+function asNullableString(value: unknown) {
+  return typeof value === 'string' ? value : null
+}
+
 function asNullableNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function asBoolean(value: unknown, fallback = false) {
   return typeof value === 'boolean' ? value : fallback
+}
+
+function asNullableBoolean(value: unknown) {
+  return typeof value === 'boolean' ? value : null
+}
+
+function asStringArray(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === 'string')
+  }
+  if (typeof value === 'string') {
+    return [value]
+  }
+  return [] as string[]
 }
 
 function toRecordClone(value: unknown) {
@@ -231,7 +280,7 @@ function normalizePromptRule(
     injectionPosition: normalizePromptInjectionPosition(rawPrompt, orderedIds, identifier),
     injectionDepth: asNullableNumber(rawPrompt.injection_depth),
     injectionOrder: asNullableNumber(rawPrompt.injection_order),
-    injectionTrigger: typeof rawPrompt.injection_trigger === 'string' ? rawPrompt.injection_trigger : null,
+    injectionTrigger: asStringArray(rawPrompt.injection_trigger) as PresetCompatPromptRuleInjectionTrigger[],
     forbidOverrides: asBoolean(rawPrompt.forbid_overrides, false),
     condition: typeof rawPrompt.condition === 'string' ? rawPrompt.condition : null,
     passthrough: {
@@ -244,6 +293,45 @@ function normalizePromptRule(
   }
 
   return prompt
+}
+
+function normalizeLegacyFlatPromptRules(rawPreset: Record<string, unknown>) {
+  const promptRules: PresetCompatPromptRule[] = []
+  const orderedIds: string[] = []
+  const legacyFlatPrompts: Record<string, PresetCompatLegacyFlatPromptKey> = {}
+
+  for (const key of PRESET_COMPAT_LEGACY_FLAT_PROMPT_KEYS) {
+    const content = typeof rawPreset[key] === 'string' ? rawPreset[key] : ''
+    if (!content.trim()) {
+      continue
+    }
+
+    const config = LEGACY_FLAT_PROMPT_CONFIG[key]
+    promptRules.push({
+      id: config.id,
+      name: config.name,
+      role: config.role,
+      content,
+      enabled: true,
+      marker: false,
+      injectAsSystemPrompt: config.injectAsSystemPrompt,
+      injectionPosition: 'before',
+      injectionDepth: null,
+      injectionOrder: 100,
+      injectionTrigger: [],
+      forbidOverrides: config.forbidOverrides,
+      condition: null,
+      passthrough: {},
+    })
+    orderedIds.push(config.id)
+    legacyFlatPrompts[config.id] = key
+  }
+
+  return {
+    promptRules,
+    orderedIds,
+    legacyFlatPrompts,
+  }
 }
 
 function normalizePlacementList(value: unknown) {
@@ -259,6 +347,71 @@ function normalizePlacementList(value: unknown) {
     }
   }
   return placements
+}
+
+function normalizeRuntimeSampler(rawPreset: Record<string, unknown>): PresetCompatPresetRecord['runtimeSampler'] {
+  return {
+    temperature: asNullableNumber(rawPreset.temperature),
+    topP: asNullableNumber(rawPreset.top_p),
+    topK: asNullableNumber(rawPreset.top_k),
+    topA: asNullableNumber(rawPreset.top_a),
+    minP: asNullableNumber(rawPreset.min_p),
+    presencePenalty: asNullableNumber(rawPreset.presence_penalty),
+    frequencyPenalty: asNullableNumber(rawPreset.frequency_penalty),
+    repetitionPenalty: asNullableNumber(rawPreset.repetition_penalty),
+    openaiMaxContext: asNullableNumber(rawPreset.openai_max_context),
+    maxTokens: asNullableNumber(rawPreset.openai_max_tokens),
+    seed: asNullableNumber(rawPreset.seed),
+    candidateCount: asNullableNumber(rawPreset.n),
+  }
+}
+
+function normalizePromptTemplate(rawPreset: Record<string, unknown>): PresetCompatPresetRecord['promptTemplate'] {
+  return {
+    namesBehavior: asNullableNumber(rawPreset.names_behavior),
+    sendIfEmpty: asNullableString(rawPreset.send_if_empty),
+    impersonationPrompt: asNullableString(rawPreset.impersonation_prompt),
+    newChatPrompt: asNullableString(rawPreset.new_chat_prompt),
+    newGroupChatPrompt: asNullableString(rawPreset.new_group_chat_prompt),
+    newExampleChatPrompt: asNullableString(rawPreset.new_example_chat_prompt),
+    continueNudgePrompt: asNullableString(rawPreset.continue_nudge_prompt),
+    wiFormat: asNullableString(rawPreset.wi_format),
+    scenarioFormat: asNullableString(rawPreset.scenario_format),
+    personalityFormat: asNullableString(rawPreset.personality_format),
+    groupNudgePrompt: asNullableString(rawPreset.group_nudge_prompt),
+    assistantPrefill: asNullableString(rawPreset.assistant_prefill),
+    assistantImpersonation: asNullableString(rawPreset.assistant_impersonation),
+    continuePostfix: asNullableString(rawPreset.continue_postfix),
+    legacyMainPrompt: asNullableString(rawPreset.main_prompt),
+    legacyNsfwPrompt: asNullableString(rawPreset.nsfw_prompt),
+    legacyJailbreakPrompt: asNullableString(rawPreset.jailbreak_prompt),
+  }
+}
+
+function normalizeTransport(rawPreset: Record<string, unknown>): PresetCompatPresetRecord['transport'] {
+  return {
+    maxContextUnlocked: asNullableBoolean(rawPreset.max_context_unlocked),
+    streamOpenAI: asNullableBoolean(rawPreset.stream_openai),
+    useSysprompt: asNullableBoolean(rawPreset.use_sysprompt),
+    squashSystemMessages: asNullableBoolean(rawPreset.squash_system_messages),
+    mediaInlining: asNullableBoolean(rawPreset.media_inlining),
+    inlineImageQuality: asNullableString(rawPreset.inline_image_quality),
+    continuePrefill: asNullableBoolean(rawPreset.continue_prefill),
+    functionCalling: asNullableBoolean(rawPreset.function_calling),
+    showThoughts: asNullableBoolean(rawPreset.show_thoughts),
+    reasoningEffort: asNullableString(rawPreset.reasoning_effort),
+    verbosity: asNullableString(rawPreset.verbosity),
+    enableWebSearch: asNullableBoolean(rawPreset.enable_web_search),
+    requestImages: asNullableBoolean(rawPreset.request_images),
+    requestImageAspectRatio: asNullableString(rawPreset.request_image_aspect_ratio),
+    requestImageResolution: asNullableString(rawPreset.request_image_resolution),
+  }
+}
+
+function normalizePreservedFields(rawPreset: Record<string, unknown>): PresetCompatPresetRecord['preservedFields'] {
+  return {
+    biasPresetSelected: asNullableString(rawPreset.bias_preset_selected),
+  }
 }
 
 function normalizeTrimStrings(value: unknown, warningPrefix: string, warnings: string[]) {
@@ -416,11 +569,21 @@ export function normalizePresetCompatPresetImport(
   const activeEntry = getActivePromptOrderEntry(promptOrderEntries)
   const { enabledById, orderedIds } = getActivePromptOrderState(activeEntry)
 
-  const promptRules = Array.isArray(rawPreset.prompts)
+  const structuredPromptRules = Array.isArray(rawPreset.prompts)
     ? rawPreset.prompts
       .map((prompt) => normalizePromptRule(prompt, orderedIds, enabledById, options.idFactory))
       .filter((prompt): prompt is PresetCompatPromptRule => prompt !== null)
     : []
+  const legacyPromptMigration = structuredPromptRules.length === 0
+    ? normalizeLegacyFlatPromptRules(rawPreset)
+    : {
+        promptRules: [] as PresetCompatPromptRule[],
+        orderedIds: [] as string[],
+        legacyFlatPrompts: {} as Record<string, PresetCompatLegacyFlatPromptKey>,
+      }
+  const promptRules = structuredPromptRules.length > 0
+    ? structuredPromptRules
+    : legacyPromptMigration.promptRules
 
   const embeddedRegexResult = normalizePresetCompatStandaloneRegexImport(
     isRecord(rawPreset.extensions) ? rawPreset.extensions.regex_scripts : [],
@@ -432,7 +595,7 @@ export function normalizePresetCompatPresetImport(
   )
   warnings.push(...embeddedRegexResult.warnings.map((warning) => `Preset embedded regex: ${warning}`))
 
-  const promptOrderIds = orderedIds.slice()
+  const promptOrderIds = orderedIds.length > 0 ? orderedIds.slice() : legacyPromptMigration.orderedIds.slice()
   const promptOrderLists = Object.fromEntries(
     PRESET_COMPAT_CREATIVE_SURFACE_IDS.map((surfaceId) => [surfaceId, promptOrderIds])
   ) as PresetCompatPresetRecord['promptOrderLists']
@@ -449,6 +612,15 @@ export function normalizePresetCompatPresetImport(
       .filter(([, value]) => Object.keys(value).length > 0)
   )
 
+  const passthrough: PresetCompatPresetPassthrough = {
+    root: passthroughRoot,
+    extensions: passthroughExtensions,
+    unknownPromptFields,
+  }
+  if (Object.keys(legacyPromptMigration.legacyFlatPrompts).length > 0) {
+    passthrough.legacyFlatPrompts = legacyPromptMigration.legacyFlatPrompts
+  }
+
   const preset: PresetCompatPresetRecord = {
     id: presetId,
     name: pickPresetName(rawPreset, options),
@@ -457,21 +629,11 @@ export function normalizePresetCompatPresetImport(
     promptOrderLists,
     embeddedRegexes: embeddedRegexResult.regexes,
     attachedStandaloneRegexIds: [],
-    runtimeSampler: {
-      temperature: asNullableNumber(rawPreset.temperature),
-      topP: asNullableNumber(rawPreset.top_p),
-      topK: asNullableNumber(rawPreset.top_k),
-      minP: asNullableNumber(rawPreset.min_p),
-      presencePenalty: asNullableNumber(rawPreset.presence_penalty),
-      frequencyPenalty: asNullableNumber(rawPreset.frequency_penalty),
-      repetitionPenalty: asNullableNumber(rawPreset.repetition_penalty),
-      maxTokens: asNullableNumber(rawPreset.openai_max_tokens),
-    },
-    passthrough: {
-      root: passthroughRoot,
-      extensions: passthroughExtensions,
-      unknownPromptFields,
-    },
+    runtimeSampler: normalizeRuntimeSampler(rawPreset),
+    promptTemplate: normalizePromptTemplate(rawPreset),
+    transport: normalizeTransport(rawPreset),
+    preservedFields: normalizePreservedFields(rawPreset),
+    passthrough,
     importWarnings: warnings,
     createdAt: now,
     updatedAt: now,

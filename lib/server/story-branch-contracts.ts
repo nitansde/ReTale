@@ -213,6 +213,14 @@ export const futureJumpMutationResponseSchema = z.object({
   timelineNodeId: z.string().nullable(),
   bridgeSummary: z.string().min(1),
   generatedTargetText: z.string().min(1),
+  presetCompat: z.object({
+    warnings: z.array(z.string()),
+    promptAssembly: z.unknown(),
+    fieldStatuses: z.array(z.unknown()),
+    providerControlIntents: z.array(z.unknown()),
+    contextWindow: z.unknown().nullable(),
+    streamPolicy: z.unknown().nullable(),
+  }).nullable().optional(),
 })
 
 export const futureJumpReviseRequestSchema = z.object({

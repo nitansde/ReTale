@@ -252,6 +252,7 @@ export type FutureJumpMutationResponse = {
   timelineNodeId: string | null
   bridgeSummary: string
   generatedTargetText: string
+  presetCompat?: PresetCompatResponseMetadata | null
 }
 
 export type FutureJumpReviseRequest = {
@@ -264,3 +265,4 @@ export type FutureJumpRunDetail = FutureJumpRunRecord & {
   revisionHistory: FutureJumpRevisionHistoryItem[]
   revisions: FutureJumpRevisionRecord[]
 }
+import type { PresetCompatResponseMetadata } from '@/lib/preset-compat/runtime-integration'

@@ -12,6 +12,10 @@ import { parseKnowledgeExtractionCandidates } from '@/lib/server/ollama-local'
 import { normalizeOpenAICompatibleBaseUrl } from '@/lib/server/openai-compatible'
 import { applyPresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runtime'
 import {
+  resolveCreativeRoutePresetCompatMetadata,
+} from '@/lib/preset-compat/runtime-integration'
+import type { PresetCompatResponseMetadata } from '@/lib/preset-compat/runtime-integration'
+import {
   bridgeSummaryGenerationSchema,
   futureJumpCreateRequestSchema,
   futureJumpMutationResponseSchema,
@@ -65,6 +69,7 @@ type FutureJumpMutationResult = {
   revision: FutureJumpRevisionRecord
   titleHint: string | null
   subtitleHint: string | null
+  presetCompat: PresetCompatResponseMetadata | null
 }
 
 type LoadedFutureJumpGenerationContext = {
@@ -755,6 +760,12 @@ export async function generateTargetNodeRewrite(params: {
   bridgeSummary: string
   userDirection?: string
   userFeedback?: string
+  promptRuleRuntimeContext?: {
+    sessionPhase?: 'new_chat' | 'new_group_chat' | 'new_example_chat' | 'continue' | null
+    hasGroupContext?: boolean
+    hasImpersonationContext?: boolean
+    supportsVirtualDepth?: boolean
+  }
 }) {
   const rewriteSettings = loadStoredAISettings().rewrite
   const runtime = applyPresetCompatCreativeRuntime({
@@ -777,9 +788,17 @@ export async function generateTargetNodeRewrite(params: {
       userDirection: params.userDirection?.trim() || '',
       userFeedback: params.userFeedback,
     }),
+    promptRuleRuntimeContext: params.promptRuleRuntimeContext,
   })
+  const presetCompat = resolveCreativeRoutePresetCompatMetadata({
+    runtime,
+    blocks: null,
+    requestOverride: { present: false, value: null },
+    providerDefaultEnabled: false,
+    streamSupported: false,
+  }).metadata
 
-  return await runValidatedStage({
+  const rewrite = await runValidatedStage({
     stage: 'rewrite',
     systemPrompt: runtime.systemPrompt,
     userPrompt: runtime.userPrompt,
@@ -797,6 +816,11 @@ export async function generateTargetNodeRewrite(params: {
       ? { openAICompatible: runtime.resolvedRuntime.providerRuntime.config }
       : { ollama: runtime.resolvedRuntime.providerRuntime.config },
   })
+
+  return {
+    ...rewrite,
+    presetCompat,
+  }
 }
 
 export async function generateFutureJump(input: GenerateFutureJumpInput): Promise<FutureJumpMutationResult> {
@@ -841,6 +865,10 @@ export async function generateFutureJump(input: GenerateFutureJumpInput): Promis
       context,
       bridgeSummary,
       userDirection: input.userDirection,
+      promptRuleRuntimeContext: {
+        sessionPhase: 'new_chat',
+        supportsVirtualDepth: false,
+      },
     })
     const run = await appendFutureJumpRevision({
       runId: pendingRun.id,
@@ -865,6 +893,7 @@ export async function generateFutureJump(input: GenerateFutureJumpInput): Promis
       revision,
       titleHint: rewrite.titleHint,
       subtitleHint: rewrite.subtitleHint,
+      presetCompat: rewrite.presetCompat,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Future jump generation failed'
@@ -904,6 +933,10 @@ export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<Fu
       bridgeSummary,
       userDirection: run.userDirection,
       userFeedback,
+      promptRuleRuntimeContext: {
+        sessionPhase: 'continue',
+        supportsVirtualDepth: false,
+      },
     })
     const nextRun = await appendFutureJumpRevision({
       runId: run.id,
@@ -928,6 +961,7 @@ export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<Fu
       revision,
       titleHint: rewrite.titleHint,
       subtitleHint: rewrite.subtitleHint,
+      presetCompat: rewrite.presetCompat,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Future jump revision failed'
@@ -1005,7 +1039,8 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
     timelineNodeId: timelineNode?.id ?? null,
     bridgeSummary: generated.run.bridgeSummary,
     generatedTargetText: generated.run.generatedTargetText,
-  })
+    presetCompat: generated.presetCompat,
+  }) as FutureJumpMutationResponse
 }
 
 export async function reviseFutureJumpRun(rawInput: Pick<ReviseFutureJumpInput, 'runId'> & FutureJumpReviseRequest): Promise<FutureJumpMutationResponse> {
@@ -1033,7 +1068,8 @@ export async function reviseFutureJumpRun(rawInput: Pick<ReviseFutureJumpInput, 
     timelineNodeId: timelineNode?.id ?? null,
     bridgeSummary: revised.run.bridgeSummary,
     generatedTargetText: revised.run.generatedTargetText,
-  })
+    presetCompat: revised.presetCompat,
+  }) as FutureJumpMutationResponse
 }
 
 export type {

@@ -117,7 +117,7 @@ function createRuntimeLibrary() {
         injectionPosition: 'before',
         injectionDepth: null,
         injectionOrder: 1,
-        injectionTrigger: null,
+        injectionTrigger: [],
         forbidOverrides: false,
         condition: null,
         passthrough: {},
@@ -133,7 +133,7 @@ function createRuntimeLibrary() {
         injectionPosition: 'before',
         injectionDepth: null,
         injectionOrder: 2,
-        injectionTrigger: null,
+        injectionTrigger: [],
         forbidOverrides: false,
         condition: null,
         passthrough: {},
@@ -152,11 +152,54 @@ function createRuntimeLibrary() {
       temperature: 0.44,
       topP: 0.87,
       topK: 55,
+      topA: null,
       minP: 0.08,
       presencePenalty: 0.29,
       frequencyPenalty: 0.18,
       repetitionPenalty: 1.22,
+      openaiMaxContext: 4096,
       maxTokens: 3333,
+        seed: 24680,
+      candidateCount: null,
+    },
+    promptTemplate: {
+      namesBehavior: null,
+      sendIfEmpty: null,
+      impersonationPrompt: null,
+      newChatPrompt: 'FUTURE JUMP NEW CHAT TEMPLATE',
+      newGroupChatPrompt: null,
+      newExampleChatPrompt: null,
+      continueNudgePrompt: 'FUTURE JUMP CONTINUE TEMPLATE',
+      wiFormat: null,
+      scenarioFormat: null,
+      personalityFormat: null,
+      groupNudgePrompt: null,
+      assistantPrefill: null,
+      assistantImpersonation: null,
+      continuePostfix: null,
+      legacyMainPrompt: null,
+      legacyNsfwPrompt: null,
+      legacyJailbreakPrompt: null,
+    },
+    transport: {
+      maxContextUnlocked: true,
+      streamOpenAI: true,
+      useSysprompt: null,
+      squashSystemMessages: null,
+      mediaInlining: null,
+      inlineImageQuality: null,
+      continuePrefill: null,
+      functionCalling: null,
+      showThoughts: null,
+      reasoningEffort: null,
+      verbosity: null,
+      enableWebSearch: null,
+      requestImages: null,
+      requestImageAspectRatio: null,
+      requestImageResolution: null,
+    },
+    preservedFields: {
+      biasPresetSelected: null,
     },
     passthrough: {},
     importWarnings: [],
@@ -305,6 +348,28 @@ describe('preset compat future jump runtime', () => {
     expect(result.run.generatedTargetText).toBe('Omega')
     expect(result.titleHint).toBe('Title Omega')
     expect(result.subtitleHint).toBe('Subtitle Omega')
+    expect(result.presetCompat).toMatchObject({
+      contextWindow: {
+        supported: false,
+        requestedMaxContextTokens: 4096,
+        effectiveMaxContextTokens: null,
+        unlockMaximum: true,
+        trimmedBlockIds: [],
+      },
+      streamPolicy: {
+        supported: false,
+        requested: true,
+        effective: false,
+        source: 'route_unsupported',
+      },
+    })
+    expect(result.presetCompat?.fieldStatuses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'openai_max_context', status: 'degraded', reason: 'ROUTE_UNSUPPORTED' }),
+      expect.objectContaining({ field: 'max_context_unlocked', status: 'degraded', reason: 'ROUTE_UNSUPPORTED' }),
+      expect.objectContaining({ field: 'stream_openai', status: 'degraded', reason: 'ROUTE_UNSUPPORTED' }),
+      expect.objectContaining({ field: 'openai_max_tokens', status: 'applied', reason: 'SUPPORTED_RUNTIME' }),
+      expect.objectContaining({ field: 'seed', status: 'degraded', reason: 'PROVIDER_ONLY' }),
+    ]))
 
     const bridgeBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
       temperature?: number
@@ -320,6 +385,7 @@ describe('preset compat future jump runtime', () => {
     expect(bridgeBody.messages[1]?.content).toContain('ALPHA')
 
     const rewriteBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
+      seed?: number
       temperature?: number
       top_p?: number
       frequency_penalty?: number
@@ -332,6 +398,9 @@ describe('preset compat future jump runtime', () => {
     expect(rewriteBody.frequency_penalty).toBe(0.18)
     expect(rewriteBody.presence_penalty).toBe(0.29)
     expect(rewriteBody.max_tokens).toBe(3333)
+    expect(rewriteBody.seed).toBeUndefined()
+    expect(rewriteBody.messages[0]?.content).toContain('FUTURE JUMP NEW CHAT TEMPLATE')
+    expect(rewriteBody.messages[0]?.content).not.toContain('FUTURE JUMP CONTINUE TEMPLATE')
     expect(rewriteBody.messages[0]?.content).toContain('## Imported Preset System Rules')
     expect(rewriteBody.messages[0]?.content).toContain('FUTURE JUMP SYSTEM RULE')
     expect(rewriteBody.messages[1]?.content.startsWith('## Imported Preset User Rules')).toBe(true)

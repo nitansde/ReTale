@@ -30,7 +30,7 @@ function cloneValue<T>(value: T): T {
   return structuredClone(value)
 }
 
-function getPresetPassthroughBucket(preset: PresetCompatPresetRecord, bucket: 'root' | 'extensions' | 'unknownPromptFields') {
+function getPresetPassthroughBucket(preset: PresetCompatPresetRecord, bucket: 'root' | 'extensions' | 'unknownPromptFields' | 'legacyFlatPrompts') {
   const value = preset.passthrough[bucket]
   return isRecord(value) ? cloneValue(value) : {}
 }
@@ -84,8 +84,8 @@ function exportPromptRule(
   }
   if (Array.isArray(promptMeta.injectionTrigger)) {
     exported.injection_trigger = cloneValue(promptMeta.injectionTrigger)
-  } else if (promptRule.injectionTrigger !== null) {
-    exported.injection_trigger = [promptRule.injectionTrigger]
+  } else if (promptRule.injectionTrigger.length > 0) {
+    exported.injection_trigger = cloneValue(promptRule.injectionTrigger)
   } else if ('injectionTrigger' in promptMeta && rawPrompt && 'injection_trigger' in rawPrompt) {
     exported.injection_trigger = cloneValue(promptMeta.injectionTrigger)
   }
@@ -174,6 +174,7 @@ export function exportPresetCompatPreset(preset: PresetCompatPresetRecord) {
   const root = getPresetPassthroughBucket(preset, 'root')
   const extensions = getPresetPassthroughBucket(preset, 'extensions')
   const unknownPromptFieldsById = getPresetPassthroughBucket(preset, 'unknownPromptFields')
+  const legacyFlatPrompts = getPresetPassthroughBucket(preset, 'legacyFlatPrompts')
   const rawPrompts = Array.isArray(root.prompts) ? root.prompts.filter(isRecord) : []
   const rawPromptsById = new Map(
     rawPrompts
@@ -191,11 +192,27 @@ export function exportPresetCompatPreset(preset: PresetCompatPresetRecord) {
     temperature: preset.runtimeSampler.temperature ?? root.temperature,
     top_p: preset.runtimeSampler.topP ?? root.top_p,
     top_k: preset.runtimeSampler.topK ?? root.top_k,
+    top_a: preset.runtimeSampler.topA ?? root.top_a,
     min_p: preset.runtimeSampler.minP ?? root.min_p,
     presence_penalty: preset.runtimeSampler.presencePenalty ?? root.presence_penalty,
     frequency_penalty: preset.runtimeSampler.frequencyPenalty ?? root.frequency_penalty,
     repetition_penalty: preset.runtimeSampler.repetitionPenalty ?? root.repetition_penalty,
+    max_context_unlocked: preset.transport.maxContextUnlocked ?? root.max_context_unlocked,
+    openai_max_context: preset.runtimeSampler.openaiMaxContext ?? root.openai_max_context,
     openai_max_tokens: preset.runtimeSampler.maxTokens ?? root.openai_max_tokens,
+    names_behavior: preset.promptTemplate.namesBehavior ?? root.names_behavior,
+    send_if_empty: preset.promptTemplate.sendIfEmpty ?? root.send_if_empty,
+    impersonation_prompt: preset.promptTemplate.impersonationPrompt ?? root.impersonation_prompt,
+    new_chat_prompt: preset.promptTemplate.newChatPrompt ?? root.new_chat_prompt,
+    new_group_chat_prompt: preset.promptTemplate.newGroupChatPrompt ?? root.new_group_chat_prompt,
+    new_example_chat_prompt: preset.promptTemplate.newExampleChatPrompt ?? root.new_example_chat_prompt,
+    continue_nudge_prompt: preset.promptTemplate.continueNudgePrompt ?? root.continue_nudge_prompt,
+    bias_preset_selected: preset.preservedFields.biasPresetSelected ?? root.bias_preset_selected,
+    wi_format: preset.promptTemplate.wiFormat ?? root.wi_format,
+    scenario_format: preset.promptTemplate.scenarioFormat ?? root.scenario_format,
+    personality_format: preset.promptTemplate.personalityFormat ?? root.personality_format,
+    group_nudge_prompt: preset.promptTemplate.groupNudgePrompt ?? root.group_nudge_prompt,
+    stream_openai: preset.transport.streamOpenAI ?? root.stream_openai,
     prompts: preset.promptRules.map((promptRule) => {
       const rawUnknownPromptFields = unknownPromptFieldsById[promptRule.id]
       return exportPromptRule(
@@ -205,6 +222,27 @@ export function exportPresetCompatPreset(preset: PresetCompatPresetRecord) {
       )
     }),
     prompt_order: exportPromptOrder(preset),
+    assistant_prefill: preset.promptTemplate.assistantPrefill ?? root.assistant_prefill,
+    assistant_impersonation: preset.promptTemplate.assistantImpersonation ?? root.assistant_impersonation,
+    use_sysprompt: preset.transport.useSysprompt ?? root.use_sysprompt,
+    squash_system_messages: preset.transport.squashSystemMessages ?? root.squash_system_messages,
+    media_inlining: preset.transport.mediaInlining ?? root.media_inlining,
+    inline_image_quality: preset.transport.inlineImageQuality ?? root.inline_image_quality,
+    continue_prefill: preset.transport.continuePrefill ?? root.continue_prefill,
+    continue_postfix: preset.promptTemplate.continuePostfix ?? root.continue_postfix,
+    function_calling: preset.transport.functionCalling ?? root.function_calling,
+    show_thoughts: preset.transport.showThoughts ?? root.show_thoughts,
+    reasoning_effort: preset.transport.reasoningEffort ?? root.reasoning_effort,
+    verbosity: preset.transport.verbosity ?? root.verbosity,
+    enable_web_search: preset.transport.enableWebSearch ?? root.enable_web_search,
+    seed: preset.runtimeSampler.seed ?? root.seed,
+    n: preset.runtimeSampler.candidateCount ?? root.n,
+    request_images: preset.transport.requestImages ?? root.request_images,
+    request_image_aspect_ratio: preset.transport.requestImageAspectRatio ?? root.request_image_aspect_ratio,
+    request_image_resolution: preset.transport.requestImageResolution ?? root.request_image_resolution,
+    main_prompt: 'main' in legacyFlatPrompts ? (preset.promptTemplate.legacyMainPrompt ?? root.main_prompt) : root.main_prompt,
+    nsfw_prompt: 'nsfw' in legacyFlatPrompts ? (preset.promptTemplate.legacyNsfwPrompt ?? root.nsfw_prompt) : root.nsfw_prompt,
+    jailbreak_prompt: 'jailbreak' in legacyFlatPrompts ? (preset.promptTemplate.legacyJailbreakPrompt ?? root.jailbreak_prompt) : root.jailbreak_prompt,
     extensions: exportedExtensions,
   }
 }

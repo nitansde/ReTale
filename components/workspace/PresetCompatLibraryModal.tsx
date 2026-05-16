@@ -3,10 +3,14 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
 import { X } from 'lucide-react'
 import { PresetCompatPresetEditor } from '@/components/workspace/PresetCompatPresetEditor'
+import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
+import type { PresetCompatSessionWorkspaceSelection } from '@/lib/types'
 import { useNovelStore } from '@/store/novel-store'
 import { cn } from '@/lib/utils'
 
 type PresetCompatLibraryModalProps = {
+  activeSurfaceId?: PresetCompatSurfaceId | null
+  activeSelection?: PresetCompatSessionWorkspaceSelection | null
   open: boolean
   onClose: () => void
 }
@@ -34,7 +38,7 @@ async function readUploadedFileText(file: File) {
   return new Response(file).text()
 }
 
-export function PresetCompatLibraryModal({ open, onClose }: PresetCompatLibraryModalProps) {
+export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelection = null, open, onClose }: PresetCompatLibraryModalProps) {
   const presetCompatLibrary = useNovelStore((state) => state.presetCompatLibrary)
   const presetCompatLibraryLoading = useNovelStore((state) => state.presetCompatLibraryLoading)
   const presetCompatLibraryError = useNovelStore((state) => state.presetCompatLibraryError)
@@ -264,6 +268,8 @@ export function PresetCompatLibraryModal({ open, onClose }: PresetCompatLibraryM
           <div>
             {selectedPreset ? (
               <PresetCompatPresetEditor
+                activeSurfaceId={activeSurfaceId}
+                activeSelection={activeSelection}
                 preset={selectedPreset}
                 library={presetCompatLibrary}
                 onBindSurface={bindPresetCompatPresetToSurface}
