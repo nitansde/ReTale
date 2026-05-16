@@ -3,6 +3,21 @@
 import { create } from 'zustand'
 import { normalizeAISettings } from '@/lib/ai-settings'
 import {
+  exportPresetCompatPresetJson,
+  exportPresetCompatStandaloneRegexJson,
+  fetchPresetCompatLibrary,
+  importPresetCompatPayload,
+  savePresetCompatLibrary as savePresetCompatLibraryToBackend,
+} from '@/lib/preset-compat/client'
+import type { ImportPresetCompatPayloadParams } from '@/lib/preset-compat/client'
+import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
+import type {
+  PresetCompatLibrary,
+  PresetCompatPromptRule,
+  PresetCompatRegexRecord,
+  PresetCompatSurfaceId,
+} from '@/lib/preset-compat/types'
+import {
   countChineseFriendlyWords,
   formatNowLabel,
   getParagraphsFromHtml,
@@ -67,6 +82,11 @@ type KnowledgeRebuildStatus = {
 }
 
 type KnowledgeActionOutcome = 'completed' | 'paused' | 'aborted' | 'deleted' | 'idle'
+
+type PresetCompatImportResult = {
+  importedIds: string[]
+  warnings: string[]
+}
 
 type KnowledgeProjectionResult = KnowledgeProjectionPayload & {
   knowledgeRebuildStatus: KnowledgeRebuildStatus | null
@@ -274,6 +294,9 @@ type NovelStore = PersistedNovelState & {
   isSaving: boolean
   backendLoaded: boolean
   backendLoadError: string
+  presetCompatLibrary: PresetCompatLibrary
+  presetCompatLibraryLoading: boolean
+  presetCompatLibraryError: string
 
   getNovels: () => Array<{ id: string; title: string; summary: string; tags: string[]; updatedAt: string; wordCount: number; chapterCount: number }>
   importNovelFromText: (input: { title: string; text: string; summary?: string }) => string | null
@@ -315,6 +338,19 @@ type NovelStore = PersistedNovelState & {
   setHydrated: (value: boolean) => void
   loadFromBackend: () => Promise<void>
   saveToBackend: () => Promise<void>
+  loadPresetCompatLibrary: () => Promise<void>
+  savePresetCompatLibrary: () => Promise<void>
+  importPresetCompatPreset: (params: Omit<ImportPresetCompatPayloadParams, 'kind'>) => Promise<PresetCompatImportResult>
+  importPresetCompatRegexBundle: (params: Omit<ImportPresetCompatPayloadParams, 'kind'>) => Promise<PresetCompatImportResult>
+  bindPresetCompatPresetToSurface: (surfaceId: PresetCompatSurfaceId, presetId: string | null) => void
+  deletePresetCompatPreset: (presetId: string) => void
+  attachPresetCompatStandaloneRegex: (presetId: string, regexId: string) => void
+  detachPresetCompatStandaloneRegex: (presetId: string, regexId: string) => void
+  updatePresetCompatPromptRule: (presetId: string, promptRuleId: string, updates: Partial<PresetCompatPromptRule>) => void
+  updatePresetCompatEmbeddedRegex: (presetId: string, regexId: string, updates: Partial<PresetCompatRegexRecord>) => void
+  updatePresetCompatStandaloneRegex: (regexId: string, updates: Partial<PresetCompatRegexRecord>) => void
+  exportPresetCompatPreset: (presetId: string) => string | null
+  exportPresetCompatStandaloneRegexBundle: (regexIds?: string[]) => string
   addCharacter: (novelId: string, fields: { name: string; role: string; goal: string; trait: string; note: string }) => void
   updateCharacter: (id: string, fields: Partial<Omit<Character, 'id' | 'novelId'>>) => void
   deleteCharacter: (id: string) => void
@@ -420,6 +456,9 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
   isSaving: false,
   backendLoaded: false,
   backendLoadError: '',
+  presetCompatLibrary: createDefaultPresetCompatLibrary(),
+  presetCompatLibraryLoading: false,
+  presetCompatLibraryError: '',
 
   getNovels: () => {
     const state = get()
@@ -897,9 +936,36 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     ...serializeState(state),
     ...payload,
   })),
-  resetWorkspace: () => set({ ...initialState }),
+  resetWorkspace: () => set((state) => ({
+    ...initialState,
+    presetCompatLibrary: state.presetCompatLibrary,
+    presetCompatLibraryLoading: state.presetCompatLibraryLoading,
+    presetCompatLibraryError: state.presetCompatLibraryError,
+  })),
+  loadPresetCompatLibrary: async () => {
+    set({ presetCompatLibraryLoading: true, presetCompatLibraryError: '' })
+    try {
+      const library = await fetchPresetCompatLibrary()
+      set({
+        presetCompatLibrary: library,
+        presetCompatLibraryLoading: false,
+        presetCompatLibraryError: '',
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load preset compat library'
+      set({
+        presetCompatLibraryLoading: false,
+        presetCompatLibraryError: message,
+      })
+      throw error
+    }
+  },
   loadFromBackend: async () => {
-    set({ backendLoadError: '' })
+    set({
+      backendLoadError: '',
+      presetCompatLibraryLoading: true,
+      presetCompatLibraryError: '',
+    })
     let restoredWorkspace = initialState
 
     try {
@@ -928,11 +994,12 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         backendLoaded: true,
         isHydrated: true,
         backendLoadError: message,
+        presetCompatLibraryLoading: false,
       })
       return
     }
 
-    const [aiResult, projectionResult] = await Promise.allSettled([
+    const [aiResult, presetCompatResult, projectionResult] = await Promise.allSettled([
       fetch('/api/settings/ai', { cache: 'no-store' }).then(async (response) => {
         if (!response.ok) {
           const error = await response.json().catch(() => null) as { error?: string } | null
@@ -940,6 +1007,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         }
         return response.json()
       }),
+      fetchPresetCompatLibrary(),
       fetchKnowledgeProjection({
         novelId: restoredWorkspace.currentNovelId || undefined,
         asOfChapter: resolveCurrentChapterOrder(restoredWorkspace, restoredWorkspace.currentNovelId || undefined),
@@ -952,6 +1020,19 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     } else {
       console.error('AI settings restore failed:', aiResult.reason)
     }
+
+    if (presetCompatResult.status === 'fulfilled') {
+      nextState.presetCompatLibrary = presetCompatResult.value
+      nextState.presetCompatLibraryError = ''
+    } else {
+      const message = presetCompatResult.reason instanceof Error
+        ? presetCompatResult.reason.message
+        : 'Failed to load preset compat library'
+      console.error('Preset compat library restore failed:', presetCompatResult.reason)
+      nextState.presetCompatLibraryError = message
+    }
+
+    nextState.presetCompatLibraryLoading = false
 
     if (projectionResult.status === 'fulfilled') {
       Object.assign(nextState, normalizeKnowledgeProjection(projectionResult.value))
@@ -972,6 +1053,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(serializeState(state)),
       })
+      await get().savePresetCompatLibrary()
       try {
         const projection = await fetchKnowledgeProjection({
           novelId: state.currentNovelId || undefined,
@@ -987,6 +1069,259 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       set({ isSaving: false })
     }
   },
+  savePresetCompatLibrary: async () => {
+    const { presetCompatLibrary } = get()
+    set({ presetCompatLibraryLoading: true, presetCompatLibraryError: '' })
+    try {
+      const result = await savePresetCompatLibraryToBackend(presetCompatLibrary)
+      set({
+        presetCompatLibrary: result.library,
+        presetCompatLibraryLoading: false,
+        presetCompatLibraryError: '',
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save preset compat library'
+      set({
+        presetCompatLibraryLoading: false,
+        presetCompatLibraryError: message,
+      })
+      throw error
+    }
+  },
+  importPresetCompatPreset: async (params) => {
+    set({ presetCompatLibraryLoading: true, presetCompatLibraryError: '' })
+    try {
+      const result = await importPresetCompatPayload({ ...params, kind: 'preset' })
+      set({
+        presetCompatLibrary: result.library,
+        presetCompatLibraryLoading: false,
+        presetCompatLibraryError: '',
+      })
+      return {
+        importedIds: result.importedIds,
+        warnings: result.warnings,
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to import preset compat preset'
+      set({
+        presetCompatLibraryLoading: false,
+        presetCompatLibraryError: message,
+      })
+      throw error
+    }
+  },
+  importPresetCompatRegexBundle: async (params) => {
+    set({ presetCompatLibraryLoading: true, presetCompatLibraryError: '' })
+    try {
+      const result = await importPresetCompatPayload({ ...params, kind: 'regex' })
+      set({
+        presetCompatLibrary: result.library,
+        presetCompatLibraryLoading: false,
+        presetCompatLibraryError: '',
+      })
+      return {
+        importedIds: result.importedIds,
+        warnings: result.warnings,
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to import preset compat regex bundle'
+      set({
+        presetCompatLibraryLoading: false,
+        presetCompatLibraryError: message,
+      })
+      throw error
+    }
+  },
+  bindPresetCompatPresetToSurface: (surfaceId, presetId) => set((state) => {
+    const binding = state.presetCompatLibrary.surfaceBindings[surfaceId]
+    if (!binding) {
+      return state
+    }
+
+    if (presetId !== null && !state.presetCompatLibrary.presets[presetId]) {
+      return {
+        presetCompatLibraryError: 'preset_not_found',
+      }
+    }
+
+    return {
+      presetCompatLibrary: {
+        ...state.presetCompatLibrary,
+        surfaceBindings: {
+          ...state.presetCompatLibrary.surfaceBindings,
+          [surfaceId]: {
+            ...binding,
+            presetId,
+            enabled: presetId === null ? binding.enabled : true,
+          },
+        },
+      },
+      presetCompatLibraryError: '',
+    }
+  }),
+  deletePresetCompatPreset: (presetId) => set((state) => {
+    const preset = state.presetCompatLibrary.presets[presetId]
+    if (!preset) {
+      return {
+        presetCompatLibraryError: 'preset_not_found',
+      }
+    }
+
+    const nextPresets = { ...state.presetCompatLibrary.presets }
+    delete nextPresets[presetId]
+
+    const nextSurfaceBindings = Object.fromEntries(
+      Object.entries(state.presetCompatLibrary.surfaceBindings).map(([surfaceId, binding]) => [
+        surfaceId,
+        binding.presetId === presetId
+          ? {
+              ...binding,
+              presetId: null,
+              enabled: false,
+            }
+          : binding,
+      ])
+    ) as typeof state.presetCompatLibrary.surfaceBindings
+
+    return {
+      presetCompatLibrary: {
+        ...state.presetCompatLibrary,
+        presets: nextPresets,
+        surfaceBindings: nextSurfaceBindings,
+      },
+      presetCompatLibraryError: '',
+    }
+  }),
+  attachPresetCompatStandaloneRegex: (presetId, regexId) => set((state) => {
+    const preset = state.presetCompatLibrary.presets[presetId]
+    const regexRecord = state.presetCompatLibrary.standaloneRegexes[regexId]
+    if (!preset || !regexRecord) {
+      return {
+        presetCompatLibraryError: !preset ? 'preset_not_found' : 'standalone_regex_not_found',
+      }
+    }
+
+    if (preset.attachedStandaloneRegexIds.includes(regexId)) {
+      return {
+        presetCompatLibraryError: '',
+      }
+    }
+
+    return {
+      presetCompatLibrary: {
+        ...state.presetCompatLibrary,
+        presets: {
+          ...state.presetCompatLibrary.presets,
+          [presetId]: {
+            ...preset,
+            attachedStandaloneRegexIds: [...preset.attachedStandaloneRegexIds, regexId],
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      },
+      presetCompatLibraryError: '',
+    }
+  }),
+  detachPresetCompatStandaloneRegex: (presetId, regexId) => set((state) => {
+    const preset = state.presetCompatLibrary.presets[presetId]
+    if (!preset) {
+      return {
+        presetCompatLibraryError: 'preset_not_found',
+      }
+    }
+
+    return {
+      presetCompatLibrary: {
+        ...state.presetCompatLibrary,
+        presets: {
+          ...state.presetCompatLibrary.presets,
+          [presetId]: {
+            ...preset,
+            attachedStandaloneRegexIds: preset.attachedStandaloneRegexIds.filter((id) => id !== regexId),
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      },
+      presetCompatLibraryError: '',
+    }
+  }),
+  updatePresetCompatPromptRule: (presetId, promptRuleId, updates) => set((state) => {
+    const preset = state.presetCompatLibrary.presets[presetId]
+    if (!preset) {
+      return {
+        presetCompatLibraryError: 'preset_not_found',
+      }
+    }
+
+    return {
+      presetCompatLibrary: {
+        ...state.presetCompatLibrary,
+        presets: {
+          ...state.presetCompatLibrary.presets,
+          [presetId]: {
+            ...preset,
+            promptRules: preset.promptRules.map((promptRule) =>
+              promptRule.id === promptRuleId ? { ...promptRule, ...updates } : promptRule
+            ),
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      },
+      presetCompatLibraryError: '',
+    }
+  }),
+  updatePresetCompatEmbeddedRegex: (presetId, regexId, updates) => set((state) => {
+    const preset = state.presetCompatLibrary.presets[presetId]
+    if (!preset) {
+      return {
+        presetCompatLibraryError: 'preset_not_found',
+      }
+    }
+
+    return {
+      presetCompatLibrary: {
+        ...state.presetCompatLibrary,
+        presets: {
+          ...state.presetCompatLibrary.presets,
+          [presetId]: {
+            ...preset,
+            embeddedRegexes: preset.embeddedRegexes.map((regexRecord) =>
+              regexRecord.id === regexId ? { ...regexRecord, ...updates } : regexRecord
+            ),
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      },
+      presetCompatLibraryError: '',
+    }
+  }),
+  updatePresetCompatStandaloneRegex: (regexId, updates) => set((state) => {
+    const regexRecord = state.presetCompatLibrary.standaloneRegexes[regexId]
+    if (!regexRecord) {
+      return {
+        presetCompatLibraryError: 'standalone_regex_not_found',
+      }
+    }
+
+    return {
+      presetCompatLibrary: {
+        ...state.presetCompatLibrary,
+        standaloneRegexes: {
+          ...state.presetCompatLibrary.standaloneRegexes,
+          [regexId]: {
+            ...regexRecord,
+            ...updates,
+          },
+        },
+      },
+      presetCompatLibraryError: '',
+    }
+  }),
+  exportPresetCompatPreset: (presetId) => {
+    const preset = get().presetCompatLibrary.presets[presetId]
+    return preset ? exportPresetCompatPresetJson(get().presetCompatLibrary, presetId) : null
+  },
+  exportPresetCompatStandaloneRegexBundle: (regexIds) => exportPresetCompatStandaloneRegexJson(get().presetCompatLibrary, regexIds),
   saveAISettings: async () => {
     const { aiSettings } = get()
     if (!aiSettings) return
