@@ -73,3 +73,4 @@ npm run start
 - OpenAI-compatible rewrite calls expect a server implementing `POST /chat/completions`.
 - If AI config is missing or the upstream request fails, rewrite generation falls back to local simulated candidates.
 - Import currently assumes valid exported JSON.
+- Preset compatibility scope, provider mappings, preserved-only behavior, provenance notes, and MVP limitations live in `docs/preset-compatibility.md`.
