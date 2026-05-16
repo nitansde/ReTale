@@ -28,6 +28,7 @@ import { ChapterGraphBrowser } from '@/components/graph/chapter-graph-browser'
 import { GraphReviewPanel } from '@/components/graph/graph-review-panel'
 import { FutureMapOverlay } from '@/components/what-if/FutureMapOverlay'
 import { WhatIfSessionView } from '@/components/what-if/WhatIfSessionView'
+import { PresetCompatLibraryModal } from '@/components/workspace/PresetCompatLibraryModal'
 import { WorkspaceCenterPane } from '@/components/workspace/WorkspaceCenterPane'
 import { WorkspaceChapterNav } from '@/components/workspace/WorkspaceChapterNav'
 import { WorkspaceReferencePanel } from '@/components/workspace/WorkspaceReferencePanel'
@@ -611,6 +612,7 @@ export function SelectionNovelStudio() {
   const aiSettings = useNovelStore((state) => state.aiSettings)
   const setAISettings = useNovelStore((state) => state.setAISettings)
   const saveAISettings = useNovelStore((state) => state.saveAISettings)
+  const loadPresetCompatLibrary = useNovelStore((state) => state.loadPresetCompatLibrary)
   const rebuildStoryKnowledge = useNovelStore((state) => state.rebuildStoryKnowledge)
   const pauseStoryKnowledgeRebuild = useNovelStore((state) => state.pauseStoryKnowledgeRebuild)
   const abortStoryKnowledgeRebuild = useNovelStore((state) => state.abortStoryKnowledgeRebuild)
@@ -721,6 +723,7 @@ export function SelectionNovelStudio() {
   const [rewriteSourceTextOverride, setRewriteSourceTextOverride] = useState('')
   const [futureMapLaunch, setFutureMapLaunch] = useState<FutureMapLaunchState | null>(null)
   const [knowledgeRebuilding, setKnowledgeRebuilding] = useState(false)
+  const [presetCompatLibraryOpen, setPresetCompatLibraryOpen] = useState(false)
   const [knowledgeRebuildStatus, setKnowledgeRebuildStatus] = useState<KnowledgeRebuildStatus | null>(null)
   const [knowledgeActionLoading, setKnowledgeActionLoading] = useState<'pause' | 'abort' | 'delete' | null>(null)
   const [ollamaModelsByScenario, setOllamaModelsByScenario] = useState<Record<AIScenarioKey, OllamaModelOption[]>>({
@@ -3136,6 +3139,18 @@ export function SelectionNovelStudio() {
                 删除小说
               </button>
               <button
+                type="button"
+                data-testid="preset-compat-library-open"
+                onClick={() => {
+                  setPresetCompatLibraryOpen(true)
+                  void loadPresetCompatLibrary().catch(() => undefined)
+                }}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 transition hover:bg-white/[0.08]"
+              >
+                <ScrollText className="h-3.5 w-3.5" />
+                预设
+              </button>
+              <button
                 onClick={() => setSettingsOpen(true)}
                 className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 transition hover:bg-white/[0.08]"
               >
@@ -3889,6 +3904,8 @@ export function SelectionNovelStudio() {
           </div>
         </div>
       ) : null}
+
+      <PresetCompatLibraryModal open={presetCompatLibraryOpen} onClose={() => setPresetCompatLibraryOpen(false)} />
 
       {futureMapLaunch ? (
         <FutureMapOverlay
