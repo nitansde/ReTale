@@ -40,9 +40,13 @@ DATABASE_URL="file:./dev.db"
 OPENAI_COMPATIBLE_BASE_URL="https://api.openai.com/v1"
 OPENAI_COMPATIBLE_API_KEY=""
 OPENAI_COMPATIBLE_MODEL="gpt-4.1-mini"
+LLM_DEBUG_LOG="0"
+LLM_DEBUG_LOG_DIR=".sisyphus/llm-debug"
 ```
 
 You can also update the AI settings from the app UI.
+
+Set `LLM_DEBUG_LOG="1"` during local development to write raw server-side LLM prompt/response JSON files into feature-specific folders under `LLM_DEBUG_LOG_DIR`.
 
 ## First-time setup
 
