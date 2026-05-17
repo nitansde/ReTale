@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { readFileSync } from 'node:fs'
-import path from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import React from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -142,6 +142,13 @@ function createLibrary(overrides: Partial<PresetCompatLibrary> = {}): PresetComp
   }
 }
 
+function readFixtureText(name: string) {
+  const worktreePath = resolve(process.cwd(), 'external', name)
+  const fallbackPath = resolve(process.cwd(), 'external', name)
+  const fixturePath = existsSync(worktreePath) ? worktreePath : fallbackPath
+  return readFileSync(fixturePath, 'utf8')
+}
+
 function resetStore() {
   useNovelStore.getState().resetWorkspace()
   useNovelStore.setState({
@@ -266,8 +273,60 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.getByRole('heading', { name: 'Preset preset-2' })).toBeInTheDocument()
   })
 
+  it('shows macro-expanded runtime preview parity while preserving raw stored preset text', async () => {
+    useNovelStore.setState({
+      presetCompatLibrary: createLibrary({
+        presets: {
+          'preset-1': createPreset('preset-1', {
+            promptRules: [
+              {
+                id: 'preset-1-rule-1',
+                name: 'Macro preview rule',
+                role: 'system',
+                content: 'Speaker pair: {{user}} / {{char}} / {{input}}',
+                enabled: true,
+                marker: false,
+                injectAsSystemPrompt: true,
+                injectionPosition: 'before',
+                injectionDepth: null,
+                injectionOrder: 0,
+                injectionTrigger: null,
+                forbidOverrides: false,
+                condition: null,
+                passthrough: {},
+              },
+            ],
+            promptOrderLists: {
+              rewrite: ['preset-1-rule-1'],
+              expand: ['preset-1-rule-1'],
+              roleplay: ['preset-1-rule-1'],
+              polish: ['preset-1-rule-1'],
+              continue: ['preset-1-rule-1'],
+              future_jump_rewrite: ['preset-1-rule-1'],
+            },
+            promptTemplate: {
+              namesBehavior: 1,
+            },
+          }),
+        },
+      }),
+    })
+
+    render(<PresetCompatLibraryModal open onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByTestId('preset-compat-binding-rewrite'), { target: { value: 'preset-1' } })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-compat-preview-system-rewrite')).toHaveTextContent('Speaker pair: Alice / Bob /')
+    })
+
+    expect(screen.getByTestId('preset-compat-rule-content-preset-1-rule-1')).toHaveValue('Speaker pair: {{user}} / {{char}} / {{input}}')
+    expect(screen.getAllByText('UNSUPPORTED_MACRO').length).toBeGreaterThan(0)
+    expect(screen.getByText('Macro is not supported on rewrite: input')).toBeInTheDocument()
+  })
+
   it('imports the golden fixture, keeps malformed regex imports non-destructive, and leaves existing library data visible', async () => {
-    const fixtureText = readFileSync(path.resolve(process.cwd(), 'external', 'resets_example.json'), 'utf8')
+    const fixtureText = readFixtureText('resets_example.json')
     let currentLibrary = createDefaultPresetCompatLibrary()
     const presetFile = new File([fixtureText], 'resets_example.json', { type: 'application/json' })
     Object.defineProperty(presetFile, 'text', { value: () => Promise.resolve(fixtureText) })
