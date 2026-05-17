@@ -561,30 +561,11 @@ function resolveOllamaProviderRuntime(
 }
 
 function sortResolvedPromptRules(left: PresetCompatResolvedPromptRule, right: PresetCompatResolvedPromptRule) {
-  const leftOrder = left.injectionOrder
-  const rightOrder = right.injectionOrder
-
-  if (leftOrder !== null && rightOrder !== null && leftOrder !== rightOrder) {
-    return leftOrder - rightOrder
-  }
-
-  if (leftOrder !== null && rightOrder === null) {
-    return -1
-  }
-
-  if (leftOrder === null && rightOrder !== null) {
-    return 1
-  }
-
   return left.sourceIndex - right.sourceIndex
 }
 
 function resolvePromptRuleChannel(rule: PresetCompatPromptRule): 'system' | 'user' {
-  if (rule.injectAsSystemPrompt) {
-    return 'system'
-  }
-
-  return rule.role === 'system' ? 'system' : 'user'
+  return rule.injectAsSystemPrompt ? 'system' : 'user'
 }
 
 function getPromptRuleTriggerReason(trigger: string): PresetCompatStatusReasonCode {
@@ -1065,10 +1046,6 @@ function evaluatePromptRuleCondition(params: {
   }
 }
 
-function getPromptRuleSlotKey(rule: PresetCompatResolvedPromptRule) {
-  return `${rule.channel}:${rule.injectionPosition}:${rule.injectionDepth ?? 'none'}`
-}
-
 function resolvePromptRules(
   preset: PresetCompatPresetRecord | null,
   surfaceId: PresetCompatSurfaceId,
@@ -1090,9 +1067,13 @@ function resolvePromptRules(
     }
   }
 
-  const activeIds = new Set(preset.promptOrderLists[surfaceId] ?? [])
-  const candidates = preset.promptRules.flatMap((rule, sourceIndex) => {
-    if (!activeIds.has(rule.id) || !rule.enabled) {
+  const configuredOrderIds = preset.promptOrderLists[surfaceId] ?? []
+  const rulesById = new Map(preset.promptRules.map((rule) => [rule.id, rule]))
+  const orderedRules = configuredOrderIds.length > 0
+    ? configuredOrderIds.map((ruleId) => rulesById.get(ruleId)).filter((rule): rule is PresetCompatPromptRule => Boolean(rule))
+    : preset.promptRules
+  const candidates = orderedRules.flatMap((rule, sourceIndex) => {
+    if (!rule.enabled) {
       return [] as PresetCompatResolvedPromptRuleCandidate[]
     }
 
@@ -1105,8 +1086,20 @@ function resolvePromptRules(
     }
 
     if (rule.marker) {
-      warnings.push(`Prompt rule \`${rule.name}\` was active but skipped because marker prompts are preserved-only in MVP runtime.`)
-      return [] as PresetCompatResolvedPromptRuleCandidate[]
+      preservedPromptMetadata.push({
+        ruleId: rule.id,
+        metadata: {
+          marker: true,
+        },
+      })
+      fieldStatuses.push(createFieldStatus({
+        field: 'prompts.marker',
+        surface: surfaceId,
+        provider: null,
+        value: true,
+        fragmentId: rule.id,
+        fragmentName: rule.name,
+      }))
     }
 
     if (!hasSupportedRole) {
@@ -1177,141 +1170,86 @@ function resolvePromptRules(
     }
 
     const injectionTriggers = getPromptRuleInjectionTriggers(rule)
-
     if (injectionTriggers.length > 0) {
-      const triggerEvaluation = evaluatePromptRuleTriggers({
-        rule,
-        surfaceId,
-        runtimeContext,
-      })
-
-      if (triggerEvaluation.status !== 'pass') {
-        const metadata: Record<string, unknown> = {
+      preservedPromptMetadata.push({
+        ruleId: rule.id,
+        metadata: {
           injectionTrigger: injectionTriggers,
-        }
-        preservedPromptMetadata.push({
-          ruleId: rule.id,
-          metadata,
-        })
-        fieldStatuses.push(createFieldStatus({
-          field: 'prompts.injection_trigger',
-          surface: surfaceId,
-          provider: null,
-          value: triggerEvaluation.value,
-          status: 'degraded',
-          reason: triggerEvaluation.reason,
-          fragmentId: rule.id,
-          fragmentName: rule.name,
-        }))
-        warnings.push(
-          triggerEvaluation.reason === 'UNKNOWN_TRIGGER'
-            ? `Prompt rule \`${rule.name}\` was preserved but not applied because it declares unsupported triggers (${injectionTriggers.join(', ')}).`
-            : `Prompt rule \`${rule.name}\` was preserved but not applied because its triggers (${injectionTriggers.join(', ')}) did not match the current runtime context.`
-        )
-        return [] as PresetCompatResolvedPromptRuleCandidate[]
-      }
-
+        },
+      })
       fieldStatuses.push(createFieldStatus({
         field: 'prompts.injection_trigger',
         surface: surfaceId,
         provider: null,
         value: injectionTriggers,
-        status: 'applied',
-        reason: 'SUPPORTED_RUNTIME',
         fragmentId: rule.id,
         fragmentName: rule.name,
       }))
     }
 
-    const requiresVirtualDepth = rule.injectionPosition === 'in_chat' || rule.injectionDepth !== null
-    if (requiresVirtualDepth && runtimeContext.supportsVirtualDepth !== true) {
-      const metadata: Record<string, unknown> = {}
-      if (rule.injectionPosition === 'in_chat') {
-        metadata.injectionPosition = rule.injectionPosition
-        fieldStatuses.push(createFieldStatus({
-          field: 'prompts.injection_position',
-          surface: surfaceId,
-          provider: null,
-          value: rule.injectionPosition,
-          status: 'degraded',
-          reason: 'VIRTUAL_DEPTH_REQUIRED',
-          fragmentId: rule.id,
-          fragmentName: rule.name,
-        }))
-      } else if (rule.injectionPosition !== 'none') {
-        fieldStatuses.push(createFieldStatus({
-          field: 'prompts.injection_position',
-          surface: surfaceId,
-          provider: null,
-          value: rule.injectionPosition,
-          status: 'applied',
-          reason: 'SUPPORTED_RUNTIME',
-          fragmentId: rule.id,
-          fragmentName: rule.name,
-        }))
-      }
-
-      if (rule.injectionDepth !== null) {
-        metadata.injectionDepth = rule.injectionDepth
-        fieldStatuses.push(createFieldStatus({
-          field: 'prompts.injection_depth',
-          surface: surfaceId,
-          provider: null,
-          value: rule.injectionDepth,
-          status: 'degraded',
-          reason: 'VIRTUAL_DEPTH_REQUIRED',
-          fragmentId: rule.id,
-          fragmentName: rule.name,
-        }))
-      }
-
-      if (Object.keys(metadata).length > 0) {
-        preservedPromptMetadata.push({
-          ruleId: rule.id,
-          metadata,
-        })
-      }
-
-      warnings.push(
-        `Prompt rule \`${rule.name}\` was preserved but not applied because virtual chat depth placement is unavailable on string-only surfaces.`
-      )
-      return [] as PresetCompatResolvedPromptRuleCandidate[]
-    }
-
-    if (!requiresVirtualDepth && rule.injectionPosition !== 'none') {
+    if (rule.injectionPosition !== 'none') {
+      preservedPromptMetadata.push({
+        ruleId: rule.id,
+        metadata: {
+          injectionPosition: rule.injectionPosition,
+        },
+      })
       fieldStatuses.push(createFieldStatus({
         field: 'prompts.injection_position',
         surface: surfaceId,
         provider: null,
         value: rule.injectionPosition,
-        status: 'applied',
-        reason: 'SUPPORTED_RUNTIME',
         fragmentId: rule.id,
         fragmentName: rule.name,
       }))
     }
 
-    if (rule.injectionDepth !== null && runtimeContext.supportsVirtualDepth === true) {
+    if (rule.injectionDepth !== null) {
+      preservedPromptMetadata.push({
+        ruleId: rule.id,
+        metadata: {
+          injectionDepth: rule.injectionDepth,
+        },
+      })
       fieldStatuses.push(createFieldStatus({
         field: 'prompts.injection_depth',
         surface: surfaceId,
         provider: null,
         value: rule.injectionDepth,
-        status: 'applied',
-        reason: 'SUPPORTED_RUNTIME',
+        fragmentId: rule.id,
+        fragmentName: rule.name,
+      }))
+    }
+
+    if (rule.injectionOrder !== null) {
+      preservedPromptMetadata.push({
+        ruleId: rule.id,
+        metadata: {
+          injectionOrder: rule.injectionOrder,
+        },
+      })
+      fieldStatuses.push(createFieldStatus({
+        field: 'prompts.injection_order',
+        surface: surfaceId,
+        provider: null,
+        value: rule.injectionOrder,
         fragmentId: rule.id,
         fragmentName: rule.name,
       }))
     }
 
     if (rule.forbidOverrides) {
+      preservedPromptMetadata.push({
+        ruleId: rule.id,
+        metadata: {
+          forbidOverrides: true,
+        },
+      })
       fieldStatuses.push(createFieldStatus({
         field: 'prompts.forbid_overrides',
         surface: surfaceId,
         provider: null,
         value: true,
-        status: 'applied',
-        reason: 'SUPPORTED_RUNTIME',
         fragmentId: rule.id,
         fragmentName: rule.name,
       }))
@@ -1335,34 +1273,7 @@ function resolvePromptRules(
   })
     .sort((left, right) => sortResolvedPromptRules(left.resolvedRule, right.resolvedRule))
 
-  const protectedSlots = new Map<string, PresetCompatResolvedPromptRule>()
-  const ordered: PresetCompatResolvedPromptRule[] = []
-
-  for (const candidate of candidates) {
-    const slotKey = getPromptRuleSlotKey(candidate.resolvedRule)
-    const protectedRule = protectedSlots.get(slotKey)
-    if (protectedRule) {
-      fieldStatuses.push(createFieldStatus({
-        field: 'prompts.content',
-        surface: surfaceId,
-        provider: null,
-        value: candidate.resolvedRule.content,
-        status: 'degraded',
-        reason: 'FORBID_OVERRIDES_PROTECTED',
-        fragmentId: candidate.resolvedRule.id,
-        fragmentName: candidate.resolvedRule.name,
-      }))
-      warnings.push(
-        `Prompt rule \`${candidate.resolvedRule.name}\` was preserved but not applied because \`${protectedRule.name}\` protects the same imported prompt slot with forbidOverrides.`
-      )
-      continue
-    }
-
-    ordered.push(candidate.resolvedRule)
-    if (candidate.resolvedRule.forbidOverrides) {
-      protectedSlots.set(slotKey, candidate.resolvedRule)
-    }
-  }
+  const ordered = candidates.map((candidate) => candidate.resolvedRule)
 
   return {
     promptRules: {

@@ -322,7 +322,7 @@ function getFieldStatus(resolved: ReturnType<typeof resolvePresetCompatPromptRul
 }
 
 describe('preset compat prompt rule resolution', () => {
-  it('routes system_prompt content into the system slot and keeps supported ordering metadata', () => {
+  it('routes system_prompt content into the system replacement slot and preserves ST-only metadata', () => {
     const preset = createPromptPreset([
       createRule({
         id: 'as-system',
@@ -348,8 +348,8 @@ describe('preset compat prompt rule resolution', () => {
     })
 
     expect(resolved.promptRules.ordered.map((rule) => ({ id: rule.id, channel: rule.channel }))).toEqual([
-      { id: 'plain-user', channel: 'user' },
       { id: 'as-system', channel: 'system' },
+      { id: 'plain-user', channel: 'user' },
     ])
     expect(resolved.promptRules.system.map((rule) => rule.id)).toEqual(['as-system'])
     expect(resolved.promptRules.user.map((rule) => rule.id)).toEqual(['plain-user'])
@@ -359,13 +359,18 @@ describe('preset compat prompt rule resolution', () => {
       value: true,
     })
     expect(getFieldStatus(resolved, 'prompts.injection_position', 'as-system')).toMatchObject({
-      status: 'applied',
-      reason: 'SUPPORTED_RUNTIME',
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
       value: 'after',
+    })
+    expect(getFieldStatus(resolved, 'prompts.injection_order', 'as-system')).toMatchObject({
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
+      value: 2,
     })
   })
 
-  it('applies only allowlisted triggers when the runtime context matches', () => {
+  it('preserves injection triggers without using them as runtime gates', () => {
     const preset = createPromptPreset([
       createRule({
         id: 'new-chat',
@@ -392,48 +397,42 @@ describe('preset compat prompt rule resolution', () => {
         id: 'unknown-trigger',
         name: 'Unknown Trigger',
         role: 'system',
-        content: 'Should never apply.',
+        content: 'Still applies in ChatBook.',
         injectionTrigger: ['rewrite'],
       }),
     ])
 
-    const runtimeContext: PresetCompatPromptRuleRuntimeContext = {
-      sessionPhase: 'new_chat',
-      hasGroupContext: false,
-    }
-
     const resolved = resolvePresetCompatPromptRuleSubset({
       preset,
       surfaceId: 'rewrite',
-      runtimeContext,
+      runtimeContext: {
+        sessionPhase: 'new_chat',
+        hasGroupContext: false,
+      },
     })
 
-    expect(resolved.promptRules.ordered.map((rule) => rule.id)).toEqual(['new-chat'])
+    expect(resolved.promptRules.ordered.map((rule) => rule.id)).toEqual([
+      'new-chat',
+      'continue-only',
+      'group-only',
+      'unknown-trigger',
+    ])
     expect(getFieldStatus(resolved, 'prompts.injection_trigger', 'new-chat')).toMatchObject({
-      status: 'applied',
-      reason: 'SUPPORTED_RUNTIME',
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
       value: ['new_chat'],
     })
     expect(getFieldStatus(resolved, 'prompts.injection_trigger', 'continue-only')).toMatchObject({
-      status: 'degraded',
-      reason: 'CONTINUE_SURFACE_ONLY',
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
       value: ['continue'],
     })
-    expect(getFieldStatus(resolved, 'prompts.injection_trigger', 'group-only')).toMatchObject({
-      status: 'degraded',
-      reason: 'NO_GROUP_CONTEXT',
-      value: ['group'],
-    })
     expect(getFieldStatus(resolved, 'prompts.injection_trigger', 'unknown-trigger')).toMatchObject({
-      status: 'degraded',
-      reason: 'UNKNOWN_TRIGGER',
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
       value: ['rewrite'],
     })
-    expect(resolved.warnings).toEqual(expect.arrayContaining([
-      'Prompt rule `Continue Only` was preserved but not applied because its triggers (continue) did not match the current runtime context.',
-      'Prompt rule `Group Only` was preserved but not applied because its triggers (group) did not match the current runtime context.',
-      'Prompt rule `Unknown Trigger` was preserved but not applied because it declares unsupported triggers (rewrite).',
-    ]))
+    expect(resolved.warnings).toEqual([])
   })
 
   it('evaluates only allowlisted safe conditions and never executes unknown or unsafe strings', () => {
@@ -523,7 +522,7 @@ describe('preset compat prompt rule resolution', () => {
     ]))
   })
 
-  it('blocks later fragments from the same slot when forbidOverrides protects the imported slot', () => {
+  it('preserves forbidOverrides without blocking later runtime prompt rules', () => {
     const preset = createPromptPreset([
       createRule({
         id: 'protected',
@@ -555,23 +554,17 @@ describe('preset compat prompt rule resolution', () => {
       surfaceId: 'rewrite',
     })
 
-    expect(resolved.promptRules.ordered.map((rule) => rule.id)).toEqual(['protected', 'different-slot'])
+    expect(resolved.promptRules.ordered.map((rule) => rule.id)).toEqual(['protected', 'blocked', 'different-slot'])
     expect(getFieldStatus(resolved, 'prompts.forbid_overrides', 'protected')).toMatchObject({
-      status: 'applied',
-      reason: 'SUPPORTED_RUNTIME',
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
       value: true,
     })
-    expect(getFieldStatus(resolved, 'prompts.content', 'blocked')).toMatchObject({
-      status: 'degraded',
-      reason: 'FORBID_OVERRIDES_PROTECTED',
-      value: 'Blocked system content.',
-    })
-    expect(resolved.warnings).toContain(
-      'Prompt rule `Blocked` was preserved but not applied because `Protected` protects the same imported prompt slot with forbidOverrides.'
-    )
+    expect(getFieldStatus(resolved, 'prompts.content', 'blocked')).toBeUndefined()
+    expect(resolved.warnings).toEqual([])
   })
 
-  it('degrades in_chat and depth placement on string-only surfaces with explicit statuses', () => {
+  it('preserves in_chat and depth placement metadata without runtime gating', () => {
     const preset = createPromptPreset([
       createRule({
         id: 'in-chat',
@@ -591,29 +584,88 @@ describe('preset compat prompt rule resolution', () => {
       },
     })
 
-    expect(resolved.promptRules.ordered).toEqual([])
+    expect(resolved.promptRules.ordered.map((rule) => rule.id)).toEqual(['in-chat'])
     expect(getFieldStatus(resolved, 'prompts.injection_position', 'in-chat')).toMatchObject({
-      status: 'degraded',
-      reason: 'VIRTUAL_DEPTH_REQUIRED',
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
       value: 'in_chat',
     })
     expect(getFieldStatus(resolved, 'prompts.injection_depth', 'in-chat')).toMatchObject({
-      status: 'degraded',
-      reason: 'VIRTUAL_DEPTH_REQUIRED',
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
       value: 4,
     })
-    expect(resolved.warnings).toContain(
-      'Prompt rule `In Chat` was preserved but not applied because virtual chat depth placement is unavailable on string-only surfaces.'
-    )
-    expect(resolved.preservedPromptMetadata).toEqual([
+    expect(resolved.warnings).toEqual([])
+    expect(resolved.preservedPromptMetadata).toEqual(expect.arrayContaining([
       {
         ruleId: 'in-chat',
         metadata: {
           injectionPosition: 'in_chat',
+        },
+      },
+      {
+        ruleId: 'in-chat',
+        metadata: {
           injectionDepth: 4,
         },
       },
+    ]))
+  })
+
+  it('preserves before and after depth metadata while applying prompt content', () => {
+    const preset = createPromptPreset([
+      createRule({
+        id: 'before-depth',
+        name: 'Before Depth',
+        role: 'system',
+        content: 'System content with depth metadata.',
+        injectionPosition: 'before',
+        injectionDepth: 4,
+        injectAsSystemPrompt: true,
+      }),
+      createRule({
+        id: 'after-depth',
+        name: 'After Depth',
+        role: 'user',
+        content: 'User content with depth metadata.',
+        injectionPosition: 'after',
+        injectionDepth: 2,
+      }),
     ])
+
+    const resolved = resolvePresetCompatPromptRuleSubset({
+      preset,
+      surfaceId: 'rewrite',
+      runtimeContext: {
+        supportsVirtualDepth: false,
+      },
+    })
+
+    expect(resolved.promptRules.ordered.map((rule) => rule.id)).toEqual(['before-depth', 'after-depth'])
+    expect(getFieldStatus(resolved, 'prompts.injection_position', 'before-depth')).toMatchObject({
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
+      value: 'before',
+    })
+    expect(getFieldStatus(resolved, 'prompts.injection_depth', 'before-depth')).toMatchObject({
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
+      value: 4,
+    })
+    expect(getFieldStatus(resolved, 'prompts.injection_position', 'after-depth')).toMatchObject({
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
+      value: 'after',
+    })
+    expect(getFieldStatus(resolved, 'prompts.injection_depth', 'after-depth')).toMatchObject({
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
+      value: 2,
+    })
+    expect(resolved.warnings).not.toEqual(expect.arrayContaining([
+      expect.stringContaining('Before Depth'),
+      expect.stringContaining('After Depth'),
+    ]))
   })
 
   it('applies only enabled active-order non-marker system and user rules from legacy stored shapes', () => {
@@ -626,14 +678,18 @@ describe('preset compat prompt rule resolution', () => {
 
     expect(resolved.promptRules.ordered.map((rule) => rule.id)).toEqual([
       'user-early',
+      'system-late',
+      'marker-rule',
       'same-order-a',
       'same-order-b',
     ])
     expect(resolved.promptRules.system.map((rule) => rule.id)).toEqual([
-      'same-order-a',
+      'system-late',
     ])
     expect(resolved.promptRules.user.map((rule) => rule.id)).toEqual([
       'user-early',
+      'marker-rule',
+      'same-order-a',
       'same-order-b',
     ])
     expect(resolved.promptRules.ordered.every((rule) => rule.content.trim().length > 0)).toBe(true)
@@ -647,20 +703,40 @@ describe('preset compat prompt rule resolution', () => {
       surfaceId: 'rewrite',
     })
 
-    expect(resolved.preservedPromptMetadata).toEqual([
+    expect(resolved.preservedPromptMetadata).toEqual(expect.arrayContaining([
       {
         ruleId: 'system-late',
         metadata: {
           injectionDepth: 4,
         },
       },
-    ])
+      {
+        ruleId: 'system-late',
+        metadata: {
+          forbidOverrides: true,
+        },
+      },
+      {
+        ruleId: 'marker-rule',
+        metadata: {
+          marker: true,
+        },
+      },
+    ]))
     expect(resolved.warnings).toEqual(expect.arrayContaining([
-      'Prompt rule `System Late` was preserved but not applied because virtual chat depth placement is unavailable on string-only surfaces.',
       'Prompt rule `Unsupported Role` was preserved but not applied because role `assistant` is unsupported in MVP runtime.',
-      'Prompt rule `Marker Rule` was active but skipped because marker prompts are preserved-only in MVP runtime.',
       'Prompt rule `Empty Rule` was active but skipped because its content was empty.',
     ]))
+    expect(getFieldStatus(resolved, 'prompts.injection_depth', 'system-late')).toMatchObject({
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
+      value: 4,
+    })
+    expect(getFieldStatus(resolved, 'prompts.marker', 'marker-rule')).toMatchObject({
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
+      value: true,
+    })
     expect(preset.promptRules.find((rule) => rule.id === 'unsupported-role')?.passthrough).toEqual({
       preservedOnly: true,
     })
@@ -681,6 +757,8 @@ describe('preset compat prompt rule resolution', () => {
 
     expect(resolved.promptRules.ordered.map((rule) => rule.id)).toEqual([
       'user-early',
+      'system-late',
+      'marker-rule',
       'same-order-a',
       'same-order-b',
     ])
