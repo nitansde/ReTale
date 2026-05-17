@@ -283,18 +283,39 @@ describe('preset compat store lifecycle', () => {
     useNovelStore.getState().bindPresetCompatPresetToSurface('rewrite', 'preset-2')
     useNovelStore.getState().attachPresetCompatStandaloneRegex('preset-2', 'regex-3')
     useNovelStore.getState().updatePresetCompatPromptRule('preset-2', 'preset-2-prompt-1', { content: 'Updated prompt' })
+    useNovelStore.getState().updatePresetCompatRuntimeSampler('preset-2', {
+      openaiMaxContext: 32768,
+      maxTokens: 4096,
+      temperature: 0.45,
+      frequencyPenalty: 0.25,
+      presencePenalty: 0.15,
+      topP: 0.8,
+    })
+    useNovelStore.getState().updatePresetCompatTransport('preset-2', { streamOpenAI: true })
     useNovelStore.getState().updatePresetCompatStandaloneRegex('regex-3', { replacement: 'updated replacement' })
     useNovelStore.getState().detachPresetCompatStandaloneRegex('preset-2', 'regex-3')
 
     const state = useNovelStore.getState()
     expect(state.presetCompatLibrary.surfaceBindings.rewrite.presetId).toBe('preset-2')
     expect(state.presetCompatLibrary.presets['preset-2']?.promptRules[0]?.content).toBe('Updated prompt')
+    expect(state.presetCompatLibrary.presets['preset-2']?.runtimeSampler.openaiMaxContext).toBe(32768)
+    expect(state.presetCompatLibrary.presets['preset-2']?.runtimeSampler.maxTokens).toBe(4096)
+    expect(state.presetCompatLibrary.presets['preset-2']?.runtimeSampler.temperature).toBe(0.45)
+    expect(state.presetCompatLibrary.presets['preset-2']?.runtimeSampler.frequencyPenalty).toBe(0.25)
+    expect(state.presetCompatLibrary.presets['preset-2']?.runtimeSampler.presencePenalty).toBe(0.15)
+    expect(state.presetCompatLibrary.presets['preset-2']?.runtimeSampler.topP).toBe(0.8)
+    expect(state.presetCompatLibrary.presets['preset-2']?.transport.streamOpenAI).toBe(true)
     expect(state.presetCompatLibrary.presets['preset-2']?.attachedStandaloneRegexIds).toEqual([])
     expect(state.presetCompatLibrary.standaloneRegexes['regex-3']?.replacement).toBe('updated replacement')
 
     const exportedPreset = state.exportPresetCompatPreset('preset-2')
     const exportedRegexBundle = state.exportPresetCompatStandaloneRegexBundle(['regex-3'])
     expect(exportedPreset).toContain('Updated prompt')
+    expect(exportedPreset).toContain('32768')
+    expect(exportedPreset).toContain('4096')
+    expect(exportedPreset).toContain('0.45')
+    expect(exportedPreset).toContain('0.8')
+    expect(exportedPreset).toContain('true')
     expect(exportedRegexBundle).toContain('regex_scripts')
   })
 

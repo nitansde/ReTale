@@ -13,6 +13,7 @@ import type { ImportPresetCompatPayloadParams } from '@/lib/preset-compat/client
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import type {
   PresetCompatLibrary,
+  PresetCompatPresetRecord,
   PresetCompatPromptRule,
   PresetCompatRegexRecord,
   PresetCompatSurfaceId,
@@ -387,6 +388,8 @@ type NovelStore = PersistedNovelState & {
   detachPresetCompatStandaloneRegex: (presetId: string, regexId: string) => void
   updatePresetCompatPromptRule: (presetId: string, promptRuleId: string, updates: Partial<PresetCompatPromptRule>) => void
   updatePresetCompatEmbeddedRegex: (presetId: string, regexId: string, updates: Partial<PresetCompatRegexRecord>) => void
+  updatePresetCompatRuntimeSampler: (presetId: string, updates: Partial<PresetCompatPresetRecord['runtimeSampler']>) => void
+  updatePresetCompatTransport: (presetId: string, updates: Partial<PresetCompatPresetRecord['transport']>) => void
   updatePresetCompatStandaloneRegex: (regexId: string, updates: Partial<PresetCompatRegexRecord>) => void
   exportPresetCompatPreset: (presetId: string) => string | null
   exportPresetCompatStandaloneRegexBundle: (regexIds?: string[]) => string
@@ -1348,6 +1351,58 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
             embeddedRegexes: preset.embeddedRegexes.map((regexRecord) =>
               regexRecord.id === regexId ? { ...regexRecord, ...updates } : regexRecord
             ),
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      },
+      presetCompatLibraryError: '',
+    }
+  }),
+  updatePresetCompatRuntimeSampler: (presetId, updates) => set((state) => {
+    const preset = state.presetCompatLibrary.presets[presetId]
+    if (!preset) {
+      return {
+        presetCompatLibraryError: 'preset_not_found',
+      }
+    }
+
+    return {
+      presetCompatLibrary: {
+        ...state.presetCompatLibrary,
+        presets: {
+          ...state.presetCompatLibrary.presets,
+          [presetId]: {
+            ...preset,
+            runtimeSampler: {
+              ...preset.runtimeSampler,
+              ...updates,
+            },
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      },
+      presetCompatLibraryError: '',
+    }
+  }),
+  updatePresetCompatTransport: (presetId, updates) => set((state) => {
+    const preset = state.presetCompatLibrary.presets[presetId]
+    if (!preset) {
+      return {
+        presetCompatLibraryError: 'preset_not_found',
+      }
+    }
+
+    return {
+      presetCompatLibrary: {
+        ...state.presetCompatLibrary,
+        presets: {
+          ...state.presetCompatLibrary.presets,
+          [presetId]: {
+            ...preset,
+            transport: {
+              ...preset.transport,
+              ...updates,
+            },
             updatedAt: new Date().toISOString(),
           },
         },
