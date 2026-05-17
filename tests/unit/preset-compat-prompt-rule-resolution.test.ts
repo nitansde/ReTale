@@ -186,12 +186,10 @@ describe('preset compat prompt rule resolution', () => {
 
     expect(resolved.promptRules.ordered.map((rule) => rule.id)).toEqual([
       'user-early',
-      'system-late',
       'same-order-a',
       'same-order-b',
     ])
     expect(resolved.promptRules.system.map((rule) => rule.id)).toEqual([
-      'system-late',
       'same-order-a',
     ])
     expect(resolved.promptRules.user.map((rule) => rule.id)).toEqual([
@@ -213,33 +211,12 @@ describe('preset compat prompt rule resolution', () => {
       {
         ruleId: 'system-late',
         metadata: {
-          injectionPosition: 'after',
           injectionDepth: 4,
-          injectionTrigger: 'rewrite',
-          forbidOverrides: true,
-        },
-      },
-      {
-        ruleId: 'unsupported-role',
-        metadata: {
-          injectionPosition: 'before',
-        },
-      },
-      {
-        ruleId: 'marker-rule',
-        metadata: {
-          injectionPosition: 'before',
-        },
-      },
-      {
-        ruleId: 'empty-rule',
-        metadata: {
-          injectionPosition: 'before',
         },
       },
     ])
     expect(resolved.warnings).toEqual(expect.arrayContaining([
-      'Prompt rule `System Late` kept unsupported metadata (injectionPosition, injectionDepth, injectionTrigger, forbidOverrides) for export without applying it at runtime.',
+      'Prompt rule `System Late` was preserved but not applied because virtual chat depth placement is unavailable on string-only surfaces.',
       'Prompt rule `Unsupported Role` was preserved but not applied because role `assistant` is unsupported in MVP runtime.',
       'Prompt rule `Marker Rule` was active but skipped because marker prompts are preserved-only in MVP runtime.',
       'Prompt rule `Empty Rule` was active but skipped because its content was empty.',
@@ -247,5 +224,31 @@ describe('preset compat prompt rule resolution', () => {
     expect(preset.promptRules.find((rule) => rule.id === 'unsupported-role')?.passthrough).toEqual({
       preservedOnly: true,
     })
+  })
+
+  it('tolerates missing or non-array injectionTrigger values from legacy stored shapes', () => {
+    const preset = createPromptPreset() as unknown as {
+      promptRules: Array<Record<string, unknown>>
+    }
+
+    preset.promptRules[0].injectionTrigger = 'rewrite'
+    preset.promptRules[1].injectionTrigger = null
+
+    const resolved = resolvePresetCompatPromptRuleSubset({
+      preset: preset as unknown as PresetCompatPresetRecord,
+      surfaceId: 'rewrite',
+    })
+
+    expect(resolved.promptRules.ordered.map((rule) => rule.id)).toEqual([
+      'user-early',
+      'same-order-a',
+      'same-order-b',
+    ])
+    expect(resolved.fieldStatuses).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'prompts.injection_trigger',
+        fragmentId: 'system-late',
+      }),
+    ]))
   })
 })
