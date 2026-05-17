@@ -1,3 +1,13 @@
+import { processPresetCompatMacroString } from '@/lib/preset-compat/macro-processor'
+import type { PresetCompatResolvedRuntime } from '@/lib/preset-compat/resolve-runtime'
+import {
+  createPresetCompatRuntimeMacroProcessing,
+  createPresetCompatRuntimeMetadata,
+  type PresetCompatRuntimeMacroProcessing,
+  type PresetCompatRuntimeMetadata,
+} from '@/lib/preset-compat/runtime-integration'
+import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
+
 export const IMPORTED_PRESET_USER_RULES_HEADING = '## Imported Preset User Rules'
 export const IMPORTED_PRESET_SYSTEM_RULES_HEADING = '## Imported Preset System Rules'
 
@@ -67,6 +77,14 @@ export type PresetCompatPromptAssemblyResult = {
   systemPrompt: string
   userPromptBeforeRegex: string
   metadata: PresetCompatPromptAssemblyMetadata
+}
+
+export type PresetCompatRuntimePromptAssemblyResult = {
+  systemPrompt: string
+  userPrompt: string
+  userPromptBeforeRegex: string
+  promptAssembly: PresetCompatPromptAssemblyMetadata
+  metadata: PresetCompatRuntimeMetadata
 }
 
 type PresetCompatPromptAssemblyParams = {
@@ -313,5 +331,47 @@ export function assemblePresetCompatPrompts(params: PresetCompatPromptAssemblyPa
         stages: buildChannelStages(userSegments),
       },
     },
+  }
+}
+
+export function assemblePresetCompatRuntimePrompts(params: {
+  surfaceId: PresetCompatSurfaceId
+  resolvedRuntime: PresetCompatResolvedRuntime
+  systemPrompt: string
+  userPrompt: string
+  surfaceContextBlocks?: readonly PresetCompatPromptAssemblyContextBlock[]
+  macroProcessing?: PresetCompatRuntimeMacroProcessing
+}) : PresetCompatRuntimePromptAssemblyResult {
+  const macroProcessing = params.macroProcessing ?? createPresetCompatRuntimeMacroProcessing({
+    surfaceId: params.surfaceId,
+    resolvedRuntime: params.resolvedRuntime,
+  })
+  const promptAssembly = assemblePresetCompatPrompts({
+    baseSystemPrompt: params.systemPrompt,
+    baseUserPrompt: params.userPrompt,
+    systemTemplateFragments: params.resolvedRuntime.templateFragments.system.map((fragment) => fragment.text),
+    userTemplateFragments: params.resolvedRuntime.templateFragments.user.map((fragment) => fragment.text),
+    surfaceContextBlocks: params.surfaceContextBlocks,
+    contextBlockFormats: params.resolvedRuntime.contextBlockFormats,
+    namesBehavior: params.resolvedRuntime.namesBehavior,
+    importedPromptRules: params.resolvedRuntime.promptRules.ordered.map((rule) => ({
+      channel: rule.channel,
+      placement: rule.channel === 'system'
+        ? 'append'
+        : rule.injectionPosition === 'after'
+          ? 'append'
+          : 'prepend',
+      text: rule.content,
+    })),
+  })
+  const systemPrompt = processPresetCompatMacroString(promptAssembly.systemPrompt, macroProcessing)
+  const userPromptBeforeRegex = processPresetCompatMacroString(promptAssembly.userPromptBeforeRegex, macroProcessing)
+
+  return {
+    systemPrompt,
+    userPrompt: userPromptBeforeRegex,
+    userPromptBeforeRegex,
+    promptAssembly: promptAssembly.metadata,
+    metadata: createPresetCompatRuntimeMetadata(macroProcessing),
   }
 }

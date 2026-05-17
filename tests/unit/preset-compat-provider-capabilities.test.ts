@@ -699,4 +699,56 @@ describe('preset compat provider capabilities', () => {
     })
     expect(runtime.providerRuntime.provider).toBe('ollama')
   })
+
+  it('tolerates missing transport, promptTemplate, and preservedFields structures from legacy stored shapes', () => {
+    const library = createDefaultPresetCompatLibrary()
+    const preset = createPreset() as unknown as Record<string, unknown>
+    delete preset.transport
+    delete preset.promptTemplate
+    delete preset.preservedFields
+    library.presets['legacy-shape'] = preset as unknown as PresetCompatPresetRecord
+    library.surfaceBindings.rewrite = {
+      ...library.surfaceBindings.rewrite,
+      presetId: 'legacy-shape',
+      enabled: true,
+    }
+
+    const runtime = resolvePresetCompatRuntime({
+      library,
+      surfaceId: 'rewrite',
+      providerDefaults: {
+        provider: 'openai-compatible',
+        openAICompatible: {
+          config: {
+            baseUrl: 'https://default.example/v1',
+            apiKey: 'default-key',
+            model: 'default-model',
+          },
+          request: {
+            temperature: 0.4,
+          },
+        },
+      },
+    })
+
+    expect(runtime.providerRuntime).toEqual({
+      provider: 'openai-compatible',
+      config: {
+        baseUrl: 'https://default.example/v1',
+        apiKey: 'default-key',
+        model: 'default-model',
+      },
+      request: {
+        temperature: 0.81,
+        top_p: 0.92,
+        frequency_penalty: 0.22,
+        presence_penalty: 0.31,
+        max_tokens: 4096,
+      },
+    })
+    expect(runtime.warnings).not.toEqual(expect.arrayContaining([
+      expect.stringContaining('max_context_unlocked'),
+      expect.stringContaining('send_if_empty'),
+    ]))
+  })
 })

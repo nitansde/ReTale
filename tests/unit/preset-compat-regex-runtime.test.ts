@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { createPresetCompatEnvMacroBuiltins } from '@/lib/preset-compat/macro-builtins-env'
+import { registerPresetCompatCoreMacroBuiltins } from '@/lib/preset-compat/macro-builtins-core'
+import { createPresetCompatMacroContext } from '@/lib/preset-compat/macro-context'
+import { createPresetCompatMacroRegistry } from '@/lib/preset-compat/macro-registry'
 import {
   PRESET_COMPAT_REGEX_RUNTIME_MAX_ACTIVE_RULES,
   PRESET_COMPAT_REGEX_RUNTIME_MAX_INPUT_LENGTH,
@@ -24,6 +28,20 @@ function createRegexRecord(overrides: Partial<PresetCompatRegexRecord> = {}): Pr
     runOnEdit: false,
     passthrough: {},
     ...overrides,
+  }
+}
+
+function createMacroOptions(runtimeValues: Record<string, unknown> = {}) {
+  return {
+    context: createPresetCompatMacroContext({
+      surfaceId: 'rewrite',
+      phase: 'regex-replacement',
+      runtimeValues,
+    }),
+    registry: createPresetCompatMacroRegistry([
+      ...registerPresetCompatCoreMacroBuiltins(),
+      ...createPresetCompatEnvMacroBuiltins(),
+    ]),
   }
 }
 
@@ -116,6 +134,73 @@ describe('preset compat regex runtime', () => {
     expect(result.warnings).toEqual([
       'Skipped rule macro-1 because substituteRegex=1 is outside the MVP runtime subset.',
       'Skipped rule invalid-1 because its regex source could not be compiled.',
+    ])
+  })
+
+  it('resolves replacement-time macros after capture substitution when macro evaluation is provided', () => {
+    const result = runPresetCompatRegexRuntime({
+      value: 'Bob',
+      phase: 'user_input',
+      standalone: [createRegexRecord({
+        id: 'macro-runtime-1',
+        pattern: '(Bob)',
+        replacement: '{{user}}-$1',
+        substituteRegex: '1',
+      })],
+      embedded: [],
+      macroProcessor: createMacroOptions({ user: 'Alice' }),
+    })
+
+    expect(result.value).toBe('Alice-Bob')
+    expect(result.appliedRuleIds).toEqual(['macro-runtime-1'])
+    expect(result.skippedRuleIds).toEqual([])
+    expect(result.warnings).toEqual([])
+  })
+
+  it('keeps regex warnings before per-occurrence macro diagnostics in stable order', () => {
+    const result = runPresetCompatRegexRuntime({
+      value: 'hello hello',
+      phase: 'user_input',
+      standalone: [createRegexRecord({
+        id: 'macro-runtime-2',
+        placements: ['user_input', 'md_display'],
+        pattern: 'hello',
+        replacement: '{{user}}',
+        substituteRegex: '1',
+      })],
+      embedded: [],
+      macroProcessor: createMacroOptions(),
+    })
+
+    expect(result.value).toBe(' ')
+    expect(result.appliedRuleIds).toEqual(['macro-runtime-2'])
+    expect(result.skippedRuleIds).toEqual([])
+    expect(result.warnings).toEqual([
+      'Rule macro-runtime-2 preserves unsupported placements (md_display) which are not executed by the MVP runtime.',
+      'Rule macro-runtime-2 replacement macro diagnostic [MISSING_CONTEXT_VALUE]: Macro requires runtime context value: user',
+      'Rule macro-runtime-2 replacement macro diagnostic [MISSING_CONTEXT_VALUE]: Macro requires runtime context value: user',
+    ])
+  })
+
+  it('emits REGEX_MACRO_UNSUPPORTED_MODE for non-MVP substituteRegex macro modes', () => {
+    const result = runPresetCompatRegexRuntime({
+      value: 'hello',
+      phase: 'user_input',
+      standalone: [createRegexRecord({
+        id: 'macro-runtime-unsupported',
+        pattern: 'hello',
+        replacement: '{{user}}',
+        substituteRegex: '2',
+      })],
+      embedded: [],
+      macroProcessor: createMacroOptions({ user: 'Alice' }),
+    })
+
+    expect(result.value).toBe('hello')
+    expect(result.appliedRuleIds).toEqual([])
+    expect(result.skippedRuleIds).toEqual(['macro-runtime-unsupported'])
+    expect(result.warnings).toEqual([
+      'Rule macro-runtime-unsupported replacement macro diagnostic [REGEX_MACRO_UNSUPPORTED_MODE]: substituteRegex=2 is not supported for replacement-time macro substitution.',
     ])
   })
 

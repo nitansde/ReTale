@@ -5,10 +5,22 @@ import {
   PRESET_COMPAT_STATUS_REASON_CODES,
 } from '@/lib/preset-compat/capability-matrix'
 import {
+  PRESET_COMPAT_MACRO_CAPABILITY_MATRIX,
+  PRESET_COMPAT_MACRO_FIELD_FAMILY_LINKS,
+} from '@/lib/preset-compat/macro-types'
+import {
   PRESET_COMPAT_CREATIVE_SURFACE_IDS,
   PRESET_COMPAT_FAIL_CLOSED_SURFACE_IDS,
   PRESET_COMPAT_SURFACE_IDS,
 } from '@/lib/preset-compat/types'
+
+const MACRO_FIELD_FAMILIES = [
+  'macro.setvar',
+  'macro.getvar',
+  'macro.trim',
+  'macro.comment',
+  'macro.user_bot_variable',
+] as const
 
 const DRAFT_FIELD_FAMILIES = [
   'temperature',
@@ -163,6 +175,24 @@ describe('preset compat field family matrix', () => {
           status: 'degraded',
           reason: 'ANALYTICAL_SURFACE_FAIL_CLOSED',
         })
+      }
+    }
+  })
+
+  it('links macro field families to explicit macro capability contracts', () => {
+    for (const fieldFamily of MACRO_FIELD_FAMILIES) {
+      const contract = PRESET_COMPAT_FIELD_FAMILY_MATRIX[fieldFamily]
+
+      expect(contract.category).toBe('macro')
+      expect(contract.macroContractNames).toEqual(PRESET_COMPAT_MACRO_FIELD_FAMILY_LINKS[fieldFamily])
+
+      for (const macroContractName of contract.macroContractNames ?? []) {
+        const macroContract = PRESET_COMPAT_MACRO_CAPABILITY_MATRIX[macroContractName]
+
+        expect(macroContract).toBeDefined()
+        for (const surfaceId of PRESET_COMPAT_CREATIVE_SURFACE_IDS) {
+          expect(macroContract.surfaces[surfaceId].reason).not.toBe('MACRO_TODO')
+        }
       }
     }
   })

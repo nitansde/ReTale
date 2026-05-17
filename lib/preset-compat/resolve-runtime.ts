@@ -17,6 +17,7 @@ import type {
   PresetCompatLibrary,
   PresetCompatPresetRecord,
   PresetCompatPromptRule,
+  PresetCompatPromptTemplateSettings,
   PresetCompatPromptRuleRuntimeContext,
   PresetCompatRuntimeContextBlock,
   PresetCompatResolvedFieldStatus,
@@ -25,6 +26,8 @@ import type {
   PresetCompatRuntimeSnapshot,
   PresetCompatStatusReasonCode,
   PresetCompatSurfaceId,
+  PresetCompatTransportSettings,
+  PresetCompatPreservedFieldSettings,
 } from '@/lib/preset-compat/types'
 
 type PresetCompatOpenAICompatibleRequest = Partial<{
@@ -169,9 +172,40 @@ function getPresetRootPassthrough(preset: PresetCompatPresetRecord | null) {
   return isRecord(root) ? root : {}
 }
 
+function getPresetSeed(preset: PresetCompatPresetRecord | null) {
+  const samplerSeed = preset?.runtimeSampler.seed
+  if (isFiniteNumber(samplerSeed)) {
+    return samplerSeed
+  }
+
+  const root = getPresetRootPassthrough(preset)
+  return isFiniteNumber(root.seed) ? root.seed : null
+}
+
 function getPresetExtensionsPassthrough(preset: PresetCompatPresetRecord | null) {
   const extensions = preset?.passthrough.extensions
   return isRecord(extensions) ? extensions : {}
+}
+
+function getPresetTransport(preset: PresetCompatPresetRecord | null) {
+  const transport = preset?.transport
+  return (isRecord(transport) ? transport : {}) as Partial<PresetCompatTransportSettings>
+}
+
+function getPresetPromptTemplate(preset: PresetCompatPresetRecord | null) {
+  const promptTemplate = preset?.promptTemplate
+  return (isRecord(promptTemplate) ? promptTemplate : {}) as Partial<PresetCompatPromptTemplateSettings>
+}
+
+function getPresetPreservedFields(preset: PresetCompatPresetRecord | null) {
+  const preservedFields = preset?.preservedFields
+  return (isRecord(preservedFields) ? preservedFields : {}) as Partial<PresetCompatPreservedFieldSettings>
+}
+
+function getPromptRuleInjectionTriggers(rule: PresetCompatPromptRule) {
+  return Array.isArray(rule.injectionTrigger)
+    ? rule.injectionTrigger.filter((trigger): trigger is string => typeof trigger === 'string' && trigger.trim().length > 0)
+    : []
 }
 
 function getPresetBoundToSurface(library: PresetCompatLibrary, surfaceId: PresetCompatSurfaceId) {
@@ -195,7 +229,7 @@ function pickNumericPresetFields(context: PresetCompatRuntimeContext) {
     repetition_penalty: context.preset?.runtimeSampler.repetitionPenalty ?? null,
     openai_max_tokens: context.preset?.runtimeSampler.maxTokens ?? null,
     openai_max_context: context.preset?.runtimeSampler.openaiMaxContext ?? null,
-    seed: context.preset?.runtimeSampler.seed ?? null,
+    seed: getPresetSeed(context.preset),
   } satisfies Partial<Record<PresetCompatProviderSamplerField, number | null>>
 }
 
@@ -355,6 +389,9 @@ function buildProviderWarnings(provider: AIProvider, context: PresetCompatRuntim
   const capability = getPresetCompatProviderCapability(provider)
   const root = getPresetRootPassthrough(context.preset)
   const extensions = getPresetExtensionsPassthrough(context.preset)
+  const transport = getPresetTransport(context.preset)
+  const promptTemplate = getPresetPromptTemplate(context.preset)
+  const preservedFields = getPresetPreservedFields(context.preset)
   const numericFields = pickNumericPresetFields(context)
   const numericFieldsByName = numericFields as Partial<Record<string, number | null>>
 
@@ -369,28 +406,28 @@ function buildProviderWarnings(provider: AIProvider, context: PresetCompatRuntim
     repetition_penalty: context.preset?.runtimeSampler.repetitionPenalty ?? null,
     openai_max_tokens: context.preset?.runtimeSampler.maxTokens ?? null,
     openai_max_context: context.preset?.runtimeSampler.openaiMaxContext ?? null,
-    seed: context.preset?.runtimeSampler.seed ?? null,
+    seed: getPresetSeed(context.preset),
     n: context.preset?.runtimeSampler.candidateCount ?? null,
-    max_context_unlocked: context.preset?.transport.maxContextUnlocked ?? null,
-    stream_openai: context.preset?.transport.streamOpenAI ?? null,
-    send_if_empty: context.preset?.promptTemplate.sendIfEmpty ?? null,
-    assistant_prefill: context.preset?.promptTemplate.assistantPrefill ?? null,
-    assistant_impersonation: context.preset?.promptTemplate.assistantImpersonation ?? null,
-    continue_prefill: context.preset?.transport.continuePrefill ?? null,
-    continue_postfix: context.preset?.promptTemplate.continuePostfix ?? null,
-    use_sysprompt: context.preset?.transport.useSysprompt ?? null,
-    squash_system_messages: context.preset?.transport.squashSystemMessages ?? null,
-    function_calling: context.preset?.transport.functionCalling ?? null,
-    show_thoughts: context.preset?.transport.showThoughts ?? null,
-    reasoning_effort: context.preset?.transport.reasoningEffort ?? null,
-    verbosity: context.preset?.transport.verbosity ?? null,
-    bias_preset_selected: context.preset?.preservedFields.biasPresetSelected ?? null,
-    media_inlining: context.preset?.transport.mediaInlining ?? null,
-    inline_image_quality: context.preset?.transport.inlineImageQuality ?? null,
-    enable_web_search: context.preset?.transport.enableWebSearch ?? null,
-    request_images: context.preset?.transport.requestImages ?? null,
-    request_image_aspect_ratio: context.preset?.transport.requestImageAspectRatio ?? null,
-    request_image_resolution: context.preset?.transport.requestImageResolution ?? null,
+    max_context_unlocked: transport.maxContextUnlocked ?? null,
+    stream_openai: transport.streamOpenAI ?? null,
+    send_if_empty: promptTemplate.sendIfEmpty ?? null,
+    assistant_prefill: promptTemplate.assistantPrefill ?? null,
+    assistant_impersonation: promptTemplate.assistantImpersonation ?? null,
+    continue_prefill: transport.continuePrefill ?? null,
+    continue_postfix: promptTemplate.continuePostfix ?? null,
+    use_sysprompt: transport.useSysprompt ?? null,
+    squash_system_messages: transport.squashSystemMessages ?? null,
+    function_calling: transport.functionCalling ?? null,
+    show_thoughts: transport.showThoughts ?? null,
+    reasoning_effort: transport.reasoningEffort ?? null,
+    verbosity: transport.verbosity ?? null,
+    bias_preset_selected: preservedFields.biasPresetSelected ?? null,
+    media_inlining: transport.mediaInlining ?? null,
+    inline_image_quality: transport.inlineImageQuality ?? null,
+    enable_web_search: transport.enableWebSearch ?? null,
+    request_images: transport.requestImages ?? null,
+    request_image_aspect_ratio: transport.requestImageAspectRatio ?? null,
+    request_image_resolution: transport.requestImageResolution ?? null,
   }
 
   for (const [field, value] of Object.entries(statusFieldValues)) {
@@ -633,25 +670,26 @@ function resolveFormattingRuntime(
     }
   }
 
+  const promptTemplate = getPresetPromptTemplate(preset)
   const contextBlocks = normalizeContextBlocks(runtimeContext.surfaceContextBlocks)
   const failClosedSurface = isFailClosedSurface(surfaceId)
 
   const formattingFields = [
     {
       field: 'wi_format' as const,
-      value: preset.promptTemplate.wiFormat,
+      value: promptTemplate.wiFormat ?? null,
       abstraction: 'world_info' as const,
       reason: 'WORLD_INFO_CONTEXT_REQUIRED' as const,
     },
     {
       field: 'scenario_format' as const,
-      value: preset.promptTemplate.scenarioFormat,
+      value: promptTemplate.scenarioFormat ?? null,
       abstraction: 'scenario' as const,
       reason: 'SCENARIO_CONTEXT_REQUIRED' as const,
     },
     {
       field: 'personality_format' as const,
-      value: preset.promptTemplate.personalityFormat,
+      value: promptTemplate.personalityFormat ?? null,
       abstraction: 'personality' as const,
       reason: 'PERSONA_CONTEXT_REQUIRED' as const,
     },
@@ -709,8 +747,8 @@ function resolveFormattingRuntime(
     }))
   }
 
-  if (preset.promptTemplate.namesBehavior !== null) {
-    const namesValue = preset.promptTemplate.namesBehavior
+  if (typeof promptTemplate.namesBehavior === 'number') {
+    const namesValue = promptTemplate.namesBehavior
     if (failClosedSurface) {
       fieldStatuses.push(createFieldStatus({
         field: 'names_behavior',
@@ -777,6 +815,7 @@ function resolvePromptTemplateFragments(
     }
   }
 
+  const promptTemplate = getPresetPromptTemplate(preset)
   const pushFragment = (field: string, text: string) => {
     const fragment = {
       field,
@@ -816,37 +855,37 @@ function resolvePromptTemplateFragments(
   const templateFields = [
     {
       field: 'new_chat_prompt',
-      value: preset.promptTemplate.newChatPrompt,
+      value: promptTemplate.newChatPrompt ?? null,
       shouldApply: resolvedSessionPhase === 'new_chat',
       degradedReason: 'NEW_CHAT_CONTEXT_REQUIRED' as const,
     },
     {
       field: 'new_group_chat_prompt',
-      value: preset.promptTemplate.newGroupChatPrompt,
+      value: promptTemplate.newGroupChatPrompt ?? null,
       shouldApply: hasGroupContext && resolvedSessionPhase === 'new_group_chat',
       degradedReason: (hasGroupContext ? 'NEW_CHAT_CONTEXT_REQUIRED' : 'NO_GROUP_CONTEXT') as PresetCompatStatusReasonCode,
     },
     {
       field: 'new_example_chat_prompt',
-      value: preset.promptTemplate.newExampleChatPrompt,
+      value: promptTemplate.newExampleChatPrompt ?? null,
       shouldApply: hasExampleContext && resolvedSessionPhase === 'new_example_chat',
       degradedReason: (hasExampleContext ? 'NEW_CHAT_CONTEXT_REQUIRED' : 'NO_EXAMPLE_CONTEXT') as PresetCompatStatusReasonCode,
     },
     {
       field: 'continue_nudge_prompt',
-      value: preset.promptTemplate.continueNudgePrompt,
+      value: promptTemplate.continueNudgePrompt ?? null,
       shouldApply: surfaceId === 'continue',
       degradedReason: 'CONTINUE_SURFACE_ONLY' as const,
     },
     {
       field: 'group_nudge_prompt',
-      value: preset.promptTemplate.groupNudgePrompt,
+      value: promptTemplate.groupNudgePrompt ?? null,
       shouldApply: hasGroupContext,
       degradedReason: 'NO_GROUP_CONTEXT' as const,
     },
     {
       field: 'impersonation_prompt',
-      value: preset.promptTemplate.impersonationPrompt,
+      value: promptTemplate.impersonationPrompt ?? null,
       shouldApply: hasImpersonationContext,
       degradedReason: 'NO_IMPERSONATION_CONTEXT' as const,
     },
@@ -924,13 +963,15 @@ function evaluatePromptRuleTriggers(params: {
   surfaceId: PresetCompatSurfaceId
   runtimeContext: PresetCompatPromptRuleRuntimeContext
 }) {
-  if (params.rule.injectionTrigger.length === 0) {
+  const injectionTriggers = getPromptRuleInjectionTriggers(params.rule)
+
+  if (injectionTriggers.length === 0) {
     return {
       status: 'pass' as const,
     }
   }
 
-  const unknownTriggers = params.rule.injectionTrigger.filter(
+  const unknownTriggers = injectionTriggers.filter(
     (trigger) => !PRESET_COMPAT_ALLOWED_PROMPT_RULE_TRIGGERS.has(trigger)
   )
   if (unknownTriggers.length > 0) {
@@ -941,7 +982,7 @@ function evaluatePromptRuleTriggers(params: {
     }
   }
 
-  for (const trigger of params.rule.injectionTrigger) {
+  for (const trigger of injectionTriggers) {
     if (doesPromptRuleTriggerMatch(trigger, params.surfaceId, params.runtimeContext)) {
       return {
         status: 'pass' as const,
@@ -951,8 +992,8 @@ function evaluatePromptRuleTriggers(params: {
 
   return {
     status: 'no-match' as const,
-    reason: getPromptRuleTriggerReason(params.rule.injectionTrigger[0] ?? 'new_chat'),
-    value: params.rule.injectionTrigger,
+    reason: getPromptRuleTriggerReason(injectionTriggers[0] ?? 'new_chat'),
+    value: injectionTriggers,
   }
 }
 
@@ -1135,7 +1176,9 @@ function resolvePromptRules(
       }
     }
 
-    if (rule.injectionTrigger.length > 0) {
+    const injectionTriggers = getPromptRuleInjectionTriggers(rule)
+
+    if (injectionTriggers.length > 0) {
       const triggerEvaluation = evaluatePromptRuleTriggers({
         rule,
         surfaceId,
@@ -1144,7 +1187,7 @@ function resolvePromptRules(
 
       if (triggerEvaluation.status !== 'pass') {
         const metadata: Record<string, unknown> = {
-          injectionTrigger: rule.injectionTrigger,
+          injectionTrigger: injectionTriggers,
         }
         preservedPromptMetadata.push({
           ruleId: rule.id,
@@ -1162,8 +1205,8 @@ function resolvePromptRules(
         }))
         warnings.push(
           triggerEvaluation.reason === 'UNKNOWN_TRIGGER'
-            ? `Prompt rule \`${rule.name}\` was preserved but not applied because it declares unsupported triggers (${rule.injectionTrigger.join(', ')}).`
-            : `Prompt rule \`${rule.name}\` was preserved but not applied because its triggers (${rule.injectionTrigger.join(', ')}) did not match the current runtime context.`
+            ? `Prompt rule \`${rule.name}\` was preserved but not applied because it declares unsupported triggers (${injectionTriggers.join(', ')}).`
+            : `Prompt rule \`${rule.name}\` was preserved but not applied because its triggers (${injectionTriggers.join(', ')}) did not match the current runtime context.`
         )
         return [] as PresetCompatResolvedPromptRuleCandidate[]
       }
@@ -1172,7 +1215,7 @@ function resolvePromptRules(
         field: 'prompts.injection_trigger',
         surface: surfaceId,
         provider: null,
-        value: rule.injectionTrigger,
+        value: injectionTriggers,
         status: 'applied',
         reason: 'SUPPORTED_RUNTIME',
         fragmentId: rule.id,

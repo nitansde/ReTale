@@ -4,6 +4,8 @@
 
 ChatBook ships a neutral `preset-compat` subsystem for importing, storing, editing, exporting, previewing, and selectively applying preset data. It is a compatibility layer, not a claim of full upstream runtime parity.
 
+## Opted-in runtime surfaces
+
 The current runtime applies preset data only on these opted-in creative surfaces:
 
 - `rewrite`
@@ -100,6 +102,8 @@ Route-effect intents:
 
 Preserved-only or degraded-without-request-mapping warnings today include fields such as `top_k`, `top_a`, `min_p`, `repetition_penalty`, `send_if_empty`, `assistant_prefill`, `assistant_impersonation`, `continue_prefill`, `continue_postfix`, `use_sysprompt`, `function_calling`, `show_thoughts`, `reasoning_effort`, `verbosity`, and image-request metadata.
 
+The same current `openai-compatible` preserved or degraded contract also covers route and template fields such as `openai_max_context`, `max_context_unlocked`, `names_behavior`, `impersonation_prompt`, `new_chat_prompt`, `new_group_chat_prompt`, `new_example_chat_prompt`, `continue_nudge_prompt`, `bias_preset_selected`, `wi_format`, `scenario_format`, `personality_format`, `group_nudge_prompt`, `stream_openai`, and `seed`.
+
 ### `ollama`
 
 Applied request fields:
@@ -122,6 +126,8 @@ Route-effect intents:
 - `n` -> `candidateCount`, currently route-degraded
 
 Preserved-only or degraded-without-request-mapping warnings today include fields such as `presence_penalty`, `frequency_penalty`, `top_a`, `assistant_prefill`, `assistant_impersonation`, `continue_prefill`, `continue_postfix`, `use_sysprompt`, `function_calling`, `show_thoughts`, `reasoning_effort`, and `verbosity`.
+
+The same current `ollama` preserved or degraded contract also covers route and template fields such as `openai_max_context`, `max_context_unlocked`, `names_behavior`, `send_if_empty`, `impersonation_prompt`, `new_chat_prompt`, `new_group_chat_prompt`, `new_example_chat_prompt`, `continue_nudge_prompt`, `bias_preset_selected`, `wi_format`, `scenario_format`, `personality_format`, `group_nudge_prompt`, and `stream_openai`.
 
 ## Route behavior
 
@@ -155,6 +161,7 @@ Prompt rules are no longer described as a tiny preserved-only MVP. The current i
 - `prompt_order` is canonical for active order and enabled state.
 - `system_prompt` can reroute a rule into the system channel.
 - supported runtime roles are `system` and `user`.
+- internal preserved prompt-rule property names still visible in storage, export metadata, and tests include `injectionPosition`, `injectionDepth`, `injectionTrigger`, and `forbidOverrides`.
 - `forbid_overrides` protects an imported slot from later fragments.
 - allowlisted `injection_trigger` values are matched against runtime context.
 - allowlisted `condition` values are evaluated without `eval`.
@@ -190,9 +197,38 @@ Preserved or degraded behavior:
 - legacy flat prompt aliases are tracked in `preset.passthrough.legacyFlatPrompts`
 - `extensions.SPreset`, `extensions.MacroNest`, `extensions.ToolBindings`, and `extensions.tavern_helper` are preserved for export
 - image-related fields with `image_` or `inline_image_` prefixes are preserved for export
-- macro-like prompt content such as `{{setvar::...}}`, `{{getvar::...}}`, and `{{trim}}` is preserved with `MACRO_TODO`
+- macro-bearing prompt content stays in `promptRules[].content` and is exported back unchanged
 
 This is why the UI and warnings use the term `preserved-only`.
+
+## Macro capability contract
+
+Macro compatibility is now described by the dedicated contract in `lib/preset-compat/macro-types.ts` instead of the old blanket `MACRO_TODO` placeholder.
+
+- macro names are matched case-insensitively
+- aliases may exist and resolve to a canonical macro name in contract metadata
+- the contract distinguishes `supported-runtime`, `context-partial`, `preserve-storage-only`, and `unsupported-runtime`
+- raw macro text is still preserved in stored preset payloads and exported preset payloads
+- supported and context-partial macros expand at runtime on opted-in preset-compat creative surfaces, including editor preview, `/api/rewrite`, `future_jump_rewrite`, and regex replacement-time substitution
+- analytical surfaces stay fail-closed, and unsupported macros or macros that need missing runtime context resolve to `""` with structured diagnostics instead of mutating stored preset payloads
+
+Current v1 contract examples:
+
+- `setvar`, `getvar`, and `trim` are marked `supported-runtime` and expand through the shared preset-compat runtime on opted-in creative surfaces
+- `user`, `bot`, and `char` / `charIfNotGroup` are marked `context-partial` because they depend on runtime naming context, but they still expand at runtime when that context is available
+- comment-style macros are marked `preserve-storage-only`
+- UI/runtime and STscript-only macros such as `input`, `outlet`, `banned`, `summary`, `hasExtension`, `lastGenerationType`, `var`, `pipe`, and `timesIndex` are explicitly `unsupported-runtime`
+
+Stable macro diagnostic codes for later parser/runtime tasks are:
+
+- `UNKNOWN_MACRO`
+- `UNSUPPORTED_MACRO`
+- `MISSING_CONTEXT_VALUE`
+- `MALFORMED_MACRO`
+- `INVALID_ARGUMENTS`
+- `UNSUPPORTED_RUNTIME_SURFACE`
+- `REGEX_MACRO_UNSUPPORTED_MODE`
+- `MACRO_CONTEXT_WARNING`
 
 ## Detailed field mapping
 

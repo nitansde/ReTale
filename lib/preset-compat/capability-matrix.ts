@@ -8,6 +8,10 @@ import {
   type PresetCompatSurfaceId,
   type PresetCompatStatusReasonCode,
 } from '@/lib/preset-compat/types'
+import {
+  PRESET_COMPAT_MACRO_CAPABILITY_MATRIX,
+  PRESET_COMPAT_MACRO_FIELD_FAMILY_LINKS,
+} from '@/lib/preset-compat/macro-types'
 
 export { PRESET_COMPAT_FIELD_STATUS, PRESET_COMPAT_STATUS_REASON_CODES } from '@/lib/preset-compat/types'
 
@@ -73,6 +77,7 @@ export type PresetCompatFieldFamilyContract = {
   category: PresetCompatFieldFamilyCategory
   fieldPaths: readonly string[]
   creativeResetPromptFamily: boolean
+  macroContractNames?: readonly (keyof typeof PRESET_COMPAT_MACRO_CAPABILITY_MATRIX)[]
   providerClassifications?: Partial<Record<AIProvider, PresetCompatFieldSurfaceClassification>>
   routeClassification?: PresetCompatFieldSurfaceClassification
   surfaceClassifications: Record<PresetCompatSurfaceId, PresetCompatFieldSurfaceClassification>
@@ -823,6 +828,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     category: 'macro',
     fieldPaths: ['prompts[].content:{{setvar::...}}'],
     creativeResetPromptFamily: true,
+    macroContractNames: PRESET_COMPAT_MACRO_FIELD_FAMILY_LINKS['macro.setvar'],
     surfaceClassifications: createSurfaceClassificationMap({ creative: preserved('MACRO_TODO') }),
   },
   {
@@ -830,6 +836,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     category: 'macro',
     fieldPaths: ['prompts[].content:{{getvar::...}}'],
     creativeResetPromptFamily: true,
+    macroContractNames: PRESET_COMPAT_MACRO_FIELD_FAMILY_LINKS['macro.getvar'],
     surfaceClassifications: createSurfaceClassificationMap({ creative: preserved('MACRO_TODO') }),
   },
   {
@@ -837,6 +844,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     category: 'macro',
     fieldPaths: ['prompts[].content:{{trim}}'],
     creativeResetPromptFamily: true,
+    macroContractNames: PRESET_COMPAT_MACRO_FIELD_FAMILY_LINKS['macro.trim'],
     surfaceClassifications: createSurfaceClassificationMap({ creative: preserved('MACRO_TODO') }),
   },
   {
@@ -844,6 +852,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     category: 'macro',
     fieldPaths: ['prompts[].content:comment-macros'],
     creativeResetPromptFamily: true,
+    macroContractNames: PRESET_COMPAT_MACRO_FIELD_FAMILY_LINKS['macro.comment'],
     surfaceClassifications: createSurfaceClassificationMap({ creative: preserved('MACRO_TODO') }),
   },
   {
@@ -851,6 +860,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     category: 'macro',
     fieldPaths: ['prompts[].content:user/bot-variables'],
     creativeResetPromptFamily: true,
+    macroContractNames: PRESET_COMPAT_MACRO_FIELD_FAMILY_LINKS['macro.user_bot_variable'],
     surfaceClassifications: createSurfaceClassificationMap({ creative: preserved('MACRO_TODO') }),
   },
 ] as const satisfies readonly PresetCompatFieldFamilyContract[]

@@ -2,9 +2,21 @@ import type { PresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runt
 import type {
   PresetCompatPromptAssemblyMetadata,
 } from '@/lib/preset-compat/prompt-assembly'
+import { registerPresetCompatCoreMacroBuiltins } from '@/lib/preset-compat/macro-builtins-core'
+import { createPresetCompatEnvMacroBuiltins } from '@/lib/preset-compat/macro-builtins-env'
+import { createPresetCompatRandomTimeMacroBuiltins } from '@/lib/preset-compat/macro-builtins-random-time'
+import { registerPresetCompatVariableMacroBuiltins } from '@/lib/preset-compat/macro-builtins-variables'
+import {
+  createPresetCompatMacroContext,
+  type PresetCompatMacroContext,
+  type PresetCompatMacroDiagnostic,
+} from '@/lib/preset-compat/macro-context'
+import { createPresetCompatMacroRegistry, type PresetCompatMacroRegistry } from '@/lib/preset-compat/macro-registry'
+import type { PresetCompatResolvedRuntime } from '@/lib/preset-compat/resolve-runtime'
 import type {
   PresetCompatResolvedFieldStatus,
   PresetCompatResolvedProviderControlIntent,
+  PresetCompatSurfaceId,
 } from '@/lib/preset-compat/types'
 import { estimateTokenCount } from '@/lib/server/knowledge-store'
 
@@ -32,7 +44,16 @@ type PresetCompatStreamPolicyMetadata = {
   source: 'explicit_request' | 'preset' | 'provider_default' | 'route_unsupported'
 }
 
-export type PresetCompatResponseMetadata = {
+export type PresetCompatRuntimeMacroProcessing = {
+  context: PresetCompatMacroContext
+  registry: PresetCompatMacroRegistry
+}
+
+export type PresetCompatRuntimeMetadata = {
+  macroDiagnostics: PresetCompatMacroDiagnostic[]
+}
+
+export type PresetCompatResponseMetadata = PresetCompatRuntimeMetadata & {
   warnings: string[]
   promptAssembly: PresetCompatPromptAssemblyMetadata
   fieldStatuses: PresetCompatResolvedFieldStatus[]
@@ -53,6 +74,63 @@ type CreativeRouteMetadataResolution = {
   contextWindow: PresetCompatContextWindowMetadata | null
   streamPolicy: PresetCompatStreamPolicyMetadata | null
   metadata: PresetCompatResponseMetadata
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function readNumericSeed(runtime: PresetCompatResolvedRuntime) {
+  const rootSeed = runtime.activePreset?.passthrough?.root
+  if (isRecord(rootSeed) && typeof rootSeed.seed === 'number' && Number.isFinite(rootSeed.seed)) {
+    return rootSeed.seed
+  }
+
+  if (runtime.providerRuntime.provider === 'ollama') {
+    const seed = runtime.providerRuntime.request.options.seed
+    if (typeof seed === 'number' && Number.isFinite(seed)) {
+      return seed
+    }
+  }
+
+  const openAiSeed = runtime.activePreset?.runtimeSampler.seed
+  return typeof openAiSeed === 'number' && Number.isFinite(openAiSeed) ? openAiSeed : 0
+}
+
+function buildRuntimeValues(runtime: PresetCompatResolvedRuntime) {
+  const values: Record<string, unknown> = {}
+  const namesBehavior = runtime.namesBehavior
+  if (namesBehavior) {
+    values.user = namesBehavior.userName
+    values.userName = namesBehavior.userName
+    values.bot = namesBehavior.assistantName
+    values.assistant = namesBehavior.assistantName
+    values.assistantName = namesBehavior.assistantName
+    values.characterName = namesBehavior.assistantName
+  }
+
+  if (runtime.providerRuntime.provider === 'openai-compatible') {
+    if (typeof runtime.providerRuntime.request.max_tokens === 'number') {
+      values.maxTokens = runtime.providerRuntime.request.max_tokens
+      values.maxResponse = runtime.providerRuntime.request.max_tokens
+    }
+  } else {
+    if (typeof runtime.providerRuntime.request.options.num_predict === 'number') {
+      values.maxTokens = runtime.providerRuntime.request.options.num_predict
+      values.maxResponse = runtime.providerRuntime.request.options.num_predict
+    }
+    if (typeof runtime.providerRuntime.request.options.seed === 'number') {
+      values.seed = runtime.providerRuntime.request.options.seed
+    }
+  }
+
+  const openaiMaxContext = runtime.activePreset?.runtimeSampler.openaiMaxContext
+  if (typeof openaiMaxContext === 'number') {
+    values.openaiMaxContext = openaiMaxContext
+    values.maxContext = openaiMaxContext
+  }
+
+  return values
 }
 
 function findProviderControlIntent(
@@ -122,6 +200,35 @@ function trimContextBlocksToBudget(blocks: readonly RouteContextBlock[], budget:
     blocks: remaining,
     trimmedBlockIds,
     tokenEstimate: estimateTokenCount(joinedBlockText(remaining)),
+  }
+}
+
+export function createPresetCompatRuntimeMacroProcessing(params: {
+  surfaceId: PresetCompatSurfaceId
+  resolvedRuntime: PresetCompatResolvedRuntime
+}) : PresetCompatRuntimeMacroProcessing {
+  const context = createPresetCompatMacroContext({
+    surfaceId: params.surfaceId,
+    phase: 'apply-runtime',
+    seed: readNumericSeed(params.resolvedRuntime),
+    runtimeValues: buildRuntimeValues(params.resolvedRuntime),
+  })
+  const registry = createPresetCompatMacroRegistry([
+    ...registerPresetCompatCoreMacroBuiltins(),
+    ...registerPresetCompatVariableMacroBuiltins(),
+    ...createPresetCompatEnvMacroBuiltins(),
+    ...createPresetCompatRandomTimeMacroBuiltins(),
+  ])
+
+  return {
+    context,
+    registry,
+  }
+}
+
+export function createPresetCompatRuntimeMetadata(processing: PresetCompatRuntimeMacroProcessing): PresetCompatRuntimeMetadata {
+  return {
+    macroDiagnostics: [...processing.context.diagnostics],
   }
 }
 
@@ -268,6 +375,7 @@ export function buildPresetCompatResponseMetadata(params: {
   return {
     warnings: params.runtime.warnings,
     promptAssembly: params.runtime.promptAssembly,
+    macroDiagnostics: params.runtime.metadata.macroDiagnostics,
     fieldStatuses: params.fieldStatuses ?? params.runtime.resolvedRuntime.fieldStatuses,
     providerControlIntents: params.runtime.resolvedRuntime.providerControlIntents,
     contextWindow: params.contextWindow ?? null,

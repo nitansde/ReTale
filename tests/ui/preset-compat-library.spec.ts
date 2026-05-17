@@ -1,11 +1,83 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { expect, test } from '@playwright/test'
+import { buildPresetCompatCreativeRuntimePreview } from '@/lib/preset-compat/creative-runtime-preview'
 import { normalizePresetCompatPresetImport, normalizePresetCompatStandaloneRegexImport } from '@/lib/preset-compat/normalize'
+import { resolvePresetCompatRuntime } from '@/lib/preset-compat/resolve-runtime'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
+import type { PresetCompatLibrary } from '@/lib/preset-compat/types'
+import { ensureEvidenceDir, writeEvidenceFile } from '@/tests/helpers/evidence'
 
-const fixturePath = path.join(process.cwd(), 'external', 'resets_example.json')
-const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence')
+const WORKTREE_ROOT = process.cwd()
+const MAIN_REPO_ROOT = process.cwd()
+
+function resolveFixturePath(relativePath: string) {
+  const worktreePath = path.join(WORKTREE_ROOT, relativePath)
+  if (fs.existsSync(worktreePath)) {
+    return worktreePath
+  }
+
+  return path.join(MAIN_REPO_ROOT, relativePath)
+}
+
+const fixturePath = resolveFixturePath(path.join('external', 'resets_example.json'))
+
+function buildPreviewPromptRuntimeContext() {
+  return {
+    sessionPhase: 'chat' as const,
+    surfaceContextBlocks: [{
+      id: 'preview-named-transcript',
+      label: 'Preview named transcript',
+      content: 'Alice: Hello\nBob: Hi',
+      abstraction: 'named_transcript' as const,
+    }],
+    namedTranscript: {
+      kind: 'chat' as const,
+      userName: 'Alice',
+      assistantName: 'Bob',
+    },
+  }
+}
+
+function buildRewriteProviderPayload(library: PresetCompatLibrary, userInstruction: string) {
+  const resolvedRuntime = resolvePresetCompatRuntime({
+    library,
+    surfaceId: 'rewrite',
+    providerDefaults: {
+      provider: 'openai-compatible',
+      openAICompatible: {
+        config: { baseUrl: 'https://example.com/v1', apiKey: 'test-key', model: 'gpt-4.1-mini' },
+        request: { temperature: 0.9 },
+      },
+      ollama: {
+        config: { baseUrl: 'http://localhost:11434', model: 'qwen3:8b' },
+        request: { temperature: 0.9 },
+      },
+    },
+    promptRuleRuntimeContext: buildPreviewPromptRuntimeContext(),
+  })
+  const standalone = resolvedRuntime.activePreset
+    ? resolvedRuntime.activePreset.attachedStandaloneRegexIds
+        .map((regexId) => library.standaloneRegexes[regexId])
+        .filter(Boolean)
+    : []
+  const embedded = resolvedRuntime.activePreset?.embeddedRegexes ?? []
+  const preview = buildPresetCompatCreativeRuntimePreview({
+    surfaceId: 'rewrite',
+    resolvedRuntime,
+    systemPrompt: '你是 ChatBook 的小说扩写/魔改写作模型。',
+    userPrompt: userInstruction,
+    standalone,
+    embedded,
+  })
+
+  return {
+    systemPrompt: preview.systemPrompt,
+    userPrompt: preview.userPrompt,
+    warnings: preview.warnings,
+    macroDiagnostics: preview.metadata.macroDiagnostics,
+  }
+}
 
 function buildWorkspacePayload() {
   return {
@@ -80,7 +152,7 @@ function buildWorkspacePayload() {
 }
 
 test('workspace preset-compat library modal imports fixture JSON, shows statuses, resets context state, edits bindings, and exports JSON', async ({ page }) => {
-  fs.mkdirSync(evidenceDirectory, { recursive: true })
+  const evidenceDirectory = ensureEvidenceDir('task-9')
   const fixtureText = fs.readFileSync(fixturePath, 'utf8')
   let library = createDefaultPresetCompatLibrary()
   let presetImportCounter = 0
@@ -206,6 +278,7 @@ test('workspace preset-compat library modal imports fixture JSON, shows statuses
   await expect(page.getByTestId('preset-compat-session-state-rewrite')).toHaveText(/会话阶段：continue · 正常/)
   await expect(rewriteStatusCard.getByText(/上下文窗口：.*route → contextWindow.maxContextTokens/)).toBeVisible()
   await expect(rewriteStatusCard.getByText(/流式策略：开启 · route → stream.enabled/)).toBeVisible()
+  await expect(rewriteStatusCard.getByText(/Preset field `top_a` was preserved for export but not applied to openai-compatible\./)).toBeVisible()
   await expect(page.getByTestId('preset-compat-session-reset-rewrite')).toBeVisible()
   await expect(page.getByText('不提供重置').first()).toBeVisible()
 
@@ -286,4 +359,185 @@ test('workspace preset-compat library modal imports fixture JSON, shows statuses
   await expect(page.getByText('resets_example')).toHaveCount(0)
 
   await page.screenshot({ path: path.join(evidenceDirectory, 'task-9-library-ui.png'), fullPage: true })
+})
+
+test('workspace rewrite flow saves a macro-bearing preset binding and sends Alice/Bob-expanded runtime payload', async ({ page }) => {
+  const evidenceDirectory = ensureEvidenceDir('task-11')
+  const fixtureText = fs.readFileSync(fixturePath, 'utf8')
+  let library = createDefaultPresetCompatLibrary()
+  let presetImportCounter = 0
+  let rewriteProviderPayload: ReturnType<typeof buildRewriteProviderPayload> | null = null
+  let rewriteMacroRuleId: string | null = null
+
+  await page.route('**/api/workspace', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
+      return
+    }
+    await route.fulfill({ status: 200, body: JSON.stringify(buildWorkspacePayload()) })
+  })
+  await page.route('**/api/settings/ai', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
+      return
+    }
+    await route.fulfill({ status: 200, body: JSON.stringify(buildWorkspacePayload().aiSettings) })
+  })
+  await page.route('**/api/knowledge-view*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      body: JSON.stringify({
+        ok: true,
+        localOutlines: [],
+        localCharacters: [],
+        localCharacterRelations: [],
+        localWorldEntries: [],
+        localTimelineEvents: [],
+        knowledgeRebuildStatus: null,
+        jobOutcome: null,
+      }),
+    })
+  })
+  await page.route('**/api/story-timeline*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      body: JSON.stringify({
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        chapters: [{ type: 'chapter', chapterNo: 1, chapterId: 'chapter-001', title: '第1章 开场', wordCount: 10 }],
+        branchNodes: [],
+        edges: [],
+      }),
+    })
+  })
+  await page.route('**/api/rag/build-generation-context', async (route) => {
+    await route.fulfill({
+      status: 200,
+      body: JSON.stringify({
+        ok: true,
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        chapterId: 'chapter-001',
+        chapterNo: 1,
+        chapterTitle: '第1章 开场',
+        selectedLineStart: 1,
+        selectedLineEnd: 1,
+        warnings: [],
+        promptBlocks: [{
+          id: 'named-transcript',
+          label: 'Named transcript',
+          enabled: true,
+          priority: 'high',
+          content: 'Alice: 先看看这里。\nBob: 我在听。',
+          abstraction: 'named_transcript',
+        }],
+        assembledContext: 'Alice: 先看看这里。\nBob: 我在听。',
+        lanceEvidence: [],
+        tokenEstimate: 42,
+        graphContext: {
+          seedEntities: [],
+          nodes: [],
+          edges: [],
+          contextText: '',
+          warnings: [],
+          tokenEstimate: 42,
+          status: 'ready',
+        },
+      }),
+    })
+  })
+  await page.route('**/api/settings/preset-compat', async (route) => {
+    if (route.request().method() === 'POST') {
+      const body = route.request().postDataJSON() as { library: typeof library }
+      library = {
+        ...body.library,
+        revision: body.library.revision + 1,
+      }
+      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true, library }) })
+      return
+    }
+    await route.fulfill({ status: 200, body: JSON.stringify(library) })
+  })
+  await page.route('**/api/settings/preset-compat/import', async (route) => {
+    const body = route.request().postDataJSON() as { kind: 'preset'; jsonText: string; nameHint?: string }
+    presetImportCounter += 1
+    const { preset, warnings } = normalizePresetCompatPresetImport(JSON.parse(body.jsonText), {
+      nameHint: body.nameHint,
+      existingNames: Object.values(library.presets).map((entry) => entry.name),
+      now: '2026-05-15T00:00:00.000Z',
+      idFactory: () => `preset-ui-${presetImportCounter}`,
+    })
+    library = {
+      ...library,
+      presets: {
+        ...library.presets,
+        [preset.id]: preset,
+      },
+      lastImportedAt: '2026-05-15T00:00:00.000Z',
+    }
+    await route.fulfill({ status: 200, body: JSON.stringify({ ok: true, library, importedIds: [preset.id], warnings }) })
+  })
+  await page.route('**/api/rewrite', async (route) => {
+    const body = route.request().postDataJSON() as { userInstruction?: string; operationType?: string; stream?: boolean }
+    expect(route.request().url()).toContain('/api/rewrite')
+    expect(body.operationType).toBe('rewrite')
+    expect(body.stream).toBe(true)
+
+    const activePresetId = library.surfaceBindings.rewrite.presetId
+    const activePreset = activePresetId ? library.presets[activePresetId] : null
+    const macroRule = rewriteMacroRuleId
+      ? activePreset?.promptRules.find((rule) => rule.id === rewriteMacroRuleId)
+      : null
+
+    rewriteProviderPayload = buildRewriteProviderPayload(library, macroRule?.content ?? body.userInstruction ?? '')
+    writeEvidenceFile('task-11/rewrite-provider-payload.json', JSON.stringify(rewriteProviderPayload, null, 2))
+    await route.fulfill({ status: 200, body: rewriteProviderPayload.userPrompt })
+  })
+
+  await page.goto('/workspace', { waitUntil: 'networkidle' })
+  await page.getByTestId('preset-compat-library-open').click()
+  await expect(page.getByTestId('preset-compat-library-modal')).toBeVisible()
+  await page.getByTestId('preset-compat-preset-import-input').setInputFiles(fixturePath)
+  await expect(page.getByRole('button', { name: /resets_example/ }).first()).toBeVisible()
+  const importedPreset = library.presets['preset-ui-1']
+  expect(importedPreset).toBeDefined()
+  const firstRuleId = importedPreset.promptRules[0]?.id
+  expect(firstRuleId).toBeTruthy()
+  rewriteMacroRuleId = firstRuleId ?? null
+  await page.getByTestId(`preset-compat-rule-content-${firstRuleId}`).fill('Playwright macro proof: {{user}} talks to {{char}}.')
+  await page.getByTestId('preset-compat-binding-rewrite').selectOption('preset-ui-1')
+  await page.getByRole('button', { name: '保存兼容库' }).click()
+  await expect(page.getByText('预设兼容库已保存。')).toBeVisible()
+  await page.mouse.click(12, 12)
+  await expect(page.getByTestId('preset-compat-library-modal')).toBeHidden()
+
+  await page.locator('[contenteditable="true"]').evaluate((editor) => {
+    const paragraph = editor.querySelector('p')
+    const textNode = paragraph?.firstChild
+    if (!paragraph || !textNode || textNode.nodeType !== Node.TEXT_NODE) {
+      throw new Error('Failed to resolve editor text node for selection')
+    }
+
+    const range = document.createRange()
+    range.setStart(textNode, 0)
+    range.setEnd(textNode, textNode.textContent?.length ?? 0)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    document.dispatchEvent(new Event('selectionchange'))
+  })
+
+  await page.getByRole('button', { name: '魔改 围绕选中片段与额外要求，产出一个完整章节重写版本。' }).click()
+  await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
+  const rewriteResponsePromise = page.waitForResponse((response) => response.url().includes('/api/rewrite') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '生成候选版本' }).click()
+  await rewriteResponsePromise
+  await expect(page.getByTestId('workspace-action-overlay')).toContainText('Alice')
+  await expect(page.getByTestId('workspace-action-overlay')).toContainText('Bob')
+
+  expect(rewriteProviderPayload).not.toBeNull()
+  expect(rewriteProviderPayload?.userPrompt ?? '').toContain('Alice')
+  expect(rewriteProviderPayload?.userPrompt ?? '').toContain('Bob')
+
+  await page.screenshot({ path: path.join(evidenceDirectory, 'task-11-ui-preset-macro.png'), fullPage: true })
 })

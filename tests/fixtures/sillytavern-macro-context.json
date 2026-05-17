@@ -1,0 +1,21 @@
+{
+  "now": "2026-05-16T00:00:00.000Z",
+  "seed": 7,
+  "runtimeValues": {
+    "user": "PreviewUser",
+    "userName": "PreviewUser",
+    "char": "PreviewChar",
+    "charName": "PreviewChar",
+    "character": "PreviewChar",
+    "characterName": "PreviewChar",
+    "assistant": "PreviewChar",
+    "assistantName": "PreviewChar",
+    "bot": "PreviewChar",
+    "lastusermessage": "PreviewUser says hello.",
+    "lastUserMessage": "PreviewUser says hello.",
+    "lastcharmessage": "PreviewChar answers quietly.",
+    "lastCharMessage": "PreviewChar answers quietly."
+  },
+  "localVariables": {},
+  "globalVariables": {}
+}

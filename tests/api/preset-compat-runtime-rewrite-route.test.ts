@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { deserializePresetCompatResponseMetadata } from '@/lib/preset-compat/runtime-integration'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
+import type { PresetCompatMacroDiagnostic } from '@/lib/preset-compat/macro-context'
 import type { PresetCompatLibrary, PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import type { AISettings } from '@/lib/types'
 
@@ -292,6 +293,105 @@ function createRouteEffectsLibrary(params: {
   return library
 }
 
+function createMacroRuntimeLibrary(): PresetCompatLibrary {
+  const library = createDefaultPresetCompatLibrary()
+  const presetId = 'rewrite-macro-preset'
+
+  library.presets[presetId] = {
+    id: presetId,
+    name: 'rewrite macro preset',
+    sourceApiId: 'openai',
+    promptRules: [
+      {
+        id: 'rewrite-macro-user-rule',
+        name: 'rewrite macro user rule',
+        role: 'user',
+        content: 'Speaker {{user}} meets {{char}}. Unsupported={{input}} Missing={{lastMessage}}.',
+        enabled: true,
+        marker: false,
+        injectAsSystemPrompt: false,
+        injectionPosition: 'before',
+        injectionDepth: null,
+        injectionOrder: 1,
+        injectionTrigger: [],
+        forbidOverrides: false,
+        condition: null,
+        passthrough: {},
+      },
+    ],
+    promptOrderLists: {
+      rewrite: ['rewrite-macro-user-rule'],
+    },
+    embeddedRegexes: [],
+    attachedStandaloneRegexIds: [],
+    runtimeSampler: {
+      temperature: null,
+      topP: null,
+      topK: null,
+      topA: null,
+      minP: null,
+      presencePenalty: null,
+      frequencyPenalty: null,
+      repetitionPenalty: null,
+      openaiMaxContext: null,
+      maxTokens: null,
+      seed: 2468,
+      candidateCount: null,
+    },
+    promptTemplate: {
+      namesBehavior: 1,
+      sendIfEmpty: null,
+      impersonationPrompt: null,
+      newChatPrompt: null,
+      newGroupChatPrompt: null,
+      newExampleChatPrompt: null,
+      continueNudgePrompt: null,
+      wiFormat: null,
+      scenarioFormat: null,
+      personalityFormat: null,
+      groupNudgePrompt: null,
+      assistantPrefill: null,
+      assistantImpersonation: null,
+      continuePostfix: null,
+      legacyMainPrompt: null,
+      legacyNsfwPrompt: null,
+      legacyJailbreakPrompt: null,
+    },
+    transport: {
+      maxContextUnlocked: null,
+      streamOpenAI: null,
+      useSysprompt: null,
+      squashSystemMessages: null,
+      mediaInlining: null,
+      inlineImageQuality: null,
+      continuePrefill: null,
+      functionCalling: null,
+      showThoughts: null,
+      reasoningEffort: null,
+      verbosity: null,
+      enableWebSearch: null,
+      requestImages: null,
+      requestImageAspectRatio: null,
+      requestImageResolution: null,
+    },
+    preservedFields: {
+      biasPresetSelected: null,
+    },
+    passthrough: {},
+    importWarnings: [],
+    createdAt: '2026-05-15T00:00:00.000Z',
+    updatedAt: '2026-05-15T00:00:00.000Z',
+  }
+
+  library.surfaceBindings.rewrite = {
+    ...library.surfaceBindings.rewrite,
+    enabled: true,
+    presetId,
+  }
+
+  return library
+}
+
 function createRequest(operationType: PresetCompatSurfaceId, body: Record<string, unknown>) {
   return new Request('http://localhost/api/rewrite', {
     method: 'POST',
@@ -314,6 +414,7 @@ function readPresetCompatHeader(response: Response) {
   const raw = response.headers.get('X-ChatBook-Preset-Compat')
   expect(raw).toBeTruthy()
   return JSON.parse(Buffer.from(String(raw), 'base64').toString('utf8')) as {
+    macroDiagnostics: PresetCompatMacroDiagnostic[]
     fieldStatuses: Array<{ field: string; status: string; reason: string }>
     contextWindow: null | {
       supported: boolean
@@ -540,6 +641,81 @@ describe('preset compat rewrite route runtime', () => {
     expect(secondRequestBody.stream).toBeUndefined()
     expect(secondRequestBody.response_format).toEqual({ type: 'json_object' })
     expect(thirdRequestBody.stream).toBe(true)
+  })
+
+  it('expands macro-bearing bound presets into provider payloads and returns macro diagnostics metadata', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createMacroRuntimeLibrary(),
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              candidates: ['RAW OUTPUT'],
+            }),
+          },
+        },
+      ],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', {
+      stream: false,
+      presetCompatRuntimeContext: {
+        namedTranscript: {
+          kind: 'chat',
+          userName: 'Alice',
+          assistantName: 'Bob',
+        },
+      },
+    }))
+
+    expect(response.status).toBe(200)
+    const expectedDiagnostics: PresetCompatMacroDiagnostic[] = [
+      {
+        code: 'UNSUPPORTED_MACRO',
+        message: 'Macro is not supported on rewrite: input',
+        macroName: 'input',
+        surfaceId: 'rewrite',
+        phase: 'apply-runtime',
+      },
+      {
+        code: 'MISSING_CONTEXT_VALUE',
+        message: 'Macro requires runtime context value: lastmessage',
+        macroName: 'lastmessage',
+        surfaceId: 'rewrite',
+        phase: 'apply-runtime',
+      },
+    ]
+    const payload = await response.json() as {
+      metadata?: {
+        macroDiagnostics: PresetCompatMacroDiagnostic[]
+      }
+      candidates: Array<{ content: string }>
+      presetCompat: {
+        macroDiagnostics: PresetCompatMacroDiagnostic[]
+      }
+    }
+    expect(payload.candidates.map((candidate) => candidate.content)).toEqual(['RAW OUTPUT'])
+    expect(payload.metadata?.macroDiagnostics).toEqual(expectedDiagnostics)
+    expect(payload.presetCompat.macroDiagnostics).toEqual(expectedDiagnostics)
+    expect(readPresetCompatHeader(response).macroDiagnostics).toEqual(expectedDiagnostics)
+
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit
+    const requestBody = JSON.parse(String(requestInit.body)) as {
+      messages: Array<{ role: string; content: string }>
+    }
+    expect(requestBody.messages[2]?.content).toContain('Speaker Alice meets Bob.')
+    expect(requestBody.messages[2]?.content).not.toContain('{{user}}')
+    expect(requestBody.messages[2]?.content).not.toContain('{{char}}')
+    expect(requestBody.messages[2]?.content).not.toContain('{{input}}')
+    expect(requestBody.messages[2]?.content).not.toContain('{{lastMessage}}')
   })
 
   it('trims context blocks deterministically from lowest-priority tails when openai_max_context is applied', async () => {

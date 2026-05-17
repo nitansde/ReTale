@@ -4,7 +4,7 @@ import type {
   PresetCompatSurfaceId,
 } from '@/lib/preset-compat/types'
 import {
-  assemblePresetCompatPrompts,
+  assemblePresetCompatRuntimePrompts,
   type PresetCompatPromptAssemblyMetadata,
 } from '@/lib/preset-compat/prompt-assembly'
 import { runPresetCompatRegexRuntime } from '@/lib/preset-compat/regex-runtime'
@@ -13,6 +13,10 @@ import {
   type PresetCompatResolvedRuntime,
   type PresetCompatRuntimeProviderDefaults,
 } from '@/lib/preset-compat/resolve-runtime'
+import {
+  createPresetCompatRuntimeMacroProcessing,
+  type PresetCompatRuntimeMetadata,
+} from '@/lib/preset-compat/runtime-integration'
 import { loadStoredPresetCompatLibrary } from '@/lib/server/preset-compat-library'
 
 export type PresetCompatCreativeRuntime = {
@@ -21,6 +25,7 @@ export type PresetCompatCreativeRuntime = {
   userPrompt: string
   warnings: string[]
   promptAssembly: PresetCompatPromptAssemblyMetadata
+  metadata: PresetCompatRuntimeMetadata
   hasActiveOutputRegex: boolean
   applyOutputRuntime: (value: string) => {
     value: string
@@ -66,31 +71,21 @@ export function applyPresetCompatCreativeRuntime(params: {
         .filter((regex): regex is PresetCompatRegexRecord => Boolean(regex))
     : []
   const embedded = resolvedRuntime.activePreset?.embeddedRegexes ?? []
-  const assembledPrompts = assemblePresetCompatPrompts({
-    baseSystemPrompt: params.systemPrompt,
-    baseUserPrompt: params.userPrompt,
-    systemTemplateFragments: resolvedRuntime.templateFragments.system.map((fragment) => fragment.text),
-    userTemplateFragments: resolvedRuntime.templateFragments.user.map((fragment) => fragment.text),
+  const macroProcessing = createPresetCompatRuntimeMacroProcessing({
+    surfaceId: params.surfaceId,
+    resolvedRuntime,
+  })
+  const assembledPrompts = assemblePresetCompatRuntimePrompts({
+    surfaceId: params.surfaceId,
+    resolvedRuntime,
+    systemPrompt: params.systemPrompt,
+    userPrompt: params.userPrompt,
+    macroProcessing,
     surfaceContextBlocks: params.promptRuleRuntimeContext?.surfaceContextBlocks?.map((block) => ({
       id: block.id,
       content: block.content,
       abstraction: block.abstraction,
     })),
-    contextBlockFormats: resolvedRuntime.contextBlockFormats,
-    namesBehavior: resolvedRuntime.namesBehavior,
-    importedPromptRules: resolvedRuntime.promptRules.ordered.map((rule) => {
-      const placement = rule.channel === 'system'
-        ? 'append'
-        : rule.injectionPosition === 'after'
-          ? 'append'
-          : 'prepend'
-
-      return {
-        channel: rule.channel,
-        placement,
-        text: rule.content,
-      }
-    }),
   })
   const inputRuntime = runPresetCompatRegexRuntime({
     value: assembledPrompts.userPromptBeforeRegex,
@@ -98,6 +93,7 @@ export function applyPresetCompatCreativeRuntime(params: {
     standalone,
     embedded,
     isPrompt: true,
+    macroProcessor: macroProcessing,
   })
 
   return {
@@ -106,10 +102,10 @@ export function applyPresetCompatCreativeRuntime(params: {
     userPrompt: inputRuntime.value,
     warnings: [...resolvedRuntime.warnings, ...inputRuntime.warnings],
     promptAssembly: {
-      ...assembledPrompts.metadata,
+      ...assembledPrompts.promptAssembly,
       user: {
-        ...assembledPrompts.metadata.user,
-        stages: assembledPrompts.metadata.user.stages.map((stage) => stage.stage === 'regex_processing'
+        ...assembledPrompts.promptAssembly.user,
+        stages: assembledPrompts.promptAssembly.user.stages.map((stage) => stage.stage === 'regex_processing'
           ? {
               stage: 'regex_processing',
               status: 'applied',
@@ -118,6 +114,7 @@ export function applyPresetCompatCreativeRuntime(params: {
           : stage),
       },
     },
+    metadata: assembledPrompts.metadata,
     hasActiveOutputRegex: hasActiveAssistantOutputRegex([...standalone, ...embedded]),
     applyOutputRuntime(value: string) {
       return runPresetCompatRegexRuntime({

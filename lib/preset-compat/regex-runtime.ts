@@ -1,4 +1,9 @@
 import { getRegexExportMeta } from '@/lib/preset-compat/normalize'
+import type { PresetCompatMacroDiagnostic } from '@/lib/preset-compat/macro-context'
+import {
+  processPresetCompatMacroString,
+  type ProcessPresetCompatMacroOptions,
+} from '@/lib/preset-compat/macro-processor'
 import type { PresetCompatRegexPlacement, PresetCompatRegexRecord } from '@/lib/preset-compat/types'
 
 export const PRESET_COMPAT_REGEX_RUNTIME_MAX_ACTIVE_RULES = 100
@@ -16,6 +21,7 @@ export type PresetCompatRegexRuntimeOptions = {
   isPrompt?: boolean
   isMarkdown?: boolean
   isEdit?: boolean
+  macroProcessor?: ProcessPresetCompatMacroOptions | null
 }
 
 export type PresetCompatRegexRuntimeResult = {
@@ -170,6 +176,30 @@ function getOrderedRules(options: Pick<PresetCompatRegexRuntimeOptions, 'standal
   return [...options.standalone, ...options.embedded]
 }
 
+function formatReplacementMacroDiagnostic(ruleId: string, diagnostic: PresetCompatMacroDiagnostic) {
+  return `Rule ${ruleId} replacement macro diagnostic [${diagnostic.code}]: ${diagnostic.message}`
+}
+
+function formatUnsupportedRegexMacroModeWarning(ruleId: string, substituteRegex: number) {
+  return `Rule ${ruleId} replacement macro diagnostic [REGEX_MACRO_UNSUPPORTED_MODE]: substituteRegex=${substituteRegex} is not supported for replacement-time macro substitution.`
+}
+
+function resolveReplacementMacros(
+  rule: PresetCompatRegexRecord,
+  replacement: string,
+  macroProcessor: ProcessPresetCompatMacroOptions,
+  warnings: string[],
+) {
+  const diagnosticsStart = macroProcessor.context.diagnostics.length
+  const nextReplacement = processPresetCompatMacroString(replacement, macroProcessor)
+
+  for (const diagnostic of macroProcessor.context.diagnostics.slice(diagnosticsStart)) {
+    warnings.push(formatReplacementMacroDiagnostic(rule.id, diagnostic))
+  }
+
+  return nextReplacement
+}
+
 export function runPresetCompatRegexRuntime(options: PresetCompatRegexRuntimeOptions): PresetCompatRegexRuntimeResult {
   const warnings: string[] = []
   const appliedRuleIds: string[] = []
@@ -230,11 +260,19 @@ export function runPresetCompatRegexRuntime(options: PresetCompatRegexRuntimeOpt
 
     const substituteRegex = getEffectiveSubstituteRegex(rule)
     if (substituteRegex !== 0) {
+      if (substituteRegex === 1 && options.macroProcessor) {
+        // Supported below via replacement-time macro evaluation.
+      } else if (options.macroProcessor) {
+        warnings.push(formatUnsupportedRegexMacroModeWarning(rule.id, substituteRegex))
+        skippedRuleIds.push(rule.id)
+        continue
+      } else {
       warnings.push(
         `Skipped rule ${rule.id} because substituteRegex=${substituteRegex} is outside the MVP runtime subset.`
       )
       skippedRuleIds.push(rule.id)
       continue
+      }
     }
 
     let compiledRegex: RegExp
@@ -252,8 +290,19 @@ export function runPresetCompatRegexRuntime(options: PresetCompatRegexRuntimeOpt
         ? groupsValue as ReplacementGroups
         : {}
       const captures = args.slice(0, maybeNamedGroups === groupsValue ? -3 : -2)
+      const resolvedReplacement = applyReplacementTemplate(
+        rule.replacement,
+        match,
+        captures,
+        maybeNamedGroups,
+        rule.trimStrings,
+      )
 
-      return applyReplacementTemplate(rule.replacement, match, captures, maybeNamedGroups, rule.trimStrings)
+      if (substituteRegex === 1 && options.macroProcessor) {
+        return resolveReplacementMacros(rule, resolvedReplacement, options.macroProcessor, warnings)
+      }
+
+      return resolvedReplacement
     })
     appliedRuleIds.push(rule.id)
   }

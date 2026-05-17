@@ -6,7 +6,9 @@ import {
   PRESET_COMPAT_OPTED_IN_SURFACE_IDS,
   PRESET_COMPAT_SURFACE_REGISTRY,
 } from '@/lib/preset-compat/surface-contract'
+import { buildPresetCompatCreativeRuntimePreview } from '@/lib/preset-compat/creative-runtime-preview'
 import { resolvePresetCompatRuntime } from '@/lib/preset-compat/resolve-runtime'
+import type { PresetCompatMacroDiagnostic } from '@/lib/preset-compat/macro-context'
 import {
   PRESET_COMPAT_CREATIVE_SURFACE_IDS,
   type PresetCompatResolvedFieldStatus,
@@ -47,6 +49,12 @@ type PresetCompatPresetEditorProps = {
 type SurfaceRuntimePreview = {
   surfaceId: PresetCompatSurfaceId
   runtime: ReturnType<typeof resolvePresetCompatRuntime>
+  promptPreview: {
+    systemPrompt: string
+    userPrompt: string
+    warnings: string[]
+    macroDiagnostics: PresetCompatMacroDiagnostic[]
+  }
   providerIntents: PresetCompatResolvedProviderControlIntent[]
   sessionPhase: PresetCompatSessionPhase
   resetPending: boolean
@@ -114,6 +122,7 @@ const REASON_LABELS: Partial<Record<PresetCompatResolvedFieldStatus['reason'], s
   VIRTUAL_DEPTH_REQUIRED: '这个字段需要真实聊天深度，字符串界面无法安全模拟。',
   FORBID_OVERRIDES_PROTECTED: '同一插槽已被 forbidOverrides 片段保护。',
   MACRO_TODO: '宏语义暂时只保留导出。',
+  UNSUPPORTED_RUNTIME_SURFACE: '该运行时界面不支持这类宏语义。',
   PRESERVED_EXPORT_ONLY: '保留在导出载荷中，但当前界面不会执行。',
   ANALYTICAL_SURFACE_FAIL_CLOSED: '分析型界面保持 fail-closed，不接入创作预设字段。',
 }
@@ -177,13 +186,33 @@ function resolveActiveSurfaceFromSessionState(params: {
 
 function buildPromptRuleWarnings(rule: PresetCompatPromptRule) {
   const warnings: string[] = []
+  const injectionTriggers = Array.isArray(rule.injectionTrigger) ? rule.injectionTrigger : []
   if (rule.marker) warnings.push('Marker prompts are preserved-only in MVP runtime.')
   if (rule.role !== 'system' && rule.role !== 'user') warnings.push(`Role \`${rule.role}\` is preserved-only and not applied at runtime.`)
   if (rule.injectionPosition !== 'before' && rule.injectionPosition !== 'none') warnings.push(`Injection position \`${rule.injectionPosition}\` is preserved-only.`)
   if (rule.injectionDepth !== null) warnings.push('Injection depth is preserved-only in MVP runtime.')
-  if (rule.injectionTrigger.length > 0) warnings.push('Injection trigger is preserved-only in MVP runtime.')
+  if (injectionTriggers.length > 0) warnings.push('Injection trigger is preserved-only in MVP runtime.')
   if (rule.forbidOverrides) warnings.push('`forbidOverrides` is preserved-only in MVP runtime.')
   return warnings
+}
+
+function buildPreviewPromptRuntimeContext(sessionPhase: PresetCompatSessionPhase) {
+  return {
+    sessionPhase,
+    surfaceContextBlocks: [
+      {
+        id: 'preview-named-transcript',
+        label: 'Preview named transcript',
+        content: 'Alice: Hello\nBob: Hi',
+        abstraction: 'named_transcript' as const,
+      },
+    ],
+    namedTranscript: {
+      kind: 'chat' as const,
+      userName: 'Alice',
+      assistantName: 'Bob',
+    },
+  }
 }
 
 function handleRuleContentChange(
@@ -251,14 +280,32 @@ export function PresetCompatPresetEditor({
         library: previewLibrary,
         surfaceId,
         providerDefaults,
-        promptRuleRuntimeContext: {
-          sessionPhase,
-        },
+        promptRuleRuntimeContext: buildPreviewPromptRuntimeContext(sessionPhase),
+      })
+      const standalone = runtime.activePreset
+        ? runtime.activePreset.attachedStandaloneRegexIds
+            .map((regexId) => previewLibrary.standaloneRegexes[regexId])
+            .filter((regex): regex is PresetCompatRegexRecord => Boolean(regex))
+        : []
+      const embedded = runtime.activePreset?.embeddedRegexes ?? []
+      const promptPreview = buildPresetCompatCreativeRuntimePreview({
+        surfaceId,
+        resolvedRuntime: runtime,
+        systemPrompt: '',
+        userPrompt: '',
+        standalone,
+        embedded,
       })
 
       return {
         surfaceId,
         runtime,
+        promptPreview: {
+          systemPrompt: promptPreview.systemPrompt,
+          userPrompt: promptPreview.userPrompt,
+          warnings: promptPreview.warnings,
+          macroDiagnostics: promptPreview.metadata.macroDiagnostics,
+        },
         providerIntents: runtime.providerControlIntents.filter((intent) => intent.field === 'max_context_unlocked' || intent.field === 'openai_max_context' || intent.field === 'stream_openai'),
         sessionPhase,
         resetPending: sessionEntry?.resetPending ?? false,
@@ -397,6 +444,54 @@ export function PresetCompatPresetEditor({
                         流式策略：{streamIntent.value === true ? '开启' : '关闭'} · route → {streamIntent.path}
                       </span>
                     ) : null}
+                  </div>
+                ) : null}
+
+                <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                  <label className="block rounded-[18px] border border-white/8 bg-black/20 p-3">
+                    <span className="mb-2 block text-[11px] uppercase tracking-[0.14em] text-zinc-500">System preview</span>
+                    <textarea
+                      readOnly
+                      value={preview.promptPreview.systemPrompt}
+                      data-testid={`preset-compat-preview-system-${preview.surfaceId}`}
+                      className="h-28 w-full rounded-2xl border border-white/10 bg-[#090b10] px-4 py-3 text-xs leading-6 text-zinc-200 outline-none"
+                    />
+                  </label>
+                  <label className="block rounded-[18px] border border-white/8 bg-black/20 p-3">
+                    <span className="mb-2 block text-[11px] uppercase tracking-[0.14em] text-zinc-500">User preview</span>
+                    <textarea
+                      readOnly
+                      value={preview.promptPreview.userPrompt}
+                      data-testid={`preset-compat-preview-user-${preview.surfaceId}`}
+                      className="h-28 w-full rounded-2xl border border-white/10 bg-[#090b10] px-4 py-3 text-xs leading-6 text-zinc-200 outline-none"
+                    />
+                  </label>
+                </div>
+
+                {preview.promptPreview.macroDiagnostics.length ? (
+                  <div className="mt-3 rounded-[18px] border border-rose-300/18 bg-rose-500/8 p-3">
+                    <p className="text-[11px] uppercase tracking-[0.14em] text-rose-100/80">Macro diagnostics</p>
+                    <ul className="mt-2 space-y-2 text-xs leading-5 text-rose-100">
+                      {preview.promptPreview.macroDiagnostics.map((diagnostic, index) => (
+                        <li
+                          key={`${preview.surfaceId}-${diagnostic.code}-${diagnostic.macroName ?? index}`}
+                          data-testid={`preset-compat-macro-diagnostic-${preview.surfaceId}-${index}`}
+                        >
+                          <span className="font-mono text-[11px]">{diagnostic.code}</span>
+                          <span className="mx-2 text-rose-200/60">·</span>
+                          <span>{diagnostic.message}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {preview.promptPreview.warnings.length ? (
+                  <div className="mt-3 rounded-[18px] border border-amber-300/18 bg-amber-500/8 p-3">
+                    <p className="text-[11px] uppercase tracking-[0.14em] text-amber-100/80">Runtime warnings</p>
+                    <ul className="mt-2 space-y-1 text-xs leading-5 text-amber-100">
+                      {preview.promptPreview.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+                    </ul>
                   </div>
                 ) : null}
 

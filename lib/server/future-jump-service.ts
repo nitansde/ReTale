@@ -41,6 +41,8 @@ import type {
   WhatIfDeltaRecord,
   WhatIfSessionDetail,
 } from '@/lib/story-branch-types'
+import type { PresetCompatRuntimeMetadata } from '@/lib/preset-compat/runtime-integration'
+import type { PresetCompatPromptRuleRuntimeContext } from '@/lib/preset-compat/types'
 import { uid } from '@/lib/utils'
 
 const BRIDGE_SUMMARY_MIN_LENGTH = 300
@@ -56,6 +58,7 @@ type GenerateFutureJumpInput = {
   targetOutlineChapterId: string
   parentTimelineNodeId?: string | null
   userDirection?: string
+  presetCompatRuntimeContext?: PresetCompatPromptRuleRuntimeContext
 }
 
 type ReviseFutureJumpInput = {
@@ -63,6 +66,7 @@ type ReviseFutureJumpInput = {
   branchId: string
   runId: string
   userFeedback: string
+  presetCompatRuntimeContext?: PresetCompatPromptRuleRuntimeContext
 }
 
 type FutureJumpMutationResult = {
@@ -893,12 +897,7 @@ export async function generateTargetNodeRewrite(params: {
   bridgeSummary: string
   userDirection?: string
   userFeedback?: string
-  promptRuleRuntimeContext?: {
-    sessionPhase?: 'new_chat' | 'new_group_chat' | 'new_example_chat' | 'continue' | null
-    hasGroupContext?: boolean
-    hasImpersonationContext?: boolean
-    supportsVirtualDepth?: boolean
-  }
+  presetCompatRuntimeContext?: PresetCompatPromptRuleRuntimeContext
 }) {
   const rewriteSettings = loadStoredAISettings().rewrite
   const runtime = applyPresetCompatCreativeRuntime({
@@ -921,7 +920,7 @@ export async function generateTargetNodeRewrite(params: {
       userDirection: params.userDirection?.trim() || '',
       userFeedback: params.userFeedback,
     }),
-    promptRuleRuntimeContext: params.promptRuleRuntimeContext,
+    promptRuleRuntimeContext: params.presetCompatRuntimeContext,
   })
   const presetCompat = resolveCreativeRoutePresetCompatMetadata({
     runtime,
@@ -998,9 +997,10 @@ export async function generateFutureJump(input: GenerateFutureJumpInput): Promis
       context,
       bridgeSummary,
       userDirection: input.userDirection,
-      promptRuleRuntimeContext: {
-        sessionPhase: 'new_chat',
-        supportsVirtualDepth: false,
+      presetCompatRuntimeContext: {
+        ...input.presetCompatRuntimeContext,
+        sessionPhase: input.presetCompatRuntimeContext?.sessionPhase ?? 'new_chat',
+        supportsVirtualDepth: input.presetCompatRuntimeContext?.supportsVirtualDepth ?? false,
       },
     })
     const run = await appendFutureJumpRevision({
@@ -1066,9 +1066,10 @@ export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<Fu
       bridgeSummary,
       userDirection: run.userDirection,
       userFeedback,
-      promptRuleRuntimeContext: {
-        sessionPhase: 'continue',
-        supportsVirtualDepth: false,
+      presetCompatRuntimeContext: {
+        ...input.presetCompatRuntimeContext,
+        sessionPhase: input.presetCompatRuntimeContext?.sessionPhase ?? 'continue',
+        supportsVirtualDepth: input.presetCompatRuntimeContext?.supportsVirtualDepth ?? false,
       },
     })
     const nextRun = await appendFutureJumpRevision({

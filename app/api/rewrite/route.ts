@@ -333,6 +333,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       provider: runtime.resolvedRuntime.providerRuntime.provider,
+      metadata: runtime.metadata,
       candidates: candidates.map((content, index) => ({
         title: `候选 ${String.fromCharCode(65 + index)}`,
         summary: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible' ? '来自 OpenAI-compatible API' : '来自 Ollama 本地模型',
@@ -348,6 +349,7 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     provider: result.enabled ? 'fallback-after-error' : 'fallback-no-config',
+    metadata: runtime.metadata,
     error: result.error,
     candidates: fallbackCandidates(body.sourceText, body.mode, body.tone, body.prompt),
     presetCompat: presetCompatMetadata,

@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "preset:macro-process": "node scripts/process-sillytavern-preset-macros.mjs",
     "test:unit": "node scripts/run-vitest-suite.mjs unit",
     "test:api": "node scripts/run-vitest-suite.mjs api",
     "test:ui": "node scripts/run-playwright-suite.mjs",

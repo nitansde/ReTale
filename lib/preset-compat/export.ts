@@ -84,7 +84,7 @@ function exportPromptRule(
   }
   if (Array.isArray(promptMeta.injectionTrigger)) {
     exported.injection_trigger = cloneValue(promptMeta.injectionTrigger)
-  } else if (promptRule.injectionTrigger.length > 0) {
+  } else if (Array.isArray(promptRule.injectionTrigger) && promptRule.injectionTrigger.length > 0) {
     exported.injection_trigger = cloneValue(promptRule.injectionTrigger)
   } else if ('injectionTrigger' in promptMeta && rawPrompt && 'injection_trigger' in rawPrompt) {
     exported.injection_trigger = cloneValue(promptMeta.injectionTrigger)
