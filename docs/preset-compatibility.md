@@ -73,7 +73,7 @@ Every creative runtime surface can expose these structured metadata channels:
 - `contextWindow`, route-level context trimming metadata for `/api/rewrite`
 - `streamPolicy`, route-level stream precedence metadata
 
-The preset editor previews `fieldStatuses` and route/provider hints from `providerControlIntents`. Reset controls are scoped to the active creative context only, they do not reset the whole library or account.
+`fieldStatuses` and `providerControlIntents` remain available to route metadata, debug payloads, and tests. The preset editor focuses on bindings, generation settings, prompt content, import/export actions, and scoped reset controls instead of surfacing compatibility diagnostics inline. Reset controls are scoped to the active creative context only, they do not reset the whole library or account.
 
 ## Provider capability matrix
 
@@ -94,15 +94,16 @@ Applied request fields:
 Route-effect intents:
 
 - `openai_max_context` -> `contextWindow.maxContextTokens`
-- `max_context_unlocked` -> `contextWindow.unlockMaximum`
 - `stream_openai` -> `stream.enabled`
 - `n` -> `candidateCount`, currently route-degraded
 
 `seed` stays degraded and preserved-only for `openai-compatible`. It is imported, exported, status-reported, and warned, but it is not written into the outgoing OpenAI-compatible request body.
 
+`max_context_unlocked` stays preserved-only for ChatBook runtime. It is imported, stored, exported, and status-reported for metadata consumers, but it does not emit route metadata or alter context-window trimming.
+
 Preserved-only or degraded-without-request-mapping warnings today include fields such as `top_k`, `top_a`, `min_p`, `repetition_penalty`, `send_if_empty`, `assistant_prefill`, `assistant_impersonation`, `continue_prefill`, `continue_postfix`, `use_sysprompt`, `function_calling`, `show_thoughts`, `reasoning_effort`, `verbosity`, and image-request metadata.
 
-The same current `openai-compatible` preserved or degraded contract also covers route and template fields such as `openai_max_context`, `max_context_unlocked`, `names_behavior`, `impersonation_prompt`, `new_chat_prompt`, `new_group_chat_prompt`, `new_example_chat_prompt`, `continue_nudge_prompt`, `bias_preset_selected`, `wi_format`, `scenario_format`, `personality_format`, `group_nudge_prompt`, `stream_openai`, and `seed`.
+The same current `openai-compatible` preserved or degraded contract also covers route and template fields such as `openai_max_context`, `max_context_unlocked`, `names_behavior`, `bias_preset_selected`, `wi_format`, `scenario_format`, `personality_format`, `group_nudge_prompt`, `stream_openai`, and `seed`. SillyTavern-only reset prompt fields such as `impersonation_prompt`, `new_chat_prompt`, `new_group_chat_prompt`, `new_example_chat_prompt`, and `continue_nudge_prompt` are imported and exported, but ChatBook ignores them at runtime.
 
 ### `ollama`
 
@@ -121,13 +122,12 @@ Applied request fields:
 Route-effect intents:
 
 - `openai_max_context` -> `contextWindow.maxContextTokens`
-- `max_context_unlocked` -> `contextWindow.unlockMaximum`
 - `stream_openai` -> `stream.enabled`
 - `n` -> `candidateCount`, currently route-degraded
 
 Preserved-only or degraded-without-request-mapping warnings today include fields such as `presence_penalty`, `frequency_penalty`, `top_a`, `assistant_prefill`, `assistant_impersonation`, `continue_prefill`, `continue_postfix`, `use_sysprompt`, `function_calling`, `show_thoughts`, `reasoning_effort`, and `verbosity`.
 
-The same current `ollama` preserved or degraded contract also covers route and template fields such as `openai_max_context`, `max_context_unlocked`, `names_behavior`, `send_if_empty`, `impersonation_prompt`, `new_chat_prompt`, `new_group_chat_prompt`, `new_example_chat_prompt`, `continue_nudge_prompt`, `bias_preset_selected`, `wi_format`, `scenario_format`, `personality_format`, `group_nudge_prompt`, and `stream_openai`.
+The same current `ollama` preserved or degraded contract also covers route and template fields such as `openai_max_context`, `max_context_unlocked`, `names_behavior`, `send_if_empty`, `bias_preset_selected`, `wi_format`, `scenario_format`, `personality_format`, `group_nudge_prompt`, and `stream_openai`. SillyTavern-only reset prompt fields such as `impersonation_prompt`, `new_chat_prompt`, `new_group_chat_prompt`, `new_example_chat_prompt`, and `continue_nudge_prompt` are imported and exported, but ChatBook ignores them at runtime.
 
 ## Route behavior
 
@@ -142,12 +142,11 @@ The same current `ollama` preserved or degraded contract also covers route and t
 
 ### `future_jump_rewrite`
 
-`future_jump_rewrite` uses the same creative runtime and prompt assembly contract for prompt rules, template fragments, and regex handling.
+`future_jump_rewrite` uses the same creative runtime and prompt assembly contract for prompt rules, supported ChatBook template fragments, and regex handling. SillyTavern-only reset prompt fields remain ignored there too.
 
 It stays honest about route controls it cannot safely enforce:
 
 - `openai_max_context` degrades to `ROUTE_UNSUPPORTED`
-- `max_context_unlocked` degrades to `ROUTE_UNSUPPORTED`
 - `stream_openai` degrades to `ROUTE_UNSUPPORTED`
 
 ### Analytical fail-closed routes
@@ -216,7 +215,7 @@ Macro compatibility is now described by the dedicated contract in `lib/preset-co
 Current v1 contract examples:
 
 - `setvar`, `getvar`, and `trim` are part of the supported runtime subset and can expand during creative preset execution while their raw source text still round-trips through storage and export
-- `user`, `bot`, and `char` / `charIfNotGroup` are `context-partial` because they depend on runtime naming context, so they expand when that context is available and otherwise resolve to `""` with diagnostics
+- `user`, `bot`, and `char` / `charIfNotGroup` are `context-partial` because they depend on runtime naming context. `{{user}}` resolves to the current roleplay/named-transcript user when provided, then to the inferred protagonist/main-viewpoint character from the built knowledge context when available, and finally to `主人公` without a diagnostic when no name is available. `bot` and `char` still require runtime naming context and otherwise resolve to `""` with diagnostics.
 - comment-style macros stay `preserve-storage-only` in stored and exported preset JSON, while runtime-only unsupported or unavailable macros never mutate the saved prompt content
 - UI/runtime and STscript-only macros such as `input`, `outlet`, `banned`, `summary`, `hasExtension`, `lastGenerationType`, `var`, `pipe`, and `timesIndex` are explicitly `unsupported-runtime`
 
