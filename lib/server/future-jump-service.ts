@@ -689,16 +689,6 @@ function buildBridgeSystemPrompt() {
   ].join('\n')
 }
 
-function buildRewriteSystemPrompt() {
-  return [
-    '你是 ChatBook 的 Future Jump 目标节点改写生成器。',
-    '你必须严格依据已给出的 what-if 分歧、桥接摘要、故事状态和目标未来节点上下文。',
-    '你只返回一个 JSON 对象，不要解释，不要 markdown，不要额外字段。',
-    'generatedTargetText 必须只包含可直接放入小说的正文。',
-    '允许结果偏离原线后果，但必须保持世界设定、人物性格、关系变化与 what-if 分歧一致。',
-  ].join('\n')
-}
-
 function buildBridgeUserPrompt(params: {
   context: LoadedFutureJumpGenerationContext
   userDirection: string
@@ -913,7 +903,7 @@ export async function generateTargetNodeRewrite(params: {
         request: { temperature: 0.7 },
       },
     },
-    systemPrompt: buildRewriteSystemPrompt(),
+    systemPrompt: '',
     userPrompt: buildRewriteUserPrompt({
       context: params.context,
       bridgeSummary: params.bridgeSummary,

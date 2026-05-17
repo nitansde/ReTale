@@ -66,6 +66,10 @@ function createAiSettings(): AISettings {
 
 function createRuntimeLibrary() {
   const library = createDefaultPresetCompatLibrary()
+  library.builtinSystemPrompts.future_jump_rewrite = {
+    ...library.builtinSystemPrompts.future_jump_rewrite,
+    content: 'FUTURE JUMP CHATBOOK BUILTIN SYSTEM',
+  }
 
   library.standaloneRegexes['regex-input'] = {
     id: 'regex-input',
@@ -524,6 +528,7 @@ describe('preset compat future jump runtime', () => {
     expect(rewriteBody.messages[0]?.content).not.toContain('FUTURE JUMP CONTINUE TEMPLATE')
     expect(rewriteBody.messages[0]?.content).not.toContain('## Imported Preset System Rules')
     expect(rewriteBody.messages[0]?.content).toBe([
+      'FUTURE JUMP CHATBOOK BUILTIN SYSTEM',
       'FUTURE JUMP SYSTEM RULE',
       'FUTURE JUMP SECOND SYSTEM RULE',
     ].join('\n\n'))
