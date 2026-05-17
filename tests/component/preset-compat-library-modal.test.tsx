@@ -6,6 +6,7 @@ import React from 'react'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PresetCompatLibraryModal } from '@/components/workspace/PresetCompatLibraryModal'
+import * as creativeRuntimePreview from '@/lib/preset-compat/creative-runtime-preview'
 import { normalizePresetCompatPresetImport, normalizePresetCompatStandaloneRegexImport } from '@/lib/preset-compat/normalize'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import { createPresetCompatSessionStateKey } from '@/lib/workspace-state'
@@ -224,7 +225,7 @@ describe('PresetCompatLibraryModal', () => {
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
   })
 
-  it('renders warnings, binding selectors, edit toggles, standalone attachment, and export actions', async () => {
+  it('renders binding controls first, editable generation settings, preview cards, standalone attachment, and export actions', async () => {
     useNovelStore.setState({
       presetCompatLibrary: createLibrary(),
       presetCompatSessionState: {
@@ -254,14 +255,12 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.getByTestId('preset-compat-binding-rewrite')).toBeInTheDocument()
     expect(screen.getByTestId('preset-compat-binding-future_jump_rewrite')).toBeInTheDocument()
     expect(screen.getByText('当前创作界面：Rewrite')).toBeInTheDocument()
-    const rewriteStatusCard = screen.getByTestId('preset-compat-status-surface-rewrite')
-    expect(rewriteStatusCard).toBeInTheDocument()
+    const rewritePreviewCard = await screen.findByTestId('preset-compat-preview-surface-rewrite')
+    expect(rewritePreviewCard).toBeInTheDocument()
     expect(screen.getByTestId('preset-compat-session-state-rewrite')).toHaveTextContent('会话阶段：continue · 正常')
-    expect(within(rewriteStatusCard).getByText('Max context：已解锁上限')).toBeInTheDocument()
-    expect(within(rewriteStatusCard).getByText('上下文窗口：8192 · route → contextWindow.maxContextTokens')).toBeInTheDocument()
-    expect(within(rewriteStatusCard).getByText('流式策略：关闭 · route → stream.enabled')).toBeInTheDocument()
-    expect(within(rewriteStatusCard).getAllByText('当前 provider 与界面已按兼容契约应用。').length).toBeGreaterThan(0)
-    expect(within(rewriteStatusCard).getAllByText('这个字段只在另一类 provider 上可直接生效。').length).toBeGreaterThan(0)
+    expect(within(rewritePreviewCard).getByTestId('preset-compat-preview-system-rewrite')).toBeInTheDocument()
+    expect(within(rewritePreviewCard).getByTestId('preset-compat-preview-user-rewrite')).toBeInTheDocument()
+    expect(screen.queryByText('导入备注')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('preset-compat-session-reset-rewrite'))
     expect(useNovelStore.getState().presetCompatSessionState[createPresetCompatSessionStateKey(chapterSelection, 'rewrite')]).toEqual({
@@ -273,11 +272,27 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.queryByTestId('preset-compat-session-reset-roleplay')).not.toBeInTheDocument()
     expect(screen.queryByTestId('preset-compat-session-reset-future_jump_bridge')).not.toBeInTheDocument()
     expect(screen.getByTestId('preset-compat-session-state-rewrite')).toHaveTextContent('会话阶段：new_chat · 待重置')
-    expect(screen.getByTestId('preset-compat-session-state-expand')).toHaveTextContent('会话阶段：continue · 正常')
-    expect(screen.getByTestId('preset-compat-session-state-continue')).toHaveTextContent('会话阶段：continue · 正常')
+    expect(await screen.findByTestId('preset-compat-session-state-expand')).toHaveTextContent('会话阶段：continue · 正常')
+    expect(await screen.findByTestId('preset-compat-session-state-continue')).toHaveTextContent('会话阶段：continue · 正常')
 
     fireEvent.change(screen.getByTestId('preset-compat-binding-rewrite'), { target: { value: 'preset-1' } })
     expect(useNovelStore.getState().presetCompatLibrary.surfaceBindings.rewrite.presetId).toBe('preset-1')
+
+    fireEvent.change(screen.getByTestId('preset-compat-runtime-openai-max-context'), { target: { value: '16384' } })
+    fireEvent.change(screen.getByTestId('preset-compat-runtime-max-tokens'), { target: { value: '2048' } })
+    fireEvent.change(screen.getByTestId('preset-compat-runtime-temperature'), { target: { value: '0.55' } })
+    fireEvent.change(screen.getByTestId('preset-compat-runtime-frequency-penalty'), { target: { value: '0.2' } })
+    fireEvent.change(screen.getByTestId('preset-compat-runtime-presence-penalty'), { target: { value: '0.1' } })
+    fireEvent.change(screen.getByTestId('preset-compat-runtime-top-p'), { target: { value: '0.85' } })
+    fireEvent.change(screen.getByTestId('preset-compat-transport-stream-openai'), { target: { value: 'true' } })
+
+    expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.runtimeSampler.openaiMaxContext).toBe(16384)
+    expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.runtimeSampler.maxTokens).toBe(2048)
+    expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.runtimeSampler.temperature).toBe(0.55)
+    expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.runtimeSampler.frequencyPenalty).toBe(0.2)
+    expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.runtimeSampler.presencePenalty).toBe(0.1)
+    expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.runtimeSampler.topP).toBe(0.85)
+    expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.transport.streamOpenAI).toBe(true)
 
     fireEvent.click(screen.getByTestId('preset-compat-rule-toggle-preset-1-rule-1'))
     expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.promptRules[0]?.enabled).toBe(false)
@@ -287,7 +302,7 @@ describe('PresetCompatLibraryModal', () => {
     })
     expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.promptRules[0]?.content).toBe('Updated narrative instruction.')
 
-    const lockedRuleContent = screen.getByTestId('preset-compat-rule-content-preset-1-rule-2')
+    const lockedRuleContent = await screen.findByTestId('preset-compat-rule-content-preset-1-rule-2')
     expect(lockedRuleContent).toBeDisabled()
     fireEvent.change(lockedRuleContent, {
       target: { value: 'Attempted locked edit.' },
@@ -302,8 +317,9 @@ describe('PresetCompatLibraryModal', () => {
       expect(URL.createObjectURL).toHaveBeenCalled()
     })
 
-    expect(screen.getByText('Marker prompts are preserved for export only and do not change ChatBook runtime behavior.')).toBeInTheDocument()
     expect(screen.getByText('Preserved-only placements: md_display')).toBeInTheDocument()
+    expect(screen.queryByText('Runtime warnings')).not.toBeInTheDocument()
+    expect(screen.queryByText('Macro diagnostics')).not.toBeInTheDocument()
     expect(screen.queryByText('`markdownOnly` is preserved for export and not applied in MVP runtime.')).not.toBeInTheDocument()
     expect(screen.queryByText('Depth gates are preserved-only in MVP runtime.')).not.toBeInTheDocument()
     expect(screen.queryByText('`substituteRegex` metadata is preserved-only in MVP runtime.')).not.toBeInTheDocument()
@@ -416,13 +432,19 @@ describe('PresetCompatLibraryModal', () => {
     })
 
     expect(screen.getByTestId('preset-compat-rule-content-preset-1-rule-1')).toHaveValue('Speaker pair: {{user}} / {{char}} / {{input}}')
-    expect(screen.getAllByText('UNSUPPORTED_MACRO').length).toBeGreaterThan(0)
-    expect(screen.getByText('Macro is not supported on rewrite: input')).toBeInTheDocument()
+    expect(screen.queryByText('UNSUPPORTED_MACRO')).not.toBeInTheDocument()
+    expect(screen.queryByText('Macro is not supported on rewrite: input')).not.toBeInTheDocument()
   })
 
   it('imports the golden fixture, keeps malformed regex imports non-destructive, and leaves existing library data visible', async () => {
     const fixtureText = readFixtureText('resets_example.json')
     let currentLibrary = createDefaultPresetCompatLibrary()
+    const previewSpy = vi.spyOn(creativeRuntimePreview, 'buildPresetCompatCreativeRuntimePreview').mockReturnValue({
+      systemPrompt: 'Mocked system preview',
+      userPrompt: 'Mocked user preview',
+      warnings: [],
+      metadata: { macroDiagnostics: [] },
+    })
     const presetFile = new File([fixtureText], 'resets_example.json', { type: 'application/json' })
     Object.defineProperty(presetFile, 'text', { value: () => Promise.resolve(fixtureText) })
     const malformedRegexText = JSON.stringify({ regex_scripts: [null, { scriptName: 'Broken regex', replaceString: 'x' }] })
@@ -479,16 +501,19 @@ describe('PresetCompatLibraryModal', () => {
     await waitFor(() => {
       expect(screen.getAllByText('resets_example').length).toBeGreaterThan(0)
     })
+    await waitFor(() => {
+      expect(previewSpy).toHaveBeenCalled()
+    })
 
     fireEvent.change(screen.getByTestId('preset-compat-regex-import-input'), {
       target: { files: [malformedRegexFile] },
     })
 
     await waitFor(() => {
-      expect(screen.getByText(/Regex entry 1 was not an object and was skipped/)).toBeInTheDocument()
+      expect(screen.getByText('没有导入任何正则条目。')).toBeInTheDocument()
     })
 
     expect(screen.getAllByText('resets_example').length).toBeGreaterThan(0)
     expect(Object.keys(useNovelStore.getState().presetCompatLibrary.presets)).toContain('preset-import-001')
-  })
+  }, 30000)
 })

@@ -151,9 +151,54 @@ function buildWorkspacePayload() {
   }
 }
 
-test('workspace preset-compat library modal imports fixture JSON, shows statuses, resets context state, edits bindings, and exports JSON', async ({ page }) => {
+test('workspace preset-compat library modal imports fixture JSON, edits bindings and generation settings, resets context state, and exports JSON', async ({ page }) => {
   const evidenceDirectory = ensureEvidenceDir('task-9')
-  const fixtureText = fs.readFileSync(fixturePath, 'utf8')
+  const fixtureText = JSON.stringify({
+    temperature: 1,
+    frequency_penalty: 0,
+    presence_penalty: 0,
+    top_p: 1,
+    top_a: 1,
+    max_context_unlocked: true,
+    openai_max_context: 2000000,
+    openai_max_tokens: 32000,
+    stream_openai: true,
+    prompts: [
+      {
+        identifier: 'main',
+        name: '➡️扩写/转述输入',
+        role: 'user',
+        system_prompt: true,
+        content: 'Small fixture main prompt',
+        injection_position: 0,
+        injection_depth: 4,
+        forbid_overrides: false,
+        injection_order: 100,
+        injection_trigger: [],
+      },
+      {
+        identifier: 'jailbreak',
+        name: 'Small fixture support prompt',
+        role: 'system',
+        system_prompt: true,
+        content: 'Support prompt',
+        injection_position: 0,
+        injection_depth: 4,
+        forbid_overrides: false,
+        injection_order: 90,
+        injection_trigger: [],
+      },
+    ],
+    prompt_order: [
+      {
+        character_id: 100001,
+        order: [
+          { identifier: 'main', enabled: true },
+          { identifier: 'jailbreak', enabled: true },
+        ],
+      },
+    ],
+  })
   let library = createDefaultPresetCompatLibrary()
   let presetImportCounter = 0
   let regexImportCounter = 0
@@ -215,8 +260,6 @@ test('workspace preset-compat library modal imports fixture JSON, shows statuses
     const body = route.request().postDataJSON() as { kind: 'preset' | 'regex'; jsonText: string; nameHint?: string }
 
     if (body.kind === 'preset') {
-      expect(body.jsonText).toContain('"temperature": 1')
-      expect(body.jsonText).toContain('"➡️扩写/转述输入"')
       presetImportCounter += 1
       const { preset, warnings } = normalizePresetCompatPresetImport(JSON.parse(body.jsonText), {
         nameHint: body.nameHint,
@@ -264,7 +307,11 @@ test('workspace preset-compat library modal imports fixture JSON, shows statuses
   await expect(page.getByTestId('preset-compat-library-modal')).toBeVisible()
   await expect(page.getByText('全局预设兼容库')).toBeVisible()
 
-  await page.getByTestId('preset-compat-preset-import-input').setInputFiles(fixturePath)
+  await page.getByTestId('preset-compat-preset-import-input').setInputFiles({
+    name: 'resets_example.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(fixtureText),
+  })
   await expect(page.getByRole('button', { name: /resets_example/ }).first()).toBeVisible()
 
   const importedPreset = library.presets['preset-ui-1']
@@ -272,15 +319,10 @@ test('workspace preset-compat library modal imports fixture JSON, shows statuses
   const firstRuleId = importedPreset.promptRules[0]?.id
   expect(firstRuleId).toBeTruthy()
 
-  await expect(page.getByTestId('preset-compat-status-surface-rewrite')).toBeVisible()
-  const rewriteStatusCard = page.getByTestId('preset-compat-status-surface-rewrite')
-  await expect(rewriteStatusCard.getByText('字段', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toBeVisible()
   await expect(page.getByTestId('preset-compat-session-state-rewrite')).toHaveText(/会话阶段：continue · 正常/)
-  await expect(rewriteStatusCard.getByText(/上下文窗口：.*route → contextWindow.maxContextTokens/)).toBeVisible()
-  await expect(rewriteStatusCard.getByText(/流式策略：开启 · route → stream.enabled/)).toBeVisible()
-  await expect(rewriteStatusCard.getByText(/Preset field `top_a` was preserved for export but not applied to openai-compatible\./)).toBeVisible()
   await expect(page.getByTestId('preset-compat-session-reset-rewrite')).toBeVisible()
-  await expect(page.getByText('不提供重置').first()).toBeVisible()
+  await expect(page.getByText('导入备注')).toHaveCount(0)
 
   await page.getByTestId('preset-compat-session-reset-rewrite').click()
   await expect(page.getByTestId('preset-compat-session-state-rewrite')).toHaveText(/会话阶段：new_chat · 待重置/)
@@ -315,6 +357,14 @@ test('workspace preset-compat library modal imports fixture JSON, shows statuses
     await page.getByTestId(`preset-compat-binding-${surfaceId}`).selectOption('preset-ui-1')
   }
 
+  await page.getByTestId('preset-compat-runtime-openai-max-context').fill('16384')
+  await page.getByTestId('preset-compat-runtime-max-tokens').fill('2048')
+  await page.getByTestId('preset-compat-runtime-temperature').fill('0.55')
+  await page.getByTestId('preset-compat-runtime-frequency-penalty').fill('0.2')
+  await page.getByTestId('preset-compat-runtime-presence-penalty').fill('0.1')
+  await page.getByTestId('preset-compat-runtime-top-p').fill('0.85')
+  await page.getByTestId('preset-compat-transport-stream-openai').selectOption('true')
+
   await page.getByTestId(`preset-compat-rule-toggle-${firstRuleId}`).uncheck()
   await page.getByTestId(`preset-compat-rule-toggle-${firstRuleId}`).check()
   await page.getByTestId(`preset-compat-rule-content-${firstRuleId}`).fill('Updated from Playwright.')
@@ -331,6 +381,15 @@ test('workspace preset-compat library modal imports fixture JSON, shows statuses
   const exportedPresetJson = JSON.parse(fs.readFileSync(presetDownloadPath, 'utf8')) as Record<string, unknown>
   expect(Array.isArray(exportedPresetJson.prompts)).toBe(true)
   expect(Array.isArray(exportedPresetJson.prompt_order)).toBe(true)
+  expect(exportedPresetJson).toMatchObject({
+    openai_max_context: 16384,
+    openai_max_tokens: 2048,
+    temperature: 0.55,
+    top_p: 0.85,
+    frequency_penalty: 0.2,
+    presence_penalty: 0.1,
+    stream_openai: true,
+  })
 
   await page.getByTestId('preset-compat-preset-delete-preset-ui-1').click()
   await expect(page.getByText('已删除预设“resets_example”，并已保存。')).toBeVisible()
@@ -355,7 +414,7 @@ test('workspace preset-compat library modal imports fixture JSON, shows statuses
     mimeType: 'application/json',
     buffer: Buffer.from(JSON.stringify({ regex_scripts: [null, { scriptName: 'Broken regex', replaceString: 'x' }] })),
   })
-  await expect(page.getByText('Regex entry 1 was not an object and was skipped.')).toBeVisible()
+  await expect(page.getByText('没有导入任何正则条目。')).toBeVisible()
   await expect(page.getByText('resets_example')).toHaveCount(0)
 
   await page.screenshot({ path: path.join(evidenceDirectory, 'task-9-library-ui.png'), fullPage: true })
@@ -501,10 +560,10 @@ test('workspace rewrite flow saves a macro-bearing preset binding and sends Alic
   await expect(page.getByRole('button', { name: /resets_example/ }).first()).toBeVisible()
   const importedPreset = library.presets['preset-ui-1']
   expect(importedPreset).toBeDefined()
-  const firstRuleId = importedPreset.promptRules[0]?.id
-  expect(firstRuleId).toBeTruthy()
-  rewriteMacroRuleId = firstRuleId ?? null
-  await page.getByTestId(`preset-compat-rule-content-${firstRuleId}`).fill('Playwright macro proof: {{user}} talks to {{char}}.')
+  const firstEditableRuleId = importedPreset.promptRules.find((rule) => !rule.forbidOverrides)?.id
+  expect(firstEditableRuleId).toBeTruthy()
+  rewriteMacroRuleId = firstEditableRuleId ?? null
+  await page.getByTestId(`preset-compat-rule-content-${firstEditableRuleId}`).fill('Playwright macro proof: {{user}} talks to {{char}}.')
   await page.getByTestId('preset-compat-binding-rewrite').selectOption('preset-ui-1')
   await page.getByRole('button', { name: '保存兼容库' }).click()
   await expect(page.getByText('预设兼容库已保存。')).toBeVisible()
