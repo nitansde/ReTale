@@ -1,6 +1,7 @@
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { loadExplicitAuthoredContext } from '@/lib/server/authored-context'
 import { buildKnowledgeExtractionStoryState } from '@/lib/server/context-builder'
+import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
 import {
   appendFutureJumpRevision,
   createFutureJumpRun as createFutureJumpRunRecord,
@@ -377,40 +378,106 @@ async function requestStructuredResponse(params: {
       throw new Error('OpenAI-compatible config not set')
     }
 
-    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
+    const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`
+    const messages = [
+      { role: 'system', content: params.systemPrompt },
+      { role: 'user', content: params.userPrompt },
+    ]
+    const requestBody = {
+      model,
+      temperature: params.requestOptions?.openAICompatible?.temperature ?? 0.7,
+      ...(typeof params.requestOptions?.openAICompatible?.top_p === 'number' ? { top_p: params.requestOptions.openAICompatible.top_p } : {}),
+      ...(typeof params.requestOptions?.openAICompatible?.frequency_penalty === 'number' ? { frequency_penalty: params.requestOptions.openAICompatible.frequency_penalty } : {}),
+      ...(typeof params.requestOptions?.openAICompatible?.presence_penalty === 'number' ? { presence_penalty: params.requestOptions.openAICompatible.presence_penalty } : {}),
+      ...(typeof params.requestOptions?.openAICompatible?.max_tokens === 'number' ? { max_tokens: params.requestOptions.openAICompatible.max_tokens } : {}),
+      response_format: { type: 'json_object' },
+      messages,
+    }
+    let response: Response
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
+      })
+    } catch (error) {
+      await writeLlmDebugLog({
+        folder: `future-jump/${params.stage}`,
+        provider: 'openai-compatible',
         model,
-        temperature: params.requestOptions?.openAICompatible?.temperature ?? 0.7,
-        ...(typeof params.requestOptions?.openAICompatible?.top_p === 'number' ? { top_p: params.requestOptions.openAICompatible.top_p } : {}),
-        ...(typeof params.requestOptions?.openAICompatible?.frequency_penalty === 'number' ? { frequency_penalty: params.requestOptions.openAICompatible.frequency_penalty } : {}),
-        ...(typeof params.requestOptions?.openAICompatible?.presence_penalty === 'number' ? { presence_penalty: params.requestOptions.openAICompatible.presence_penalty } : {}),
-        ...(typeof params.requestOptions?.openAICompatible?.max_tokens === 'number' ? { max_tokens: params.requestOptions.openAICompatible.max_tokens } : {}),
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: params.systemPrompt },
-          { role: 'user', content: params.userPrompt },
-        ],
-      }),
-    })
+        streamed: false,
+        stage: params.stage,
+        request: { url, body: requestBody, messages },
+        response: { error: error instanceof Error ? error.message : 'OpenAI-compatible future jump request failed' },
+      })
+      throw error
+    }
 
     if (!response.ok) {
+      await writeLlmDebugLog({
+        folder: `future-jump/${params.stage}`,
+        provider: 'openai-compatible',
+        model,
+        streamed: false,
+        stage: params.stage,
+        request: { url, body: requestBody, messages },
+        response: { status: response.status, error: `OpenAI-compatible HTTP ${response.status}` },
+      })
       throw new Error(`OpenAI-compatible HTTP ${response.status}`)
     }
 
     const data = await response.json() as OpenAICompatibleChatCompletionResponse
     const raw = extractOpenAICompatibleText(data.choices?.[0]?.message?.content)
     if (!raw) {
+      await writeLlmDebugLog({
+        folder: `future-jump/${params.stage}`,
+        provider: 'openai-compatible',
+        model,
+        streamed: false,
+        stage: params.stage,
+        request: { url, body: requestBody, messages },
+        response: { status: response.status, parsed: data, error: 'OpenAI-compatible API returned empty content' },
+      })
       throw new Error('OpenAI-compatible API returned empty content')
     }
 
+    let parsed: unknown
+    try {
+      parsed = parseStructuredJson(raw)
+    } catch (error) {
+      await writeLlmDebugLog({
+        folder: `future-jump/${params.stage}`,
+        provider: 'openai-compatible',
+        model,
+        streamed: false,
+        stage: params.stage,
+        request: { url, body: requestBody, messages },
+        response: {
+          status: response.status,
+          rawText: raw,
+          parsed: data,
+          error: error instanceof Error ? error.message : 'Future jump JSON parse failed',
+        },
+      })
+      throw error
+    }
+
+    await writeLlmDebugLog({
+      folder: `future-jump/${params.stage}`,
+      provider: 'openai-compatible',
+      model,
+      streamed: false,
+      stage: params.stage,
+      request: { url, body: requestBody, messages },
+      response: { status: response.status, rawText: raw, parsed },
+    })
+
     return {
       raw,
-      parsed: parseStructuredJson(raw),
+      parsed,
     } satisfies StructuredResponse
   }
 
@@ -420,45 +487,111 @@ async function requestStructuredResponse(params: {
     throw new Error('Ollama rewrite config not set')
   }
 
-  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const url = `${baseUrl.replace(/\/$/, '')}/api/chat`
+  const messages = [
+    { role: 'system', content: params.systemPrompt },
+    { role: 'user', content: params.userPrompt },
+  ]
+  const requestBody = {
+    model,
+    stream: false,
+    think: false,
+    keep_alive: '5m',
+    format: buildOllamaFormat(params.stage),
+    options: {
+      temperature: params.requestOptions?.ollama?.temperature ?? 0.7,
+      ...(typeof params.requestOptions?.ollama?.top_p === 'number' ? { top_p: params.requestOptions.ollama.top_p } : {}),
+      ...(typeof params.requestOptions?.ollama?.top_k === 'number' ? { top_k: params.requestOptions.ollama.top_k } : {}),
+      ...(typeof params.requestOptions?.ollama?.min_p === 'number' ? { min_p: params.requestOptions.ollama.min_p } : {}),
+      ...(typeof params.requestOptions?.ollama?.repeat_penalty === 'number' ? { repeat_penalty: params.requestOptions.ollama.repeat_penalty } : {}),
+      ...(typeof params.requestOptions?.ollama?.num_predict === 'number' ? { num_predict: params.requestOptions.ollama.num_predict } : {}),
+      ...(typeof params.requestOptions?.ollama?.seed === 'number' ? { seed: params.requestOptions.ollama.seed } : {}),
+    },
+    messages,
+  }
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    })
+  } catch (error) {
+    await writeLlmDebugLog({
+      folder: `future-jump/${params.stage}`,
+      provider: 'ollama',
       model,
-      stream: false,
-      think: false,
-      keep_alive: '5m',
-      format: buildOllamaFormat(params.stage),
-        options: {
-          temperature: params.requestOptions?.ollama?.temperature ?? 0.7,
-          ...(typeof params.requestOptions?.ollama?.top_p === 'number' ? { top_p: params.requestOptions.ollama.top_p } : {}),
-          ...(typeof params.requestOptions?.ollama?.top_k === 'number' ? { top_k: params.requestOptions.ollama.top_k } : {}),
-          ...(typeof params.requestOptions?.ollama?.min_p === 'number' ? { min_p: params.requestOptions.ollama.min_p } : {}),
-          ...(typeof params.requestOptions?.ollama?.repeat_penalty === 'number' ? { repeat_penalty: params.requestOptions.ollama.repeat_penalty } : {}),
-          ...(typeof params.requestOptions?.ollama?.num_predict === 'number' ? { num_predict: params.requestOptions.ollama.num_predict } : {}),
-          ...(typeof params.requestOptions?.ollama?.seed === 'number' ? { seed: params.requestOptions.ollama.seed } : {}),
-        },
-        messages: [
-        { role: 'system', content: params.systemPrompt },
-        { role: 'user', content: params.userPrompt },
-      ],
-    }),
-  })
+      streamed: false,
+      stage: params.stage,
+      request: { url, body: requestBody, messages },
+      response: { error: error instanceof Error ? error.message : 'Ollama future jump request failed' },
+    })
+    throw error
+  }
 
   if (!response.ok) {
     const text = await response.text()
+    await writeLlmDebugLog({
+      folder: `future-jump/${params.stage}`,
+      provider: 'ollama',
+      model,
+      streamed: false,
+      stage: params.stage,
+      request: { url, body: requestBody, messages },
+      response: { status: response.status, rawText: text, error: `Ollama HTTP ${response.status}` },
+    })
     throw new Error(`Ollama HTTP ${response.status}: ${text.slice(0, 200)}`)
   }
 
   const data = await response.json() as OllamaChatResponse
   const raw = data.message?.content?.trim() || ''
   if (!raw) {
+    await writeLlmDebugLog({
+      folder: `future-jump/${params.stage}`,
+      provider: 'ollama',
+      model,
+      streamed: false,
+      stage: params.stage,
+      request: { url, body: requestBody, messages },
+      response: { status: response.status, parsed: data, error: 'Ollama returned empty content' },
+    })
     throw new Error('Ollama returned empty content')
   }
 
+  let parsed: unknown
+  try {
+    parsed = parseStructuredJson(raw)
+  } catch (error) {
+    await writeLlmDebugLog({
+      folder: `future-jump/${params.stage}`,
+      provider: 'ollama',
+      model,
+      streamed: false,
+      stage: params.stage,
+      request: { url, body: requestBody, messages },
+      response: {
+        status: response.status,
+        rawText: raw,
+        parsed: data,
+        error: error instanceof Error ? error.message : 'Future jump JSON parse failed',
+      },
+    })
+    throw error
+  }
+
+  await writeLlmDebugLog({
+    folder: `future-jump/${params.stage}`,
+    provider: 'ollama',
+    model,
+    streamed: false,
+    stage: params.stage,
+    request: { url, body: requestBody, messages },
+    response: { status: response.status, rawText: raw, parsed },
+  })
+
   return {
     raw,
-    parsed: parseStructuredJson(raw),
+    parsed,
   } satisfies StructuredResponse
 }
 

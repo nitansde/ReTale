@@ -1,4 +1,5 @@
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
+import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
 import { whatIfCreateRequestSchema, whatIfCreateResponseSchema, whatIfDeltaExtractionSchema } from '@/lib/server/story-branch-contracts'
 import { createStoryTimelineNode, getNextStoryTimelineLabelIndex } from '@/lib/server/story-timeline-store'
 import { withTransaction } from '@/lib/server/sqlite'
@@ -155,30 +156,64 @@ async function requestOpenAICompatibleJson(config: OpenAICompatibleProviderSetti
   const messages = buildDeltaExtractionMessages(input)
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 20000)
+  const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`
+  const requestMessages = [
+    { role: 'system', content: messages.system },
+    { role: 'user', content: messages.user },
+  ]
+  const requestBody = {
+    model: config.model,
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    messages: requestMessages,
+  }
 
   try {
-    const response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${config.apiKey}`,
       },
-      body: JSON.stringify({
-        model: config.model,
-        temperature: 0,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: messages.system },
-          { role: 'user', content: messages.user },
-        ],
-      }),
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     })
 
-    if (!response.ok) return null
+    if (!response.ok) {
+      await writeLlmDebugLog({
+        folder: 'what-if',
+        provider: 'openai-compatible',
+        model: config.model,
+        streamed: false,
+        stage: 'delta-extraction',
+        request: { url, body: requestBody, messages: requestMessages },
+        response: { status: response.status, error: `HTTP ${response.status}` },
+      })
+      return null
+    }
     const data = await response.json() as StructuredModelResponse
-    return parseJsonObject(normalizeModelContent(data.choices?.[0]?.message?.content))
-  } catch {
+    const raw = normalizeModelContent(data.choices?.[0]?.message?.content)
+    const parsed = parseJsonObject(raw)
+    await writeLlmDebugLog({
+      folder: 'what-if',
+      provider: 'openai-compatible',
+      model: config.model,
+      streamed: false,
+      stage: 'delta-extraction',
+      request: { url, body: requestBody, messages: requestMessages },
+      response: { status: response.status, rawText: raw, parsed },
+    })
+    return parsed
+  } catch (error) {
+    await writeLlmDebugLog({
+      folder: 'what-if',
+      provider: 'openai-compatible',
+      model: config.model,
+      streamed: false,
+      stage: 'delta-extraction',
+      request: { url, body: requestBody, messages: requestMessages },
+      response: { error: error instanceof Error ? error.message : 'What-if delta extraction failed' },
+    })
     return null
   } finally {
     clearTimeout(timeout)
@@ -190,53 +225,88 @@ async function requestOllamaJson(config: OllamaProviderSettings, input: WhatIfCr
   const messages = buildDeltaExtractionMessages(input)
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 20000)
+  const url = `${config.baseUrl.replace(/\/$/, '')}/api/chat`
+  const requestMessages = [
+    { role: 'system', content: messages.system },
+    { role: 'user', content: messages.user },
+  ]
+  const requestBody = {
+    model: config.model,
+    stream: false,
+    format: {
+      type: 'object',
+      properties: {
+        deltas: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              delta_type: { type: 'string' },
+              subject_name: { type: ['string', 'null'] },
+              target_name: { type: ['string', 'null'] },
+              key: { type: 'string' },
+              old_value: { type: ['string', 'null'] },
+              new_value: { type: ['string', 'null'] },
+              valid_from_chapter: { type: ['integer', 'null'] },
+              description: { type: 'string' },
+              confidence: { type: ['number', 'null'] },
+            },
+            required: ['delta_type', 'key', 'description'],
+          },
+        },
+      },
+      required: ['deltas'],
+    },
+    messages: requestMessages,
+    options: {
+      temperature: 0,
+    },
+  }
 
   try {
-    const response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/api/chat`, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: config.model,
-        stream: false,
-        format: {
-          type: 'object',
-          properties: {
-            deltas: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  delta_type: { type: 'string' },
-                  subject_name: { type: ['string', 'null'] },
-                  target_name: { type: ['string', 'null'] },
-                  key: { type: 'string' },
-                  old_value: { type: ['string', 'null'] },
-                  new_value: { type: ['string', 'null'] },
-                  valid_from_chapter: { type: ['integer', 'null'] },
-                  description: { type: 'string' },
-                  confidence: { type: ['number', 'null'] },
-                },
-                required: ['delta_type', 'key', 'description'],
-              },
-            },
-          },
-          required: ['deltas'],
-        },
-        messages: [
-          { role: 'system', content: messages.system },
-          { role: 'user', content: messages.user },
-        ],
-        options: {
-          temperature: 0,
-        },
-      }),
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     })
 
-    if (!response.ok) return null
+    if (!response.ok) {
+      const text = await response.text()
+      await writeLlmDebugLog({
+        folder: 'what-if',
+        provider: 'ollama',
+        model: config.model,
+        streamed: false,
+        stage: 'delta-extraction',
+        request: { url, body: requestBody, messages: requestMessages },
+        response: { status: response.status, rawText: text, error: `HTTP ${response.status}` },
+      })
+      return null
+    }
     const data = await response.json() as OllamaChatResponse
-    return parseJsonObject(data.message?.content?.trim() || '')
-  } catch {
+    const raw = data.message?.content?.trim() || ''
+    const parsed = parseJsonObject(raw)
+    await writeLlmDebugLog({
+      folder: 'what-if',
+      provider: 'ollama',
+      model: config.model,
+      streamed: false,
+      stage: 'delta-extraction',
+      request: { url, body: requestBody, messages: requestMessages },
+      response: { status: response.status, rawText: raw, parsed },
+    })
+    return parsed
+  } catch (error) {
+    await writeLlmDebugLog({
+      folder: 'what-if',
+      provider: 'ollama',
+      model: config.model,
+      streamed: false,
+      stage: 'delta-extraction',
+      request: { url, body: requestBody, messages: requestMessages },
+      response: { error: error instanceof Error ? error.message : 'What-if delta extraction failed' },
+    })
     return null
   } finally {
     clearTimeout(timeout)
