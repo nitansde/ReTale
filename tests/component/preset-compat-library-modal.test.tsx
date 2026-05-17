@@ -255,6 +255,8 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.getByTestId('preset-compat-binding-rewrite')).toBeInTheDocument()
     expect(screen.getByTestId('preset-compat-binding-future_jump_rewrite')).toBeInTheDocument()
     expect(screen.getByText('当前创作界面：Rewrite')).toBeInTheDocument()
+    expect(screen.getByText('ChatBook 内置 System Prompt')).toBeInTheDocument()
+    expect((screen.getByTestId('preset-compat-builtin-system-content-rewrite') as HTMLTextAreaElement).value).toContain('你是 ChatBook 的小说扩写/魔改写作模型。')
     expect(screen.getByTestId('preset-compat-rule-content-preset-1-rule-1')).toBeInTheDocument()
     expect(screen.queryByTestId('preset-compat-preview-surface-rewrite')).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
@@ -298,6 +300,15 @@ describe('PresetCompatLibraryModal', () => {
     expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.runtimeSampler.topP).toBe(0.85)
     expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.transport.streamOpenAI).toBe(true)
 
+    fireEvent.click(screen.getByTestId('preset-compat-builtin-system-toggle-rewrite'))
+    fireEvent.change(screen.getByTestId('preset-compat-builtin-system-content-rewrite'), {
+      target: { value: 'UI edited ChatBook built-in prompt.' },
+    })
+    expect(useNovelStore.getState().presetCompatLibrary.builtinSystemPrompts.rewrite).toMatchObject({
+      enabled: false,
+      content: 'UI edited ChatBook built-in prompt.',
+    })
+
     fireEvent.click(screen.getByTestId('preset-compat-rule-toggle-preset-1-rule-1'))
     expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.promptRules[0]?.enabled).toBe(false)
 
@@ -327,6 +338,20 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.queryByText('`markdownOnly` is preserved for export and not applied in MVP runtime.')).not.toBeInTheDocument()
     expect(screen.queryByText('Depth gates are preserved-only in MVP runtime.')).not.toBeInTheDocument()
     expect(screen.queryByText('`substituteRegex` metadata is preserved-only in MVP runtime.')).not.toBeInTheDocument()
+  })
+
+  it('keeps ChatBook built-in system prompts editable before any preset is imported', () => {
+    useNovelStore.setState({
+      presetCompatLibrary: createLibrary({ presets: {} }),
+    })
+
+    render(<PresetCompatLibraryModal open onClose={vi.fn()} />)
+
+    expect(screen.getByText('ChatBook 内置 System Prompt')).toBeInTheDocument()
+    fireEvent.change(screen.getByTestId('preset-compat-builtin-system-content-rewrite'), {
+      target: { value: 'No preset built-in edit.' },
+    })
+    expect(useNovelStore.getState().presetCompatLibrary.builtinSystemPrompts.rewrite.content).toBe('No preset built-in edit.')
   })
 
   it('deletes and saves the selected preset, clears matching surface bindings, and keeps standalone regexes intact', async () => {

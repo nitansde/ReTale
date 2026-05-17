@@ -12,6 +12,8 @@ import {
 } from '@/lib/preset-compat/types'
 import type {
   PresetCompatLibrary,
+  PresetCompatBuiltinSystemPrompt,
+  PresetCompatCreativeSurfaceId,
   PresetCompatPresetRecord,
   PresetCompatPromptRule,
   PresetCompatRegexRecord,
@@ -32,6 +34,7 @@ type PresetCompatPresetEditorProps = {
   preset: PresetCompatPresetRecord
   library: PresetCompatLibrary
   onBindSurface: (surfaceId: PresetCompatSurfaceId, presetId: string | null) => void
+  onUpdateBuiltinSystemPrompt: (surfaceId: PresetCompatCreativeSurfaceId, updates: Partial<Omit<PresetCompatBuiltinSystemPrompt, 'surfaceId'>>) => void
   onUpdatePromptRule: (promptRuleId: string, updates: Partial<PresetCompatPromptRule>) => void
   onUpdateEmbeddedRegex: (regexId: string, updates: Partial<PresetCompatRegexRecord>) => void
   onUpdateRuntimeSampler: (updates: Partial<PresetCompatPresetRecord['runtimeSampler']>) => void
@@ -51,6 +54,11 @@ type SurfaceRuntimePreview = {
   sessionPhase: PresetCompatSessionPhase
   resetPending: boolean
   canReset: boolean
+}
+
+type PresetCompatBuiltinSystemPromptEditorProps = {
+  library: PresetCompatLibrary
+  onUpdateBuiltinSystemPrompt: (surfaceId: PresetCompatCreativeSurfaceId, updates: Partial<Omit<PresetCompatBuiltinSystemPrompt, 'surfaceId'>>) => void
 }
 
 const INITIAL_DEFERRED_PROMPT_RULE_BATCH = 4
@@ -185,12 +193,69 @@ function updateTransportStreamField(
   onUpdateTransport({ streamOpenAI: nextValue })
 }
 
+export function PresetCompatBuiltinSystemPromptEditor({
+  library,
+  onUpdateBuiltinSystemPrompt,
+}: PresetCompatBuiltinSystemPromptEditorProps) {
+  return (
+    <div className="rounded-[24px] border border-violet-400/16 bg-violet-500/8 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-violet-200/80">ChatBook 内置 System Prompt</p>
+          <p className="mt-2 text-sm leading-6 text-zinc-300">
+            这些规则由 ChatBook 存储并默认启用，会以第一顺序插入 system prompt；导出预设 JSON 时不会写入预设文件。
+          </p>
+        </div>
+        <span className="rounded-full border border-violet-300/20 bg-violet-400/10 px-3 py-1 text-[11px] text-violet-100">
+          Applied first
+        </span>
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        {PRESET_COMPAT_CREATIVE_SURFACE_IDS.map((surfaceId) => {
+          const rule = library.builtinSystemPrompts[surfaceId]
+          return (
+            <div key={surfaceId} className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-zinc-100">{SURFACE_LABELS[surfaceId]}</p>
+                  <p className="mt-1 text-xs leading-5 text-zinc-500">ChatBook-owned · 不随预设导出</p>
+                </div>
+                <label className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300">
+                  <input
+                    type="checkbox"
+                    data-testid={`preset-compat-builtin-system-toggle-${surfaceId}`}
+                    checked={rule.enabled}
+                    onChange={(event) => onUpdateBuiltinSystemPrompt(surfaceId, { enabled: event.target.checked })}
+                    className="h-3.5 w-3.5 rounded border-white/20 bg-transparent"
+                  />
+                  启用
+                </label>
+              </div>
+              <label className="mt-3 block">
+                <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">System prompt</span>
+                <textarea
+                  data-testid={`preset-compat-builtin-system-content-${surfaceId}`}
+                  value={rule.content}
+                  onChange={(event) => onUpdateBuiltinSystemPrompt(surfaceId, { content: event.target.value })}
+                  className="h-40 w-full rounded-[20px] border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-zinc-100 outline-none"
+                />
+              </label>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function PresetCompatPresetEditor({
   activeSurfaceId = null,
   activeSelection = null,
   preset,
   library,
   onBindSurface,
+  onUpdateBuiltinSystemPrompt,
   onUpdatePromptRule,
   onUpdateEmbeddedRegex,
   onUpdateRuntimeSampler,
@@ -636,6 +701,11 @@ export function PresetCompatPresetEditor({
           )}
         </div>
       </div>
+
+      <PresetCompatBuiltinSystemPromptEditor
+        library={library}
+        onUpdateBuiltinSystemPrompt={onUpdateBuiltinSystemPrompt}
+      />
 
       <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
         <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">提示词规则</p>

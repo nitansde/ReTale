@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
 import { X } from 'lucide-react'
 import { PresetCompatPresetEditor } from '@/components/workspace/PresetCompatPresetEditor'
-import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
+import {
+  PRESET_COMPAT_CREATIVE_SURFACE_IDS,
+  type PresetCompatCreativeSurfaceId,
+  type PresetCompatSurfaceId,
+} from '@/lib/preset-compat/types'
 import type { PresetCompatSessionWorkspaceSelection } from '@/lib/types'
 import { useNovelStore } from '@/store/novel-store'
 import { cn } from '@/lib/utils'
@@ -13,6 +17,15 @@ type PresetCompatLibraryModalProps = {
   activeSelection?: PresetCompatSessionWorkspaceSelection | null
   open: boolean
   onClose: () => void
+}
+
+const BUILTIN_SURFACE_LABELS: Record<PresetCompatCreativeSurfaceId, string> = {
+  rewrite: 'Rewrite',
+  expand: 'Expand',
+  roleplay: 'Roleplay',
+  polish: 'Polish',
+  continue: 'Continue',
+  future_jump_rewrite: 'Future Jump rewrite',
 }
 
 function sanitizeFileStem(name: string) {
@@ -50,6 +63,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
   const attachPresetCompatStandaloneRegex = useNovelStore((state) => state.attachPresetCompatStandaloneRegex)
   const detachPresetCompatStandaloneRegex = useNovelStore((state) => state.detachPresetCompatStandaloneRegex)
   const updatePresetCompatPromptRule = useNovelStore((state) => state.updatePresetCompatPromptRule)
+  const updatePresetCompatBuiltinSystemPrompt = useNovelStore((state) => state.updatePresetCompatBuiltinSystemPrompt)
   const updatePresetCompatEmbeddedRegex = useNovelStore((state) => state.updatePresetCompatEmbeddedRegex)
   const updatePresetCompatRuntimeSampler = useNovelStore((state) => state.updatePresetCompatRuntimeSampler)
   const updatePresetCompatTransport = useNovelStore((state) => state.updatePresetCompatTransport)
@@ -274,6 +288,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                 preset={selectedPreset}
                 library={presetCompatLibrary}
                 onBindSurface={bindPresetCompatPresetToSurface}
+                onUpdateBuiltinSystemPrompt={updatePresetCompatBuiltinSystemPrompt}
                 onUpdatePromptRule={(promptRuleId, updates) => updatePresetCompatPromptRule(selectedPreset.id, promptRuleId, updates)}
                 onUpdateEmbeddedRegex={(regexId, updates) => updatePresetCompatEmbeddedRegex(selectedPreset.id, regexId, updates)}
                 onUpdateRuntimeSampler={(updates) => updatePresetCompatRuntimeSampler(selectedPreset.id, updates)}
@@ -290,8 +305,59 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                 onExportPreset={handleExportPreset}
               />
             ) : (
-              <div className="rounded-[24px] border border-white/8 bg-black/20 p-8 text-sm leading-7 text-zinc-400">
-                先导入一个预设，这里才会显示界面绑定、提示词规则编辑、正则开关、独立正则附加与导出操作。
+              <div className="space-y-4">
+                <div className="rounded-[24px] border border-violet-400/16 bg-violet-500/8 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-violet-200/80">ChatBook 内置 System Prompt</p>
+                      <p className="mt-2 text-sm leading-6 text-zinc-300">
+                        这些规则由 ChatBook 存储并默认启用，会以第一顺序插入 system prompt；导出预设 JSON 时不会写入预设文件。
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-violet-300/20 bg-violet-400/10 px-3 py-1 text-[11px] text-violet-100">
+                      Applied first
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                    {PRESET_COMPAT_CREATIVE_SURFACE_IDS.map((surfaceId) => {
+                      const rule = presetCompatLibrary.builtinSystemPrompts[surfaceId]
+                      return (
+                        <div key={surfaceId} className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-medium text-zinc-100">{BUILTIN_SURFACE_LABELS[surfaceId]}</p>
+                              <p className="mt-1 text-xs leading-5 text-zinc-500">ChatBook-owned · 不随预设导出</p>
+                            </div>
+                            <label className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300">
+                              <input
+                                type="checkbox"
+                                data-testid={`preset-compat-builtin-system-toggle-${surfaceId}`}
+                                checked={rule.enabled}
+                                onChange={(event) => updatePresetCompatBuiltinSystemPrompt(surfaceId, { enabled: event.target.checked })}
+                                className="h-3.5 w-3.5 rounded border-white/20 bg-transparent"
+                              />
+                              启用
+                            </label>
+                          </div>
+                          <label className="mt-3 block">
+                            <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">System prompt</span>
+                            <textarea
+                              data-testid={`preset-compat-builtin-system-content-${surfaceId}`}
+                              value={rule.content}
+                              onChange={(event) => updatePresetCompatBuiltinSystemPrompt(surfaceId, { content: event.target.value })}
+                              className="h-40 w-full rounded-[20px] border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-zinc-100 outline-none"
+                            />
+                          </label>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div className="rounded-[24px] border border-white/8 bg-black/20 p-8 text-sm leading-7 text-zinc-400">
+                  先导入一个预设，这里才会显示界面绑定、提示词规则编辑、正则开关、独立正则附加与导出操作。
+                </div>
               </div>
             )}
           </div>
