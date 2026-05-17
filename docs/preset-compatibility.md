@@ -156,17 +156,17 @@ It stays honest about route controls it cannot safely enforce:
 
 ## Prompt-rule subset
 
-Prompt rules are no longer described as a tiny preserved-only MVP. The current implementation does apply a safe subset.
+Prompt rules apply a deliberately narrow ChatBook compatibility subset.
 
-- `prompt_order` is canonical for active order and enabled state.
-- `system_prompt` can reroute a rule into the system channel.
-- supported runtime roles are `system` and `user`.
-- internal preserved prompt-rule property names still visible in storage, export metadata, and tests include `injectionPosition`, `injectionDepth`, `injectionTrigger`, and `forbidOverrides`.
-- `forbid_overrides` protects an imported slot from later fragments.
-- allowlisted `injection_trigger` values are matched against runtime context.
+- `prompt_order.character_id:100001` is the current active order and enabled-state bucket.
+- If the `100001` bucket is absent, import falls back to natural `prompts[]` order and each prompt's own `enabled` value.
+- `system_prompt:true` makes imported system-rule content replace the ChatBook default system prompt for creative routes.
+- `system_prompt:false` injects imported rule content at the top of the user prompt before native ChatBook context.
+- supported runtime roles are `system` and `user`, but ChatBook uses `system_prompt` as the runtime channel switch for imported rules.
+- `forbid_overrides` locks ChatBook content editing for that imported rule; it does not block same-slot runtime prompt rules.
+- `injectionPosition`, `injectionDepth`, `injectionOrder`, `injectionTrigger`, and `marker` are preserved for export only and have no ChatBook runtime effect.
 - allowlisted `condition` values are evaluated without `eval`.
-- `in_chat` and chat-depth placement degrade on string-only surfaces with `VIRTUAL_DEPTH_REQUIRED`.
-- unsupported roles and markers degrade with explicit statuses instead of being silently dropped.
+- unsupported roles degrade with explicit warnings instead of being silently dropped.
 
 ## Regex subset
 
