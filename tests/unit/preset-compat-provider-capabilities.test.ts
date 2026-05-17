@@ -238,13 +238,6 @@ describe('preset compat provider capabilities', () => {
         value: 2000000,
       },
       {
-        field: 'max_context_unlocked',
-        provider: 'openai-compatible',
-        target: 'route',
-        path: 'contextWindow.unlockMaximum',
-        value: true,
-      },
-      {
         field: 'stream_openai',
         provider: 'openai-compatible',
         target: 'route',
@@ -258,6 +251,9 @@ describe('preset compat provider capabilities', () => {
         path: 'candidateCount',
         value: 3,
       },
+    ]))
+    expect(runtime.providerControlIntents).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'max_context_unlocked' }),
     ]))
     expect(getFieldStatus(runtime, 'temperature')).toMatchObject({
       surface: 'rewrite',
@@ -288,8 +284,8 @@ describe('preset compat provider capabilities', () => {
     })
     expect(getFieldStatus(runtime, 'max_context_unlocked')).toMatchObject({
       surface: 'rewrite',
-      status: 'applied',
-      reason: 'SUPPORTED_RUNTIME',
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
     })
     expect(getFieldStatus(runtime, 'stream_openai')).toMatchObject({
       surface: 'rewrite',
@@ -434,7 +430,7 @@ describe('preset compat provider capabilities', () => {
     expect(runtime.snapshot.activePresetId).toBe(preset.id)
   })
 
-  it('resolves template fragments and statuses only when the runtime context matches', () => {
+  it('resolves only supported template fragments and ignores ST-only runtime template fields', () => {
     const library = createDefaultPresetCompatLibrary()
     const preset = createPreset()
     preset.promptTemplate = {
@@ -465,13 +461,13 @@ describe('preset compat provider capabilities', () => {
         sessionPhase: 'new_chat',
       },
     })
-    expect(rewriteRuntime.templateFragments.system.map((fragment) => fragment.field)).toEqual(['new_chat_prompt'])
-    expect(getFieldStatus(rewriteRuntime, 'new_chat_prompt')).toMatchObject({ status: 'applied', reason: 'SUPPORTED_RUNTIME' })
-    expect(getFieldStatus(rewriteRuntime, 'new_group_chat_prompt')).toMatchObject({ status: 'degraded', reason: 'NO_GROUP_CONTEXT' })
-    expect(getFieldStatus(rewriteRuntime, 'new_example_chat_prompt')).toMatchObject({ status: 'degraded', reason: 'NO_EXAMPLE_CONTEXT' })
-    expect(getFieldStatus(rewriteRuntime, 'continue_nudge_prompt')).toMatchObject({ status: 'degraded', reason: 'CONTINUE_SURFACE_ONLY' })
+    expect(rewriteRuntime.templateFragments.system.map((fragment) => fragment.field)).toEqual([])
     expect(getFieldStatus(rewriteRuntime, 'group_nudge_prompt')).toMatchObject({ status: 'degraded', reason: 'NO_GROUP_CONTEXT' })
-    expect(getFieldStatus(rewriteRuntime, 'impersonation_prompt')).toMatchObject({ status: 'degraded', reason: 'NO_IMPERSONATION_CONTEXT' })
+    expect(rewriteRuntime.fieldStatuses.find((status) => status.field === 'new_chat_prompt')).toBeUndefined()
+    expect(rewriteRuntime.fieldStatuses.find((status) => status.field === 'new_group_chat_prompt')).toBeUndefined()
+    expect(rewriteRuntime.fieldStatuses.find((status) => status.field === 'new_example_chat_prompt')).toBeUndefined()
+    expect(rewriteRuntime.fieldStatuses.find((status) => status.field === 'continue_nudge_prompt')).toBeUndefined()
+    expect(rewriteRuntime.fieldStatuses.find((status) => status.field === 'impersonation_prompt')).toBeUndefined()
 
     const roleplayRuntime = resolvePresetCompatRuntime({
       library,
@@ -486,9 +482,7 @@ describe('preset compat provider capabilities', () => {
       },
     })
     expect(roleplayRuntime.templateFragments.system.map((fragment) => fragment.field)).toEqual([
-      'new_group_chat_prompt',
       'group_nudge_prompt',
-      'impersonation_prompt',
     ])
 
     const roleplayWithoutImpersonationRuntime = resolvePresetCompatRuntime({
@@ -503,13 +497,9 @@ describe('preset compat provider capabilities', () => {
       },
     })
     expect(roleplayWithoutImpersonationRuntime.templateFragments.system.map((fragment) => fragment.field)).toEqual([
-      'new_group_chat_prompt',
       'group_nudge_prompt',
     ])
-    expect(getFieldStatus(roleplayWithoutImpersonationRuntime, 'impersonation_prompt')).toMatchObject({
-      status: 'degraded',
-      reason: 'NO_IMPERSONATION_CONTEXT',
-    })
+    expect(roleplayWithoutImpersonationRuntime.fieldStatuses.find((status) => status.field === 'impersonation_prompt')).toBeUndefined()
 
     const exampleRuntime = resolvePresetCompatRuntime({
       library,
@@ -522,7 +512,7 @@ describe('preset compat provider capabilities', () => {
       },
     })
     expect(exampleRuntime.templateFragments.system.map((fragment) => fragment.field)).toEqual([])
-    expect(getFieldStatus(exampleRuntime, 'new_example_chat_prompt')).toMatchObject({ status: 'degraded', reason: 'NO_EXAMPLE_CONTEXT' })
+    expect(exampleRuntime.fieldStatuses.find((status) => status.field === 'new_example_chat_prompt')).toBeUndefined()
 
     const explicitExampleRuntime = resolvePresetCompatRuntime({
       library,
@@ -535,8 +525,8 @@ describe('preset compat provider capabilities', () => {
         hasExampleContext: true,
       },
     })
-    expect(explicitExampleRuntime.templateFragments.system.map((fragment) => fragment.field)).toEqual(['new_example_chat_prompt'])
-    expect(getFieldStatus(explicitExampleRuntime, 'new_example_chat_prompt')).toMatchObject({ status: 'applied', reason: 'SUPPORTED_RUNTIME' })
+    expect(explicitExampleRuntime.templateFragments.system.map((fragment) => fragment.field)).toEqual([])
+    expect(explicitExampleRuntime.fieldStatuses.find((status) => status.field === 'new_example_chat_prompt')).toBeUndefined()
 
     const continueRuntime = resolvePresetCompatRuntime({
       library,
@@ -548,9 +538,9 @@ describe('preset compat provider capabilities', () => {
         sessionPhase: 'continue',
       },
     })
-    expect(continueRuntime.templateFragments.system.map((fragment) => fragment.field)).toEqual(['continue_nudge_prompt'])
-    expect(getFieldStatus(continueRuntime, 'continue_nudge_prompt')).toMatchObject({ status: 'applied', reason: 'SUPPORTED_RUNTIME' })
-    expect(getFieldStatus(continueRuntime, 'new_chat_prompt')).toMatchObject({ status: 'degraded', reason: 'NEW_CHAT_CONTEXT_REQUIRED' })
+    expect(continueRuntime.templateFragments.system.map((fragment) => fragment.field)).toEqual([])
+    expect(continueRuntime.fieldStatuses.find((status) => status.field === 'continue_nudge_prompt')).toBeUndefined()
+    expect(continueRuntime.fieldStatuses.find((status) => status.field === 'new_chat_prompt')).toBeUndefined()
   })
 
   it('resolves Ollama runtime options with provider selection and session overrides taking precedence', () => {

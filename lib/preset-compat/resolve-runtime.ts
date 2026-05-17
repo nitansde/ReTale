@@ -322,14 +322,6 @@ function createProviderIntent(
   }
 
   switch (field) {
-    case 'max_context_unlocked':
-      return {
-        field,
-        provider,
-        target: 'route',
-        path: 'contextWindow.unlockMaximum',
-        value,
-      }
     case 'openai_max_context':
       return {
         field,
@@ -372,8 +364,7 @@ function createProviderIntent(
 }
 
 function isAppliedIntentField(field: string) {
-  return field === 'max_context_unlocked'
-    || field === 'openai_max_context'
+  return field === 'openai_max_context'
     || field === 'stream_openai'
 }
 
@@ -830,45 +821,13 @@ function resolvePromptTemplateFragments(
 
   const resolvedSessionPhase = runtimeContext.sessionPhase ?? null
   const hasGroupContext = runtimeContext.hasGroupContext === true || resolvedSessionPhase === 'new_group_chat'
-  const hasExampleContext = runtimeContext.hasExampleContext === true
-  const hasImpersonationContext = runtimeContext.hasImpersonationContext === true
 
   const templateFields = [
-    {
-      field: 'new_chat_prompt',
-      value: promptTemplate.newChatPrompt ?? null,
-      shouldApply: resolvedSessionPhase === 'new_chat',
-      degradedReason: 'NEW_CHAT_CONTEXT_REQUIRED' as const,
-    },
-    {
-      field: 'new_group_chat_prompt',
-      value: promptTemplate.newGroupChatPrompt ?? null,
-      shouldApply: hasGroupContext && resolvedSessionPhase === 'new_group_chat',
-      degradedReason: (hasGroupContext ? 'NEW_CHAT_CONTEXT_REQUIRED' : 'NO_GROUP_CONTEXT') as PresetCompatStatusReasonCode,
-    },
-    {
-      field: 'new_example_chat_prompt',
-      value: promptTemplate.newExampleChatPrompt ?? null,
-      shouldApply: hasExampleContext && resolvedSessionPhase === 'new_example_chat',
-      degradedReason: (hasExampleContext ? 'NEW_CHAT_CONTEXT_REQUIRED' : 'NO_EXAMPLE_CONTEXT') as PresetCompatStatusReasonCode,
-    },
-    {
-      field: 'continue_nudge_prompt',
-      value: promptTemplate.continueNudgePrompt ?? null,
-      shouldApply: surfaceId === 'continue',
-      degradedReason: 'CONTINUE_SURFACE_ONLY' as const,
-    },
     {
       field: 'group_nudge_prompt',
       value: promptTemplate.groupNudgePrompt ?? null,
       shouldApply: hasGroupContext,
       degradedReason: 'NO_GROUP_CONTEXT' as const,
-    },
-    {
-      field: 'impersonation_prompt',
-      value: promptTemplate.impersonationPrompt ?? null,
-      shouldApply: hasImpersonationContext,
-      degradedReason: 'NO_IMPERSONATION_CONTEXT' as const,
     },
   ] as const
 

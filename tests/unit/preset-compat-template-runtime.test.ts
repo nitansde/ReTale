@@ -113,7 +113,7 @@ function getStatus(runtime: ReturnType<typeof resolvePresetCompatRuntime>, field
 }
 
 describe('preset compat template runtime', () => {
-  it('applies matching template fragments through the shared runtime contract', () => {
+  it('applies only supported template fragments through the shared runtime contract', () => {
     const runtime = resolvePresetCompatRuntime({
       library: createTemplateLibrary(),
       surfaceId: 'roleplay',
@@ -126,25 +126,17 @@ describe('preset compat template runtime', () => {
     })
 
     expect(runtime.templateFragments.system.map((fragment) => fragment.field)).toEqual([
-      'new_group_chat_prompt',
       'group_nudge_prompt',
-      'impersonation_prompt',
     ])
-    expect(getStatus(runtime, 'new_group_chat_prompt')).toMatchObject({
-      status: 'applied',
-      reason: 'SUPPORTED_RUNTIME',
-    })
     expect(getStatus(runtime, 'group_nudge_prompt')).toMatchObject({
       status: 'applied',
       reason: 'SUPPORTED_RUNTIME',
     })
-    expect(getStatus(runtime, 'impersonation_prompt')).toMatchObject({
-      status: 'applied',
-      reason: 'SUPPORTED_RUNTIME',
-    })
+    expect(getStatus(runtime, 'new_group_chat_prompt')).toBeUndefined()
+    expect(getStatus(runtime, 'impersonation_prompt')).toBeUndefined()
   })
 
-  it('degrades non-matching template fields with explicit reason codes', () => {
+  it('ignores SillyTavern-only template fields at runtime instead of degrading them', () => {
     const runtime = resolvePresetCompatRuntime({
       library: createTemplateLibrary(),
       surfaceId: 'rewrite',
@@ -157,33 +149,18 @@ describe('preset compat template runtime', () => {
     })
 
     expect(runtime.templateFragments.system.map((fragment) => fragment.field)).toEqual([])
-    expect(getStatus(runtime, 'new_chat_prompt')).toMatchObject({
-      status: 'degraded',
-      reason: 'NEW_CHAT_CONTEXT_REQUIRED',
-    })
-    expect(getStatus(runtime, 'new_group_chat_prompt')).toMatchObject({
-      status: 'degraded',
-      reason: 'NO_GROUP_CONTEXT',
-    })
-    expect(getStatus(runtime, 'new_example_chat_prompt')).toMatchObject({
-      status: 'degraded',
-      reason: 'NO_EXAMPLE_CONTEXT',
-    })
-    expect(getStatus(runtime, 'continue_nudge_prompt')).toMatchObject({
-      status: 'degraded',
-      reason: 'CONTINUE_SURFACE_ONLY',
-    })
     expect(getStatus(runtime, 'group_nudge_prompt')).toMatchObject({
       status: 'degraded',
       reason: 'NO_GROUP_CONTEXT',
     })
-    expect(getStatus(runtime, 'impersonation_prompt')).toMatchObject({
-      status: 'degraded',
-      reason: 'NO_IMPERSONATION_CONTEXT',
-    })
+    expect(getStatus(runtime, 'new_chat_prompt')).toBeUndefined()
+    expect(getStatus(runtime, 'new_group_chat_prompt')).toBeUndefined()
+    expect(getStatus(runtime, 'new_example_chat_prompt')).toBeUndefined()
+    expect(getStatus(runtime, 'continue_nudge_prompt')).toBeUndefined()
+    expect(getStatus(runtime, 'impersonation_prompt')).toBeUndefined()
   })
 
-  it('requires explicit example and impersonation abstractions for those template fields', () => {
+  it('keeps ignored SillyTavern template fields out of runtime fragments even when matching contexts exist', () => {
     const library = createTemplateLibrary()
 
     const newChatRuntime = resolvePresetCompatRuntime({
@@ -194,7 +171,8 @@ describe('preset compat template runtime', () => {
         sessionPhase: 'new_chat',
       },
     })
-    expect(newChatRuntime.templateFragments.system.map((fragment) => fragment.field)).toContain('new_chat_prompt')
+    expect(newChatRuntime.templateFragments.system.map((fragment) => fragment.field)).not.toContain('new_chat_prompt')
+    expect(getStatus(newChatRuntime, 'new_chat_prompt')).toBeUndefined()
 
     const exampleRuntime = resolvePresetCompatRuntime({
       library,
@@ -205,10 +183,7 @@ describe('preset compat template runtime', () => {
       },
     })
     expect(exampleRuntime.templateFragments.system.map((fragment) => fragment.field)).not.toContain('new_example_chat_prompt')
-    expect(getStatus(exampleRuntime, 'new_example_chat_prompt')).toMatchObject({
-      status: 'degraded',
-      reason: 'NO_EXAMPLE_CONTEXT',
-    })
+    expect(getStatus(exampleRuntime, 'new_example_chat_prompt')).toBeUndefined()
 
     const explicitExampleRuntime = resolvePresetCompatRuntime({
       library,
@@ -219,7 +194,8 @@ describe('preset compat template runtime', () => {
         hasExampleContext: true,
       },
     })
-    expect(explicitExampleRuntime.templateFragments.system.map((fragment) => fragment.field)).toContain('new_example_chat_prompt')
+    expect(explicitExampleRuntime.templateFragments.system.map((fragment) => fragment.field)).not.toContain('new_example_chat_prompt')
+    expect(getStatus(explicitExampleRuntime, 'new_example_chat_prompt')).toBeUndefined()
 
     const implicitRoleplayRuntime = resolvePresetCompatRuntime({
       library,
@@ -228,10 +204,7 @@ describe('preset compat template runtime', () => {
       promptRuleRuntimeContext: {},
     })
     expect(implicitRoleplayRuntime.templateFragments.system.map((fragment) => fragment.field)).not.toContain('impersonation_prompt')
-    expect(getStatus(implicitRoleplayRuntime, 'impersonation_prompt')).toMatchObject({
-      status: 'degraded',
-      reason: 'NO_IMPERSONATION_CONTEXT',
-    })
+    expect(getStatus(implicitRoleplayRuntime, 'impersonation_prompt')).toBeUndefined()
 
     const explicitRoleplayRuntime = resolvePresetCompatRuntime({
       library,
@@ -241,7 +214,8 @@ describe('preset compat template runtime', () => {
         hasImpersonationContext: true,
       },
     })
-    expect(explicitRoleplayRuntime.templateFragments.system.map((fragment) => fragment.field)).toContain('impersonation_prompt')
+    expect(explicitRoleplayRuntime.templateFragments.system.map((fragment) => fragment.field)).not.toContain('impersonation_prompt')
+    expect(getStatus(explicitRoleplayRuntime, 'impersonation_prompt')).toBeUndefined()
 
     const continueRuntime = resolvePresetCompatRuntime({
       library,
@@ -251,7 +225,8 @@ describe('preset compat template runtime', () => {
         sessionPhase: 'continue',
       },
     })
-    expect(continueRuntime.templateFragments.system.map((fragment) => fragment.field)).toContain('continue_nudge_prompt')
+    expect(continueRuntime.templateFragments.system.map((fragment) => fragment.field)).not.toContain('continue_nudge_prompt')
+    expect(getStatus(continueRuntime, 'continue_nudge_prompt')).toBeUndefined()
   })
 
   it('wraps matching world, scenario, and personality context blocks exactly once', () => {

@@ -215,7 +215,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     category: 'provider-sampler',
     fieldPaths: ['max_context_unlocked'],
     creativeResetPromptFamily: false,
-    surfaceClassifications: createSurfaceClassificationMap({ creative: applied() }),
+    surfaceClassifications: createSurfaceClassificationMap({ creative: preserved() }),
   },
   {
     id: 'openai_max_context',
@@ -293,57 +293,50 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     id: 'impersonation_prompt',
     category: 'prompt-template',
     fieldPaths: ['impersonation_prompt'],
-    creativeResetPromptFamily: true,
+    creativeResetPromptFamily: false,
     surfaceClassifications: createSurfaceClassificationMap({
-      creative: degraded('NO_IMPERSONATION_CONTEXT'),
-      creativeOverrides: {
-        roleplay: applied(),
-      },
+      creative: preserved(),
+      analytical: preserved(),
     }),
   },
   {
     id: 'new_chat_prompt',
     category: 'prompt-template',
     fieldPaths: ['new_chat_prompt'],
-    creativeResetPromptFamily: true,
+    creativeResetPromptFamily: false,
     surfaceClassifications: createSurfaceClassificationMap({
-      creative: applied(),
-      creativeOverrides: {
-        continue: degraded('NEW_CHAT_CONTEXT_REQUIRED'),
-      },
+      creative: preserved(),
+      analytical: preserved(),
     }),
   },
   {
     id: 'new_group_chat_prompt',
     category: 'prompt-template',
     fieldPaths: ['new_group_chat_prompt'],
-    creativeResetPromptFamily: true,
+    creativeResetPromptFamily: false,
     surfaceClassifications: createSurfaceClassificationMap({
-      creative: degraded('NO_GROUP_CONTEXT'),
-      creativeOverrides: {
-        roleplay: applied(),
-      },
+      creative: preserved(),
+      analytical: preserved(),
     }),
   },
   {
     id: 'new_example_chat_prompt',
     category: 'prompt-template',
     fieldPaths: ['new_example_chat_prompt'],
-    creativeResetPromptFamily: true,
+    creativeResetPromptFamily: false,
     surfaceClassifications: createSurfaceClassificationMap({
-      creative: degraded('NO_EXAMPLE_CONTEXT'),
+      creative: preserved(),
+      analytical: preserved(),
     }),
   },
   {
     id: 'continue_nudge_prompt',
     category: 'prompt-template',
     fieldPaths: ['continue_nudge_prompt'],
-    creativeResetPromptFamily: true,
+    creativeResetPromptFamily: false,
     surfaceClassifications: createSurfaceClassificationMap({
-      creative: degraded('CONTINUE_SURFACE_ONLY'),
-      creativeOverrides: {
-        continue: applied(),
-      },
+      creative: preserved(),
+      analytical: preserved(),
     }),
   },
   {
