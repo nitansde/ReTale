@@ -154,7 +154,7 @@ describe('preset compat prompt assembly', () => {
     ])
   })
 
-  it('expands macros after imported-rule insertion and reuses one context across assembled prompt strings', () => {
+  it('concatenates active imported system rules in order, replaces the base system prompt, and reuses one macro context', () => {
     const library = createDefaultPresetCompatLibrary()
     library.presets['rewrite-preset'] = {
       id: 'rewrite-preset',
@@ -162,8 +162,8 @@ describe('preset compat prompt assembly', () => {
       sourceApiId: 'openai',
       promptRules: [
         {
-          id: 'system-rule',
-          name: 'System rule',
+          id: 'system-rule-a',
+          name: 'System rule A',
           role: 'system',
           content: '{{setvar::topic::ALPHA}}System topic {{getvar::topic}}',
           enabled: true,
@@ -172,6 +172,22 @@ describe('preset compat prompt assembly', () => {
           injectionPosition: 'before',
           injectionDepth: null,
           injectionOrder: 1,
+          injectionTrigger: [],
+          forbidOverrides: false,
+          condition: null,
+          passthrough: {},
+        },
+        {
+          id: 'system-rule-b',
+          name: 'System rule B',
+          role: 'system',
+          content: 'System echo {{getvar::topic}}',
+          enabled: true,
+          marker: false,
+          injectAsSystemPrompt: true,
+          injectionPosition: 'before',
+          injectionDepth: null,
+          injectionOrder: 3,
           injectionTrigger: [],
           forbidOverrides: false,
           condition: null,
@@ -195,7 +211,7 @@ describe('preset compat prompt assembly', () => {
         },
       ],
       promptOrderLists: {
-        rewrite: ['system-rule', 'user-rule'],
+        rewrite: ['system-rule-a', 'user-rule', 'system-rule-b'],
       },
       embeddedRegexes: [],
       attachedStandaloneRegexIds: [],
@@ -280,7 +296,10 @@ describe('preset compat prompt assembly', () => {
       userPrompt: 'Prompt topic {{getvar::topic}} / max {{maxresponse}}',
     })
 
-    expect(assembled.systemPrompt).toBe('System topic ALPHA')
+    expect(assembled.systemPrompt).toBe([
+      'System topic ALPHA',
+      'System echo ALPHA',
+    ].join('\n\n'))
     expect(assembled.systemPrompt).not.toContain('Base system')
     expect(assembled.userPrompt).not.toContain('## Imported Preset User Rules')
     expect(assembled.userPrompt).toContain('User topic ALPHA')

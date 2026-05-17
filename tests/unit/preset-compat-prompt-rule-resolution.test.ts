@@ -322,13 +322,13 @@ function getFieldStatus(resolved: ReturnType<typeof resolvePresetCompatPromptRul
 }
 
 describe('preset compat prompt rule resolution', () => {
-  it('routes system_prompt content into the system replacement slot and preserves ST-only metadata', () => {
+  it('routes all active system_prompt rules into the system replacement slot in active order and preserves ST-only metadata', () => {
     const preset = createPromptPreset([
       createRule({
-        id: 'as-system',
-        name: 'As System',
+        id: 'as-system-first',
+        name: 'As System First',
         role: 'user',
-        content: 'Route me to system.',
+        content: 'Route me to system first.',
         injectAsSystemPrompt: true,
         injectionPosition: 'after',
         injectionOrder: 2,
@@ -340,6 +340,15 @@ describe('preset compat prompt rule resolution', () => {
         content: 'Keep me in user.',
         injectionOrder: 1,
       }),
+      createRule({
+        id: 'as-system-second',
+        name: 'As System Second',
+        role: 'user',
+        content: 'Route me to system second.',
+        injectAsSystemPrompt: true,
+        injectionPosition: 'after',
+        injectionOrder: 3,
+      }),
     ])
 
     const resolved = resolvePresetCompatPromptRuleSubset({
@@ -348,22 +357,28 @@ describe('preset compat prompt rule resolution', () => {
     })
 
     expect(resolved.promptRules.ordered.map((rule) => ({ id: rule.id, channel: rule.channel }))).toEqual([
-      { id: 'as-system', channel: 'system' },
+      { id: 'as-system-first', channel: 'system' },
       { id: 'plain-user', channel: 'user' },
+      { id: 'as-system-second', channel: 'system' },
     ])
-    expect(resolved.promptRules.system.map((rule) => rule.id)).toEqual(['as-system'])
+    expect(resolved.promptRules.system.map((rule) => rule.id)).toEqual(['as-system-first', 'as-system-second'])
     expect(resolved.promptRules.user.map((rule) => rule.id)).toEqual(['plain-user'])
-    expect(getFieldStatus(resolved, 'prompts.system_prompt', 'as-system')).toMatchObject({
+    expect(getFieldStatus(resolved, 'prompts.system_prompt', 'as-system-first')).toMatchObject({
       status: 'applied',
       reason: 'SUPPORTED_RUNTIME',
       value: true,
     })
-    expect(getFieldStatus(resolved, 'prompts.injection_position', 'as-system')).toMatchObject({
+    expect(getFieldStatus(resolved, 'prompts.system_prompt', 'as-system-second')).toMatchObject({
+      status: 'applied',
+      reason: 'SUPPORTED_RUNTIME',
+      value: true,
+    })
+    expect(getFieldStatus(resolved, 'prompts.injection_position', 'as-system-first')).toMatchObject({
       status: 'preserved',
       reason: 'PRESERVED_EXPORT_ONLY',
       value: 'after',
     })
-    expect(getFieldStatus(resolved, 'prompts.injection_order', 'as-system')).toMatchObject({
+    expect(getFieldStatus(resolved, 'prompts.injection_order', 'as-system-first')).toMatchObject({
       status: 'preserved',
       reason: 'PRESERVED_EXPORT_ONLY',
       value: 2,
