@@ -147,9 +147,25 @@ function createCreativeLibrary(mode: 'default' | 'stream' = 'default'): PresetCo
           condition: null,
           passthrough: {},
         },
+        {
+          id: `${surfaceId}-system-rule-second`,
+          name: `${surfaceId} second system rule`,
+          role: 'system',
+          content: `${surfaceId.toUpperCase()} SECOND SYSTEM RULE`,
+          enabled: true,
+          marker: false,
+          injectAsSystemPrompt: true,
+          injectionPosition: 'before',
+          injectionDepth: null,
+          injectionOrder: 3,
+          injectionTrigger: [],
+          forbidOverrides: false,
+          condition: null,
+          passthrough: {},
+        },
       ],
       promptOrderLists: {
-        [surfaceId]: [`${surfaceId}-user-rule`, `${surfaceId}-system-rule`],
+        [surfaceId]: [`${surfaceId}-user-rule`, `${surfaceId}-system-rule`, `${surfaceId}-system-rule-second`],
       },
       embeddedRegexes: [],
       attachedStandaloneRegexIds: ['regex-input', 'regex-output'],
@@ -504,7 +520,10 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.presence_penalty).toBe(0.33)
     expect(requestBody.max_tokens).toBe(2222)
     expect(requestBody.seed).toBeUndefined()
-    expect(requestBody.messages[0]?.content).toBe(`${surfaceId.toUpperCase()} SYSTEM RULE`)
+    expect(requestBody.messages[0]?.content).toBe([
+      `${surfaceId.toUpperCase()} SYSTEM RULE`,
+      `${surfaceId.toUpperCase()} SECOND SYSTEM RULE`,
+    ].join('\n\n'))
     expect(requestBody.messages[0]?.content).not.toContain('## Imported Preset System Rules')
     expect(requestBody.messages[1]?.content.startsWith(`${surfaceId.toUpperCase()} USER RULE`)).toBe(true)
     expect(requestBody.messages[1]?.content).not.toContain('## Imported Preset User Rules')

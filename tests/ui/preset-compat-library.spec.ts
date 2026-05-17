@@ -318,6 +318,9 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
   expect(importedPreset).toBeDefined()
   const firstRuleId = importedPreset.promptRules[0]?.id
   expect(firstRuleId).toBeTruthy()
+  await expect(page.getByTestId(`preset-compat-rule-content-${firstRuleId}`)).toBeVisible()
+  await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toHaveCount(0)
+  await page.getByTestId('preset-compat-preview-generate').click()
 
   await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toBeVisible()
   await expect(page.getByTestId('preset-compat-session-state-rewrite')).toHaveText(/会话阶段：continue · 正常/)
@@ -325,6 +328,7 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
   await expect(page.getByText('导入备注')).toHaveCount(0)
 
   await page.getByTestId('preset-compat-session-reset-rewrite').click()
+  await page.getByTestId('preset-compat-preview-generate').click()
   await expect(page.getByTestId('preset-compat-session-state-rewrite')).toHaveText(/会话阶段：new_chat · 待重置/)
 
   await page.getByTestId('preset-compat-regex-import-input').setInputFiles({

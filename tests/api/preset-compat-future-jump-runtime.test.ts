@@ -139,13 +139,29 @@ function createRuntimeLibrary() {
         condition: null,
         passthrough: {},
       },
+      {
+        id: 'fj-system-rule-second',
+        name: 'Future jump second system rule',
+        role: 'system',
+        content: 'FUTURE JUMP SECOND SYSTEM RULE',
+        enabled: true,
+        marker: false,
+        injectAsSystemPrompt: true,
+        injectionPosition: 'before',
+        injectionDepth: null,
+        injectionOrder: 3,
+        injectionTrigger: [],
+        forbidOverrides: false,
+        condition: null,
+        passthrough: {},
+      },
     ],
     promptOrderLists: {
-      future_jump_rewrite: ['fj-user-rule', 'fj-system-rule'],
-      future_jump_bridge: ['fj-user-rule', 'fj-system-rule'],
-      what_if_delta_extraction: ['fj-user-rule', 'fj-system-rule'],
-      knowledge_extraction: ['fj-user-rule', 'fj-system-rule'],
-      embeddings: ['fj-user-rule', 'fj-system-rule'],
+      future_jump_rewrite: ['fj-user-rule', 'fj-system-rule', 'fj-system-rule-second'],
+      future_jump_bridge: ['fj-user-rule', 'fj-system-rule', 'fj-system-rule-second'],
+      what_if_delta_extraction: ['fj-user-rule', 'fj-system-rule', 'fj-system-rule-second'],
+      knowledge_extraction: ['fj-user-rule', 'fj-system-rule', 'fj-system-rule-second'],
+      embeddings: ['fj-user-rule', 'fj-system-rule', 'fj-system-rule-second'],
     },
     embeddedRegexes: [],
     attachedStandaloneRegexIds: ['regex-input', 'regex-output'],
@@ -507,7 +523,10 @@ describe('preset compat future jump runtime', () => {
     expect(rewriteBody.messages[0]?.content).not.toContain('FUTURE JUMP NEW CHAT TEMPLATE')
     expect(rewriteBody.messages[0]?.content).not.toContain('FUTURE JUMP CONTINUE TEMPLATE')
     expect(rewriteBody.messages[0]?.content).not.toContain('## Imported Preset System Rules')
-    expect(rewriteBody.messages[0]?.content).toContain('FUTURE JUMP SYSTEM RULE')
+    expect(rewriteBody.messages[0]?.content).toBe([
+      'FUTURE JUMP SYSTEM RULE',
+      'FUTURE JUMP SECOND SYSTEM RULE',
+    ].join('\n\n'))
     expect(rewriteBody.messages[1]?.content.startsWith('FUTURE JUMP USER RULE')).toBe(true)
     expect(rewriteBody.messages[1]?.content).not.toContain('## Imported Preset User Rules')
     expect(rewriteBody.messages[1]?.content).toContain('BETA')

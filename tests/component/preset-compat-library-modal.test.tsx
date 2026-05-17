@@ -255,6 +255,9 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.getByTestId('preset-compat-binding-rewrite')).toBeInTheDocument()
     expect(screen.getByTestId('preset-compat-binding-future_jump_rewrite')).toBeInTheDocument()
     expect(screen.getByText('当前创作界面：Rewrite')).toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-rule-content-preset-1-rule-1')).toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-preview-surface-rewrite')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
     const rewritePreviewCard = await screen.findByTestId('preset-compat-preview-surface-rewrite')
     expect(rewritePreviewCard).toBeInTheDocument()
     expect(screen.getByTestId('preset-compat-session-state-rewrite')).toHaveTextContent('会话阶段：continue · 正常')
@@ -271,7 +274,8 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.queryByTestId('preset-compat-session-reset-expand')).not.toBeInTheDocument()
     expect(screen.queryByTestId('preset-compat-session-reset-roleplay')).not.toBeInTheDocument()
     expect(screen.queryByTestId('preset-compat-session-reset-future_jump_bridge')).not.toBeInTheDocument()
-    expect(screen.getByTestId('preset-compat-session-state-rewrite')).toHaveTextContent('会话阶段：new_chat · 待重置')
+    fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
+    expect(await screen.findByTestId('preset-compat-session-state-rewrite')).toHaveTextContent('会话阶段：new_chat · 待重置')
     expect(await screen.findByTestId('preset-compat-session-state-expand')).toHaveTextContent('会话阶段：continue · 正常')
     expect(await screen.findByTestId('preset-compat-session-state-continue')).toHaveTextContent('会话阶段：continue · 正常')
 
@@ -426,6 +430,7 @@ describe('PresetCompatLibraryModal', () => {
     render(<PresetCompatLibraryModal open onClose={vi.fn()} />)
 
     fireEvent.change(screen.getByTestId('preset-compat-binding-rewrite'), { target: { value: 'preset-1' } })
+    fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
 
     await waitFor(() => {
       expect(screen.getByTestId('preset-compat-preview-system-rewrite')).toHaveTextContent('Speaker pair: Alice / Bob /')
@@ -501,6 +506,8 @@ describe('PresetCompatLibraryModal', () => {
     await waitFor(() => {
       expect(screen.getAllByText('resets_example').length).toBeGreaterThan(0)
     })
+    expect(previewSpy).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
     await waitFor(() => {
       expect(previewSpy).toHaveBeenCalled()
     })

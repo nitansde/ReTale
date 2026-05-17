@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import {
   PRESET_COMPAT_OPTED_IN_SURFACE_IDS,
 } from '@/lib/preset-compat/surface-contract'
@@ -59,6 +59,8 @@ const DEFERRED_PROMPT_RULE_INITIAL_DELAY_MS = 150
 const DEFERRED_PROMPT_RULE_BATCH_DELAY_MS = 32
 const SURFACE_PREVIEW_BATCH_SIZE = 2
 const SURFACE_PREVIEW_BATCH_DELAY_MS = 64
+
+type PreviewGenerationStatus = 'idle' | 'generating' | 'ready'
 
 const SURFACE_LABELS: Record<PresetCompatSurfaceId, string> = {
   rewrite: 'Rewrite',
@@ -198,9 +200,11 @@ export function PresetCompatPresetEditor({
   onDeletePreset,
   onExportPreset,
 }: PresetCompatPresetEditorProps) {
-  const [showSurfacePreviews, setShowSurfacePreviews] = useState(false)
-  const [visibleSurfacePreviewCount, setVisibleSurfacePreviewCount] = useState(0)
+  const [surfacePreviews, setSurfacePreviews] = useState<SurfaceRuntimePreview[]>([])
+  const [previewGenerationStatus, setPreviewGenerationStatus] = useState<PreviewGenerationStatus>('idle')
   const [visibleDeferredPromptRuleCount, setVisibleDeferredPromptRuleCount] = useState(0)
+  const previewGenerationIdRef = useRef(0)
+  const previewBatchTimerRef = useRef<number | null>(null)
   const aiSettings = useNovelStore((state) => state.aiSettings)
   const currentChapterId = useNovelStore((state) => state.currentChapterId)
   const presetCompatSessionState = useNovelStore((state) => state.presetCompatSessionState)
@@ -230,47 +234,123 @@ export function PresetCompatPresetEditor({
     ]
   }, [effectiveActiveSurfaceId])
 
+  const cancelPendingPreviewGeneration = () => {
+    previewGenerationIdRef.current += 1
+    if (previewBatchTimerRef.current !== null) {
+      window.clearTimeout(previewBatchTimerRef.current)
+      previewBatchTimerRef.current = null
+    }
+  }
+
+  const handleGenerateSurfacePreviews = () => {
+    cancelPendingPreviewGeneration()
+    setSurfacePreviews([])
+    setPreviewGenerationStatus('generating')
+
+    const generationId = previewGenerationIdRef.current
+    const previewLibraryBase = library
+    const previewSurfaceIds = [...orderedPreviewSurfaceIds]
+    const providerDefaults = buildProviderDefaults(rewriteAISettings)
+    const selectionForPreview = effectiveSelection
+    const activeSurfaceForPreview = effectiveActiveSurfaceId
+    const sessionStateForPreview = presetCompatSessionState
+    const presetId = preset.id
+
+    const appendPreviewBatch = (startIndex: number) => {
+      if (previewGenerationIdRef.current !== generationId) {
+        return
+      }
+
+      const nextSurfaceIds = previewSurfaceIds.slice(startIndex, startIndex + SURFACE_PREVIEW_BATCH_SIZE)
+      const nextPreviews = nextSurfaceIds.map((surfaceId) => {
+        const sessionEntry = selectionForPreview
+          ? sessionStateForPreview[createPresetCompatSessionStateKey(selectionForPreview, surfaceId)] ?? null
+          : null
+        const sessionPhase = getPreviewSessionPhase(surfaceId, sessionEntry?.phase ?? null)
+        const previewLibrary: PresetCompatLibrary = {
+          ...previewLibraryBase,
+          surfaceBindings: {
+            ...previewLibraryBase.surfaceBindings,
+            [surfaceId]: {
+              ...previewLibraryBase.surfaceBindings[surfaceId],
+              presetId,
+              enabled: true,
+            },
+          },
+        }
+        const runtime = resolvePresetCompatRuntime({
+          library: previewLibrary,
+          surfaceId,
+          providerDefaults,
+          promptRuleRuntimeContext: buildPreviewPromptRuntimeContext(sessionPhase),
+        })
+        const standalone = runtime.activePreset
+          ? runtime.activePreset.attachedStandaloneRegexIds
+              .map((regexId) => previewLibrary.standaloneRegexes[regexId])
+              .filter((regex): regex is PresetCompatRegexRecord => Boolean(regex))
+          : []
+        const embedded = runtime.activePreset?.embeddedRegexes ?? []
+        const promptPreview = buildPresetCompatCreativeRuntimePreview({
+          surfaceId,
+          resolvedRuntime: runtime,
+          systemPrompt: '',
+          userPrompt: '',
+          standalone,
+          embedded,
+        })
+
+        return {
+          surfaceId,
+          promptPreview: {
+            systemPrompt: promptPreview.systemPrompt,
+            userPrompt: promptPreview.userPrompt,
+          },
+          sessionPhase,
+          resetPending: sessionEntry?.resetPending ?? false,
+          canReset: Boolean(selectionForPreview && activeSurfaceForPreview && surfaceId === activeSurfaceForPreview),
+        }
+      })
+
+      setSurfacePreviews((currentPreviews) => startIndex === 0 ? nextPreviews : [...currentPreviews, ...nextPreviews])
+
+      const nextIndex = startIndex + SURFACE_PREVIEW_BATCH_SIZE
+      if (nextIndex >= previewSurfaceIds.length) {
+        previewBatchTimerRef.current = null
+        setPreviewGenerationStatus('ready')
+        return
+      }
+
+      previewBatchTimerRef.current = window.setTimeout(() => {
+        appendPreviewBatch(nextIndex)
+      }, SURFACE_PREVIEW_BATCH_DELAY_MS)
+    }
+
+    previewBatchTimerRef.current = window.setTimeout(() => {
+      appendPreviewBatch(0)
+    }, 0)
+  }
+
   useEffect(() => {
-    setShowSurfacePreviews(false)
-    setVisibleSurfacePreviewCount(0)
+    cancelPendingPreviewGeneration()
+    setSurfacePreviews([])
+    setPreviewGenerationStatus('idle')
     setVisibleDeferredPromptRuleCount(0)
 
     let deferredRulesTimer: number | null = null
 
-    const previewTimer = window.setTimeout(() => {
-      setShowSurfacePreviews(true)
-      setVisibleSurfacePreviewCount(1)
-
+    const deferredRulesInitialTimer = window.setTimeout(() => {
       deferredRulesTimer = window.setTimeout(() => {
         setVisibleDeferredPromptRuleCount(Math.min(INITIAL_DEFERRED_PROMPT_RULE_BATCH, deferredPromptRules.length))
       }, DEFERRED_PROMPT_RULE_INITIAL_DELAY_MS)
     }, 0)
 
     return () => {
-      window.clearTimeout(previewTimer)
+      window.clearTimeout(deferredRulesInitialTimer)
       if (deferredRulesTimer !== null) {
         window.clearTimeout(deferredRulesTimer)
       }
     }
   }, [preset.id])
-
-  useEffect(() => {
-    if (
-      !showSurfacePreviews
-      || visibleSurfacePreviewCount >= orderedPreviewSurfaceIds.length
-      || visibleDeferredPromptRuleCount < deferredPromptRules.length
-    ) {
-      return
-    }
-
-    const nextPreviewBatchTimer = window.setTimeout(() => {
-      setVisibleSurfacePreviewCount((currentCount) => Math.min(currentCount + SURFACE_PREVIEW_BATCH_SIZE, orderedPreviewSurfaceIds.length))
-    }, SURFACE_PREVIEW_BATCH_DELAY_MS)
-
-    return () => {
-      window.clearTimeout(nextPreviewBatchTimer)
-    }
-  }, [deferredPromptRules.length, orderedPreviewSurfaceIds.length, showSurfacePreviews, visibleDeferredPromptRuleCount, visibleSurfacePreviewCount])
 
   useEffect(() => {
     if (visibleDeferredPromptRuleCount === 0 || visibleDeferredPromptRuleCount >= deferredPromptRules.length) {
@@ -286,63 +366,11 @@ export function PresetCompatPresetEditor({
     }
   }, [deferredPromptRules.length, visibleDeferredPromptRuleCount])
 
-  const surfacePreviews = useMemo<SurfaceRuntimePreview[]>(() => {
-    if (!showSurfacePreviews) {
-      return []
+  useEffect(() => {
+    return () => {
+      cancelPendingPreviewGeneration()
     }
-
-    const providerDefaults = buildProviderDefaults(rewriteAISettings)
-    const previewSurfaceIds = orderedPreviewSurfaceIds.slice(0, visibleSurfacePreviewCount)
-
-    return previewSurfaceIds.map((surfaceId) => {
-      const sessionEntry = effectiveSelection
-        ? presetCompatSessionState[createPresetCompatSessionStateKey(effectiveSelection, surfaceId)] ?? null
-        : null
-      const sessionPhase = getPreviewSessionPhase(surfaceId, sessionEntry?.phase ?? null)
-      const previewLibrary: PresetCompatLibrary = {
-        ...library,
-        surfaceBindings: {
-          ...library.surfaceBindings,
-          [surfaceId]: {
-            ...library.surfaceBindings[surfaceId],
-            presetId: preset.id,
-            enabled: true,
-          },
-        },
-      }
-      const runtime = resolvePresetCompatRuntime({
-        library: previewLibrary,
-        surfaceId,
-        providerDefaults,
-        promptRuleRuntimeContext: buildPreviewPromptRuntimeContext(sessionPhase),
-      })
-      const standalone = runtime.activePreset
-        ? runtime.activePreset.attachedStandaloneRegexIds
-            .map((regexId) => previewLibrary.standaloneRegexes[regexId])
-            .filter((regex): regex is PresetCompatRegexRecord => Boolean(regex))
-        : []
-      const embedded = runtime.activePreset?.embeddedRegexes ?? []
-      const promptPreview = buildPresetCompatCreativeRuntimePreview({
-        surfaceId,
-        resolvedRuntime: runtime,
-        systemPrompt: '',
-        userPrompt: '',
-        standalone,
-        embedded,
-      })
-
-      return {
-        surfaceId,
-        promptPreview: {
-          systemPrompt: promptPreview.systemPrompt,
-          userPrompt: promptPreview.userPrompt,
-        },
-        sessionPhase,
-        resetPending: sessionEntry?.resetPending ?? false,
-        canReset: Boolean(effectiveSelection && effectiveActiveSurfaceId && surfaceId === effectiveActiveSurfaceId),
-      }
-    })
-  }, [effectiveSelection, effectiveActiveSurfaceId, library, orderedPreviewSurfaceIds, preset.id, presetCompatSessionState, rewriteAISettings, showSurfacePreviews, visibleSurfacePreviewCount])
+  }, [])
 
   return (
     <div className="space-y-4">
@@ -527,7 +555,23 @@ export function PresetCompatPresetEditor({
         </div>
 
         <div className="mt-4 space-y-4">
-          {showSurfacePreviews ? surfacePreviews.map((preview) => {
+          <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm leading-6 text-zinc-400">
+                预览不会在进入编辑器时自动计算。需要时手动生成，避免大型预设阻塞首屏与首条规则编辑。
+              </p>
+              <button
+                type="button"
+                data-testid="preset-compat-preview-generate"
+                onClick={handleGenerateSurfacePreviews}
+                className="rounded-2xl border border-white/10 bg-black/20 px-4 py-2 text-sm text-zinc-100 transition hover:bg-white/[0.06]"
+              >
+                {previewGenerationStatus === 'idle' ? '生成预览' : previewGenerationStatus === 'generating' ? '刷新预览中…' : '刷新预览'}
+              </button>
+            </div>
+          </div>
+
+          {surfacePreviews.length > 0 ? surfacePreviews.map((preview) => {
             return (
               <div
                 key={preview.surfaceId}
@@ -581,9 +625,13 @@ export function PresetCompatPresetEditor({
                 </div>
               </div>
             )
-          }) : (
+          }) : previewGenerationStatus === 'generating' ? (
             <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">
               正在生成运行时预览…
+            </div>
+          ) : (
+            <div className="rounded-[20px] border border-dashed border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-500">
+              点击“生成预览”后，会按当前创作界面优先生成运行时 prompt 预览。
             </div>
           )}
         </div>
