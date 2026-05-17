@@ -55,7 +55,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000
+Open http://localhost:14500, or use `http://<tailscale-ip-or-hostname>:14500` from another Tailscale device on a trusted tailnet. The dev script intentionally defaults to `0.0.0.0:14500` for this workflow and still honors explicit CLI overrides such as `npm run dev -- --port 3000` for automated test harnesses; do not expose it on untrusted networks.
 
 ## Production check
 
