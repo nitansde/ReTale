@@ -1,8 +1,14 @@
-import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
+import {
+  createDefaultPresetCompatBuiltinSystemPrompts,
+  createDefaultPresetCompatLibrary,
+} from '@/lib/preset-compat/surface-contract'
 import {
   PRESET_COMPAT_LEGACY_FLAT_PROMPT_KEYS,
+  PRESET_COMPAT_CREATIVE_SURFACE_IDS,
   PRESET_COMPAT_SOURCE_API_ID,
   PRESET_COMPAT_SURFACE_IDS,
+  type PresetCompatBuiltinSystemPrompt,
+  type PresetCompatCreativeSurfaceId,
   type PresetCompatLibrary,
   type PresetCompatLegacyFlatPromptKey,
   type PresetCompatPresetPassthrough,
@@ -351,6 +357,33 @@ function normalizeSurfaceBindings(value: unknown): PresetCompatLibrary['surfaceB
   ) as PresetCompatLibrary['surfaceBindings']
 }
 
+function normalizeBuiltinSystemPrompt(
+  value: unknown,
+  fallback: PresetCompatBuiltinSystemPrompt
+): PresetCompatBuiltinSystemPrompt {
+  if (!isRecord(value)) {
+    return fallback
+  }
+
+  return {
+    surfaceId: fallback.surfaceId,
+    enabled: normalizeBoolean(value.enabled, fallback.enabled),
+    content: normalizeString(value.content, fallback.content),
+  }
+}
+
+function normalizeBuiltinSystemPrompts(value: unknown): PresetCompatLibrary['builtinSystemPrompts'] {
+  const defaults = createDefaultPresetCompatBuiltinSystemPrompts()
+  const record = isRecord(value) ? value : {}
+
+  return Object.fromEntries(
+    PRESET_COMPAT_CREATIVE_SURFACE_IDS.map((surfaceId) => [
+      surfaceId,
+      normalizeBuiltinSystemPrompt(record[surfaceId], defaults[surfaceId]),
+    ])
+  ) as Record<PresetCompatCreativeSurfaceId, PresetCompatBuiltinSystemPrompt>
+}
+
 function normalizePresetCompatLibrary(value: unknown): PresetCompatLibrary {
   const defaults = createDefaultPresetCompatLibrary()
   if (!isRecord(value)) {
@@ -363,6 +396,7 @@ function normalizePresetCompatLibrary(value: unknown): PresetCompatLibrary {
     presets: normalizePresets(value.presets),
     standaloneRegexes: normalizeStandaloneRegexes(value.standaloneRegexes),
     surfaceBindings: normalizeSurfaceBindings(value.surfaceBindings),
+    builtinSystemPrompts: normalizeBuiltinSystemPrompts(value.builtinSystemPrompts),
     lastImportedAt: normalizeNullableString(value.lastImportedAt),
     lastExportedAt: normalizeNullableString(value.lastExportedAt),
   }

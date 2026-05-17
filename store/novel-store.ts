@@ -13,6 +13,8 @@ import type { ImportPresetCompatPayloadParams } from '@/lib/preset-compat/client
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import type {
   PresetCompatLibrary,
+  PresetCompatBuiltinSystemPrompt,
+  PresetCompatCreativeSurfaceId,
   PresetCompatPresetRecord,
   PresetCompatPromptRule,
   PresetCompatRegexRecord,
@@ -391,6 +393,7 @@ type NovelStore = PersistedNovelState & {
   updatePresetCompatRuntimeSampler: (presetId: string, updates: Partial<PresetCompatPresetRecord['runtimeSampler']>) => void
   updatePresetCompatTransport: (presetId: string, updates: Partial<PresetCompatPresetRecord['transport']>) => void
   updatePresetCompatStandaloneRegex: (regexId: string, updates: Partial<PresetCompatRegexRecord>) => void
+  updatePresetCompatBuiltinSystemPrompt: (surfaceId: PresetCompatCreativeSurfaceId, updates: Partial<Omit<PresetCompatBuiltinSystemPrompt, 'surfaceId'>>) => void
   exportPresetCompatPreset: (presetId: string) => string | null
   exportPresetCompatStandaloneRegexBundle: (regexIds?: string[]) => string
   addCharacter: (novelId: string, fields: { name: string; role: string; goal: string; trait: string; note: string }) => void
@@ -1426,6 +1429,29 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
           [regexId]: {
             ...regexRecord,
             ...updates,
+          },
+        },
+      },
+      presetCompatLibraryError: '',
+    }
+  }),
+  updatePresetCompatBuiltinSystemPrompt: (surfaceId, updates) => set((state) => {
+    const rule = state.presetCompatLibrary.builtinSystemPrompts[surfaceId]
+    if (!rule) {
+      return {
+        presetCompatLibraryError: 'builtin_system_prompt_not_found',
+      }
+    }
+
+    return {
+      presetCompatLibrary: {
+        ...state.presetCompatLibrary,
+        builtinSystemPrompts: {
+          ...state.presetCompatLibrary.builtinSystemPrompts,
+          [surfaceId]: {
+            ...rule,
+            ...updates,
+            surfaceId,
           },
         },
       },

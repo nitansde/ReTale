@@ -71,6 +71,61 @@ describe('preset compat library app-setting store', () => {
 
     writeAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1', JSON.stringify(['wrong-shape']))
     expect(loadStoredPresetCompatLibrary()).toEqual(createDefaultPresetCompatLibrary())
+
+    writeAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1', JSON.stringify({
+      revision: 4,
+      presets: {},
+      standaloneRegexes: {},
+      surfaceBindings: {},
+      builtinSystemPrompts: {
+        rewrite: {
+          surfaceId: 'rewrite',
+          enabled: false,
+          content: 'Stored rewrite built-in.',
+        },
+      },
+      lastImportedAt: null,
+      lastExportedAt: null,
+    }))
+    const partialReload = loadStoredPresetCompatLibrary()
+    expect(partialReload.builtinSystemPrompts.rewrite).toMatchObject({
+      surfaceId: 'rewrite',
+      enabled: false,
+      content: 'Stored rewrite built-in.',
+    })
+    expect(partialReload.builtinSystemPrompts.expand).toMatchObject({
+      surfaceId: 'expand',
+      enabled: true,
+    })
+    expect(partialReload.builtinSystemPrompts.expand.content).toContain('你是 ChatBook 的小说扩写/魔改写作模型。')
+
+    writeAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1', JSON.stringify({
+      revision: 5,
+      presets: {},
+      standaloneRegexes: {},
+      surfaceBindings: {},
+      builtinSystemPrompts: {
+        rewrite: {
+          surfaceId: 'future_jump_rewrite',
+          enabled: 'yes',
+          content: 42,
+        },
+        future_jump_rewrite: {
+          surfaceId: 'rewrite',
+          enabled: false,
+          content: 'Stored future jump built-in.',
+        },
+      },
+      lastImportedAt: null,
+      lastExportedAt: null,
+    }))
+    const malformedReload = loadStoredPresetCompatLibrary()
+    expect(malformedReload.builtinSystemPrompts.rewrite).toEqual(createDefaultPresetCompatLibrary().builtinSystemPrompts.rewrite)
+    expect(malformedReload.builtinSystemPrompts.future_jump_rewrite).toEqual({
+      surfaceId: 'future_jump_rewrite',
+      enabled: false,
+      content: 'Stored future jump built-in.',
+    })
   })
 
   it('stores under PRESET_COMPAT_LIBRARY_V1, keeps AI settings isolated, and bumps revision on every write', async () => {
