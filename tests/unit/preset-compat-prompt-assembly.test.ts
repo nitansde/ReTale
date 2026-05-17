@@ -84,6 +84,7 @@ describe('preset compat prompt assembly', () => {
 
     expect(assembled.metadata.stageOrder).toEqual(PRESET_COMPAT_PROMPT_ASSEMBLY_STAGE_ORDER)
     expect(assembled.metadata.system.stages).toEqual([
+      { stage: 'builtin_system_prompt', status: 'empty', segmentCount: 0 },
       { stage: 'base_prompt', status: 'empty', segmentCount: 0 },
       { stage: 'template_fragments', status: 'applied', segmentCount: 1 },
       { stage: 'imported_prompt_rules', status: 'applied', segmentCount: 1 },
@@ -91,6 +92,7 @@ describe('preset compat prompt assembly', () => {
       { stage: 'regex_processing', status: 'pending', segmentCount: 0 },
     ])
     expect(assembled.metadata.user.stages).toEqual([
+      { stage: 'builtin_system_prompt', status: 'empty', segmentCount: 0 },
       { stage: 'base_prompt', status: 'applied', segmentCount: 1 },
       { stage: 'template_fragments', status: 'applied', segmentCount: 1 },
       { stage: 'imported_prompt_rules', status: 'applied', segmentCount: 1 },
@@ -116,6 +118,7 @@ describe('preset compat prompt assembly', () => {
     expect(assembled.systemPrompt).toBe('')
     expect(assembled.userPromptBeforeRegex).toBe('Base user prompt.')
     expect(assembled.metadata.system.stages).toEqual([
+      { stage: 'builtin_system_prompt', status: 'empty', segmentCount: 0 },
       { stage: 'base_prompt', status: 'empty', segmentCount: 0 },
       { stage: 'template_fragments', status: 'empty', segmentCount: 0 },
       { stage: 'imported_prompt_rules', status: 'empty', segmentCount: 0 },
@@ -146,6 +149,7 @@ describe('preset compat prompt assembly', () => {
       'User appended.',
     ].join('\n\n'))
     expect(assembled.metadata.system.stages).toEqual([
+      { stage: 'builtin_system_prompt', status: 'empty', segmentCount: 0 },
       { stage: 'base_prompt', status: 'empty', segmentCount: 0 },
       { stage: 'template_fragments', status: 'empty', segmentCount: 0 },
       { stage: 'imported_prompt_rules', status: 'applied', segmentCount: 2 },
@@ -154,8 +158,33 @@ describe('preset compat prompt assembly', () => {
     ])
   })
 
+  it('prepends ChatBook built-in system prompt before imported system rules', () => {
+    const assembled = assemblePresetCompatPrompts({
+      builtinSystemPrompt: 'ChatBook built-in system.',
+      baseSystemPrompt: 'Base system prompt.',
+      baseUserPrompt: 'Base user prompt.',
+      importedPromptRules: [
+        { channel: 'system', placement: 'append', text: 'Imported system rule.' },
+      ],
+    })
+
+    expect(assembled.systemPrompt).toBe([
+      'ChatBook built-in system.',
+      'Imported system rule.',
+    ].join('\n\n'))
+    expect(assembled.metadata.system.stages[0]).toEqual({
+      stage: 'builtin_system_prompt',
+      status: 'applied',
+      segmentCount: 1,
+    })
+  })
+
   it('concatenates active imported system rules in order, replaces the base system prompt, and reuses one macro context', () => {
     const library = createDefaultPresetCompatLibrary()
+    library.builtinSystemPrompts.rewrite = {
+      ...library.builtinSystemPrompts.rewrite,
+      content: 'ChatBook builtin system',
+    }
     library.presets['rewrite-preset'] = {
       id: 'rewrite-preset',
       name: 'Rewrite preset',
@@ -297,6 +326,7 @@ describe('preset compat prompt assembly', () => {
     })
 
     expect(assembled.systemPrompt).toBe([
+      'ChatBook builtin system',
       'System topic ALPHA',
       'System echo ALPHA',
     ].join('\n\n'))
@@ -307,5 +337,34 @@ describe('preset compat prompt assembly', () => {
     expect(assembled.systemPrompt).not.toContain('{{')
     expect(assembled.userPrompt).not.toContain('{{')
     expect(assembled.metadata.macroDiagnostics).toEqual([])
+  })
+
+  it('omits disabled ChatBook built-in prompts from runtime assembly without leaving blank wrappers', () => {
+    const library = createDefaultPresetCompatLibrary()
+    library.builtinSystemPrompts.rewrite = {
+      ...library.builtinSystemPrompts.rewrite,
+      enabled: false,
+      content: 'Disabled built-in prompt',
+    }
+
+    const resolvedRuntime = resolvePresetCompatRuntime({
+      library,
+      surfaceId: 'rewrite',
+      providerDefaults: PROVIDER_DEFAULTS,
+    })
+
+    const assembled = assemblePresetCompatRuntimePrompts({
+      surfaceId: 'rewrite',
+      resolvedRuntime,
+      systemPrompt: '',
+      userPrompt: 'Base user prompt.',
+    })
+
+    expect(assembled.systemPrompt).toBe('')
+    expect(assembled.promptAssembly.system.stages[0]).toEqual({
+      stage: 'builtin_system_prompt',
+      status: 'empty',
+      segmentCount: 0,
+    })
   })
 })

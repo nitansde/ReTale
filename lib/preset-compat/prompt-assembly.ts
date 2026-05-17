@@ -11,6 +11,7 @@ import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 export const IMPORTED_PRESET_USER_RULES_HEADING = '## Imported Preset User Rules'
 
 export const PRESET_COMPAT_PROMPT_ASSEMBLY_STAGE_ORDER = [
+  'builtin_system_prompt',
   'base_prompt',
   'template_fragments',
   'imported_prompt_rules',
@@ -87,6 +88,7 @@ export type PresetCompatRuntimePromptAssemblyResult = {
 }
 
 type PresetCompatPromptAssemblyParams = {
+  builtinSystemPrompt?: string | null
   baseSystemPrompt: string
   baseUserPrompt: string
   systemTemplateFragments?: readonly string[]
@@ -267,6 +269,8 @@ export function assemblePresetCompatPrompts(params: PresetCompatPromptAssemblyPa
   const fallbackSystemRuleCount = normalizeTexts(params.importedSystemRuleContents).length
   const hasImportedSystemRules = structuredSystemRuleCount > 0 || fallbackSystemRuleCount > 0
 
+  appendSegment(systemSegments, 'system', 'builtin_system_prompt', 'prepend', params.builtinSystemPrompt ?? '')
+
   if (!hasImportedSystemRules) {
     appendSegment(systemSegments, 'system', 'base_prompt', 'append', params.baseSystemPrompt)
   }
@@ -348,6 +352,7 @@ export function assemblePresetCompatRuntimePrompts(params: {
     baseUserPrompt: params.userPrompt,
     systemTemplateFragments: params.resolvedRuntime.templateFragments.system.map((fragment) => fragment.text),
     userTemplateFragments: params.resolvedRuntime.templateFragments.user.map((fragment) => fragment.text),
+    builtinSystemPrompt: params.resolvedRuntime.builtinSystemPrompt,
     surfaceContextBlocks: params.surfaceContextBlocks,
     contextBlockFormats: params.resolvedRuntime.contextBlockFormats,
     namesBehavior: params.resolvedRuntime.namesBehavior,

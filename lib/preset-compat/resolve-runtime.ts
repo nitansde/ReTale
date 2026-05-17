@@ -12,22 +12,24 @@ import {
   isPresetCompatPreservedOnlyField,
   type PresetCompatProviderSamplerField,
 } from '@/lib/preset-compat/capability-matrix'
-import type {
-  PresetCompatNamedTranscriptContext,
-  PresetCompatLibrary,
-  PresetCompatPresetRecord,
-  PresetCompatPromptRule,
-  PresetCompatPromptTemplateSettings,
-  PresetCompatPromptRuleRuntimeContext,
-  PresetCompatRuntimeContextBlock,
-  PresetCompatResolvedFieldStatus,
-  PresetCompatResolvedProviderControlIntent,
-  PresetCompatRuntimePromptRuleRole,
-  PresetCompatRuntimeSnapshot,
-  PresetCompatStatusReasonCode,
-  PresetCompatSurfaceId,
-  PresetCompatTransportSettings,
-  PresetCompatPreservedFieldSettings,
+import {
+  PRESET_COMPAT_CREATIVE_SURFACE_IDS,
+  type PresetCompatCreativeSurfaceId,
+  type PresetCompatNamedTranscriptContext,
+  type PresetCompatLibrary,
+  type PresetCompatPresetRecord,
+  type PresetCompatPromptRule,
+  type PresetCompatPromptTemplateSettings,
+  type PresetCompatPromptRuleRuntimeContext,
+  type PresetCompatRuntimeContextBlock,
+  type PresetCompatResolvedFieldStatus,
+  type PresetCompatResolvedProviderControlIntent,
+  type PresetCompatRuntimePromptRuleRole,
+  type PresetCompatRuntimeSnapshot,
+  type PresetCompatStatusReasonCode,
+  type PresetCompatSurfaceId,
+  type PresetCompatTransportSettings,
+  type PresetCompatPreservedFieldSettings,
 } from '@/lib/preset-compat/types'
 
 type PresetCompatOpenAICompatibleRequest = Partial<{
@@ -125,6 +127,7 @@ export type PresetCompatResolvedProviderRuntime =
 export type PresetCompatResolvedRuntime = {
   snapshot: PresetCompatRuntimeSnapshot
   activePreset: PresetCompatPresetRecord | null
+  builtinSystemPrompt: string | null
   providerRuntime: PresetCompatResolvedProviderRuntime
   templateFragments: PresetCompatResolvedTemplateFragmentSet
   contextBlockFormats: PresetCompatResolvedContextBlockFormat[]
@@ -165,6 +168,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isPresetCompatCreativeSurfaceId(surfaceId: PresetCompatSurfaceId): surfaceId is PresetCompatCreativeSurfaceId {
+  return PRESET_COMPAT_CREATIVE_SURFACE_IDS.includes(surfaceId as PresetCompatCreativeSurfaceId)
 }
 
 function getPresetRootPassthrough(preset: PresetCompatPresetRecord | null) {
@@ -1255,6 +1262,12 @@ export function resolvePresetCompatRuntime(params: {
 }) : PresetCompatResolvedRuntime {
   const sessionOverrides = params.sessionOverrides ?? {}
   const activePreset = getPresetBoundToSurface(params.library, params.surfaceId)
+  const builtinSystemPromptRule = isPresetCompatCreativeSurfaceId(params.surfaceId)
+    ? params.library.builtinSystemPrompts[params.surfaceId]
+    : null
+  const builtinSystemPrompt = builtinSystemPromptRule?.enabled && builtinSystemPromptRule.content.trim()
+    ? builtinSystemPromptRule.content.trim()
+    : null
   const provider = sessionOverrides.provider ?? params.providerDefaults.provider
   const context = {
     preset: activePreset,
@@ -1286,6 +1299,7 @@ export function resolvePresetCompatRuntime(params: {
       warnings,
     },
     activePreset,
+    builtinSystemPrompt,
     providerRuntime,
     templateFragments: templateResolution.templateFragments,
     contextBlockFormats: formattingResolution.contextBlockFormats,
