@@ -9,7 +9,6 @@ import {
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 
 export const IMPORTED_PRESET_USER_RULES_HEADING = '## Imported Preset User Rules'
-export const IMPORTED_PRESET_SYSTEM_RULES_HEADING = '## Imported Preset System Rules'
 
 export const PRESET_COMPAT_PROMPT_ASSEMBLY_STAGE_ORDER = [
   'base_prompt',
@@ -110,13 +109,8 @@ function normalizeTexts(values: readonly string[] | undefined) {
   return (values ?? []).map((value) => value.trim()).filter(Boolean)
 }
 
-function buildImportedRulesSection(heading: string, contents: readonly string[]) {
-  const trimmedContents = contents.map((content) => content.trim()).filter(Boolean)
-  if (!trimmedContents.length) {
-    return ''
-  }
-
-  return [heading, ...trimmedContents].join('\n\n')
+function buildImportedRulesSection(contents: readonly string[]) {
+  return contents.map((content) => content.trim()).filter(Boolean).join('\n\n')
 }
 
 function appendSegment(
@@ -241,7 +235,6 @@ function applyUserMetadataTransforms(params: {
 function appendStructuredImportedRuleSections(
   segments: PresetCompatPromptAssemblySegment[],
   channel: PresetCompatPromptAssemblyChannel,
-  heading: string,
   rules: readonly PresetCompatPromptAssemblyImportedRule[]
 ) {
   for (const placement of ['prepend', 'append'] as const) {
@@ -254,7 +247,7 @@ function appendStructuredImportedRuleSections(
       channel,
       'imported_prompt_rules',
       placement,
-      buildImportedRulesSection(heading, normalizeTexts(contents))
+      buildImportedRulesSection(normalizeTexts(contents))
     )
   }
 }
@@ -270,7 +263,13 @@ export function assemblePresetCompatPrompts(params: PresetCompatPromptAssemblyPa
     namesBehavior: params.namesBehavior,
   })
 
-  appendSegment(systemSegments, 'system', 'base_prompt', 'append', params.baseSystemPrompt)
+  const structuredSystemRuleCount = (params.importedPromptRules ?? []).filter((rule) => rule.channel === 'system' && rule.text.trim()).length
+  const fallbackSystemRuleCount = normalizeTexts(params.importedSystemRuleContents).length
+  const hasImportedSystemRules = structuredSystemRuleCount > 0 || fallbackSystemRuleCount > 0
+
+  if (!hasImportedSystemRules) {
+    appendSegment(systemSegments, 'system', 'base_prompt', 'append', params.baseSystemPrompt)
+  }
   appendSegment(userSegments, 'user', 'base_prompt', 'append', baseUserPrompt)
 
   for (const fragment of normalizeTexts(params.systemTemplateFragments)) {
@@ -284,13 +283,11 @@ export function assemblePresetCompatPrompts(params: PresetCompatPromptAssemblyPa
     appendStructuredImportedRuleSections(
       systemSegments,
       'system',
-      IMPORTED_PRESET_SYSTEM_RULES_HEADING,
       params.importedPromptRules
     )
     appendStructuredImportedRuleSections(
       userSegments,
       'user',
-      IMPORTED_PRESET_USER_RULES_HEADING,
       params.importedPromptRules
     )
   } else {
@@ -299,14 +296,14 @@ export function assemblePresetCompatPrompts(params: PresetCompatPromptAssemblyPa
       'system',
       'imported_prompt_rules',
       'append',
-      buildImportedRulesSection(IMPORTED_PRESET_SYSTEM_RULES_HEADING, normalizeTexts(params.importedSystemRuleContents))
+      buildImportedRulesSection(normalizeTexts(params.importedSystemRuleContents))
     )
     appendSegment(
       userSegments,
       'user',
       'imported_prompt_rules',
       'prepend',
-      buildImportedRulesSection(IMPORTED_PRESET_USER_RULES_HEADING, normalizeTexts(params.importedUserRuleContents))
+      buildImportedRulesSection(normalizeTexts(params.importedUserRuleContents))
     )
   }
 
@@ -356,11 +353,7 @@ export function assemblePresetCompatRuntimePrompts(params: {
     namesBehavior: params.resolvedRuntime.namesBehavior,
     importedPromptRules: params.resolvedRuntime.promptRules.ordered.map((rule) => ({
       channel: rule.channel,
-      placement: rule.channel === 'system'
-        ? 'append'
-        : rule.injectionPosition === 'after'
-          ? 'append'
-          : 'prepend',
+      placement: rule.channel === 'system' ? 'append' : 'prepend',
       text: rule.content,
     })),
   })

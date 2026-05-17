@@ -31,13 +31,10 @@ describe('preset compat prompt assembly', () => {
     })
 
     expect(assembled.systemPrompt).toBe([
-      'Base system prompt.',
-      '## Imported Preset System Rules',
       'System rule A.',
       'System rule B.',
     ].join('\n\n'))
     expect(assembled.userPromptBeforeRegex).toBe([
-      '## Imported Preset User Rules',
       'User rule A.',
       'User rule B.',
       'Base user prompt.',
@@ -59,18 +56,13 @@ describe('preset compat prompt assembly', () => {
     })
 
     expect(assembled.systemPrompt).toBe([
-      '## Imported Preset System Rules',
       'System before.',
-      'Base system prompt.',
-      '## Imported Preset System Rules',
       'System after.',
       'System metadata insertion.',
     ].join('\n\n'))
     expect(assembled.userPromptBeforeRegex).toBe([
-      '## Imported Preset User Rules',
       'User before.',
       'Base user prompt.',
-      '## Imported Preset User Rules',
       'User after.',
       'User metadata insertion.',
     ].join('\n\n'))
@@ -92,7 +84,7 @@ describe('preset compat prompt assembly', () => {
 
     expect(assembled.metadata.stageOrder).toEqual(PRESET_COMPAT_PROMPT_ASSEMBLY_STAGE_ORDER)
     expect(assembled.metadata.system.stages).toEqual([
-      { stage: 'base_prompt', status: 'applied', segmentCount: 1 },
+      { stage: 'base_prompt', status: 'empty', segmentCount: 0 },
       { stage: 'template_fragments', status: 'applied', segmentCount: 1 },
       { stage: 'imported_prompt_rules', status: 'applied', segmentCount: 1 },
       { stage: 'metadata_insertions', status: 'applied', segmentCount: 1 },
@@ -145,21 +137,16 @@ describe('preset compat prompt assembly', () => {
     })
 
     expect(assembled.systemPrompt).toBe([
-      '## Imported Preset System Rules',
       'System prepended.',
-      'Base system prompt.',
-      '## Imported Preset System Rules',
       'System appended.',
     ].join('\n\n'))
     expect(assembled.userPromptBeforeRegex).toBe([
-      '## Imported Preset User Rules',
       'User prepended.',
       'Base user prompt.',
-      '## Imported Preset User Rules',
       'User appended.',
     ].join('\n\n'))
     expect(assembled.metadata.system.stages).toEqual([
-      { stage: 'base_prompt', status: 'applied', segmentCount: 1 },
+      { stage: 'base_prompt', status: 'empty', segmentCount: 0 },
       { stage: 'template_fragments', status: 'empty', segmentCount: 0 },
       { stage: 'imported_prompt_rules', status: 'applied', segmentCount: 2 },
       { stage: 'metadata_insertions', status: 'empty', segmentCount: 0 },
@@ -293,9 +280,9 @@ describe('preset compat prompt assembly', () => {
       userPrompt: 'Prompt topic {{getvar::topic}} / max {{maxresponse}}',
     })
 
-    expect(assembled.systemPrompt).toContain('## Imported Preset System Rules')
-    expect(assembled.systemPrompt).toContain('System topic ALPHA')
-    expect(assembled.userPrompt).toContain('## Imported Preset User Rules')
+    expect(assembled.systemPrompt).toBe('System topic ALPHA')
+    expect(assembled.systemPrompt).not.toContain('Base system')
+    expect(assembled.userPrompt).not.toContain('## Imported Preset User Rules')
     expect(assembled.userPrompt).toContain('User topic ALPHA')
     expect(assembled.userPrompt).toContain('Prompt topic ALPHA / max 222')
     expect(assembled.systemPrompt).not.toContain('{{')
