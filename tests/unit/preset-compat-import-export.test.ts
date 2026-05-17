@@ -86,9 +86,9 @@ describe('preset compat import/export compatibility', () => {
     })
     expect(preset.promptRules[0]?.injectionTrigger).toEqual([])
     expect(Object.keys(preset.passthrough)).toEqual(['root', 'extensions', 'unknownPromptFields'])
-    expect(preset.promptOrderLists.rewrite).toEqual(
-      (fixture.prompt_order as Array<{ character_id: number, order: Array<{ identifier: string }> }>)[0].order.map((entry) => entry.identifier)
-    )
+    const activeFixtureOrder = (fixture.prompt_order as Array<{ character_id: number, order: Array<{ identifier: string }> }>)
+      .find((entry) => entry.character_id === 100001)?.order ?? []
+    expect(preset.promptOrderLists.rewrite).toEqual(activeFixtureOrder.map((entry) => entry.identifier))
     expect(preset.promptOrderLists.expand).toEqual(preset.promptOrderLists.rewrite)
     expect(preset.embeddedRegexes).toHaveLength(
       ((fixture.extensions as Record<string, unknown>).regex_scripts as unknown[]).length
@@ -120,7 +120,7 @@ describe('preset compat import/export compatibility', () => {
       ],
       prompt_order: [
         {
-          character_id: 100000,
+          character_id: 100001,
           order: [
             { identifier: 'main', enabled: true },
           ],
@@ -150,6 +150,80 @@ describe('preset compat import/export compatibility', () => {
     expect(exported.prompt_order).toEqual(fixture.prompt_order)
   })
 
+  it('keeps unknown active-order identifiers implicitly enabled when no enabled flag is present', () => {
+    const payload = {
+      prompts: [
+        { identifier: 'main', name: 'Main', role: 'system', content: 'Main content' },
+      ],
+      prompt_order: [
+        {
+          character_id: 100001,
+          order: [
+            { identifier: 'main', enabled: true },
+            { identifier: 'chatHistory' },
+          ],
+        },
+      ],
+    }
+
+    const { preset } = normalizePresetCompatPresetImport(payload, {
+      idFactory: () => 'preset-import-unknown-active-order',
+      now: '2026-05-16T00:00:00.000Z',
+    })
+
+    const exported = exportPresetCompatPreset(preset)
+    expect(exported.prompt_order).toEqual([
+      {
+        character_id: 100001,
+        order: [
+          { identifier: 'main', enabled: true },
+          { identifier: 'chatHistory', enabled: true },
+        ],
+      },
+    ])
+  })
+
+  it('falls back to natural prompt order when the active 100001 bucket is missing', () => {
+    const payload = {
+      prompts: [
+        { identifier: 'alpha', name: 'Alpha', role: 'system', content: 'Alpha content', enabled: true },
+        { identifier: 'beta', name: 'Beta', role: 'user', content: 'Beta content', enabled: false },
+      ],
+      prompt_order: [
+        {
+          character_id: 100000,
+          order: [{ identifier: 'beta', enabled: true }],
+        },
+      ],
+    }
+
+    const { preset } = normalizePresetCompatPresetImport(payload, {
+      idFactory: () => 'preset-import-natural-order',
+      now: '2026-05-16T00:00:00.000Z',
+    })
+
+    expect(preset.promptOrderLists.rewrite).toEqual(['alpha', 'beta'])
+    expect(preset.promptRules.map((rule) => ({ id: rule.id, enabled: rule.enabled }))).toEqual([
+      { id: 'alpha', enabled: true },
+      { id: 'beta', enabled: false },
+    ])
+
+    const exported = exportPresetCompatPreset(preset)
+    expect(exported.prompt_order).toEqual([
+      {
+        character_id: 100000,
+        order: [{ identifier: 'beta', enabled: true }],
+      },
+      {
+        character_id: 100001,
+        order: [
+          { identifier: 'alpha', enabled: true },
+          { identifier: 'beta', enabled: false },
+        ],
+      },
+    ])
+  })
+
   it('normalizes a single-string injection_trigger into a one-element array and preserves it on export', () => {
     const payload = {
       prompts: [
@@ -165,7 +239,7 @@ describe('preset compat import/export compatibility', () => {
       ],
       prompt_order: [
         {
-          character_id: 100000,
+          character_id: 100001,
           order: [{ identifier: 'triggered-rule', enabled: true }],
         },
       ],
@@ -495,7 +569,7 @@ describe('preset compat import/export compatibility', () => {
     ])
     expect(exported.prompt_order).toEqual([
       {
-        character_id: 100000,
+        character_id: 100001,
         order: [
           { identifier: 'main', enabled: true },
           { identifier: 'nsfw', enabled: true },
@@ -520,7 +594,7 @@ describe('preset compat import/export compatibility', () => {
       ],
       prompt_order: [
         {
-          character_id: 100000,
+          character_id: 100001,
           order: [{ identifier: 'structured-main', enabled: true }],
         },
       ],

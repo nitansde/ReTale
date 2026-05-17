@@ -292,7 +292,7 @@ describe('preset compat library route', () => {
         ],
         prompt_order: [
           {
-            character_id: 100000,
+            character_id: 100001,
             order: [
               { identifier: 'prompt-1', enabled: true },
             ],

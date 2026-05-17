@@ -11,7 +11,7 @@ import {
   type PresetCompatRegexRecord,
 } from '@/lib/preset-compat/types'
 
-const ACTIVE_PROMPT_ORDER_CHARACTER_ID = 100000
+const ACTIVE_PROMPT_ORDER_CHARACTER_ID = 100001
 const PROMPT_EXPORT_META_KEY = '__presetCompatPromptMeta'
 const REGEX_EXPORT_META_KEY = '__presetCompatRegexMeta'
 
@@ -192,9 +192,7 @@ function normalizePromptOrderEntries(value: unknown) {
 }
 
 function getActivePromptOrderEntry(entries: RawPromptOrderEntry[]) {
-  return entries.find((entry) => entry.character_id === ACTIVE_PROMPT_ORDER_CHARACTER_ID)
-    ?? entries.find((entry) => Array.isArray(entry.order))
-    ?? null
+  return entries.find((entry) => entry.character_id === ACTIVE_PROMPT_ORDER_CHARACTER_ID) ?? null
 }
 
 function getActivePromptOrderState(activeEntry: RawPromptOrderEntry | null) {
@@ -209,7 +207,7 @@ function getActivePromptOrderState(activeEntry: RawPromptOrderEntry | null) {
     }
 
     orderedIds.push(identifier)
-    enabledById.set(identifier, asBoolean(entry.enabled, false))
+    enabledById.set(identifier, asBoolean(entry.enabled, true))
   }
 
   return { activeOrder, enabledById, orderedIds }
@@ -274,7 +272,7 @@ function normalizePromptRule(
     name: asString(rawPrompt.name, identifier),
     role: asString(rawPrompt.role, 'system'),
     content: asString(rawPrompt.content),
-    enabled: enabledById.has(identifier) ? enabledById.get(identifier) === true : asBoolean(rawPrompt.enabled, false),
+    enabled: enabledById.has(identifier) ? enabledById.get(identifier) === true : asBoolean(rawPrompt.enabled, true),
     marker: asBoolean(rawPrompt.marker, false),
     injectAsSystemPrompt: asBoolean(rawPrompt.system_prompt, false),
     injectionPosition: normalizePromptInjectionPosition(rawPrompt, orderedIds, identifier),
@@ -595,7 +593,12 @@ export function normalizePresetCompatPresetImport(
   )
   warnings.push(...embeddedRegexResult.warnings.map((warning) => `Preset embedded regex: ${warning}`))
 
-  const promptOrderIds = orderedIds.length > 0 ? orderedIds.slice() : legacyPromptMigration.orderedIds.slice()
+  const naturalStructuredOrderIds = structuredPromptRules.map((promptRule) => promptRule.id)
+  const promptOrderIds = orderedIds.length > 0
+    ? orderedIds.slice()
+    : structuredPromptRules.length > 0
+      ? naturalStructuredOrderIds
+      : legacyPromptMigration.orderedIds.slice()
   const promptOrderLists = Object.fromEntries(
     PRESET_COMPAT_CREATIVE_SURFACE_IDS.map((surfaceId) => [surfaceId, promptOrderIds])
   ) as PresetCompatPresetRecord['promptOrderLists']

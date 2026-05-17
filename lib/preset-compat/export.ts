@@ -11,7 +11,7 @@ import {
   stripInternalRegexPassthroughMeta,
 } from '@/lib/preset-compat/normalize'
 
-const ACTIVE_PROMPT_ORDER_CHARACTER_ID = 100000
+const ACTIVE_PROMPT_ORDER_CHARACTER_ID = 100001
 
 const REGEX_PLACEMENT_TO_ST: Record<PresetCompatRegexPlacement, number> = {
   md_display: 0,
@@ -66,8 +66,8 @@ function exportPromptRule(
   if (rawPrompt ? 'content' in rawPrompt : Boolean(promptRule.content)) {
     exported.content = promptRule.content
   }
-  if (rawPrompt ? 'enabled' in rawPrompt : promptRule.enabled === false) {
-    exported.enabled = promptRule.enabled
+  if (rawPrompt && 'enabled' in rawPrompt) {
+    exported.enabled = rawPrompt.enabled
   }
   if (rawPrompt ? 'marker' in rawPrompt : promptRule.marker) {
     exported.marker = promptRule.marker
@@ -106,11 +106,19 @@ function exportPromptOrder(preset: PresetCompatPresetRecord) {
     : []
   const promptById = new Map(preset.promptRules.map((promptRule) => [promptRule.id, promptRule]))
   const activeOrderIds = getActiveOrderIds(preset)
+  const rawActiveOrder = rawPromptOrder
+    .find((entry) => entry.character_id === ACTIVE_PROMPT_ORDER_CHARACTER_ID)?.order
+  const rawEnabledById = new Map(
+    (Array.isArray(rawActiveOrder) ? rawActiveOrder.filter(isRecord) : [])
+      .filter((entry) => typeof entry.identifier === 'string')
+      .map((entry) => [entry.identifier as string, entry.enabled])
+  )
   const nextOrder = activeOrderIds.map((identifier) => {
     const promptRule = promptById.get(identifier)
+    const rawEnabled = rawEnabledById.get(identifier)
     return {
       identifier,
-      enabled: promptRule?.enabled ?? false,
+      enabled: promptRule?.enabled ?? (typeof rawEnabled === 'boolean' ? rawEnabled : true),
     }
   })
 
@@ -122,15 +130,24 @@ function exportPromptOrder(preset: PresetCompatPresetRecord) {
   }
 
   const activeIndex = rawPromptOrder.findIndex((entry) => entry.character_id === ACTIVE_PROMPT_ORDER_CHARACTER_ID)
-  const replacementIndex = activeIndex >= 0 ? activeIndex : 0
+  if (activeIndex === -1) {
+    return [
+      ...rawPromptOrder,
+      {
+        character_id: ACTIVE_PROMPT_ORDER_CHARACTER_ID,
+        order: nextOrder,
+      },
+    ]
+  }
+
   return rawPromptOrder.map((entry, index) => {
-    if (index !== replacementIndex) {
+    if (index !== activeIndex) {
       return entry
     }
 
     return {
       ...entry,
-      character_id: entry.character_id ?? ACTIVE_PROMPT_ORDER_CHARACTER_ID,
+      character_id: ACTIVE_PROMPT_ORDER_CHARACTER_ID,
       order: nextOrder,
     }
   })
