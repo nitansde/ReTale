@@ -1,8 +1,11 @@
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import {
+  PRESET_COMPAT_LEGACY_FLAT_PROMPT_KEYS,
   PRESET_COMPAT_SOURCE_API_ID,
   PRESET_COMPAT_SURFACE_IDS,
   type PresetCompatLibrary,
+  type PresetCompatLegacyFlatPromptKey,
+  type PresetCompatPresetPassthrough,
   type PresetCompatPresetRecord,
   type PresetCompatPromptRule,
   type PresetCompatRegexPlacement,
@@ -55,8 +58,63 @@ function normalizeStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 }
 
+function normalizePromptTriggerArray(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === 'string')
+  }
+  if (typeof value === 'string') {
+    return [value]
+  }
+  return [] as string[]
+}
+
 function normalizePassthrough(value: unknown) {
   return isRecord(value) ? value : {}
+}
+
+function normalizeUnknownPromptFields(value: unknown) {
+  if (!isRecord(value)) {
+    return {} as Record<string, Record<string, unknown>>
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, promptValue]) => isRecord(promptValue))
+      .map(([promptId, promptValue]) => [promptId, promptValue])
+  ) as Record<string, Record<string, unknown>>
+}
+
+function normalizeLegacyFlatPrompts(value: unknown) {
+  if (!isRecord(value)) {
+    return {} as Record<string, PresetCompatLegacyFlatPromptKey>
+  }
+
+  const validKeys = new Set<string>(PRESET_COMPAT_LEGACY_FLAT_PROMPT_KEYS)
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, promptKey]) => typeof promptKey === 'string' && validKeys.has(promptKey))
+      .map(([promptId, promptKey]) => [promptId, promptKey])
+  ) as Record<string, PresetCompatLegacyFlatPromptKey>
+}
+
+function normalizePresetPassthrough(value: unknown): PresetCompatPresetPassthrough {
+  const record = normalizePassthrough(value)
+  const normalized: PresetCompatPresetPassthrough = { ...record }
+
+  if ('root' in record) {
+    normalized.root = normalizePassthrough(record.root)
+  }
+  if ('extensions' in record) {
+    normalized.extensions = normalizePassthrough(record.extensions)
+  }
+  if ('unknownPromptFields' in record) {
+    normalized.unknownPromptFields = normalizeUnknownPromptFields(record.unknownPromptFields)
+  }
+  if ('legacyFlatPrompts' in record) {
+    normalized.legacyFlatPrompts = normalizeLegacyFlatPrompts(record.legacyFlatPrompts)
+  }
+
+  return normalized
 }
 
 function normalizePromptRule(value: unknown): PresetCompatPromptRule | null {
@@ -84,7 +142,7 @@ function normalizePromptRule(value: unknown): PresetCompatPromptRule | null {
     injectionOrder: typeof value.injectionOrder === 'number' && Number.isFinite(value.injectionOrder)
       ? value.injectionOrder
       : null,
-    injectionTrigger: typeof value.injectionTrigger === 'string' ? value.injectionTrigger : null,
+    injectionTrigger: normalizePromptTriggerArray(value.injectionTrigger),
     forbidOverrides: normalizeBoolean(value.forbidOverrides),
     condition: typeof value.condition === 'string' ? value.condition : null,
     passthrough: normalizePassthrough(value.passthrough),
@@ -133,11 +191,69 @@ function normalizeRuntimeSampler(value: unknown): PresetCompatPresetRecord['runt
     temperature: normalizeNullableNumber(record.temperature),
     topP: normalizeNullableNumber(record.topP),
     topK: normalizeNullableNumber(record.topK),
+    topA: normalizeNullableNumber(record.topA),
     minP: normalizeNullableNumber(record.minP),
     presencePenalty: normalizeNullableNumber(record.presencePenalty),
     frequencyPenalty: normalizeNullableNumber(record.frequencyPenalty),
     repetitionPenalty: normalizeNullableNumber(record.repetitionPenalty),
+    openaiMaxContext: normalizeNullableNumber(record.openaiMaxContext),
     maxTokens: normalizeNullableNumber(record.maxTokens),
+    seed: normalizeNullableNumber(record.seed),
+    candidateCount: normalizeNullableNumber(record.candidateCount),
+  }
+}
+
+function normalizePromptTemplate(value: unknown): PresetCompatPresetRecord['promptTemplate'] {
+  const record = isRecord(value) ? value : {}
+
+  return {
+    namesBehavior: normalizeNullableNumber(record.namesBehavior),
+    sendIfEmpty: normalizeNullableString(record.sendIfEmpty),
+    impersonationPrompt: normalizeNullableString(record.impersonationPrompt),
+    newChatPrompt: normalizeNullableString(record.newChatPrompt),
+    newGroupChatPrompt: normalizeNullableString(record.newGroupChatPrompt),
+    newExampleChatPrompt: normalizeNullableString(record.newExampleChatPrompt),
+    continueNudgePrompt: normalizeNullableString(record.continueNudgePrompt),
+    wiFormat: normalizeNullableString(record.wiFormat),
+    scenarioFormat: normalizeNullableString(record.scenarioFormat),
+    personalityFormat: normalizeNullableString(record.personalityFormat),
+    groupNudgePrompt: normalizeNullableString(record.groupNudgePrompt),
+    assistantPrefill: normalizeNullableString(record.assistantPrefill),
+    assistantImpersonation: normalizeNullableString(record.assistantImpersonation),
+    continuePostfix: normalizeNullableString(record.continuePostfix),
+    legacyMainPrompt: normalizeNullableString(record.legacyMainPrompt),
+    legacyNsfwPrompt: normalizeNullableString(record.legacyNsfwPrompt),
+    legacyJailbreakPrompt: normalizeNullableString(record.legacyJailbreakPrompt),
+  }
+}
+
+function normalizeTransport(value: unknown): PresetCompatPresetRecord['transport'] {
+  const record = isRecord(value) ? value : {}
+
+  return {
+    maxContextUnlocked: typeof record.maxContextUnlocked === 'boolean' ? record.maxContextUnlocked : null,
+    streamOpenAI: typeof record.streamOpenAI === 'boolean' ? record.streamOpenAI : null,
+    useSysprompt: typeof record.useSysprompt === 'boolean' ? record.useSysprompt : null,
+    squashSystemMessages: typeof record.squashSystemMessages === 'boolean' ? record.squashSystemMessages : null,
+    mediaInlining: typeof record.mediaInlining === 'boolean' ? record.mediaInlining : null,
+    inlineImageQuality: normalizeNullableString(record.inlineImageQuality),
+    continuePrefill: typeof record.continuePrefill === 'boolean' ? record.continuePrefill : null,
+    functionCalling: typeof record.functionCalling === 'boolean' ? record.functionCalling : null,
+    showThoughts: typeof record.showThoughts === 'boolean' ? record.showThoughts : null,
+    reasoningEffort: normalizeNullableString(record.reasoningEffort),
+    verbosity: normalizeNullableString(record.verbosity),
+    enableWebSearch: typeof record.enableWebSearch === 'boolean' ? record.enableWebSearch : null,
+    requestImages: typeof record.requestImages === 'boolean' ? record.requestImages : null,
+    requestImageAspectRatio: normalizeNullableString(record.requestImageAspectRatio),
+    requestImageResolution: normalizeNullableString(record.requestImageResolution),
+  }
+}
+
+function normalizePreservedFields(value: unknown): PresetCompatPresetRecord['preservedFields'] {
+  const record = isRecord(value) ? value : {}
+
+  return {
+    biasPresetSelected: normalizeNullableString(record.biasPresetSelected),
   }
 }
 
@@ -176,7 +292,10 @@ function normalizePresetRecord(value: unknown): PresetCompatPresetRecord | null 
       : [],
     attachedStandaloneRegexIds: normalizeStringArray(value.attachedStandaloneRegexIds),
     runtimeSampler: normalizeRuntimeSampler(value.runtimeSampler),
-    passthrough: normalizePassthrough(value.passthrough),
+    promptTemplate: normalizePromptTemplate(value.promptTemplate),
+    transport: normalizeTransport(value.transport),
+    preservedFields: normalizePreservedFields(value.preservedFields),
+    passthrough: normalizePresetPassthrough(value.passthrough),
     importWarnings: normalizeStringArray(value.importWarnings),
     createdAt: normalizeString(value.createdAt),
     updatedAt: normalizeString(value.updatedAt),

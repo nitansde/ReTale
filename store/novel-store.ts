@@ -35,6 +35,8 @@ import type {
   OutlineItem,
   OutlineType,
   PersistedNovelState,
+  PresetCompatSessionPhase,
+  PresetCompatSessionWorkspaceSelection,
   RewriteCandidate,
   RewriteConstraint,
   RewriteHistoryEntry,
@@ -49,7 +51,13 @@ import type {
   WorldEntryType,
   WorkspaceTab,
 } from '@/lib/types'
-import { createEmptyWorkspaceState, normalizeWorkspaceState } from '@/lib/workspace-state'
+import {
+  clearPresetCompatSessionStateForSelection,
+  createEmptyWorkspaceState,
+  normalizeWorkspaceState,
+  resetPresetCompatSessionStateForSelection,
+  setPresetCompatSessionEntry,
+} from '@/lib/workspace-state'
 
 type GenerateRewriteParams = {
   prompt?: string
@@ -335,6 +343,18 @@ type NovelStore = PersistedNovelState & {
   exportWorkspace: () => string
   importWorkspace: (payload: ImportPayload) => void
   resetWorkspace: () => void
+  setPresetCompatSessionPhase: (
+    selection: PresetCompatSessionWorkspaceSelection,
+    surfaceId: PresetCompatSurfaceId,
+    phase: PresetCompatSessionPhase,
+    resetPending?: boolean
+  ) => void
+  clearPresetCompatSessionStateForSelection: (selection: PresetCompatSessionWorkspaceSelection) => void
+  resetPresetCompatSessionStateForSelection: (
+    selection: PresetCompatSessionWorkspaceSelection,
+    surfaceIds: PresetCompatSurfaceId[],
+    phase?: PresetCompatSessionPhase
+  ) => void
   setHydrated: (value: boolean) => void
   loadFromBackend: () => Promise<void>
   saveToBackend: () => Promise<void>
@@ -412,6 +432,7 @@ function serializeState(state: NovelStore): PersistedNovelState {
     presets: state.presets,
     constraints: state.constraints,
     focusMode: state.focusMode,
+    presetCompatSessionState: state.presetCompatSessionState,
     aiSettings: state.aiSettings,
   }
 }
@@ -941,6 +962,26 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     presetCompatLibrary: state.presetCompatLibrary,
     presetCompatLibraryLoading: state.presetCompatLibraryLoading,
     presetCompatLibraryError: state.presetCompatLibraryError,
+  })),
+  setPresetCompatSessionPhase: (selection, surfaceId, phase, resetPending = false) => set((state) => ({
+    presetCompatSessionState: setPresetCompatSessionEntry(
+      state.presetCompatSessionState,
+      selection,
+      surfaceId,
+      phase,
+      resetPending
+    ),
+  })),
+  clearPresetCompatSessionStateForSelection: (selection) => set((state) => ({
+    presetCompatSessionState: clearPresetCompatSessionStateForSelection(state.presetCompatSessionState, selection),
+  })),
+  resetPresetCompatSessionStateForSelection: (selection, surfaceIds, phase = 'new_chat') => set((state) => ({
+    presetCompatSessionState: resetPresetCompatSessionStateForSelection(
+      state.presetCompatSessionState,
+      selection,
+      surfaceIds,
+      phase
+    ),
   })),
   loadPresetCompatLibrary: async () => {
     set({ presetCompatLibraryLoading: true, presetCompatLibraryError: '' })

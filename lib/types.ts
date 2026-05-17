@@ -240,6 +240,8 @@ export type EmbeddingsScenarioSettings = AIScenarioSettings & {
   embeddingBatchSize: number
 }
 
+import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
+
 export type AISettings = {
   rewrite: AIScenarioSettings
   knowledgeExtraction: KnowledgeExtractionScenarioSettings
@@ -247,6 +249,42 @@ export type AISettings = {
 }
 
 export type AIScenarioKey = keyof AISettings
+
+export const PRESET_COMPAT_SESSION_PHASES = [
+  'new_chat',
+  'new_group_chat',
+  'new_example_chat',
+  'continue',
+] as const
+
+export type PresetCompatSessionPhase = (typeof PRESET_COMPAT_SESSION_PHASES)[number]
+
+export type PresetCompatSessionWorkspaceSelection =
+  | {
+      kind: 'chapter'
+      chapterId: string
+    }
+  | {
+      kind: 'what_if'
+      nodeId: string
+      sessionId: string
+      anchorChapterNo: number
+    }
+  | {
+      kind: 'future_jump'
+      nodeId: string
+      runId: string
+      sourceChapterNo: number
+      targetChapterNo: number
+    }
+
+export type PresetCompatSessionEntry = {
+  surfaceId: PresetCompatSurfaceId
+  phase: PresetCompatSessionPhase
+  resetPending: boolean
+}
+
+export type PresetCompatSessionState = Record<string, PresetCompatSessionEntry>
 
 export type PersistedNovelState = {
   currentNovelId: string
@@ -279,5 +317,6 @@ export type PersistedNovelState = {
   presets: RewritePreset[]
   constraints: RewriteConstraint[]
   focusMode: boolean
+  presetCompatSessionState: PresetCompatSessionState
   aiSettings?: AISettings
 }
