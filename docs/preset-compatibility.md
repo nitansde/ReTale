@@ -49,6 +49,7 @@ Research attribution for the upstream source:
 The implementation is split into a few stable layers.
 
 - `lib/preset-compat/normalize.ts` imports preset JSON into structured storage buckets such as `runtimeSampler`, `promptTemplate`, `transport`, `preservedFields`, `promptRules`, `promptOrderLists`, `embeddedRegexes`, and `passthrough`.
+- `lib/preset-compat/surface-contract.ts` owns ChatBook's built-in system prompts for opted-in creative surfaces. These prompts are ChatBook library state, not imported preset data.
 - `lib/preset-compat/resolve-runtime.ts` resolves the active preset for a surface, filters prompt rules, computes `fieldStatuses`, and records `providerControlIntents`.
 - `lib/preset-compat/prompt-assembly.ts` is the canonical prompt rendering layer. Routes and services feed it runtime data, they do not replace it.
 - `lib/preset-compat/runtime-integration.ts` adds creative-route metadata such as `contextWindow` and `streamPolicy`.
@@ -56,11 +57,14 @@ The implementation is split into a few stable layers.
 
 The prompt assembly stage order is fixed:
 
-1. `base_prompt`
-2. `template_fragments`
-3. `imported_prompt_rules`
-4. `metadata_insertions`
-5. `regex_processing`
+1. `builtin_system_prompt`
+2. `base_prompt`
+3. `template_fragments`
+4. `imported_prompt_rules`
+5. `metadata_insertions`
+6. `regex_processing`
+
+`builtin_system_prompt` is the editable ChatBook-owned system prompt for the active creative surface. It is stored on the ChatBook preset compatibility library, defaults to enabled, can be disabled per surface, and is intentionally excluded from imported preset export payloads.
 
 `user_input` regex processing still happens after prompt assembly. `assistant_output` regex processing still happens after model output.
 
@@ -159,7 +163,7 @@ Prompt rules apply a deliberately narrow ChatBook compatibility subset.
 
 - `prompt_order.character_id:100001` is the current active order and enabled-state bucket.
 - If the `100001` bucket is absent, import falls back to natural `prompts[]` order and each prompt's own `enabled` value.
-- `system_prompt:true` makes imported system-rule content replace the ChatBook default system prompt for creative routes.
+- `system_prompt:true` makes imported system-rule content replace the route-provided base prompt for creative routes. It does not replace the earlier ChatBook-owned `builtin_system_prompt` stage; disable the built-in rule for that surface if the imported preset should be the first system content.
 - `system_prompt:false` injects imported rule content at the top of the user prompt before native ChatBook context.
 - supported runtime roles are `system` and `user`, but ChatBook uses `system_prompt` as the runtime channel switch for imported rules.
 - `forbid_overrides` locks ChatBook content editing for that imported rule; it does not block same-slot runtime prompt rules.
