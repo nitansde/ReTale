@@ -75,5 +75,12 @@ describe('preset compat surface contract', () => {
       lastExportedAt: null,
     })
     expect(Object.keys(library.surfaceBindings)).toEqual(Object.keys(PRESET_COMPAT_SURFACE_REGISTRY))
+    expect(Object.keys(library.builtinSystemPrompts)).toEqual(PRESET_COMPAT_OPTED_IN_SURFACE_IDS)
+    expect(library.builtinSystemPrompts.rewrite).toMatchObject({
+      surfaceId: 'rewrite',
+      enabled: true,
+    })
+    expect(library.builtinSystemPrompts.rewrite.content).toContain('你是 ChatBook 的小说扩写/魔改写作模型。')
+    expect(library.builtinSystemPrompts.future_jump_rewrite.content).toContain('Future Jump 目标节点改写生成器')
   })
 })

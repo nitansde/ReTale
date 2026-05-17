@@ -168,12 +168,19 @@ export type PresetCompatRegexRecord = {
 }
 
 export type PresetCompatSurfaceId = (typeof PRESET_COMPAT_SURFACE_IDS)[number]
+export type PresetCompatCreativeSurfaceId = (typeof PRESET_COMPAT_CREATIVE_SURFACE_IDS)[number]
 
 export type PresetCompatSurfaceBinding = {
   surfaceId: PresetCompatSurfaceId
   presetId: string | null
   enabled: boolean
   failClosed: boolean
+}
+
+export type PresetCompatBuiltinSystemPrompt = {
+  surfaceId: PresetCompatCreativeSurfaceId
+  enabled: boolean
+  content: string
 }
 
 export type PresetCompatRuntimeSamplerSettings = {
@@ -291,6 +298,7 @@ export type PresetCompatLibrary = {
   presets: Record<string, PresetCompatPresetRecord>
   standaloneRegexes: Record<string, PresetCompatRegexRecord>
   surfaceBindings: Record<PresetCompatSurfaceId, PresetCompatSurfaceBinding>
+  builtinSystemPrompts: Record<PresetCompatCreativeSurfaceId, PresetCompatBuiltinSystemPrompt>
   lastImportedAt: string | null
   lastExportedAt: string | null
 }

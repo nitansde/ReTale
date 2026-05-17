@@ -7,6 +7,7 @@ import type {
   PresetCompatRuntimeSnapshot,
   PresetCompatSurfaceBinding,
 } from '@/lib/preset-compat/types'
+import { createDefaultPresetCompatBuiltinSystemPrompts } from '@/lib/preset-compat/surface-contract'
 
 describe('preset compat domain types', () => {
   it('locks the preset and library record shape required by the compatibility subsystem', () => {
@@ -175,6 +176,7 @@ describe('preset compat domain types', () => {
       standaloneRegexes: {
         [standaloneRegex.id]: standaloneRegex,
       },
+      builtinSystemPrompts: createDefaultPresetCompatBuiltinSystemPrompts(),
       surfaceBindings: {
         rewrite: surfaceBinding,
         expand: {
@@ -352,6 +354,7 @@ describe('preset compat domain types', () => {
       'presets',
       'standaloneRegexes',
       'surfaceBindings',
+      'builtinSystemPrompts',
       'lastImportedAt',
       'lastExportedAt',
     ]))
