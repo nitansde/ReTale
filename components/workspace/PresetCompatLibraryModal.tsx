@@ -51,6 +51,8 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
   const detachPresetCompatStandaloneRegex = useNovelStore((state) => state.detachPresetCompatStandaloneRegex)
   const updatePresetCompatPromptRule = useNovelStore((state) => state.updatePresetCompatPromptRule)
   const updatePresetCompatEmbeddedRegex = useNovelStore((state) => state.updatePresetCompatEmbeddedRegex)
+  const updatePresetCompatRuntimeSampler = useNovelStore((state) => state.updatePresetCompatRuntimeSampler)
+  const updatePresetCompatTransport = useNovelStore((state) => state.updatePresetCompatTransport)
   const updatePresetCompatStandaloneRegex = useNovelStore((state) => state.updatePresetCompatStandaloneRegex)
   const exportPresetCompatPreset = useNovelStore((state) => state.exportPresetCompatPreset)
   const exportPresetCompatStandaloneRegexBundle = useNovelStore((state) => state.exportPresetCompatStandaloneRegexBundle)
@@ -91,8 +93,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
       const importedLabel = result.importedIds.length
         ? `已导入 ${result.importedIds.length} 个${kind === 'preset' ? '预设' : '正则包条目'}。`
         : `没有导入任何${kind === 'preset' ? '预设' : '正则'}条目。`
-      const warningLabel = result.warnings.length ? ` 警告：${result.warnings.join(' ')}` : ''
-      setStatusMessage(`${importedLabel}${warningLabel}`)
+      setStatusMessage(importedLabel)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : `导入${kind === 'preset' ? '预设' : '正则'}失败`)
     }
@@ -275,6 +276,8 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                 onBindSurface={bindPresetCompatPresetToSurface}
                 onUpdatePromptRule={(promptRuleId, updates) => updatePresetCompatPromptRule(selectedPreset.id, promptRuleId, updates)}
                 onUpdateEmbeddedRegex={(regexId, updates) => updatePresetCompatEmbeddedRegex(selectedPreset.id, regexId, updates)}
+                onUpdateRuntimeSampler={(updates) => updatePresetCompatRuntimeSampler(selectedPreset.id, updates)}
+                onUpdateTransport={(updates) => updatePresetCompatTransport(selectedPreset.id, updates)}
                 onUpdateStandaloneRegex={updatePresetCompatStandaloneRegex}
                 onToggleStandaloneRegexAttachment={(regexId) => {
                   if (selectedPreset.attachedStandaloneRegexIds.includes(regexId)) {
