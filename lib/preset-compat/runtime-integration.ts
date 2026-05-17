@@ -127,9 +127,14 @@ function buildRuntimeValues(runtime: PresetCompatResolvedRuntime, runtimeContext
   const namedTranscript = runtimeContext?.namedTranscript
   const runtimeUserName = namedTranscript?.userName?.trim()
   const runtimeAssistantName = namedTranscript?.assistantName?.trim()
+  const protagonistName = runtimeContext?.protagonistName?.trim()
   if (runtimeUserName) {
     values.user = runtimeUserName
     values.userName = runtimeUserName
+  } else if (protagonistName) {
+    values.user = protagonistName
+    values.userName = protagonistName
+    values.protagonistName = protagonistName
   }
   if (runtimeAssistantName) {
     values.bot = runtimeAssistantName
@@ -287,19 +292,13 @@ export function resolveRewriteContextWindow(params: {
     'route',
     'contextWindow.maxContextTokens',
   )
-  const unlockMaximumIntent = findProviderControlIntent(
-    params.providerControlIntents,
-    'max_context_unlocked',
-    'route',
-    'contextWindow.unlockMaximum',
-  )
   const statusOverrides = new Map<string, PresetCompatResolvedFieldStatus['status']>()
   const reasonOverrides = new Map<string, PresetCompatResolvedFieldStatus['reason']>()
 
   const requestedMaxContextTokens = typeof requestedBudgetIntent?.value === 'number'
     ? requestedBudgetIntent.value
     : null
-  const unlockMaximum = unlockMaximumIntent?.value === true
+  const unlockMaximum = false
 
   if (requestedMaxContextTokens === null) {
     return {
@@ -313,10 +312,6 @@ export function resolveRewriteContextWindow(params: {
   if (!params.blocks) {
     statusOverrides.set('openai_max_context', 'degraded')
     reasonOverrides.set('openai_max_context', 'ROUTE_UNSUPPORTED')
-    if (unlockMaximumIntent) {
-      statusOverrides.set('max_context_unlocked', 'degraded')
-      reasonOverrides.set('max_context_unlocked', 'ROUTE_UNSUPPORTED')
-    }
 
     return {
       blocks: [],
@@ -333,18 +328,12 @@ export function resolveRewriteContextWindow(params: {
     }
   }
 
-  const effectiveMaxContextTokens = unlockMaximum
-    ? requestedMaxContextTokens
-    : Math.min(requestedMaxContextTokens, DEFAULT_SAFE_CONTEXT_MAX_TOKENS)
+  const effectiveMaxContextTokens = Math.min(requestedMaxContextTokens, DEFAULT_SAFE_CONTEXT_MAX_TOKENS)
   const trimmed = trimContextBlocksToBudget(params.blocks, effectiveMaxContextTokens)
   const applied = trimmed.tokenEstimate <= effectiveMaxContextTokens
 
   statusOverrides.set('openai_max_context', applied ? 'applied' : 'degraded')
   reasonOverrides.set('openai_max_context', applied ? 'SUPPORTED_RUNTIME' : 'ROUTE_UNSUPPORTED')
-  if (unlockMaximumIntent) {
-    statusOverrides.set('max_context_unlocked', applied ? 'applied' : 'degraded')
-    reasonOverrides.set('max_context_unlocked', applied ? 'SUPPORTED_RUNTIME' : 'ROUTE_UNSUPPORTED')
-  }
 
   return {
     blocks: trimmed.blocks,

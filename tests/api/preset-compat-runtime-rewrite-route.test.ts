@@ -723,6 +723,40 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.messages[1]?.content).not.toContain('{{lastMessage}}')
   })
 
+  it('renders user macros from protagonist context and falls back to 主人公', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createMacroRuntimeLibrary(),
+    }))
+
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT'] }) } }],
+    }), { status: 200 })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    await POST(createRequest('rewrite', {
+      stream: false,
+      presetCompatRuntimeContext: {
+        protagonistName: '林砚',
+      },
+    }))
+    await POST(createRequest('rewrite', { stream: false }))
+
+    const firstRequestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ role: string; content: string }>
+    }
+    const secondRequestBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
+      messages: Array<{ role: string; content: string }>
+    }
+
+    expect(firstRequestBody.messages[1]?.content).toContain('Speaker 林砚 meets')
+    expect(secondRequestBody.messages[1]?.content).toContain('Speaker 主人公 meets')
+    expect(secondRequestBody.messages[1]?.content).not.toContain('{{user}}')
+  })
+
   it('trims context blocks deterministically from lowest-priority tails when openai_max_context is applied', async () => {
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => createAiSettings('openai-compatible'),
@@ -794,8 +828,8 @@ describe('preset compat rewrite route runtime', () => {
       reason: 'SUPPORTED_RUNTIME',
     })
     expect(payload.presetCompat.fieldStatuses.find((status) => status.field === 'max_context_unlocked')).toMatchObject({
-      status: 'applied',
-      reason: 'SUPPORTED_RUNTIME',
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
     })
 
     const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
@@ -958,12 +992,12 @@ describe('preset compat rewrite route runtime', () => {
       supported: true,
       requestedMaxContextTokens: 20,
       effectiveMaxContextTokens: 20,
-      unlockMaximum: true,
+      unlockMaximum: false,
       trimmedBlockIds: ['worldbuilding'],
     })
     expect(payload.presetCompat.fieldStatuses).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'openai_max_context', status: 'applied', reason: 'SUPPORTED_RUNTIME' }),
-      expect.objectContaining({ field: 'max_context_unlocked', status: 'applied', reason: 'SUPPORTED_RUNTIME' }),
+      expect.objectContaining({ field: 'max_context_unlocked', status: 'preserved', reason: 'PRESERVED_EXPORT_ONLY' }),
     ]))
     expect(requestBody.messages[1]?.content).toContain('summary keep keep keep keep')
     expect(requestBody.messages[1]?.content).not.toContain('world trim trim trim')
@@ -1097,20 +1131,20 @@ describe('preset compat rewrite route runtime', () => {
     const continueBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
       messages: Array<{ content: string }>
     }
-    expect(continueBody.messages[0]?.content).toContain('CONTINUE TEMPLATE FRAGMENT')
+    expect(continueBody.messages[0]?.content).not.toContain('CONTINUE TEMPLATE FRAGMENT')
     expect(continueBody.messages[0]?.content).not.toContain('CONTINUE SHOULD NOT SEE NEW CHAT')
 
     const roleplayBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
       messages: Array<{ content: string }>
     }
-    expect(roleplayBody.messages[0]?.content).toContain('ROLEPLAY NEW GROUP TEMPLATE')
+    expect(roleplayBody.messages[0]?.content).not.toContain('ROLEPLAY NEW GROUP TEMPLATE')
     expect(roleplayBody.messages[0]?.content).toContain('ROLEPLAY GROUP NUDGE TEMPLATE')
-    expect(roleplayBody.messages[0]?.content).toContain('ROLEPLAY IMPERSONATION TEMPLATE')
+    expect(roleplayBody.messages[0]?.content).not.toContain('ROLEPLAY IMPERSONATION TEMPLATE')
 
     const exampleBody = JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body)) as {
       messages: Array<{ content: string }>
     }
-    expect(exampleBody.messages[0]?.content).toContain('REWRITE NEW EXAMPLE TEMPLATE')
+    expect(exampleBody.messages[0]?.content).not.toContain('REWRITE NEW EXAMPLE TEMPLATE')
     expect(exampleBody.messages[0]?.content).not.toContain('REWRITE SHOULD NOT SEE NEW CHAT')
   })
 

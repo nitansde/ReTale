@@ -458,7 +458,7 @@ describe('preset compat future jump runtime', () => {
         supported: false,
         requestedMaxContextTokens: 4096,
         effectiveMaxContextTokens: null,
-        unlockMaximum: true,
+        unlockMaximum: false,
         trimmedBlockIds: [],
       },
       streamPolicy: {
@@ -470,7 +470,7 @@ describe('preset compat future jump runtime', () => {
     })
     expect(result.presetCompat?.fieldStatuses).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'openai_max_context', status: 'degraded', reason: 'ROUTE_UNSUPPORTED' }),
-      expect.objectContaining({ field: 'max_context_unlocked', status: 'degraded', reason: 'ROUTE_UNSUPPORTED' }),
+      expect.objectContaining({ field: 'max_context_unlocked', status: 'preserved', reason: 'PRESERVED_EXPORT_ONLY' }),
       expect.objectContaining({ field: 'stream_openai', status: 'degraded', reason: 'ROUTE_UNSUPPORTED' }),
       expect.objectContaining({ field: 'openai_max_tokens', status: 'applied', reason: 'SUPPORTED_RUNTIME' }),
       expect.objectContaining({ field: 'seed', status: 'degraded', reason: 'PROVIDER_ONLY' }),
@@ -504,7 +504,7 @@ describe('preset compat future jump runtime', () => {
     expect(rewriteBody.presence_penalty).toBe(0.29)
     expect(rewriteBody.max_tokens).toBe(3333)
     expect(rewriteBody.seed).toBeUndefined()
-    expect(rewriteBody.messages[0]?.content).toContain('FUTURE JUMP NEW CHAT TEMPLATE')
+    expect(rewriteBody.messages[0]?.content).not.toContain('FUTURE JUMP NEW CHAT TEMPLATE')
     expect(rewriteBody.messages[0]?.content).not.toContain('FUTURE JUMP CONTINUE TEMPLATE')
     expect(rewriteBody.messages[0]?.content).not.toContain('## Imported Preset System Rules')
     expect(rewriteBody.messages[0]?.content).toContain('FUTURE JUMP SYSTEM RULE')
