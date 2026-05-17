@@ -186,12 +186,13 @@ function resolveActiveSurfaceFromSessionState(params: {
 function buildPromptRuleWarnings(rule: PresetCompatPromptRule) {
   const warnings: string[] = []
   const injectionTriggers = Array.isArray(rule.injectionTrigger) ? rule.injectionTrigger : []
-  if (rule.marker) warnings.push('Marker prompts are preserved-only in MVP runtime.')
+  if (rule.marker) warnings.push('Marker prompts are preserved for export only and do not change ChatBook runtime behavior.')
   if (rule.role !== 'system' && rule.role !== 'user') warnings.push(`Role \`${rule.role}\` is preserved-only and not applied at runtime.`)
-  if (rule.injectionPosition !== 'before' && rule.injectionPosition !== 'none') warnings.push(`Injection position \`${rule.injectionPosition}\` is preserved-only.`)
-  if (rule.injectionDepth !== null) warnings.push('Injection depth is preserved-only in MVP runtime.')
-  if (injectionTriggers.length > 0) warnings.push('Injection trigger is preserved-only in MVP runtime.')
-  if (rule.forbidOverrides) warnings.push('`forbidOverrides` is preserved-only in MVP runtime.')
+  if (rule.injectionPosition !== 'none') warnings.push(`Injection position \`${rule.injectionPosition}\` is preserved for export only.`)
+  if (rule.injectionDepth !== null) warnings.push('Injection depth is preserved for export only.')
+  if (rule.injectionOrder !== null) warnings.push('Injection order is preserved for export only.')
+  if (injectionTriggers.length > 0) warnings.push('Injection trigger is preserved for export only.')
+  if (rule.forbidOverrides) warnings.push('`forbidOverrides` locks content editing in ChatBook but does not block runtime prompt rules.')
   return warnings
 }
 
@@ -217,8 +218,13 @@ function buildPreviewPromptRuntimeContext(sessionPhase: PresetCompatSessionPhase
 function handleRuleContentChange(
   event: ChangeEvent<HTMLTextAreaElement>,
   promptRuleId: string,
+  locked: boolean,
   onUpdatePromptRule: (promptRuleId: string, updates: Partial<PresetCompatPromptRule>) => void
 ) {
+  if (locked) {
+    return
+  }
+
   onUpdatePromptRule(promptRuleId, { content: event.target.value })
 }
 
@@ -258,6 +264,7 @@ export function PresetCompatPresetEditor({
   const surfacePreviews = useMemo<SurfaceRuntimePreview[]>(() => {
     const providerDefaults = buildProviderDefaults(rewriteAISettings)
     const previewSurfaceIds = [...PRESET_COMPAT_OPTED_IN_SURFACE_IDS, ...PRESET_COMPAT_FAIL_CLOSED_SURFACE_REGISTRY_IDS]
+    const omitFullPromptPreview = preset.promptRules.length > 80
 
     return previewSurfaceIds.map((surfaceId) => {
       const sessionEntry = effectiveSelection
@@ -287,14 +294,21 @@ export function PresetCompatPresetEditor({
             .filter((regex): regex is PresetCompatRegexRecord => Boolean(regex))
         : []
       const embedded = runtime.activePreset?.embeddedRegexes ?? []
-      const promptPreview = buildPresetCompatCreativeRuntimePreview({
-        surfaceId,
-        resolvedRuntime: runtime,
-        systemPrompt: '',
-        userPrompt: '',
-        standalone,
-        embedded,
-      })
+      const promptPreview = omitFullPromptPreview
+        ? {
+            systemPrompt: '',
+            userPrompt: '',
+            warnings: ['Full prompt preview omitted for large imported presets.'],
+            metadata: { macroDiagnostics: [] },
+          }
+        : buildPresetCompatCreativeRuntimePreview({
+            surfaceId,
+            resolvedRuntime: runtime,
+            systemPrompt: '',
+            userPrompt: '',
+            standalone,
+            embedded,
+          })
 
       return {
         surfaceId,
@@ -640,8 +654,9 @@ export function PresetCompatPresetEditor({
                   <textarea
                     data-testid={`preset-compat-rule-content-${rule.id}`}
                     value={rule.content}
-                    onChange={(event) => handleRuleContentChange(event, rule.id, onUpdatePromptRule)}
-                    className="h-28 w-full rounded-[20px] border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
+                    disabled={rule.forbidOverrides}
+                    onChange={(event) => handleRuleContentChange(event, rule.id, rule.forbidOverrides, onUpdatePromptRule)}
+                    className="h-28 w-full rounded-[20px] border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none disabled:cursor-not-allowed disabled:text-zinc-500"
                   />
                 </label>
               </div>

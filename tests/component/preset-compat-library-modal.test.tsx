@@ -287,6 +287,13 @@ describe('PresetCompatLibraryModal', () => {
     })
     expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.promptRules[0]?.content).toBe('Updated narrative instruction.')
 
+    const lockedRuleContent = screen.getByTestId('preset-compat-rule-content-preset-1-rule-2')
+    expect(lockedRuleContent).toBeDisabled()
+    fireEvent.change(lockedRuleContent, {
+      target: { value: 'Attempted locked edit.' },
+    })
+    expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.promptRules[1]?.content).toBe('Preserve me.')
+
     fireEvent.click(screen.getByTestId('preset-compat-standalone-regex-attach-regex-1'))
     expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']?.attachedStandaloneRegexIds).toEqual(['regex-1'])
 
@@ -295,7 +302,7 @@ describe('PresetCompatLibraryModal', () => {
       expect(URL.createObjectURL).toHaveBeenCalled()
     })
 
-    expect(screen.getByText('Marker prompts are preserved-only in MVP runtime.')).toBeInTheDocument()
+    expect(screen.getByText('Marker prompts are preserved for export only and do not change ChatBook runtime behavior.')).toBeInTheDocument()
     expect(screen.getByText('Preserved-only placements: md_display')).toBeInTheDocument()
     expect(screen.queryByText('`markdownOnly` is preserved for export and not applied in MVP runtime.')).not.toBeInTheDocument()
     expect(screen.queryByText('Depth gates are preserved-only in MVP runtime.')).not.toBeInTheDocument()
