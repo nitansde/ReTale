@@ -466,14 +466,13 @@ export async function generateRewriteWithOpenAICompatible(
   const messages: OpenAICompatibleChatMessage[] = [
     {
       role: 'system',
-      content: [
+      content: input.systemPrompt?.trim() || [
         'You are a novel rewriting assistant.',
         'Return JSON only.',
         'Produce exactly 3 rewrite candidates in Chinese.',
         'Each candidate should be a coherent prose passage.',
       ].join(' '),
     },
-    ...(input.systemPrompt?.trim() ? [{ role: 'system' as const, content: input.systemPrompt.trim() }] : []),
     { role: 'user', content: input.userPrompt?.trim() || JSON.stringify(user) },
   ]
   const requestBody = {

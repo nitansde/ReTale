@@ -504,13 +504,12 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.presence_penalty).toBe(0.33)
     expect(requestBody.max_tokens).toBe(2222)
     expect(requestBody.seed).toBeUndefined()
-    expect(requestBody.messages[1]?.content).toContain('## Imported Preset System Rules')
-    expect(requestBody.messages[1]?.content).toContain(`${surfaceId.toUpperCase()} SYSTEM RULE`)
-    expect(requestBody.messages[1]?.content.trim().endsWith(`${surfaceId.toUpperCase()} SYSTEM RULE`)).toBe(true)
-    expect(requestBody.messages[2]?.content.startsWith('## Imported Preset User Rules')).toBe(true)
-    expect(requestBody.messages[2]?.content).toContain(`${surfaceId.toUpperCase()} USER RULE`)
-    expect(requestBody.messages[2]?.content).toContain('BETA')
-    expect(requestBody.messages[2]?.content).not.toContain('ALPHA')
+    expect(requestBody.messages[0]?.content).toBe(`${surfaceId.toUpperCase()} SYSTEM RULE`)
+    expect(requestBody.messages[0]?.content).not.toContain('## Imported Preset System Rules')
+    expect(requestBody.messages[1]?.content.startsWith(`${surfaceId.toUpperCase()} USER RULE`)).toBe(true)
+    expect(requestBody.messages[1]?.content).not.toContain('## Imported Preset User Rules')
+    expect(requestBody.messages[1]?.content).toContain('BETA')
+    expect(requestBody.messages[1]?.content).not.toContain('ALPHA')
   })
 
   it('buffers stream output only when active assistant regexes need the final text and passes ollama sampler options', async () => {
@@ -562,7 +561,8 @@ describe('preset compat rewrite route runtime', () => {
       num_predict: 2222,
       seed: 98765,
     })
-    expect(requestBody.messages[1]?.content.startsWith('## Imported Preset User Rules')).toBe(true)
+    expect(requestBody.messages[1]?.content.startsWith('REWRITE USER RULE')).toBe(true)
+    expect(requestBody.messages[1]?.content).not.toContain('## Imported Preset User Rules')
     expect(requestBody.messages[1]?.content).toContain('BETA')
     expect(requestBody.messages[1]?.content).not.toContain('ALPHA')
   })
@@ -716,11 +716,11 @@ describe('preset compat rewrite route runtime', () => {
     const requestBody = JSON.parse(String(requestInit.body)) as {
       messages: Array<{ role: string; content: string }>
     }
-    expect(requestBody.messages[2]?.content).toContain('Speaker Alice meets Bob.')
-    expect(requestBody.messages[2]?.content).not.toContain('{{user}}')
-    expect(requestBody.messages[2]?.content).not.toContain('{{char}}')
-    expect(requestBody.messages[2]?.content).not.toContain('{{input}}')
-    expect(requestBody.messages[2]?.content).not.toContain('{{lastMessage}}')
+    expect(requestBody.messages[1]?.content).toContain('Speaker Alice meets Bob.')
+    expect(requestBody.messages[1]?.content).not.toContain('{{user}}')
+    expect(requestBody.messages[1]?.content).not.toContain('{{char}}')
+    expect(requestBody.messages[1]?.content).not.toContain('{{input}}')
+    expect(requestBody.messages[1]?.content).not.toContain('{{lastMessage}}')
   })
 
   it('trims context blocks deterministically from lowest-priority tails when openai_max_context is applied', async () => {
@@ -801,9 +801,9 @@ describe('preset compat rewrite route runtime', () => {
     const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
       messages: Array<{ content: string }>
     }
-    expect(requestBody.messages[2]?.content).toContain('H1 H2 H3 H4')
-    expect(requestBody.messages[2]?.content).toContain('A1 A2 A3 A4')
-    expect(requestBody.messages[2]?.content).not.toContain('M1 M2 M3 M4')
+    expect(requestBody.messages[1]?.content).toContain('H1 H2 H3 H4')
+    expect(requestBody.messages[1]?.content).toContain('A1 A2 A3 A4')
+    expect(requestBody.messages[1]?.content).not.toContain('M1 M2 M3 M4')
   })
 
   it('falls back invalid operation types to expand and keeps status surfaces deterministic', async () => {
@@ -834,8 +834,8 @@ describe('preset compat rewrite route runtime', () => {
     const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
       messages: Array<{ content: string }>
     }
-    expect(requestBody.messages[1]?.content).toContain('EXPAND SYSTEM RULE')
-    expect(requestBody.messages[2]?.content).toContain('EXPAND USER RULE')
+    expect(requestBody.messages[0]?.content).toContain('EXPAND SYSTEM RULE')
+    expect(requestBody.messages[1]?.content).toContain('EXPAND USER RULE')
   })
 
   it('uses imported stream_openai when the request does not override streaming', async () => {
@@ -965,8 +965,8 @@ describe('preset compat rewrite route runtime', () => {
       expect.objectContaining({ field: 'openai_max_context', status: 'applied', reason: 'SUPPORTED_RUNTIME' }),
       expect.objectContaining({ field: 'max_context_unlocked', status: 'applied', reason: 'SUPPORTED_RUNTIME' }),
     ]))
-    expect(requestBody.messages[2]?.content).toContain('summary keep keep keep keep')
-    expect(requestBody.messages[2]?.content).not.toContain('world trim trim trim')
+    expect(requestBody.messages[1]?.content).toContain('summary keep keep keep keep')
+    expect(requestBody.messages[1]?.content).not.toContain('world trim trim trim')
   })
 
   it('degrades formatting statuses for context blocks removed by max-context trimming', async () => {
@@ -1035,9 +1035,9 @@ describe('preset compat rewrite route runtime', () => {
       messages: Array<{ content: string }>
     }
 
-    expect(requestBody.messages[2]?.content).toContain('summary keep keep keep keep')
-    expect(requestBody.messages[2]?.content).not.toContain('world trim trim trim')
-    expect(requestBody.messages[2]?.content).not.toContain('[WI]')
+    expect(requestBody.messages[1]?.content).toContain('summary keep keep keep keep')
+    expect(requestBody.messages[1]?.content).not.toContain('world trim trim trim')
+    expect(requestBody.messages[1]?.content).not.toContain('[WI]')
     expect(payload.presetCompat.fieldStatuses).toEqual(expect.arrayContaining([
       expect.objectContaining({
         field: 'wi_format',
@@ -1097,21 +1097,21 @@ describe('preset compat rewrite route runtime', () => {
     const continueBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
       messages: Array<{ content: string }>
     }
-    expect(continueBody.messages[1]?.content).toContain('CONTINUE TEMPLATE FRAGMENT')
-    expect(continueBody.messages[1]?.content).not.toContain('CONTINUE SHOULD NOT SEE NEW CHAT')
+    expect(continueBody.messages[0]?.content).toContain('CONTINUE TEMPLATE FRAGMENT')
+    expect(continueBody.messages[0]?.content).not.toContain('CONTINUE SHOULD NOT SEE NEW CHAT')
 
     const roleplayBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
       messages: Array<{ content: string }>
     }
-    expect(roleplayBody.messages[1]?.content).toContain('ROLEPLAY NEW GROUP TEMPLATE')
-    expect(roleplayBody.messages[1]?.content).toContain('ROLEPLAY GROUP NUDGE TEMPLATE')
-    expect(roleplayBody.messages[1]?.content).toContain('ROLEPLAY IMPERSONATION TEMPLATE')
+    expect(roleplayBody.messages[0]?.content).toContain('ROLEPLAY NEW GROUP TEMPLATE')
+    expect(roleplayBody.messages[0]?.content).toContain('ROLEPLAY GROUP NUDGE TEMPLATE')
+    expect(roleplayBody.messages[0]?.content).toContain('ROLEPLAY IMPERSONATION TEMPLATE')
 
     const exampleBody = JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body)) as {
       messages: Array<{ content: string }>
     }
-    expect(exampleBody.messages[1]?.content).toContain('REWRITE NEW EXAMPLE TEMPLATE')
-    expect(exampleBody.messages[1]?.content).not.toContain('REWRITE SHOULD NOT SEE NEW CHAT')
+    expect(exampleBody.messages[0]?.content).toContain('REWRITE NEW EXAMPLE TEMPLATE')
+    expect(exampleBody.messages[0]?.content).not.toContain('REWRITE SHOULD NOT SEE NEW CHAT')
   })
 
   it('wraps only matching context blocks for formatting fields and safely degrades names behavior without transcript names', async () => {
@@ -1165,14 +1165,14 @@ describe('preset compat rewrite route runtime', () => {
       messages: Array<{ content: string }>
     }
 
-    expect(requestBody.messages[2]?.content.match(/\[WI\]/g)?.length ?? 0).toBe(1)
-    expect(requestBody.messages[2]?.content.match(/\[SCENARIO\]/g)?.length ?? 0).toBe(1)
-    expect(requestBody.messages[2]?.content.match(/\[PERSONALITY\]/g)?.length ?? 0).toBe(1)
-    expect(requestBody.messages[2]?.content).toContain('[WI]\n# 相关世界设定\n- 月海｜location｜银蓝潮汐会吞没码头\n[/WI]')
-    expect(requestBody.messages[2]?.content).toContain('[SCENARIO]\n# 当前章节摘要\n雨夜里的对峙一触即发。\n[/SCENARIO]')
-    expect(requestBody.messages[2]?.content).toContain('[PERSONALITY]\n# 相关人物\n- 林澈｜状态：克制｜话少但护短\n[/PERSONALITY]')
-    expect(requestBody.messages[2]?.content).toContain('# 输出要求\n- 只输出正文。')
-    expect(requestBody.messages[2]?.content).not.toContain('USER:')
+    expect(requestBody.messages[1]?.content.match(/\[WI\]/g)?.length ?? 0).toBe(1)
+    expect(requestBody.messages[1]?.content.match(/\[SCENARIO\]/g)?.length ?? 0).toBe(1)
+    expect(requestBody.messages[1]?.content.match(/\[PERSONALITY\]/g)?.length ?? 0).toBe(1)
+    expect(requestBody.messages[1]?.content).toContain('[WI]\n# 相关世界设定\n- 月海｜location｜银蓝潮汐会吞没码头\n[/WI]')
+    expect(requestBody.messages[1]?.content).toContain('[SCENARIO]\n# 当前章节摘要\n雨夜里的对峙一触即发。\n[/SCENARIO]')
+    expect(requestBody.messages[1]?.content).toContain('[PERSONALITY]\n# 相关人物\n- 林澈｜状态：克制｜话少但护短\n[/PERSONALITY]')
+    expect(requestBody.messages[1]?.content).toContain('# 输出要求\n- 只输出正文。')
+    expect(requestBody.messages[1]?.content).not.toContain('USER:')
   })
 
   it('ignores disabled matching blocks for formatting so omitted blocks are not wrapped', async () => {
@@ -1225,9 +1225,9 @@ describe('preset compat rewrite route runtime', () => {
       messages: Array<{ content: string }>
     }
 
-    expect(requestBody.messages[2]?.content).not.toContain('[WI]')
-    expect(requestBody.messages[2]?.content).not.toContain('# 相关世界设定')
-    expect(requestBody.messages[2]?.content).toContain('[SCENARIO]\n# 当前章节摘要\n雨夜里的对峙一触即发。\n[/SCENARIO]')
-    expect(requestBody.messages[2]?.content).toContain('[PERSONALITY]\n# 相关人物\n- 林澈｜状态：克制｜话少但护短\n[/PERSONALITY]')
+    expect(requestBody.messages[1]?.content).not.toContain('[WI]')
+    expect(requestBody.messages[1]?.content).not.toContain('# 相关世界设定')
+    expect(requestBody.messages[1]?.content).toContain('[SCENARIO]\n# 当前章节摘要\n雨夜里的对峙一触即发。\n[/SCENARIO]')
+    expect(requestBody.messages[1]?.content).toContain('[PERSONALITY]\n# 相关人物\n- 林澈｜状态：克制｜话少但护短\n[/PERSONALITY]')
   })
 })
