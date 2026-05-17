@@ -48,6 +48,7 @@ import {
 } from '@/components/workspace/workspace-selection'
 import { normalizeAISettings } from '@/lib/ai-settings'
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
+import { createPresetCompatSessionStateKey } from '@/lib/workspace-state'
 import type {
   ChapterGraphContextData,
   GraphEdgeEditDraft,
@@ -618,6 +619,7 @@ export function SelectionNovelStudio() {
   const setAISettings = useNovelStore((state) => state.setAISettings)
   const saveAISettings = useNovelStore((state) => state.saveAISettings)
   const loadPresetCompatLibrary = useNovelStore((state) => state.loadPresetCompatLibrary)
+  const savePresetCompatLibrary = useNovelStore((state) => state.savePresetCompatLibrary)
   const rebuildStoryKnowledge = useNovelStore((state) => state.rebuildStoryKnowledge)
   const pauseStoryKnowledgeRebuild = useNovelStore((state) => state.pauseStoryKnowledgeRebuild)
   const abortStoryKnowledgeRebuild = useNovelStore((state) => state.abortStoryKnowledgeRebuild)
@@ -626,6 +628,7 @@ export function SelectionNovelStudio() {
   const setPresetCompatSessionPhase = useNovelStore((state) => state.setPresetCompatSessionPhase)
   const clearPresetCompatSessionStateForSelection = useNovelStore((state) => state.clearPresetCompatSessionStateForSelection)
   const resetPresetCompatSessionStateForSelection = useNovelStore((state) => state.resetPresetCompatSessionStateForSelection)
+  const presetCompatSessionState = useNovelStore((state) => state.presetCompatSessionState)
   const localCharacters = useNovelStore((state) => state.localCharacters)
   const localCharacterRelations = useNovelStore((state) => state.localCharacterRelations)
   const localWorldEntries = useNovelStore((state) => state.localWorldEntries)
@@ -1634,6 +1637,18 @@ export function SelectionNovelStudio() {
     return roleplayInput.trim() || '围绕当前选区继续推进剧情。'
   }, [expandPrompt, roleplayInput, rewritePrompt])
 
+  const buildPresetCompatRuntimeContext = (surfaceId: PresetCompatSurfaceId) => {
+    if (!currentChapter) return {}
+
+    const selection = workspaceSelection ?? toChapterTimelineSelection(currentChapter)
+    const sessionEntry = presetCompatSessionState[createPresetCompatSessionStateKey(selection, surfaceId)]
+
+    return {
+      sessionPhase: sessionEntry?.phase ?? null,
+      hasImpersonationContext: surfaceId === 'roleplay',
+    }
+  }
+
   const loadContextPreview = useCallback(async (
     mode: WorkspaceActionMode,
     instructionOverride?: string,
@@ -2531,6 +2546,7 @@ export function SelectionNovelStudio() {
     setRewriteState({ loading: true, result: '', error: '' })
     setRewriteFlow((current) => ({ ...current, loading: true, error: '', provider: 'context-stream', candidates: [], selectedIndex: 0 }))
     try {
+      await savePresetCompatLibrary()
       await loadContextPreview('rewrite', rewritePrompt)
       let streamed = ''
       await streamRewriteApi(
@@ -2544,6 +2560,7 @@ export function SelectionNovelStudio() {
           disabledBlockIds: disabledContextBlockIds,
           excludedGraphEdgeIds,
           excludedEvidenceIds,
+          presetCompatRuntimeContext: buildPresetCompatRuntimeContext('rewrite'),
           scope: 'chapter',
           mode: 'heavy',
           tone: 'dramatic',
@@ -2642,6 +2659,7 @@ export function SelectionNovelStudio() {
     if (!currentChapter || !targetSelection) return
     setExpandState({ loading: true, result: '', error: '' })
     try {
+      await savePresetCompatLibrary()
       await loadContextPreview('expand', expandPrompt)
       let streamed = ''
       await streamRewriteApi(
@@ -2655,6 +2673,7 @@ export function SelectionNovelStudio() {
           disabledBlockIds: disabledContextBlockIds,
           excludedGraphEdgeIds,
           excludedEvidenceIds,
+          presetCompatRuntimeContext: buildPresetCompatRuntimeContext('expand'),
           scope: 'chapter',
           mode: 'medium',
           tone: 'cinematic',
@@ -2691,6 +2710,7 @@ export function SelectionNovelStudio() {
 
     try {
       const fallbackReply = buildRoleplayReply(userTurn.content, targetSelection, currentChapter.title)
+      await savePresetCompatLibrary()
       await loadContextPreview('roleplay', userTurn.content)
       let streamed = ''
       await streamRewriteApi(
@@ -2704,6 +2724,11 @@ export function SelectionNovelStudio() {
           disabledBlockIds: disabledContextBlockIds,
           excludedGraphEdgeIds,
           excludedEvidenceIds,
+          presetCompatRuntimeContext: {
+            ...buildPresetCompatRuntimeContext('roleplay'),
+            sessionPhase: 'continue',
+            hasImpersonationContext: true,
+          },
           scope: 'chapter',
           mode: 'continue',
           tone: 'dramatic',

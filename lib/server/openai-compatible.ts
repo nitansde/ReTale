@@ -28,6 +28,7 @@ type RewriteRequest = {
     presence_penalty: number
     max_tokens: number
   }>
+  presetCompat?: unknown
 }
 
 export type RewriteResult = {
@@ -47,6 +48,7 @@ export type StreamRewriteRequest = {
     presence_penalty: number
     max_tokens: number
   }>
+  presetCompat?: unknown
 }
 
 export type StreamRewriteResult = {
@@ -504,6 +506,7 @@ export async function generateRewriteWithOpenAICompatible(
       model: config.model,
       streamed: false,
       stage: 'rewrite',
+      presetCompat: input.presetCompat,
       request: { url, body: requestBody, messages },
       response: { error: error instanceof Error ? error.message : 'Model request failed' },
     })
@@ -522,6 +525,7 @@ export async function generateRewriteWithOpenAICompatible(
       model: config.model,
       streamed: false,
       stage: 'rewrite',
+      presetCompat: input.presetCompat,
       request: { url, body: requestBody, messages },
       response: { status: response.status, error: `HTTP ${response.status}` },
     })
@@ -537,6 +541,7 @@ export async function generateRewriteWithOpenAICompatible(
       model: config.model,
       streamed: false,
       stage: 'rewrite',
+      presetCompat: input.presetCompat,
       request: { url, body: requestBody, messages },
       response: { status: response.status, parsed: data, error: 'No content returned from model' },
     })
@@ -555,6 +560,7 @@ export async function generateRewriteWithOpenAICompatible(
         model: config.model,
         streamed: false,
         stage: 'rewrite',
+        presetCompat: input.presetCompat,
         request: { url, body: requestBody, messages },
         response: { status: response.status, rawText: extractChatCompletionText(raw), parsed, error: 'Model returned empty candidates' },
       })
@@ -566,6 +572,7 @@ export async function generateRewriteWithOpenAICompatible(
       model: config.model,
       streamed: false,
       stage: 'rewrite',
+      presetCompat: input.presetCompat,
       request: { url, body: requestBody, messages },
       response: { status: response.status, rawText: extractChatCompletionText(raw), parsed },
     })
@@ -577,6 +584,7 @@ export async function generateRewriteWithOpenAICompatible(
       model: config.model,
       streamed: false,
       stage: 'rewrite',
+      presetCompat: input.presetCompat,
       request: { url, body: requestBody, messages },
       response: {
         status: response.status,
@@ -639,6 +647,7 @@ export async function streamRewriteWithOpenAICompatible(
       model: config.model,
       streamed: true,
       stage: 'rewrite',
+      presetCompat: input.presetCompat,
       request: { url, body: requestBody, messages },
       response: { error: error instanceof Error ? error.message : 'Model request failed' },
     })
@@ -657,6 +666,7 @@ export async function streamRewriteWithOpenAICompatible(
       model: config.model,
       streamed: true,
       stage: 'rewrite',
+      presetCompat: input.presetCompat,
       request: { url, body: requestBody, messages },
       response: { status: response.status, error: `HTTP ${response.status}` },
     })
@@ -670,6 +680,7 @@ export async function streamRewriteWithOpenAICompatible(
       model: config.model,
       streamed: true,
       stage: 'rewrite',
+      presetCompat: input.presetCompat,
       request: { url, body: requestBody, messages },
       response: { status: response.status, error: 'No response body returned from model' },
     })
@@ -724,6 +735,7 @@ export async function streamRewriteWithOpenAICompatible(
           model: config.model,
           streamed: true,
           stage: 'rewrite',
+          presetCompat: input.presetCompat,
           request: { url, body: requestBody, messages },
           response: {
             status: response.status,
@@ -763,6 +775,7 @@ export async function streamRewriteWithOpenAICompatible(
         model: config.model,
         streamed: true,
         stage: 'rewrite',
+        presetCompat: input.presetCompat,
         request: { url, body: requestBody, messages },
         response: { status: response.status, rawText },
       })

@@ -829,7 +829,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     fieldPaths: ['prompts[].content:{{setvar::...}}'],
     creativeResetPromptFamily: true,
     macroContractNames: PRESET_COMPAT_MACRO_FIELD_FAMILY_LINKS['macro.setvar'],
-    surfaceClassifications: createSurfaceClassificationMap({ creative: preserved('MACRO_TODO') }),
+    surfaceClassifications: createSurfaceClassificationMap({ creative: preserved() }),
   },
   {
     id: 'macro.getvar',
@@ -837,7 +837,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     fieldPaths: ['prompts[].content:{{getvar::...}}'],
     creativeResetPromptFamily: true,
     macroContractNames: PRESET_COMPAT_MACRO_FIELD_FAMILY_LINKS['macro.getvar'],
-    surfaceClassifications: createSurfaceClassificationMap({ creative: preserved('MACRO_TODO') }),
+    surfaceClassifications: createSurfaceClassificationMap({ creative: preserved() }),
   },
   {
     id: 'macro.trim',
@@ -845,7 +845,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     fieldPaths: ['prompts[].content:{{trim}}'],
     creativeResetPromptFamily: true,
     macroContractNames: PRESET_COMPAT_MACRO_FIELD_FAMILY_LINKS['macro.trim'],
-    surfaceClassifications: createSurfaceClassificationMap({ creative: preserved('MACRO_TODO') }),
+    surfaceClassifications: createSurfaceClassificationMap({ creative: preserved() }),
   },
   {
     id: 'macro.comment',
@@ -853,7 +853,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     fieldPaths: ['prompts[].content:comment-macros'],
     creativeResetPromptFamily: true,
     macroContractNames: PRESET_COMPAT_MACRO_FIELD_FAMILY_LINKS['macro.comment'],
-    surfaceClassifications: createSurfaceClassificationMap({ creative: preserved('MACRO_TODO') }),
+    surfaceClassifications: createSurfaceClassificationMap({ creative: preserved() }),
   },
   {
     id: 'macro.user_bot_variable',
@@ -861,7 +861,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     fieldPaths: ['prompts[].content:user/bot-variables'],
     creativeResetPromptFamily: true,
     macroContractNames: PRESET_COMPAT_MACRO_FIELD_FAMILY_LINKS['macro.user_bot_variable'],
-    surfaceClassifications: createSurfaceClassificationMap({ creative: preserved('MACRO_TODO') }),
+    surfaceClassifications: createSurfaceClassificationMap({ creative: preserved() }),
   },
 ] as const satisfies readonly PresetCompatFieldFamilyContract[]
 

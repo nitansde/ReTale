@@ -74,6 +74,7 @@ export function applyPresetCompatCreativeRuntime(params: {
   const macroProcessing = createPresetCompatRuntimeMacroProcessing({
     surfaceId: params.surfaceId,
     resolvedRuntime,
+    runtimeContext: params.promptRuleRuntimeContext,
   })
   const assembledPrompts = assemblePresetCompatRuntimePrompts({
     surfaceId: params.surfaceId,

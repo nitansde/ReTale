@@ -194,6 +194,10 @@ describe('preset compat field family matrix', () => {
           expect(macroContract.surfaces[surfaceId].reason).not.toBe('MACRO_TODO')
         }
       }
+
+      for (const surfaceId of PRESET_COMPAT_CREATIVE_SURFACE_IDS) {
+        expect(contract.surfaceClassifications[surfaceId].reason).not.toBe('MACRO_TODO')
+      }
     }
   })
 })

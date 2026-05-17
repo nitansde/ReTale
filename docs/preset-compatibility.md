@@ -208,15 +208,16 @@ Macro compatibility is now described by the dedicated contract in `lib/preset-co
 - macro names are matched case-insensitively
 - aliases may exist and resolve to a canonical macro name in contract metadata
 - the contract distinguishes `supported-runtime`, `context-partial`, `preserve-storage-only`, and `unsupported-runtime`
-- raw macro text is still preserved in stored preset payloads and exported preset payloads
-- supported and context-partial macros expand at runtime on opted-in preset-compat creative surfaces, including editor preview, `/api/rewrite`, `future_jump_rewrite`, and regex replacement-time substitution
-- analytical surfaces stay fail-closed, and unsupported macros or macros that need missing runtime context resolve to `""` with structured diagnostics instead of mutating stored preset payloads
+- raw macro text is preserved in stored and exported preset payloads
+- supported and context-partial macros expand at runtime on opted-in creative surfaces
+- editor preview, `/api/rewrite`, `future_jump_rewrite`, and regex replacement-time flows use that runtime path
+- analytical surfaces stay fail-closed, and unsupported macros or macros with missing context resolve to `""` with structured diagnostics instead of mutating stored preset payloads
 
 Current v1 contract examples:
 
-- `setvar`, `getvar`, and `trim` are marked `supported-runtime` and expand through the shared preset-compat runtime on opted-in creative surfaces
-- `user`, `bot`, and `char` / `charIfNotGroup` are marked `context-partial` because they depend on runtime naming context, but they still expand at runtime when that context is available
-- comment-style macros are marked `preserve-storage-only`
+- `setvar`, `getvar`, and `trim` are part of the supported runtime subset and can expand during creative preset execution while their raw source text still round-trips through storage and export
+- `user`, `bot`, and `char` / `charIfNotGroup` are `context-partial` because they depend on runtime naming context, so they expand when that context is available and otherwise resolve to `""` with diagnostics
+- comment-style macros stay `preserve-storage-only` in stored and exported preset JSON, while runtime-only unsupported or unavailable macros never mutate the saved prompt content
 - UI/runtime and STscript-only macros such as `input`, `outlet`, `banned`, `summary`, `hasExtension`, `lastGenerationType`, `var`, `pipe`, and `timesIndex` are explicitly `unsupported-runtime`
 
 Stable macro diagnostic codes for later parser/runtime tasks are:

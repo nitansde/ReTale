@@ -468,6 +468,7 @@ describe('preset compat rewrite route runtime', () => {
       provider: string
       candidates: Array<{ content: string }>
       presetCompat: {
+        runtimeSnapshot: { activePresetId: string; activeSurfaceId: string | null }
         fieldStatuses: Array<{ field: string; status: string; reason: string }>
         streamPolicy: { effective: boolean; source: string }
       }
@@ -483,6 +484,10 @@ describe('preset compat rewrite route runtime', () => {
       expect.objectContaining({ field: 'seed', status: 'degraded', reason: 'PROVIDER_ONLY' }),
     ]))
     expect(payload.presetCompat.streamPolicy).toMatchObject({ effective: false, source: 'explicit_request' })
+    expect(payload.presetCompat.runtimeSnapshot).toMatchObject({
+      activePresetId: `${surfaceId}-preset`,
+      activeSurfaceId: surfaceId,
+    })
 
     const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit
     const requestBody = JSON.parse(String(requestInit.body)) as {

@@ -11,6 +11,7 @@ export type LlmDebugLogParams = {
   streamed: boolean
   stage?: string
   attempt?: number
+  presetCompat?: unknown
   request: {
     url: string
     body: unknown
@@ -84,6 +85,7 @@ export async function writeLlmDebugLog(params: LlmDebugLogParams) {
       streamed: params.streamed,
       stage: params.stage,
       attempt: params.attempt,
+      ...(params.presetCompat === undefined ? {} : { presetCompat: params.presetCompat }),
       request: {
         ...params.request,
         url: redactUrlCredentials(params.request.url),

@@ -121,7 +121,6 @@ const REASON_LABELS: Partial<Record<PresetCompatResolvedFieldStatus['reason'], s
   REGEX_SUBSTITUTE_MODE_UNSUPPORTED: 'substituteRegex 模式超出当前受支持子集。',
   VIRTUAL_DEPTH_REQUIRED: '这个字段需要真实聊天深度，字符串界面无法安全模拟。',
   FORBID_OVERRIDES_PROTECTED: '同一插槽已被 forbidOverrides 片段保护。',
-  MACRO_TODO: '宏语义暂时只保留导出。',
   UNSUPPORTED_RUNTIME_SURFACE: '该运行时界面不支持这类宏语义。',
   PRESERVED_EXPORT_ONLY: '保留在导出载荷中，但当前界面不会执行。',
   ANALYTICAL_SURFACE_FAIL_CLOSED: '分析型界面保持 fail-closed，不接入创作预设字段。',

@@ -1,6 +1,8 @@
 import type { PresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runtime'
 import type {
   PresetCompatPromptAssemblyMetadata,
+  PresetCompatPromptAssemblyStage,
+  PresetCompatPromptAssemblyStageStatus,
 } from '@/lib/preset-compat/prompt-assembly'
 import { registerPresetCompatCoreMacroBuiltins } from '@/lib/preset-compat/macro-builtins-core'
 import { createPresetCompatEnvMacroBuiltins } from '@/lib/preset-compat/macro-builtins-env'
@@ -16,6 +18,8 @@ import type { PresetCompatResolvedRuntime } from '@/lib/preset-compat/resolve-ru
 import type {
   PresetCompatResolvedFieldStatus,
   PresetCompatResolvedProviderControlIntent,
+  PresetCompatPromptRuleRuntimeContext,
+  PresetCompatRuntimeSnapshot,
   PresetCompatSurfaceId,
 } from '@/lib/preset-compat/types'
 import { estimateTokenCount } from '@/lib/server/knowledge-store'
@@ -53,9 +57,20 @@ export type PresetCompatRuntimeMetadata = {
   macroDiagnostics: PresetCompatMacroDiagnostic[]
 }
 
+type PresetCompatPromptAssemblyResponseMetadata = {
+  stageOrder: readonly PresetCompatPromptAssemblyStage[]
+  system: {
+    stages: PresetCompatPromptAssemblyStageStatus[]
+  }
+  user: {
+    stages: PresetCompatPromptAssemblyStageStatus[]
+  }
+}
+
 export type PresetCompatResponseMetadata = PresetCompatRuntimeMetadata & {
+  runtimeSnapshot: PresetCompatRuntimeSnapshot
   warnings: string[]
-  promptAssembly: PresetCompatPromptAssemblyMetadata
+  promptAssembly: PresetCompatPromptAssemblyResponseMetadata
   fieldStatuses: PresetCompatResolvedFieldStatus[]
   providerControlIntents: PresetCompatResolvedProviderControlIntent[]
   contextWindow: PresetCompatContextWindowMetadata | null
@@ -97,7 +112,7 @@ function readNumericSeed(runtime: PresetCompatResolvedRuntime) {
   return typeof openAiSeed === 'number' && Number.isFinite(openAiSeed) ? openAiSeed : 0
 }
 
-function buildRuntimeValues(runtime: PresetCompatResolvedRuntime) {
+function buildRuntimeValues(runtime: PresetCompatResolvedRuntime, runtimeContext?: PresetCompatPromptRuleRuntimeContext) {
   const values: Record<string, unknown> = {}
   const namesBehavior = runtime.namesBehavior
   if (namesBehavior) {
@@ -107,6 +122,23 @@ function buildRuntimeValues(runtime: PresetCompatResolvedRuntime) {
     values.assistant = namesBehavior.assistantName
     values.assistantName = namesBehavior.assistantName
     values.characterName = namesBehavior.assistantName
+  }
+
+  const namedTranscript = runtimeContext?.namedTranscript
+  const runtimeUserName = namedTranscript?.userName?.trim()
+  const runtimeAssistantName = namedTranscript?.assistantName?.trim()
+  if (runtimeUserName) {
+    values.user = runtimeUserName
+    values.userName = runtimeUserName
+  }
+  if (runtimeAssistantName) {
+    values.bot = runtimeAssistantName
+    values.assistant = runtimeAssistantName
+    values.assistantName = runtimeAssistantName
+    values.char = runtimeAssistantName
+    values.charName = runtimeAssistantName
+    values.character = runtimeAssistantName
+    values.characterName = runtimeAssistantName
   }
 
   if (runtime.providerRuntime.provider === 'openai-compatible') {
@@ -167,6 +199,18 @@ function joinedBlockText(blocks: readonly RouteContextBlock[]) {
   return blocks.map((block) => block.content).join('\n\n')
 }
 
+function redactPromptAssemblyMetadata(metadata: PresetCompatPromptAssemblyMetadata): PresetCompatPromptAssemblyResponseMetadata {
+  return {
+    stageOrder: metadata.stageOrder,
+    system: {
+      stages: metadata.system.stages,
+    },
+    user: {
+      stages: metadata.user.stages,
+    },
+  }
+}
+
 function trimContextBlocksToBudget(blocks: readonly RouteContextBlock[], budget: number) {
   const remaining = [...blocks]
   const trimmedBlockIds: string[] = []
@@ -206,12 +250,13 @@ function trimContextBlocksToBudget(blocks: readonly RouteContextBlock[], budget:
 export function createPresetCompatRuntimeMacroProcessing(params: {
   surfaceId: PresetCompatSurfaceId
   resolvedRuntime: PresetCompatResolvedRuntime
+  runtimeContext?: PresetCompatPromptRuleRuntimeContext
 }) : PresetCompatRuntimeMacroProcessing {
   const context = createPresetCompatMacroContext({
     surfaceId: params.surfaceId,
     phase: 'apply-runtime',
     seed: readNumericSeed(params.resolvedRuntime),
-    runtimeValues: buildRuntimeValues(params.resolvedRuntime),
+    runtimeValues: buildRuntimeValues(params.resolvedRuntime, params.runtimeContext),
   })
   const registry = createPresetCompatMacroRegistry([
     ...registerPresetCompatCoreMacroBuiltins(),
@@ -373,9 +418,10 @@ export function buildPresetCompatResponseMetadata(params: {
   streamPolicy?: PresetCompatStreamPolicyMetadata | null
 }) : PresetCompatResponseMetadata {
   return {
+    runtimeSnapshot: params.runtime.resolvedRuntime.snapshot,
     warnings: params.runtime.warnings,
-    promptAssembly: params.runtime.promptAssembly,
     macroDiagnostics: params.runtime.metadata.macroDiagnostics,
+    promptAssembly: redactPromptAssemblyMetadata(params.runtime.promptAssembly),
     fieldStatuses: params.fieldStatuses ?? params.runtime.resolvedRuntime.fieldStatuses,
     providerControlIntents: params.runtime.resolvedRuntime.providerControlIntents,
     contextWindow: params.contextWindow ?? null,

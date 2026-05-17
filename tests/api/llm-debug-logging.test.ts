@@ -2,6 +2,8 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
+import type { PresetCompatLibrary } from '@/lib/preset-compat/types'
 import type { AISettings } from '@/lib/types'
 
 let tempRoot: string | null = null
@@ -73,9 +75,103 @@ async function readFirstLog(folder: string) {
     provider: string
     streamed: boolean
     stage?: string
+    presetCompat?: {
+      runtimeSnapshot?: { activePresetId: string | null; activeSurfaceId: string | null }
+    }
     request: { body: { messages?: Array<{ content: string }> } }
     response: { rawText?: string; parsed?: unknown; error?: string; partial?: boolean }
   }
+}
+
+function createDebugPresetLibrary(): PresetCompatLibrary {
+  const library = createDefaultPresetCompatLibrary()
+  library.presets['debug-preset'] = {
+    id: 'debug-preset',
+    name: 'Debug Preset',
+    sourceApiId: 'openai',
+    promptRules: [
+      {
+        id: 'debug-user-rule',
+        name: 'Debug user rule',
+        role: 'user',
+        content: 'DEBUG PRESET USER RULE',
+        enabled: true,
+        marker: false,
+        injectAsSystemPrompt: false,
+        injectionPosition: 'before',
+        injectionDepth: null,
+        injectionOrder: 1,
+        injectionTrigger: [],
+        forbidOverrides: false,
+        condition: null,
+        passthrough: {},
+      },
+    ],
+    promptOrderLists: { rewrite: ['debug-user-rule'] },
+    embeddedRegexes: [],
+    attachedStandaloneRegexIds: [],
+    runtimeSampler: {
+      temperature: 0.51,
+      topP: null,
+      topK: null,
+      topA: null,
+      minP: null,
+      presencePenalty: null,
+      frequencyPenalty: null,
+      repetitionPenalty: null,
+      openaiMaxContext: null,
+      maxTokens: null,
+      seed: null,
+      candidateCount: null,
+    },
+    promptTemplate: {
+      namesBehavior: null,
+      sendIfEmpty: null,
+      impersonationPrompt: null,
+      newChatPrompt: null,
+      newGroupChatPrompt: null,
+      newExampleChatPrompt: null,
+      continueNudgePrompt: null,
+      wiFormat: null,
+      scenarioFormat: null,
+      personalityFormat: null,
+      groupNudgePrompt: null,
+      assistantPrefill: null,
+      assistantImpersonation: null,
+      continuePostfix: null,
+      legacyMainPrompt: null,
+      legacyNsfwPrompt: null,
+      legacyJailbreakPrompt: null,
+    },
+    transport: {
+      maxContextUnlocked: null,
+      streamOpenAI: null,
+      useSysprompt: null,
+      squashSystemMessages: null,
+      mediaInlining: null,
+      inlineImageQuality: null,
+      continuePrefill: null,
+      functionCalling: null,
+      showThoughts: null,
+      reasoningEffort: null,
+      verbosity: null,
+      enableWebSearch: null,
+      requestImages: null,
+      requestImageAspectRatio: null,
+      requestImageResolution: null,
+    },
+    preservedFields: { biasPresetSelected: null },
+    passthrough: {},
+    importWarnings: [],
+    createdAt: '2026-05-17T00:00:00.000Z',
+    updatedAt: '2026-05-17T00:00:00.000Z',
+  }
+  library.surfaceBindings.rewrite = {
+    ...library.surfaceBindings.rewrite,
+    enabled: true,
+    presetId: 'debug-preset',
+  }
+  return library
 }
 
 async function waitForFirstLog(folder: string) {
@@ -170,6 +266,45 @@ describe('llm debug logging', () => {
     expect(log.request.body.messages?.at(-1)?.content).toContain('prompt marker')
     expect(log.response.rawText).toContain('raw one')
     expect(JSON.stringify(log)).not.toContain('Bearer')
+  })
+
+  it('writes resolved preset compatibility metadata into rewrite debug logs', async () => {
+    await createTempRoot()
+    process.env.LLM_DEBUG_LOG = '1'
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings(),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createDebugPresetLibrary(),
+    }))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['raw one', 'raw two', 'raw three'] }) } }],
+    }), { status: 200 })))
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(new Request('http://localhost/api/rewrite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceText: 'source marker',
+        selectedText: 'selected marker',
+        prompt: 'prompt marker',
+        userInstruction: 'instruction marker',
+        operationType: 'rewrite',
+        mode: 'heavy',
+        tone: 'dramatic',
+        scope: 'selection',
+        stream: false,
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    const log = await readFirstLog('rewrite')
+    expect(log.presetCompat?.runtimeSnapshot).toMatchObject({
+      activePresetId: 'debug-preset',
+      activeSurfaceId: 'rewrite',
+    })
+    expect(log.request.body.messages?.at(-1)?.content).toContain('DEBUG PRESET USER RULE')
   })
 
   it('writes knowledge extraction logs into the knowledge-extraction folder', async () => {

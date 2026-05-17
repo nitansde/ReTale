@@ -278,6 +278,7 @@ export async function POST(request: Request) {
       requestOptions: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
         ? runtime.resolvedRuntime.providerRuntime.request
         : runtime.resolvedRuntime.providerRuntime.request.options,
+      presetCompat: presetCompatMetadata,
     }
     const streamResult = runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
       ? await streamRewriteWithOpenAICompatible(promptPayload, runtime.resolvedRuntime.providerRuntime.config)
@@ -323,6 +324,7 @@ export async function POST(request: Request) {
     requestOptions: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
       ? runtime.resolvedRuntime.providerRuntime.request
       : runtime.resolvedRuntime.providerRuntime.request.options,
+    presetCompat: presetCompatMetadata,
   }
   const result = runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
     ? await generateRewriteWithOpenAICompatible(rewriteInput, runtime.resolvedRuntime.providerRuntime.config)

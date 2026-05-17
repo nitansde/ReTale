@@ -682,7 +682,7 @@ describe('preset compat future jump runtime', () => {
       },
     })
 
-    expect(result.metadata?.macroDiagnostics).toEqual([
+    expect(result.presetCompat?.macroDiagnostics).toEqual([
       {
         code: 'UNSUPPORTED_MACRO',
         message: 'Macro is not supported on future_jump_rewrite: input',
