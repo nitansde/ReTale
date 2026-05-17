@@ -198,11 +198,9 @@ describe('sillytavern macro runtime', () => {
     expect(runtime.warnings).not.toContain(
       'Skipped rule regex-warning because substituteRegex=1 is outside the MVP runtime subset.'
     )
-    expect(runtime.metadata.macroDiagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        code: 'MISSING_CONTEXT_VALUE',
-        macroName: 'user',
-      }),
+    expect(runtime.systemPrompt).toContain('Hello 主人公')
+    expect(runtime.metadata.macroDiagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ macroName: 'user' }),
     ]))
     expect(library.presets['rewrite-preset']?.promptRules[0]?.content).toBe('Hello {{user}} {{setvar::topic::ALPHA}}')
     expect(library.presets['rewrite-preset']?.promptRules[1]?.content).toBe('Rule sees {{getvar::topic}}')

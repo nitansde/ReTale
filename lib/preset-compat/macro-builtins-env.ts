@@ -7,10 +7,11 @@ import {
 type RuntimeLookupSpec = {
   macroName: string
   keys: readonly string[]
+  fallback?: string
 }
 
 const ENV_MACRO_SPECS: readonly RuntimeLookupSpec[] = [
-  { macroName: 'user', keys: ['user', 'userName'] },
+  { macroName: 'user', keys: ['user', 'userName', 'protagonistName'], fallback: '主人公' },
   { macroName: 'bot', keys: ['bot', 'assistant', 'assistantName'] },
   { macroName: 'char', keys: ['char', 'charName', 'character', 'characterName'] },
   { macroName: 'persona', keys: ['persona', 'personaPrompt', 'personality', 'personalityPrompt'] },
@@ -50,6 +51,10 @@ function readRuntimeValue(context: PresetCompatMacroContext, spec: RuntimeLookup
     if (normalized !== null) {
       return normalized
     }
+  }
+
+  if (typeof spec.fallback === 'string') {
+    return spec.fallback
   }
 
   context.addDiagnostic({

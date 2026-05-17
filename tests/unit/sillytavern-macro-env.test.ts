@@ -56,20 +56,16 @@ describe('sillytavern macro env/time/random built-ins', () => {
     expect(context.diagnostics).toEqual([])
   })
 
-  it('returns empty string with MISSING_CONTEXT_VALUE when a context-backed value is unavailable', () => {
+  it('uses the protagonist fallback for user and reports missing non-fallback values', () => {
     const context = createPresetCompatMacroContext({
       surfaceId: 'rewrite',
       phase: 'prompt-rule',
     })
     const registry = createRegistry()
 
-    expect(evaluateMacro(registry, 'user', context)).toBe('')
+    expect(evaluateMacro(registry, 'user', context)).toBe('主人公')
     expect(evaluateMacro(registry, 'maxcontext', context)).toBe('')
     expect(context.diagnostics).toEqual([
-      expect.objectContaining({
-        code: 'MISSING_CONTEXT_VALUE',
-        macroName: 'user',
-      }),
       expect.objectContaining({
         code: 'MISSING_CONTEXT_VALUE',
         macroName: 'maxcontext',

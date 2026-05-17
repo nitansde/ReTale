@@ -100,6 +100,7 @@ export type PresetCompatPromptRuleRuntimeContext = {
   supportsVirtualDepth?: boolean
   surfaceContextBlocks?: PresetCompatRuntimeContextBlock[]
   namedTranscript?: PresetCompatNamedTranscriptContext | null
+  protagonistName?: string | null
 }
 
 export type PresetCompatRuntimeContextBlockAbstraction =
