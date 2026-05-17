@@ -79,12 +79,66 @@ async function readFirstLog(folder: string) {
       runtimeSnapshot?: { activePresetId: string | null; activeSurfaceId: string | null }
     }
     request: { body: { messages?: Array<{ content: string }> } }
-    response: { rawText?: string; parsed?: unknown; error?: string; partial?: boolean }
+    response: {
+      rawText?: string
+      parsed?: unknown
+      outputTransform?: {
+        preRegexText?: string
+        postRegexText?: string
+        candidates?: Array<{
+          preRegexText: string
+          postRegexText: string
+        }>
+      }
+      error?: string
+      partial?: boolean
+    }
   }
 }
 
-function createDebugPresetLibrary(): PresetCompatLibrary {
+async function readLogs(folder: string) {
+  const files = await listJsonFiles(path.join(String(tempRoot), folder))
+  return Promise.all(files
+    .sort((left, right) => left.localeCompare(right))
+    .map(async (filePath) => JSON.parse(await fs.readFile(filePath, 'utf8')) as Awaited<ReturnType<typeof readFirstLog>>))
+}
+
+function createDebugPresetLibrary(mode: 'default' | 'rewrite-output' | 'stream-output' = 'default'): PresetCompatLibrary {
   const library = createDefaultPresetCompatLibrary()
+  library.standaloneRegexes['rewrite-output-regex'] = {
+    id: 'rewrite-output-regex',
+    name: 'Rewrite output regex',
+    pattern: 'RAW OUTPUT',
+    replacement: 'CLEAN OUTPUT',
+    flags: 'g',
+    disabled: false,
+    placements: ['assistant_output'],
+    trimStrings: [],
+    promptOnly: false,
+    markdownOnly: false,
+    minDepth: null,
+    maxDepth: null,
+    substituteRegex: null,
+    runOnEdit: true,
+    passthrough: {},
+  }
+  library.standaloneRegexes['stream-output-regex'] = {
+    id: 'stream-output-regex',
+    name: 'Stream output regex',
+    pattern: 'AlphaBeta',
+    replacement: 'Omega',
+    flags: 'g',
+    disabled: false,
+    placements: ['assistant_output'],
+    trimStrings: [],
+    promptOnly: false,
+    markdownOnly: false,
+    minDepth: null,
+    maxDepth: null,
+    substituteRegex: null,
+    runOnEdit: true,
+    passthrough: {},
+  }
   library.presets['debug-preset'] = {
     id: 'debug-preset',
     name: 'Debug Preset',
@@ -109,7 +163,11 @@ function createDebugPresetLibrary(): PresetCompatLibrary {
     ],
     promptOrderLists: { rewrite: ['debug-user-rule'] },
     embeddedRegexes: [],
-    attachedStandaloneRegexIds: [],
+    attachedStandaloneRegexIds: mode === 'rewrite-output'
+      ? ['rewrite-output-regex']
+      : mode === 'stream-output'
+        ? ['stream-output-regex']
+        : [],
     runtimeSampler: {
       temperature: 0.51,
       topP: null,
@@ -307,6 +365,57 @@ describe('llm debug logging', () => {
     expect(log.request.body.messages?.at(-1)?.content).toContain('DEBUG PRESET USER RULE')
   })
 
+  it('writes route-level debug artifacts with pre/post regex candidate text for rewrite responses', async () => {
+    await createTempRoot()
+    process.env.LLM_DEBUG_LOG = '1'
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings(),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createDebugPresetLibrary('rewrite-output'),
+    }))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT one', 'RAW OUTPUT two', 'RAW OUTPUT three'] }) } }],
+    }), { status: 200 })))
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(new Request('http://localhost/api/rewrite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceText: 'source marker',
+        selectedText: 'selected marker',
+        prompt: 'prompt marker',
+        userInstruction: 'instruction marker',
+        operationType: 'rewrite',
+        mode: 'heavy',
+        tone: 'dramatic',
+        scope: 'selection',
+        stream: false,
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      candidates: [
+        { content: 'CLEAN OUTPUT one' },
+        { content: 'CLEAN OUTPUT two' },
+        { content: 'CLEAN OUTPUT three' },
+      ],
+    })
+
+    const logs = await readLogs('rewrite')
+    expect(logs).toHaveLength(2)
+    const providerLog = logs.find((log) => log.stage !== 'output-runtime')
+    const runtimeLog = logs.find((log) => log.stage === 'output-runtime')
+    expect(providerLog?.response.rawText).toContain('RAW OUTPUT one')
+    expect(runtimeLog?.response.outputTransform?.candidates).toEqual([
+      { preRegexText: 'RAW OUTPUT one', postRegexText: 'CLEAN OUTPUT one' },
+      { preRegexText: 'RAW OUTPUT two', postRegexText: 'CLEAN OUTPUT two' },
+      { preRegexText: 'RAW OUTPUT three', postRegexText: 'CLEAN OUTPUT three' },
+    ])
+  })
+
   it('writes knowledge extraction logs into the knowledge-extraction folder', async () => {
     await createTempRoot()
     process.env.LLM_DEBUG_LOG = '1'
@@ -380,6 +489,61 @@ describe('llm debug logging', () => {
     expect(log.streamed).toBe(true)
     expect(log.request.body.messages?.[1]?.content).toBe('user prompt marker')
     expect(log.response.rawText).toBe('AlphaBeta')
+  })
+
+  it('writes route-level debug artifacts with pre/post regex text for streamed rewrites', async () => {
+    await createTempRoot()
+    process.env.LLM_DEBUG_LOG = '1'
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('ollama'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createDebugPresetLibrary('stream-output'),
+    }))
+    vi.doMock('@/lib/server/persistence', () => ({
+      findAppSettings: () => [],
+    }))
+    const streamBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder()
+        controller.enqueue(encoder.encode('{"message":{"content":"Alpha"},"done":false}\n'))
+        controller.enqueue(encoder.encode('{"message":{"content":"Beta"},"done":true}\n'))
+        controller.close()
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ models: [{ model: 'ollama-model' }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(streamBody, { status: 200 })))
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(new Request('http://localhost/api/rewrite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceText: 'source marker',
+        selectedText: 'selected marker',
+        prompt: 'prompt marker',
+        userInstruction: 'instruction marker',
+        operationType: 'rewrite',
+        mode: 'heavy',
+        tone: 'dramatic',
+        scope: 'selection',
+        stream: true,
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    await expect(response.text()).resolves.toBe('Omega')
+
+    const logs = await readLogs('rewrite')
+    expect(logs).toHaveLength(2)
+    const providerLog = logs.find((log) => log.stage !== 'output-runtime')
+    const runtimeLog = logs.find((log) => log.stage === 'output-runtime')
+    expect(providerLog?.response.rawText).toBe('AlphaBeta')
+    expect(runtimeLog?.response.outputTransform).toEqual({
+      preRegexText: 'AlphaBeta',
+      postRegexText: 'Omega',
+    })
   })
 
   it('writes Ollama knowledge extraction logs into the knowledge-extraction folder', async () => {

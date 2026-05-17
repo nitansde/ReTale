@@ -6,12 +6,13 @@ import {
   resolveCreativeRoutePresetCompatMetadata,
   serializePresetCompatResponseMetadata,
 } from '@/lib/preset-compat/runtime-integration'
-import { transformBufferedTextStream } from '@/lib/preset-compat/stream-buffer'
+import { bufferAndTransformTextStream } from '@/lib/preset-compat/stream-buffer'
 import {
   buildFallbackRewriteStream,
   generateRewriteWithOpenAICompatible,
   streamRewriteWithOpenAICompatible,
 } from '@/lib/server/openai-compatible'
+import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
 import { generateRewriteWithOllama, streamRewriteWithOllama } from '@/lib/server/ollama-local'
 import type { PresetCompatPromptRuleRuntimeContext, PresetCompatRuntimeContextBlock } from '@/lib/preset-compat/types'
 import type { GenerationContextBlock } from '@/lib/server/context-builder'
@@ -66,6 +67,11 @@ function normalizePresetCompatRuntimeContext(
   const namedTranscript = runtimeContext.namedTranscript && typeof runtimeContext.namedTranscript === 'object' && !Array.isArray(runtimeContext.namedTranscript)
     ? runtimeContext.namedTranscript as Record<string, unknown>
     : null
+  const explicitProtagonistName = typeof runtimeContext.protagonistName === 'string'
+    ? runtimeContext.protagonistName.trim()
+    : typeof runtimeContext.macroUserName === 'string'
+      ? runtimeContext.macroUserName.trim()
+      : ''
 
   return {
     sessionPhase: sessionPhase === 'new_chat'
@@ -86,7 +92,18 @@ function normalizePresetCompatRuntimeContext(
           assistantName: typeof namedTranscript.assistantName === 'string' ? namedTranscript.assistantName : null,
         }
       : null,
+    protagonistName: explicitProtagonistName || inferProtagonistNameFromPromptBlocks(promptBlocks),
   }
+}
+
+function inferProtagonistNameFromPromptBlocks(promptBlocks: readonly GenerationContextBlock[] | null) {
+  const charactersBlock = promptBlocks?.find((block) => block.id === 'characters')
+  if (!charactersBlock) return null
+
+  const match = charactersBlock.content.match(/^\s*-\s*([^｜|\n]+)[｜|]/m)
+  const name = match?.[1]?.trim() ?? ''
+  if (!name || name.startsWith('未命中')) return null
+  return name
 }
 
 function fallbackCandidates(sourceText: string, mode: string, tone: string, prompt: string) {
@@ -173,6 +190,38 @@ function buildRouteContextBlocks(promptBlocks: readonly GenerationContextBlock[]
         content: block.content,
       }))
     : null
+}
+
+async function writeRewriteOutputRuntimeDebugArtifact(params: {
+  request: Request
+  body: unknown
+  runtime: ReturnType<typeof applyPresetCompatCreativeRuntime>
+  streamed: boolean
+  presetCompatMetadata: unknown
+  outputTransform: {
+    preRegexText?: string
+    postRegexText?: string
+    candidates?: Array<{
+      preRegexText: string
+      postRegexText: string
+    }>
+  }
+}) {
+  await writeLlmDebugLog({
+    folder: 'rewrite',
+    provider: params.runtime.resolvedRuntime.providerRuntime.provider,
+    model: params.runtime.resolvedRuntime.providerRuntime.config.model ?? 'unknown',
+    streamed: params.streamed,
+    stage: 'output-runtime',
+    presetCompat: params.presetCompatMetadata,
+    request: {
+      url: params.request.url,
+      body: params.body,
+    },
+    response: {
+      outputTransform: params.outputTransform,
+    },
+  })
 }
 
 export async function POST(request: Request) {
@@ -285,11 +334,31 @@ export async function POST(request: Request) {
       : await streamRewriteWithOllama(promptPayload, runtime.resolvedRuntime.providerRuntime.config)
 
     if (streamResult.enabled && streamResult.stream) {
-      const responseStream = runtime.hasActiveOutputRegex
-        ? await transformBufferedTextStream(streamResult.stream, (value) => runtime.applyOutputRuntime(value).value)
-        : streamResult.stream
+      if (runtime.hasActiveOutputRegex) {
+        const transformedStream = await bufferAndTransformTextStream(streamResult.stream, (value) => runtime.applyOutputRuntime(value).value)
 
-      return new Response(responseStream, {
+        await writeRewriteOutputRuntimeDebugArtifact({
+          request,
+          body,
+          runtime,
+          streamed: true,
+          presetCompatMetadata,
+          outputTransform: {
+            preRegexText: transformedStream.rawText,
+            postRegexText: transformedStream.transformedText,
+          },
+        })
+
+        return new Response(transformedStream.stream, {
+          headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'no-cache, no-transform',
+            'X-ChatBook-Preset-Compat': presetCompatHeader,
+          },
+        })
+      }
+
+      return new Response(streamResult.stream, {
         headers: {
           'Content-Type': 'text/plain; charset=utf-8',
           'Cache-Control': 'no-cache, no-transform',
@@ -331,15 +400,34 @@ export async function POST(request: Request) {
     : await generateRewriteWithOllama(rewriteInput, runtime.resolvedRuntime.providerRuntime.config)
 
   if (result.enabled && result.content?.length) {
-    const candidates = result.content.map((content) => runtime.applyOutputRuntime(content).value)
+    const transformedCandidates = result.content.map((content) => {
+      const outputRuntime = runtime.applyOutputRuntime(content)
+      return {
+        preRegexText: content,
+        postRegexText: outputRuntime.value,
+      }
+    })
+
+    if (runtime.hasActiveOutputRegex) {
+      await writeRewriteOutputRuntimeDebugArtifact({
+        request,
+        body,
+        runtime,
+        streamed: false,
+        presetCompatMetadata,
+        outputTransform: {
+          candidates: transformedCandidates,
+        },
+      })
+    }
 
     return NextResponse.json({
       provider: runtime.resolvedRuntime.providerRuntime.provider,
       metadata: runtime.metadata,
-      candidates: candidates.map((content, index) => ({
+      candidates: transformedCandidates.map(({ postRegexText }, index) => ({
         title: `候选 ${String.fromCharCode(65 + index)}`,
         summary: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible' ? '来自 OpenAI-compatible API' : '来自 Ollama 本地模型',
-        content,
+        content: postRegexText,
       })),
       presetCompat: presetCompatMetadata,
     }, {

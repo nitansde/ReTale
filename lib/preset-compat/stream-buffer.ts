@@ -36,10 +36,24 @@ export function createBufferedTextStream(text: string) {
   })
 }
 
+export async function bufferAndTransformTextStream(
+  stream: ReadableStream<Uint8Array>,
+  transform: (value: string) => string
+) {
+  const rawText = await readBufferedTextStream(stream)
+  const transformedText = transform(rawText)
+
+  return {
+    rawText,
+    transformedText,
+    stream: createBufferedTextStream(transformedText),
+  }
+}
+
 export async function transformBufferedTextStream(
   stream: ReadableStream<Uint8Array>,
   transform: (value: string) => string
 ) {
-  const text = await readBufferedTextStream(stream)
-  return createBufferedTextStream(transform(text))
+  const result = await bufferAndTransformTextStream(stream, transform)
+  return result.stream
 }

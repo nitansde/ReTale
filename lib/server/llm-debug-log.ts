@@ -4,6 +4,17 @@ import path from 'node:path'
 
 export type LlmDebugProvider = 'openai-compatible' | 'ollama'
 
+export type LlmDebugOutputTransformCandidate = {
+  preRegexText: string
+  postRegexText: string
+}
+
+export type LlmDebugOutputTransform = {
+  preRegexText?: string
+  postRegexText?: string
+  candidates?: LlmDebugOutputTransformCandidate[]
+}
+
 export type LlmDebugLogParams = {
   folder: string
   provider: LlmDebugProvider
@@ -21,6 +32,7 @@ export type LlmDebugLogParams = {
     status?: number
     rawText?: string
     parsed?: unknown
+    outputTransform?: LlmDebugOutputTransform
     error?: string
     partial?: boolean
   }
