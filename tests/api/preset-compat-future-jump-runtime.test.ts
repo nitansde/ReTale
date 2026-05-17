@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { PresetCompatMacroDiagnostic } from '@/lib/preset-compat/macro-context'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 import type { AISettings } from '@/lib/types'
@@ -169,6 +170,110 @@ function createRuntimeLibrary() {
       ...library.surfaceBindings[surfaceId],
       enabled: true,
       presetId: 'future-jump-preset',
+    }
+  }
+
+  return library
+}
+
+function createMacroRuntimeLibrary() {
+  const library = createDefaultPresetCompatLibrary()
+
+  library.presets['future-jump-macro-preset'] = {
+    id: 'future-jump-macro-preset',
+    name: 'Future jump macro preset',
+    sourceApiId: 'openai',
+    promptRules: [
+      {
+        id: 'fj-macro-user-rule',
+        name: 'Future jump macro user rule',
+        role: 'user',
+        content: 'Future rewrite {{user}} -> {{char}}. Unsupported={{input}} Missing={{lastMessage}}.',
+        enabled: true,
+        marker: false,
+        injectAsSystemPrompt: false,
+        injectionPosition: 'before',
+        injectionDepth: null,
+        injectionOrder: 1,
+        injectionTrigger: [],
+        forbidOverrides: false,
+        condition: null,
+        passthrough: {},
+      },
+    ],
+    promptOrderLists: {
+      future_jump_rewrite: ['fj-macro-user-rule'],
+      future_jump_bridge: ['fj-macro-user-rule'],
+      what_if_delta_extraction: ['fj-macro-user-rule'],
+      knowledge_extraction: ['fj-macro-user-rule'],
+      embeddings: ['fj-macro-user-rule'],
+    },
+    embeddedRegexes: [],
+    attachedStandaloneRegexIds: [],
+    runtimeSampler: {
+      temperature: 0.44,
+      topP: null,
+      topK: null,
+      topA: null,
+      minP: null,
+      presencePenalty: null,
+      frequencyPenalty: null,
+      repetitionPenalty: null,
+      openaiMaxContext: null,
+      maxTokens: 3333,
+      seed: 1357,
+      candidateCount: null,
+    },
+    promptTemplate: {
+      namesBehavior: 1,
+      sendIfEmpty: null,
+      impersonationPrompt: null,
+      newChatPrompt: null,
+      newGroupChatPrompt: null,
+      newExampleChatPrompt: null,
+      continueNudgePrompt: null,
+      wiFormat: null,
+      scenarioFormat: null,
+      personalityFormat: null,
+      groupNudgePrompt: null,
+      assistantPrefill: null,
+      assistantImpersonation: null,
+      continuePostfix: null,
+      legacyMainPrompt: null,
+      legacyNsfwPrompt: null,
+      legacyJailbreakPrompt: null,
+    },
+    transport: {
+      maxContextUnlocked: null,
+      streamOpenAI: null,
+      useSysprompt: null,
+      squashSystemMessages: null,
+      mediaInlining: null,
+      inlineImageQuality: null,
+      continuePrefill: null,
+      functionCalling: null,
+      showThoughts: null,
+      reasoningEffort: null,
+      verbosity: null,
+      enableWebSearch: null,
+      requestImages: null,
+      requestImageAspectRatio: null,
+      requestImageResolution: null,
+    },
+    preservedFields: {
+      biasPresetSelected: null,
+    },
+    passthrough: {},
+    importWarnings: [],
+    createdAt: '2026-05-15T00:00:00.000Z',
+    updatedAt: '2026-05-15T00:00:00.000Z',
+  }
+
+  for (const surfaceId of ['future_jump_rewrite', 'future_jump_bridge', 'what_if_delta_extraction', 'knowledge_extraction', 'embeddings'] as const) {
+    library.surfaceBindings[surfaceId] = {
+      ...library.surfaceBindings[surfaceId],
+      enabled: true,
+      presetId: 'future-jump-macro-preset',
     }
   }
 
@@ -464,5 +569,81 @@ describe('preset compat future jump runtime', () => {
     expect(embeddingBody.input).toBe('ALPHA embedding text')
     expect(embeddingBody.temperature).toBeUndefined()
     expect(embeddingBody.top_p).toBeUndefined()
+  })
+
+  it('expands macro-bearing bound presets into future-jump rewrite payloads and returns macro diagnostics metadata', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings(),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createMacroRuntimeLibrary(),
+    }))
+
+    const database = await createTestDatabase('chatbook-preset-compat-future-jump-macro-runtime')
+    seedFutureJumpFixture(database)
+
+    const bridgeSummary = '桥'.repeat(350)
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ bridgeSummary }) } }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ generatedTargetText: 'future text', titleHint: 'future title', subtitleHint: 'future subtitle' }) } }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const service = await import('@/lib/server/future-jump-service')
+    const result = await service.generateFutureJump({
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      whatIfSessionId: 'what-if-001',
+      targetOutlineNodeId: 'outline-100',
+      targetOutlineChapterId: 'outline-anchor-100',
+      userDirection: '让结果保持可预测。',
+      presetCompatRuntimeContext: {
+        namedTranscript: {
+          kind: 'chat',
+          userName: 'Alice',
+          assistantName: 'Bob',
+        },
+        surfaceContextBlocks: [
+          {
+            id: 'named-transcript',
+            label: 'Named Transcript',
+            content: 'Alice: hello\nBob: hi',
+            abstraction: 'named_transcript',
+          },
+        ],
+      },
+    })
+
+    expect(result.metadata?.macroDiagnostics).toEqual([
+      {
+        code: 'UNSUPPORTED_MACRO',
+        message: 'Macro is not supported on future_jump_rewrite: input',
+        macroName: 'input',
+        surfaceId: 'future_jump_rewrite',
+        phase: 'apply-runtime',
+      },
+      {
+        code: 'MISSING_CONTEXT_VALUE',
+        message: 'Macro requires runtime context value: lastmessage',
+        macroName: 'lastmessage',
+        surfaceId: 'future_jump_rewrite',
+        phase: 'apply-runtime',
+      },
+    ] satisfies PresetCompatMacroDiagnostic[])
+
+    const bridgeBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    expect(bridgeBody.messages[1]?.content).toContain('ALPHA')
+    expect(bridgeBody.messages[1]?.content).not.toContain('Alice')
+    expect(bridgeBody.messages[1]?.content).not.toContain('Bob')
+
+    const rewriteBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    expect(rewriteBody.messages[1]?.content).toContain('Future rewrite Alice -> Bob.')
+    expect(rewriteBody.messages[1]?.content).not.toContain('{{user}}')
+    expect(rewriteBody.messages[1]?.content).not.toContain('{{char}}')
+    expect(rewriteBody.messages[1]?.content).not.toContain('{{input}}')
+    expect(rewriteBody.messages[1]?.content).not.toContain('{{lastMessage}}')
   })
 })

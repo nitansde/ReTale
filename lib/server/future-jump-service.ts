@@ -36,6 +36,8 @@ import type {
   WhatIfDeltaRecord,
   WhatIfSessionDetail,
 } from '@/lib/story-branch-types'
+import type { PresetCompatRuntimeMetadata } from '@/lib/preset-compat/runtime-integration'
+import type { PresetCompatPromptRuleRuntimeContext } from '@/lib/preset-compat/types'
 import { uid } from '@/lib/utils'
 
 const BRIDGE_SUMMARY_MIN_LENGTH = 300
@@ -51,6 +53,7 @@ type GenerateFutureJumpInput = {
   targetOutlineChapterId: string
   parentTimelineNodeId?: string | null
   userDirection?: string
+  presetCompatRuntimeContext?: PresetCompatPromptRuleRuntimeContext
 }
 
 type ReviseFutureJumpInput = {
@@ -58,6 +61,7 @@ type ReviseFutureJumpInput = {
   branchId: string
   runId: string
   userFeedback: string
+  presetCompatRuntimeContext?: PresetCompatPromptRuleRuntimeContext
 }
 
 type FutureJumpMutationResult = {
@@ -65,6 +69,7 @@ type FutureJumpMutationResult = {
   revision: FutureJumpRevisionRecord
   titleHint: string | null
   subtitleHint: string | null
+  metadata: PresetCompatRuntimeMetadata | null
 }
 
 type LoadedFutureJumpGenerationContext = {
@@ -755,6 +760,7 @@ export async function generateTargetNodeRewrite(params: {
   bridgeSummary: string
   userDirection?: string
   userFeedback?: string
+  presetCompatRuntimeContext?: PresetCompatPromptRuleRuntimeContext
 }) {
   const rewriteSettings = loadStoredAISettings().rewrite
   const runtime = applyPresetCompatCreativeRuntime({
@@ -777,9 +783,10 @@ export async function generateTargetNodeRewrite(params: {
       userDirection: params.userDirection?.trim() || '',
       userFeedback: params.userFeedback,
     }),
+    promptRuleRuntimeContext: params.presetCompatRuntimeContext,
   })
 
-  return await runValidatedStage({
+  const result = await runValidatedStage({
     stage: 'rewrite',
     systemPrompt: runtime.systemPrompt,
     userPrompt: runtime.userPrompt,
@@ -797,6 +804,11 @@ export async function generateTargetNodeRewrite(params: {
       ? { openAICompatible: runtime.resolvedRuntime.providerRuntime.config }
       : { ollama: runtime.resolvedRuntime.providerRuntime.config },
   })
+
+  return {
+    ...result,
+    metadata: runtime.metadata,
+  }
 }
 
 export async function generateFutureJump(input: GenerateFutureJumpInput): Promise<FutureJumpMutationResult> {
@@ -841,6 +853,7 @@ export async function generateFutureJump(input: GenerateFutureJumpInput): Promis
       context,
       bridgeSummary,
       userDirection: input.userDirection,
+      presetCompatRuntimeContext: input.presetCompatRuntimeContext,
     })
     const run = await appendFutureJumpRevision({
       runId: pendingRun.id,
@@ -865,6 +878,7 @@ export async function generateFutureJump(input: GenerateFutureJumpInput): Promis
       revision,
       titleHint: rewrite.titleHint,
       subtitleHint: rewrite.subtitleHint,
+      metadata: rewrite.metadata,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Future jump generation failed'
@@ -904,6 +918,7 @@ export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<Fu
       bridgeSummary,
       userDirection: run.userDirection,
       userFeedback,
+      presetCompatRuntimeContext: input.presetCompatRuntimeContext,
     })
     const nextRun = await appendFutureJumpRevision({
       runId: run.id,
@@ -928,6 +943,7 @@ export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<Fu
       revision,
       titleHint: rewrite.titleHint,
       subtitleHint: rewrite.subtitleHint,
+      metadata: rewrite.metadata,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Future jump revision failed'
