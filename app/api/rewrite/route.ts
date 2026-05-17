@@ -123,19 +123,6 @@ function buildFallbackText(sourceText: string, mode: string, tone: string, promp
   return fallbackCandidates(sourceText, mode, tone, prompt)[0]?.content ?? sourceText
 }
 
-function buildSystemPrompt() {
-  return [
-    '你是 ChatBook 的小说扩写/魔改写作模型。',
-    '你必须严格遵守给定的小说世界状态、人物关系、事件线和设定。',
-    '你只能使用上下文中提供的截至当前章节的信息。',
-    '不要引入未来章节事实。',
-    '不要擅自改变已确认的人物状态、阵营、关系和世界规则。',
-    '如果用户要求魔改，可以改变当前片段及其后续走向，但不得和当前章节之前的事实矛盾。',
-    '保持原文文风、叙事视角、人称、节奏和人物口吻。',
-    '优先输出可直接替换或插入到小说中的正文，不要解释。',
-  ].join('\n')
-}
-
 function normalizeOperationType(value: unknown) {
   const operationType = String(value ?? 'expand').trim()
   if (operationType === 'expand' || operationType === 'rewrite' || operationType === 'roleplay' || operationType === 'polish' || operationType === 'continue') {
@@ -253,7 +240,6 @@ export async function POST(request: Request) {
   const activePromptBlocks = context
     ? context.promptBlocks.filter((block) => !disabledBlockIds.includes(block.id))
     : null
-  const baseSystemPrompt = buildSystemPrompt()
   const buildRuntime = (
     assembledContext: string,
     promptBlocks: readonly GenerationContextBlock[] | null,
@@ -270,7 +256,7 @@ export async function POST(request: Request) {
         request: { temperature: body.tone === 'keep' ? 0.7 : 0.9 },
       },
     },
-    systemPrompt: baseSystemPrompt,
+    systemPrompt: '',
     userPrompt: buildUserPrompt({
       operationType,
       userInstruction,

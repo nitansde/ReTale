@@ -110,6 +110,10 @@ function createCreativeLibrary(mode: 'default' | 'stream' = 'default'): PresetCo
 
   for (const surfaceId of CREATIVE_SURFACES) {
     const presetId = `${surfaceId}-preset`
+    library.builtinSystemPrompts[surfaceId] = {
+      ...library.builtinSystemPrompts[surfaceId],
+      content: `${surfaceId.toUpperCase()} CHATBOOK BUILTIN SYSTEM`,
+    }
     library.presets[presetId] = {
       id: presetId,
       name: `${surfaceId} preset`,
@@ -521,6 +525,7 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.max_tokens).toBe(2222)
     expect(requestBody.seed).toBeUndefined()
     expect(requestBody.messages[0]?.content).toBe([
+      `${surfaceId.toUpperCase()} CHATBOOK BUILTIN SYSTEM`,
       `${surfaceId.toUpperCase()} SYSTEM RULE`,
       `${surfaceId.toUpperCase()} SECOND SYSTEM RULE`,
     ].join('\n\n'))
