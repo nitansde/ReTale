@@ -22,35 +22,58 @@ function createPreset(): PresetCompatPresetRecord {
       temperature: 0.81,
       topP: 0.92,
       topK: 40,
+      topA: 0.25,
       minP: 0.07,
       presencePenalty: 0.31,
       frequencyPenalty: 0.22,
       repetitionPenalty: 1.14,
+      openaiMaxContext: 2000000,
       maxTokens: 4096,
+      seed: 123456,
+      candidateCount: null,
+    },
+    promptTemplate: {
+      namesBehavior: 0,
+      sendIfEmpty: '',
+      impersonationPrompt: '',
+      newChatPrompt: '',
+      newGroupChatPrompt: '',
+      newExampleChatPrompt: '',
+      continueNudgePrompt: '',
+      wiFormat: '',
+      scenarioFormat: '',
+      personalityFormat: '',
+      groupNudgePrompt: '',
+      assistantPrefill: null,
+      assistantImpersonation: null,
+      continuePostfix: null,
+      legacyMainPrompt: null,
+      legacyNsfwPrompt: null,
+      legacyJailbreakPrompt: null,
+    },
+    transport: {
+      maxContextUnlocked: true,
+      streamOpenAI: true,
+      useSysprompt: null,
+      squashSystemMessages: null,
+      mediaInlining: null,
+      inlineImageQuality: null,
+      continuePrefill: null,
+      functionCalling: true,
+      showThoughts: true,
+      reasoningEffort: 'high',
+      verbosity: null,
+      enableWebSearch: null,
+      requestImages: null,
+      requestImageAspectRatio: null,
+      requestImageResolution: null,
+    },
+    preservedFields: {
+      biasPresetSelected: 'Default (none)',
     },
     passthrough: {
       root: {
-        top_a: 0.25,
-        openai_max_context: 2000000,
-        max_context_unlocked: true,
-        names_behavior: 0,
-        send_if_empty: '',
-        impersonation_prompt: '',
-        new_chat_prompt: '',
-        new_group_chat_prompt: '',
-        new_example_chat_prompt: '',
-        continue_nudge_prompt: '',
-        bias_preset_selected: 'Default (none)',
-        wi_format: '',
-        scenario_format: '',
-        personality_format: '',
-        group_nudge_prompt: '',
-        stream_openai: true,
-        function_calling: true,
-        show_thoughts: true,
-        reasoning_effort: 'high',
         image_inlining: true,
-        seed: 123456,
       },
       extensions: {
         SPreset: {
@@ -170,9 +193,6 @@ describe('preset compat provider capabilities', () => {
       'Preset field `min_p` was preserved for export but not applied to openai-compatible.',
       'Preset field `repetition_penalty` was preserved for export but not applied to openai-compatible.',
       'Preset field `top_a` was preserved for export but not applied to openai-compatible.',
-      'Preset field `openai_max_context` was preserved for export but not applied to openai-compatible.',
-      'Preset field `max_context_unlocked` was preserved for export but not applied to openai-compatible.',
-      'Preset field `stream_openai` was preserved for export but not applied to openai-compatible.',
       'Preset field `function_calling` was preserved for export but not applied to openai-compatible.',
       'Preset field `show_thoughts` was preserved for export but not applied to openai-compatible.',
       'Preset field `reasoning_effort` was preserved for export but not applied to openai-compatible.',
@@ -248,5 +268,57 @@ describe('preset compat provider capabilities', () => {
       'Preset extension `SPreset` was preserved for export but not applied to ollama.',
     ]))
     expect(runtime.providerRuntime.provider).toBe('ollama')
+  })
+
+  it('tolerates missing transport, promptTemplate, and preservedFields structures from legacy stored shapes', () => {
+    const library = createDefaultPresetCompatLibrary()
+    const preset = createPreset() as unknown as Record<string, unknown>
+    delete preset.transport
+    delete preset.promptTemplate
+    delete preset.preservedFields
+    library.presets['legacy-shape'] = preset as unknown as PresetCompatPresetRecord
+    library.surfaceBindings.rewrite = {
+      ...library.surfaceBindings.rewrite,
+      presetId: 'legacy-shape',
+      enabled: true,
+    }
+
+    const runtime = resolvePresetCompatRuntime({
+      library,
+      surfaceId: 'rewrite',
+      providerDefaults: {
+        provider: 'openai-compatible',
+        openAICompatible: {
+          config: {
+            baseUrl: 'https://default.example/v1',
+            apiKey: 'default-key',
+            model: 'default-model',
+          },
+          request: {
+            temperature: 0.4,
+          },
+        },
+      },
+    })
+
+    expect(runtime.providerRuntime).toEqual({
+      provider: 'openai-compatible',
+      config: {
+        baseUrl: 'https://default.example/v1',
+        apiKey: 'default-key',
+        model: 'default-model',
+      },
+      request: {
+        temperature: 0.81,
+        top_p: 0.92,
+        frequency_penalty: 0.22,
+        presence_penalty: 0.31,
+        max_tokens: 4096,
+      },
+    })
+    expect(runtime.warnings).not.toEqual(expect.arrayContaining([
+      expect.stringContaining('max_context_unlocked'),
+      expect.stringContaining('send_if_empty'),
+    ]))
   })
 })

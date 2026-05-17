@@ -5,7 +5,7 @@ import type {
   OpenAICompatibleProviderSettings,
 } from '@/lib/types'
 import {
-  PRESET_COMPAT_PROMPT_RULE_PRESERVED_ONLY_FIELDS,
+  PRESET_COMPAT_FIELD_FAMILY_MATRIX,
   PRESET_COMPAT_PROMPT_RULE_SUPPORTED_ROLES,
   getPresetCompatProviderCapability,
   isPresetCompatImageRequestField,
@@ -13,12 +13,21 @@ import {
   type PresetCompatProviderSamplerField,
 } from '@/lib/preset-compat/capability-matrix'
 import type {
+  PresetCompatNamedTranscriptContext,
   PresetCompatLibrary,
   PresetCompatPresetRecord,
   PresetCompatPromptRule,
+  PresetCompatPromptTemplateSettings,
+  PresetCompatPromptRuleRuntimeContext,
+  PresetCompatRuntimeContextBlock,
+  PresetCompatResolvedFieldStatus,
+  PresetCompatResolvedProviderControlIntent,
   PresetCompatRuntimePromptRuleRole,
   PresetCompatRuntimeSnapshot,
+  PresetCompatStatusReasonCode,
   PresetCompatSurfaceId,
+  PresetCompatTransportSettings,
+  PresetCompatPreservedFieldSettings,
 } from '@/lib/preset-compat/types'
 
 type PresetCompatOpenAICompatibleRequest = Partial<{
@@ -57,15 +66,46 @@ export type PresetCompatResolvedPromptRule = {
   id: string
   name: string
   role: PresetCompatRuntimePromptRuleRole
+  channel: 'system' | 'user'
   content: string
   sourceIndex: number
+  injectionPosition: PresetCompatPromptRule['injectionPosition']
+  injectionDepth: number | null
   injectionOrder: number | null
+  forbidOverrides: boolean
 }
 
 export type PresetCompatResolvedPromptRuleSet = {
   ordered: PresetCompatResolvedPromptRule[]
   system: PresetCompatResolvedPromptRule[]
   user: PresetCompatResolvedPromptRule[]
+}
+
+export type PresetCompatResolvedTemplateFragment = {
+  field: string
+  channel: 'system' | 'user'
+  placement?: 'append'
+  text: string
+}
+
+export type PresetCompatResolvedTemplateFragmentSet = {
+  ordered: PresetCompatResolvedTemplateFragment[]
+  system: PresetCompatResolvedTemplateFragment[]
+  user: PresetCompatResolvedTemplateFragment[]
+}
+
+export type PresetCompatResolvedContextBlockFormat = {
+  field: 'wi_format' | 'scenario_format' | 'personality_format'
+  abstraction: 'world_info' | 'scenario' | 'personality'
+  format: string
+  blockIds: string[]
+}
+
+export type PresetCompatResolvedNamesBehavior = {
+  mode: number
+  kind: 'chat' | 'roleplay'
+  userName: string
+  assistantName: string
 }
 
 export type PresetCompatResolvedProviderRuntime =
@@ -86,14 +126,33 @@ export type PresetCompatResolvedRuntime = {
   snapshot: PresetCompatRuntimeSnapshot
   activePreset: PresetCompatPresetRecord | null
   providerRuntime: PresetCompatResolvedProviderRuntime
+  templateFragments: PresetCompatResolvedTemplateFragmentSet
+  contextBlockFormats: PresetCompatResolvedContextBlockFormat[]
+  namesBehavior: PresetCompatResolvedNamesBehavior | null
   promptRules: PresetCompatResolvedPromptRuleSet
   warnings: string[]
+  fieldStatuses: PresetCompatResolvedFieldStatus[]
+  providerControlIntents: PresetCompatResolvedProviderControlIntent[]
   preservedSamplerFields: Record<string, unknown>
   preservedPromptMetadata: Array<{
     ruleId: string
-    metadata: Partial<Record<(typeof PRESET_COMPAT_PROMPT_RULE_PRESERVED_ONLY_FIELDS)[number], unknown>>
+    metadata: Record<string, unknown>
   }>
 }
+
+type PresetCompatResolvedPromptRuleCandidate = {
+  resolvedRule: PresetCompatResolvedPromptRule
+  rule: PresetCompatPromptRule
+}
+
+const PRESET_COMPAT_ALLOWED_PROMPT_RULE_TRIGGERS = new Set([
+  'new_chat',
+  'new_group_chat',
+  'new_example_chat',
+  'continue',
+  'group',
+  'impersonation',
+])
 
 type PresetCompatRuntimeContext = {
   preset: PresetCompatPresetRecord | null
@@ -113,9 +172,40 @@ function getPresetRootPassthrough(preset: PresetCompatPresetRecord | null) {
   return isRecord(root) ? root : {}
 }
 
+function getPresetSeed(preset: PresetCompatPresetRecord | null) {
+  const samplerSeed = preset?.runtimeSampler.seed
+  if (isFiniteNumber(samplerSeed)) {
+    return samplerSeed
+  }
+
+  const root = getPresetRootPassthrough(preset)
+  return isFiniteNumber(root.seed) ? root.seed : null
+}
+
 function getPresetExtensionsPassthrough(preset: PresetCompatPresetRecord | null) {
   const extensions = preset?.passthrough.extensions
   return isRecord(extensions) ? extensions : {}
+}
+
+function getPresetTransport(preset: PresetCompatPresetRecord | null) {
+  const transport = preset?.transport
+  return (isRecord(transport) ? transport : {}) as Partial<PresetCompatTransportSettings>
+}
+
+function getPresetPromptTemplate(preset: PresetCompatPresetRecord | null) {
+  const promptTemplate = preset?.promptTemplate
+  return (isRecord(promptTemplate) ? promptTemplate : {}) as Partial<PresetCompatPromptTemplateSettings>
+}
+
+function getPresetPreservedFields(preset: PresetCompatPresetRecord | null) {
+  const preservedFields = preset?.preservedFields
+  return (isRecord(preservedFields) ? preservedFields : {}) as Partial<PresetCompatPreservedFieldSettings>
+}
+
+function getPromptRuleInjectionTriggers(rule: PresetCompatPromptRule) {
+  return Array.isArray(rule.injectionTrigger)
+    ? rule.injectionTrigger.filter((trigger): trigger is string => typeof trigger === 'string' && trigger.trim().length > 0)
+    : []
 }
 
 function getPresetBoundToSurface(library: PresetCompatLibrary, surfaceId: PresetCompatSurfaceId) {
@@ -128,18 +218,18 @@ function getPresetBoundToSurface(library: PresetCompatLibrary, surfaceId: Preset
 }
 
 function pickNumericPresetFields(context: PresetCompatRuntimeContext) {
-  const root = getPresetRootPassthrough(context.preset)
-
   return {
     temperature: context.preset?.runtimeSampler.temperature ?? null,
     top_p: context.preset?.runtimeSampler.topP ?? null,
     top_k: context.preset?.runtimeSampler.topK ?? null,
+    top_a: context.preset?.runtimeSampler.topA ?? null,
     min_p: context.preset?.runtimeSampler.minP ?? null,
     presence_penalty: context.preset?.runtimeSampler.presencePenalty ?? null,
     frequency_penalty: context.preset?.runtimeSampler.frequencyPenalty ?? null,
     repetition_penalty: context.preset?.runtimeSampler.repetitionPenalty ?? null,
     openai_max_tokens: context.preset?.runtimeSampler.maxTokens ?? null,
-    seed: isFiniteNumber(root.seed) ? root.seed : null,
+    openai_max_context: context.preset?.runtimeSampler.openaiMaxContext ?? null,
+    seed: getPresetSeed(context.preset),
   } satisfies Partial<Record<PresetCompatProviderSamplerField, number | null>>
 }
 
@@ -167,17 +257,209 @@ function mergeOllamaRequest(
   }
 }
 
+function getFieldSurfaceClassification(
+  field: string,
+  surfaceId: PresetCompatSurfaceId,
+  provider: AIProvider,
+) {
+  const contract = PRESET_COMPAT_FIELD_FAMILY_MATRIX[field]
+  if (!contract) {
+    return {
+      status: 'preserved' as const,
+      reason: 'PRESERVED_EXPORT_ONLY' as const,
+    }
+  }
+
+  if (contract.routeClassification && field === 'n') {
+    return contract.routeClassification
+  }
+
+  return contract.providerClassifications?.[provider] ?? contract.surfaceClassifications[surfaceId]
+}
+
+function createFieldStatus(params: {
+  field: string
+  surface: PresetCompatSurfaceId
+  provider: AIProvider | null
+  value: unknown
+  reason?: PresetCompatStatusReasonCode
+  status?: PresetCompatResolvedFieldStatus['status']
+  fragmentId?: string
+  fragmentName?: string
+  providerIntent?: PresetCompatResolvedProviderControlIntent
+}) : PresetCompatResolvedFieldStatus {
+  return {
+    field: params.field,
+    surface: params.surface,
+    status: params.status ?? 'preserved',
+    reason: params.reason ?? 'PRESERVED_EXPORT_ONLY',
+    provider: params.provider,
+    value: params.value,
+    ...(params.fragmentId ? { fragmentId: params.fragmentId } : {}),
+    ...(params.fragmentName ? { fragmentName: params.fragmentName } : {}),
+    ...(params.providerIntent ? { providerIntent: params.providerIntent } : {}),
+  }
+}
+
+function createProviderIntent(
+  provider: AIProvider,
+  field: string,
+  value: unknown,
+): PresetCompatResolvedProviderControlIntent | null {
+  if (value === null || typeof value === 'undefined') {
+    return null
+  }
+
+  const appliedPath = getPresetCompatProviderCapability(provider).appliedFields[field as PresetCompatProviderSamplerField]
+  if (appliedPath) {
+    return {
+      field,
+      provider,
+      target: 'request',
+      path: appliedPath,
+      value,
+    }
+  }
+
+  switch (field) {
+    case 'max_context_unlocked':
+      return {
+        field,
+        provider,
+        target: 'route',
+        path: 'contextWindow.unlockMaximum',
+        value,
+      }
+    case 'openai_max_context':
+      return {
+        field,
+        provider,
+        target: 'route',
+        path: 'contextWindow.maxContextTokens',
+        value,
+      }
+    case 'stream_openai':
+      return {
+        field,
+        provider,
+        target: 'route',
+        path: 'stream.enabled',
+        value,
+      }
+    case 'seed':
+      if (provider !== 'ollama') {
+        return null
+      }
+
+      return {
+        field,
+        provider,
+        target: 'request',
+        path: 'options.seed',
+        value,
+      }
+    case 'n':
+      return {
+        field,
+        provider,
+        target: 'route',
+        path: 'candidateCount',
+        value,
+      }
+    default:
+      return null
+  }
+}
+
+function isAppliedIntentField(field: string) {
+  return field === 'max_context_unlocked'
+    || field === 'openai_max_context'
+    || field === 'stream_openai'
+}
+
+function shouldWarnForFieldStatus(status: PresetCompatResolvedFieldStatus['status']) {
+  return status !== 'applied'
+}
+
 function buildProviderWarnings(provider: AIProvider, context: PresetCompatRuntimeContext) {
   const warnings: string[] = []
   const preserved: Record<string, unknown> = {}
+  const fieldStatuses: PresetCompatResolvedFieldStatus[] = []
+  const providerControlIntents: PresetCompatResolvedProviderControlIntent[] = []
   const capability = getPresetCompatProviderCapability(provider)
   const root = getPresetRootPassthrough(context.preset)
   const extensions = getPresetExtensionsPassthrough(context.preset)
+  const transport = getPresetTransport(context.preset)
+  const promptTemplate = getPresetPromptTemplate(context.preset)
+  const preservedFields = getPresetPreservedFields(context.preset)
   const numericFields = pickNumericPresetFields(context)
   const numericFieldsByName = numericFields as Partial<Record<string, number | null>>
 
+  const statusFieldValues: Record<string, unknown> = {
+    temperature: context.preset?.runtimeSampler.temperature ?? null,
+    top_p: context.preset?.runtimeSampler.topP ?? null,
+    top_k: context.preset?.runtimeSampler.topK ?? null,
+    top_a: context.preset?.runtimeSampler.topA ?? null,
+    min_p: context.preset?.runtimeSampler.minP ?? null,
+    presence_penalty: context.preset?.runtimeSampler.presencePenalty ?? null,
+    frequency_penalty: context.preset?.runtimeSampler.frequencyPenalty ?? null,
+    repetition_penalty: context.preset?.runtimeSampler.repetitionPenalty ?? null,
+    openai_max_tokens: context.preset?.runtimeSampler.maxTokens ?? null,
+    openai_max_context: context.preset?.runtimeSampler.openaiMaxContext ?? null,
+    seed: getPresetSeed(context.preset),
+    n: context.preset?.runtimeSampler.candidateCount ?? null,
+    max_context_unlocked: transport.maxContextUnlocked ?? null,
+    stream_openai: transport.streamOpenAI ?? null,
+    send_if_empty: promptTemplate.sendIfEmpty ?? null,
+    assistant_prefill: promptTemplate.assistantPrefill ?? null,
+    assistant_impersonation: promptTemplate.assistantImpersonation ?? null,
+    continue_prefill: transport.continuePrefill ?? null,
+    continue_postfix: promptTemplate.continuePostfix ?? null,
+    use_sysprompt: transport.useSysprompt ?? null,
+    squash_system_messages: transport.squashSystemMessages ?? null,
+    function_calling: transport.functionCalling ?? null,
+    show_thoughts: transport.showThoughts ?? null,
+    reasoning_effort: transport.reasoningEffort ?? null,
+    verbosity: transport.verbosity ?? null,
+    bias_preset_selected: preservedFields.biasPresetSelected ?? null,
+    media_inlining: transport.mediaInlining ?? null,
+    inline_image_quality: transport.inlineImageQuality ?? null,
+    enable_web_search: transport.enableWebSearch ?? null,
+    request_images: transport.requestImages ?? null,
+    request_image_aspect_ratio: transport.requestImageAspectRatio ?? null,
+    request_image_resolution: transport.requestImageResolution ?? null,
+  }
+
+  for (const [field, value] of Object.entries(statusFieldValues)) {
+    if (value === null || typeof value === 'undefined') {
+      continue
+    }
+
+    const classification = getFieldSurfaceClassification(field, context.surfaceId, provider)
+    const providerIntent = createProviderIntent(provider, field, value)
+    if (providerIntent) {
+      providerControlIntents.push(providerIntent)
+    }
+
+    fieldStatuses.push(createFieldStatus({
+      field,
+      surface: context.surfaceId,
+      provider,
+      value,
+      status: classification.status,
+      reason: classification.reason,
+      providerIntent: providerIntent ?? undefined,
+    }))
+
+    if (shouldWarnForFieldStatus(classification.status) && !isAppliedIntentField(field)) {
+      warnings.push(`Preset field \`${field}\` was preserved for export but not applied to ${provider}.`)
+    }
+  }
+
   for (const fieldName of capability.preservedOnlyFields) {
-    const value = fieldName in numericFieldsByName
+    const value = fieldName in statusFieldValues
+      ? statusFieldValues[fieldName]
+      : fieldName in numericFieldsByName
       ? numericFieldsByName[fieldName]
       : root[fieldName]
 
@@ -186,7 +468,9 @@ function buildProviderWarnings(provider: AIProvider, context: PresetCompatRuntim
     }
 
     preserved[fieldName] = value
-    warnings.push(`Preset field \`${fieldName}\` was preserved for export but not applied to ${provider}.`)
+    if (!isAppliedIntentField(fieldName) && !(fieldName in statusFieldValues)) {
+      warnings.push(`Preset field \`${fieldName}\` was preserved for export but not applied to ${provider}.`)
+    }
   }
 
   for (const [fieldName, value] of Object.entries(root)) {
@@ -213,6 +497,8 @@ function buildProviderWarnings(provider: AIProvider, context: PresetCompatRuntim
   return {
     warnings,
     preserved,
+    fieldStatuses,
+    providerControlIntents,
   }
 }
 
@@ -293,9 +579,504 @@ function sortResolvedPromptRules(left: PresetCompatResolvedPromptRule, right: Pr
   return left.sourceIndex - right.sourceIndex
 }
 
-function resolvePromptRules(preset: PresetCompatPresetRecord | null, surfaceId: PresetCompatSurfaceId) {
+function resolvePromptRuleChannel(rule: PresetCompatPromptRule): 'system' | 'user' {
+  if (rule.injectAsSystemPrompt) {
+    return 'system'
+  }
+
+  return rule.role === 'system' ? 'system' : 'user'
+}
+
+function getPromptRuleTriggerReason(trigger: string): PresetCompatStatusReasonCode {
+  switch (trigger) {
+    case 'new_group_chat':
+    case 'group':
+      return 'NO_GROUP_CONTEXT'
+    case 'new_example_chat':
+      return 'NO_EXAMPLE_CONTEXT'
+    case 'impersonation':
+      return 'NO_IMPERSONATION_CONTEXT'
+    case 'continue':
+      return 'CONTINUE_SURFACE_ONLY'
+    case 'new_chat':
+    default:
+      return 'NEW_CHAT_CONTEXT_REQUIRED'
+  }
+}
+
+function createEmptyTemplateFragmentSet(): PresetCompatResolvedTemplateFragmentSet {
+  return {
+    ordered: [],
+    system: [],
+    user: [],
+  }
+}
+
+function isFailClosedSurface(surfaceId: PresetCompatSurfaceId) {
+  return surfaceId === 'future_jump_bridge'
+    || surfaceId === 'what_if_delta_extraction'
+    || surfaceId === 'knowledge_extraction'
+    || surfaceId === 'embeddings'
+}
+
+function normalizeContextBlocks(blocks: PresetCompatRuntimeContextBlock[] | undefined) {
+  return (blocks ?? []).filter((block) => block.content.trim())
+}
+
+function getBlocksForAbstraction(
+  blocks: PresetCompatRuntimeContextBlock[],
+  abstraction: PresetCompatResolvedContextBlockFormat['abstraction']
+) {
+  return blocks.filter((block) => block.abstraction === abstraction)
+}
+
+function getNamedTranscriptBlocks(blocks: PresetCompatRuntimeContextBlock[]) {
+  return blocks.filter((block) => block.abstraction === 'named_transcript')
+}
+
+function getNamedTranscriptContext(namedTranscript: PresetCompatNamedTranscriptContext | null | undefined) {
+  if (!namedTranscript) {
+    return null
+  }
+
+  const userName = namedTranscript.userName?.trim() ?? ''
+  const assistantName = namedTranscript.assistantName?.trim() ?? ''
+  if (!userName || !assistantName) {
+    return null
+  }
+
+  return {
+    kind: namedTranscript.kind,
+    userName,
+    assistantName,
+  }
+}
+
+function resolveFormattingRuntime(
+  preset: PresetCompatPresetRecord | null,
+  surfaceId: PresetCompatSurfaceId,
+  runtimeContext: PresetCompatPromptRuleRuntimeContext = {}
+) {
+  const warnings: string[] = []
+  const fieldStatuses: PresetCompatResolvedFieldStatus[] = []
+  const contextBlockFormats: PresetCompatResolvedContextBlockFormat[] = []
+  let namesBehavior: PresetCompatResolvedNamesBehavior | null = null
+  if (!preset) {
+    return {
+      contextBlockFormats,
+      namesBehavior,
+      warnings,
+      fieldStatuses,
+    }
+  }
+
+  const promptTemplate = getPresetPromptTemplate(preset)
+  const contextBlocks = normalizeContextBlocks(runtimeContext.surfaceContextBlocks)
+  const failClosedSurface = isFailClosedSurface(surfaceId)
+
+  const formattingFields = [
+    {
+      field: 'wi_format' as const,
+      value: promptTemplate.wiFormat ?? null,
+      abstraction: 'world_info' as const,
+      reason: 'WORLD_INFO_CONTEXT_REQUIRED' as const,
+    },
+    {
+      field: 'scenario_format' as const,
+      value: promptTemplate.scenarioFormat ?? null,
+      abstraction: 'scenario' as const,
+      reason: 'SCENARIO_CONTEXT_REQUIRED' as const,
+    },
+    {
+      field: 'personality_format' as const,
+      value: promptTemplate.personalityFormat ?? null,
+      abstraction: 'personality' as const,
+      reason: 'PERSONA_CONTEXT_REQUIRED' as const,
+    },
+  ]
+
+  for (const formattingField of formattingFields) {
+    const trimmedValue = formattingField.value?.trim() ?? ''
+    if (!trimmedValue) {
+      continue
+    }
+
+    if (failClosedSurface) {
+      fieldStatuses.push(createFieldStatus({
+        field: formattingField.field,
+        surface: surfaceId,
+        provider: null,
+        value: trimmedValue,
+        status: 'degraded',
+        reason: 'ANALYTICAL_SURFACE_FAIL_CLOSED',
+      }))
+      warnings.push(`Prompt formatting field \`${formattingField.field}\` was preserved but not applied because runtime reason \`ANALYTICAL_SURFACE_FAIL_CLOSED\` blocked it on surface \`${surfaceId}\`.`)
+      continue
+    }
+
+    const matchingBlocks = getBlocksForAbstraction(contextBlocks, formattingField.abstraction)
+    if (matchingBlocks.length === 0) {
+      fieldStatuses.push(createFieldStatus({
+        field: formattingField.field,
+        surface: surfaceId,
+        provider: null,
+        value: trimmedValue,
+        status: 'degraded',
+        reason: formattingField.reason,
+      }))
+      warnings.push(`Prompt formatting field \`${formattingField.field}\` was preserved but not applied because runtime reason \`${formattingField.reason}\` blocked it on surface \`${surfaceId}\`.`)
+      continue
+    }
+
+    contextBlockFormats.push({
+      field: formattingField.field,
+      abstraction: formattingField.abstraction,
+      format: trimmedValue,
+      blockIds: matchingBlocks.map((block) => block.id),
+    })
+    fieldStatuses.push(createFieldStatus({
+      field: formattingField.field,
+      surface: surfaceId,
+      provider: null,
+      value: {
+        format: trimmedValue,
+        blockIds: matchingBlocks.map((block) => block.id),
+      },
+      status: 'applied',
+      reason: 'SUPPORTED_RUNTIME',
+    }))
+  }
+
+  if (typeof promptTemplate.namesBehavior === 'number') {
+    const namesValue = promptTemplate.namesBehavior
+    if (failClosedSurface) {
+      fieldStatuses.push(createFieldStatus({
+        field: 'names_behavior',
+        surface: surfaceId,
+        provider: null,
+        value: namesValue,
+        status: 'degraded',
+        reason: 'ANALYTICAL_SURFACE_FAIL_CLOSED',
+      }))
+      warnings.push(`Prompt formatting field \`names_behavior\` was preserved but not applied because runtime reason \`ANALYTICAL_SURFACE_FAIL_CLOSED\` blocked it on surface \`${surfaceId}\`.`)
+    } else {
+      const namedTranscript = getNamedTranscriptContext(runtimeContext.namedTranscript)
+      const namedTranscriptBlocks = getNamedTranscriptBlocks(contextBlocks)
+      if (!namedTranscript || namedTranscriptBlocks.length === 0) {
+        fieldStatuses.push(createFieldStatus({
+          field: 'names_behavior',
+          surface: surfaceId,
+          provider: null,
+          value: namesValue,
+          status: 'degraded',
+          reason: 'NO_CHAT_HISTORY',
+        }))
+        warnings.push(`Prompt formatting field \`names_behavior\` was preserved but not applied because runtime reason \`NO_CHAT_HISTORY\` blocked it on surface \`${surfaceId}\`.`)
+      } else {
+        namesBehavior = {
+          mode: namesValue,
+          kind: namedTranscript.kind,
+          userName: namedTranscript.userName,
+          assistantName: namedTranscript.assistantName,
+        }
+        fieldStatuses.push(createFieldStatus({
+          field: 'names_behavior',
+          surface: surfaceId,
+          provider: null,
+          value: namesBehavior,
+          status: 'applied',
+          reason: 'SUPPORTED_RUNTIME',
+        }))
+      }
+    }
+  }
+
+  return {
+    contextBlockFormats,
+    namesBehavior,
+    warnings,
+    fieldStatuses,
+  }
+}
+
+function resolvePromptTemplateFragments(
+  preset: PresetCompatPresetRecord | null,
+  surfaceId: PresetCompatSurfaceId,
+  runtimeContext: PresetCompatPromptRuleRuntimeContext = {}
+) {
+  const warnings: string[] = []
+  const fieldStatuses: PresetCompatResolvedFieldStatus[] = []
+  const templateFragments = createEmptyTemplateFragmentSet()
+  if (!preset) {
+    return {
+      templateFragments,
+      warnings,
+      fieldStatuses,
+    }
+  }
+
+  const promptTemplate = getPresetPromptTemplate(preset)
+  const pushFragment = (field: string, text: string) => {
+    const fragment = {
+      field,
+      channel: 'system' as const,
+      placement: 'append' as const,
+      text,
+    }
+    templateFragments.ordered.push(fragment)
+    templateFragments.system.push(fragment)
+  }
+
+  const pushTemplateStatus = (params: {
+    field: string
+    value: string
+    status: PresetCompatResolvedFieldStatus['status']
+    reason: PresetCompatStatusReasonCode
+  }) => {
+    fieldStatuses.push(createFieldStatus({
+      field: params.field,
+      surface: surfaceId,
+      provider: null,
+      value: params.value,
+      status: params.status,
+      reason: params.reason,
+    }))
+  }
+
+  const pushTemplateWarning = (field: string, reason: PresetCompatStatusReasonCode) => {
+    warnings.push(`Prompt template field \`${field}\` was preserved but not applied because runtime reason \`${reason}\` blocked it on surface \`${surfaceId}\`.`)
+  }
+
+  const resolvedSessionPhase = runtimeContext.sessionPhase ?? null
+  const hasGroupContext = runtimeContext.hasGroupContext === true || resolvedSessionPhase === 'new_group_chat'
+  const hasExampleContext = runtimeContext.hasExampleContext === true
+  const hasImpersonationContext = runtimeContext.hasImpersonationContext === true
+
+  const templateFields = [
+    {
+      field: 'new_chat_prompt',
+      value: promptTemplate.newChatPrompt ?? null,
+      shouldApply: resolvedSessionPhase === 'new_chat',
+      degradedReason: 'NEW_CHAT_CONTEXT_REQUIRED' as const,
+    },
+    {
+      field: 'new_group_chat_prompt',
+      value: promptTemplate.newGroupChatPrompt ?? null,
+      shouldApply: hasGroupContext && resolvedSessionPhase === 'new_group_chat',
+      degradedReason: (hasGroupContext ? 'NEW_CHAT_CONTEXT_REQUIRED' : 'NO_GROUP_CONTEXT') as PresetCompatStatusReasonCode,
+    },
+    {
+      field: 'new_example_chat_prompt',
+      value: promptTemplate.newExampleChatPrompt ?? null,
+      shouldApply: hasExampleContext && resolvedSessionPhase === 'new_example_chat',
+      degradedReason: (hasExampleContext ? 'NEW_CHAT_CONTEXT_REQUIRED' : 'NO_EXAMPLE_CONTEXT') as PresetCompatStatusReasonCode,
+    },
+    {
+      field: 'continue_nudge_prompt',
+      value: promptTemplate.continueNudgePrompt ?? null,
+      shouldApply: surfaceId === 'continue',
+      degradedReason: 'CONTINUE_SURFACE_ONLY' as const,
+    },
+    {
+      field: 'group_nudge_prompt',
+      value: promptTemplate.groupNudgePrompt ?? null,
+      shouldApply: hasGroupContext,
+      degradedReason: 'NO_GROUP_CONTEXT' as const,
+    },
+    {
+      field: 'impersonation_prompt',
+      value: promptTemplate.impersonationPrompt ?? null,
+      shouldApply: hasImpersonationContext,
+      degradedReason: 'NO_IMPERSONATION_CONTEXT' as const,
+    },
+  ] as const
+
+  for (const templateField of templateFields) {
+    const trimmedValue = templateField.value?.trim() ?? ''
+    if (!trimmedValue) {
+      continue
+    }
+
+    if (isFailClosedSurface(surfaceId)) {
+      pushTemplateStatus({
+        field: templateField.field,
+        value: trimmedValue,
+        status: 'degraded',
+        reason: 'ANALYTICAL_SURFACE_FAIL_CLOSED',
+      })
+      pushTemplateWarning(templateField.field, 'ANALYTICAL_SURFACE_FAIL_CLOSED')
+      continue
+    }
+
+    if (templateField.shouldApply) {
+      pushFragment(templateField.field, trimmedValue)
+      pushTemplateStatus({
+        field: templateField.field,
+        value: trimmedValue,
+        status: 'applied',
+        reason: 'SUPPORTED_RUNTIME',
+      })
+      continue
+    }
+
+    pushTemplateStatus({
+      field: templateField.field,
+      value: trimmedValue,
+      status: 'degraded',
+      reason: templateField.degradedReason,
+    })
+    pushTemplateWarning(templateField.field, templateField.degradedReason)
+  }
+
+  return {
+    templateFragments,
+    warnings,
+    fieldStatuses,
+  }
+}
+
+function doesPromptRuleTriggerMatch(
+  trigger: string,
+  surfaceId: PresetCompatSurfaceId,
+  runtimeContext: PresetCompatPromptRuleRuntimeContext
+) {
+  switch (trigger) {
+    case 'new_chat':
+      return runtimeContext.sessionPhase === 'new_chat'
+    case 'new_group_chat':
+      return runtimeContext.sessionPhase === 'new_group_chat'
+    case 'new_example_chat':
+      return runtimeContext.sessionPhase === 'new_example_chat'
+    case 'continue':
+      return runtimeContext.sessionPhase === 'continue' || surfaceId === 'continue'
+    case 'group':
+      return runtimeContext.hasGroupContext === true
+    case 'impersonation':
+      return runtimeContext.hasImpersonationContext === true
+    default:
+      return false
+  }
+}
+
+function evaluatePromptRuleTriggers(params: {
+  rule: PresetCompatPromptRule
+  surfaceId: PresetCompatSurfaceId
+  runtimeContext: PresetCompatPromptRuleRuntimeContext
+}) {
+  const injectionTriggers = getPromptRuleInjectionTriggers(params.rule)
+
+  if (injectionTriggers.length === 0) {
+    return {
+      status: 'pass' as const,
+    }
+  }
+
+  const unknownTriggers = injectionTriggers.filter(
+    (trigger) => !PRESET_COMPAT_ALLOWED_PROMPT_RULE_TRIGGERS.has(trigger)
+  )
+  if (unknownTriggers.length > 0) {
+    return {
+      status: 'unknown' as const,
+      reason: 'UNKNOWN_TRIGGER' as const,
+      value: unknownTriggers,
+    }
+  }
+
+  for (const trigger of injectionTriggers) {
+    if (doesPromptRuleTriggerMatch(trigger, params.surfaceId, params.runtimeContext)) {
+      return {
+        status: 'pass' as const,
+      }
+    }
+  }
+
+  return {
+    status: 'no-match' as const,
+    reason: getPromptRuleTriggerReason(injectionTriggers[0] ?? 'new_chat'),
+    value: injectionTriggers,
+  }
+}
+
+function evaluatePromptRuleCondition(params: {
+  condition: string | null
+  surfaceId: PresetCompatSurfaceId
+  runtimeContext: PresetCompatPromptRuleRuntimeContext
+}) {
+  const trimmedCondition = params.condition?.trim() ?? ''
+  if (!trimmedCondition) {
+    return {
+      status: 'pass' as const,
+      result: true,
+    }
+  }
+
+  if (!/^[\w\s!-]+$/.test(trimmedCondition)) {
+    return {
+      status: 'unsafe' as const,
+      reason: 'UNSAFE_CONDITION' as const,
+      value: trimmedCondition,
+    }
+  }
+
+  const normalized = trimmedCondition.replace(/\s+/g, '').toLowerCase()
+  const isNegated = normalized.startsWith('!')
+  const token = isNegated ? normalized.slice(1) : normalized
+
+  let result: boolean | null = null
+  switch (token) {
+    case 'true':
+      result = true
+      break
+    case 'false':
+      result = false
+      break
+    case 'new_chat':
+    case 'newchat':
+      result = doesPromptRuleTriggerMatch('new_chat', params.surfaceId, params.runtimeContext)
+      break
+    case 'newgroupchat':
+    case 'new_group_chat':
+      result = doesPromptRuleTriggerMatch('new_group_chat', params.surfaceId, params.runtimeContext)
+      break
+    case 'new_example_chat':
+    case 'newexamplechat':
+      result = doesPromptRuleTriggerMatch('new_example_chat', params.surfaceId, params.runtimeContext)
+      break
+    case 'continue':
+      result = doesPromptRuleTriggerMatch('continue', params.surfaceId, params.runtimeContext)
+      break
+    case 'group':
+      result = doesPromptRuleTriggerMatch('group', params.surfaceId, params.runtimeContext)
+      break
+    case 'impersonation':
+      result = doesPromptRuleTriggerMatch('impersonation', params.surfaceId, params.runtimeContext)
+      break
+    default:
+      return {
+        status: 'unknown' as const,
+        reason: 'UNKNOWN_CONDITION' as const,
+        value: trimmedCondition,
+      }
+  }
+
+  return {
+    status: 'pass' as const,
+    result: isNegated ? !result : result,
+  }
+}
+
+function getPromptRuleSlotKey(rule: PresetCompatResolvedPromptRule) {
+  return `${rule.channel}:${rule.injectionPosition}:${rule.injectionDepth ?? 'none'}`
+}
+
+function resolvePromptRules(
+  preset: PresetCompatPresetRecord | null,
+  surfaceId: PresetCompatSurfaceId,
+  runtimeContext: PresetCompatPromptRuleRuntimeContext = {}
+) {
   const warnings: string[] = []
   const preservedPromptMetadata: PresetCompatResolvedRuntime['preservedPromptMetadata'] = []
+  const fieldStatuses: PresetCompatResolvedFieldStatus[] = []
   if (!preset) {
     return {
       promptRules: {
@@ -305,84 +1086,293 @@ function resolvePromptRules(preset: PresetCompatPresetRecord | null, surfaceId: 
       } satisfies PresetCompatResolvedPromptRuleSet,
       warnings,
       preservedPromptMetadata,
+      fieldStatuses,
     }
   }
 
   const activeIds = new Set(preset.promptOrderLists[surfaceId] ?? [])
-  const ordered = preset.promptRules.flatMap((rule, sourceIndex) => {
+  const candidates = preset.promptRules.flatMap((rule, sourceIndex) => {
     if (!activeIds.has(rule.id) || !rule.enabled) {
-      return [] as PresetCompatResolvedPromptRule[]
+      return [] as PresetCompatResolvedPromptRuleCandidate[]
     }
 
     const trimmedContent = rule.content.trim()
     const hasSupportedRole = PRESET_COMPAT_PROMPT_RULE_SUPPORTED_ROLES.includes(rule.role as PresetCompatRuntimePromptRuleRole)
-    const wouldApplyRule = Boolean(trimmedContent) && !rule.marker && hasSupportedRole
-
-    const metadata: PresetCompatResolvedRuntime['preservedPromptMetadata'][number]['metadata'] = {}
-    for (const fieldName of PRESET_COMPAT_PROMPT_RULE_PRESERVED_ONLY_FIELDS) {
-      const value = rule[fieldName]
-      if (
-        value === null
-        || value === false
-        || value === 'none'
-        || typeof value === 'undefined'
-      ) {
-        continue
-      }
-
-      if (fieldName === 'injectionPosition' && value === 'before' && wouldApplyRule) {
-        continue
-      }
-
-      metadata[fieldName] = value
-    }
-
-    if (Object.keys(metadata).length > 0) {
-      preservedPromptMetadata.push({
-        ruleId: rule.id,
-        metadata,
-      })
-      if (wouldApplyRule) {
-        warnings.push(
-          `Prompt rule \`${rule.name}\` kept unsupported metadata (${Object.keys(metadata).join(', ')}) for export without applying it at runtime.`
-        )
-      }
-    }
 
     if (!trimmedContent) {
       warnings.push(`Prompt rule \`${rule.name}\` was active but skipped because its content was empty.`)
-      return [] as PresetCompatResolvedPromptRule[]
+      return [] as PresetCompatResolvedPromptRuleCandidate[]
     }
 
     if (rule.marker) {
       warnings.push(`Prompt rule \`${rule.name}\` was active but skipped because marker prompts are preserved-only in MVP runtime.`)
-      return [] as PresetCompatResolvedPromptRule[]
+      return [] as PresetCompatResolvedPromptRuleCandidate[]
     }
 
     if (!hasSupportedRole) {
       warnings.push(`Prompt rule \`${rule.name}\` was preserved but not applied because role \`${rule.role}\` is unsupported in MVP runtime.`)
-      return [] as PresetCompatResolvedPromptRule[]
+      return [] as PresetCompatResolvedPromptRuleCandidate[]
+    }
+
+    if (rule.injectAsSystemPrompt) {
+      fieldStatuses.push(createFieldStatus({
+        field: 'prompts.system_prompt',
+        surface: surfaceId,
+        provider: null,
+        value: true,
+        status: 'applied',
+        reason: 'SUPPORTED_RUNTIME',
+        fragmentId: rule.id,
+        fragmentName: rule.name,
+      }))
+    }
+
+    if (rule.condition !== null) {
+      const conditionEvaluation = evaluatePromptRuleCondition({
+        condition: rule.condition,
+        surfaceId,
+        runtimeContext,
+      })
+
+      if (conditionEvaluation.status === 'unsafe' || conditionEvaluation.status === 'unknown') {
+        preservedPromptMetadata.push({
+          ruleId: rule.id,
+          metadata: {
+            condition: rule.condition,
+          },
+        })
+        fieldStatuses.push(createFieldStatus({
+          field: 'prompts.condition',
+          surface: surfaceId,
+          provider: null,
+          value: conditionEvaluation.value,
+          status: 'degraded',
+          reason: conditionEvaluation.reason,
+          fragmentId: rule.id,
+          fragmentName: rule.name,
+        }))
+        warnings.push(
+          `Prompt rule \`${rule.name}\` was preserved but not applied because condition \`${rule.condition}\` is ${conditionEvaluation.status}.`
+        )
+        return [] as PresetCompatResolvedPromptRuleCandidate[]
+      }
+
+      fieldStatuses.push(createFieldStatus({
+        field: 'prompts.condition',
+        surface: surfaceId,
+        provider: null,
+        value: {
+          expression: rule.condition,
+          result: conditionEvaluation.result,
+        },
+        status: 'applied',
+        reason: 'SUPPORTED_RUNTIME',
+        fragmentId: rule.id,
+        fragmentName: rule.name,
+      }))
+
+      if (!conditionEvaluation.result) {
+        return [] as PresetCompatResolvedPromptRuleCandidate[]
+      }
+    }
+
+    const injectionTriggers = getPromptRuleInjectionTriggers(rule)
+
+    if (injectionTriggers.length > 0) {
+      const triggerEvaluation = evaluatePromptRuleTriggers({
+        rule,
+        surfaceId,
+        runtimeContext,
+      })
+
+      if (triggerEvaluation.status !== 'pass') {
+        const metadata: Record<string, unknown> = {
+          injectionTrigger: injectionTriggers,
+        }
+        preservedPromptMetadata.push({
+          ruleId: rule.id,
+          metadata,
+        })
+        fieldStatuses.push(createFieldStatus({
+          field: 'prompts.injection_trigger',
+          surface: surfaceId,
+          provider: null,
+          value: triggerEvaluation.value,
+          status: 'degraded',
+          reason: triggerEvaluation.reason,
+          fragmentId: rule.id,
+          fragmentName: rule.name,
+        }))
+        warnings.push(
+          triggerEvaluation.reason === 'UNKNOWN_TRIGGER'
+            ? `Prompt rule \`${rule.name}\` was preserved but not applied because it declares unsupported triggers (${injectionTriggers.join(', ')}).`
+            : `Prompt rule \`${rule.name}\` was preserved but not applied because its triggers (${injectionTriggers.join(', ')}) did not match the current runtime context.`
+        )
+        return [] as PresetCompatResolvedPromptRuleCandidate[]
+      }
+
+      fieldStatuses.push(createFieldStatus({
+        field: 'prompts.injection_trigger',
+        surface: surfaceId,
+        provider: null,
+        value: injectionTriggers,
+        status: 'applied',
+        reason: 'SUPPORTED_RUNTIME',
+        fragmentId: rule.id,
+        fragmentName: rule.name,
+      }))
+    }
+
+    const requiresVirtualDepth = rule.injectionPosition === 'in_chat' || rule.injectionDepth !== null
+    if (requiresVirtualDepth && runtimeContext.supportsVirtualDepth !== true) {
+      const metadata: Record<string, unknown> = {}
+      if (rule.injectionPosition === 'in_chat') {
+        metadata.injectionPosition = rule.injectionPosition
+        fieldStatuses.push(createFieldStatus({
+          field: 'prompts.injection_position',
+          surface: surfaceId,
+          provider: null,
+          value: rule.injectionPosition,
+          status: 'degraded',
+          reason: 'VIRTUAL_DEPTH_REQUIRED',
+          fragmentId: rule.id,
+          fragmentName: rule.name,
+        }))
+      } else if (rule.injectionPosition !== 'none') {
+        fieldStatuses.push(createFieldStatus({
+          field: 'prompts.injection_position',
+          surface: surfaceId,
+          provider: null,
+          value: rule.injectionPosition,
+          status: 'applied',
+          reason: 'SUPPORTED_RUNTIME',
+          fragmentId: rule.id,
+          fragmentName: rule.name,
+        }))
+      }
+
+      if (rule.injectionDepth !== null) {
+        metadata.injectionDepth = rule.injectionDepth
+        fieldStatuses.push(createFieldStatus({
+          field: 'prompts.injection_depth',
+          surface: surfaceId,
+          provider: null,
+          value: rule.injectionDepth,
+          status: 'degraded',
+          reason: 'VIRTUAL_DEPTH_REQUIRED',
+          fragmentId: rule.id,
+          fragmentName: rule.name,
+        }))
+      }
+
+      if (Object.keys(metadata).length > 0) {
+        preservedPromptMetadata.push({
+          ruleId: rule.id,
+          metadata,
+        })
+      }
+
+      warnings.push(
+        `Prompt rule \`${rule.name}\` was preserved but not applied because virtual chat depth placement is unavailable on string-only surfaces.`
+      )
+      return [] as PresetCompatResolvedPromptRuleCandidate[]
+    }
+
+    if (!requiresVirtualDepth && rule.injectionPosition !== 'none') {
+      fieldStatuses.push(createFieldStatus({
+        field: 'prompts.injection_position',
+        surface: surfaceId,
+        provider: null,
+        value: rule.injectionPosition,
+        status: 'applied',
+        reason: 'SUPPORTED_RUNTIME',
+        fragmentId: rule.id,
+        fragmentName: rule.name,
+      }))
+    }
+
+    if (rule.injectionDepth !== null && runtimeContext.supportsVirtualDepth === true) {
+      fieldStatuses.push(createFieldStatus({
+        field: 'prompts.injection_depth',
+        surface: surfaceId,
+        provider: null,
+        value: rule.injectionDepth,
+        status: 'applied',
+        reason: 'SUPPORTED_RUNTIME',
+        fragmentId: rule.id,
+        fragmentName: rule.name,
+      }))
+    }
+
+    if (rule.forbidOverrides) {
+      fieldStatuses.push(createFieldStatus({
+        field: 'prompts.forbid_overrides',
+        surface: surfaceId,
+        provider: null,
+        value: true,
+        status: 'applied',
+        reason: 'SUPPORTED_RUNTIME',
+        fragmentId: rule.id,
+        fragmentName: rule.name,
+      }))
     }
 
     return [{
-      id: rule.id,
-      name: rule.name,
-      role: rule.role as PresetCompatRuntimePromptRuleRole,
-      content: trimmedContent,
-      sourceIndex,
-      injectionOrder: rule.injectionOrder,
+      rule,
+      resolvedRule: {
+        id: rule.id,
+        name: rule.name,
+        role: rule.role as PresetCompatRuntimePromptRuleRole,
+        channel: resolvePromptRuleChannel(rule),
+        content: trimmedContent,
+        sourceIndex,
+        injectionPosition: rule.injectionPosition,
+        injectionDepth: rule.injectionDepth,
+        injectionOrder: rule.injectionOrder,
+        forbidOverrides: rule.forbidOverrides,
+      },
     }]
   })
-    .sort(sortResolvedPromptRules)
+    .sort((left, right) => sortResolvedPromptRules(left.resolvedRule, right.resolvedRule))
+
+  const protectedSlots = new Map<string, PresetCompatResolvedPromptRule>()
+  const ordered: PresetCompatResolvedPromptRule[] = []
+
+  for (const candidate of candidates) {
+    const slotKey = getPromptRuleSlotKey(candidate.resolvedRule)
+    const protectedRule = protectedSlots.get(slotKey)
+    if (protectedRule) {
+      fieldStatuses.push(createFieldStatus({
+        field: 'prompts.content',
+        surface: surfaceId,
+        provider: null,
+        value: candidate.resolvedRule.content,
+        status: 'degraded',
+        reason: 'FORBID_OVERRIDES_PROTECTED',
+        fragmentId: candidate.resolvedRule.id,
+        fragmentName: candidate.resolvedRule.name,
+      }))
+      warnings.push(
+        `Prompt rule \`${candidate.resolvedRule.name}\` was preserved but not applied because \`${protectedRule.name}\` protects the same imported prompt slot with forbidOverrides.`
+      )
+      continue
+    }
+
+    ordered.push(candidate.resolvedRule)
+    if (candidate.resolvedRule.forbidOverrides) {
+      protectedSlots.set(slotKey, candidate.resolvedRule)
+    }
+  }
 
   return {
     promptRules: {
       ordered,
-      system: ordered.filter((rule) => rule.role === 'system'),
-      user: ordered.filter((rule) => rule.role === 'user'),
+      system: ordered.filter((rule) => rule.channel === 'system'),
+      user: ordered.filter((rule) => rule.channel === 'user'),
     } satisfies PresetCompatResolvedPromptRuleSet,
     warnings,
     preservedPromptMetadata,
+    fieldStatuses,
   }
 }
 
@@ -391,6 +1381,7 @@ export function resolvePresetCompatRuntime(params: {
   surfaceId: PresetCompatSurfaceId
   providerDefaults: PresetCompatRuntimeProviderDefaults
   sessionOverrides?: PresetCompatRuntimeSessionOverrides
+  promptRuleRuntimeContext?: PresetCompatPromptRuleRuntimeContext
 }) : PresetCompatResolvedRuntime {
   const sessionOverrides = params.sessionOverrides ?? {}
   const activePreset = getPresetBoundToSurface(params.library, params.surfaceId)
@@ -400,12 +1391,19 @@ export function resolvePresetCompatRuntime(params: {
     surfaceId: params.surfaceId,
   } satisfies PresetCompatRuntimeContext
   const providerWarnings = buildProviderWarnings(provider, context)
-  const promptResolution = resolvePromptRules(activePreset, params.surfaceId)
+  const templateResolution = resolvePromptTemplateFragments(activePreset, params.surfaceId, params.promptRuleRuntimeContext)
+  const formattingResolution = resolveFormattingRuntime(activePreset, params.surfaceId, params.promptRuleRuntimeContext)
+  const promptResolution = resolvePromptRules(activePreset, params.surfaceId, params.promptRuleRuntimeContext)
   const providerRuntime = provider === 'ollama'
     ? resolveOllamaProviderRuntime(context, params.providerDefaults, sessionOverrides)
     : resolveOpenAICompatibleProviderRuntime(context, params.providerDefaults, sessionOverrides)
 
-  const warnings = [...providerWarnings.warnings, ...promptResolution.warnings]
+  const warnings = [
+    ...providerWarnings.warnings,
+    ...templateResolution.warnings,
+    ...formattingResolution.warnings,
+    ...promptResolution.warnings,
+  ]
   if (params.library.surfaceBindings[params.surfaceId]?.enabled && params.library.surfaceBindings[params.surfaceId]?.presetId && !activePreset) {
     warnings.unshift(`Surface \`${params.surfaceId}\` is bound to a missing preset and fell back to provider defaults.`)
   }
@@ -419,8 +1417,18 @@ export function resolvePresetCompatRuntime(params: {
     },
     activePreset,
     providerRuntime,
+    templateFragments: templateResolution.templateFragments,
+    contextBlockFormats: formattingResolution.contextBlockFormats,
+    namesBehavior: formattingResolution.namesBehavior,
     promptRules: promptResolution.promptRules,
     warnings,
+    fieldStatuses: [
+      ...providerWarnings.fieldStatuses,
+      ...templateResolution.fieldStatuses,
+      ...formattingResolution.fieldStatuses,
+      ...promptResolution.fieldStatuses,
+    ],
+    providerControlIntents: providerWarnings.providerControlIntents,
     preservedSamplerFields: providerWarnings.preserved,
     preservedPromptMetadata: promptResolution.preservedPromptMetadata,
   }
@@ -429,6 +1437,7 @@ export function resolvePresetCompatRuntime(params: {
 export function resolvePresetCompatPromptRuleSubset(params: {
   preset: PresetCompatPresetRecord | null
   surfaceId: PresetCompatSurfaceId
+  runtimeContext?: PresetCompatPromptRuleRuntimeContext
 }) {
-  return resolvePromptRules(params.preset, params.surfaceId)
+  return resolvePromptRules(params.preset, params.surfaceId, params.runtimeContext)
 }
