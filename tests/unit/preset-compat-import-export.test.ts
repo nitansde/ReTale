@@ -300,7 +300,7 @@ describe('preset compat import/export compatibility', () => {
 
     expect(prompts[0]).not.toHaveProperty('injection_trigger')
     expect(prompts[1]).not.toHaveProperty('injection_trigger')
-    expect(prompts[2]?.injection_trigger).toEqual([['chat']])
+    expect(prompts[2]?.injection_trigger).toEqual(['chat'])
     expect(prompts[3]?.injection_trigger).toEqual([])
   })
 
