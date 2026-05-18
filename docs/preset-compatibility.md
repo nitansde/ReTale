@@ -163,9 +163,9 @@ Prompt rules apply a deliberately narrow ChatBook compatibility subset.
 
 - `prompt_order.character_id:100001` is the current active order and enabled-state bucket.
 - If the `100001` bucket is absent, import falls back to natural `prompts[]` order and each prompt's own `enabled` value.
-- `system_prompt:true` makes imported system-rule content replace the route-provided base prompt for creative routes. It does not replace the earlier ChatBook-owned `builtin_system_prompt` stage; disable the built-in rule for that surface if the imported preset should be the first system content.
-- `system_prompt:false` injects imported rule content at the top of the user prompt before native ChatBook context.
-- supported runtime roles are `system` and `user`, but ChatBook uses `system_prompt` as the runtime channel switch for imported rules.
+- `role` value `system` routes imported rule content into the system prompt in active order. Imported system-channel content replaces the route-provided base prompt but does not replace the earlier ChatBook-owned `builtin_system_prompt` stage; disable the built-in rule for that surface if the imported preset should be the first system content.
+- `role` value `user` injects imported rule content at the top of the user prompt before native ChatBook context.
+- `system_prompt` is preserved for import/export round-trip only and has no ChatBook runtime effect.
 - `forbid_overrides` locks ChatBook content editing for that imported rule; it does not block same-slot runtime prompt rules.
 - `injectionPosition`, `injectionDepth`, `injectionOrder`, `injectionTrigger`, and `marker` are preserved for export only and have no ChatBook runtime effect.
 - allowlisted `condition` values are evaluated without `eval`.
