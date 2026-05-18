@@ -121,7 +121,7 @@ describe('sillytavern macro context and evaluator boundary', () => {
     const registry = createPresetCompatMacroRegistry([
       createPresetCompatRegisteredMacro({
         name: 'trim',
-        evaluate: ({ resolvedArguments }) => resolvedArguments[0]?.trim() ?? '',
+        evaluate: ({ resolvedArguments = [] }) => resolvedArguments[0]?.trim() ?? '',
       }),
       createPresetCompatRegisteredMacro({
         name: 'if',

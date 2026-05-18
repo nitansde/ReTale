@@ -53,6 +53,15 @@ describe('story branch validation contracts', () => {
 
     expect(() =>
       timelineSelectionSchema.parse({
+        kind: 'continue_block',
+        nodeId: 'node-continue-001',
+        continueBlockId: 'continue-block-001',
+        anchorChapterNo: 10,
+      })
+    ).not.toThrow()
+
+    expect(() =>
+      timelineSelectionSchema.parse({
         kind: 'future_jump',
         nodeId: 'node-001',
         runId: 'run-001',

@@ -1,8 +1,9 @@
 "use client"
 
-import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
+import { useMemo, useState, type ChangeEvent } from 'react'
 import { X } from 'lucide-react'
 import { PresetCompatPresetEditor } from '@/components/workspace/PresetCompatPresetEditor'
+import { PRESET_COMPAT_EDITABLE_SURFACE_META } from '@/lib/preset-compat/surface-contract'
 import {
   PRESET_COMPAT_CREATIVE_SURFACE_IDS,
   type PresetCompatCreativeSurfaceId,
@@ -20,12 +21,9 @@ type PresetCompatLibraryModalProps = {
 }
 
 const BUILTIN_SURFACE_LABELS: Record<PresetCompatCreativeSurfaceId, string> = {
-  rewrite: 'Rewrite',
-  expand: 'Expand',
-  roleplay: 'Roleplay',
-  polish: 'Polish',
-  continue: 'Continue',
-  future_jump_rewrite: 'Future Jump rewrite',
+  rewrite: PRESET_COMPAT_EDITABLE_SURFACE_META.rewrite.label,
+  future_jump: PRESET_COMPAT_EDITABLE_SURFACE_META.future_jump.label,
+  roleplay: PRESET_COMPAT_EDITABLE_SURFACE_META.roleplay.label,
 }
 
 function sanitizeFileStem(name: string) {
@@ -80,13 +78,12 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
     () => Object.values(presetCompatLibrary.presets).slice().sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
     [presetCompatLibrary.presets]
   )
-  const selectedPreset = selectedPresetId ? presetCompatLibrary.presets[selectedPresetId] ?? null : presets[0] ?? null
-
-  useEffect(() => {
-    if (!open) return
-    if (selectedPresetId && presetCompatLibrary.presets[selectedPresetId]) return
-    setSelectedPresetId(presets[0]?.id ?? null)
-  }, [open, presetCompatLibrary.presets, presets, selectedPresetId])
+  const selectedPreset = selectedPresetId && presetCompatLibrary.presets[selectedPresetId]
+    ? presetCompatLibrary.presets[selectedPresetId]
+    : presets[0] ?? null
+  const resolvedActiveSurfaceId = activeSurfaceId && PRESET_COMPAT_CREATIVE_SURFACE_IDS.includes(activeSurfaceId as PresetCompatCreativeSurfaceId)
+    ? activeSurfaceId as PresetCompatCreativeSurfaceId
+    : null
 
   async function importFile(event: ChangeEvent<HTMLInputElement>, kind: 'preset' | 'regex') {
     const file = event.target.files?.[0]
@@ -283,7 +280,8 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
           <div>
             {selectedPreset ? (
               <PresetCompatPresetEditor
-                activeSurfaceId={activeSurfaceId}
+                key={`${selectedPreset.id}:${resolvedActiveSurfaceId ?? 'none'}`}
+                activeSurfaceId={resolvedActiveSurfaceId}
                 activeSelection={activeSelection}
                 preset={selectedPreset}
                 library={presetCompatLibrary}
@@ -322,12 +320,14 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                   <div className="mt-4 grid gap-3 lg:grid-cols-2">
                     {PRESET_COMPAT_CREATIVE_SURFACE_IDS.map((surfaceId) => {
                       const rule = presetCompatLibrary.builtinSystemPrompts[surfaceId]
+                      const surfaceMeta = PRESET_COMPAT_EDITABLE_SURFACE_META[surfaceId]
                       return (
                         <div key={surfaceId} className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4">
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
                               <p className="text-sm font-medium text-zinc-100">{BUILTIN_SURFACE_LABELS[surfaceId]}</p>
                               <p className="mt-1 text-xs leading-5 text-zinc-500">ChatBook-owned · 不随预设导出</p>
+                              <p className="mt-1 text-xs leading-5 text-zinc-500">{surfaceMeta.builtinPromptSummary}</p>
                             </div>
                             <label className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300">
                               <input

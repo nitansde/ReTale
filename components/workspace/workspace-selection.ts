@@ -6,6 +6,7 @@ const WORKSPACE_SELECTION_QUERY_KEYS = [
   'selectionChapterId',
   'selectionChapterNo',
   'selectionNodeId',
+  'selectionContinueBlockId',
   'selectionSessionId',
   'selectionRunId',
   'selectionAnchorChapterNo',
@@ -17,6 +18,52 @@ function parseSelectionNumber(value: string | null) {
   if (!value) return null
   const parsed = Number.parseInt(value, 10)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function matchesBranchSelectionNode(selection: Exclude<TimelineSelection, { kind: 'chapter' }>, node: StoryTimelineBranchNode) {
+  if (selection.kind === 'what_if') {
+    return node.nodeType === 'what_if' && node.whatIfSessionId === selection.sessionId
+  }
+
+  if (selection.kind === 'continue_block') {
+    return node.nodeType === 'continue_block' && node.continueBlockId === selection.continueBlockId
+  }
+
+  return node.nodeType === 'future_jump' && node.futureJumpRunId === selection.runId
+}
+
+export function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelection | null {
+  if (node.nodeType === 'continue_block') {
+    return node.continueBlockId
+      ? {
+          kind: 'continue_block',
+          nodeId: node.id,
+          continueBlockId: node.continueBlockId,
+          anchorChapterNo: node.anchorChapterNo,
+        }
+      : null
+  }
+
+  if (node.nodeType === 'what_if') {
+    return node.whatIfSessionId
+      ? {
+          kind: 'what_if',
+          nodeId: node.id,
+          sessionId: node.whatIfSessionId,
+          anchorChapterNo: node.anchorChapterNo,
+        }
+      : null
+  }
+
+  return node.futureJumpRunId && node.sourceChapterNo !== null && node.targetChapterNo !== null
+    ? {
+        kind: 'future_jump',
+        nodeId: node.id,
+        runId: node.futureJumpRunId,
+        sourceChapterNo: node.sourceChapterNo,
+        targetChapterNo: node.targetChapterNo,
+      }
+    : null
 }
 
 export function toChapterTimelineSelection(chapter: Pick<Chapter, 'id' | 'order'>): TimelineSelection {
@@ -41,17 +88,12 @@ export function resolveWorkspaceSelection(options: {
   if (currentSelection.kind === 'chapter') return fallbackSelection
 
   const matchingNode = branchNodes.find((node) => node.id === currentSelection.nodeId)
-  if (!matchingNode) return fallbackSelection
-
-  if (currentSelection.kind === 'what_if') {
-    return matchingNode.nodeType === 'what_if' && matchingNode.whatIfSessionId === currentSelection.sessionId
-      ? currentSelection
-      : fallbackSelection
+  if (matchingNode && matchesBranchSelectionNode(currentSelection, matchingNode)) {
+    return toBranchTimelineSelection(matchingNode) ?? fallbackSelection
   }
 
-  return matchingNode.nodeType === 'future_jump' && matchingNode.futureJumpRunId === currentSelection.runId
-    ? currentSelection
-    : fallbackSelection
+  const fallbackBranchMatch = branchNodes.find((node) => matchesBranchSelectionNode(currentSelection, node))
+  return fallbackBranchMatch ? (toBranchTimelineSelection(fallbackBranchMatch) ?? fallbackSelection) : fallbackSelection
 }
 
 export function readWorkspaceSelectionFromSearchParams(searchParams: URLSearchParams): TimelineSelection | null {
@@ -79,6 +121,20 @@ export function readWorkspaceSelectionFromSearchParams(searchParams: URLSearchPa
       kind: 'what_if',
       nodeId,
       sessionId,
+      anchorChapterNo,
+    }
+  }
+
+  if (selectionKind === 'continue_block') {
+    const nodeId = searchParams.get('selectionNodeId')
+    const continueBlockId = searchParams.get('selectionContinueBlockId')
+    const anchorChapterNo = parseSelectionNumber(searchParams.get('selectionAnchorChapterNo'))
+    if (!nodeId || !continueBlockId || anchorChapterNo === null) return null
+
+    return {
+      kind: 'continue_block',
+      nodeId,
+      continueBlockId,
       anchorChapterNo,
     }
   }
@@ -121,6 +177,14 @@ export function writeWorkspaceSelectionToSearchParams(searchParams: URLSearchPar
     nextSearchParams.set('selectionKind', 'what_if')
     nextSearchParams.set('selectionNodeId', selection.nodeId)
     nextSearchParams.set('selectionSessionId', selection.sessionId)
+    nextSearchParams.set('selectionAnchorChapterNo', String(selection.anchorChapterNo))
+    return nextSearchParams
+  }
+
+  if (selection.kind === 'continue_block') {
+    nextSearchParams.set('selectionKind', 'continue_block')
+    nextSearchParams.set('selectionNodeId', selection.nodeId)
+    nextSearchParams.set('selectionContinueBlockId', selection.continueBlockId)
     nextSearchParams.set('selectionAnchorChapterNo', String(selection.anchorChapterNo))
     return nextSearchParams
   }

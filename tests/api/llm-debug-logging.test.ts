@@ -58,9 +58,9 @@ async function createTempRoot() {
   return tempRoot
 }
 
-async function listJsonFiles(directory: string) {
+async function listJsonFiles(directory: string): Promise<string[]> {
   const entries = await fs.readdir(directory, { withFileTypes: true })
-  const nested = await Promise.all(entries.map(async (entry) => {
+  const nested: string[][] = await Promise.all(entries.map(async (entry): Promise<string[]> => {
     const entryPath = path.join(directory, entry.name)
     if (entry.isDirectory()) return listJsonFiles(entryPath)
     return entry.name.endsWith('.json') ? [entryPath] : []
@@ -99,8 +99,8 @@ async function readFirstLog(folder: string) {
 async function readLogs(folder: string) {
   const files = await listJsonFiles(path.join(String(tempRoot), folder))
   return Promise.all(files
-    .sort((left, right) => left.localeCompare(right))
-    .map(async (filePath) => JSON.parse(await fs.readFile(filePath, 'utf8')) as Awaited<ReturnType<typeof readFirstLog>>))
+    .sort((left: string, right: string) => left.localeCompare(right))
+    .map(async (filePath: string) => JSON.parse(await fs.readFile(filePath, 'utf8')) as Awaited<ReturnType<typeof readFirstLog>>))
 }
 
 function createDebugPresetLibrary(mode: 'default' | 'rewrite-output' | 'stream-output' = 'default'): PresetCompatLibrary {

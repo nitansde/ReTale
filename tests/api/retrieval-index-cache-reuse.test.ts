@@ -156,7 +156,7 @@ async function createRetrievalIndexHarness(testName: string) {
 afterEach(() => {
   if (globalForSqlite.sqlite) {
     try {
-      globalForSqlite.sqlite.close()
+      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
     delete globalForSqlite.sqlite
@@ -299,7 +299,9 @@ describe('retrieval-index cache reuse helpers', () => {
     })
 
     expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
-    expect(mockLanceDb.database.createTable.mock.calls[0]?.[1].map((row: { id: string }) => row.id)).toEqual(mergedDocs.map((row) => row.id))
+    expect(
+      (mockLanceDb.database.createTable.mock.calls[0]?.[1] as Array<{ id: string }> | undefined)?.map((row) => row.id)
+    ).toEqual(mergedDocs.map((row) => row.id))
     expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
       count: rawTextDocs.length,
     })
@@ -386,8 +388,15 @@ describe('retrieval-index cache reuse helpers', () => {
 
     expect(emptyHarness.embedTextsWithOllama).toHaveBeenCalledTimes(1)
     const emptyCacheRows = emptyHarness.database.prepare(
-      'SELECT embeddingInputHash, vectorJson, vectorDimension FROM RawTextEmbeddingCache ORDER BY embeddingInputHash ASC'
-    ).all() as Array<{ embeddingInputHash: string; vectorJson: string; vectorDimension: number }>
+      `SELECT embeddingInputHash, vectorJson, vectorDimension
+       FROM RawTextEmbeddingCache
+       WHERE branchId = ? AND provider = ? AND model = ?
+       ORDER BY embeddingInputHash ASC`
+    ).all('novel-001:main', 'ollama', 'unit-test-embedding-model') as Array<{
+      embeddingInputHash: string
+      vectorJson: string
+      vectorDimension: number
+    }>
     expect(emptyCacheRows).toHaveLength(emptyRawTextDocs.length)
     expect(emptyCacheRows.every((row) => row.vectorDimension === 3)).toBe(true)
 

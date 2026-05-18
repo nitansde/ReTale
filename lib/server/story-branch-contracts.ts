@@ -10,6 +10,12 @@ export const timelineSelectionSchema = z.discriminatedUnion('kind', [
     chapterNo: positiveInt,
   }),
   z.object({
+    kind: z.literal('continue_block'),
+    nodeId: z.string().min(1),
+    continueBlockId: z.string().min(1),
+    anchorChapterNo: positiveInt,
+  }),
+  z.object({
     kind: z.literal('what_if'),
     nodeId: z.string().min(1),
     sessionId: z.string().min(1),
@@ -115,7 +121,7 @@ export const storyTimelineNodeCreateSchema = z.object({
   id: z.string().min(1),
   novelId: z.string().min(1),
   branchId: z.string().min(1),
-  nodeType: z.enum(['what_if', 'future_jump']),
+  nodeType: z.enum(['what_if', 'continue_block', 'future_jump']),
   labelIndex: z.number().int().nonnegative(),
   anchorChapterNo: positiveInt,
   title: z.string().min(1),
@@ -124,6 +130,7 @@ export const storyTimelineNodeCreateSchema = z.object({
   sourceChapterNo: positiveInt.nullable(),
   targetChapterNo: positiveInt.nullable(),
   chapterId: z.string().nullable(),
+  continueBlockId: z.string().nullable(),
   whatIfSessionId: z.string().nullable(),
   futureJumpRunId: z.string().nullable(),
   laneIndex: z.number().int().nonnegative().default(0),
@@ -233,6 +240,78 @@ export const futureJumpReviseSchema = z.object({
   userFeedback: z.string().nullable(),
   bridgeSummary: z.string().min(1),
   generatedTargetText: z.string().min(1),
+})
+
+export const continueBlockRevisionSchema = z.object({
+  id: z.string().min(1),
+  continueBlockId: z.string().min(1),
+  revisionNo: positiveInt,
+  revisionKind: z.string().min(1),
+  userInstruction: z.string(),
+  selectedText: z.string(),
+  originalText: z.string(),
+  generatedText: z.string().min(1),
+  title: z.string().min(1),
+  subtitle: z.string().nullable(),
+  createdAt: z.string().min(1),
+})
+
+export const continueBlockCreateRequestSchema = z.object({
+  novelId: z.string().min(1),
+  branchId: z.string().min(1),
+  sourceChapterNo: positiveInt,
+  parentTimelineNodeId: z.string().nullable().optional(),
+  selectedText: z.string(),
+  originalText: z.string(),
+  generatedText: z.string().min(1),
+  userInstruction: z.string().min(1),
+  titleHint: z.string().nullable().optional(),
+  subtitleHint: z.string().nullable().optional(),
+})
+
+export const continueBlockRegenerateRequestSchema = z.object({
+  continueBlockId: z.string().min(1),
+  generatedText: z.string().min(1),
+  userInstruction: z.string().min(1),
+  selectedText: z.string(),
+  originalText: z.string(),
+  titleHint: z.string().nullable().optional(),
+  subtitleHint: z.string().nullable().optional(),
+})
+
+export const continueBlockMutationResponseSchema = z.object({
+  continueBlockId: z.string().min(1),
+  timelineNodeId: z.string().min(1),
+  generatedText: z.string().min(1),
+  title: z.string().min(1),
+  subtitle: z.string().nullable(),
+  latestRevisionNo: positiveInt,
+})
+
+export const continueBlockDetailSchema = z.object({
+  id: z.string().min(1),
+  novelId: z.string().min(1),
+  branchId: z.string().min(1),
+  parentTimelineNodeId: z.string().nullable(),
+  sourceChapterNo: positiveInt,
+  title: z.string().min(1),
+  subtitle: z.string().nullable(),
+  userInstruction: z.string(),
+  selectedText: z.string(),
+  originalText: z.string(),
+  latestText: z.string().min(1),
+  latestRevisionNo: positiveInt,
+  status: z.string().min(1),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+  timelineNodeId: z.string().nullable(),
+  latestRevision: continueBlockRevisionSchema.nullable(),
+  revisionHistory: z.array(z.object({
+    revisionNo: positiveInt,
+    revisionKind: z.string().min(1),
+    createdAt: z.string().min(1),
+  })),
+  revisions: z.array(continueBlockRevisionSchema),
 })
 
 export const bridgeSummaryGenerationSchema = z.object({

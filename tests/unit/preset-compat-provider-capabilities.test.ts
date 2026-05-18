@@ -443,7 +443,7 @@ describe('preset compat provider capabilities', () => {
       impersonationPrompt: 'IMPERSONATION TEMPLATE',
     }
     library.presets[preset.id] = preset
-    for (const surfaceId of ['rewrite', 'roleplay', 'continue'] as const) {
+    for (const surfaceId of ['rewrite', 'roleplay', 'future_jump'] as const) {
       library.surfaceBindings[surfaceId] = {
         ...library.surfaceBindings[surfaceId],
         presetId: preset.id,
@@ -530,7 +530,7 @@ describe('preset compat provider capabilities', () => {
 
     const continueRuntime = resolvePresetCompatRuntime({
       library,
-      surfaceId: 'continue',
+      surfaceId: 'rewrite',
       providerDefaults: {
         provider: 'openai-compatible',
       },

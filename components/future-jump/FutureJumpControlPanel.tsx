@@ -18,7 +18,7 @@ export function FutureJumpControlPanel(props: {
         <div>
           <p className="text-[11px] uppercase tracking-[0.18em] text-sky-200/70">Revision controls</p>
           <h3 className="mt-2 text-lg font-semibold text-zinc-100">在最新 Future 版本上继续试错</h3>
-          <p className="mt-2 text-sm leading-6 text-zinc-300">这里保持单一 combined revise 流：一段反馈 + 一次重生成，不拆分 bridge-only / text-only 控件。</p>
+          <p className="mt-2 text-sm leading-6 text-zinc-300">这里保持单一 combined revise 流：一段反馈 + 一次重生成，不拆分 bridge-only / text-only 控件；而 continue 会切回 rewrite continuation，并在保存时创建子 continue block。</p>
         </div>
         <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1 text-[11px] text-sky-100">当前 latest revision: {props.latestRevisionNo}</span>
       </div>
@@ -50,6 +50,7 @@ export function FutureJumpControlPanel(props: {
           onClick={props.onContinue}
           disabled={props.continueDisabled}
           className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid="future-jump-continue"
         >
           <ArrowRight className="h-4 w-4" />
           Continue this Future
@@ -57,7 +58,7 @@ export function FutureJumpControlPanel(props: {
       </div>
 
       <div className="mt-4 rounded-[18px] border border-amber-300/18 bg-amber-500/10 p-3 text-xs leading-6 text-amber-100">
-        继续改写会复用现有 rewrite overlay，但默认只把最新 Future 输出当作候选和 source material，不直接回写主线章节正文。
+        continue 会复用现有 rewrite overlay，并继承这次 Future Jump 的最新输出与桥接上下文；保存时创建子 continue block。regenerate 仍直接修订当前 Future Jump run 并保留 revision history。
       </div>
 
       {props.actionError ? (

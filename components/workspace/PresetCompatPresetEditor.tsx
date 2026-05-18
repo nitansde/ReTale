@@ -2,18 +2,21 @@
 
 import { useEffect, useState, type ChangeEvent } from 'react'
 import {
+  PRESET_COMPAT_EDITABLE_SURFACE_META,
+  PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS,
   PRESET_COMPAT_OPTED_IN_SURFACE_IDS,
 } from '@/lib/preset-compat/surface-contract'
 import { buildPresetCompatCreativeRuntimePreview } from '@/lib/preset-compat/creative-runtime-preview'
 import { resolvePresetCompatRuntime } from '@/lib/preset-compat/resolve-runtime'
 import {
   PRESET_COMPAT_CREATIVE_SURFACE_IDS,
+  type PresetCompatCreativeSurfaceId,
+  type PresetCompatEditableSurfaceId,
   type PresetCompatSurfaceId,
 } from '@/lib/preset-compat/types'
 import type {
   PresetCompatLibrary,
   PresetCompatBuiltinSystemPrompt,
-  PresetCompatCreativeSurfaceId,
   PresetCompatPresetRecord,
   PresetCompatPromptRule,
   PresetCompatRegexRecord,
@@ -29,11 +32,11 @@ import type {
 import { useNovelStore } from '@/store/novel-store'
 
 type PresetCompatPresetEditorProps = {
-  activeSurfaceId?: PresetCompatSurfaceId | null
+  activeSurfaceId?: PresetCompatCreativeSurfaceId | null
   activeSelection?: PresetCompatSessionWorkspaceSelection | null
   preset: PresetCompatPresetRecord
   library: PresetCompatLibrary
-  onBindSurface: (surfaceId: PresetCompatSurfaceId, presetId: string | null) => void
+  onBindSurface: (surfaceId: PresetCompatEditableSurfaceId, presetId: string | null) => void
   onUpdateBuiltinSystemPrompt: (surfaceId: PresetCompatCreativeSurfaceId, updates: Partial<Omit<PresetCompatBuiltinSystemPrompt, 'surfaceId'>>) => void
   onUpdatePromptRule: (promptRuleId: string, updates: Partial<PresetCompatPromptRule>) => void
   onUpdateEmbeddedRegex: (regexId: string, updates: Partial<PresetCompatRegexRecord>) => void
@@ -46,7 +49,7 @@ type PresetCompatPresetEditorProps = {
 }
 
 type SurfaceRuntimePreview = {
-  surfaceId: PresetCompatSurfaceId
+  surfaceId: PresetCompatCreativeSurfaceId
   promptPreview: {
     systemPrompt: string
     userPrompt: string
@@ -68,12 +71,9 @@ const DEFERRED_PROMPT_RULE_BATCH_DELAY_MS = 32
 type PreviewGenerationStatus = 'idle' | 'generating' | 'ready'
 
 const SURFACE_LABELS: Record<PresetCompatSurfaceId, string> = {
-  rewrite: 'Rewrite',
-  expand: 'Expand',
-  roleplay: 'Roleplay',
-  polish: 'Polish',
-  continue: 'Continue',
-  future_jump_rewrite: 'Future Jump rewrite',
+  rewrite: PRESET_COMPAT_EDITABLE_SURFACE_META.rewrite.label,
+  future_jump: PRESET_COMPAT_EDITABLE_SURFACE_META.future_jump.label,
+  roleplay: PRESET_COMPAT_EDITABLE_SURFACE_META.roleplay.label,
   future_jump_bridge: 'Future Jump bridge',
   what_if_delta_extraction: 'What-if delta extraction',
   knowledge_extraction: 'Knowledge extraction',
@@ -92,27 +92,28 @@ function buildProviderDefaults(settings: AIScenarioSettings) {
   } as const
 }
 
-function getPreviewSessionPhase(surfaceId: PresetCompatSurfaceId, phase: PresetCompatSessionPhase | null) {
+function getPreviewSessionPhase(_surfaceId: PresetCompatCreativeSurfaceId, phase: PresetCompatSessionPhase | null) {
   if (phase) return phase
-  return surfaceId === 'continue' ? 'continue' : 'new_chat'
+  return 'new_chat'
 }
 
-function getResetPhaseForSurface(surfaceId: PresetCompatSurfaceId): PresetCompatSessionPhase {
-  return surfaceId === 'continue' ? 'continue' : 'new_chat'
+function getResetPhaseForSurface(): PresetCompatSessionPhase {
+  return 'new_chat'
 }
 
 function formatSurfaceSelectionLabel(selection: PresetCompatSessionWorkspaceSelection | null | undefined) {
   if (!selection) return '当前工作区上下文'
   if (selection.kind === 'chapter') return `章节 ${selection.chapterId}`
+  if (selection.kind === 'continue_block') return `续写块 ${selection.continueBlockId}`
   if (selection.kind === 'what_if') return `What-if ${selection.sessionId}`
   return `Future Jump ${selection.runId}`
 }
 
-function isPreviewableSurfaceId(surfaceId: PresetCompatSurfaceId | null): surfaceId is PresetCompatCreativeSurfaceId {
+function isPreviewableSurfaceId(surfaceId: PresetCompatCreativeSurfaceId | null): surfaceId is PresetCompatCreativeSurfaceId {
   return surfaceId !== null && (PRESET_COMPAT_OPTED_IN_SURFACE_IDS as readonly string[]).includes(surfaceId)
 }
 
-function getDefaultPreviewSurfaceId(activeSurfaceId: PresetCompatSurfaceId | null): PresetCompatCreativeSurfaceId {
+function getDefaultPreviewSurfaceId(activeSurfaceId: PresetCompatCreativeSurfaceId | null): PresetCompatCreativeSurfaceId {
   if (isPreviewableSurfaceId(activeSurfaceId)) {
     return activeSurfaceId
   }
@@ -121,9 +122,9 @@ function getDefaultPreviewSurfaceId(activeSurfaceId: PresetCompatSurfaceId | nul
 }
 
 function resolveActiveSurfaceFromSessionState(params: {
-  activeSelection: PresetCompatSessionWorkspaceSelection | null
-  presetCompatSessionState: ReturnType<typeof useNovelStore.getState>['presetCompatSessionState']
-  explicitActiveSurfaceId: PresetCompatSurfaceId | null
+    activeSelection: PresetCompatSessionWorkspaceSelection | null
+    presetCompatSessionState: ReturnType<typeof useNovelStore.getState>['presetCompatSessionState']
+    explicitActiveSurfaceId: PresetCompatCreativeSurfaceId | null
 }) {
   if (params.explicitActiveSurfaceId) {
     return params.explicitActiveSurfaceId
@@ -223,12 +224,14 @@ export function PresetCompatBuiltinSystemPromptEditor({
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
         {PRESET_COMPAT_CREATIVE_SURFACE_IDS.map((surfaceId) => {
           const rule = library.builtinSystemPrompts[surfaceId]
+          const surfaceMeta = PRESET_COMPAT_EDITABLE_SURFACE_META[surfaceId]
           return (
             <div key={surfaceId} className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="text-sm font-medium text-zinc-100">{SURFACE_LABELS[surfaceId]}</p>
+                  <p className="text-sm font-medium text-zinc-100">{surfaceMeta.label}</p>
                   <p className="mt-1 text-xs leading-5 text-zinc-500">ChatBook-owned · 不随预设导出</p>
+                  <p className="mt-1 text-xs leading-5 text-zinc-500">{surfaceMeta.builtinPromptSummary}</p>
                 </div>
                 <label className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300">
                   <input
@@ -288,7 +291,7 @@ export function PresetCompatPresetEditor({
         chapterId: currentChapterId,
       }
     : null)
-  const standardSurfaces = PRESET_COMPAT_OPTED_IN_SURFACE_IDS.filter((surfaceId) => surfaceId !== 'future_jump_rewrite')
+  const standardSurfaces = PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS
   const standaloneRegexes = Object.values(library.standaloneRegexes)
   const [firstPromptRule, ...deferredPromptRules] = preset.promptRules
   const activeSelectionLabel = formatSurfaceSelectionLabel(effectiveSelection)
@@ -361,14 +364,6 @@ export function PresetCompatPresetEditor({
   }
 
   useEffect(() => {
-    setSelectedPreviewSurfaceId(defaultPreviewSurfaceId)
-    setSurfacePreview(null)
-    setPreviewGenerationStatus('idle')
-  }, [defaultPreviewSurfaceId, preset.id])
-
-  useEffect(() => {
-    setVisibleDeferredPromptRuleCount(0)
-
     let deferredRulesTimer: number | null = null
 
     const deferredRulesInitialTimer = window.setTimeout(() => {
@@ -383,7 +378,7 @@ export function PresetCompatPresetEditor({
         window.clearTimeout(deferredRulesTimer)
       }
     }
-  }, [preset.id])
+  }, [deferredPromptRules.length, preset.id])
 
   useEffect(() => {
     if (visibleDeferredPromptRuleCount === 0 || visibleDeferredPromptRuleCount >= deferredPromptRules.length) {
@@ -439,9 +434,16 @@ export function PresetCompatPresetEditor({
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {standardSurfaces.map((surfaceId) => {
             const binding = library.surfaceBindings[surfaceId]
+            const surfaceMeta = PRESET_COMPAT_EDITABLE_SURFACE_META[surfaceId]
             return (
               <label key={surfaceId} className="block rounded-[20px] border border-white/8 bg-[#0b0d12] p-3">
-                <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">{SURFACE_LABELS[surfaceId]}</span>
+                <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">{surfaceMeta.label}</span>
+                <span
+                  className="mb-3 block text-xs leading-5 text-zinc-500"
+                  data-testid={`preset-compat-binding-summary-${surfaceId}`}
+                >
+                  {surfaceMeta.bindingSummary}
+                </span>
                 <select
                   data-testid={`preset-compat-binding-${surfaceId}`}
                   value={binding?.presetId ?? ''}
@@ -456,22 +458,6 @@ export function PresetCompatPresetEditor({
           })}
         </div>
 
-        <div className="mt-4 rounded-[20px] border border-violet-400/16 bg-violet-500/8 p-4">
-          <p className="text-[11px] uppercase tracking-[0.16em] text-violet-200/80">高级</p>
-          <p className="mt-2 text-sm leading-6 text-zinc-300">Future Jump 改写保留独立绑定，因为 bridge 生成仍需保持 fail-closed。</p>
-          <label className="mt-3 block">
-            <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">{SURFACE_LABELS.future_jump_rewrite}</span>
-            <select
-              data-testid="preset-compat-binding-future_jump_rewrite"
-              value={library.surfaceBindings.future_jump_rewrite.presetId ?? ''}
-              onChange={(event) => onBindSurface('future_jump_rewrite', event.target.value || null)}
-              className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
-            >
-              <option value="">不使用预设</option>
-              {Object.values(library.presets).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
-        </div>
       </div>
 
       <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
@@ -633,7 +619,7 @@ export function PresetCompatPresetEditor({
                   <button
                     type="button"
                     data-testid={`preset-compat-session-reset-${surfacePreview.surfaceId}`}
-                    onClick={() => resetPresetCompatSessionStateForSelection(effectiveSelection, [surfacePreview.surfaceId], getResetPhaseForSurface(surfacePreview.surfaceId))}
+                    onClick={() => resetPresetCompatSessionStateForSelection(effectiveSelection, [surfacePreview.surfaceId], getResetPhaseForSurface())}
                     className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-200 transition hover:bg-white/[0.06]"
                   >
                     重置当前上下文

@@ -328,9 +328,8 @@ describe('preset compat store lifecycle', () => {
     expect(exportedRegexBundle).toContain('regex_scripts')
   })
 
-  it('persists the preset-compatible library inside saveToBackend without leaking it into workspace payloads', async () => {
+  it('keeps workspace autosave isolated from the global preset-compatible library payload', async () => {
     const initialLibrary = createLibrary({ revision: 5 })
-    const savedLibrary = createLibrary({ revision: 6 })
     const requestBodies: Array<{ url: string; body: unknown }> = []
 
     useNovelStore.setState({
@@ -345,13 +344,6 @@ describe('preset compat store lifecycle', () => {
           body: JSON.parse(String(init.body)),
         })
         return new Response(JSON.stringify({ ok: true }), { status: 200 })
-      }
-      if (url === '/api/settings/preset-compat' && init?.method === 'POST') {
-        requestBodies.push({
-          url,
-          body: JSON.parse(String(init.body)),
-        })
-        return new Response(JSON.stringify({ ok: true, library: savedLibrary }), { status: 200 })
       }
       if (url === '/api/knowledge-view') {
         return new Response(JSON.stringify({
@@ -370,17 +362,10 @@ describe('preset compat store lifecycle', () => {
 
     await useNovelStore.getState().saveToBackend()
 
-    expect(requestBodies).toHaveLength(2)
+    expect(requestBodies).toHaveLength(1)
     expect(requestBodies[0]?.url).toBe('/api/workspace')
     expect(requestBodies[0]?.body).not.toHaveProperty('presetCompatLibrary')
-    expect(requestBodies[1]).toEqual({
-      url: '/api/settings/preset-compat',
-      body: {
-        library: initialLibrary,
-        expectedRevision: 5,
-      },
-    })
-    expect(useNovelStore.getState().presetCompatLibrary.revision).toBe(6)
+    expect(useNovelStore.getState().presetCompatLibrary.revision).toBe(5)
   })
 
   it('retains the last good library when load, save, or import fails and records explicit errors', async () => {

@@ -161,13 +161,21 @@ describe('future-jump revise API', () => {
       timelineNodeId: string | null
       bridgeSummary: string
       generatedTargetText: string
+      presetCompat?: {
+        fieldStatuses: unknown[]
+        warnings: unknown[]
+      } | null
     }
-    expect(revisePayload).toEqual({
+    expect(revisePayload).toEqual(expect.objectContaining({
       runId: 'jump-run-001',
       timelineNodeId: 'jump_fixture_001',
       bridgeSummary: revisedBridgeSummary,
       generatedTargetText: revisedTargetText,
-    })
+    }))
+    expect(revisePayload.presetCompat).toEqual(expect.objectContaining({
+      fieldStatuses: [],
+      warnings: [],
+    }))
     expect(fetchMock).toHaveBeenCalledTimes(2)
 
     const revisions = database.prepare(

@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 
 import { act, renderHook } from '@testing-library/react'
+import type { Dispatch, SetStateAction } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import type { GraphReviewControls } from '@/components/graph/types'
+import type { GenerationContextBuildData, GraphReviewControls, GraphSelection } from '@/components/graph/types'
 import {
+  WORKSPACE_CHAPTER_ACTION_ENTRY_MODES,
   useWorkspaceChapterSelection,
   type PendingSourceJump,
   type WorkspaceActionMode,
@@ -16,6 +18,11 @@ const DEFAULT_GRAPH_REVIEW_CONTROLS: GraphReviewControls = {
   maxHops: 2,
   hideLowConfidence: false,
   confirmedOnly: false,
+  showPotentiallyStale: false,
+}
+
+function createStateSetterMock<T>() {
+  return vi.fn() as unknown as Dispatch<SetStateAction<T>>
 }
 
 function buildChapter(overrides: Partial<Chapter>): Chapter {
@@ -37,35 +44,39 @@ function createResetControls() {
   return {
     defaultGraphReviewControls: DEFAULT_GRAPH_REVIEW_CONTROLS,
     resetPresetCompatSessionStateForChapter: vi.fn<(chapter: Chapter) => void>(),
-    setRoleplayTurns: vi.fn<(value: WorkspaceRoleplayTurn[]) => void>(),
-    setRoleplayDraft: vi.fn<(value: string) => void>(),
-    setSelectionText: vi.fn<(value: string) => void>(),
-    setLockedSelectionText: vi.fn<(value: string) => void>(),
-    setGenerationContext: vi.fn<(value: null) => void>(),
-    setGraphContext: vi.fn<(value: null) => void>(),
-    setContextPreviewError: vi.fn<(value: string) => void>(),
-    setGraphReviewControls: vi.fn<(value: GraphReviewControls) => void>(),
-    setGraphSelection: vi.fn<(value: null) => void>(),
-    setEvidenceDrawerOpen: vi.fn<(value: boolean) => void>(),
-    setDisabledContextBlockIds: vi.fn<(value: string[]) => void>(),
-    setExcludedGraphEdgeIds: vi.fn<(value: string[]) => void>(),
-    setExcludedEvidenceIds: vi.fn<(value: string[]) => void>(),
-    setGraphMutationPendingId: vi.fn<(value: string | null) => void>(),
-    setGraphMutationError: vi.fn<(value: string) => void>(),
-    setToolbarPos: vi.fn<(value: WorkspaceFloatingPosition | null) => void>(),
-    setActiveMode: vi.fn<(value: WorkspaceActionMode | null) => void>(),
+    setRoleplayTurns: createStateSetterMock<WorkspaceRoleplayTurn[]>(),
+    setRoleplayDraft: createStateSetterMock<string>(),
+    setSelectionText: createStateSetterMock<string>(),
+    setLockedSelectionText: createStateSetterMock<string>(),
+    setGenerationContext: createStateSetterMock<GenerationContextBuildData | null>(),
+    setGraphContext: createStateSetterMock<GenerationContextBuildData['graphContext'] | null>(),
+    setContextPreviewError: createStateSetterMock<string>(),
+    setGraphReviewControls: createStateSetterMock<GraphReviewControls>(),
+    setGraphSelection: createStateSetterMock<GraphSelection>(),
+    setEvidenceDrawerOpen: createStateSetterMock<boolean>(),
+    setDisabledContextBlockIds: createStateSetterMock<string[]>(),
+    setExcludedGraphEdgeIds: createStateSetterMock<string[]>(),
+    setExcludedEvidenceIds: createStateSetterMock<string[]>(),
+    setGraphMutationPendingId: createStateSetterMock<string | null>(),
+    setGraphMutationError: createStateSetterMock<string>(),
+    setToolbarPos: createStateSetterMock<WorkspaceFloatingPosition | null>(),
+    setActiveMode: createStateSetterMock<WorkspaceActionMode | null>(),
   }
 }
 
 describe('useWorkspaceChapterSelection', () => {
+  it('keeps chapter-root action entries narrower than the canonical workspace surface union', () => {
+    expect(WORKSPACE_CHAPTER_ACTION_ENTRY_MODES).toEqual(['rewrite', 'roleplay'])
+  })
+
   it('resets selection and action state when selecting a chapter', () => {
     const chapterOne = buildChapter({ id: 'chapter-1', title: 'Chapter 1', content: '<p>Alpha</p>', order: 1 })
     const chapterTwo = buildChapter({ id: 'chapter-2', title: 'Chapter 2', content: '<p>Beta body</p>', order: 2 })
     const htmlToPlainText = vi.fn((html: string) => html.replace(/<[^>]+>/g, '').trim())
     const setCurrentChapterId = vi.fn<(chapterId: string) => void>()
-    const setCenterPaneView = vi.fn<(value: 'body' | 'graph') => void>()
-    const setPendingSourceJump = vi.fn<(value: PendingSourceJump | null) => void>()
-    const setLeftPanelOpen = vi.fn<(value: boolean) => void>()
+    const setCenterPaneView = createStateSetterMock<'body' | 'graph'>()
+    const setPendingSourceJump = createStateSetterMock<PendingSourceJump | null>()
+    const setLeftPanelOpen = createStateSetterMock<boolean>()
     const resetControls = createResetControls()
 
     const { result } = renderHook(() =>
@@ -115,9 +126,9 @@ describe('useWorkspaceChapterSelection', () => {
     const chapterOne = buildChapter({ id: 'chapter-1', title: 'Chapter 1', content: '<p>Alpha</p>', order: 1 })
     const chapterTwo = buildChapter({ id: 'chapter-2', title: 'Chapter 2', content: '<p>Beta body</p>', order: 2 })
     const setCurrentChapterId = vi.fn<(chapterId: string) => void>()
-    const setCenterPaneView = vi.fn<(value: 'body' | 'graph') => void>()
-    const setPendingSourceJump = vi.fn<(value: PendingSourceJump | null) => void>()
-    const setLeftPanelOpen = vi.fn<(value: boolean) => void>()
+    const setCenterPaneView = createStateSetterMock<'body' | 'graph'>()
+    const setPendingSourceJump = createStateSetterMock<PendingSourceJump | null>()
+    const setLeftPanelOpen = createStateSetterMock<boolean>()
     const resetControls = createResetControls()
     const target: PendingSourceJump = {
       chapterId: chapterTwo.id,

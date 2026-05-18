@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   BookOpen,
   Check,
+  ChevronDown,
   Globe,
   GitBranch,
   LoaderCircle,
@@ -34,6 +35,7 @@ import { WorkspaceChapterNav } from '@/components/workspace/WorkspaceChapterNav'
 import { WorkspaceReferencePanel } from '@/components/workspace/WorkspaceReferencePanel'
 import {
   type PendingSourceJump,
+  WORKSPACE_CHAPTER_ACTION_ENTRY_MODES,
   useWorkspaceChapterSelection,
   type WorkspaceActionMode,
   type WorkspaceFloatingPosition,
@@ -107,9 +109,27 @@ type PendingFutureJumpRewriteLaunch = {
   detail: FutureJumpRunDetail
   targetChapterId: string
   targetTitle: string
+  parentTimelineNodeId: string | null
+  selectedText: string
+  originalText: string
+  userInstruction: string
 }
 
-type RewriteLaunchSource = 'chapter' | 'what_if' | 'future_jump'
+type PendingContinueBlockRewriteLaunch = {
+  continueBlockId: string
+  nodeId: string
+  anchorChapterNo: number
+  latestText: string
+  userInstruction: string
+  selectedText: string
+  originalText: string
+  title: string
+  subtitle: string | null
+  targetChapterId: string
+  variant: 'continue' | 'regenerate'
+}
+
+type RewriteLaunchSource = 'chapter' | 'what_if' | 'future_jump' | 'continue_block'
 
 type FutureMapLaunchState = {
   novelId: string
@@ -304,19 +324,30 @@ const ACTION_META: Record<WorkspaceActionMode, { label: string; title: string; d
     description: '围绕选中片段与额外要求，产出一个完整章节重写版本。',
     icon: Wand2,
   },
+  future_jump: {
+    label: '未来跳转',
+    title: 'Future Jump · 目标节点改写',
+    description: '围绕 what-if 分歧与桥接上下文，生成目标未来节点的改写结果。',
+    icon: Sparkles,
+  },
   roleplay: {
     label: '角色扮演',
     title: '角色扮演 · 剧情推进',
     description: '像聊天一样输入角色台词或行动，让故事围绕当前选区继续推进。',
     icon: MessageCircleMore,
   },
-  expand: {
-    label: '智能扩写',
-    title: '智能扩写 · 保留剧情',
-    description: '不改变既有剧情走向，只增强描述、氛围、动作与感官细节。',
-    icon: Sparkles,
-  },
 }
+
+const CHAPTER_ACTION_ENTRY_TEST_IDS = {
+  rewrite: 'workspace-chapter-rewrite-entry',
+  roleplay: 'workspace-chapter-roleplay-entry',
+} as const
+
+const CONTINUE_BLOCK_ACTION_TEST_IDS = {
+  continue: 'workspace-continue-block-continue-entry',
+  regenerate: 'workspace-continue-block-regenerate-entry',
+  futureJump: 'workspace-continue-block-future-jump-entry',
+} as const
 
 const CHARACTER_PROFILE_LABELS = {
   personality: '性格',
@@ -549,6 +580,66 @@ async function callCreateWhatIfSessionApi(payload: Record<string, unknown>): Pro
   return data
 }
 
+async function callCreateContinueBlockApi(payload: Record<string, unknown>): Promise<{
+  continueBlockId: string
+  timelineNodeId: string
+  generatedText: string
+  title: string
+  subtitle: string | null
+  latestRevisionNo: number
+}> {
+  const response = await fetch('/api/continue-blocks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  const data = await response.json() as {
+    continueBlockId: string
+    timelineNodeId: string
+    generatedText: string
+    title: string
+    subtitle: string | null
+    latestRevisionNo: number
+    error?: string
+  }
+  if (!response.ok) {
+    throw new Error(data.error || '保存续写块失败')
+  }
+
+  return data
+}
+
+async function callRegenerateContinueBlockApi(payload: Record<string, unknown>): Promise<{
+  continueBlockId: string
+  timelineNodeId: string
+  generatedText: string
+  title: string
+  subtitle: string | null
+  latestRevisionNo: number
+}> {
+  const response = await fetch('/api/continue-blocks', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  const data = await response.json() as {
+    continueBlockId: string
+    timelineNodeId: string
+    generatedText: string
+    title: string
+    subtitle: string | null
+    latestRevisionNo: number
+    error?: string
+  }
+  if (!response.ok) {
+    throw new Error(data.error || '重生续写块失败')
+  }
+
+  return data
+}
+
 async function callDeleteWhatIfSessionApi(sessionId: string, novelId: string, branchId: string) {
   const searchParams = new URLSearchParams({ novelId, branchId })
   const response = await fetch(`/api/what-if/sessions/${sessionId}?${searchParams.toString()}`, {
@@ -574,6 +665,17 @@ async function callDeleteFutureJumpRunApi(runId: string, branchId: string) {
 }
 
 function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelection | null {
+  if (node.nodeType === 'continue_block') {
+    return node.continueBlockId
+      ? {
+          kind: 'continue_block',
+          nodeId: node.id,
+          continueBlockId: node.continueBlockId,
+          anchorChapterNo: node.anchorChapterNo,
+        }
+      : null
+  }
+
   if (node.nodeType === 'what_if') {
     return node.whatIfSessionId
       ? {
@@ -597,7 +699,11 @@ function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelec
 }
 
 function toPresetCompatSessionSurfaceId(mode: WorkspaceActionMode): PresetCompatSurfaceId {
-  return mode
+  return mode === 'roleplay' ? 'roleplay' : 'rewrite'
+}
+
+function toGenerationContextOperationType(mode: WorkspaceActionMode): WorkspaceActionMode {
+  return mode === 'roleplay' ? 'roleplay' : 'rewrite'
 }
 
 export function SelectionNovelStudio() {
@@ -689,9 +795,7 @@ export function SelectionNovelStudio() {
   const [toolbarPos, setToolbarPos] = useState<WorkspaceFloatingPosition | null>(null)
   const [activeMode, setActiveMode] = useState<WorkspaceActionMode | null>(null)
   const [rewritePrompt, setRewritePrompt] = useState('保留核心剧情，围绕选中部分做更大胆、更有戏剧张力的整章重写。')
-  const [expandPrompt, setExpandPrompt] = useState('不改变剧情和信息顺序，只补足环境、动作、心理和感官描写。')
   const [rewriteState, setRewriteState] = useState<GenerationState>({ loading: false, result: '', error: '' })
-  const [expandState, setExpandState] = useState<GenerationState>({ loading: false, result: '', error: '' })
   const [rewriteFlow, setRewriteFlow] = useState<RewriteFlowState>({
     loading: false,
     error: '',
@@ -705,6 +809,7 @@ export function SelectionNovelStudio() {
   const [contextPreviewError, setContextPreviewError] = useState('')
   const [graphReviewLoading, setGraphReviewLoading] = useState(false)
   const [graphReviewControls, setGraphReviewControls] = useState<GraphReviewControls>(DEFAULT_GRAPH_REVIEW_CONTROLS)
+  const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [graphSelection, setGraphSelection] = useState<GraphSelection>(null)
   const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false)
   const [disabledContextBlockIds, setDisabledContextBlockIds] = useState<string[]>([])
@@ -724,13 +829,16 @@ export function SelectionNovelStudio() {
   const [roleplayInput, setRoleplayInput] = useState('')
   const [roleplayDraft, setRoleplayDraft] = useState('')
   const [roleplayTurns, setRoleplayTurns] = useState<WorkspaceRoleplayTurn[]>([])
-  const [copied, setCopied] = useState<'rewrite' | 'expand' | 'roleplay' | null>(null)
+  const [copied, setCopied] = useState<'rewrite' | 'roleplay' | null>(null)
   const [toast, setToast] = useState('')
-  const [whatIfCreating, setWhatIfCreating] = useState(false)
-  const [whatIfCreateError, setWhatIfCreateError] = useState('')
+  const [saveContinueBlockPending, setSaveContinueBlockPending] = useState(false)
+  const [saveContinueBlockError, setSaveContinueBlockError] = useState('')
   const [deletingBranchNodeId, setDeletingBranchNodeId] = useState<string | null>(null)
   const [pendingWhatIfRewriteLaunch, setPendingWhatIfRewriteLaunch] = useState<PendingWhatIfRewriteLaunch | null>(null)
   const [pendingFutureJumpRewriteLaunch, setPendingFutureJumpRewriteLaunch] = useState<PendingFutureJumpRewriteLaunch | null>(null)
+  const [pendingContinueBlockRewriteLaunch, setPendingContinueBlockRewriteLaunch] = useState<PendingContinueBlockRewriteLaunch | null>(null)
+  const [activeFutureJumpRewriteContext, setActiveFutureJumpRewriteContext] = useState<PendingFutureJumpRewriteLaunch | null>(null)
+  const [activeContinueBlockRewriteContext, setActiveContinueBlockRewriteContext] = useState<PendingContinueBlockRewriteLaunch | null>(null)
   const [rewriteLaunchSource, setRewriteLaunchSource] = useState<RewriteLaunchSource>('chapter')
   const [rewriteSourceTextOverride, setRewriteSourceTextOverride] = useState('')
   const [futureMapLaunch, setFutureMapLaunch] = useState<FutureMapLaunchState | null>(null)
@@ -1060,7 +1168,7 @@ export function SelectionNovelStudio() {
       resetPresetCompatSessionStateForChapter: (chapter) => {
         resetPresetCompatSessionStateForSelection(
           toChapterTimelineSelection(chapter),
-          ['rewrite', 'expand', 'roleplay']
+          ['rewrite', 'future_jump', 'roleplay']
         )
       },
       setRoleplayTurns,
@@ -1472,13 +1580,18 @@ export function SelectionNovelStudio() {
 
     setActiveMode(null)
     setLockedSelectionText('')
-    setWhatIfCreateError('')
+    setSaveContinueBlockError('')
     setRewriteLaunchSource('chapter')
     setRewriteSourceTextOverride('')
+    setActiveFutureJumpRewriteContext(null)
+    setActiveContinueBlockRewriteContext(null)
+    setPendingFutureJumpRewriteLaunch(null)
+    setPendingContinueBlockRewriteLaunch(null)
     setGenerationContext(null)
     setGraphContext(null)
     setContextPreviewError('')
     setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
+    setContextPanelOpen(false)
     setGraphSelection(null)
     setEvidenceDrawerOpen(false)
     setDisabledContextBlockIds([])
@@ -1487,7 +1600,6 @@ export function SelectionNovelStudio() {
     setGraphMutationPendingId(null)
     setGraphMutationError('')
     setRewriteState((current) => ({ ...current, error: '' }))
-    setExpandState((current) => ({ ...current, error: '' }))
   }
 
   const loadChapterGraph = useCallback(async (chapter: Chapter, controls = chapterGraphControls, preserveData = false) => {
@@ -1615,6 +1727,10 @@ export function SelectionNovelStudio() {
 
   const selectedRewriteCandidate = rewriteFlow.candidates[rewriteFlow.selectedIndex]
   const activeGraphContext = graphContext ?? generationContext?.graphContext ?? null
+  const activePromptBlockCount = generationContext?.promptBlocks.length ?? 0
+  const activeSeedEntityCount = activeGraphContext?.seedEntities.length ?? 0
+  const activeGraphEdgeCount = activeGraphContext?.edges.length ?? 0
+  const activeEvidenceCount = generationContext?.lanceEvidence.length ?? 0
   const scenarioStatusLabels = (Object.keys(AI_SCENARIO_META) as AIScenarioKey[]).map((scenario) => {
     const meta = AI_SCENARIO_META[scenario]
     const settings = resolvedAISettings[scenario]
@@ -1633,9 +1749,8 @@ export function SelectionNovelStudio() {
 
   const getInstructionForMode = useCallback((mode: WorkspaceActionMode) => {
     if (mode === 'rewrite') return rewritePrompt
-    if (mode === 'expand') return expandPrompt
     return roleplayInput.trim() || '围绕当前选区继续推进剧情。'
-  }, [expandPrompt, roleplayInput, rewritePrompt])
+  }, [roleplayInput, rewritePrompt])
 
   const buildPresetCompatRuntimeContext = (surfaceId: PresetCompatSurfaceId) => {
     if (!currentChapter) return {}
@@ -1674,7 +1789,7 @@ export function SelectionNovelStudio() {
         novelId: currentNovelId,
         chapterId: sourceChapter.id,
         selectedText: targetSelection,
-        operationType: mode,
+        operationType: toGenerationContextOperationType(mode),
         userInstruction: instructionOverride ?? getInstructionForMode(mode),
         excludedGraphEdgeIds: options?.excludedGraphEdgeIds ?? excludedGraphEdgeIds,
         excludedEvidenceIds: options?.excludedEvidenceIds ?? excludedEvidenceIds,
@@ -1742,6 +1857,7 @@ export function SelectionNovelStudio() {
     setGraphContext(null)
     setContextPreviewError('')
     setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
+    setContextPanelOpen(false)
     setGraphSelection(null)
     setEvidenceDrawerOpen(false)
     setDisabledContextBlockIds([])
@@ -1779,21 +1895,16 @@ export function SelectionNovelStudio() {
   useEffect(() => {
     if (!pendingFutureJumpRewriteLaunch || !currentChapter || currentChapter.id !== pendingFutureJumpRewriteLaunch.targetChapterId) return
 
-    const { detail, targetTitle } = pendingFutureJumpRewriteLaunch
-    const instruction = [
-      detail.userDirection.trim() ? `原始方向：${detail.userDirection.trim()}` : '',
-      `目标未来节点：${targetTitle}`,
-      `最新桥接摘要：${detail.bridgeSummary}`,
-      '继续沿着这个 Future Jump 的最新版本扩展新的整章候选，不要默认回写主线正文。',
-    ].filter(Boolean).join('\n\n')
+    const { detail, selectedText, originalText, userInstruction } = pendingFutureJumpRewriteLaunch
 
-    setSelectionText(detail.generatedTargetText)
-    setLockedSelectionText(detail.generatedTargetText)
+    setSelectionText(selectedText)
+    setLockedSelectionText(selectedText)
     setToolbarPos(null)
     setGenerationContext(null)
     setGraphContext(null)
     setContextPreviewError('')
     setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
+    setContextPanelOpen(false)
     setGraphSelection(null)
     setEvidenceDrawerOpen(false)
     setDisabledContextBlockIds([])
@@ -1801,10 +1912,10 @@ export function SelectionNovelStudio() {
     setExcludedEvidenceIds([])
     setGraphMutationPendingId(null)
     setGraphMutationError('')
-    setRewritePrompt(instruction)
+    setRewritePrompt(userInstruction)
     setRewriteLaunchSource('future_jump')
-    setRewriteSourceTextOverride(detail.generatedTargetText)
-    setRewriteState({ loading: false, result: detail.generatedTargetText, error: '' })
+    setRewriteSourceTextOverride(originalText)
+    setRewriteState({ loading: false, result: originalText, error: '' })
     setRewriteFlow({
       loading: false,
       error: '',
@@ -1813,18 +1924,79 @@ export function SelectionNovelStudio() {
         {
           title: '当前 Future 版本',
           summary: '从已持久化的 Future Jump 最新修订继续推进，不默认回写主线章节。',
-          content: detail.generatedTargetText,
+          content: originalText,
         },
       ],
       selectedIndex: 0,
     })
+    setActiveFutureJumpRewriteContext(pendingFutureJumpRewriteLaunch)
+    setActiveContinueBlockRewriteContext(null)
     setActiveMode('rewrite')
     setPendingFutureJumpRewriteLaunch(null)
 
     window.setTimeout(() => {
-      void loadContextPreview('rewrite', instruction)
+      void loadContextPreview('rewrite', userInstruction)
     }, 0)
   }, [currentChapter, pendingFutureJumpRewriteLaunch, loadContextPreview])
+
+  useEffect(() => {
+    if (!pendingContinueBlockRewriteLaunch || !currentChapter || currentChapter.id !== pendingContinueBlockRewriteLaunch.targetChapterId) return
+
+    const instruction = pendingContinueBlockRewriteLaunch.variant === 'continue'
+      ? [
+          pendingContinueBlockRewriteLaunch.userInstruction.trim() ? `前一版要求：${pendingContinueBlockRewriteLaunch.userInstruction.trim()}` : '',
+          `当前续写块：${pendingContinueBlockRewriteLaunch.title}`,
+          '继续沿着这个续写块的最新版本扩展新的续写块，不要覆盖当前节点。',
+        ].filter(Boolean).join('\n\n')
+      : [
+          pendingContinueBlockRewriteLaunch.userInstruction.trim() ? `前一版要求：${pendingContinueBlockRewriteLaunch.userInstruction.trim()}` : '',
+          `当前续写块：${pendingContinueBlockRewriteLaunch.title}`,
+          '重新生成当前续写块，并保留它的修订历史。',
+        ].filter(Boolean).join('\n\n')
+
+    setSelectionText(pendingContinueBlockRewriteLaunch.selectedText)
+    setLockedSelectionText(pendingContinueBlockRewriteLaunch.selectedText)
+    setToolbarPos(null)
+    setGenerationContext(null)
+    setGraphContext(null)
+    setContextPreviewError('')
+    setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
+    setContextPanelOpen(false)
+    setGraphSelection(null)
+    setEvidenceDrawerOpen(false)
+    setDisabledContextBlockIds([])
+    setExcludedGraphEdgeIds([])
+    setExcludedEvidenceIds([])
+    setGraphMutationPendingId(null)
+    setGraphMutationError('')
+    setRewritePrompt(instruction)
+    setRewriteLaunchSource('continue_block')
+    setRewriteSourceTextOverride(pendingContinueBlockRewriteLaunch.latestText)
+    setRewriteState({ loading: false, result: pendingContinueBlockRewriteLaunch.latestText, error: '' })
+    setRewriteFlow({
+      loading: false,
+      error: '',
+      provider: 'continue-block-reader',
+      candidates: [
+        {
+          title: pendingContinueBlockRewriteLaunch.variant === 'continue' ? '当前续写块版本' : '当前待重生版本',
+          summary: pendingContinueBlockRewriteLaunch.variant === 'continue'
+            ? '会复用 rewrite 工作台，但保存时创建新的子续写块。'
+            : '会复用 rewrite 工作台，但保存时覆盖当前续写块并追加历史。',
+          content: pendingContinueBlockRewriteLaunch.latestText,
+        },
+      ],
+      selectedIndex: 0,
+    })
+    setActiveFutureJumpRewriteContext(null)
+    setActiveContinueBlockRewriteContext(pendingContinueBlockRewriteLaunch)
+    setActiveMode('rewrite')
+    setPendingContinueBlockRewriteLaunch(null)
+
+    window.setTimeout(() => {
+      void loadContextPreview('rewrite', instruction)
+    }, 0)
+  }, [currentChapter, pendingContinueBlockRewriteLaunch, loadContextPreview])
 
   const syncGraphReview = async (nextControls: GraphReviewControls, fallbackContext?: GenerationContextBuildData | null) => {
     const sourceContext = fallbackContext ?? generationContext
@@ -1998,7 +2170,7 @@ export function SelectionNovelStudio() {
     await syncGraphReview(nextControls)
   }
 
-  const copyText = async (mode: 'rewrite' | 'expand' | 'roleplay', text: string) => {
+  const copyText = async (mode: 'rewrite' | 'roleplay', text: string) => {
     if (!text) return
     await navigator.clipboard.writeText(text)
     setCopied(mode)
@@ -2600,13 +2772,90 @@ export function SelectionNovelStudio() {
     }
   }
 
+  const handleSaveContinueBlock = async () => {
+    const targetSelection = lockedSelectionText.trim() || selectionText.trim()
+    const selectedCandidate = selectedRewriteCandidate?.content?.trim() || ''
+    const originalText = activeContinueBlockRewriteContext?.originalText?.trim()
+      || activeFutureJumpRewriteContext?.originalText.trim()
+      || rewriteSourceTextOverride.trim()
+      || chapterText
+    if (!currentNovelId || !currentChapter || !targetSelection || !selectedCandidate || saveContinueBlockPending) return
+
+    setSaveContinueBlockPending(true)
+    setSaveContinueBlockError('')
+    try {
+      const isContinueBlockRegenerate = rewriteLaunchSource === 'continue_block' && activeContinueBlockRewriteContext?.variant === 'regenerate'
+      const result = isContinueBlockRegenerate
+        ? await callRegenerateContinueBlockApi({
+            continueBlockId: activeContinueBlockRewriteContext.continueBlockId,
+            selectedText: targetSelection,
+            originalText,
+            generatedText: selectedCandidate,
+            userInstruction: rewritePrompt.trim() || activeContinueBlockRewriteContext.userInstruction.trim() || '重新生成当前续写块',
+            titleHint: selectedRewriteCandidate?.title?.trim() || rewritePrompt.trim().slice(0, 24),
+            subtitleHint: selectedRewriteCandidate?.summary?.trim() || null,
+          })
+        : await callCreateContinueBlockApi({
+            novelId: currentNovelId,
+            branchId: storyTimelineBranchId,
+            sourceChapterNo: currentChapter.order,
+            parentTimelineNodeId: rewriteLaunchSource === 'continue_block'
+              ? activeContinueBlockRewriteContext?.nodeId ?? (activeWorkspaceSelection.kind === 'chapter' ? null : activeWorkspaceSelection.nodeId)
+              : rewriteLaunchSource === 'future_jump'
+                ? activeFutureJumpRewriteContext?.parentTimelineNodeId ?? (activeWorkspaceSelection.kind === 'chapter' ? null : activeWorkspaceSelection.nodeId)
+                : activeWorkspaceSelection.kind === 'chapter'
+                  ? null
+                  : activeWorkspaceSelection.nodeId,
+            selectedText: targetSelection,
+            originalText,
+            generatedText: selectedCandidate,
+            userInstruction: rewritePrompt.trim() || activeFutureJumpRewriteContext?.userInstruction.trim() || '保存当前改写结果',
+            titleHint: selectedRewriteCandidate?.title?.trim() || rewritePrompt.trim().slice(0, 24),
+            subtitleHint: selectedRewriteCandidate?.summary?.trim() || null,
+          })
+
+      const refreshed = await loadStoryTimeline()
+      const matchingNode = refreshed?.branchNodes.find(
+        (node) => node.id === result.timelineNodeId || node.continueBlockId === result.continueBlockId
+      )
+
+      closePanel()
+      setCenterPaneView('body')
+      setWorkspaceSelection(
+        matchingNode?.continueBlockId
+          ? {
+              kind: 'continue_block',
+              nodeId: matchingNode.id,
+              continueBlockId: matchingNode.continueBlockId,
+              anchorChapterNo: matchingNode.anchorChapterNo,
+            }
+          : {
+              kind: 'continue_block',
+              nodeId: result.timelineNodeId,
+              continueBlockId: result.continueBlockId,
+              anchorChapterNo: currentChapter.order,
+            }
+      )
+      setLeftPanelOpen(false)
+
+      setToast(`${isContinueBlockRegenerate ? '已更新' : '已创建'} ${result.title}`)
+      window.setTimeout(() => setToast(''), 2200)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '保存续写块失败'
+      setSaveContinueBlockError(message)
+      setToast(message)
+      window.setTimeout(() => setToast(''), 2400)
+    } finally {
+      setSaveContinueBlockPending(false)
+    }
+  }
+
   const handleCreateWhatIf = async () => {
     const targetSelection = lockedSelectionText.trim() || selectionText.trim()
     const selectedCandidate = selectedRewriteCandidate?.content?.trim() || ''
-    if (!currentNovelId || !currentChapter || !targetSelection || !selectedCandidate || whatIfCreating) return
+    if (!currentNovelId || !currentChapter || !targetSelection || !selectedCandidate || saveContinueBlockPending) return
 
-    setWhatIfCreating(true)
-    setWhatIfCreateError('')
+    setSaveContinueBlockError('')
     try {
       const result = await callCreateWhatIfSessionApi({
         novelId: currentNovelId,
@@ -2646,52 +2895,9 @@ export function SelectionNovelStudio() {
       window.setTimeout(() => setToast(''), 2200)
     } catch (error) {
       const message = error instanceof Error ? error.message : '创建 What-if 失败'
-      setWhatIfCreateError(message)
+      setSaveContinueBlockError(message)
       setToast(message)
       window.setTimeout(() => setToast(''), 2400)
-    } finally {
-      setWhatIfCreating(false)
-    }
-  }
-
-  const handleExpand = async () => {
-    const targetSelection = lockedSelectionText.trim() || selectionText.trim()
-    if (!currentChapter || !targetSelection) return
-    setExpandState({ loading: true, result: '', error: '' })
-    try {
-      await savePresetCompatLibrary()
-      await loadContextPreview('expand', expandPrompt)
-      let streamed = ''
-      await streamRewriteApi(
-        {
-          novelId: currentNovelId,
-          chapterId: currentChapter.id,
-          selectedText: targetSelection,
-          sourceText: chapterText,
-          operationType: 'expand',
-          userInstruction: expandPrompt,
-          disabledBlockIds: disabledContextBlockIds,
-          excludedGraphEdgeIds,
-          excludedEvidenceIds,
-          presetCompatRuntimeContext: buildPresetCompatRuntimeContext('expand'),
-          scope: 'chapter',
-          mode: 'medium',
-          tone: 'cinematic',
-        },
-        {
-          onChunk: (chunk) => {
-            streamed += chunk
-            setExpandState({ loading: true, result: streamed, error: '' })
-          },
-          onError: (message) => {
-            throw new Error(message)
-          },
-        }
-      )
-      const result = streamed.trim()
-      setExpandState({ loading: false, result, error: result ? '' : 'No result returned.' })
-    } catch (error) {
-      setExpandState({ loading: false, result: '', error: error instanceof Error ? error.message : 'Expand failed.' })
     }
   }
 
@@ -2730,7 +2936,7 @@ export function SelectionNovelStudio() {
             hasImpersonationContext: true,
           },
           scope: 'chapter',
-          mode: 'continue',
+          mode: 'dialogue',
           tone: 'dramatic',
         },
         {
@@ -2801,6 +3007,36 @@ export function SelectionNovelStudio() {
   const selectedTimelineNode = activeWorkspaceSelection.kind === 'chapter'
     ? null
     : timelineNodeById.get(activeWorkspaceSelection.nodeId) ?? null
+  const selectedContinueBlockNode = activeWorkspaceSelection.kind === 'continue_block' ? selectedTimelineNode : null
+  const selectedContinueBlockFutureMapLaunch = (() => {
+    if (
+      activeWorkspaceSelection.kind !== 'continue_block'
+      || !selectedContinueBlockNode
+      || !currentNovelId
+    ) {
+      return null
+    }
+
+    let cursor: StoryTimelineBranchNode | null = selectedContinueBlockNode
+    while (cursor) {
+      if (cursor.whatIfSessionId) {
+        const sourceChapterNo = cursor.sourceChapterNo ?? cursor.anchorChapterNo
+        return {
+          novelId: currentNovelId,
+          branchId: storyTimelineBranchId,
+          sessionId: cursor.whatIfSessionId,
+          sourceChapterNo,
+          title: selectedContinueBlockNode.title,
+          parentTimelineNodeId: activeWorkspaceSelection.nodeId,
+        }
+      }
+
+      cursor = cursor.parentNodeId ? timelineNodeById.get(cursor.parentNodeId) ?? null : null
+    }
+
+    return null
+  })()
+  const continueBlockBodyText = selectedContinueBlockNode?.latestText?.trim() || '当前续写块还没有可展示的已保存正文。'
   const workspaceHeaderTitle = selectedTimelineNode?.title ?? currentChapter.title
   const chapterSelectionSummary = (lockedSelectionText || selectionText)
     ? `当前选区：${(lockedSelectionText || selectionText).slice(0, 24)}${(lockedSelectionText || selectionText).length > 24 ? '…' : ''}`
@@ -2893,6 +3129,15 @@ export function SelectionNovelStudio() {
       return
     }
 
+    const targetTitle = context.targetChapter?.chapterTitle?.trim() || context.targetEvent?.title?.trim() || `第 ${context.detail.targetChapterNo} 章未来版本`
+    const selectedText = context.detail.generatedTargetText.trim()
+    const userInstruction = [
+      context.detail.userDirection.trim() ? `原始方向：${context.detail.userDirection.trim()}` : '',
+      `目标未来节点：${targetTitle}`,
+      `最新桥接摘要：${context.detail.bridgeSummary}`,
+      '继续沿着这个 Future Jump 的最新版本扩展新的整章候选；保存时创建子续写块，不要覆盖当前 Future Jump run，也不要默认回写主线正文。',
+    ].filter(Boolean).join('\n\n')
+
     setCenterPaneView('body')
     setLeftPanelOpen(false)
     setPresetCompatSessionPhase(
@@ -2909,9 +3154,52 @@ export function SelectionNovelStudio() {
     setPendingFutureJumpRewriteLaunch({
       detail: context.detail,
       targetChapterId: targetChapter.id,
-      targetTitle: context.targetChapter?.chapterTitle?.trim() || context.targetEvent?.title?.trim() || `第 ${context.detail.targetChapterNo} 章未来版本`,
+      targetTitle,
+      parentTimelineNodeId: context.detail.timelineNodeId,
+      selectedText,
+      originalText: selectedText,
+      userInstruction,
     })
     setCurrentChapterId(targetChapter.id)
+  }
+
+  function reopenContinueBlockRewriteFlow(variant: 'continue' | 'regenerate') {
+    if (activeWorkspaceSelection.kind !== 'continue_block' || !selectedContinueBlockNode?.continueBlockId) return
+
+    const anchorChapter = resolveSourceChapter({ chapterId: null, chapterNo: activeWorkspaceSelection.anchorChapterNo })
+    if (!anchorChapter) {
+      setToast(`找不到第 ${activeWorkspaceSelection.anchorChapterNo} 章，无法重新打开续写块改写流`)
+      window.setTimeout(() => setToast(''), 2400)
+      return
+    }
+
+    setCenterPaneView('body')
+    setLeftPanelOpen(false)
+    setPresetCompatSessionPhase(
+      {
+        kind: 'continue_block',
+        nodeId: activeWorkspaceSelection.nodeId,
+        continueBlockId: activeWorkspaceSelection.continueBlockId,
+        anchorChapterNo: activeWorkspaceSelection.anchorChapterNo,
+      },
+      'rewrite',
+      variant === 'continue' ? 'continue' : 'new_chat',
+      variant !== 'continue'
+    )
+    setPendingContinueBlockRewriteLaunch({
+      continueBlockId: activeWorkspaceSelection.continueBlockId,
+      nodeId: activeWorkspaceSelection.nodeId,
+      anchorChapterNo: activeWorkspaceSelection.anchorChapterNo,
+      latestText: selectedContinueBlockNode.latestText?.trim() || '',
+      userInstruction: selectedContinueBlockNode.userInstruction?.trim() || '',
+      selectedText: selectedContinueBlockNode.selectedText?.trim() || selectedContinueBlockNode.latestText?.trim() || '',
+      originalText: selectedContinueBlockNode.originalText?.trim() || selectedContinueBlockNode.latestText?.trim() || '',
+      title: selectedContinueBlockNode.title,
+      subtitle: selectedContinueBlockNode.subtitle ?? null,
+      targetChapterId: anchorChapter.id,
+      variant,
+    })
+    setCurrentChapterId(anchorChapter.id)
   }
 
   const selectionActions = activeWorkspaceSelection.kind === 'chapter' ? (
@@ -2924,12 +3212,14 @@ export function SelectionNovelStudio() {
         <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] text-zinc-300">第 {currentChapter.order} 章</span>
       </div>
       <div className="mt-3 grid gap-2">
-        {(['rewrite', 'roleplay', 'expand'] as const).map((mode) => {
+        {WORKSPACE_CHAPTER_ACTION_ENTRY_MODES.map((mode) => {
           const meta = ACTION_META[mode]
           const Icon = meta.icon
           return (
             <button
               key={mode}
+              type="button"
+              data-testid={CHAPTER_ACTION_ENTRY_TEST_IDS[mode]}
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => {
                 if (!selectionText.trim()) return
@@ -2951,6 +3241,57 @@ export function SelectionNovelStudio() {
             </button>
           )
         })}
+      </div>
+    </div>
+  ) : activeWorkspaceSelection.kind === 'continue_block' ? (
+    <div className="mb-4 rounded-[24px] border border-fuchsia-400/20 bg-fuchsia-500/10 p-4" data-testid="workspace-continue-block-actions">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">续写块动作</p>
+          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineNode?.title ?? '续写块'}</h3>
+          <p className="mt-2 text-xs leading-6 text-zinc-300">续写块保存后会直接落到这个 reader 视图，并继续保留续写、重生与 Future Jump 三个稳定节点动作入口。</p>
+        </div>
+        <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{activeWorkspaceSelection.continueBlockId}</span>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => reopenContinueBlockRewriteFlow('continue')}
+          data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.continue}
+          className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]"
+        >
+          继续续写
+        </button>
+        <button
+          type="button"
+          onClick={() => reopenContinueBlockRewriteFlow('regenerate')}
+          data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.regenerate}
+          className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]"
+        >
+          重生当前节点
+        </button>
+        <button
+          type="button"
+          disabled={!selectedContinueBlockFutureMapLaunch}
+          onClick={() => {
+            if (!selectedContinueBlockFutureMapLaunch) return
+            setFutureMapLaunch(selectedContinueBlockFutureMapLaunch)
+          }}
+          data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.futureJump}
+          className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08] disabled:opacity-60"
+        >
+          Future Jump
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const anchorChapter = resolveSourceChapter({ chapterId: null, chapterNo: activeWorkspaceSelection.anchorChapterNo })
+            if (anchorChapter) openChapterWorkspace(anchorChapter)
+          }}
+          className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]"
+        >
+          返回锚点章节
+        </button>
       </div>
     </div>
   ) : activeWorkspaceSelection.kind === 'what_if' ? (
@@ -3325,6 +3666,39 @@ export function SelectionNovelStudio() {
                     : undefined
                 }
               />
+            }
+            continueBlockView={
+              activeWorkspaceSelection.kind === 'continue_block' ? (
+                <div className="space-y-4 px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-continue-block-view">
+                  <section className="overflow-hidden rounded-[28px] border border-fuchsia-400/20 bg-[radial-gradient(circle_at_top,_rgba(217,70,239,0.12),_transparent_42%),#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+                    <div className="flex flex-col gap-5 px-5 py-5 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="max-w-3xl">
+                        <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">已保存续写块</p>
+                        <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{selectedContinueBlockNode?.title ?? '续写块'}</h3>
+                        <p className="mt-3 text-sm leading-7 text-zinc-300">{selectedContinueBlockNode?.subtitle?.trim() || '这里展示已保存的续写块最新版本。默认以只读 reader 打开，不再回到候选选择或编辑态。'}</p>
+                        <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-zinc-300">
+                          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">reader mode</span>
+                          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">revision {selectedContinueBlockNode?.latestRevisionNo ?? 1}</span>
+                          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">anchor 第 {activeWorkspaceSelection.anchorChapterNo} 章</span>
+                        </div>
+                      </div>
+                      <div className="rounded-[22px] border border-fuchsia-300/20 bg-black/20 px-4 py-3 text-xs uppercase tracking-[0.18em] text-fuchsia-100" data-testid="workspace-continue-block-reader-mode">
+                        Read mode
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="rounded-[28px] border border-white/8 bg-[#0b0d12] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:p-6">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Latest saved revision</p>
+                      <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{activeWorkspaceSelection.continueBlockId}</span>
+                    </div>
+                    <div className="rounded-[24px] border border-white/8 bg-black/20 p-5">
+                      <p className="whitespace-pre-wrap text-sm leading-8 text-zinc-200" data-testid="workspace-continue-block-reader-body">{continueBlockBodyText}</p>
+                    </div>
+                  </section>
+                </div>
+              ) : null
             }
             whatIfView={
               activeWorkspaceSelection.kind === 'what_if' ? (
@@ -3870,7 +4244,7 @@ export function SelectionNovelStudio() {
           style={{ top: toolbarPos.top, left: toolbarPos.left, transform: 'translateX(-50%)' }}
         >
           <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-white/10 bg-[#090b10]/96 p-1 shadow-[0_18px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl">
-                {(['rewrite', 'roleplay', 'expand'] as const).map((mode) => {
+            {WORKSPACE_CHAPTER_ACTION_ENTRY_MODES.map((mode) => {
               const meta = ACTION_META[mode]
               const Icon = meta.icon
               return (
@@ -4032,90 +4406,6 @@ export function SelectionNovelStudio() {
               <div className="mb-4 rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">正在装配图谱上下文与证据…</div>
             ) : null}
 
-            {generationContext && activeGraphContext ? (
-              <GraphReviewPanel
-                context={{ ...generationContext, graphContext: activeGraphContext }}
-                graphNodes={activeGraphContext.nodes}
-                graphEdges={activeGraphContext.edges}
-                controls={graphReviewControls}
-                loading={contextPreviewLoading || graphReviewLoading}
-                error={contextPreviewError}
-                selection={graphSelection}
-                evidenceDrawerOpen={evidenceDrawerOpen}
-                disabledBlockIds={disabledContextBlockIds}
-                excludedEdgeIds={excludedGraphEdgeIds}
-                excludedEvidenceIds={excludedEvidenceIds}
-                edgeMutationPending={Boolean(graphMutationPendingId && graphSelection?.type === 'edge' && graphSelection.edge.id === graphMutationPendingId)}
-                edgeMutationError={graphMutationError}
-                onTogglePromptBlock={(blockId, enabled) => {
-                  setDisabledContextBlockIds((current) => (enabled ? current.filter((item) => item !== blockId) : [...current, blockId]))
-                }}
-                onToggleEvidenceDrawer={() => setEvidenceDrawerOpen((current) => !current)}
-                onSelectNode={(node) => setGraphSelection({ type: 'node', node })}
-                onSelectEdge={(edge) => {
-                  setGraphSelection({ type: 'edge', edge })
-                  if (edge.evidenceQuote || edge.evidenceLocation) {
-                    setEvidenceDrawerOpen(true)
-                  }
-                }}
-                onClearSelection={() => setGraphSelection(null)}
-                onConfirmEdge={(edge) => {
-                  void handleConfirmGraphEdge(edge.id)
-                }}
-                onRejectEdge={(edge) => {
-                  void handleRejectGraphEdge(edge.id)
-                }}
-                onSaveEdgeEdit={(edge, draft) => {
-                  void handleSaveGraphEdgeEdit(edge.id, draft)
-                }}
-                onToggleNodeExcluded={(node, excluded) => {
-                  const connectedEdgeIds = getConnectedGraphEdgeIds(node.id, activeGraphContext.edges)
-                  if (!connectedEdgeIds.length) return
-                  const nextExcludedGraphEdgeIds = excluded
-                    ? Array.from(new Set([...excludedGraphEdgeIds, ...connectedEdgeIds]))
-                    : excludedGraphEdgeIds.filter((item) => !connectedEdgeIds.includes(item))
-                  void handleExcludedGenerationContextChange({
-                    excludedGraphEdgeIds: nextExcludedGraphEdgeIds,
-                    excludedEvidenceIds,
-                  })
-                }}
-                onToggleEdgeExcluded={(edge, excluded) => {
-                  const nextExcludedGraphEdgeIds = excluded
-                    ? Array.from(new Set([...excludedGraphEdgeIds, edge.id]))
-                    : excludedGraphEdgeIds.filter((item) => item !== edge.id)
-                  void handleExcludedGenerationContextChange({
-                    excludedGraphEdgeIds: nextExcludedGraphEdgeIds,
-                    excludedEvidenceIds,
-                  })
-                }}
-                onToggleEvidenceExcluded={(itemId, excluded) => {
-                  const nextExcludedEvidenceIds = excluded
-                    ? Array.from(new Set([...excludedEvidenceIds, itemId]))
-                    : excludedEvidenceIds.filter((item) => item !== itemId)
-                  void handleExcludedGenerationContextChange({
-                    excludedGraphEdgeIds,
-                    excludedEvidenceIds: nextExcludedEvidenceIds,
-                  })
-                }}
-                onChangeControls={(controls) => {
-                  void handleGraphControlChange(controls)
-                }}
-                onJumpToEdgeSource={(edge) => {
-                  const target = resolveEdgeSourceJumpTarget(edge)
-                  if (target) jumpToGraphSource(target)
-                }}
-                canJumpToEdgeSource={(edge) => Boolean(resolveEdgeSourceJumpTarget(edge))}
-                onJumpToEvidenceSource={(item) => {
-                  const target = resolveEvidenceSourceJumpTarget(item)
-                  if (target) jumpToGraphSource(target)
-                }}
-                canJumpToEvidenceSource={(item) => Boolean(resolveEvidenceSourceJumpTarget(item))}
-                onRefresh={() => {
-                  void handleRefreshContextReview()
-                }}
-              />
-            ) : null}
-
             {!contextPreviewLoading && !generationContext && contextPreviewError ? (
               <div className="mb-4 rounded-[24px] border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-200">{contextPreviewError}</div>
             ) : null}
@@ -4128,8 +4418,10 @@ export function SelectionNovelStudio() {
                       <p className="text-[11px] uppercase tracking-[0.18em] text-violet-200/70">魔改工作台</p>
                       <p className="mt-1 text-sm text-zinc-300">
                         {rewriteLaunchSource === 'future_jump'
-                          ? '当前是从已持久化的 Future Jump 最新版本继续改写：会复用 rewrite 流，但不会默认开放主线正文替换。'
-                          : '先描述你想怎么改，再生成多个完整章节候选。'}
+                          ? '当前是从已持久化的 Future Jump 最新版本继续改写：生成时走 rewrite，保存时会落成当前 Future Jump 节点下的子续写块，不会默认开放主线正文替换。'
+                          : rewriteLaunchSource === 'continue_block'
+                            ? '当前是从已持久化的续写块 reader 重新打开改写：保存时会按续写 / 重生语义写回时间线。'
+                            : '先描述你想怎么改，再生成多个完整章节候选。'}
                       </p>
                     </div>
                     <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-zinc-300">{rewriteFlow.provider || providerLabel}</span>
@@ -4138,7 +4430,7 @@ export function SelectionNovelStudio() {
 
                 {rewriteLaunchSource === 'future_jump' ? (
                   <div className="rounded-[22px] border border-amber-300/18 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100">
-                    这轮改写以最新 Future Jump 输出作为 source material 与初始候选，默认不把结果直接写回当前主线章节。你可以继续生成、筛选和复制版本，再决定后续如何落地。
+                    这轮改写以最新 Future Jump 输出作为 source material 与初始候选，继续生成时只走 rewrite surface；保存结果会创建当前 Future Jump 节点下的子续写块，而不是新建 Future Jump run，也不会默认把结果直接写回当前主线章节。
                   </div>
                 ) : null}
 
@@ -4147,12 +4439,128 @@ export function SelectionNovelStudio() {
                   <textarea value={rewritePrompt} onChange={(event) => setRewritePrompt(event.target.value)} className="h-28 w-full rounded-[24px] border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none" placeholder="例如：保留剧情走向，但把这段写得更压迫、更像命运在逼近。" />
                 </label>
 
+                {generationContext && activeGraphContext ? (
+                  <div className="rounded-[24px] border border-amber-400/18 bg-amber-500/[0.08] p-3">
+                    <button
+                      type="button"
+                      data-testid="workspace-context-panel-toggle"
+                      aria-expanded={contextPanelOpen}
+                      onClick={() => setContextPanelOpen((current) => !current)}
+                      className="flex w-full items-start justify-between gap-3 rounded-[20px] border border-white/10 bg-black/20 px-4 py-3 text-left transition hover:bg-white/[0.05]"
+                    >
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-amber-200/70">高级上下文</p>
+                        <p className="mt-1 text-sm text-zinc-200">默认收起的图谱/人物/关系覆写面板。展开后会直接显示当前自动选出的上下文，而不是空白配置。</p>
+                        <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-zinc-400">
+                          <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">种子人物 {activeSeedEntityCount}</span>
+                          <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">关系 {activeGraphEdgeCount}</span>
+                          <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">证据 {activeEvidenceCount}</span>
+                          <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">Prompt 块 {activePromptBlockCount}</span>
+                        </div>
+                      </div>
+                      <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-zinc-300">
+                        {contextPanelOpen ? '收起' : '展开'}
+                        <ChevronDown className={cn('h-4 w-4 transition', contextPanelOpen && 'rotate-180')} />
+                      </span>
+                    </button>
+
+                    {contextPanelOpen ? (
+                      <div className="pt-3" data-testid="workspace-context-panel">
+                        <GraphReviewPanel
+                          context={{ ...generationContext, graphContext: activeGraphContext }}
+                          graphNodes={activeGraphContext.nodes}
+                          graphEdges={activeGraphContext.edges}
+                          controls={graphReviewControls}
+                          loading={contextPreviewLoading || graphReviewLoading}
+                          error={contextPreviewError}
+                          selection={graphSelection}
+                          evidenceDrawerOpen={evidenceDrawerOpen}
+                          disabledBlockIds={disabledContextBlockIds}
+                          excludedEdgeIds={excludedGraphEdgeIds}
+                          excludedEvidenceIds={excludedEvidenceIds}
+                          edgeMutationPending={Boolean(graphMutationPendingId && graphSelection?.type === 'edge' && graphSelection.edge.id === graphMutationPendingId)}
+                          edgeMutationError={graphMutationError}
+                          onTogglePromptBlock={(blockId, enabled) => {
+                            setDisabledContextBlockIds((current) => (enabled ? current.filter((item) => item !== blockId) : [...current, blockId]))
+                          }}
+                          onToggleEvidenceDrawer={() => setEvidenceDrawerOpen((current) => !current)}
+                          onSelectNode={(node) => setGraphSelection({ type: 'node', node })}
+                          onSelectEdge={(edge) => {
+                            setGraphSelection({ type: 'edge', edge })
+                            if (edge.evidenceQuote || edge.evidenceLocation) {
+                              setEvidenceDrawerOpen(true)
+                            }
+                          }}
+                          onClearSelection={() => setGraphSelection(null)}
+                          onConfirmEdge={(edge) => {
+                            void handleConfirmGraphEdge(edge.id)
+                          }}
+                          onRejectEdge={(edge) => {
+                            void handleRejectGraphEdge(edge.id)
+                          }}
+                          onSaveEdgeEdit={(edge, draft) => {
+                            void handleSaveGraphEdgeEdit(edge.id, draft)
+                          }}
+                          onToggleNodeExcluded={(node, excluded) => {
+                            const connectedEdgeIds = getConnectedGraphEdgeIds(node.id, activeGraphContext.edges)
+                            if (!connectedEdgeIds.length) return
+                            const nextExcludedGraphEdgeIds = excluded
+                              ? Array.from(new Set([...excludedGraphEdgeIds, ...connectedEdgeIds]))
+                              : excludedGraphEdgeIds.filter((item) => !connectedEdgeIds.includes(item))
+                            void handleExcludedGenerationContextChange({
+                              excludedGraphEdgeIds: nextExcludedGraphEdgeIds,
+                              excludedEvidenceIds,
+                            })
+                          }}
+                          onToggleEdgeExcluded={(edge, excluded) => {
+                            const nextExcludedGraphEdgeIds = excluded
+                              ? Array.from(new Set([...excludedGraphEdgeIds, edge.id]))
+                              : excludedGraphEdgeIds.filter((item) => item !== edge.id)
+                            void handleExcludedGenerationContextChange({
+                              excludedGraphEdgeIds: nextExcludedGraphEdgeIds,
+                              excludedEvidenceIds,
+                            })
+                          }}
+                          onToggleEvidenceExcluded={(itemId, excluded) => {
+                            const nextExcludedEvidenceIds = excluded
+                              ? Array.from(new Set([...excludedEvidenceIds, itemId]))
+                              : excludedEvidenceIds.filter((item) => item !== itemId)
+                            void handleExcludedGenerationContextChange({
+                              excludedGraphEdgeIds,
+                              excludedEvidenceIds: nextExcludedEvidenceIds,
+                            })
+                          }}
+                          onChangeControls={(controls) => {
+                            void handleGraphControlChange(controls)
+                          }}
+                          onJumpToEdgeSource={(edge) => {
+                            const target = resolveEdgeSourceJumpTarget(edge)
+                            if (target) jumpToGraphSource(target)
+                          }}
+                          canJumpToEdgeSource={(edge) => Boolean(resolveEdgeSourceJumpTarget(edge))}
+                          onJumpToEvidenceSource={(item) => {
+                            const target = resolveEvidenceSourceJumpTarget(item)
+                            if (target) jumpToGraphSource(target)
+                          }}
+                          canJumpToEvidenceSource={(item) => Boolean(resolveEvidenceSourceJumpTarget(item))}
+                          onRefresh={() => {
+                            void handleRefreshContextReview()
+                          }}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="flex flex-wrap gap-2">
                   <button onClick={handleRewrite} disabled={rewriteFlow.loading} className="inline-flex items-center gap-2 rounded-2xl bg-violet-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60">
                     {rewriteFlow.loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} 生成候选版本
                   </button>
-                  <button onClick={handleCreateWhatIf} disabled={!selectedRewriteCandidate || whatIfCreating} className="rounded-2xl border border-violet-400/30 bg-violet-500/10 px-4 py-3 text-sm text-violet-100 transition hover:bg-violet-500/20 disabled:opacity-40">
-                    {whatIfCreating ? <span className="inline-flex items-center gap-2"><LoaderCircle className="h-4 w-4 animate-spin" /> 创建中</span> : '创建 What-if'}
+                  <button onClick={handleSaveContinueBlock} disabled={!selectedRewriteCandidate || saveContinueBlockPending} className="rounded-2xl border border-fuchsia-400/30 bg-fuchsia-500/10 px-4 py-3 text-sm text-fuchsia-100 transition hover:bg-fuchsia-500/20 disabled:opacity-40">
+                    {saveContinueBlockPending ? <span className="inline-flex items-center gap-2"><LoaderCircle className="h-4 w-4 animate-spin" /> 保存中</span> : '保存为续写块'}
+                  </button>
+                  <button onClick={handleCreateWhatIf} disabled={!selectedRewriteCandidate || saveContinueBlockPending} className="rounded-2xl border border-violet-400/30 bg-violet-500/10 px-4 py-3 text-sm text-violet-100 transition hover:bg-violet-500/20 disabled:opacity-40">
+                    创建 What-if
                   </button>
                   <button onClick={() => selectedRewriteCandidate && applyFullChapter(selectedRewriteCandidate.content)} disabled={!selectedRewriteCandidate || rewriteLaunchSource === 'future_jump'} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
                     {rewriteLaunchSource === 'future_jump' ? '默认不替换正文' : '替换正文'}
@@ -4165,7 +4573,7 @@ export function SelectionNovelStudio() {
                   </button>
                 </div>
 
-                {whatIfCreateError ? <p data-testid="what-if-create-error" className="text-sm text-rose-300">{whatIfCreateError}</p> : null}
+                {saveContinueBlockError ? <p data-testid="continue-block-save-error" className="text-sm text-rose-300">{saveContinueBlockError}</p> : null}
                 {rewriteFlow.error ? <p className="text-sm text-rose-300">{rewriteFlow.error}</p> : null}
 
                 <div className="grid gap-3 lg:grid-cols-[0.9fr_1.4fr]">
@@ -4208,34 +4616,6 @@ export function SelectionNovelStudio() {
                     </div>
                     <p className="min-h-72 whitespace-pre-wrap text-sm leading-7 text-zinc-300">{selectedRewriteCandidate?.content || rewriteState.result || '选择文本并生成后，完整章节候选会显示在这里。'}</p>
                   </div>
-                </div>
-              </div>
-            ) : null}
-
-            {activeMode === 'expand' ? (
-              <div className="space-y-4">
-                <label className="block">
-                  <span className="mb-2 block text-sm text-zinc-300">扩写要求</span>
-                  <textarea value={expandPrompt} onChange={(event) => setExpandPrompt(event.target.value)} className="h-28 w-full rounded-[24px] border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none" />
-                </label>
-
-                <div className="flex flex-wrap gap-2">
-                  <button onClick={handleExpand} disabled={expandState.loading} className="inline-flex items-center gap-2 rounded-2xl bg-sky-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-sky-400 disabled:opacity-60">
-                    {expandState.loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} 生成扩写稿
-                  </button>
-                  <button onClick={() => applyFullChapter(expandState.result)} disabled={!expandState.result.trim()} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
-                    应用到正文
-                  </button>
-                  <button onClick={() => copyText('expand', expandState.result)} disabled={!expandState.result.trim()} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
-                    {copied === 'expand' ? <span className="inline-flex items-center gap-2"><Check className="h-4 w-4" /> 已复制</span> : '复制结果'}
-                  </button>
-                </div>
-
-                {expandState.error ? <p className="text-sm text-rose-300">{expandState.error}</p> : null}
-
-                <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
-                  <p className="mb-2 text-xs uppercase tracking-[0.16em] text-zinc-500">扩写后的完整章节</p>
-                  <p className="min-h-52 whitespace-pre-wrap text-sm leading-7 text-zinc-300">{expandState.result || '扩写结果会出现在这里。'}</p>
                 </div>
               </div>
             ) : null}

@@ -26,7 +26,7 @@ function createTestDb() {
   const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
   return {
     cleanup() {
-      database.close()
+  ;(database as DatabaseSync & { close?: () => void }).close?.()
       tempDatabase.cleanup()
     },
     db: {

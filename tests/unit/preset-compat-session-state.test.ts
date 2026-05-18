@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
+import type { PresetCompatSessionState } from '@/lib/types'
 import {
+  clearPresetCompatSessionStateForSelection,
+  createPresetCompatSessionSelectionKey,
   createPresetCompatSessionStateKey,
   normalizeWorkspaceState,
+  setPresetCompatSessionEntry,
 } from '@/lib/workspace-state'
 import { useNovelStore } from '@/store/novel-store'
 
@@ -60,7 +64,7 @@ describe('preset compat session state', () => {
           turns: [{ role: 'assistant', content: 'should not persist' }],
         },
         invalid_shape: ['assistant turn leak'],
-      } as Record<string, unknown>,
+      } as Record<string, unknown> as PresetCompatSessionState,
     })
 
     expect(normalized.presetCompatSessionState).toEqual({
@@ -72,6 +76,43 @@ describe('preset compat session state', () => {
     })
 
     expect(normalizeWorkspaceState({ localChapters: [createChapter('chapter-1', 1)] }).presetCompatSessionState).toEqual({})
+  })
+
+  it('keys branch session entries by canonical selection identity and clears one branch selection at a time', () => {
+    const continueSelection = {
+      kind: 'continue_block' as const,
+      nodeId: 'continue-node-1',
+      continueBlockId: 'continue-block-1',
+      anchorChapterNo: 10,
+    }
+    const whatIfSelection = {
+      kind: 'what_if' as const,
+      nodeId: 'what-if-node-1',
+      sessionId: 'what-if-session-1',
+      anchorChapterNo: 10,
+    }
+    const futureJumpSelection = {
+      kind: 'future_jump' as const,
+      nodeId: 'jump-node-1',
+      runId: 'jump-run-1',
+      sourceChapterNo: 10,
+      targetChapterNo: 100,
+    }
+
+    let state = {} as PresetCompatSessionState
+    state = setPresetCompatSessionEntry(state, continueSelection, 'rewrite', 'continue')
+    state = setPresetCompatSessionEntry(state, continueSelection, 'roleplay', 'continue')
+    state = setPresetCompatSessionEntry(state, whatIfSelection, 'rewrite', 'continue')
+    state = setPresetCompatSessionEntry(state, futureJumpSelection, 'future_jump', 'continue')
+
+    expect(createPresetCompatSessionSelectionKey(continueSelection)).toBe('continue_block:continue-node-1:continue-block-1:10')
+    expect(createPresetCompatSessionSelectionKey(whatIfSelection)).toBe('what_if:what-if-node-1:what-if-session-1:10')
+    expect(createPresetCompatSessionSelectionKey(futureJumpSelection)).toBe('future_jump:jump-node-1:jump-run-1:10:100')
+
+    expect(Object.keys(clearPresetCompatSessionStateForSelection(state, continueSelection)).sort()).toEqual([
+      createPresetCompatSessionStateKey(futureJumpSelection, 'future_jump'),
+      createPresetCompatSessionStateKey(whatIfSelection, 'rewrite'),
+    ])
   })
 
   it('serializes only lightweight phase and reset metadata, then resets it without touching the preset library', () => {
@@ -131,12 +172,12 @@ describe('preset compat session state', () => {
     )
     useNovelStore.getState().setPresetCompatSessionPhase(
       { kind: 'chapter', chapterId: 'chapter-1' },
-      'continue',
+      'future_jump',
       'continue'
     )
     useNovelStore.getState().setPresetCompatSessionPhase(
       { kind: 'chapter', chapterId: 'chapter-2' },
-      'expand',
+      'future_jump',
       'continue'
     )
 
@@ -156,8 +197,8 @@ describe('preset compat session state', () => {
         phase: 'new_chat',
         resetPending: true,
       },
-      [createPresetCompatSessionStateKey({ kind: 'chapter', chapterId: 'chapter-1' }, 'continue')]: {
-        surfaceId: 'continue',
+      [createPresetCompatSessionStateKey({ kind: 'chapter', chapterId: 'chapter-1' }, 'future_jump')]: {
+        surfaceId: 'future_jump',
         phase: 'continue',
         resetPending: false,
       },
@@ -166,8 +207,8 @@ describe('preset compat session state', () => {
     useNovelStore.getState().deleteChapter('chapter-1')
 
     expect(useNovelStore.getState().presetCompatSessionState).toEqual({
-      [createPresetCompatSessionStateKey({ kind: 'chapter', chapterId: 'chapter-2' }, 'expand')]: {
-        surfaceId: 'expand',
+      [createPresetCompatSessionStateKey({ kind: 'chapter', chapterId: 'chapter-2' }, 'future_jump')]: {
+        surfaceId: 'future_jump',
         phase: 'continue',
         resetPending: false,
       },
@@ -188,12 +229,12 @@ describe('preset compat session state', () => {
     )
     useNovelStore.getState().setPresetCompatSessionPhase(
       { kind: 'chapter', chapterId: 'chapter-1' },
-      'expand',
+      'future_jump',
       'continue'
     )
     useNovelStore.getState().setPresetCompatSessionPhase(
       { kind: 'chapter', chapterId: 'chapter-1' },
-      'continue',
+      'roleplay',
       'continue'
     )
 
@@ -208,13 +249,13 @@ describe('preset compat session state', () => {
         phase: 'new_chat',
         resetPending: true,
       },
-      [createPresetCompatSessionStateKey({ kind: 'chapter', chapterId: 'chapter-1' }, 'expand')]: {
-        surfaceId: 'expand',
+      [createPresetCompatSessionStateKey({ kind: 'chapter', chapterId: 'chapter-1' }, 'future_jump')]: {
+        surfaceId: 'future_jump',
         phase: 'continue',
         resetPending: false,
       },
-      [createPresetCompatSessionStateKey({ kind: 'chapter', chapterId: 'chapter-1' }, 'continue')]: {
-        surfaceId: 'continue',
+      [createPresetCompatSessionStateKey({ kind: 'chapter', chapterId: 'chapter-1' }, 'roleplay')]: {
+        surfaceId: 'roleplay',
         phase: 'continue',
         resetPending: false,
       },

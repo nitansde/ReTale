@@ -47,6 +47,7 @@ import { uid } from '@/lib/utils'
 
 const BRIDGE_SUMMARY_MIN_LENGTH = 300
 const BRIDGE_SUMMARY_MAX_LENGTH = 600
+const FUTURE_JUMP_RUNTIME_SURFACE_ID = 'future_jump' as const
 
 type StageKey = 'bridge' | 'rewrite'
 
@@ -891,7 +892,7 @@ export async function generateTargetNodeRewrite(params: {
 }) {
   const rewriteSettings = loadStoredAISettings().rewrite
   const runtime = applyPresetCompatCreativeRuntime({
-    surfaceId: 'future_jump_rewrite',
+    surfaceId: FUTURE_JUMP_RUNTIME_SURFACE_ID,
     providerDefaults: {
       provider: rewriteSettings.provider,
       openAICompatible: {
@@ -1150,6 +1151,7 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
       sourceChapterNo: generated.run.sourceChapterNo,
       targetChapterNo: generated.run.targetChapterNo,
       chapterId: targetAnchor.chapterId,
+      continueBlockId: null,
       whatIfSessionId: null,
       futureJumpRunId: generated.run.id,
       laneIndex: 0,

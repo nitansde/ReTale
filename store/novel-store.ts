@@ -1119,7 +1119,6 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(serializeState(state)),
       })
-      await get().savePresetCompatLibrary()
       try {
         const projection = await fetchKnowledgeProjection({
           novelId: state.currentNovelId || undefined,

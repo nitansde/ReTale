@@ -5,6 +5,7 @@ import {
 import {
   PRESET_COMPAT_LEGACY_FLAT_PROMPT_KEYS,
   PRESET_COMPAT_CREATIVE_SURFACE_IDS,
+  PRESET_COMPAT_OBSOLETE_SURFACE_IDS,
   PRESET_COMPAT_SOURCE_API_ID,
   PRESET_COMPAT_SURFACE_IDS,
   type PresetCompatBuiltinSystemPrompt,
@@ -21,13 +22,15 @@ import {
 } from '@/lib/preset-compat/types'
 import { findAppSettings, upsertAppSettings } from '@/lib/server/persistence'
 
-const PRESET_COMPAT_LIBRARY_V1_KEY = 'PRESET_COMPAT_LIBRARY_V1'
+export const PRESET_COMPAT_LIBRARY_V1_KEY = 'PRESET_COMPAT_LIBRARY_V1'
+const PRESET_COMPAT_SURFACE_ID_SET = new Set<string>(PRESET_COMPAT_SURFACE_IDS)
+const PRESET_COMPAT_OBSOLETE_SURFACE_ID_SET = new Set<string>(PRESET_COMPAT_OBSOLETE_SURFACE_IDS)
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-function parseStoredLibraryBlob(value: string | null | undefined) {
+export function parseStoredLibraryBlob(value: string | null | undefined) {
   const raw = value?.trim()
   if (!raw) {
     return null
@@ -37,6 +40,29 @@ function parseStoredLibraryBlob(value: string | null | undefined) {
     return JSON.parse(raw) as unknown
   } catch {
     return null
+  }
+}
+
+export type ProtectedPresetCompatLibraryResetSnapshot = {
+  presetCompatLibraryV1: string | null
+}
+
+export function loadProtectedPresetCompatLibraryResetSnapshot(): ProtectedPresetCompatLibraryResetSnapshot {
+  const entries = findAppSettings([PRESET_COMPAT_LIBRARY_V1_KEY])
+  const map = Object.fromEntries(entries.map((item) => [item.key, item.value])) as Partial<Record<typeof PRESET_COMPAT_LIBRARY_V1_KEY, string>>
+  return {
+    presetCompatLibraryV1: map.PRESET_COMPAT_LIBRARY_V1 ?? null,
+  }
+}
+
+export function validateProtectedPresetCompatLibraryResetSnapshot(snapshot: ProtectedPresetCompatLibraryResetSnapshot) {
+  if (snapshot.presetCompatLibraryV1 === null) {
+    return
+  }
+
+  const parsed = parseStoredLibraryBlob(snapshot.presetCompatLibraryV1)
+  if (!isRecord(parsed)) {
+    throw new Error('Protected reset snapshot for PRESET_COMPAT_LIBRARY_V1 is invalid')
   }
 }
 
@@ -76,6 +102,18 @@ function normalizePromptTriggerArray(value: unknown) {
 
 function normalizePassthrough(value: unknown) {
   return isRecord(value) ? value : {}
+}
+
+function normalizeKnownSurfaceRecord(value: unknown) {
+  if (!isRecord(value)) {
+    return {} as Partial<Record<PresetCompatSurfaceId, unknown>>
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter(([surfaceId]) => (
+      PRESET_COMPAT_SURFACE_ID_SET.has(surfaceId) && !PRESET_COMPAT_OBSOLETE_SURFACE_ID_SET.has(surfaceId)
+    ))
+  ) as Partial<Record<PresetCompatSurfaceId, unknown>>
 }
 
 function normalizeUnknownPromptFields(value: unknown) {
@@ -264,12 +302,10 @@ function normalizePreservedFields(value: unknown): PresetCompatPresetRecord['pre
 }
 
 function normalizePromptOrderLists(value: unknown): PresetCompatPresetRecord['promptOrderLists'] {
-  if (!isRecord(value)) {
-    return {}
-  }
+  const record = normalizeKnownSurfaceRecord(value)
 
   const entries = PRESET_COMPAT_SURFACE_IDS.flatMap((surfaceId) => {
-    const orderList = value[surfaceId]
+    const orderList = record[surfaceId]
     if (!Array.isArray(orderList)) {
       return [] as Array<[PresetCompatSurfaceId, string[]]>
     }
@@ -347,12 +383,12 @@ function normalizeSurfaceBinding(value: unknown, fallback: PresetCompatSurfaceBi
 
 function normalizeSurfaceBindings(value: unknown): PresetCompatLibrary['surfaceBindings'] {
   const defaults = createDefaultPresetCompatLibrary().surfaceBindings
-  const record = isRecord(value) ? value : {}
+  const record = normalizeKnownSurfaceRecord(value)
 
   return Object.fromEntries(
     Object.entries(defaults).map(([surfaceId, binding]) => [
       surfaceId,
-      normalizeSurfaceBinding(record[surfaceId], binding),
+      normalizeSurfaceBinding(record[surfaceId as PresetCompatSurfaceId], binding),
     ])
   ) as PresetCompatLibrary['surfaceBindings']
 }

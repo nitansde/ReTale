@@ -66,8 +66,8 @@ function createAiSettings(): AISettings {
 
 function createRuntimeLibrary() {
   const library = createDefaultPresetCompatLibrary()
-  library.builtinSystemPrompts.future_jump_rewrite = {
-    ...library.builtinSystemPrompts.future_jump_rewrite,
+  library.builtinSystemPrompts.future_jump = {
+    ...library.builtinSystemPrompts.future_jump,
     content: 'FUTURE JUMP CHATBOOK BUILTIN SYSTEM',
   }
 
@@ -161,7 +161,7 @@ function createRuntimeLibrary() {
       },
     ],
     promptOrderLists: {
-      future_jump_rewrite: ['fj-user-rule', 'fj-system-rule', 'fj-system-rule-second'],
+      future_jump: ['fj-user-rule', 'fj-system-rule', 'fj-system-rule-second'],
       future_jump_bridge: ['fj-user-rule', 'fj-system-rule', 'fj-system-rule-second'],
       what_if_delta_extraction: ['fj-user-rule', 'fj-system-rule', 'fj-system-rule-second'],
       knowledge_extraction: ['fj-user-rule', 'fj-system-rule', 'fj-system-rule-second'],
@@ -228,7 +228,7 @@ function createRuntimeLibrary() {
     updatedAt: '2026-05-15T00:00:00.000Z',
   }
 
-  for (const surfaceId of ['future_jump_rewrite', 'future_jump_bridge', 'what_if_delta_extraction', 'knowledge_extraction', 'embeddings'] as const) {
+  for (const surfaceId of ['future_jump', 'future_jump_bridge', 'what_if_delta_extraction', 'knowledge_extraction', 'embeddings'] as const) {
     library.surfaceBindings[surfaceId] = {
       ...library.surfaceBindings[surfaceId],
       enabled: true,
@@ -265,7 +265,7 @@ function createMacroRuntimeLibrary() {
       },
     ],
     promptOrderLists: {
-      future_jump_rewrite: ['fj-macro-user-rule'],
+      future_jump: ['fj-macro-user-rule'],
       future_jump_bridge: ['fj-macro-user-rule'],
       what_if_delta_extraction: ['fj-macro-user-rule'],
       knowledge_extraction: ['fj-macro-user-rule'],
@@ -332,7 +332,7 @@ function createMacroRuntimeLibrary() {
     updatedAt: '2026-05-15T00:00:00.000Z',
   }
 
-  for (const surfaceId of ['future_jump_rewrite', 'future_jump_bridge', 'what_if_delta_extraction', 'knowledge_extraction', 'embeddings'] as const) {
+  for (const surfaceId of ['future_jump', 'future_jump_bridge', 'what_if_delta_extraction', 'knowledge_extraction', 'embeddings'] as const) {
     library.surfaceBindings[surfaceId] = {
       ...library.surfaceBindings[surfaceId],
       enabled: true,
@@ -474,6 +474,10 @@ describe('preset compat future jump runtime', () => {
     expect(result.titleHint).toBe('Title Omega')
     expect(result.subtitleHint).toBe('Subtitle Omega')
     expect(result.presetCompat).toMatchObject({
+      runtimeSnapshot: {
+        activeSurfaceId: 'future_jump',
+        activePresetId: 'future-jump-preset',
+      },
       contextWindow: {
         supported: false,
         requestedMaxContextTokens: 4096,
@@ -709,16 +713,16 @@ describe('preset compat future jump runtime', () => {
     expect(result.presetCompat?.macroDiagnostics).toEqual([
       {
         code: 'UNSUPPORTED_MACRO',
-        message: 'Macro is not supported on future_jump_rewrite: input',
+        message: 'Macro is not supported on future_jump: input',
         macroName: 'input',
-        surfaceId: 'future_jump_rewrite',
+        surfaceId: 'future_jump',
         phase: 'apply-runtime',
       },
       {
         code: 'MISSING_CONTEXT_VALUE',
         message: 'Macro requires runtime context value: lastmessage',
         macroName: 'lastmessage',
-        surfaceId: 'future_jump_rewrite',
+        surfaceId: 'future_jump',
         phase: 'apply-runtime',
       },
     ] satisfies PresetCompatMacroDiagnostic[])

@@ -26,11 +26,8 @@ function createTemplateLibrary() {
     promptRules: [],
     promptOrderLists: {
       rewrite: [],
-      expand: [],
+      future_jump: [],
       roleplay: [],
-      polish: [],
-      continue: [],
-      future_jump_rewrite: [],
     },
     embeddedRegexes: [],
     attachedStandaloneRegexIds: [],
@@ -97,7 +94,7 @@ function createTemplateLibrary() {
     updatedAt: '2026-05-16T00:00:00.000Z',
   }
 
-  for (const surfaceId of ['rewrite', 'expand', 'roleplay', 'polish', 'continue', 'future_jump_rewrite'] as const) {
+  for (const surfaceId of ['rewrite', 'future_jump', 'roleplay'] as const) {
     library.surfaceBindings[surfaceId] = {
       ...library.surfaceBindings[surfaceId],
       enabled: true,
@@ -219,7 +216,7 @@ describe('preset compat template runtime', () => {
 
     const continueRuntime = resolvePresetCompatRuntime({
       library,
-      surfaceId: 'continue',
+      surfaceId: 'rewrite',
       providerDefaults: createProviderDefaults(),
       promptRuleRuntimeContext: {
         sessionPhase: 'continue',

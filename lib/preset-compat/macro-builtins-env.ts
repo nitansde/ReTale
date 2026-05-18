@@ -53,7 +53,7 @@ function readRuntimeValue(context: PresetCompatMacroContext, spec: RuntimeLookup
     }
   }
 
-  if (typeof spec.fallback === 'string') {
+  if (typeof spec.fallback === 'string' && context.phase !== 'regex-replacement') {
     return spec.fallback
   }
 

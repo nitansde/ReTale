@@ -15,6 +15,7 @@ async function createTestDatabase(prefix: string) {
 
   const sqliteModule = await import('@/lib/server/sqlite')
   const cacheModule = await import('@/lib/server/retrieval-embedding-cache')
+  globalForSqlite.sqlite = sqliteModule.sqlite
 
   return {
     database: sqliteModule.sqlite,
@@ -105,7 +106,7 @@ async function runDirectRawTextCachePass(params: {
 afterEach(() => {
   if (globalForSqlite.sqlite) {
     try {
-      globalForSqlite.sqlite.close()
+      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
     delete globalForSqlite.sqlite

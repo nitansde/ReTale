@@ -24,7 +24,25 @@ const branchNodes: StoryTimelineBranchNode[] = [
     colorToken: 'rose',
     sourceChapterNo: 10,
     targetChapterNo: null,
+    continueBlockId: null,
     whatIfSessionId: 'what-if-session-1',
+    futureJumpRunId: null,
+    status: 'active',
+  },
+  {
+    type: 'branch_node',
+    id: 'continue-node-1',
+    nodeType: 'continue_block',
+    anchorChapterNo: 10,
+    parentNodeId: 'if-node-1',
+    title: 'CONT-01 续写块',
+    subtitle: '沿着分支继续推进',
+    laneIndex: 1,
+    colorToken: 'fuchsia',
+    sourceChapterNo: 10,
+    targetChapterNo: null,
+    continueBlockId: 'continue-block-1',
+    whatIfSessionId: null,
     futureJumpRunId: null,
     status: 'active',
   },
@@ -40,6 +58,7 @@ const branchNodes: StoryTimelineBranchNode[] = [
     colorToken: 'sky',
     sourceChapterNo: 10,
     targetChapterNo: 100,
+    continueBlockId: null,
     whatIfSessionId: null,
     futureJumpRunId: 'jump-run-1',
     status: 'generated',
@@ -59,6 +78,7 @@ function renderPane(selection: TimelineSelection) {
       chapterGraphSummary="当前浏览：章节图谱"
       chapterBodyView={<div data-testid="chapter-body-view">body</div>}
       chapterGraphView={<div data-testid="chapter-graph-view">graph</div>}
+      continueBlockView={<div data-testid="continue-block-slot">continue-block seam</div>}
       whatIfView={<div data-testid="what-if-slot">what-if seam</div>}
       futureJumpView={<div data-testid="future-jump-slot">future-jump seam</div>}
     />
@@ -72,7 +92,7 @@ describe('workspace selection shell', () => {
     expect(resolveWorkspaceSelection({
       currentSelection: {
         kind: 'what_if',
-        nodeId: 'if-node-1',
+        nodeId: 'stale-if-node',
         sessionId: 'what-if-session-1',
         anchorChapterNo: 10,
       },
@@ -87,9 +107,43 @@ describe('workspace selection shell', () => {
 
     expect(resolveWorkspaceSelection({
       currentSelection: {
+        kind: 'continue_block',
+        nodeId: 'stale-continue-node',
+        continueBlockId: 'continue-block-1',
+        anchorChapterNo: 10,
+      },
+      currentChapter: { id: 'chapter-10', order: 10 },
+      branchNodes,
+    })).toEqual({
+      kind: 'continue_block',
+      nodeId: 'continue-node-1',
+      continueBlockId: 'continue-block-1',
+      anchorChapterNo: 10,
+    })
+
+    expect(resolveWorkspaceSelection({
+      currentSelection: {
+        kind: 'future_jump',
+        nodeId: 'stale-jump-node',
+        runId: 'jump-run-1',
+        sourceChapterNo: 10,
+        targetChapterNo: 100,
+      },
+      currentChapter: { id: 'chapter-10', order: 10 },
+      branchNodes,
+    })).toEqual({
+      kind: 'future_jump',
+      nodeId: 'jump-node-1',
+      runId: 'jump-run-1',
+      sourceChapterNo: 10,
+      targetChapterNo: 100,
+    })
+
+    expect(resolveWorkspaceSelection({
+      currentSelection: {
         kind: 'future_jump',
         nodeId: 'missing-jump',
-        runId: 'jump-run-1',
+        runId: 'missing-run',
         sourceChapterNo: 10,
         targetChapterNo: 100,
       },
@@ -99,6 +153,24 @@ describe('workspace selection shell', () => {
       kind: 'chapter',
       chapterId: 'chapter-10',
       chapterNo: 10,
+    })
+
+    expect(resolveWorkspaceSelection({
+      currentSelection: {
+        kind: 'future_jump',
+        nodeId: 'missing-jump',
+        runId: 'jump-run-1',
+        sourceChapterNo: 10,
+        targetChapterNo: 100,
+      },
+      currentChapter: { id: 'chapter-10', order: 10 },
+      branchNodes,
+    })).toEqual({
+      kind: 'future_jump',
+      nodeId: 'jump-node-1',
+      runId: 'jump-run-1',
+      sourceChapterNo: 10,
+      targetChapterNo: 100,
     })
   })
 
@@ -117,7 +189,20 @@ describe('workspace selection shell', () => {
       anchorChapterNo: 10,
     })
 
-    const futureJumpSearch = writeWorkspaceSelectionToSearchParams(whatIfSearch, {
+    const continueBlockSearch = writeWorkspaceSelectionToSearchParams(whatIfSearch, {
+      kind: 'continue_block',
+      nodeId: 'continue-node-1',
+      continueBlockId: 'continue-block-1',
+      anchorChapterNo: 10,
+    })
+    expect(readWorkspaceSelectionFromSearchParams(continueBlockSearch)).toEqual({
+      kind: 'continue_block',
+      nodeId: 'continue-node-1',
+      continueBlockId: 'continue-block-1',
+      anchorChapterNo: 10,
+    })
+
+    const futureJumpSearch = writeWorkspaceSelectionToSearchParams(continueBlockSearch, {
       kind: 'future_jump',
       nodeId: 'jump-node-1',
       runId: 'jump-run-1',
@@ -168,7 +253,22 @@ describe('workspace selection shell', () => {
 
     expect(screen.getByTestId('what-if-slot')).toBeInTheDocument()
     expect(screen.queryByTestId('workspace-chapter-view-toggle')).not.toBeInTheDocument()
+    expect(screen.getByTestId('workspace-center-pane-kind')).toHaveTextContent('What-if session workspace')
     expect(whatIf.onCenterPaneViewChange).not.toHaveBeenCalled()
+    cleanup()
+
+    renderPane({
+      kind: 'continue_block',
+      nodeId: 'continue-node-1',
+      continueBlockId: 'continue-block-1',
+      anchorChapterNo: 10,
+    })
+
+    expect(screen.getByTestId('continue-block-slot')).toBeInTheDocument()
+    expect(screen.queryByTestId('workspace-chapter-view-toggle')).not.toBeInTheDocument()
+    expect(screen.getByTestId('workspace-center-pane-kind')).toHaveTextContent('续写块工作区')
+    expect(screen.getByText(/默认停留在干净的 reader 视图里/)).toBeInTheDocument()
+    expect(screen.getByText('Selection-driven branch view')).toBeInTheDocument()
     cleanup()
 
     renderPane({
@@ -181,5 +281,6 @@ describe('workspace selection shell', () => {
 
     expect(screen.getByTestId('future-jump-slot')).toBeInTheDocument()
     expect(screen.queryByTestId('workspace-chapter-view-toggle')).not.toBeInTheDocument()
+    expect(screen.getByTestId('workspace-center-pane-kind')).toHaveTextContent('Future jump workspace')
   })
 })

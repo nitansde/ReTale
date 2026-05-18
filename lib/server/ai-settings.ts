@@ -2,7 +2,8 @@ import { normalizeAISettings } from '@/lib/ai-settings'
 import type { AISettings } from '@/lib/types'
 import { findAppSettings, upsertAppSettings } from '@/lib/server/persistence'
 
-const AI_SETTINGS_V2_KEY = 'AI_SETTINGS_V2'
+export const AI_SETTINGS_V2_KEY = 'AI_SETTINGS_V2'
+export const OLLAMA_TIMEOUT_MS_KEY = 'OLLAMA_TIMEOUT_MS'
 
 const LEGACY_SETTING_KEYS = [
   AI_SETTINGS_V2_KEY,
@@ -27,6 +28,34 @@ function parseStoredSettingsBlob(value: string | null | undefined) {
     return JSON.parse(raw) as unknown
   } catch {
     return null
+  }
+}
+
+function isPositiveIntegerString(value: string) {
+  return /^[1-9]\d*$/.test(value.trim())
+}
+
+export type ProtectedAISettingsResetSnapshot = {
+  aiSettingsV2: string | null
+  ollamaTimeoutMs: string | null
+}
+
+export function loadProtectedAISettingsResetSnapshot(): ProtectedAISettingsResetSnapshot {
+  const entries = findAppSettings([AI_SETTINGS_V2_KEY, OLLAMA_TIMEOUT_MS_KEY])
+  const map = Object.fromEntries(entries.map((item) => [item.key, item.value])) as Partial<Record<typeof AI_SETTINGS_V2_KEY | typeof OLLAMA_TIMEOUT_MS_KEY, string>>
+  return {
+    aiSettingsV2: map.AI_SETTINGS_V2 ?? null,
+    ollamaTimeoutMs: map.OLLAMA_TIMEOUT_MS ?? null,
+  }
+}
+
+export function validateProtectedAISettingsResetSnapshot(snapshot: ProtectedAISettingsResetSnapshot) {
+  if (snapshot.aiSettingsV2 !== null && parseStoredSettingsBlob(snapshot.aiSettingsV2) === null) {
+    throw new Error('Protected reset snapshot for AI_SETTINGS_V2 is invalid')
+  }
+
+  if (snapshot.ollamaTimeoutMs !== null && !isPositiveIntegerString(snapshot.ollamaTimeoutMs)) {
+    throw new Error('Protected reset snapshot for OLLAMA_TIMEOUT_MS is invalid')
   }
 }
 

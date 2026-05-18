@@ -16,6 +16,9 @@ import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
 import { generateRewriteWithOllama, streamRewriteWithOllama } from '@/lib/server/ollama-local'
 import type { PresetCompatPromptRuleRuntimeContext, PresetCompatRuntimeContextBlock } from '@/lib/preset-compat/types'
 import type { GenerationContextBlock } from '@/lib/server/context-builder'
+import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
+
+const INVALID_OPERATION_TYPE_ERROR = `Invalid operationType. Expected one of: ${PRODUCT_SURFACE_IDS.join(', ')}`
 
 function mapSurfaceContextBlocks(promptBlocks: readonly GenerationContextBlock[] | null): PresetCompatRuntimeContextBlock[] {
   if (!promptBlocks) {
@@ -52,7 +55,7 @@ function mapSurfaceContextBlocks(promptBlocks: readonly GenerationContextBlock[]
 
 function normalizePresetCompatRuntimeContext(
   body: Record<string, unknown>,
-  operationType: string,
+  operationType: ProductSurfaceId,
   promptBlocks: readonly GenerationContextBlock[] | null
 ): PresetCompatPromptRuleRuntimeContext {
   const rawContext = body.presetCompatRuntimeContext
@@ -61,9 +64,7 @@ function normalizePresetCompatRuntimeContext(
     : {}
   const sessionPhase = typeof runtimeContext.sessionPhase === 'string'
     ? runtimeContext.sessionPhase
-    : operationType === 'continue'
-      ? 'continue'
-      : null
+    : null
   const namedTranscript = runtimeContext.namedTranscript && typeof runtimeContext.namedTranscript === 'object' && !Array.isArray(runtimeContext.namedTranscript)
     ? runtimeContext.namedTranscript as Record<string, unknown>
     : null
@@ -123,12 +124,15 @@ function buildFallbackText(sourceText: string, mode: string, tone: string, promp
   return fallbackCandidates(sourceText, mode, tone, prompt)[0]?.content ?? sourceText
 }
 
-function normalizeOperationType(value: unknown) {
-  const operationType = String(value ?? 'expand').trim()
-  if (operationType === 'expand' || operationType === 'rewrite' || operationType === 'roleplay' || operationType === 'polish' || operationType === 'continue') {
-    return operationType
-  }
-  return 'expand'
+function parseOperationType(value: unknown): ProductSurfaceId | null {
+  const operationType = String(value ?? '').trim()
+  return PRODUCT_SURFACE_IDS.includes(operationType as ProductSurfaceId)
+    ? operationType as ProductSurfaceId
+    : null
+}
+
+function resolveRewriteRouteSurfaceId(operationType: ProductSurfaceId): ProductSurfaceId {
+  return operationType === 'roleplay' ? 'roleplay' : 'rewrite'
 }
 
 function normalizeStringArray(value: unknown) {
@@ -219,7 +223,11 @@ export async function POST(request: Request) {
 
   const sourceText = String(body.sourceText ?? '')
   const selectedText = String(body.selectedText ?? body.sourceText ?? '')
-  const operationType = normalizeOperationType(body.operationType ?? body.mode)
+  const operationType = parseOperationType(body.operationType)
+  if (!operationType) {
+    return NextResponse.json({ ok: false, error: INVALID_OPERATION_TYPE_ERROR }, { status: 400 })
+  }
+  const runtimeSurfaceId = resolveRewriteRouteSurfaceId(operationType)
   const disabledBlockIds = Array.isArray(body.disabledBlockIds) ? body.disabledBlockIds.map((item: unknown) => String(item)) : []
   const excludedGraphEdgeIds = normalizeStringArray(body.excludedGraphEdgeIds)
   const excludedEvidenceIds = normalizeStringArray(body.excludedEvidenceIds)
@@ -229,7 +237,7 @@ export async function POST(request: Request) {
         branchId: body.branchId ? String(body.branchId) : undefined,
         chapterId: String(body.chapterId),
         selectedText,
-        operationType,
+        operationType: runtimeSurfaceId,
         userInstruction,
         excludedGraphEdgeIds,
         excludedEvidenceIds,
@@ -244,7 +252,7 @@ export async function POST(request: Request) {
     assembledContext: string,
     promptBlocks: readonly GenerationContextBlock[] | null,
   ) => applyPresetCompatCreativeRuntime({
-    surfaceId: operationType,
+    surfaceId: runtimeSurfaceId,
     providerDefaults: {
       provider: rewriteProvider,
       openAICompatible: {
@@ -258,7 +266,7 @@ export async function POST(request: Request) {
     },
     systemPrompt: '',
     userPrompt: buildUserPrompt({
-      operationType,
+      operationType: runtimeSurfaceId,
       userInstruction,
       chapterNo: context?.chapterNo,
       selectedLineStart: context?.selectedLineStart,
@@ -268,7 +276,7 @@ export async function POST(request: Request) {
     }),
     promptRuleRuntimeContext: normalizePresetCompatRuntimeContext(
       body as Record<string, unknown>,
-      operationType,
+      runtimeSurfaceId,
       promptBlocks,
     ),
   })

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import {
   exportPresetCompatPreset,
   exportPresetCompatStandaloneRegex,
@@ -89,7 +90,7 @@ describe('preset compat import/export compatibility', () => {
     const activeFixtureOrder = (fixture.prompt_order as Array<{ character_id: number, order: Array<{ identifier: string }> }>)
       .find((entry) => entry.character_id === 100001)?.order ?? []
     expect(preset.promptOrderLists.rewrite).toEqual(activeFixtureOrder.map((entry) => entry.identifier))
-    expect(preset.promptOrderLists.expand).toEqual(preset.promptOrderLists.rewrite)
+    expect(preset.promptOrderLists.future_jump).toEqual(preset.promptOrderLists.rewrite)
     expect(preset.embeddedRegexes).toHaveLength(
       ((fixture.extensions as Record<string, unknown>).regex_scripts as unknown[]).length
     )
@@ -290,10 +291,14 @@ describe('preset compat import/export compatibility', () => {
         injectionPosition: 'before',
         injectionDepth: null,
         injectionOrder: null,
-        injectionTrigger: null,
+        injectionTrigger: [],
         forbidOverrides: false,
         condition: null,
-        passthrough: {},
+        passthrough: {
+          __presetCompatPromptMeta: {
+            injectionTrigger: null,
+          },
+        },
       },
       {
         id: 'prompt-empty',
@@ -338,7 +343,7 @@ describe('preset compat import/export compatibility', () => {
         injectionPosition: 'before',
         injectionDepth: null,
         injectionOrder: null,
-        injectionTrigger: null,
+        injectionTrigger: [],
         forbidOverrides: false,
         condition: null,
         passthrough: {
@@ -362,11 +367,8 @@ describe('preset compat import/export compatibility', () => {
     }
     preset.promptOrderLists = {
       rewrite: ['prompt-null', 'prompt-empty', 'prompt-array', 'prompt-raw-empty'],
-      expand: ['prompt-null', 'prompt-empty', 'prompt-array', 'prompt-raw-empty'],
+      future_jump: ['prompt-null', 'prompt-empty', 'prompt-array', 'prompt-raw-empty'],
       roleplay: ['prompt-null', 'prompt-empty', 'prompt-array', 'prompt-raw-empty'],
-      polish: ['prompt-null', 'prompt-empty', 'prompt-array', 'prompt-raw-empty'],
-      continue: ['prompt-null', 'prompt-empty', 'prompt-array', 'prompt-raw-empty'],
-      future_jump_rewrite: ['prompt-null', 'prompt-empty', 'prompt-array', 'prompt-raw-empty'],
     }
 
     const exported = exportPresetCompatPreset(preset)
@@ -507,7 +509,7 @@ describe('preset compat import/export compatibility', () => {
       { id: 'jailbreak', role: 'system', content: 'Legacy jailbreak prompt content' },
     ])
     expect(preset.promptOrderLists.rewrite).toEqual(['main', 'nsfw', 'jailbreak'])
-    expect(preset.promptOrderLists.future_jump_rewrite).toEqual(['main', 'nsfw', 'jailbreak'])
+    expect(preset.promptOrderLists.future_jump).toEqual(['main', 'nsfw', 'jailbreak'])
     expect(preset.passthrough).toMatchObject({
       root: {
         main_prompt: 'Legacy main prompt content',
@@ -536,8 +538,8 @@ describe('preset compat import/export compatibility', () => {
     expect(exported.nsfw_prompt).toBe('Legacy nsfw prompt content')
     expect(exported.jailbreak_prompt).toBe('Legacy jailbreak prompt content')
     expect(exported.use_sysprompt).toBe(true)
-    expect(exported.post_history).toBe('Keep this exact root field')
-    expect(exported.post_history_instructions).toBeUndefined()
+    expect((exported as Record<string, unknown>).post_history).toBe('Keep this exact root field')
+    expect((exported as Record<string, unknown>).post_history_instructions).toBeUndefined()
     expect(exported.prompts).toEqual([
       {
         identifier: 'main',
@@ -620,5 +622,46 @@ describe('preset compat import/export compatibility', () => {
       },
     ])
     expect(exported.main_prompt).toBe('Legacy main prompt content')
+  })
+
+  it('keeps restored preset content parseable when a full-library blob is rebuilt from imported preset exports', () => {
+    const fixture = readFixture('resets_example.json')
+    const { preset } = normalizePresetCompatPresetImport(fixture, {
+      uploadedFileName: 'resets_example.json',
+      existingNames: [],
+      now: '2026-05-18T00:00:00.000Z',
+      idFactory: () => 'reset-roundtrip-preset',
+    })
+    const { regexes } = normalizePresetCompatStandaloneRegexImport({
+      regex_scripts: ((fixture.extensions as Record<string, unknown>)?.regex_scripts as unknown[]) ?? [],
+    })
+
+    const exportedPreset = exportPresetCompatPreset(preset)
+    const exportedRegexes = exportPresetCompatStandaloneRegex(regexes)
+    const library = createDefaultPresetCompatLibrary()
+    library.revision = 3
+    library.lastImportedAt = '2026-05-18T00:00:00.000Z'
+    library.lastExportedAt = '2026-05-18T00:00:01.000Z'
+    library.presets[preset.id] = preset
+    library.standaloneRegexes = Object.fromEntries(regexes.map((regex) => [regex.id, regex]))
+    library.surfaceBindings.rewrite = {
+      ...library.surfaceBindings.rewrite,
+      presetId: preset.id,
+    }
+
+    const restoredLibraryBlob = JSON.stringify(library)
+    const restoredLibrary = JSON.parse(restoredLibraryBlob) as typeof library
+
+    expect(restoredLibrary.presets[preset.id]?.passthrough.root).toMatchObject({
+      prompts: exportedPreset.prompts,
+    })
+    expect((restoredLibrary.presets[preset.id]?.passthrough.extensions as Record<string, unknown>).regex_scripts).toEqual(
+      (exportedRegexes as Record<string, unknown>).regex_scripts
+    )
+    expect(restoredLibrary.presets[preset.id]?.promptRules[0]?.content).toBe(
+      preset.promptRules[0]?.content
+    )
+    expect(restoredLibrary.surfaceBindings.rewrite.presetId).toBe(preset.id)
+    expect(Object.keys(restoredLibrary.standaloneRegexes)).toHaveLength(regexes.length)
   })
 })

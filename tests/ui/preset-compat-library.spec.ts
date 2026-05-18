@@ -3,6 +3,7 @@ import path from 'node:path'
 import { expect, test } from '@playwright/test'
 import { buildPresetCompatCreativeRuntimePreview } from '@/lib/preset-compat/creative-runtime-preview'
 import { normalizePresetCompatPresetImport, normalizePresetCompatStandaloneRegexImport } from '@/lib/preset-compat/normalize'
+import { PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS } from '@/lib/preset-compat/surface-contract'
 import { resolvePresetCompatRuntime } from '@/lib/preset-compat/resolve-runtime'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import type { PresetCompatLibrary } from '@/lib/preset-compat/types'
@@ -24,7 +25,7 @@ const fixturePath = resolveFixturePath(path.join('external', 'resets_example.jso
 
 function buildPreviewPromptRuntimeContext() {
   return {
-    sessionPhase: 'chat' as const,
+    sessionPhase: 'new_chat' as const,
     surfaceContextBlocks: [{
       id: 'preview-named-transcript',
       label: 'Preview named transcript',
@@ -318,24 +319,31 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
   expect(importedPreset).toBeDefined()
   const firstRuleId = importedPreset.promptRules[0]?.id
   expect(firstRuleId).toBeTruthy()
+  await expect(page.locator('select[data-testid^="preset-compat-binding-"]')).toHaveCount(PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS.length)
+  await expect(page.getByTestId('preset-compat-binding-summary-rewrite')).toContainText('save / continue / regenerate')
+  await expect(page.getByTestId('preset-compat-binding-summary-future_jump')).toContainText('不参与 continue')
+  await expect(page.getByTestId('preset-compat-binding-roleplay')).toBeVisible()
+  await expect(page.getByTestId('preset-compat-binding-expand')).toHaveCount(0)
+  await expect(page.getByTestId('preset-compat-binding-polish')).toHaveCount(0)
+  await expect(page.getByTestId('preset-compat-binding-continue')).toHaveCount(0)
   await expect(page.getByTestId(`preset-compat-rule-content-${firstRuleId}`)).toBeVisible()
   await expect(page.getByTestId('preset-compat-preview-surface-select')).toHaveValue('rewrite')
   await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toHaveCount(0)
   await page.getByTestId('preset-compat-preview-generate').click()
 
   await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toBeVisible()
-  await expect(page.getByTestId('preset-compat-preview-surface-expand')).toHaveCount(0)
+  await expect(page.getByTestId('preset-compat-preview-surface-future_jump')).toHaveCount(0)
   await expect(page.getByTestId('preset-compat-session-state-rewrite')).toHaveText(/会话阶段：continue · 正常/)
   await expect(page.getByTestId('preset-compat-session-reset-rewrite')).toBeVisible()
   await expect(page.getByText('导入备注')).toHaveCount(0)
 
-  await page.getByTestId('preset-compat-preview-surface-select').selectOption('expand')
+  await page.getByTestId('preset-compat-preview-surface-select').selectOption('future_jump')
   await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toHaveCount(0)
   await expect(page.getByTestId('preset-compat-session-reset-rewrite')).toHaveCount(0)
   await page.getByTestId('preset-compat-preview-generate').click()
-  await expect(page.getByTestId('preset-compat-preview-surface-expand')).toBeVisible()
+  await expect(page.getByTestId('preset-compat-preview-surface-future_jump')).toBeVisible()
   await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toHaveCount(0)
-  await expect(page.getByTestId('preset-compat-session-reset-expand')).toHaveCount(0)
+  await expect(page.getByTestId('preset-compat-session-reset-future_jump')).toHaveCount(0)
 
   await page.getByTestId('preset-compat-preview-surface-select').selectOption('rewrite')
   await page.getByTestId('preset-compat-preview-generate').click()
@@ -370,7 +378,7 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
   const firstStandaloneRegexId = Object.keys(library.standaloneRegexes)[0]
   expect(firstStandaloneRegexId).toBeTruthy()
 
-  for (const surfaceId of ['rewrite', 'expand', 'roleplay', 'polish', 'continue', 'future_jump_rewrite']) {
+  for (const surfaceId of ['rewrite', 'future_jump', 'roleplay'] as const) {
     await page.getByTestId(`preset-compat-binding-${surfaceId}`).selectOption('preset-ui-1')
   }
 
@@ -412,7 +420,7 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
   await expect(page.getByText('已删除预设“resets_example”，并已保存。')).toBeVisible()
   expect(library.presets['preset-ui-1']).toBeUndefined()
   expect(library.surfaceBindings.rewrite.presetId).toBeNull()
-  expect(library.surfaceBindings.future_jump_rewrite.presetId).toBeNull()
+  expect(library.surfaceBindings.future_jump.presetId).toBeNull()
   expect(Object.keys(library.standaloneRegexes).length).toBeGreaterThan(0)
 
   await page.getByRole('button', { name: '保存兼容库' }).click()
@@ -611,9 +619,10 @@ test('workspace rewrite flow saves a macro-bearing preset binding and sends Alic
   await expect(page.getByTestId('workspace-action-overlay')).toContainText('Alice')
   await expect(page.getByTestId('workspace-action-overlay')).toContainText('Bob')
 
-  expect(rewriteProviderPayload).not.toBeNull()
-  expect(rewriteProviderPayload?.userPrompt ?? '').toContain('Alice')
-  expect(rewriteProviderPayload?.userPrompt ?? '').toContain('Bob')
+  const runtimePayload = rewriteProviderPayload as ReturnType<typeof buildRewriteProviderPayload> | null
+  expect(runtimePayload).not.toBeNull()
+  expect(runtimePayload?.userPrompt ?? '').toContain('Alice')
+  expect(runtimePayload?.userPrompt ?? '').toContain('Bob')
 
   await page.screenshot({ path: path.join(evidenceDirectory, 'task-11-ui-preset-macro.png'), fullPage: true })
 })

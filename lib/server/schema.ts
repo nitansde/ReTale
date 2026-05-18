@@ -1,3 +1,9 @@
+export const PROTECTED_RESET_APP_SETTING_KEYS = [
+  'PRESET_COMPAT_LIBRARY_V1',
+  'AI_SETTINGS_V2',
+  'OLLAMA_TIMEOUT_MS',
+] as const
+
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS WorkspaceState (
   id TEXT PRIMARY KEY DEFAULT 'singleton',
@@ -400,6 +406,7 @@ CREATE TABLE IF NOT EXISTS story_timeline_nodes (
   source_chapter_no INTEGER,
   target_chapter_no INTEGER,
   chapter_id TEXT,
+  continue_block_id TEXT,
   what_if_session_id TEXT,
   future_jump_run_id TEXT,
   lane_index INTEGER DEFAULT 0,
@@ -411,11 +418,50 @@ CREATE TABLE IF NOT EXISTS story_timeline_nodes (
   FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE,
   FOREIGN KEY (parent_node_id) REFERENCES story_timeline_nodes(id) ON DELETE SET NULL,
   FOREIGN KEY (chapter_id) REFERENCES KnowledgeChapter(id) ON DELETE SET NULL,
+  FOREIGN KEY (continue_block_id) REFERENCES continue_blocks(id) ON DELETE SET NULL,
   FOREIGN KEY (what_if_session_id) REFERENCES what_if_sessions(id) ON DELETE SET NULL,
   FOREIGN KEY (future_jump_run_id) REFERENCES future_jump_runs(id) ON DELETE SET NULL,
   UNIQUE (novel_id, branch_id, node_type, label_index),
+  UNIQUE (continue_block_id),
   UNIQUE (what_if_session_id),
   UNIQUE (future_jump_run_id)
+);
+
+CREATE TABLE IF NOT EXISTS continue_blocks (
+  id TEXT PRIMARY KEY,
+  novel_id TEXT NOT NULL,
+  branch_id TEXT NOT NULL,
+  parent_timeline_node_id TEXT,
+  source_chapter_no INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  subtitle TEXT,
+  user_instruction TEXT NOT NULL,
+  selected_text TEXT NOT NULL,
+  original_text TEXT NOT NULL,
+  latest_text TEXT NOT NULL,
+  latest_revision_no INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (parent_timeline_node_id) REFERENCES story_timeline_nodes(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS continue_block_revisions (
+  id TEXT PRIMARY KEY,
+  continue_block_id TEXT NOT NULL,
+  revision_no INTEGER NOT NULL,
+  revision_kind TEXT NOT NULL,
+  user_instruction TEXT NOT NULL,
+  selected_text TEXT NOT NULL,
+  original_text TEXT NOT NULL,
+  generated_text TEXT NOT NULL,
+  title TEXT NOT NULL,
+  subtitle TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (continue_block_id) REFERENCES continue_blocks(id) ON DELETE CASCADE,
+  UNIQUE (continue_block_id, revision_no)
 );
 
 CREATE TABLE IF NOT EXISTS what_if_sessions (
@@ -555,6 +601,9 @@ CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_anchor_chapter ON story_time
 CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_parent ON story_timeline_nodes(parent_node_id);
 CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_session ON story_timeline_nodes(what_if_session_id);
 CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_run ON story_timeline_nodes(future_jump_run_id);
+CREATE INDEX IF NOT EXISTS idx_continue_blocks_branch_source ON continue_blocks(branch_id, source_chapter_no);
+CREATE INDEX IF NOT EXISTS idx_continue_blocks_parent_node ON continue_blocks(parent_timeline_node_id);
+CREATE INDEX IF NOT EXISTS idx_continue_block_revisions_block ON continue_block_revisions(continue_block_id);
 CREATE INDEX IF NOT EXISTS idx_what_if_sessions_branch_source ON what_if_sessions(base_branch_id, source_chapter_no);
 CREATE INDEX IF NOT EXISTS idx_what_if_deltas_session ON what_if_deltas(session_id);
 CREATE INDEX IF NOT EXISTS idx_outline_nodes_branch_track_sort ON outline_nodes(novel_id, branch_id, track_key, sort_order);

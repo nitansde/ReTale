@@ -1,14 +1,41 @@
 import {
   PRESET_COMPAT_CREATIVE_SURFACE_IDS,
+  PRESET_COMPAT_EDITABLE_SURFACE_IDS,
   PRESET_COMPAT_FAIL_CLOSED_SURFACE_IDS,
   PRESET_COMPAT_LIBRARY_INITIAL_REVISION,
   PRESET_COMPAT_LIBRARY_SCHEMA_VERSION,
   type PresetCompatBuiltinSystemPrompt,
   type PresetCompatCreativeSurfaceId,
+  type PresetCompatEditableSurfaceId,
   type PresetCompatLibrary,
   type PresetCompatSurfaceBinding,
   type PresetCompatSurfaceId,
 } from '@/lib/preset-compat/types'
+
+export const PRESET_COMPAT_EDITABLE_SURFACE_META: Record<
+  PresetCompatEditableSurfaceId,
+  {
+    label: string
+    bindingSummary: string
+    builtinPromptSummary: string
+  }
+> = {
+  rewrite: {
+    label: 'Rewrite',
+    bindingSummary: '用于 rewrite 的 save / continue / regenerate；所有 continue 生成都复用这里的预设。',
+    builtinPromptSummary: '影响 rewrite 保存、rewrite regenerate，以及所有 continue 生成。',
+  },
+  future_jump: {
+    label: 'Future Jump',
+    bindingSummary: '仅用于 Future Jump 的目标节点生成与 regenerate，不参与 continue。',
+    builtinPromptSummary: '只影响 Future Jump 目标节点改写，不参与 continue。',
+  },
+  roleplay: {
+    label: 'Roleplay',
+    bindingSummary: '仅用于角色扮演生成，不扩展到 rewrite / future jump 流。',
+    builtinPromptSummary: '只影响角色扮演会话。',
+  },
+}
 
 export const PRESET_COMPAT_SURFACE_REGISTRY: Record<
   PresetCompatSurfaceId,
@@ -25,32 +52,14 @@ export const PRESET_COMPAT_SURFACE_REGISTRY: Record<
     failClosed: false,
     channel: 'creative',
   },
-  expand: {
-    surfaceId: 'expand',
-    enabledByDefault: true,
-    failClosed: false,
-    channel: 'creative',
-  },
   roleplay: {
     surfaceId: 'roleplay',
     enabledByDefault: true,
     failClosed: false,
     channel: 'creative',
   },
-  polish: {
-    surfaceId: 'polish',
-    enabledByDefault: true,
-    failClosed: false,
-    channel: 'creative',
-  },
-  continue: {
-    surfaceId: 'continue',
-    enabledByDefault: true,
-    failClosed: false,
-    channel: 'creative',
-  },
-  future_jump_rewrite: {
-    surfaceId: 'future_jump_rewrite',
+  future_jump: {
+    surfaceId: 'future_jump',
     enabledByDefault: true,
     failClosed: false,
     channel: 'creative',
@@ -82,6 +91,7 @@ export const PRESET_COMPAT_SURFACE_REGISTRY: Record<
 }
 
 export const PRESET_COMPAT_OPTED_IN_SURFACE_IDS = [...PRESET_COMPAT_CREATIVE_SURFACE_IDS]
+export const PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS = [...PRESET_COMPAT_EDITABLE_SURFACE_IDS]
 export const PRESET_COMPAT_FAIL_CLOSED_SURFACE_REGISTRY_IDS = [...PRESET_COMPAT_FAIL_CLOSED_SURFACE_IDS]
 
 export const CHATBOOK_CREATIVE_SYSTEM_PROMPT = [
@@ -118,7 +128,7 @@ export function createDefaultPresetCompatSurfaceBindings(): Record<PresetCompatS
 }
 
 function getDefaultBuiltinSystemPromptContent(surfaceId: PresetCompatCreativeSurfaceId) {
-  return surfaceId === 'future_jump_rewrite'
+  return surfaceId === 'future_jump'
     ? CHATBOOK_FUTURE_JUMP_REWRITE_SYSTEM_PROMPT
     : CHATBOOK_CREATIVE_SYSTEM_PROMPT
 }

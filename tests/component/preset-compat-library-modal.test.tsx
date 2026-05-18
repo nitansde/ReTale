@@ -7,6 +7,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PresetCompatLibraryModal } from '@/components/workspace/PresetCompatLibraryModal'
 import * as creativeRuntimePreview from '@/lib/preset-compat/creative-runtime-preview'
+import { PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS } from '@/lib/preset-compat/surface-contract'
 import { normalizePresetCompatPresetImport, normalizePresetCompatStandaloneRegexImport } from '@/lib/preset-compat/normalize'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import { createPresetCompatSessionStateKey } from '@/lib/workspace-state'
@@ -64,11 +65,8 @@ function createPreset(id: string, overrides: Partial<PresetCompatPresetRecord> =
     ],
     promptOrderLists: {
       rewrite: [`${id}-rule-1`, `${id}-rule-2`],
-      expand: [`${id}-rule-1`],
+      future_jump: [`${id}-rule-1`],
       roleplay: [`${id}-rule-1`],
-      polish: [`${id}-rule-1`],
-      continue: [`${id}-rule-1`],
-      future_jump_rewrite: [`${id}-rule-1`],
     },
     embeddedRegexes: [
       {
@@ -234,13 +232,8 @@ describe('PresetCompatLibraryModal', () => {
           phase: 'continue',
           resetPending: false,
         },
-        [createPresetCompatSessionStateKey(chapterSelection, 'expand')]: {
-          surfaceId: 'expand',
-          phase: 'continue',
-          resetPending: false,
-        },
-        [createPresetCompatSessionStateKey(chapterSelection, 'continue')]: {
-          surfaceId: 'continue',
+        [createPresetCompatSessionStateKey(chapterSelection, 'future_jump')]: {
+          surfaceId: 'future_jump',
           phase: 'continue',
           resetPending: false,
         },
@@ -250,10 +243,17 @@ describe('PresetCompatLibraryModal', () => {
     render(<PresetCompatLibraryModal activeSelection={chapterSelection} activeSurfaceId="rewrite" open onClose={vi.fn()} />)
 
     expect(screen.getByTestId('preset-compat-library-modal')).toBeInTheDocument()
+    expect(document.querySelectorAll('select[data-testid^="preset-compat-binding-"]').length).toBe(PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS.length)
     expect(screen.getByText('全局预设兼容库')).toBeInTheDocument()
     expect(screen.getByText('预设列表')).toBeInTheDocument()
     expect(screen.getByTestId('preset-compat-binding-rewrite')).toBeInTheDocument()
-    expect(screen.getByTestId('preset-compat-binding-future_jump_rewrite')).toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-binding-future_jump')).toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-binding-roleplay')).toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-binding-summary-rewrite')).toHaveTextContent('save / continue / regenerate')
+    expect(screen.getByTestId('preset-compat-binding-summary-future_jump')).toHaveTextContent('不参与 continue')
+    expect(screen.queryByTestId('preset-compat-binding-expand')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-binding-polish')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-binding-continue')).not.toBeInTheDocument()
     expect(screen.getByText('当前创作界面：Rewrite')).toBeInTheDocument()
     expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('rewrite')
     expect(screen.getByText('ChatBook 内置 System Prompt')).toBeInTheDocument()
@@ -266,8 +266,7 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.getByTestId('preset-compat-session-state-rewrite')).toHaveTextContent('会话阶段：continue · 正常')
     expect(within(rewritePreviewCard).getByTestId('preset-compat-preview-system-rewrite')).toBeInTheDocument()
     expect(within(rewritePreviewCard).getByTestId('preset-compat-preview-user-rewrite')).toBeInTheDocument()
-    expect(screen.queryByTestId('preset-compat-preview-surface-expand')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('preset-compat-preview-surface-continue')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-preview-surface-future_jump')).not.toBeInTheDocument()
     expect(screen.queryByText('导入备注')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('preset-compat-session-reset-rewrite'))
@@ -276,23 +275,22 @@ describe('PresetCompatLibraryModal', () => {
       phase: 'new_chat',
       resetPending: true,
     })
-    expect(screen.queryByTestId('preset-compat-session-reset-expand')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-session-reset-future_jump')).not.toBeInTheDocument()
     expect(screen.queryByTestId('preset-compat-session-reset-roleplay')).not.toBeInTheDocument()
     expect(screen.queryByTestId('preset-compat-session-reset-future_jump_bridge')).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
     expect(await screen.findByTestId('preset-compat-session-state-rewrite')).toHaveTextContent('会话阶段：new_chat · 待重置')
-    expect(screen.queryByTestId('preset-compat-session-state-expand')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('preset-compat-session-state-continue')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-session-state-future_jump')).not.toBeInTheDocument()
 
-    fireEvent.change(screen.getByTestId('preset-compat-preview-surface-select'), { target: { value: 'expand' } })
-    expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('expand')
+    fireEvent.change(screen.getByTestId('preset-compat-preview-surface-select'), { target: { value: 'future_jump' } })
+    expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('future_jump')
     expect(screen.queryByTestId('preset-compat-preview-surface-rewrite')).not.toBeInTheDocument()
     expect(screen.queryByTestId('preset-compat-session-reset-rewrite')).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
-    expect(await screen.findByTestId('preset-compat-preview-surface-expand')).toBeInTheDocument()
+    expect(await screen.findByTestId('preset-compat-preview-surface-future_jump')).toBeInTheDocument()
     expect(screen.queryByTestId('preset-compat-preview-surface-rewrite')).not.toBeInTheDocument()
-    expect(screen.getByTestId('preset-compat-session-state-expand')).toHaveTextContent('会话阶段：continue · 正常')
-    expect(screen.queryByTestId('preset-compat-session-reset-expand')).not.toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-session-state-future_jump')).toHaveTextContent('会话阶段：continue · 正常')
+    expect(screen.queryByTestId('preset-compat-session-reset-future_jump')).not.toBeInTheDocument()
 
     fireEvent.change(screen.getByTestId('preset-compat-binding-rewrite'), { target: { value: 'preset-1' } })
     expect(useNovelStore.getState().presetCompatLibrary.surfaceBindings.rewrite.presetId).toBe('preset-1')
@@ -367,17 +365,17 @@ describe('PresetCompatLibraryModal', () => {
     fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
     expect(await screen.findByTestId('preset-compat-preview-surface-rewrite')).toBeInTheDocument()
 
-    rerender(<PresetCompatLibraryModal activeSelection={chapterSelection} activeSurfaceId="expand" open onClose={onClose} />)
+    rerender(<PresetCompatLibraryModal activeSelection={chapterSelection} activeSurfaceId="future_jump" open onClose={onClose} />)
 
     await waitFor(() => {
-      expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('expand')
+      expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('future_jump')
     })
     expect(screen.queryByTestId('preset-compat-preview-surface-rewrite')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
-    expect(await screen.findByTestId('preset-compat-preview-surface-expand')).toBeInTheDocument()
+    expect(await screen.findByTestId('preset-compat-preview-surface-future_jump')).toBeInTheDocument()
     expect(screen.queryByTestId('preset-compat-preview-surface-rewrite')).not.toBeInTheDocument()
-    expect(screen.getByTestId('preset-compat-session-reset-expand')).toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-session-reset-future_jump')).toBeInTheDocument()
   })
 
   it('keeps ChatBook built-in system prompts editable before any preset is imported', () => {
@@ -403,8 +401,8 @@ describe('PresetCompatLibraryModal', () => {
           phase: 'continue',
           resetPending: false,
         },
-        [createPresetCompatSessionStateKey(chapterSelection, 'continue')]: {
-          surfaceId: 'continue',
+        [createPresetCompatSessionStateKey(chapterSelection, 'future_jump')]: {
+          surfaceId: 'future_jump',
           phase: 'continue',
           resetPending: false,
         },
@@ -416,29 +414,27 @@ describe('PresetCompatLibraryModal', () => {
     )
 
     expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('rewrite')
-    fireEvent.change(screen.getByTestId('preset-compat-preview-surface-select'), { target: { value: 'expand' } })
-    expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('expand')
+    fireEvent.change(screen.getByTestId('preset-compat-preview-surface-select'), { target: { value: 'future_jump' } })
+    expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('future_jump')
     fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
-    expect(await screen.findByTestId('preset-compat-preview-surface-expand')).toBeInTheDocument()
+    expect(await screen.findByTestId('preset-compat-preview-surface-future_jump')).toBeInTheDocument()
 
     rerender(
-      <PresetCompatLibraryModal activeSelection={chapterSelection} activeSurfaceId="continue" open={false} onClose={vi.fn()} />
+      <PresetCompatLibraryModal activeSelection={chapterSelection} activeSurfaceId="future_jump" open={false} onClose={vi.fn()} />
     )
     expect(screen.queryByTestId('preset-compat-library-modal')).not.toBeInTheDocument()
 
     rerender(
-      <PresetCompatLibraryModal activeSelection={chapterSelection} activeSurfaceId="continue" open onClose={vi.fn()} />
+      <PresetCompatLibraryModal activeSelection={chapterSelection} activeSurfaceId="future_jump" open onClose={vi.fn()} />
     )
 
-    expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('continue')
-    expect(screen.queryByTestId('preset-compat-preview-surface-expand')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('preset-compat-session-state-expand')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('preset-compat-session-reset-expand')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('preset-compat-preview-surface-continue')).not.toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('future_jump')
+    expect(screen.queryByTestId('preset-compat-preview-surface-future_jump')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-session-state-future_jump')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-session-reset-future_jump')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
-    expect(await screen.findByTestId('preset-compat-preview-surface-continue')).toBeInTheDocument()
-    expect(screen.queryByTestId('preset-compat-preview-surface-expand')).not.toBeInTheDocument()
+    expect(await screen.findByTestId('preset-compat-preview-surface-future_jump')).toBeInTheDocument()
   })
 
   it('deletes and saves the selected preset, clears matching surface bindings, and keeps standalone regexes intact', async () => {
@@ -454,8 +450,8 @@ describe('PresetCompatLibraryModal', () => {
           presetId: 'preset-1',
           enabled: true,
         },
-        future_jump_rewrite: {
-          ...createDefaultPresetCompatLibrary().surfaceBindings.future_jump_rewrite,
+        future_jump: {
+          ...createDefaultPresetCompatLibrary().surfaceBindings.future_jump,
           presetId: 'preset-1',
           enabled: true,
         },
@@ -474,7 +470,7 @@ describe('PresetCompatLibraryModal', () => {
       const body = JSON.parse(String(init.body)) as { library: PresetCompatLibrary }
       expect(body.library.presets['preset-1']).toBeUndefined()
       expect(body.library.surfaceBindings.rewrite.presetId).toBeNull()
-      expect(body.library.surfaceBindings.future_jump_rewrite.presetId).toBeNull()
+      expect(body.library.surfaceBindings.future_jump.presetId).toBeNull()
       return new Response(JSON.stringify({
         ok: true,
         library: {
@@ -494,7 +490,7 @@ describe('PresetCompatLibraryModal', () => {
     expect(fetch).toHaveBeenCalledWith('/api/settings/preset-compat', expect.objectContaining({ method: 'POST' }))
     expect(useNovelStore.getState().presetCompatLibrary.presets['preset-1']).toBeUndefined()
     expect(useNovelStore.getState().presetCompatLibrary.surfaceBindings.rewrite.presetId).toBeNull()
-    expect(useNovelStore.getState().presetCompatLibrary.surfaceBindings.future_jump_rewrite.presetId).toBeNull()
+    expect(useNovelStore.getState().presetCompatLibrary.surfaceBindings.future_jump.presetId).toBeNull()
     expect(useNovelStore.getState().presetCompatLibrary.surfaceBindings.rewrite.enabled).toBe(false)
     expect(useNovelStore.getState().presetCompatLibrary.standaloneRegexes['regex-1']).toBeDefined()
     expect(screen.getByRole('heading', { name: 'Preset preset-2' })).toBeInTheDocument()
@@ -517,7 +513,7 @@ describe('PresetCompatLibraryModal', () => {
                 injectionPosition: 'before',
                 injectionDepth: null,
                 injectionOrder: 0,
-                injectionTrigger: null,
+                injectionTrigger: [],
                 forbidOverrides: false,
                 condition: null,
                 passthrough: {},
@@ -525,13 +521,11 @@ describe('PresetCompatLibraryModal', () => {
             ],
             promptOrderLists: {
               rewrite: ['preset-1-rule-1'],
-              expand: ['preset-1-rule-1'],
+              future_jump: ['preset-1-rule-1'],
               roleplay: ['preset-1-rule-1'],
-              polish: ['preset-1-rule-1'],
-              continue: ['preset-1-rule-1'],
-              future_jump_rewrite: ['preset-1-rule-1'],
             },
             promptTemplate: {
+              ...createPreset('preset-1').promptTemplate,
               namesBehavior: 1,
             },
           }),

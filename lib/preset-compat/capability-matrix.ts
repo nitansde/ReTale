@@ -275,8 +275,8 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     surfaceClassifications: createSurfaceClassificationMap({
       creative: degraded('NO_CHAT_HISTORY'),
       creativeOverrides: {
+        future_jump: applied(),
         roleplay: applied(),
-        continue: applied(),
       },
     }),
   },

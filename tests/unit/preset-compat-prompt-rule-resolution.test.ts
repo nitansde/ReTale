@@ -31,7 +31,7 @@ function createPromptPreset(promptRules: PresetCompatPromptRule[]): PresetCompat
     promptOrderLists: {
       rewrite: promptRules.map((rule) => rule.id),
       roleplay: promptRules.map((rule) => rule.id),
-      continue: promptRules.map((rule) => rule.id),
+      future_jump: promptRules.map((rule) => rule.id),
     },
     embeddedRegexes: [],
     attachedStandaloneRegexIds: [],
@@ -249,7 +249,7 @@ function createLegacyShapePromptPreset(): PresetCompatPresetRecord {
         'same-order-b',
       ],
       roleplay: [],
-      continue: [],
+      future_jump: [],
     },
     embeddedRegexes: [],
     attachedStandaloneRegexIds: [],

@@ -9,11 +9,8 @@ ChatBook ships a neutral `preset-compat` subsystem for importing, storing, editi
 The current runtime applies preset data only on these opted-in creative surfaces:
 
 - `rewrite`
-- `expand`
+- `future_jump`
 - `roleplay`
-- `polish`
-- `continue`
-- `future_jump_rewrite`
 
 These surfaces stay fail-closed and do not receive imported preset prompt rules, regex transforms, sampler overrides, or reset fragments:
 
@@ -144,9 +141,9 @@ The same current `ollama` preserved or degraded contract also covers route and t
 - It supports the stream precedence rule `explicit request override > imported preset value > provider default`.
 - It returns structured preset metadata in JSON responses and in the base64 `X-ChatBook-Preset-Compat` header for streaming responses.
 
-### `future_jump_rewrite`
+### `future_jump`
 
-`future_jump_rewrite` uses the same creative runtime and prompt assembly contract for prompt rules, supported ChatBook template fragments, and regex handling. SillyTavern-only reset prompt fields remain ignored there too.
+`future_jump` uses the same creative runtime and prompt assembly contract for prompt rules, supported ChatBook template fragments, and regex handling. SillyTavern-only reset prompt fields remain ignored there too.
 
 It stays honest about route controls it cannot safely enforce:
 
@@ -213,7 +210,7 @@ Macro compatibility is now described by the dedicated contract in `lib/preset-co
 - the contract distinguishes `supported-runtime`, `context-partial`, `preserve-storage-only`, and `unsupported-runtime`
 - raw macro text is preserved in stored and exported preset payloads
 - supported and context-partial macros expand at runtime on opted-in creative surfaces
-- editor preview, `/api/rewrite`, `future_jump_rewrite`, and regex replacement-time flows use that runtime path
+- editor preview, `/api/rewrite`, `future_jump`, and regex replacement-time flows use that runtime path
 - analytical surfaces stay fail-closed, and unsupported macros or macros with missing context resolve to `""` with structured diagnostics instead of mutating stored preset payloads
 
 Current v1 contract examples:

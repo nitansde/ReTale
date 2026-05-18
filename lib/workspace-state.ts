@@ -83,6 +83,15 @@ export function createPresetCompatSessionSelectionKey(selection: PresetCompatSes
     ].join(':')
   }
 
+  if (selection.kind === 'continue_block') {
+    return [
+      'continue_block',
+      encodePresetCompatSessionKeyPart(selection.nodeId),
+      encodePresetCompatSessionKeyPart(selection.continueBlockId),
+      selection.anchorChapterNo,
+    ].join(':')
+  }
+
   return [
     'future_jump',
     encodePresetCompatSessionKeyPart(selection.nodeId),

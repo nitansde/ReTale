@@ -30,7 +30,7 @@ afterEach(() => {
 
   if (globalForSqlite.sqlite) {
     try {
-      globalForSqlite.sqlite.close()
+      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
     delete globalForSqlite.sqlite
@@ -45,10 +45,10 @@ describe('workspace route', () => {
   it('waits for workspace knowledge sync before returning success', async () => {
     createTestDatabase('chatbook-workspace-route-awaits-sync')
 
-    let resolveSync: (() => void) | null = null
+    const syncControl: { resolve: null | (() => void) } = { resolve: null }
     const syncWorkspacePayloadToKnowledgeStore = vi.fn(
       () => new Promise<void>((resolve) => {
-        resolveSync = resolve
+        syncControl.resolve = () => resolve()
       })
     )
 
@@ -69,7 +69,7 @@ describe('workspace route', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(settled).toBe(false)
 
-    resolveSync?.()
+    syncControl.resolve?.()
 
     const response = await responsePromise
     expect(response.status).toBe(200)

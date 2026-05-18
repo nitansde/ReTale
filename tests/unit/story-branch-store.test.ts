@@ -10,6 +10,7 @@ import { addWhatIfDelta, createWhatIfSession, findWhatIfSessionById } from '@/li
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const EVIDENCE_DIR = path.join(process.cwd(), '.sisyphus/evidence/task-3-store-contracts')
+type SqlParam = string | number | bigint | Uint8Array | null
 
 const cleanups: Array<() => void> = []
 
@@ -26,13 +27,13 @@ describe('story branch stores', () => {
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
     const testDb = {
-      execute: (sql: string, ...params: Parameters<typeof database.prepare>[0] extends never ? never : never) => {
-        return database.prepare(sql).run(...(params as never[]))
+      execute: (sql: string, ...params: SqlParam[]) => {
+        return database.prepare(sql).run(...params)
       },
-      queryAll: <T>(sql: string, ...params: Array<string | number | bigint | Uint8Array | null>) => {
+      queryAll: <T>(sql: string, ...params: SqlParam[]) => {
         return database.prepare(sql).all(...params) as T[]
       },
-      queryOne: <T>(sql: string, ...params: Array<string | number | bigint | Uint8Array | null>) => {
+      queryOne: <T>(sql: string, ...params: SqlParam[]) => {
         const row = database.prepare(sql).get(...params)
         return (row ?? null) as T | null
       },
@@ -191,6 +192,7 @@ describe('story branch stores', () => {
         sourceChapterNo: 10,
         targetChapterNo: null,
         chapterId: 'chapter-10',
+        continueBlockId: null,
         whatIfSessionId: 'what-if-session-001',
         futureJumpRunId: null,
         laneIndex: 0,
@@ -234,6 +236,7 @@ describe('story branch stores', () => {
         sourceChapterNo: 10,
         targetChapterNo: 100,
         chapterId: 'chapter-100',
+        continueBlockId: null,
         whatIfSessionId: null,
         futureJumpRunId: 'jump-run-001',
         laneIndex: 0,
@@ -289,6 +292,6 @@ describe('story branch stores', () => {
       )
     )
 
-    database.close()
+    ;(database as DatabaseSync & { close?: () => void }).close?.()
   })
 })

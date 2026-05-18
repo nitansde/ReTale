@@ -8,10 +8,12 @@ import type {
   GraphReviewControls,
   GraphSelection,
 } from '@/components/graph/types'
-import type { Chapter } from '@/lib/types'
+import type { Chapter, ProductSurfaceId } from '@/lib/types'
 import type { WorkspaceCenterPaneView } from '@/components/workspace/use-workspace-pane-state'
 
-export type WorkspaceActionMode = 'rewrite' | 'roleplay' | 'expand'
+export type WorkspaceActionMode = ProductSurfaceId
+
+export const WORKSPACE_CHAPTER_ACTION_ENTRY_MODES = ['rewrite', 'roleplay'] as const satisfies readonly WorkspaceActionMode[]
 
 export type WorkspaceFloatingPosition = {
   top: number

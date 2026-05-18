@@ -5,6 +5,7 @@ import { BranchBlock } from '@/components/timeline/BranchBlock'
 import { BranchLineLayer } from '@/components/timeline/BranchLineLayer'
 import { ChapterTimelineCard } from '@/components/timeline/ChapterTimelineCard'
 import type { ChapterTimelineItem, StoryTimelineBranchNode, StoryTimelineEdge, TimelineSelection } from '@/lib/story-branch-types'
+import { toBranchTimelineSelection } from '@/components/workspace/workspace-selection'
 import type { Chapter } from '@/lib/types'
 
 type NodePosition = {
@@ -12,27 +13,63 @@ type NodePosition = {
   y: number
 }
 
-function toSelection(node: StoryTimelineBranchNode): TimelineSelection | null {
-  if (node.nodeType === 'what_if') {
-    return node.whatIfSessionId
-      ? {
-          kind: 'what_if',
-          nodeId: node.id,
-          sessionId: node.whatIfSessionId,
-          anchorChapterNo: node.anchorChapterNo,
-        }
-      : null
+function compareNodeCreation(left: StoryTimelineBranchNode, right: StoryTimelineBranchNode): number {
+  const leftCreatedAt = left.createdAt ?? ''
+  const rightCreatedAt = right.createdAt ?? ''
+  if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt.localeCompare(rightCreatedAt)
+  return left.id.localeCompare(right.id)
+}
+
+function resolveNodeDepth(node: StoryTimelineBranchNode, nodesById: Map<string, StoryTimelineBranchNode>, visited = new Set<string>()): number {
+  if (!node.parentNodeId) return 0
+  if (visited.has(node.id)) return 0
+
+  const parentNode = nodesById.get(node.parentNodeId)
+  if (!parentNode) return 0
+
+  visited.add(node.id)
+  return resolveNodeDepth(parentNode, nodesById, visited) + 1
+}
+
+function orderBranchNodes(branchNodes: StoryTimelineBranchNode[]): StoryTimelineBranchNode[] {
+  const nodesById = new Map(branchNodes.map((node) => [node.id, node]))
+  const childrenByParentId = new Map<string, StoryTimelineBranchNode[]>()
+  const rootNodes: StoryTimelineBranchNode[] = []
+
+  for (const node of branchNodes) {
+    if (node.parentNodeId && nodesById.has(node.parentNodeId)) {
+      const current = childrenByParentId.get(node.parentNodeId) ?? []
+      current.push(node)
+      childrenByParentId.set(node.parentNodeId, current)
+      continue
+    }
+
+    rootNodes.push(node)
   }
 
-  return node.futureJumpRunId && node.sourceChapterNo !== null && node.targetChapterNo !== null
-    ? {
-        kind: 'future_jump',
-        nodeId: node.id,
-        runId: node.futureJumpRunId,
-        sourceChapterNo: node.sourceChapterNo,
-        targetChapterNo: node.targetChapterNo,
-      }
-    : null
+  for (const children of childrenByParentId.values()) {
+    children.sort(compareNodeCreation)
+  }
+
+  rootNodes.sort((left, right) => {
+    if (left.anchorChapterNo !== right.anchorChapterNo) return left.anchorChapterNo - right.anchorChapterNo
+    return compareNodeCreation(left, right)
+  })
+
+  const nodeDepths = new Map(branchNodes.map((node) => [node.id, resolveNodeDepth(node, nodesById)]))
+  const ordered: StoryTimelineBranchNode[] = []
+  const visit = (node: StoryTimelineBranchNode) => {
+    ordered.push({ ...node, laneIndex: nodeDepths.get(node.id) ?? node.laneIndex })
+    for (const child of childrenByParentId.get(node.id) ?? []) {
+      visit(child)
+    }
+  }
+
+  for (const rootNode of rootNodes) {
+    visit(rootNode)
+  }
+
+  return ordered
 }
 
 export function StoryTimeline(props: {
@@ -60,17 +97,12 @@ export function StoryTimeline(props: {
   })
 
   const nodesByAnchor = useMemo(() => {
+    const orderedNodes = orderBranchNodes(props.branchNodes)
     const grouped = new Map<number, StoryTimelineBranchNode[]>()
-    for (const node of props.branchNodes) {
+    for (const node of orderedNodes) {
       const current = grouped.get(node.anchorChapterNo) ?? []
       current.push(node)
       grouped.set(node.anchorChapterNo, current)
-    }
-    for (const group of grouped.values()) {
-      group.sort((left, right) => {
-        if (left.laneIndex !== right.laneIndex) return left.laneIndex - right.laneIndex
-        return left.id.localeCompare(right.id)
-      })
     }
     return grouped
   }, [props.branchNodes])
@@ -155,7 +187,7 @@ export function StoryTimeline(props: {
             branchArtifacts={
               attachedNodes.length ? (
                 attachedNodes.map((node) => {
-                  const selection = toSelection(node)
+                  const selection = toBranchTimelineSelection(node)
                   const highlighted = hoveredNodeId === node.id || selectedNodeId === node.id
 
                   return (
@@ -177,7 +209,7 @@ export function StoryTimeline(props: {
                           ? node.whatIfSessionId
                             ? () => props.onDeleteWhatIfSession(node)
                             : undefined
-                          : node.futureJumpRunId
+                          : node.nodeType === 'future_jump' && node.futureJumpRunId
                             ? () => props.onDeleteFutureJumpRun(node)
                             : undefined
                       }

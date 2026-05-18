@@ -71,7 +71,7 @@ describe('preset compat capability doc sync', () => {
     expect(DOC_TEXT).toContain('presetCompatSessionState')
     expect(DOC_TEXT).toContain('/api/rewrite')
     expect(DOC_TEXT).toContain('explicit request override > imported preset value > provider default')
-    expect(DOC_TEXT).toContain('future_jump_rewrite')
+    expect(DOC_TEXT).toContain('future_jump')
     expect(DOC_TEXT).toContain('ROUTE_UNSUPPORTED')
   })
 

@@ -49,7 +49,7 @@ afterEach(() => {
 
   if (globalForSqlite.sqlite) {
     try {
-      globalForSqlite.sqlite.close()
+      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
     delete globalForSqlite.sqlite
@@ -65,10 +65,10 @@ describe('import-txt route', () => {
     const database = createTestDatabase('chatbook-import-txt-route-awaits-sync')
     resetWorkspaceState(database)
 
-    let resolveSync: (() => void) | null = null
+    const syncControl: { resolve: null | (() => void) } = { resolve: null }
     const syncWorkspacePayloadToKnowledgeStore = vi.fn(
       () => new Promise<void>((resolve) => {
-        resolveSync = resolve
+        syncControl.resolve = () => resolve()
       })
     )
 
@@ -89,7 +89,7 @@ describe('import-txt route', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(settled).toBe(false)
 
-    resolveSync?.()
+    syncControl.resolve?.()
 
     const response = await responsePromise
     expect(response.status).toBe(200)

@@ -895,7 +895,7 @@ function doesPromptRuleTriggerMatch(
     case 'new_example_chat':
       return runtimeContext.sessionPhase === 'new_example_chat'
     case 'continue':
-      return runtimeContext.sessionPhase === 'continue' || surfaceId === 'continue'
+      return runtimeContext.sessionPhase === 'continue'
     case 'group':
       return runtimeContext.hasGroupContext === true
     case 'impersonation':

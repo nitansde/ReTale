@@ -1,22 +1,38 @@
 import { describe, expect, it } from 'vitest'
 import {
+  PRESET_COMPAT_EDITABLE_SURFACE_META,
+  PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS,
   PRESET_COMPAT_FAIL_CLOSED_SURFACE_REGISTRY_IDS,
   PRESET_COMPAT_OPTED_IN_SURFACE_IDS,
   PRESET_COMPAT_SURFACE_REGISTRY,
   createDefaultPresetCompatLibrary,
   createDefaultPresetCompatSurfaceBindings,
 } from '@/lib/preset-compat/surface-contract'
+import { PRESET_COMPAT_OBSOLETE_SURFACE_IDS } from '@/lib/preset-compat/types'
 
 describe('preset compat surface contract', () => {
   it('keeps the opted-in creative surfaces explicit', () => {
     expect(PRESET_COMPAT_OPTED_IN_SURFACE_IDS).toEqual([
       'rewrite',
-      'expand',
+      'future_jump',
       'roleplay',
+    ])
+    expect(PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS).toEqual(PRESET_COMPAT_OPTED_IN_SURFACE_IDS)
+    expect(PRESET_COMPAT_EDITABLE_SURFACE_META.rewrite.bindingSummary).toContain('save / continue / regenerate')
+    expect(PRESET_COMPAT_EDITABLE_SURFACE_META.future_jump.bindingSummary).toContain('不参与 continue')
+  })
+
+  it('keeps obsolete creative surface ids out of the editable registry', () => {
+    expect(PRESET_COMPAT_OBSOLETE_SURFACE_IDS).toEqual([
+      'expand',
       'polish',
       'continue',
       'future_jump_rewrite',
     ])
+
+    for (const obsoleteSurfaceId of PRESET_COMPAT_OBSOLETE_SURFACE_IDS) {
+      expect(PRESET_COMPAT_SURFACE_REGISTRY).not.toHaveProperty(obsoleteSurfaceId)
+    }
   })
 
   it('keeps analytical surfaces fail-closed unless explicitly enabled later', () => {
@@ -81,6 +97,6 @@ describe('preset compat surface contract', () => {
       enabled: true,
     })
     expect(library.builtinSystemPrompts.rewrite.content).toContain('你是 ChatBook 的小说扩写/魔改写作模型。')
-    expect(library.builtinSystemPrompts.future_jump_rewrite.content).toContain('Future Jump 目标节点改写生成器')
+    expect(library.builtinSystemPrompts.future_jump.content).toContain('Future Jump 目标节点改写生成器')
   })
 })

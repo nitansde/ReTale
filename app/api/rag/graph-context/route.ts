@@ -2,15 +2,15 @@ import { NextResponse } from 'next/server'
 import { buildChapterGraphContext } from '@/lib/server/context-builder'
 import { buildGraphAwareContext } from '@/lib/server/graph-context'
 import { normalizeBranchId } from '@/lib/server/knowledge-store'
+import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
 
-function normalizeOperationType(value: unknown) {
-  const operationType = String(value ?? 'expand').trim()
-  if (operationType === 'continue') return 'expand' as const
-  if (operationType === 'roleplay') return 'dialogue' as const
-  if (operationType === 'deep_rewrite' || operationType === 'dialogue' || operationType === 'expand' || operationType === 'rewrite' || operationType === 'polish') {
-    return operationType
-  }
-  return 'expand' as const
+const INVALID_OPERATION_TYPE_ERROR = `Invalid operationType. Expected one of: ${PRODUCT_SURFACE_IDS.join(', ')}`
+
+function parseOperationType(value: unknown): ProductSurfaceId | null {
+  const operationType = String(value ?? '').trim()
+  return PRODUCT_SURFACE_IDS.includes(operationType as ProductSurfaceId)
+    ? operationType as ProductSurfaceId
+    : null
 }
 
 function normalizeMaxHops(value: unknown) {
@@ -30,9 +30,15 @@ export async function POST(request: Request) {
     const chapterNo = Number(body.chapterNo)
     const selectedText = String(body.selectedText ?? '')
     const nearbyText = String(body.nearbyText ?? '')
+    const operationTypeInput = body.operationType
+    const operationType = operationTypeInput === undefined && chapterId ? null : parseOperationType(operationTypeInput)
 
     if (!novelId) {
       return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+    }
+
+    if (operationTypeInput !== undefined && !operationType) {
+      return NextResponse.json({ ok: false, error: INVALID_OPERATION_TYPE_ERROR }, { status: 400 })
     }
 
     if (chapterId) {
@@ -50,6 +56,9 @@ export async function POST(request: Request) {
     if (!Number.isFinite(chapterNo) || chapterNo < 1) {
       return NextResponse.json({ ok: false, error: 'chapterNo must be a positive number' }, { status: 400 })
     }
+    if (!operationType) {
+      return NextResponse.json({ ok: false, error: INVALID_OPERATION_TYPE_ERROR }, { status: 400 })
+    }
 
     const result = await buildGraphAwareContext({
       novelId,
@@ -57,7 +66,7 @@ export async function POST(request: Request) {
       chapterNo,
       selectedText,
       nearbyText,
-      operationType: normalizeOperationType(body.operationType),
+      operationType,
       maxHops: normalizeMaxHops(body.maxHops),
       includeLowConfidence: Boolean(body.includeLowConfidence),
       confirmedOnly: Boolean(body.confirmedOnly),

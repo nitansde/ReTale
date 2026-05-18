@@ -1,8 +1,17 @@
 import { NextResponse } from 'next/server'
 import type { PresetCompatLibrary } from '@/lib/preset-compat/types'
 import {
+  PRESET_COMPAT_LIBRARY_V1_KEY,
+  loadProtectedPresetCompatLibraryResetSnapshot,
   loadStoredPresetCompatLibrary,
   saveStoredPresetCompatLibrary,
+  validateProtectedPresetCompatLibraryResetSnapshot,
+} from '@/lib/server/preset-compat-library'
+
+export {
+  PRESET_COMPAT_LIBRARY_V1_KEY,
+  loadProtectedPresetCompatLibraryResetSnapshot,
+  validateProtectedPresetCompatLibraryResetSnapshot,
 } from '@/lib/server/preset-compat-library'
 
 function isRecord(value: unknown): value is Record<string, unknown> {

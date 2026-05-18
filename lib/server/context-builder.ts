@@ -13,18 +13,23 @@ import {
   normalizeCharacterRoleCardProfile,
   type CharacterRoleCardProfile,
 } from '@/lib/story-knowledge'
+import type { ProductSurfaceId } from '@/lib/types'
 
 export type GenerationContextRequest = {
   novelId: string
   branchId?: string
   chapterId: string
   selectedText: string
-  operationType: 'expand' | 'rewrite' | 'roleplay' | 'polish' | 'continue'
+  operationType: ProductSurfaceId
   userInstruction: string
   excludedGraphEdgeIds?: string[]
   excludedEvidenceIds?: string[]
   whatIfSessionId?: string
   futureJumpRunId?: string
+}
+
+export function resolveGenerationContextOperationType(operationType: ProductSurfaceId): ProductSurfaceId {
+  return operationType === 'roleplay' ? 'roleplay' : 'rewrite'
 }
 
 export type GenerationContextBlock = {
@@ -173,13 +178,11 @@ export type KnowledgeExtractionStoryStateRequest = {
 
 function formatOutputConstraints(operationType: GenerationContextRequest['operationType']) {
   const modeSpecific =
-    operationType === 'expand'
-      ? '- 如果是扩写：保留原意，增加细节、动作、心理、氛围。'
-      : operationType === 'rewrite'
-        ? '- 如果是魔改/重写：允许改变当前片段走向，但要保持前文一致。'
-        : operationType === 'polish'
-          ? '- 如果是润色：尽量不改变情节事实。'
-          : '- 保持前文连续性，不要引入未来章节事实。'
+    operationType === 'rewrite'
+      ? '- 如果是魔改/重写：允许改变当前片段走向，但要保持前文一致。'
+      : operationType === 'future_jump'
+        ? '- 如果是未来跳转：允许朝目标未来推进，但要保持已知上下文自洽。'
+        : '- 保持前文连续性，不要引入未来章节事实。'
 
   return [
     '- 只输出小说正文。',
@@ -775,6 +778,7 @@ export function buildKnowledgeExtractionStoryState(request: KnowledgeExtractionS
 }
 
 export async function buildGenerationContext(request: GenerationContextRequest): Promise<GenerationContextBuildResult> {
+  const effectiveOperationType = resolveGenerationContextOperationType(request.operationType)
   const excludedGraphEdgeIds = new Set((request.excludedGraphEdgeIds ?? []).map((item) => item.trim()).filter(Boolean))
   const excludedEvidenceIds = new Set((request.excludedEvidenceIds ?? []).map((item) => item.trim()).filter(Boolean))
   const branchId = normalizeBranchId(request.novelId, request.branchId)
@@ -883,7 +887,7 @@ export async function buildGenerationContext(request: GenerationContextRequest):
     chapterNo: chapter.chapterNo,
     selectedText: request.selectedText,
     nearbyText: neighborhoodText,
-    operationType: request.operationType === 'continue' ? 'expand' : request.operationType === 'roleplay' ? 'dialogue' : request.operationType,
+    operationType: effectiveOperationType,
     maxHops: 1,
     includeLowConfidence: false,
   })
@@ -1016,7 +1020,7 @@ export async function buildGenerationContext(request: GenerationContextRequest):
       label: '任务',
       enabled: true,
       priority: 'highest',
-      content: renderBlock('任务', [`操作类型：${request.operationType}`, `用户要求：${request.userInstruction || '按当前模式生成。'}`]),
+      content: renderBlock('任务', [`操作类型：${effectiveOperationType}`, `用户要求：${request.userInstruction || '按当前模式生成。'}`]),
     },
     {
       id: 'selected-text',
@@ -1152,7 +1156,7 @@ export async function buildGenerationContext(request: GenerationContextRequest):
       label: '输出要求',
       enabled: true,
       priority: 'high',
-      content: renderBlock('输出要求', [formatOutputConstraints(request.operationType)]),
+      content: renderBlock('输出要求', [formatOutputConstraints(effectiveOperationType)]),
     },
   ]
 

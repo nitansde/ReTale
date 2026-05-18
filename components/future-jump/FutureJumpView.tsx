@@ -188,6 +188,12 @@ export function FutureJumpView(props: {
     }
   }
 
+  const handleContinue = () => {
+    if (!bundle || regenerating || !bundle.detail.generatedTargetText.trim()) return
+    setActionError('')
+    props.onContinueInFuture(bundle)
+  }
+
   return (
     <div className="space-y-4 px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-future-jump-view">
       <section
@@ -244,8 +250,8 @@ export function FutureJumpView(props: {
               onFeedbackChange={setFeedback}
               onRegenerate={handleRegenerate}
               regenerating={regenerating}
-              onContinue={() => props.onContinueInFuture(bundle)}
-              continueDisabled={regenerating}
+              onContinue={handleContinue}
+              continueDisabled={regenerating || !bundle.detail.generatedTargetText.trim()}
               latestRevisionNo={bundle.detail.latestRevisionNo}
               actionError={actionError}
             />

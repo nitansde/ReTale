@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { StoryTimelineNodeType, TimelineSelection } from '@/lib/story-branch-types'
 import type {
   PresetCompatLibrary,
   PresetCompatPresetRecord,
@@ -8,8 +9,29 @@ import type {
   PresetCompatSurfaceBinding,
 } from '@/lib/preset-compat/types'
 import { createDefaultPresetCompatBuiltinSystemPrompts } from '@/lib/preset-compat/surface-contract'
+import { PRODUCT_ACTION_IDS, PRODUCT_SURFACE_IDS } from '@/lib/types'
 
 describe('preset compat domain types', () => {
+  it('keeps canonical product surface, action, and timeline node unions aligned with the simplified contract', () => {
+    const branchSelections: TimelineSelection[] = [
+      { kind: 'chapter', chapterId: 'chapter-1', chapterNo: 10 },
+      { kind: 'what_if', nodeId: 'if-node-1', sessionId: 'what-if-1', anchorChapterNo: 10 },
+      { kind: 'continue_block', nodeId: 'continue-node-1', continueBlockId: 'continue-block-1', anchorChapterNo: 10 },
+      { kind: 'future_jump', nodeId: 'jump-node-1', runId: 'jump-run-1', sourceChapterNo: 10, targetChapterNo: 100 },
+    ]
+    const nodeTypes: StoryTimelineNodeType[] = ['what_if', 'continue_block', 'future_jump']
+
+    expect(PRODUCT_SURFACE_IDS).toEqual(['rewrite', 'future_jump', 'roleplay'])
+    expect(PRODUCT_ACTION_IDS).toEqual(['save', 'continue', 'regenerate'])
+    expect(branchSelections.map((selection) => selection.kind)).toEqual([
+      'chapter',
+      'what_if',
+      'continue_block',
+      'future_jump',
+    ])
+    expect(nodeTypes).toEqual(['what_if', 'continue_block', 'future_jump'])
+  })
+
   it('locks the preset and library record shape required by the compatibility subsystem', () => {
     const promptRule: PresetCompatPromptRule = {
       id: 'rule-001',
@@ -179,32 +201,14 @@ describe('preset compat domain types', () => {
       builtinSystemPrompts: createDefaultPresetCompatBuiltinSystemPrompts(),
       surfaceBindings: {
         rewrite: surfaceBinding,
-        expand: {
-          surfaceId: 'expand',
-          presetId: 'preset-001',
-          enabled: true,
-          failClosed: false,
-        },
         roleplay: {
           surfaceId: 'roleplay',
           presetId: 'preset-001',
           enabled: true,
           failClosed: false,
         },
-        polish: {
-          surfaceId: 'polish',
-          presetId: 'preset-001',
-          enabled: true,
-          failClosed: false,
-        },
-        continue: {
-          surfaceId: 'continue',
-          presetId: 'preset-001',
-          enabled: true,
-          failClosed: false,
-        },
-        future_jump_rewrite: {
-          surfaceId: 'future_jump_rewrite',
+        future_jump: {
+          surfaceId: 'future_jump',
           presetId: 'preset-001',
           enabled: true,
           failClosed: false,

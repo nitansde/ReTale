@@ -147,6 +147,8 @@ describe('preset compat library route', () => {
             promptRules: [],
             promptOrderLists: {
               rewrite: ['missing-rule'],
+              expand: ['legacy-expand-rule'],
+              continue: ['legacy-continue-rule'],
             },
             embeddedRegexes: [],
             attachedStandaloneRegexIds: [],
@@ -167,6 +169,18 @@ describe('preset compat library route', () => {
             enabled: true,
             failClosed: false,
           },
+          expand: {
+            surfaceId: 'expand',
+            presetId: 'alpha',
+            enabled: true,
+            failClosed: false,
+          },
+          continue: {
+            surfaceId: 'continue',
+            presetId: 'alpha',
+            enabled: true,
+            failClosed: false,
+          },
         },
         lastImportedAt: '2026-05-15T12:00:00.000Z',
       },
@@ -177,7 +191,10 @@ describe('preset compat library route', () => {
     expect(payload.ok).toBe(true)
     expect(payload.library.revision).toBe(current.revision + 1)
     expect(payload.library.presets.alpha?.passthrough).toEqual({ preserved: true })
-    expect(payload.library.surfaceBindings.expand).toBeDefined()
+    expect(payload.library.presets.alpha?.promptOrderLists).toEqual({ rewrite: ['missing-rule'] })
+    expect(payload.library.surfaceBindings.future_jump).toBeDefined()
+    expect(payload.library.surfaceBindings).not.toHaveProperty('expand')
+    expect(payload.library.surfaceBindings).not.toHaveProperty('continue')
     expect(payload.library.lastImportedAt).toBe('2026-05-15T12:00:00.000Z')
   })
 

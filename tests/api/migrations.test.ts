@@ -49,6 +49,8 @@ describe('authored branching schema migrations', () => {
     expect([...tables]).toEqual(
       expect.arrayContaining([
         'story_timeline_nodes',
+        'continue_blocks',
+        'continue_block_revisions',
         'what_if_sessions',
         'what_if_deltas',
         'outline_nodes',
@@ -63,8 +65,12 @@ describe('authored branching schema migrations', () => {
         'idx_story_timeline_nodes_label_scope',
         'idx_story_timeline_nodes_anchor_chapter',
         'idx_story_timeline_nodes_parent',
+        'idx_story_timeline_nodes_continue_block',
         'idx_story_timeline_nodes_session',
         'idx_story_timeline_nodes_run',
+        'idx_continue_blocks_branch_source',
+        'idx_continue_blocks_parent_node',
+        'idx_continue_block_revisions_block',
         'idx_what_if_sessions_branch_source',
         'idx_what_if_deltas_session',
         'idx_outline_nodes_branch_track_sort',
@@ -87,15 +93,15 @@ describe('authored branching schema migrations', () => {
       JSON.stringify(
         {
           databasePath,
-          tables: [...tables].filter((tableName) => tableName.includes('what_if') || tableName.includes('outline') || tableName.includes('future_jump') || tableName.includes('story_timeline')),
-          indexes: [...indexes].filter((indexName) => indexName.includes('story_timeline') || indexName.includes('what_if') || indexName.includes('outline') || indexName.includes('future_jump')),
+          tables: [...tables].filter((tableName) => tableName.includes('continue') || tableName.includes('what_if') || tableName.includes('outline') || tableName.includes('future_jump') || tableName.includes('story_timeline')),
+          indexes: [...indexes].filter((indexName) => indexName.includes('continue') || indexName.includes('story_timeline') || indexName.includes('what_if') || indexName.includes('outline') || indexName.includes('future_jump')),
         },
         null,
         2
       )
     )
 
-    database.close()
+  ;(database as DatabaseSync & { close?: () => void }).close?.()
   })
 
   it('is idempotent across repeated initialization and preserves an existing copied database', () => {
@@ -104,7 +110,7 @@ describe('authored branching schema migrations', () => {
 
     const firstOpen = initializeDatabase(new DatabaseSync(databasePath))
     const firstTableCount = listTableNames(firstOpen).length
-    firstOpen.close()
+  ;(firstOpen as DatabaseSync & { close?: () => void }).close?.()
 
     const secondOpen = initializeDatabase(new DatabaseSync(databasePath))
     const secondTableCount = listTableNames(secondOpen).length
@@ -119,6 +125,6 @@ describe('authored branching schema migrations', () => {
       [`databasePath=${databasePath}`, `firstTableCount=${firstTableCount}`, `secondTableCount=${secondTableCount}`, `workspaceStateCount=${workspaceStateCount.count}`].join('\n')
     )
 
-    secondOpen.close()
+  ;(secondOpen as DatabaseSync & { close?: () => void }).close?.()
   })
 })

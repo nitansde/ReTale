@@ -117,6 +117,12 @@ export type TimelineEvent = {
 export type HelperTab = 'ai' | 'references' | 'trajectory' | 'stats'
 export type WorkspaceTab = 'editor' | 'rewrite' | 'outline' | 'characters' | 'world'
 
+export const PRODUCT_SURFACE_IDS = ['rewrite', 'future_jump', 'roleplay'] as const
+export type ProductSurfaceId = (typeof PRODUCT_SURFACE_IDS)[number]
+
+export const PRODUCT_ACTION_IDS = ['save', 'continue', 'regenerate'] as const
+export type ProductActionId = (typeof PRODUCT_ACTION_IDS)[number]
+
 export type RewriteMode =
   | 'light'
   | 'medium'
@@ -124,7 +130,6 @@ export type RewriteMode =
   | 'perspective'
   | 'relationship'
   | 'branch'
-  | 'continue'
   | 'dialogue'
   | 'compression'
 
@@ -263,6 +268,12 @@ export type PresetCompatSessionWorkspaceSelection =
   | {
       kind: 'chapter'
       chapterId: string
+    }
+  | {
+      kind: 'continue_block'
+      nodeId: string
+      continueBlockId: string
+      anchorChapterNo: number
     }
   | {
       kind: 'what_if'

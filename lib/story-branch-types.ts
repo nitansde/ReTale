@@ -5,6 +5,12 @@ export type TimelineSelection =
       chapterNo: number
     }
   | {
+      kind: 'continue_block'
+      nodeId: string
+      continueBlockId: string
+      anchorChapterNo: number
+    }
+  | {
       kind: 'what_if'
       nodeId: string
       sessionId: string
@@ -18,7 +24,7 @@ export type TimelineSelection =
       targetChapterNo: number
     }
 
-export type StoryTimelineNodeType = 'what_if' | 'future_jump'
+export type StoryTimelineNodeType = 'what_if' | 'continue_block' | 'future_jump'
 
 export type ChapterTimelineItem = {
   type: 'chapter'
@@ -41,8 +47,14 @@ export type StoryTimelineNodeRecord = {
   sourceChapterNo: number | null
   targetChapterNo: number | null
   chapterId: string | null
+  continueBlockId: string | null
   whatIfSessionId: string | null
   futureJumpRunId: string | null
+  latestText?: string | null
+  latestRevisionNo?: number | null
+  userInstruction?: string | null
+  selectedText?: string | null
+  originalText?: string | null
   laneIndex: number
   colorToken: string | null
   status: string
@@ -62,8 +74,16 @@ export type StoryTimelineBranchNode = {
   colorToken: string | null
   sourceChapterNo: number | null
   targetChapterNo: number | null
+  continueBlockId: string | null
   whatIfSessionId: string | null
   futureJumpRunId: string | null
+  latestText?: string | null
+  latestRevisionNo?: number | null
+  userInstruction?: string | null
+  selectedText?: string | null
+  originalText?: string | null
+  createdAt?: string
+  updatedAt?: string
   status: string
 }
 
@@ -264,5 +284,82 @@ export type FutureJumpRunDetail = FutureJumpRunRecord & {
   latestRevision: FutureJumpRevisionRecord | null
   revisionHistory: FutureJumpRevisionHistoryItem[]
   revisions: FutureJumpRevisionRecord[]
+}
+
+export type ContinueBlockRevisionRecord = {
+  id: string
+  continueBlockId: string
+  revisionNo: number
+  revisionKind: string
+  userInstruction: string
+  selectedText: string
+  originalText: string
+  generatedText: string
+  title: string
+  subtitle: string | null
+  createdAt: string
+}
+
+export type ContinueBlockRevisionHistoryItem = {
+  revisionNo: number
+  revisionKind: string
+  createdAt: string
+}
+
+export type ContinueBlockRecord = {
+  id: string
+  novelId: string
+  branchId: string
+  parentTimelineNodeId: string | null
+  sourceChapterNo: number
+  title: string
+  subtitle: string | null
+  userInstruction: string
+  selectedText: string
+  originalText: string
+  latestText: string
+  latestRevisionNo: number
+  status: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type ContinueBlockDetail = ContinueBlockRecord & {
+  timelineNodeId: string | null
+  latestRevision: ContinueBlockRevisionRecord | null
+  revisionHistory: ContinueBlockRevisionHistoryItem[]
+  revisions: ContinueBlockRevisionRecord[]
+}
+
+export type ContinueBlockCreateRequest = {
+  novelId: string
+  branchId: string
+  sourceChapterNo: number
+  parentTimelineNodeId?: string | null
+  selectedText: string
+  originalText: string
+  generatedText: string
+  userInstruction: string
+  titleHint?: string | null
+  subtitleHint?: string | null
+}
+
+export type ContinueBlockRegenerateRequest = {
+  continueBlockId: string
+  generatedText: string
+  userInstruction: string
+  selectedText: string
+  originalText: string
+  titleHint?: string | null
+  subtitleHint?: string | null
+}
+
+export type ContinueBlockMutationResponse = {
+  continueBlockId: string
+  timelineNodeId: string
+  generatedText: string
+  title: string
+  subtitle: string | null
+  latestRevisionNo: number
 }
 import type { PresetCompatResponseMetadata } from '@/lib/preset-compat/runtime-integration'

@@ -93,11 +93,11 @@ describe('preset compat library app-setting store', () => {
       enabled: false,
       content: 'Stored rewrite built-in.',
     })
-    expect(partialReload.builtinSystemPrompts.expand).toMatchObject({
-      surfaceId: 'expand',
+    expect(partialReload.builtinSystemPrompts.future_jump).toMatchObject({
+      surfaceId: 'future_jump',
       enabled: true,
     })
-    expect(partialReload.builtinSystemPrompts.expand.content).toContain('你是 ChatBook 的小说扩写/魔改写作模型。')
+    expect(partialReload.builtinSystemPrompts.future_jump.content).toContain('Future Jump 目标节点改写生成器')
 
     writeAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1', JSON.stringify({
       revision: 5,
@@ -106,11 +106,11 @@ describe('preset compat library app-setting store', () => {
       surfaceBindings: {},
       builtinSystemPrompts: {
         rewrite: {
-          surfaceId: 'future_jump_rewrite',
+          surfaceId: 'future_jump',
           enabled: 'yes',
           content: 42,
         },
-        future_jump_rewrite: {
+        future_jump: {
           surfaceId: 'rewrite',
           enabled: false,
           content: 'Stored future jump built-in.',
@@ -121,8 +121,8 @@ describe('preset compat library app-setting store', () => {
     }))
     const malformedReload = loadStoredPresetCompatLibrary()
     expect(malformedReload.builtinSystemPrompts.rewrite).toEqual(createDefaultPresetCompatLibrary().builtinSystemPrompts.rewrite)
-    expect(malformedReload.builtinSystemPrompts.future_jump_rewrite).toEqual({
-      surfaceId: 'future_jump_rewrite',
+    expect(malformedReload.builtinSystemPrompts.future_jump).toEqual({
+      surfaceId: 'future_jump',
       enabled: false,
       content: 'Stored future jump built-in.',
     })
@@ -155,6 +155,139 @@ describe('preset compat library app-setting store', () => {
     const secondSaved = await saveStoredPresetCompatLibrary(firstSaved)
     expect(secondSaved.revision).toBe(2)
     expect(loadStoredPresetCompatLibrary().revision).toBe(2)
+  })
+
+  it('persists a full library blob that remains parseable after raw app-setting reloads', async () => {
+    const database = await createTestDatabase('chatbook-preset-compat-library-parseable-blob')
+    deleteAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1')
+    vi.resetModules()
+
+    const {
+      loadStoredPresetCompatLibrary,
+      saveStoredPresetCompatLibrary,
+    } = await import('@/lib/server/preset-compat-library')
+
+    const library = createDefaultPresetCompatLibrary()
+    library.lastImportedAt = '2026-05-18T00:00:00.000Z'
+    library.lastExportedAt = '2026-05-18T00:00:01.000Z'
+    library.presets['raw-blob-preset'] = {
+      id: 'raw-blob-preset',
+      name: 'Raw Blob Preset',
+      sourceApiId: 'openai',
+      promptRules: [
+        {
+          id: 'raw-blob-rule',
+          name: 'Raw Blob Rule',
+          role: 'system',
+          content: 'Persist me as full-library JSON.',
+          enabled: true,
+          marker: false,
+          injectAsSystemPrompt: true,
+          injectionPosition: 'before',
+          injectionDepth: null,
+          injectionOrder: 100,
+          injectionTrigger: ['rewrite'],
+          forbidOverrides: false,
+          condition: null,
+          passthrough: {},
+        },
+      ],
+      promptOrderLists: {
+        rewrite: ['raw-blob-rule'],
+        future_jump: ['raw-blob-rule'],
+        roleplay: ['raw-blob-rule'],
+      },
+      embeddedRegexes: [],
+      attachedStandaloneRegexIds: [],
+      runtimeSampler: {
+        temperature: 1,
+        topP: 1,
+        topK: 0,
+        topA: null,
+        minP: null,
+        presencePenalty: null,
+        frequencyPenalty: null,
+        repetitionPenalty: null,
+        openaiMaxContext: 200000,
+        maxTokens: 8000,
+        seed: 999,
+        candidateCount: 1,
+      },
+      promptTemplate: {
+        namesBehavior: 0,
+        sendIfEmpty: '',
+        impersonationPrompt: '',
+        newChatPrompt: '',
+        newGroupChatPrompt: '',
+        newExampleChatPrompt: '',
+        continueNudgePrompt: '',
+        wiFormat: '',
+        scenarioFormat: '',
+        personalityFormat: '',
+        groupNudgePrompt: '',
+        assistantPrefill: '',
+        assistantImpersonation: '',
+        continuePostfix: ' ',
+        legacyMainPrompt: 'legacy root prompt',
+        legacyNsfwPrompt: null,
+        legacyJailbreakPrompt: null,
+      },
+      transport: {
+        maxContextUnlocked: true,
+        streamOpenAI: true,
+        useSysprompt: true,
+        squashSystemMessages: false,
+        mediaInlining: false,
+        inlineImageQuality: 'low',
+        continuePrefill: false,
+        functionCalling: false,
+        showThoughts: true,
+        reasoningEffort: 'medium',
+        verbosity: 'auto',
+        enableWebSearch: false,
+        requestImages: false,
+        requestImageAspectRatio: '',
+        requestImageResolution: '',
+      },
+      preservedFields: {
+        biasPresetSelected: 'Default (none)',
+      },
+      passthrough: {
+        root: {
+          main_prompt: 'legacy root prompt',
+        },
+        extensions: {
+          instruct: {
+            template: 'template body',
+          },
+        },
+        unknownPromptFields: {},
+        legacyFlatPrompts: {
+          main: 'main_prompt',
+        },
+      },
+      importWarnings: [],
+      createdAt: '2026-05-18T00:00:00.000Z',
+      updatedAt: '2026-05-18T00:00:01.000Z',
+    }
+
+    const saved = await saveStoredPresetCompatLibrary(library)
+    const storedRow = readAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1')
+
+    expect(storedRow?.value).toBe(JSON.stringify(saved))
+    expect(JSON.parse(storedRow?.value ?? 'null')).toEqual(saved)
+    expect(loadStoredPresetCompatLibrary()).toEqual(saved)
+    expect(loadStoredPresetCompatLibrary().presets['raw-blob-preset']).toMatchObject({
+      id: 'raw-blob-preset',
+      promptTemplate: {
+        legacyMainPrompt: 'legacy root prompt',
+      },
+      passthrough: {
+        root: {
+          main_prompt: 'legacy root prompt',
+        },
+      },
+    })
   })
 
   it('round-trips preserved passthrough payloads unchanged after json persistence', async () => {

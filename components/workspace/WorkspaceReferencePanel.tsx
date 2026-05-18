@@ -11,6 +11,8 @@ export function WorkspaceReferencePanel(props: {
 }) {
   const selectionLabel = props.selection.kind === 'chapter'
     ? 'chapter'
+    : props.selection.kind === 'continue_block'
+      ? 'continue-block'
     : props.selection.kind === 'what_if'
       ? 'what-if'
       : 'future-jump'

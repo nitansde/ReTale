@@ -1,3 +1,5 @@
+import type { ProductSurfaceId } from '@/lib/types'
+
 export type EntityType =
   | 'character'
   | 'location'
@@ -23,7 +25,7 @@ export type GraphAwareRequest = {
   chapterNo: number
   selectedText: string
   nearbyText: string
-  operationType: 'expand' | 'rewrite' | 'polish' | 'dialogue' | 'deep_rewrite'
+  operationType: ProductSurfaceId
   maxHops?: 1 | 2
   includeLowConfidence?: boolean
   confirmedOnly?: boolean

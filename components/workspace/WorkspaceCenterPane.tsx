@@ -14,6 +14,7 @@ export function WorkspaceCenterPane(props: {
   chapterGraphSummary: string
   chapterBodyView: ReactNode
   chapterGraphView: ReactNode
+  continueBlockView: ReactNode
   whatIfView: ReactNode
   futureJumpView: ReactNode
 }) {
@@ -21,7 +22,7 @@ export function WorkspaceCenterPane(props: {
   let eyebrow = props.centerPaneView === 'body' ? 'Chapter body first' : 'Chapter graph browser'
   let title = props.chapterTitle
   let description = props.centerPaneView === 'body'
-    ? '先选章节，再在正文里直接选中想处理的文本。选区上方会弹出浮动入口，展开三种模式：魔改、角色扮演、智能扩写。'
+    ? '先选章节，再在正文里直接选中想处理的文本。章节正文入口只保留魔改和角色扮演，避免在主线章节里提前暴露不稳定的续写分支动作。'
     : '切到图谱后会持续停留在这个浏览视角；你从左侧切换章节时，中心面板会直接换成对应章节的已检索图谱。'
   let statusSummary = props.centerPaneView === 'body' ? props.chapterSelectionSummary : props.chapterGraphSummary
 
@@ -30,10 +31,15 @@ export function WorkspaceCenterPane(props: {
     title = `IF · 第 ${props.selection.anchorChapterNo} 章分支推演`
     description = '这里展示已持久化的 What-if 会话详情：原始片段、推演正文、变化清单，以及继续进入未来跳转或重开改写流的入口。'
     statusSummary = `当前会话：${props.selection.sessionId}`
+  } else if (props.selection.kind === 'continue_block') {
+    eyebrow = '续写块工作区'
+    title = `CONT · 第 ${props.selection.anchorChapterNo} 章续写块`
+    description = '这里直接读取已保存的续写块最新版本，默认停留在干净的 reader 视图里；续写、重生与 Future Jump 仍保留为稳定的节点级动作入口。'
+    statusSummary = `当前节点：${props.selection.continueBlockId}`
   } else if (props.selection.kind === 'future_jump') {
     eyebrow = 'Future jump workspace'
     title = `JUMP · 第 ${props.selection.sourceChapterNo} → ${props.selection.targetChapterNo} 章`
-    description = '这里展示已持久化的 Future Jump run 详情、最新修订内容，以及继续沿着这条未来版本重开 rewrite 流的入口。'
+    description = '这里展示已持久化的 Future Jump run 详情、最新修订内容，以及 continue / regenerate 两个节点级动作入口。'
     statusSummary = `当前运行：${props.selection.runId}`
   }
 
@@ -83,7 +89,15 @@ export function WorkspaceCenterPane(props: {
         </div>
       </div>
 
-      {isChapter ? (props.centerPaneView === 'body' ? props.chapterBodyView : props.chapterGraphView) : props.selection.kind === 'what_if' ? props.whatIfView : props.futureJumpView}
+      {isChapter
+        ? (props.centerPaneView === 'body' ? props.chapterBodyView : props.chapterGraphView)
+        : props.selection.kind === 'what_if'
+          ? props.whatIfView
+          : props.selection.kind === 'continue_block'
+            ? props.continueBlockView
+          : props.selection.kind === 'future_jump'
+            ? props.futureJumpView
+            : props.chapterBodyView}
     </section>
   )
 }

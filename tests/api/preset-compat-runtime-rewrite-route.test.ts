@@ -5,7 +5,7 @@ import type { PresetCompatMacroDiagnostic } from '@/lib/preset-compat/macro-cont
 import type { PresetCompatLibrary, PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import type { AISettings } from '@/lib/types'
 
-const CREATIVE_SURFACES = ['rewrite', 'expand', 'roleplay', 'polish', 'continue'] as const
+const REWRITE_ROUTE_RUNTIME_SURFACES = ['rewrite', 'roleplay'] as const
 
 function createAiSettings(provider: 'openai-compatible' | 'ollama'): AISettings {
   return {
@@ -108,7 +108,7 @@ function createCreativeLibrary(mode: 'default' | 'stream' = 'default'): PresetCo
     passthrough: {},
   }
 
-  for (const surfaceId of CREATIVE_SURFACES) {
+  for (const surfaceId of ['rewrite', 'future_jump', 'roleplay'] as const) {
     const presetId = `${surfaceId}-preset`
     library.builtinSystemPrompts[surfaceId] = {
       ...library.builtinSystemPrompts[surfaceId],
@@ -255,10 +255,10 @@ function createCreativeLibrary(mode: 'default' | 'stream' = 'default'): PresetCo
 function createTemplateSurfaceLibrary(): PresetCompatLibrary {
   const library = createCreativeLibrary()
 
-  library.presets['continue-preset'] = {
-    ...library.presets['continue-preset'],
+  library.presets['rewrite-preset'] = {
+    ...library.presets['rewrite-preset'],
     promptTemplate: {
-      ...library.presets['continue-preset'].promptTemplate,
+      ...library.presets['rewrite-preset'].promptTemplate,
       newChatPrompt: 'CONTINUE SHOULD NOT SEE NEW CHAT',
       continueNudgePrompt: 'CONTINUE TEMPLATE FRAGMENT',
     },
@@ -412,7 +412,7 @@ function createMacroRuntimeLibrary(): PresetCompatLibrary {
   return library
 }
 
-function createRequest(operationType: PresetCompatSurfaceId, body: Record<string, unknown>) {
+function createRequest(operationType: string, body: Record<string, unknown>) {
   return new Request('http://localhost/api/rewrite', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -459,7 +459,7 @@ afterEach(() => {
 })
 
 describe('preset compat rewrite route runtime', () => {
-  it.each(CREATIVE_SURFACES)('applies runtime prompt rules, regexes, and sampler options for %s', async (surfaceId) => {
+  it.each(REWRITE_ROUTE_RUNTIME_SURFACES)('applies runtime prompt rules, regexes, and sampler options for %s', async (surfaceId) => {
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => createAiSettings('openai-compatible'),
     }))
@@ -532,6 +532,57 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.messages[0]?.content).not.toContain('## Imported Preset System Rules')
     expect(requestBody.messages[1]?.content.startsWith(`${surfaceId.toUpperCase()} USER RULE`)).toBe(true)
     expect(requestBody.messages[1]?.content).not.toContain('## Imported Preset User Rules')
+    expect(requestBody.messages[1]?.content).toContain('BETA')
+    expect(requestBody.messages[1]?.content).not.toContain('ALPHA')
+  })
+
+  it('routes generic future-jump rewrite requests through rewrite surface bindings', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createCreativeLibrary(),
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              candidates: ['RAW OUTPUT'],
+            }),
+          },
+        },
+      ],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('future_jump', { stream: false }))
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as {
+      candidates: Array<{ content: string }>
+      presetCompat: {
+        runtimeSnapshot: { activePresetId: string; activeSurfaceId: string | null }
+      }
+    }
+    expect(payload.candidates.map((candidate) => candidate.content)).toEqual(['CLEAN OUTPUT'])
+    expect(payload.presetCompat.runtimeSnapshot).toMatchObject({
+      activePresetId: 'rewrite-preset',
+      activeSurfaceId: 'rewrite',
+    })
+
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit
+    const requestBody = JSON.parse(String(requestInit.body)) as {
+      messages: Array<{ role: string; content: string }>
+    }
+    expect(requestBody.messages[0]?.content).toBe([
+      'REWRITE CHATBOOK BUILTIN SYSTEM',
+      'REWRITE SYSTEM RULE',
+      'REWRITE SECOND SYSTEM RULE',
+    ].join('\n\n'))
+    expect(requestBody.messages[1]?.content.startsWith('REWRITE USER RULE')).toBe(true)
     expect(requestBody.messages[1]?.content).toContain('BETA')
     expect(requestBody.messages[1]?.content).not.toContain('ALPHA')
   })
@@ -899,7 +950,7 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.messages[1]?.content).not.toContain('M1 M2 M3 M4')
   })
 
-  it('falls back invalid operation types to expand and keeps status surfaces deterministic', async () => {
+  it.each(['expand', 'polish', 'continue', 'totally-unknown-mode'])('rejects invalid public operation type %s with a deterministic 400', async (operationType) => {
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => createAiSettings('openai-compatible'),
     }))
@@ -914,21 +965,16 @@ describe('preset compat rewrite route runtime', () => {
 
     const { POST } = await import('@/app/api/rewrite/route')
     const response = await POST(createRequest('rewrite', {
-      operationType: 'totally-unknown-mode',
+      operationType,
       stream: false,
     }))
 
-    expect(response.status).toBe(200)
-    const payload = await response.json() as {
-      presetCompat: { fieldStatuses: Array<{ surface: string }> }
-    }
-    expect(payload.presetCompat.fieldStatuses.every((status) => status.surface === 'expand')).toBe(true)
-
-    const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
-      messages: Array<{ content: string }>
-    }
-    expect(requestBody.messages[0]?.content).toContain('EXPAND SYSTEM RULE')
-    expect(requestBody.messages[1]?.content).toContain('EXPAND USER RULE')
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: 'Invalid operationType. Expected one of: rewrite, future_jump, roleplay',
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('uses imported stream_openai when the request does not override streaming', async () => {
@@ -1163,7 +1209,7 @@ describe('preset compat rewrite route runtime', () => {
 
     const { POST } = await import('@/app/api/rewrite/route')
 
-    await POST(createRequest('continue', {
+    await POST(createRequest('rewrite', {
       stream: false,
       presetCompatRuntimeContext: {
         sessionPhase: 'continue',

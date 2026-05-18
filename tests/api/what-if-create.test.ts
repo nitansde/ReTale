@@ -62,7 +62,7 @@ function snapshotAuthoritativeState(database: DatabaseSync) {
 afterEach(() => {
   if (globalForSqlite.sqlite) {
     try {
-      globalForSqlite.sqlite.close()
+      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
     delete globalForSqlite.sqlite

@@ -199,6 +199,7 @@ describe('FutureJumpView', () => {
     expect(screen.getByTestId('future-jump-text')).toHaveTextContent('最新镜像未来正文')
     expect(screen.getByTestId('future-jump-feedback')).toBeInTheDocument()
     expect(screen.getByTestId('future-jump-regenerate')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Continue this Future' })).toBeInTheDocument()
     expect(screen.queryByText('初始桥接摘要')).not.toBeInTheDocument()
     expect(screen.queryByText('初始未来正文')).not.toBeInTheDocument()
 
@@ -259,6 +260,7 @@ describe('FutureJumpView', () => {
     fireEvent.change(screen.getByTestId('future-jump-feedback'), {
       target: { value: '把救援推得更晚' },
     })
+    expect(screen.getByRole('button', { name: 'Continue this Future' })).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('future-jump-regenerate'))
 
     await waitFor(() => {
@@ -308,6 +310,7 @@ describe('FutureJumpView', () => {
     expect(screen.getByTestId('future-jump-bridge')).toHaveTextContent('最新镜像桥接摘要')
     expect(screen.getByTestId('future-jump-text')).toHaveTextContent('最新镜像未来正文')
     expect(screen.getByTestId('future-jump-feedback')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Continue this Future' })).toBeInTheDocument()
     expect(screen.queryByText('parent failed')).not.toBeInTheDocument()
 
     fireEvent.change(screen.getByTestId('future-jump-feedback'), {

@@ -430,6 +430,7 @@ export async function createWhatIfSessionFromRewrite(rawInput: WhatIfCreateReque
       sourceChapterNo: input.sourceChapterNo,
       targetChapterNo: null,
       chapterId: null,
+      continueBlockId: null,
       whatIfSessionId: sessionId,
       futureJumpRunId: null,
       laneIndex: 0,

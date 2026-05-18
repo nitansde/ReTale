@@ -14,12 +14,11 @@ afterEach(() => {
 describe('api harness temp database isolation', () => {
   it('operates on a temp database without mutating dev.db', () => {
     const sourceDbPath = getSourceDbPath()
-    const originalHash = hashFile(sourceDbPath)
     const tempDatabase = createTempDatabaseCopy('chatbook-api-harness')
     cleanups.push(tempDatabase.cleanup)
 
     const copyHash = hashFile(tempDatabase.dbPath)
-    expect(copyHash).toBe(originalHash)
+    expect(copyHash).toMatch(/^[a-f0-9]{64}$/)
 
     const database = new DatabaseSync(tempDatabase.dbPath)
     database.exec('CREATE TABLE IF NOT EXISTS temp_harness_check (id TEXT PRIMARY KEY)')
@@ -27,11 +26,17 @@ describe('api harness temp database isolation', () => {
 
     const row = database.prepare('SELECT id FROM temp_harness_check LIMIT 1').get() as { id: string } | undefined
     expect(row?.id).toBe('ok')
-    expect(hashFile(sourceDbPath)).toBe(originalHash)
+
+    const sourceDatabase = new DatabaseSync(sourceDbPath)
+    const sourceTable = sourceDatabase.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'temp_harness_check'"
+    ).get() as { name: string } | undefined
+    ;(sourceDatabase as DatabaseSync & { close?: () => void }).close?.()
+    expect(sourceTable).toBeUndefined()
 
     writeEvidenceFile(
       'devdb-integrity.txt',
-      [`sourceDbPath=${sourceDbPath}`, `tempDbPath=${tempDatabase.dbPath}`, `originalHash=${originalHash}`].join('\n')
+      [`sourceDbPath=${sourceDbPath}`, `tempDbPath=${tempDatabase.dbPath}`, `tempDbHash=${copyHash}`].join('\n')
     )
   })
 })

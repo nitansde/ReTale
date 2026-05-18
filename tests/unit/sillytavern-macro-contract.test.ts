@@ -35,9 +35,9 @@ describe('sillytavern macro capability contract', () => {
     expect(setvar.storage.preserveRawTextInStoredPresetPayload).toBe(true)
     expect(setvar.storage.preserveRawTextInExportedPresetPayload).toBe(true)
     expect(setvar.surfaces.rewrite.capability).toBe('supported-runtime')
-    expect(trim.surfaces.future_jump_rewrite.capability).toBe('supported-runtime')
+    expect(trim.surfaces.future_jump.capability).toBe('supported-runtime')
     expect(user.surfaces.roleplay.capability).toBe('context-partial')
-    expect(comment.surfaces.expand.capability).toBe('preserve-storage-only')
+    expect(comment.surfaces.future_jump.capability).toBe('preserve-storage-only')
     expect(input.surfaces.rewrite.capability).toBe('unsupported-runtime')
 
     for (const surfaceId of PRESET_COMPAT_FAIL_CLOSED_SURFACE_IDS) {

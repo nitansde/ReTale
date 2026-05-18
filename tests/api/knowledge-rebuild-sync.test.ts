@@ -18,7 +18,7 @@ function createTestDatabase(prefix: string) {
 afterEach(() => {
   if (globalForSqlite.sqlite) {
     try {
-      globalForSqlite.sqlite.close()
+      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
     delete globalForSqlite.sqlite
@@ -67,9 +67,13 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
         {
           id: 'ch_1',
           novelId: 'novel_imported',
+          volumeId: 'volume-1',
           title: '第1章 初遇',
           content: '<p>林澄开始记录这次练习。</p>',
           order: 1,
+          status: 'draft',
+          wordCount: 8,
+          updatedAt: '2026-05-16T00:00:00.000Z',
         },
       ],
     })

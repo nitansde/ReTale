@@ -1,3 +1,5 @@
+import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
+
 export const PRESET_COMPAT_LIBRARY_SCHEMA_VERSION = 1
 export const PRESET_COMPAT_LIBRARY_INITIAL_REVISION = 0
 export const PRESET_COMPAT_SOURCE_API_ID = 'openai' as const
@@ -8,10 +10,12 @@ export const PRESET_COMPAT_LEGACY_FLAT_PROMPT_KEYS = [
   'jailbreak_prompt',
 ] as const
 
-export const PRESET_COMPAT_CREATIVE_SURFACE_IDS = [
-  'rewrite',
+export const PRESET_COMPAT_CREATIVE_SURFACE_IDS = PRODUCT_SURFACE_IDS
+
+export const PRESET_COMPAT_EDITABLE_SURFACE_IDS = PRODUCT_SURFACE_IDS
+
+export const PRESET_COMPAT_OBSOLETE_SURFACE_IDS = [
   'expand',
-  'roleplay',
   'polish',
   'continue',
   'future_jump_rewrite',
@@ -168,7 +172,9 @@ export type PresetCompatRegexRecord = {
 }
 
 export type PresetCompatSurfaceId = (typeof PRESET_COMPAT_SURFACE_IDS)[number]
-export type PresetCompatCreativeSurfaceId = (typeof PRESET_COMPAT_CREATIVE_SURFACE_IDS)[number]
+export type PresetCompatCreativeSurfaceId = ProductSurfaceId
+export type PresetCompatEditableSurfaceId = ProductSurfaceId
+export type PresetCompatObsoleteSurfaceId = (typeof PRESET_COMPAT_OBSOLETE_SURFACE_IDS)[number]
 
 export type PresetCompatSurfaceBinding = {
   surfaceId: PresetCompatSurfaceId

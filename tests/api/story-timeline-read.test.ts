@@ -98,12 +98,34 @@ function seedTimelineFixture(database: DatabaseSync) {
   ).run('if_fixture_001', 'novel-001', 'novel-001:main', 'what_if', 1, 10, 'IF-01 决裂线', '如果他们在这里闹翻', null, 10, null, 'chapter-10', 'what-if-session-001', null, 0, 'rose', 'active')
 
   database.prepare(
+    `INSERT INTO continue_blocks (
+      id, novel_id, branch_id, parent_timeline_node_id, source_chapter_no, title, subtitle,
+      user_instruction, selected_text, original_text, latest_text, latest_revision_no, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('continue-block-001', 'novel-001', 'novel-001:main', 'if_fixture_001', 10, 'CONT-01 续写块', '沿着分支继续推进', '继续沿着当前分支扩展。', '原始选区', '原始片段', '续写后的正文', 1, 'active')
+
+  database.prepare(
+    `INSERT INTO continue_block_revisions (
+      id, continue_block_id, revision_no, revision_kind, user_instruction, selected_text,
+      original_text, generated_text, title, subtitle
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('continue-revision-001', 'continue-block-001', 1, 'initial', '继续沿着当前分支扩展。', '原始选区', '原始片段', '续写后的正文', 'CONT-01 续写块', '沿着分支继续推进')
+
+  database.prepare(
     `INSERT INTO story_timeline_nodes (
       id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
-      parent_node_id, source_chapter_no, target_chapter_no, chapter_id, what_if_session_id,
-      future_jump_run_id, lane_index, color_token, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run('jump_fixture_001', 'novel-001', 'novel-001:main', 'future_jump', 1, 100, 'JUMP-01 第100章', '跳到被绑走后的未来', 'if_fixture_001', 10, 100, 'chapter-100', null, 'jump-run-001', 1, 'violet', 'generated')
+      parent_node_id, source_chapter_no, target_chapter_no, chapter_id, continue_block_id,
+      what_if_session_id, future_jump_run_id, lane_index, color_token, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('continue_fixture_001', 'novel-001', 'novel-001:main', 'continue_block', 1, 10, 'CONT-01 续写块', '沿着分支继续推进', 'if_fixture_001', 10, null, null, 'continue-block-001', null, null, 1, 'fuchsia', 'active')
+
+  database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
+      parent_node_id, source_chapter_no, target_chapter_no, chapter_id, continue_block_id,
+      what_if_session_id, future_jump_run_id, lane_index, color_token, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('jump_fixture_001', 'novel-001', 'novel-001:main', 'future_jump', 1, 100, 'JUMP-01 第100章', '跳到被绑走后的未来', 'continue_fixture_001', 10, 100, 'chapter-100', null, null, 'jump-run-001', 1, 'violet', 'generated')
 }
 
 afterEach(() => {
@@ -111,7 +133,7 @@ afterEach(() => {
 
   if (globalForSqlite.sqlite) {
     try {
-      globalForSqlite.sqlite.close()
+      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
     delete globalForSqlite.sqlite
@@ -150,14 +172,26 @@ describe('story-timeline-read', () => {
         whatIfSessionId: 'what-if-session-001',
       }),
       expect.objectContaining({
+        id: 'continue_fixture_001',
+        nodeType: 'continue_block',
+        parentNodeId: 'if_fixture_001',
+        continueBlockId: 'continue-block-001',
+        latestText: '续写后的正文',
+        latestRevisionNo: 1,
+        userInstruction: '继续沿着当前分支扩展。',
+        selectedText: '原始选区',
+        originalText: '原始片段',
+      }),
+      expect.objectContaining({
         id: 'jump_fixture_001',
         nodeType: 'future_jump',
-        parentNodeId: 'if_fixture_001',
+        parentNodeId: 'continue_fixture_001',
         futureJumpRunId: 'jump-run-001',
       }),
     ])
     expect(timelinePayload.edges).toEqual([
-      { fromNodeId: 'if_fixture_001', toNodeId: 'jump_fixture_001' },
+      { fromNodeId: 'if_fixture_001', toNodeId: 'continue_fixture_001' },
+      { fromNodeId: 'continue_fixture_001', toNodeId: 'jump_fixture_001' },
     ])
 
     const sessionResponse = await getWhatIfSession(
