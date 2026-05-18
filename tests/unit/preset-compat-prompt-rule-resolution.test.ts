@@ -322,28 +322,37 @@ function getFieldStatus(resolved: ReturnType<typeof resolvePresetCompatPromptRul
 }
 
 describe('preset compat prompt rule resolution', () => {
-  it('routes all active system_prompt rules into the system replacement slot in active order and preserves ST-only metadata', () => {
+  it('routes active prompt rules by role and preserves system_prompt as ST-only metadata', () => {
     const preset = createPromptPreset([
       createRule({
-        id: 'as-system-first',
-        name: 'As System First',
-        role: 'user',
-        content: 'Route me to system first.',
-        injectAsSystemPrompt: true,
+        id: 'system-role-first',
+        name: 'System Role First',
+        role: 'system',
+        content: 'Route me to system first by role.',
+        injectAsSystemPrompt: false,
         injectionPosition: 'after',
         injectionOrder: 2,
+      }),
+      createRule({
+        id: 'preserved-system-prompt-user',
+        name: 'Preserved System Prompt User',
+        role: 'user',
+        content: 'Keep me in user despite system_prompt.',
+        injectAsSystemPrompt: true,
+        injectionPosition: 'after',
+        injectionOrder: 1,
       }),
       createRule({
         id: 'plain-user',
         name: 'Plain User',
         role: 'user',
         content: 'Keep me in user.',
-        injectionOrder: 1,
+        injectionOrder: 2,
       }),
       createRule({
-        id: 'as-system-second',
-        name: 'As System Second',
-        role: 'user',
+        id: 'system-role-second',
+        name: 'System Role Second',
+        role: 'system',
         content: 'Route me to system second.',
         injectAsSystemPrompt: true,
         injectionPosition: 'after',
@@ -357,28 +366,30 @@ describe('preset compat prompt rule resolution', () => {
     })
 
     expect(resolved.promptRules.ordered.map((rule) => ({ id: rule.id, channel: rule.channel }))).toEqual([
-      { id: 'as-system-first', channel: 'system' },
+      { id: 'system-role-first', channel: 'system' },
+      { id: 'preserved-system-prompt-user', channel: 'user' },
       { id: 'plain-user', channel: 'user' },
-      { id: 'as-system-second', channel: 'system' },
+      { id: 'system-role-second', channel: 'system' },
     ])
-    expect(resolved.promptRules.system.map((rule) => rule.id)).toEqual(['as-system-first', 'as-system-second'])
-    expect(resolved.promptRules.user.map((rule) => rule.id)).toEqual(['plain-user'])
-    expect(getFieldStatus(resolved, 'prompts.system_prompt', 'as-system-first')).toMatchObject({
-      status: 'applied',
-      reason: 'SUPPORTED_RUNTIME',
+    expect(resolved.promptRules.system.map((rule) => rule.id)).toEqual(['system-role-first', 'system-role-second'])
+    expect(resolved.promptRules.user.map((rule) => rule.id)).toEqual(['preserved-system-prompt-user', 'plain-user'])
+    expect(getFieldStatus(resolved, 'prompts.system_prompt', 'preserved-system-prompt-user')).toMatchObject({
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
       value: true,
     })
-    expect(getFieldStatus(resolved, 'prompts.system_prompt', 'as-system-second')).toMatchObject({
-      status: 'applied',
-      reason: 'SUPPORTED_RUNTIME',
+    expect(getFieldStatus(resolved, 'prompts.system_prompt', 'system-role-second')).toMatchObject({
+      status: 'preserved',
+      reason: 'PRESERVED_EXPORT_ONLY',
       value: true,
     })
-    expect(getFieldStatus(resolved, 'prompts.injection_position', 'as-system-first')).toMatchObject({
+    expect(getFieldStatus(resolved, 'prompts.system_prompt', 'system-role-first')).toBeUndefined()
+    expect(getFieldStatus(resolved, 'prompts.injection_position', 'system-role-first')).toMatchObject({
       status: 'preserved',
       reason: 'PRESERVED_EXPORT_ONLY',
       value: 'after',
     })
-    expect(getFieldStatus(resolved, 'prompts.injection_order', 'as-system-first')).toMatchObject({
+    expect(getFieldStatus(resolved, 'prompts.injection_order', 'system-role-first')).toMatchObject({
       status: 'preserved',
       reason: 'PRESERVED_EXPORT_ONLY',
       value: 2,
@@ -700,11 +711,11 @@ describe('preset compat prompt rule resolution', () => {
     ])
     expect(resolved.promptRules.system.map((rule) => rule.id)).toEqual([
       'system-late',
+      'same-order-a',
     ])
     expect(resolved.promptRules.user.map((rule) => rule.id)).toEqual([
       'user-early',
       'marker-rule',
-      'same-order-a',
       'same-order-b',
     ])
     expect(resolved.promptRules.ordered.every((rule) => rule.content.trim().length > 0)).toBe(true)

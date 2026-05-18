@@ -563,7 +563,7 @@ function sortResolvedPromptRules(left: PresetCompatResolvedPromptRule, right: Pr
 }
 
 function resolvePromptRuleChannel(rule: PresetCompatPromptRule): 'system' | 'user' {
-  return rule.injectAsSystemPrompt ? 'system' : 'user'
+  return rule.role === 'system' ? 'system' : 'user'
 }
 
 function getPromptRuleTriggerReason(trigger: string): PresetCompatStatusReasonCode {
@@ -1079,8 +1079,6 @@ function resolvePromptRules(
         surface: surfaceId,
         provider: null,
         value: true,
-        status: 'applied',
-        reason: 'SUPPORTED_RUNTIME',
         fragmentId: rule.id,
         fragmentName: rule.name,
       }))
