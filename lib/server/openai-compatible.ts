@@ -64,7 +64,11 @@ type OpenAICompatibleChatMessage = {
 
 type OpenAICompatibleChatCompletionResponse = {
   choices?: Array<{
+    text?: unknown
     message?: {
+      content?: unknown
+    }
+    delta?: {
       content?: unknown
     }
   }>
@@ -232,24 +236,91 @@ function chunkTextStream(text: string) {
   })
 }
 
-function extractChatCompletionText(content: unknown) {
+function collectChatCompletionText(content: unknown): string {
   if (typeof content === 'string') {
-    return content.trim()
+    return content
   }
 
   if (Array.isArray(content)) {
     return content
       .map((item) => {
-        if (typeof item === 'string') return item
-        if (!item || typeof item !== 'object') return ''
-        const record = item as Record<string, unknown>
-        return typeof record.text === 'string' ? record.text : ''
+        return collectChatCompletionText(item)
       })
       .join('')
-      .trim()
+  }
+
+  if (content && typeof content === 'object') {
+    const record = content as Record<string, unknown>
+    const text = collectChatCompletionText(record.text)
+    if (text) return text
+
+    const outputText = collectChatCompletionText(record.output_text)
+    if (outputText) return outputText
+
+    return collectChatCompletionText(record.content)
   }
 
   return ''
+}
+
+function extractChatCompletionText(content: unknown) {
+  return collectChatCompletionText(content).trim()
+}
+
+function extractChatCompletionChoiceText(choice: unknown) {
+  if (!choice || typeof choice !== 'object') return ''
+
+  const record = choice as Record<string, unknown>
+  const delta = record.delta && typeof record.delta === 'object' ? record.delta as Record<string, unknown> : null
+  const message = record.message && typeof record.message === 'object' ? record.message as Record<string, unknown> : null
+
+  return [
+    collectChatCompletionText(delta?.content),
+    collectChatCompletionText(message?.content),
+    collectChatCompletionText(record.text),
+    collectChatCompletionText(record.output_text),
+    collectChatCompletionText(record.content),
+  ].find(Boolean) ?? ''
+}
+
+function extractChatCompletionResponseText(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return ''
+
+  const record = payload as Record<string, unknown>
+  if (Array.isArray(record.choices)) {
+    const text = record.choices.map(extractChatCompletionChoiceText).join('')
+    if (text) return text
+  }
+
+  const delta = record.delta && typeof record.delta === 'object' ? record.delta as Record<string, unknown> : null
+  const message = record.message && typeof record.message === 'object' ? record.message as Record<string, unknown> : null
+
+  return [
+    collectChatCompletionText(record.delta),
+    collectChatCompletionText(delta?.content),
+    collectChatCompletionText(message?.content),
+    collectChatCompletionText(record.text),
+    collectChatCompletionText(record.output_text),
+    collectChatCompletionText(record.content),
+  ].find(Boolean) ?? ''
+}
+
+function extractStreamPayloadText(payload: string) {
+  const trimmed = payload.trim()
+  if (!trimmed || trimmed === '[DONE]') return ''
+
+  try {
+    return extractChatCompletionResponseText(JSON.parse(trimmed))
+  } catch {
+    return trimmed.startsWith('{')
+      || trimmed.startsWith('[')
+      || trimmed.startsWith('}')
+      || trimmed.startsWith(']')
+      || trimmed.startsWith('"')
+      || trimmed.startsWith(',')
+      ? ''
+      : trimmed
+  }
 }
 
 async function requestOpenAICompatibleChat(params: {
@@ -308,7 +379,7 @@ async function requestOpenAICompatibleChat(params: {
       request: { url, body: requestBody, messages: params.messages },
       response: {
         status: response.status,
-        rawText: extractChatCompletionText(data.choices?.[0]?.message?.content),
+        rawText: extractChatCompletionResponseText(data),
         parsed: data,
       },
     })
@@ -400,7 +471,7 @@ export async function extractChapterKnowledgeWithOpenAICompatible(params: {
             ],
       })
 
-      const content = extractChatCompletionText(response.choices?.[0]?.message?.content)
+      const content = extractChatCompletionResponseText(response)
       lastContent = content
       if (!content) {
         lastError = 'OpenAI-compatible API returned empty content'
@@ -532,7 +603,7 @@ export async function generateRewriteWithOpenAICompatible(
   }
 
   const data = await response.json()
-  const raw = data?.choices?.[0]?.message?.content
+  const raw = extractChatCompletionResponseText(data)
   if (!raw) {
     await writeLlmDebugLog({
       folder: 'rewrite',
@@ -694,37 +765,43 @@ export async function streamRewriteWithOpenAICompatible(
     async start(controller) {
       let buffer = ''
       let rawText = ''
+      let upstreamText = ''
+
+      const enqueueText = (text: string) => {
+        if (!text) return
+        rawText += text
+        controller.enqueue(encoder.encode(text))
+      }
+
+      const consumePayload = (payload: string) => {
+        enqueueText(extractStreamPayloadText(payload))
+      }
+
+      const consumeLine = (rawLine: string) => {
+        const line = rawLine.trim()
+        if (!line) return
+
+        if (line.startsWith('data:')) {
+          consumePayload(line.slice(5).trim())
+          return
+        }
+
+        consumePayload(line)
+      }
 
       try {
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
 
-          buffer += decoder.decode(value, { stream: true })
+          const chunk = decoder.decode(value, { stream: true })
+          upstreamText += chunk
+          buffer += chunk
           const lines = buffer.split('\n')
           buffer = lines.pop() ?? ''
 
           for (const rawLine of lines) {
-            const line = rawLine.trim()
-            if (!line.startsWith('data:')) continue
-            const payload = line.slice(5).trim()
-            if (!payload || payload === '[DONE]') continue
-
-            try {
-              const parsed = JSON.parse(payload) as {
-                choices?: Array<{
-                  delta?: { content?: string }
-                  message?: { content?: string }
-                }>
-              }
-              const choice = parsed.choices?.[0]
-              const content = choice?.delta?.content ?? choice?.message?.content ?? ''
-              if (content) {
-                rawText += content
-                controller.enqueue(encoder.encode(content))
-              }
-            } catch {
-            }
+            consumeLine(rawLine)
           }
         }
       } catch (error) {
@@ -739,6 +816,7 @@ export async function streamRewriteWithOpenAICompatible(
           response: {
             status: response.status,
             rawText,
+            parsed: { upstreamText },
             error: error instanceof Error ? error.message : 'OpenAI-compatible stream failed',
             partial: true,
           },
@@ -747,25 +825,18 @@ export async function streamRewriteWithOpenAICompatible(
         return
       }
 
-      if (buffer.trim().startsWith('data:')) {
-        const payload = buffer.trim().slice(5).trim()
-        if (payload && payload !== '[DONE]') {
-          try {
-            const parsed = JSON.parse(payload) as {
-              choices?: Array<{
-                delta?: { content?: string }
-                message?: { content?: string }
-              }>
-            }
-            const choice = parsed.choices?.[0]
-            const content = choice?.delta?.content ?? choice?.message?.content ?? ''
-            if (content) {
-              rawText += content
-              controller.enqueue(encoder.encode(content))
-            }
-          } catch {
-          }
-        }
+      const finalDecoderChunk = decoder.decode()
+      if (finalDecoderChunk) {
+        upstreamText += finalDecoderChunk
+        buffer += finalDecoderChunk
+      }
+
+      if (buffer.trim()) {
+        consumeLine(buffer)
+      }
+
+      if (!rawText) {
+        consumePayload(upstreamText)
       }
 
       await writeLlmDebugLog({
@@ -776,7 +847,7 @@ export async function streamRewriteWithOpenAICompatible(
         stage: 'rewrite',
         presetCompat: input.presetCompat,
         request: { url, body: requestBody, messages },
-        response: { status: response.status, rawText },
+        response: { status: response.status, rawText, parsed: rawText ? undefined : { upstreamText } },
       })
       controller.close()
     },

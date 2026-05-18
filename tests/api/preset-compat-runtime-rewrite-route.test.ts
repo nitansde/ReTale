@@ -672,6 +672,41 @@ describe('preset compat rewrite route runtime', () => {
     expect(thirdRequestBody.stream).toBe(true)
   })
 
+  it('reads full chat completion JSON bodies returned to streaming OpenAI-compatible requests', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createRouteEffectsLibrary({ streamOpenAI: false }),
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [
+        {
+          message: {
+            content: [
+              { type: 'text', text: '完整响应' },
+              { type: 'text', text: '正文' },
+            ],
+          },
+        },
+      ],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', { stream: true }))
+
+    expect(response.status).toBe(200)
+    await expect(response.text()).resolves.toBe('完整响应正文')
+    expect(deserializePresetCompatResponseMetadata(String(response.headers.get('X-ChatBook-Preset-Compat'))).streamPolicy).toMatchObject({
+      effective: true,
+      source: 'explicit_request',
+    })
+    const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as { stream?: boolean }
+    expect(requestBody.stream).toBe(true)
+  })
+
   it('expands macro-bearing bound presets into provider payloads and returns macro diagnostics metadata', async () => {
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => createAiSettings('openai-compatible'),
