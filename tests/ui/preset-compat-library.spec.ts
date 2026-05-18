@@ -319,13 +319,26 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
   const firstRuleId = importedPreset.promptRules[0]?.id
   expect(firstRuleId).toBeTruthy()
   await expect(page.getByTestId(`preset-compat-rule-content-${firstRuleId}`)).toBeVisible()
+  await expect(page.getByTestId('preset-compat-preview-surface-select')).toHaveValue('rewrite')
   await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toHaveCount(0)
   await page.getByTestId('preset-compat-preview-generate').click()
 
   await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toBeVisible()
+  await expect(page.getByTestId('preset-compat-preview-surface-expand')).toHaveCount(0)
   await expect(page.getByTestId('preset-compat-session-state-rewrite')).toHaveText(/会话阶段：continue · 正常/)
   await expect(page.getByTestId('preset-compat-session-reset-rewrite')).toBeVisible()
   await expect(page.getByText('导入备注')).toHaveCount(0)
+
+  await page.getByTestId('preset-compat-preview-surface-select').selectOption('expand')
+  await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toHaveCount(0)
+  await expect(page.getByTestId('preset-compat-session-reset-rewrite')).toHaveCount(0)
+  await page.getByTestId('preset-compat-preview-generate').click()
+  await expect(page.getByTestId('preset-compat-preview-surface-expand')).toBeVisible()
+  await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toHaveCount(0)
+  await expect(page.getByTestId('preset-compat-session-reset-expand')).toHaveCount(0)
+
+  await page.getByTestId('preset-compat-preview-surface-select').selectOption('rewrite')
+  await page.getByTestId('preset-compat-preview-generate').click()
 
   await page.getByTestId('preset-compat-session-reset-rewrite').click()
   await page.getByTestId('preset-compat-preview-generate').click()

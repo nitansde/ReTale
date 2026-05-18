@@ -255,6 +255,7 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.getByTestId('preset-compat-binding-rewrite')).toBeInTheDocument()
     expect(screen.getByTestId('preset-compat-binding-future_jump_rewrite')).toBeInTheDocument()
     expect(screen.getByText('当前创作界面：Rewrite')).toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('rewrite')
     expect(screen.getByText('ChatBook 内置 System Prompt')).toBeInTheDocument()
     expect((screen.getByTestId('preset-compat-builtin-system-content-rewrite') as HTMLTextAreaElement).value).toContain('你是 ChatBook 的小说扩写/魔改写作模型。')
     expect(screen.getByTestId('preset-compat-rule-content-preset-1-rule-1')).toBeInTheDocument()
@@ -265,6 +266,8 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.getByTestId('preset-compat-session-state-rewrite')).toHaveTextContent('会话阶段：continue · 正常')
     expect(within(rewritePreviewCard).getByTestId('preset-compat-preview-system-rewrite')).toBeInTheDocument()
     expect(within(rewritePreviewCard).getByTestId('preset-compat-preview-user-rewrite')).toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-preview-surface-expand')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-preview-surface-continue')).not.toBeInTheDocument()
     expect(screen.queryByText('导入备注')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('preset-compat-session-reset-rewrite'))
@@ -278,8 +281,18 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.queryByTestId('preset-compat-session-reset-future_jump_bridge')).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
     expect(await screen.findByTestId('preset-compat-session-state-rewrite')).toHaveTextContent('会话阶段：new_chat · 待重置')
-    expect(await screen.findByTestId('preset-compat-session-state-expand')).toHaveTextContent('会话阶段：continue · 正常')
-    expect(await screen.findByTestId('preset-compat-session-state-continue')).toHaveTextContent('会话阶段：continue · 正常')
+    expect(screen.queryByTestId('preset-compat-session-state-expand')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-session-state-continue')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByTestId('preset-compat-preview-surface-select'), { target: { value: 'expand' } })
+    expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('expand')
+    expect(screen.queryByTestId('preset-compat-preview-surface-rewrite')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-session-reset-rewrite')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
+    expect(await screen.findByTestId('preset-compat-preview-surface-expand')).toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-preview-surface-rewrite')).not.toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-session-state-expand')).toHaveTextContent('会话阶段：continue · 正常')
+    expect(screen.queryByTestId('preset-compat-session-reset-expand')).not.toBeInTheDocument()
 
     fireEvent.change(screen.getByTestId('preset-compat-binding-rewrite'), { target: { value: 'preset-1' } })
     expect(useNovelStore.getState().presetCompatLibrary.surfaceBindings.rewrite.presetId).toBe('preset-1')
@@ -340,6 +353,33 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.queryByText('`substituteRegex` metadata is preserved-only in MVP runtime.')).not.toBeInTheDocument()
   })
 
+  it('resets the selected preview surface when the active surface changes', async () => {
+    useNovelStore.setState({
+      presetCompatLibrary: createLibrary(),
+    })
+
+    const onClose = vi.fn()
+    const { rerender } = render(
+      <PresetCompatLibraryModal activeSelection={chapterSelection} activeSurfaceId="rewrite" open onClose={onClose} />,
+    )
+
+    expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('rewrite')
+    fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
+    expect(await screen.findByTestId('preset-compat-preview-surface-rewrite')).toBeInTheDocument()
+
+    rerender(<PresetCompatLibraryModal activeSelection={chapterSelection} activeSurfaceId="expand" open onClose={onClose} />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('expand')
+    })
+    expect(screen.queryByTestId('preset-compat-preview-surface-rewrite')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
+    expect(await screen.findByTestId('preset-compat-preview-surface-expand')).toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-preview-surface-rewrite')).not.toBeInTheDocument()
+    expect(screen.getByTestId('preset-compat-session-reset-expand')).toBeInTheDocument()
+  })
+
   it('keeps ChatBook built-in system prompts editable before any preset is imported', () => {
     useNovelStore.setState({
       presetCompatLibrary: createLibrary({ presets: {} }),
@@ -352,6 +392,53 @@ describe('PresetCompatLibraryModal', () => {
       target: { value: 'No preset built-in edit.' },
     })
     expect(useNovelStore.getState().presetCompatLibrary.builtinSystemPrompts.rewrite.content).toBe('No preset built-in edit.')
+  })
+
+  it('re-syncs the preview surface selector and clears stale preview when reopening the same preset on a different active surface', async () => {
+    useNovelStore.setState({
+      presetCompatLibrary: createLibrary(),
+      presetCompatSessionState: {
+        [createPresetCompatSessionStateKey(chapterSelection, 'rewrite')]: {
+          surfaceId: 'rewrite',
+          phase: 'continue',
+          resetPending: false,
+        },
+        [createPresetCompatSessionStateKey(chapterSelection, 'continue')]: {
+          surfaceId: 'continue',
+          phase: 'continue',
+          resetPending: false,
+        },
+      },
+    })
+
+    const { rerender } = render(
+      <PresetCompatLibraryModal activeSelection={chapterSelection} activeSurfaceId="rewrite" open onClose={vi.fn()} />
+    )
+
+    expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('rewrite')
+    fireEvent.change(screen.getByTestId('preset-compat-preview-surface-select'), { target: { value: 'expand' } })
+    expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('expand')
+    fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
+    expect(await screen.findByTestId('preset-compat-preview-surface-expand')).toBeInTheDocument()
+
+    rerender(
+      <PresetCompatLibraryModal activeSelection={chapterSelection} activeSurfaceId="continue" open={false} onClose={vi.fn()} />
+    )
+    expect(screen.queryByTestId('preset-compat-library-modal')).not.toBeInTheDocument()
+
+    rerender(
+      <PresetCompatLibraryModal activeSelection={chapterSelection} activeSurfaceId="continue" open onClose={vi.fn()} />
+    )
+
+    expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('continue')
+    expect(screen.queryByTestId('preset-compat-preview-surface-expand')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-session-state-expand')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-session-reset-expand')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-preview-surface-continue')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
+    expect(await screen.findByTestId('preset-compat-preview-surface-continue')).toBeInTheDocument()
+    expect(screen.queryByTestId('preset-compat-preview-surface-expand')).not.toBeInTheDocument()
   })
 
   it('deletes and saves the selected preset, clears matching surface bindings, and keeps standalone regexes intact', async () => {
@@ -455,6 +542,7 @@ describe('PresetCompatLibraryModal', () => {
     render(<PresetCompatLibraryModal open onClose={vi.fn()} />)
 
     fireEvent.change(screen.getByTestId('preset-compat-binding-rewrite'), { target: { value: 'preset-1' } })
+    expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('rewrite')
     fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
 
     await waitFor(() => {
