@@ -562,7 +562,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     category: 'prompt-entry',
     fieldPaths: ['prompts[].system_prompt'],
     creativeResetPromptFamily: true,
-    surfaceClassifications: createSurfaceClassificationMap({ creative: applied() }),
+    surfaceClassifications: createSurfaceClassificationMap({ creative: preserved() }),
   },
   {
     id: 'prompts.role',
