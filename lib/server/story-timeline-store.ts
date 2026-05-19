@@ -62,6 +62,11 @@ type StoryTimelineNodeDeleteResult = {
   promotedChildIds: string[]
 }
 
+type StoryTimelineNodeParentRow = {
+  id: string
+  parent_node_id: string | null
+}
+
 const STORY_TIMELINE_NODE_SELECT = `
   SELECT
      story_timeline_nodes.*,
@@ -169,6 +174,78 @@ export function getNextStoryTimelineLabelIndex(novelId: string, branchId: string
   )
 
   return row?.next_index ?? 1
+}
+
+function resolveStoryTimelineRootNodeId(nodeId: string, db: Db) {
+  let currentNodeId: string | null = nodeId
+  const visited = new Set<string>()
+
+  while (currentNodeId && !visited.has(currentNodeId)) {
+    visited.add(currentNodeId)
+    const row: StoryTimelineNodeParentRow | null = db.queryOne(
+      'SELECT id, parent_node_id FROM story_timeline_nodes WHERE id = ? LIMIT 1',
+      currentNodeId
+    )
+
+    if (!row) return null
+    if (!row.parent_node_id) return row.id
+    currentNodeId = row.parent_node_id
+  }
+
+  return currentNodeId
+}
+
+function parseContinueReadableLabelIndex(readableLabel: string | null | undefined) {
+  const normalized = readableLabel?.trim()
+  if (!normalized) return null
+
+  const match = /^CONT-(\d+)$/u.exec(normalized)
+  if (!match) return null
+
+  const parsed = Number.parseInt(match[1] ?? '', 10)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+export function getNextContinueReadableLabelIndex(novelId: string, branchId: string, parentNodeId: string, db: Db = defaultDb) {
+  const rootNodeId = resolveStoryTimelineRootNodeId(parentNodeId, db)
+  if (!rootNodeId) return 1
+
+  const nodes = listStoryTimelineNodes(novelId, branchId, db)
+  const nodesById = new Map(nodes.map((node) => [node.id, node]))
+  const rootNodeIdByNodeId = new Map<string, string | null>()
+
+  const getRootNodeIdForNode = (nodeId: string) => {
+    if (rootNodeIdByNodeId.has(nodeId)) return rootNodeIdByNodeId.get(nodeId) ?? null
+
+    let currentNodeId: string | null = nodeId
+    const visited = new Set<string>()
+
+    while (currentNodeId && !visited.has(currentNodeId)) {
+      visited.add(currentNodeId)
+      const currentNode = nodesById.get(currentNodeId)
+      if (!currentNode) {
+        rootNodeIdByNodeId.set(nodeId, null)
+        return null
+      }
+      if (!currentNode.parentNodeId) {
+        rootNodeIdByNodeId.set(nodeId, currentNode.id)
+        return currentNode.id
+      }
+      currentNodeId = currentNode.parentNodeId
+    }
+
+    rootNodeIdByNodeId.set(nodeId, null)
+    return null
+  }
+
+  const nextIndex = nodes
+    .filter((node) => node.nodeType === 'continue_block' && getRootNodeIdForNode(node.id) === rootNodeId)
+    .reduce((maxIndex, node) => {
+      const scopedReadableIndex = parseContinueReadableLabelIndex(node.readableLabel)
+      return Math.max(maxIndex, scopedReadableIndex ?? node.labelIndex)
+    }, 0)
+
+  return nextIndex + 1
 }
 
 export function createStoryTimelineNode(input: Omit<StoryTimelineNodeRecord, 'createdAt' | 'updatedAt'>, db: Db = defaultDb) {

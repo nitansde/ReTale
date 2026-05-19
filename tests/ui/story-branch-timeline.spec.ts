@@ -405,6 +405,97 @@ function buildContinueBlockTimelinePayload(): StoryTimelineResponse {
   }
 }
 
+type ContinueBlockDetailFixtureInput = {
+  continueBlockId: string
+  timelineNodeId: string
+  parentTimelineNodeId: string | null
+  sourceChapterNo: number
+  title: string
+  subtitle: string
+  userInstruction: string
+  selectedText: string
+  originalText: string
+  latestText: string
+  inputTokens: number | null
+  outputTokens: number | null
+  latestRevisionNo: number
+  revisionKind?: 'initial' | 'regenerate'
+  createdAt?: string
+  updatedAt?: string
+  revisions?: Array<{
+    revisionNo: number
+    revisionKind: 'initial' | 'regenerate'
+    userInstruction: string
+    selectedText: string
+    originalText: string
+    generatedText: string
+    inputTokens: number | null
+    outputTokens: number | null
+    title: string
+    subtitle: string
+    createdAt: string
+  }>
+}
+
+function buildContinueBlockDetail(input: ContinueBlockDetailFixtureInput) {
+  const createdAt = input.createdAt ?? '2026-05-15T01:23:45.000Z'
+  const updatedAt = input.updatedAt ?? createdAt
+  const revisions = input.revisions ?? [
+    {
+      revisionNo: input.latestRevisionNo,
+      revisionKind: input.revisionKind ?? (input.latestRevisionNo > 1 ? 'regenerate' : 'initial'),
+      userInstruction: input.userInstruction,
+      selectedText: input.selectedText,
+      originalText: input.originalText,
+      generatedText: input.latestText,
+      inputTokens: input.inputTokens,
+      outputTokens: input.outputTokens,
+      title: input.title,
+      subtitle: input.subtitle,
+      createdAt,
+    },
+  ]
+  const latestRevision = revisions.at(-1) ?? null
+
+  return {
+    id: input.continueBlockId,
+    novelId: 'novel-001',
+    branchId: 'novel-001:main',
+    parentTimelineNodeId: input.parentTimelineNodeId,
+    sourceChapterNo: input.sourceChapterNo,
+    title: input.title,
+    subtitle: input.subtitle,
+    userInstruction: input.userInstruction,
+    selectedText: input.selectedText,
+    originalText: input.originalText,
+    latestText: input.latestText,
+    inputTokens: input.inputTokens,
+    outputTokens: input.outputTokens,
+    latestRevisionNo: input.latestRevisionNo,
+    status: input.latestRevisionNo > 1 ? 'revised' : 'active',
+    createdAt,
+    updatedAt,
+    timelineNodeId: input.timelineNodeId,
+    latestRevision: latestRevision
+      ? {
+          id: `${input.continueBlockId}-revision-${latestRevision.revisionNo}`,
+          continueBlockId: input.continueBlockId,
+          ...latestRevision,
+        }
+      : null,
+    revisionHistory: revisions.map((revision) => ({
+      revisionNo: revision.revisionNo,
+      revisionKind: revision.revisionKind,
+      createdAt: revision.createdAt,
+    })),
+    revisions: revisions.map((revision) => ({
+      id: `${input.continueBlockId}-revision-${revision.revisionNo}`,
+      continueBlockId: input.continueBlockId,
+      ...revision,
+    })),
+  }
+}
+
 function buildMixedContinueTreeTimelinePayload(): StoryTimelineResponse {
   return {
     novelId: 'novel-001',
@@ -555,7 +646,7 @@ function buildDeleteAffordanceTimelinePayload(): StoryTimelineResponse {
         readableLineageLabel: 'RE-01, CONT-01',
         anchorChapterNo: 10,
         parentNodeId: 'rewrite-node-1',
-        title: 'RE-01, CONT-01 续写块',
+        title: 'CONT-01 续写块',
         subtitle: '沿着改写结果继续推进',
         laneIndex: 1,
         colorToken: 'fuchsia',
@@ -600,7 +691,7 @@ function buildDeleteAffordanceTimelinePayload(): StoryTimelineResponse {
         readableLineageLabel: 'IF-01, JUMP-01',
         anchorChapterNo: 100,
         parentNodeId: storyBranchFixtureIds.whatIfNodeId,
-        title: 'IF-01, JUMP-01 第100章',
+        title: 'JUMP-01 第100章',
         subtitle: '跳到被绑走后的未来',
         laneIndex: 0,
         colorToken: 'violet',
@@ -644,6 +735,22 @@ function deleteTimelineNodeFromPayload(timeline: StoryTimelineResponse, nodeId: 
 test('saving a rewrite candidate lands on a persisted continue-block reader and survives reload in read mode', async ({ page }) => {
   let createdContinueBlock = false
   let continueBlockPayload: Record<string, unknown> | null = null
+  let continueBlockDetailRequestCount = 0
+  const continueBlockDetailState = buildContinueBlockDetail({
+    continueBlockId: 'continue-block-1',
+    timelineNodeId: 'continue-node-1',
+    parentTimelineNodeId: null,
+    sourceChapterNo: 10,
+    title: 'CONT-01 续写块',
+    subtitle: '把誓言后的情绪变化压进同一场景。',
+    userInstruction: '把誓言后的情绪变化压进同一场景。',
+    selectedText: '第10章正文',
+    originalText: '第10章正文',
+    latestText: '已保存的续写块正文：她在门后听见誓言改变了方向。',
+    inputTokens: 41,
+    outputTokens: 59,
+    latestRevisionNo: 1,
+  })
 
   await page.route('**/api/workspace', async (route) => {
     await route.fulfill({ json: buildWorkspacePayload() })
@@ -669,6 +776,10 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
   })
   await page.route('**/api/rewrite', async (route) => {
     await route.fulfill({ status: 200, body: '保存后的候选正文：她在门后听见誓言改变了方向。' })
+  })
+  await page.route('**/api/continue-blocks/continue-block-1?*', async (route) => {
+    continueBlockDetailRequestCount += 1
+    await route.fulfill({ json: continueBlockDetailState })
   })
   await page.route('**/api/continue-blocks', async (route) => {
     continueBlockPayload = route.request().postDataJSON()
@@ -726,6 +837,7 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
+  expect(continueBlockDetailRequestCount).toBeGreaterThanOrEqual(1)
   await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 41 tokens')
   await expect(page.getByTestId('workspace-current-output-tokens')).toContainText('输出 59 tokens')
   await expect(page.getByTestId('workspace-continue-block-continue-entry')).toBeEnabled()
@@ -745,10 +857,44 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
+  expect(continueBlockDetailRequestCount).toBeGreaterThanOrEqual(2)
 })
 
 test('delete affordances stay visible across rewrite/continue/what-if/future-jump nodes and selected deletes recover URL state deterministically', async ({ page }) => {
   let timelineState = buildDeleteAffordanceTimelinePayload()
+  const continueBlockDetails = {
+    'rewrite-block-1': buildContinueBlockDetail({
+      continueBlockId: 'rewrite-block-1',
+      timelineNodeId: 'rewrite-node-1',
+      parentTimelineNodeId: null,
+      sourceChapterNo: 10,
+      title: 'RE-01 第一版改写',
+      subtitle: '首个保存的改写节点',
+      userInstruction: '让誓言转向更冷的情绪。',
+      selectedText: '第10章正文',
+      originalText: '第10章正文',
+      latestText: '改写正文：她在门后听见誓言改变了方向。',
+      inputTokens: 38,
+      outputTokens: 52,
+      latestRevisionNo: 1,
+    }),
+    'continue-block-1': buildContinueBlockDetail({
+      continueBlockId: 'continue-block-1',
+      timelineNodeId: 'continue-node-1',
+      parentTimelineNodeId: 'rewrite-node-1',
+      sourceChapterNo: 10,
+      title: 'CONT-01 续写块',
+      subtitle: '沿着改写结果继续推进',
+      userInstruction: '继续压低场景里的情绪。',
+      selectedText: '第10章正文',
+      originalText: '改写正文：她在门后听见誓言改变了方向。',
+      latestText: '续写正文：她决定把誓言藏进下一次沉默。',
+      inputTokens: 44,
+      outputTokens: 61,
+      latestRevisionNo: 1,
+    }),
+  }
+  const continueBlockDetailRequests: string[] = []
 
   await page.route('**/api/workspace', async (route) => {
     await route.fulfill({ json: buildWorkspacePayload() })
@@ -777,6 +923,11 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
       },
     })
   })
+  await page.route('**/api/continue-blocks/*', async (route) => {
+    const continueBlockId = new URL(route.request().url()).pathname.split('/').at(-1) ?? ''
+    continueBlockDetailRequests.push(continueBlockId)
+    await route.fulfill({ json: continueBlockDetails[continueBlockId as keyof typeof continueBlockDetails] })
+  })
   await page.route('**/api/what-if/sessions/what-if-session-001?*', async (route) => {
     await route.fulfill({ json: buildWhatIfSessionDetail() })
   })
@@ -787,21 +938,23 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
   await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
 
   await expect(page.getByLabel('删除 Rewrite 节点 RE-01')).toBeVisible()
-  await expect(page.getByLabel('删除 Continue block 节点 RE-01, CONT-01')).toBeVisible()
+  await expect(page.getByLabel('删除 Continue block 节点 CONT-01')).toBeVisible()
   await expect(page.getByLabel('删除 What if 节点 IF-01')).toBeVisible()
-  await expect(page.getByLabel('删除 Future jump 节点 IF-01, JUMP-01')).toBeVisible()
+  await expect(page.getByLabel('删除 Future jump 节点 JUMP-01')).toBeVisible()
+  expect(continueBlockDetailRequests).toContain('continue-block-1')
 
   page.once('dialog', (dialog) => dialog.accept())
-  await page.getByLabel('删除 Continue block 节点 RE-01, CONT-01').click()
+  await page.getByLabel('删除 Continue block 节点 CONT-01').click()
   await expect(page).toHaveURL(/selectionKind=rewrite/)
   await expect(page).toHaveURL(/selectionNodeId=rewrite-node-1/)
   await expect(page).not.toHaveURL(/selectionNodeId=continue-node-1/)
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('rewrite')
+  expect(continueBlockDetailRequests).toContain('rewrite-block-1')
 
   timelineState = buildDeleteAffordanceTimelinePayload()
   await page.goto(`/workspace?selectionKind=future_jump&selectionNodeId=${storyBranchFixtureIds.futureJumpNodeId}&selectionRunId=jump-run-001&selectionSourceChapterNo=10&selectionTargetChapterNo=100`, { waitUntil: 'networkidle' })
   page.once('dialog', (dialog) => dialog.accept())
-  await page.getByLabel('删除 Future jump 节点 IF-01, JUMP-01').click()
+  await page.getByLabel('删除 Future jump 节点 JUMP-01').click()
   await expect(page).toHaveURL(/selectionKind=what_if/)
   await expect(page).toHaveURL(new RegExp(`selectionNodeId=${storyBranchFixtureIds.whatIfNodeId}`))
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('what-if')
@@ -822,7 +975,7 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
   await expect(page).toHaveURL(/selectionChapterId=chapter-10/)
   await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
   await expect(page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`)).toBeVisible()
-  await expect(page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`)).toContainText('IF-01, JUMP-01')
+  await expect(page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`)).toContainText('JUMP-01')
   await page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`).click()
   await expect(page.getByTestId('workspace-future-jump-view')).toBeVisible()
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('future-jump')
@@ -1083,8 +1236,8 @@ test('full speculative branching flow persists through revise, reload, and reope
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('future-jump')
   await expect(jumpNode).toHaveAttribute('data-active', 'true')
   await expect(edge).toHaveAttribute('data-active', 'true')
-  await expect(jumpNode).toContainText('IF-01, JUMP-01')
-  await expect(page.getByTestId('workspace-center-pane')).toContainText('IF-01, JUMP-01')
+  await expect(jumpNode).toContainText('JUMP-01')
+  await expect(page.getByTestId('workspace-center-pane')).toContainText('JUMP-01')
   await expect(page.getByTestId('workspace-future-jump-view')).toContainText(`指令预览 · ${formatStoryBranchInstructionPreview('让救援更晚到来')}`)
   await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 555 tokens')
   await expect(page.getByTestId('workspace-current-output-tokens')).toContainText('输出 666 tokens')
@@ -1191,6 +1344,8 @@ test('future jump view renders latest revision, revises in place, and reopens re
   let rewritePayload: Record<string, unknown> | null = null
   let continueBlockPayload: Record<string, unknown> | null = null
   let reviseRequestCount = 0
+  const continueBlockDetails: Record<string, ReturnType<typeof buildContinueBlockDetail>> = {}
+  const continueBlockDetailRequests: string[] = []
 
   await page.route('**/api/workspace', async (route) => {
     await route.fulfill({ json: buildWorkspacePayload() })
@@ -1214,6 +1369,11 @@ test('future jump view renders latest revision, revises in place, and reopens re
   })
   await page.route('**/api/what-if/sessions/what-if-session-001?*', async (route) => {
     await route.fulfill({ json: buildWhatIfSessionDetail() })
+  })
+  await page.route('**/api/continue-blocks/*', async (route) => {
+    const continueBlockId = new URL(route.request().url()).pathname.split('/').at(-1) ?? ''
+    continueBlockDetailRequests.push(continueBlockId)
+    await route.fulfill({ json: continueBlockDetails[continueBlockId] })
   })
   await page.route('**/api/story-future-map*', async (route) => {
     await route.fulfill({ json: buildFutureMapPayload() })
@@ -1243,6 +1403,21 @@ test('future jump view renders latest revision, revises in place, and reopens re
   })
   await page.route('**/api/continue-blocks', async (route) => {
     continueBlockPayload = route.request().postDataJSON()
+    continueBlockDetails['continue-block-2'] = buildContinueBlockDetail({
+      continueBlockId: 'continue-block-2',
+      timelineNodeId: 'continue-node-2',
+      parentTimelineNodeId: storyBranchFixtureIds.futureJumpNodeId,
+      sourceChapterNo: 100,
+      title: 'CONT-02 未来续写块',
+      subtitle: '沿着未来跳转继续推进',
+      userInstruction: '沿着未来跳转后的正文继续推进。',
+      selectedText: '第三版未来正文：她被带走后，所有误会都在更慢地发酵。',
+      originalText: '第三版未来正文：她被带走后，所有误会都在更慢地发酵。',
+      latestText: '未来续写块正文：她被带走后，誓言开始在更远的地方回响。',
+      inputTokens: 73,
+      outputTokens: 91,
+      latestRevisionNo: 1,
+    })
     timelineState = {
       ...timelineState,
       branchNodes: [
@@ -1331,12 +1506,16 @@ test('future jump view renders latest revision, revises in place, and reopens re
   await expect(page).toHaveURL(/selectionNodeId=continue-node-2/)
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('未来续写块正文：她被带走后，誓言开始在更远的地方回响。')
+  expect(continueBlockDetailRequests).toContain('continue-block-2')
   await page.reload({ waitUntil: 'networkidle' })
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('未来续写块正文：她被带走后，誓言开始在更远的地方回响。')
+  expect(continueBlockDetailRequests.filter((id) => id === 'continue-block-2').length).toBeGreaterThanOrEqual(2)
 })
 
 test('continue-block selection restores on reload and exposes the reader action matrix', async ({ page }) => {
+  let continueBlockDetailRequestCount = 0
+
   await page.route('**/api/workspace', async (route) => {
     await route.fulfill({ json: buildWorkspacePayload() })
   })
@@ -1357,6 +1536,26 @@ test('continue-block selection restores on reload and exposes the reader action 
       },
     })
   })
+  await page.route('**/api/continue-blocks/continue-block-1?*', async (route) => {
+    continueBlockDetailRequestCount += 1
+    await route.fulfill({
+      json: buildContinueBlockDetail({
+        continueBlockId: 'continue-block-1',
+        timelineNodeId: 'continue-node-1',
+        parentTimelineNodeId: null,
+        sourceChapterNo: 10,
+        title: 'CONT-01 续写块',
+        subtitle: '沿着当前节点继续写',
+        userInstruction: '把誓言后的情绪变化压进同一场景。',
+        selectedText: '第10章正文',
+        originalText: '第10章正文',
+        latestText: '已保存的续写块正文：她在门后听见誓言改变了方向。',
+        inputTokens: 41,
+        outputTokens: 59,
+        latestRevisionNo: 1,
+      }),
+    })
+  })
 
   await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
 
@@ -1365,6 +1564,7 @@ test('continue-block selection restores on reload and exposes the reader action 
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
+  expect(continueBlockDetailRequestCount).toBeGreaterThanOrEqual(1)
   await expect(page.getByTestId('workspace-continue-block-continue-entry')).toBeEnabled()
   await expect(page.getByTestId('workspace-continue-block-regenerate-entry')).toBeEnabled()
   await expect(page.getByTestId('workspace-continue-block-future-jump-entry')).toBeEnabled()
@@ -1376,12 +1576,33 @@ test('continue-block selection restores on reload and exposes the reader action 
   await expect(page.getByTestId('workspace-continue-block-actions')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
+  expect(continueBlockDetailRequestCount).toBeGreaterThanOrEqual(2)
 })
 
 test('continue-block continue creates a child node while regenerate updates the same node in place', async ({ page }) => {
   let timelineState = buildContinueBlockTimelinePayload()
   let createPayload: Record<string, unknown> | null = null
   let regeneratePayload: Record<string, unknown> | null = null
+  const generationContextPayloads: Record<string, unknown>[] = []
+  const rewritePayloads: Record<string, unknown>[] = []
+  const continueBlockDetails: Record<string, ReturnType<typeof buildContinueBlockDetail>> = {
+    'continue-block-1': buildContinueBlockDetail({
+      continueBlockId: 'continue-block-1',
+      timelineNodeId: 'continue-node-1',
+      parentTimelineNodeId: null,
+      sourceChapterNo: 10,
+      title: 'CONT-01 续写块',
+      subtitle: '沿着当前节点继续写',
+      userInstruction: '把誓言后的情绪变化压进同一场景。',
+      selectedText: '第10章正文',
+      originalText: '第10章正文',
+      latestText: '已保存的续写块正文：她在门后听见誓言改变了方向。',
+      inputTokens: 41,
+      outputTokens: 59,
+      latestRevisionNo: 1,
+    }),
+  }
+  const continueBlockDetailRequests: string[] = []
 
   await page.route('**/api/workspace', async (route) => {
     await route.fulfill({ json: buildWorkspacePayload() })
@@ -1403,12 +1624,65 @@ test('continue-block continue creates a child node while regenerate updates the 
       },
     })
   })
+  await page.route('**/api/rag/build-generation-context', async (route) => {
+    generationContextPayloads.push(route.request().postDataJSON())
+    await route.fulfill({ json: buildGenerationContextPayload() })
+  })
   await page.route('**/api/rewrite', async (route) => {
+    rewritePayloads.push(route.request().postDataJSON())
     await route.fulfill({ status: 200, body: '新的候选正文：誓言之后，她选择独自离开。' })
+  })
+  await page.route('**/api/continue-blocks/*', async (route) => {
+    const continueBlockId = new URL(route.request().url()).pathname.split('/').at(-1) ?? ''
+    continueBlockDetailRequests.push(continueBlockId)
+    await route.fulfill({ json: continueBlockDetails[continueBlockId] })
   })
   await page.route('**/api/continue-blocks', async (route) => {
     if (route.request().method() === 'PUT') {
       regeneratePayload = route.request().postDataJSON()
+      continueBlockDetails['continue-block-1'] = buildContinueBlockDetail({
+        continueBlockId: 'continue-block-1',
+        timelineNodeId: 'continue-node-1',
+        parentTimelineNodeId: null,
+        sourceChapterNo: 10,
+        title: 'CONT-01 重生版',
+        subtitle: '同节点重生后保留修订历史',
+        userInstruction: '重新生成当前 continue block，并保留它的修订历史。',
+        selectedText: '第10章正文',
+        originalText: '第10章正文',
+        latestText: '重生后的续写块正文：誓言之后，她选择独自离开。',
+        inputTokens: 67,
+        outputTokens: 89,
+        latestRevisionNo: 2,
+        revisions: [
+          {
+            revisionNo: 1,
+            revisionKind: 'initial',
+            userInstruction: '把誓言后的情绪变化压进同一场景。',
+            selectedText: '第10章正文',
+            originalText: '第10章正文',
+            generatedText: '已保存的续写块正文：她在门后听见誓言改变了方向。',
+            inputTokens: 41,
+            outputTokens: 59,
+            title: 'CONT-01 续写块',
+            subtitle: '沿着当前节点继续写',
+            createdAt: '2026-05-15T01:23:45.000Z',
+          },
+          {
+            revisionNo: 2,
+            revisionKind: 'regenerate',
+            userInstruction: '重新生成当前 continue block，并保留它的修订历史。',
+            selectedText: '第10章正文',
+            originalText: '第10章正文',
+            generatedText: '重生后的续写块正文：誓言之后，她选择独自离开。',
+            inputTokens: 67,
+            outputTokens: 89,
+            title: 'CONT-01 重生版',
+            subtitle: '同节点重生后保留修订历史',
+            createdAt: '2026-05-15T01:25:45.000Z',
+          },
+        ],
+      })
       timelineState = {
         ...timelineState,
         branchNodes: timelineState.branchNodes.map((node) => node.id === 'continue-node-1'
@@ -1436,6 +1710,21 @@ test('continue-block continue creates a child node while regenerate updates the 
     }
 
     createPayload = route.request().postDataJSON()
+    continueBlockDetails['continue-block-2'] = buildContinueBlockDetail({
+      continueBlockId: 'continue-block-2',
+      timelineNodeId: 'continue-node-2',
+      parentTimelineNodeId: 'continue-node-1',
+      sourceChapterNo: 10,
+      title: 'CONT-02 子续写块',
+      subtitle: '沿着当前续写块继续推进',
+      userInstruction: '继续沿着这个 continue block 的最新版本扩展新的续写块，不要覆盖当前节点。',
+      selectedText: '第10章正文',
+      originalText: '已保存的续写块正文：她在门后听见誓言改变了方向。',
+      latestText: '子续写块正文：誓言之后，她选择独自离开。',
+      inputTokens: 63,
+      outputTokens: 84,
+      latestRevisionNo: 1,
+    })
     timelineState = {
       ...timelineState,
       branchNodes: [
@@ -1478,6 +1767,7 @@ test('continue-block continue creates a child node while regenerate updates the 
   })
 
   await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
+  expect(continueBlockDetailRequests).toContain('continue-block-1')
 
   await page.getByTestId('workspace-continue-block-continue-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
@@ -1489,9 +1779,18 @@ test('continue-block continue creates a child node while regenerate updates the 
     parentTimelineNodeId: 'continue-node-1',
     branchId: 'novel-001:main',
   })
+  expect(generationContextPayloads[0]).toMatchObject({
+    branchContextNodeId: 'continue-node-1',
+    branchContextInclusion: 'include_selected',
+  })
+  expect(rewritePayloads[0]).toMatchObject({
+    branchContextNodeId: 'continue-node-1',
+    branchContextInclusion: 'include_selected',
+  })
   await expect(page).toHaveURL(/selectionNodeId=continue-node-2/)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('子续写块正文：誓言之后，她选择独自离开。')
   await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
+  expect(continueBlockDetailRequests).toContain('continue-block-2')
 
   await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
   await page.getByTestId('workspace-continue-block-regenerate-entry').click()
@@ -1503,12 +1802,57 @@ test('continue-block continue creates a child node while regenerate updates the 
   expect(regeneratePayload).toMatchObject({
     continueBlockId: 'continue-block-1',
   })
+  expect(generationContextPayloads[1]).toMatchObject({
+    branchContextNodeId: 'continue-node-1',
+    branchContextInclusion: 'include_selected',
+  })
+  expect(rewritePayloads[1]).toMatchObject({
+    branchContextNodeId: 'continue-node-1',
+    branchContextInclusion: 'include_selected',
+  })
   await expect(page).toHaveURL(/selectionNodeId=continue-node-1/)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('重生后的续写块正文：誓言之后，她选择独自离开。')
   await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
+  await expect(page.getByTestId('continue-block-revision-history')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
+  await expect(page.getByTestId('continue-block-history-item-1')).toContainText('第 1 版 · initial')
+  expect(continueBlockDetailRequests.filter((id) => id === 'continue-block-1').length).toBeGreaterThanOrEqual(2)
 })
 
 test('mixed continue and future-jump trees keep continue-block navigation selectable and reload-stable', async ({ page }) => {
+  const continueBlockDetails = {
+    'continue-block-1': buildContinueBlockDetail({
+      continueBlockId: 'continue-block-1',
+      timelineNodeId: 'continue-node-1',
+      parentTimelineNodeId: storyBranchFixtureIds.whatIfNodeId,
+      sourceChapterNo: 10,
+      title: 'CONT-01 续写块',
+      subtitle: '沿着分支继续推进',
+      userInstruction: '把誓言后的情绪变化压进同一场景。',
+      selectedText: '第10章正文',
+      originalText: '第10章正文',
+      latestText: '已保存的续写块正文：她在门后听见誓言改变了方向。',
+      inputTokens: 41,
+      outputTokens: 59,
+      latestRevisionNo: 1,
+    }),
+    'continue-block-2': buildContinueBlockDetail({
+      continueBlockId: 'continue-block-2',
+      timelineNodeId: 'continue-node-2',
+      parentTimelineNodeId: storyBranchFixtureIds.futureJumpNodeId,
+      sourceChapterNo: 100,
+      title: 'CONT-02 未来续写块',
+      subtitle: '沿着未来跳转继续推进',
+      userInstruction: '沿着未来跳转后的正文继续推进。',
+      selectedText: '第100章正文',
+      originalText: '第100章正文',
+      latestText: '未来续写块正文：她被带走后，誓言开始在更远的地方回响。',
+      inputTokens: 73,
+      outputTokens: 91,
+      latestRevisionNo: 1,
+    }),
+  }
+  const continueBlockDetailRequests: string[] = []
+
   await page.route('**/api/workspace', async (route) => {
     await route.fulfill({ json: buildWorkspacePayload() })
   })
@@ -1529,6 +1873,11 @@ test('mixed continue and future-jump trees keep continue-block navigation select
       },
     })
   })
+  await page.route('**/api/continue-blocks/*', async (route) => {
+    const continueBlockId = new URL(route.request().url()).pathname.split('/').at(-1) ?? ''
+    continueBlockDetailRequests.push(continueBlockId)
+    await route.fulfill({ json: continueBlockDetails[continueBlockId as keyof typeof continueBlockDetails] })
+  })
 
   await page.goto('/workspace', { waitUntil: 'networkidle' })
 
@@ -1546,6 +1895,7 @@ test('mixed continue and future-jump trees keep continue-block navigation select
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('未来续写块正文：她被带走后，誓言开始在更远的地方回响。')
+  expect(continueBlockDetailRequests).toContain('continue-block-2')
 
   await page.reload({ waitUntil: 'networkidle' })
 
@@ -1553,6 +1903,7 @@ test('mixed continue and future-jump trees keep continue-block navigation select
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('未来续写块正文：她被带走后，誓言开始在更远的地方回响。')
+  expect(continueBlockDetailRequests.filter((id) => id === 'continue-block-2').length).toBeGreaterThanOrEqual(2)
   await expect(page.getByTestId('timeline-node-continue-node-1')).toHaveAttribute('data-visible-depth', '1')
   await expect(page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`)).toHaveAttribute('data-visible-depth', '1')
   await expect(page.getByTestId('timeline-node-continue-node-2')).toHaveAttribute('data-visible-depth', '1')
