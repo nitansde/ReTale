@@ -5,6 +5,7 @@ import { ArrowRight, Check, GitBranch, LoaderCircle, Sparkles, X } from 'lucide-
 import { cn } from '@/lib/utils'
 import type {
   FutureJumpMutationResponse,
+  FutureJumpSourceContext,
   FutureMapEvent,
   FutureMapResponse,
   OutlineNodeChapterRecord,
@@ -13,8 +14,7 @@ import type {
 type FutureMapOverlayProps = {
   novelId: string
   branchId: string
-  sessionId: string
-  sourceChapterNo: number
+  sourceContext: FutureJumpSourceContext
   title: string
   parentTimelineNodeId: string | null
   onClose: () => void
@@ -22,6 +22,13 @@ type FutureMapOverlayProps = {
     result: FutureJumpMutationResponse,
     context: { sourceChapterNo: number; targetChapterNo: number }
   ) => Promise<void> | void
+}
+
+type FutureMapMode = 'history_node' | 'direct_chapter'
+
+type DirectChapterOption = {
+  event: FutureMapEvent
+  chapter: OutlineNodeChapterRecord
 }
 
 function formatConfidence(confidence: number | null) {
@@ -45,13 +52,22 @@ function buildSourceMeta(sourceType: string) {
   }
 }
 
-async function loadFutureMap(input: Pick<FutureMapOverlayProps, 'novelId' | 'branchId' | 'sessionId' | 'sourceChapterNo'>) {
+async function loadFutureMap(input: Pick<FutureMapOverlayProps, 'novelId' | 'branchId' | 'sourceContext'>) {
   const params = new URLSearchParams({
     novelId: input.novelId,
     branchId: input.branchId,
-    sourceChapterNo: String(input.sourceChapterNo),
-    parentSessionId: input.sessionId,
+    sourceChapterNo: String(input.sourceContext.chapterNo),
   })
+  if (input.sourceContext.chapterId) {
+    params.set('sourceChapterId', input.sourceContext.chapterId)
+  }
+  if (input.sourceContext.nodeId) {
+    params.set('sourceNodeId', input.sourceContext.nodeId)
+  }
+  params.set('sourceNodeType', input.sourceContext.nodeType)
+  if (input.sourceContext.whatIfSessionId) {
+    params.set('parentSessionId', input.sourceContext.whatIfSessionId)
+  }
   const response = await fetch(`/api/story-future-map?${params.toString()}`, { cache: 'no-store' })
   const data = await response.json() as FutureMapResponse & { error?: string }
   if (!response.ok) {
@@ -61,7 +77,7 @@ async function loadFutureMap(input: Pick<FutureMapOverlayProps, 'novelId' | 'bra
 }
 
 async function createFutureJump(input: {
-  sessionId: string
+  sourceContext: FutureJumpSourceContext
   targetOutlineNodeId: string
   targetOutlineChapterId: string
   parentTimelineNodeId: string | null
@@ -135,10 +151,11 @@ function EventCard(props: {
 }
 
 export function FutureMapOverlay(props: FutureMapOverlayProps) {
-  const { branchId, novelId, onClose, onCreated, parentTimelineNodeId, sessionId, sourceChapterNo, title } = props
+  const { branchId, novelId, onClose, onCreated, parentTimelineNodeId, sourceContext, title } = props
   const [data, setData] = useState<FutureMapResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [mode, setMode] = useState<FutureMapMode>('history_node')
   const [selectedTrackKey, setSelectedTrackKey] = useState<string | null>(null)
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null)
@@ -153,11 +170,12 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
       setLoading(true)
       setError('')
       setCreateError('')
+      setMode('history_node')
       setSelectedEventId(null)
       setSelectedChapterId(null)
 
       try {
-        const nextData = await loadFutureMap({ novelId, branchId, sessionId, sourceChapterNo })
+        const nextData = await loadFutureMap({ novelId, branchId, sourceContext })
         if (cancelled) return
         setData(nextData)
         setSelectedTrackKey(nextData.defaults.selectedTrackKey ?? nextData.tracks[0]?.trackKey ?? null)
@@ -176,7 +194,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
     return () => {
       cancelled = true
     }
-  }, [branchId, novelId, sessionId, sourceChapterNo])
+  }, [branchId, novelId, sourceContext])
 
   const eventsById = useMemo(() => new Map((data?.events ?? []).map((event) => [event.id, event] as const)), [data?.events])
   const visibleEvents = useMemo(() => {
@@ -185,10 +203,28 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
     return data.events.filter((event) => event.trackKey === selectedTrackKey)
   }, [data, selectedTrackKey])
   const selectedEvent = selectedEventId ? eventsById.get(selectedEventId) ?? null : null
+  const resolveHistoryNodeChapterId = (event: FutureMapEvent) => {
+    const chapters = data?.chaptersByEvent[event.id] ?? []
+    if (!chapters.length) return null
+    return chapters.find((chapter) => chapter.chapterNo === event.chapterNo)?.id
+      ?? chapters.find((chapter) => chapter.isPrimary)?.id
+      ?? chapters[0]?.id
+      ?? null
+  }
   const chapterOptions = useMemo<OutlineNodeChapterRecord[]>(() => {
     if (!selectedEvent || !data) return []
     return data.chaptersByEvent[selectedEvent.id] ?? []
   }, [data, selectedEvent])
+  const directChapterOptions = useMemo<DirectChapterOption[]>(() => {
+    if (!data) return []
+    return data.events.flatMap((event) =>
+      (data.chaptersByEvent[event.id] ?? []).map((chapter) => ({ event, chapter }))
+    )
+  }, [data])
+  const visibleDirectChapterOptions = useMemo(() => {
+    if (!selectedTrackKey) return directChapterOptions
+    return directChapterOptions.filter((option) => option.event.trackKey === selectedTrackKey)
+  }, [directChapterOptions, selectedTrackKey])
   const selectedChapter = chapterOptions.find((chapter) => chapter.id === selectedChapterId) ?? null
   const canConfirm = Boolean(selectedEvent && selectedChapter) && !creating
 
@@ -204,7 +240,14 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
   const handleEventSelect = (event: FutureMapEvent) => {
     setSelectedTrackKey(event.trackKey)
     setSelectedEventId(event.id)
-    setSelectedChapterId(null)
+    setSelectedChapterId(mode === 'history_node' ? resolveHistoryNodeChapterId(event) : null)
+    setCreateError('')
+  }
+
+  const handleDirectChapterSelect = (option: DirectChapterOption) => {
+    setSelectedTrackKey(option.event.trackKey)
+    setSelectedEventId(option.event.id)
+    setSelectedChapterId(option.chapter.id)
     setCreateError('')
   }
 
@@ -216,14 +259,14 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
 
     try {
         const result = await createFutureJump({
-          sessionId,
+          sourceContext,
           targetOutlineNodeId: selectedEvent.id,
           targetOutlineChapterId: selectedChapter.id,
           parentTimelineNodeId,
           userDirection: userDirection.trim() || undefined,
         })
         await onCreated(result, {
-          sourceChapterNo,
+          sourceChapterNo: sourceContext.chapterNo,
           targetChapterNo: selectedChapter.chapterNo,
         })
     } catch (submitError) {
@@ -247,18 +290,56 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                   <p className="text-[11px] uppercase tracking-[0.22em] text-sky-200/70">Future map</p>
                   <h3 className="mt-2 text-2xl font-semibold text-zinc-100">{title}</h3>
                   <p className="mt-3 text-sm leading-7 text-zinc-300">
-                    先选轨道，再锁定一个未来事件，最后确认要跳到哪一章锚点。只有完成 事件 → 章节 这两个步骤后，Future Jump 才会真正生成。
+                    先选一种跳转方式：历史节点会直接绑定该节点所属章节；直接章节会列出可跳到的章节锚点，并展示已有摘要帮助你判断落点。
                   </p>
                 </div>
-                <button onClick={onClose} className="rounded-2xl border border-white/10 p-2 text-zinc-300 transition hover:bg-white/[0.06]">
+                <button data-testid="future-map-close" onClick={onClose} className="rounded-2xl border border-white/10 p-2 text-zinc-300 transition hover:bg-white/[0.06]">
                   <X className="h-4 w-4" />
                 </button>
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2 text-xs text-zinc-300">
-                <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1.5">session {sessionId}</span>
-                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">branch {branchId}</span>
-                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">source 第 {sourceChapterNo} 章</span>
+                <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1.5">source {sourceContext.nodeType}</span>
+                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">当前分支</span>
+                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">source 第 {sourceContext.chapterNo} 章</span>
+              </div>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-testid="future-map-mode-history-node"
+                  onClick={() => {
+                    setMode('history_node')
+                    setSelectedEventId(null)
+                    setSelectedChapterId(null)
+                    setCreateError('')
+                  }}
+                  className={cn(
+                    'rounded-full border px-4 py-2 text-sm transition',
+                    mode === 'history_node'
+                      ? 'border-sky-300/35 bg-sky-500/12 text-sky-50'
+                      : 'border-white/10 bg-black/20 text-zinc-300 hover:bg-white/[0.05]'
+                  )}
+                >
+                  历史节点
+                </button>
+                <button
+                  type="button"
+                  data-testid="future-map-mode-direct-chapter"
+                  onClick={() => {
+                    setMode('direct_chapter')
+                    setSelectedEventId(null)
+                    setSelectedChapterId(null)
+                    setCreateError('')
+                  }}
+                  className={cn(
+                    'rounded-full border px-4 py-2 text-sm transition',
+                    mode === 'direct_chapter'
+                      ? 'border-sky-300/35 bg-sky-500/12 text-sky-50'
+                      : 'border-white/10 bg-black/20 text-zinc-300 hover:bg-white/[0.05]'
+                  )}
+                >
+                  直接章节
+                </button>
               </div>
             </div>
 
@@ -280,7 +361,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                     <GitBranch className="h-4 w-4 text-sky-300" />
                     <h4 className="text-sm font-medium">Tracks</h4>
                   </div>
-                  <p className="mt-2 text-xs leading-6 text-zinc-400">先按未来阶段或世界线收窄候选范围，再进入具体事件选择。</p>
+                  <p className="mt-2 text-xs leading-6 text-zinc-400">先按未来阶段或世界线收窄候选范围，再进入 {mode === 'history_node' ? '历史节点' : '直接章节'} 选择。</p>
                   <div className="mt-4 space-y-2">
                     {data.tracks.map((track) => {
                       const selected = selectedTrackKey === track.trackKey
@@ -311,9 +392,11 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                 <section className="rounded-[28px] border border-white/8 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.08),_transparent_40%),#0b0d12] p-4 sm:p-5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Event candidates</p>
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{mode === 'history_node' ? 'History nodes' : 'Direct chapter anchors'}</p>
                       <h4 className="mt-1 text-lg font-semibold text-zinc-100">
-                        {selectedTrackKey ? `${visibleEvents.length} 个候选事件` : '选择一个轨道'}
+                        {selectedTrackKey
+                          ? `${mode === 'history_node' ? visibleEvents.length : visibleDirectChapterOptions.length} 个候选${mode === 'history_node' ? '节点' : '章节'}`
+                          : '选择一个轨道'}
                       </h4>
                     </div>
                     <div className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] text-zinc-300">
@@ -321,21 +404,60 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                     </div>
                   </div>
 
-                  {visibleEvents.length ? (
+                  {(mode === 'history_node' ? visibleEvents.length : visibleDirectChapterOptions.length) ? (
                     <div className="mt-4 grid gap-3 xl:grid-cols-2">
-                      {visibleEvents.map((event) => (
-                        <EventCard
-                          key={event.id}
-                          event={event}
-                          selected={selectedEventId === event.id}
-                          dimmed={Boolean(selectedTrackKey) && event.trackKey !== selectedTrackKey}
-                          onClick={() => handleEventSelect(event)}
-                        />
-                      ))}
+                      {mode === 'history_node'
+                        ? visibleEvents.map((event) => (
+                            <EventCard
+                              key={event.id}
+                              event={event}
+                              selected={selectedEventId === event.id}
+                              dimmed={Boolean(selectedTrackKey) && event.trackKey !== selectedTrackKey}
+                              onClick={() => handleEventSelect(event)}
+                            />
+                          ))
+                        : visibleDirectChapterOptions.map((option) => {
+                            const selected = selectedChapterId === option.chapter.id
+                            const sourceMeta = buildSourceMeta(option.event.sourceType)
+                            return (
+                              <button
+                                key={option.chapter.id}
+                                type="button"
+                                data-testid={`future-map-direct-chapter-${option.chapter.chapterNo}`}
+                                onClick={() => handleDirectChapterSelect(option)}
+                                className={cn(
+                                  'w-full rounded-[24px] border p-4 text-left transition',
+                                  selected
+                                    ? 'border-sky-300/35 bg-sky-500/12 shadow-[0_18px_60px_rgba(14,165,233,0.12)]'
+                                    : 'border-white/8 bg-black/20 hover:border-white/15 hover:bg-white/[0.05]'
+                                )}
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{option.event.phaseLabel || option.event.trackKey}</p>
+                                    <h4 className="mt-1 text-sm font-medium text-zinc-100">第 {option.chapter.chapterNo} 章 · {option.chapter.chapterTitle || option.event.title}</h4>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2 text-[11px]">
+                                    <span className={cn('rounded-full border px-2.5 py-1', sourceMeta.tone)}>{sourceMeta.label}</span>
+                                    <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-zinc-300">
+                                      置信度 {formatConfidence(option.event.confidence)}
+                                    </span>
+                                    {option.chapter.isPrimary ? (
+                                      <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] text-zinc-300">primary</span>
+                                    ) : null}
+                                  </div>
+                                </div>
+                                <p className="mt-3 text-sm leading-6 text-zinc-300">{option.event.summary}</p>
+                                {option.event.originalOutcome ? (
+                                  <p className="mt-3 text-xs leading-6 text-zinc-500">原线结果：{option.event.originalOutcome}</p>
+                                ) : null}
+                              </button>
+                            )
+                          })}
                     </div>
                   ) : (
                     <div className="mt-4 rounded-[24px] border border-dashed border-white/10 bg-black/20 p-5 text-sm leading-6 text-zinc-400">
-                      当前轨道下还没有可跳转的未来事件候选。
+                      当前轨道下还没有可跳转的未来{mode === 'history_node' ? '节点' : '章节'}候选。
                     </div>
                   )}
                 </section>
@@ -345,52 +467,46 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                     <Sparkles className="h-4 w-4 text-sky-300" />
                     <h4 className="text-sm font-medium">Confirm target</h4>
                   </div>
-                  <p className="mt-2 text-xs leading-6 text-zinc-400">必须先选择事件，再从这个事件对应的章节锚点里确认具体落点。</p>
+                  <p className="mt-2 text-xs leading-6 text-zinc-400">
+                    {mode === 'history_node'
+                      ? '历史节点模式会在你选中节点后立刻绑定所属章节，不再要求第二次选章节。'
+                      : '直接章节模式会把章节锚点与现有摘要一起展示，选中后即可生成 Future Jump。'}
+                  </p>
 
                   <div className="mt-4 rounded-[22px] border border-white/8 bg-white/[0.03] p-4">
-                    <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Step 1 · Event</p>
+                    <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{mode === 'history_node' ? 'Step 1 · History node' : 'Step 1 · Direct chapter'}</p>
                     {selectedEvent ? (
                       <div className="mt-2 space-y-2">
-                        <p className="text-sm font-medium text-zinc-100">{selectedEvent.title}</p>
+                        <p className="text-sm font-medium text-zinc-100">{mode === 'history_node' ? selectedEvent.title : `第 ${selectedChapter?.chapterNo ?? '—'} 章 · ${selectedChapter?.chapterTitle || selectedEvent.title}`}</p>
                         <p className="text-sm leading-6 text-zinc-300">{selectedEvent.summary}</p>
                       </div>
                     ) : (
-                      <p className="mt-2 text-sm leading-6 text-zinc-400">先从中间事件区选中一个未来事件，右侧才会解锁章节锚点。</p>
+                      <p className="mt-2 text-sm leading-6 text-zinc-400">先从中间区域选中一个{mode === 'history_node' ? '历史节点' : '目标章节'}，右侧才会解锁生成确认。</p>
                     )}
                   </div>
 
                   <div className="mt-4 rounded-[22px] border border-white/8 bg-white/[0.03] p-4">
                     <div className="flex items-center justify-between gap-3">
-                      <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Step 2 · Chapter anchor</p>
-                      <span className="text-[11px] text-zinc-500">{chapterOptions.length} options</span>
+                      <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Step 2 · Resolved chapter</p>
+                      <span className="text-[11px] text-zinc-500">{mode === 'history_node' ? 'auto-bound' : chapterOptions.length ? 'selected' : 'pending'}</span>
                     </div>
                     <div className="mt-3 space-y-2">
-                      {chapterOptions.length ? chapterOptions.map((chapter) => {
-                        const selected = selectedChapterId === chapter.id
-                        return (
-                          <button
-                            key={chapter.id}
-                            type="button"
-                            disabled={!selectedEvent}
-                            data-testid={`future-map-chapter-${chapter.chapterNo}`}
-                            onClick={() => setSelectedChapterId(chapter.id)}
-                            className={cn(
-                              'w-full rounded-[18px] border px-3 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50',
-                              selected ? 'border-sky-300/35 bg-sky-500/12 text-sky-50' : 'border-white/8 bg-black/20 text-zinc-200 hover:bg-white/[0.05]'
-                            )}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-medium">第 {chapter.chapterNo} 章</p>
-                                <p className="mt-1 text-xs text-zinc-400">{chapter.chapterTitle || chapter.chapterId || '未命名章节锚点'}</p>
-                              </div>
-                              {chapter.isPrimary ? <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] text-zinc-300">primary</span> : null}
+                      {selectedChapter ? (
+                        <div
+                          data-testid="future-map-resolved-chapter"
+                          className="rounded-[18px] border border-sky-300/20 bg-sky-500/10 px-3 py-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-medium text-sky-50">第 {selectedChapter.chapterNo} 章</p>
+                              <p className="mt-1 text-xs text-sky-100/75">{selectedChapter.chapterTitle || selectedChapter.chapterId || '未命名章节锚点'}</p>
                             </div>
-                          </button>
-                        )
-                      }) : (
+                            {selectedChapter.isPrimary ? <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] text-zinc-300">primary</span> : null}
+                          </div>
+                        </div>
+                      ) : (
                         <div className="rounded-[18px] border border-dashed border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-zinc-400">
-                          {selectedEvent ? '当前事件还没有可用的章节锚点。' : '尚未选中事件，章节锚点暂不可选。'}
+                          {selectedEvent ? '当前选择还没有可用的章节锚点。' : '尚未选中目标，章节锚点暂不可用。'}
                         </div>
                       )}
                     </div>

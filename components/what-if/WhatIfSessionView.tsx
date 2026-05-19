@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, GitBranch, LoaderCircle, RefreshCcw, Sparkles } from 'lucide-react'
+import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import { WhatIfDeltaPanel } from '@/components/what-if/WhatIfDeltaPanel'
+import { cn, splitPlainTextParagraphs } from '@/lib/utils'
 import type { WhatIfSessionDetail } from '@/lib/story-branch-types'
 
 async function loadWhatIfSessionDetail(input: {
@@ -40,6 +42,19 @@ function formatCreatedAt(value: string) {
   })
 }
 
+function renderReaderBodyParagraphs(text: string, className?: string) {
+  const paragraphs = splitPlainTextParagraphs(text)
+  const visibleParagraphs = paragraphs.length ? paragraphs : [text.trim() || '　']
+
+  return (
+    <div className={cn('reader-body-prose mt-3', className)}>
+      {visibleParagraphs.map((paragraph, index) => (
+        <p key={`${index}-${paragraph.slice(0, 24)}`}>{paragraph}</p>
+      ))}
+    </div>
+  )
+}
+
 export function WhatIfSessionView(props: {
   novelId: string
   branchId: string
@@ -47,6 +62,8 @@ export function WhatIfSessionView(props: {
   anchorChapterNo: number
   nodeTitle?: string | null
   nodeSubtitle?: string | null
+  readableLineageLabel?: string | null
+  onMetricsChange?: (metrics: { currentText: string; inputTokens: number | null; outputTokens: number | null }) => void
   onJumpToFuture: (detail: WhatIfSessionDetail) => void
   onRegenerateWhatIf: (detail: WhatIfSessionDetail) => void
   onContinueInBranch: (detail: WhatIfSessionDetail) => void
@@ -87,16 +104,27 @@ export function WhatIfSessionView(props: {
     }
   }, [props.branchId, props.novelId, props.sessionId])
 
-  const resolvedTitle = detail?.title || props.nodeTitle || `IF · 第 ${props.anchorChapterNo} 章分支推演`
+  useEffect(() => {
+    if (!detail) return
+    props.onMetricsChange?.({
+      currentText: detail.generatedText,
+      inputTokens: detail.inputTokens ?? null,
+      outputTokens: detail.outputTokens ?? null,
+    })
+  }, [detail, props.onMetricsChange])
+
+  const resolvedTitle = props.readableLineageLabel?.trim() || detail?.title || props.nodeTitle || `IF · 第 ${props.anchorChapterNo} 章分支推演`
   const resolvedSubtitle = props.nodeSubtitle?.trim() || detail?.premise?.trim() || ''
+  const instructionPreview = formatStoryBranchInstructionPreview(detail?.premise ?? props.nodeSubtitle)
   const canRunActions = Boolean(detail) && !loading
   const metaPills = useMemo(
     () => [
+      props.readableLineageLabel?.trim() || null,
+      instructionPreview ? `指令预览 ${instructionPreview}` : null,
       `source 第 ${detail?.sourceChapterNo ?? props.anchorChapterNo} 章`,
-      `session ${props.sessionId}`,
       detail ? `创建于 ${formatCreatedAt(detail.createdAt)}` : null,
     ].filter(Boolean) as string[],
-    [detail, props.anchorChapterNo, props.sessionId]
+    [detail, instructionPreview, props.anchorChapterNo, props.readableLineageLabel]
   )
 
   return (
@@ -177,14 +205,14 @@ export function WhatIfSessionView(props: {
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Original excerpt</p>
-                  <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-200">{excerptText(detail)}</p>
+                  {renderReaderBodyParagraphs(excerptText(detail), 'text-zinc-200')}
                 </div>
               </div>
             </section>
 
             <section className="rounded-[24px] border border-sky-300/18 bg-sky-500/10 p-5">
               <p className="text-[11px] uppercase tracking-[0.18em] text-sky-100/70">Generated what-if</p>
-              <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-sky-50">{detail.generatedText}</p>
+              {renderReaderBodyParagraphs(detail.generatedText, 'text-sky-50')}
             </section>
           </div>
 
