@@ -37,6 +37,51 @@ const sessionDetail: WhatIfSessionDetail = {
       createdAt: '2026-05-15T01:23:45.000Z',
     },
   ],
+  latestRevision: {
+    revisionNo: 2,
+    revisionKind: 'regenerate',
+    userInstruction: '让冲突再锋利一些。',
+    selectedText: '“你根本没信过我。”',
+    originalText: '原始章节正文',
+    generatedText: '魔改后的 What-if 正文',
+    inputTokens: 120,
+    outputTokens: 240,
+    title: 'IF-01 决裂线',
+    subtitle: null,
+    createdAt: '2026-05-15T01:24:45.000Z',
+  },
+  revisionHistory: [
+    { revisionNo: 1, revisionKind: 'initial', createdAt: '2026-05-15T01:23:45.000Z' },
+    { revisionNo: 2, revisionKind: 'regenerate', createdAt: '2026-05-15T01:24:45.000Z' },
+  ],
+  revisions: [
+    {
+      revisionNo: 1,
+      revisionKind: 'initial',
+      userInstruction: '如果他们在这里彻底闹翻。',
+      selectedText: '“你根本没信过我。”',
+      originalText: '原始章节正文',
+      generatedText: '第一版 What-if 正文',
+      inputTokens: 100,
+      outputTokens: 200,
+      title: 'IF-01 决裂线',
+      subtitle: null,
+      createdAt: '2026-05-15T01:23:45.000Z',
+    },
+    {
+      revisionNo: 2,
+      revisionKind: 'regenerate',
+      userInstruction: '让冲突再锋利一些。',
+      selectedText: '“你根本没信过我。”',
+      originalText: '原始章节正文',
+      generatedText: '魔改后的 What-if 正文',
+      inputTokens: 120,
+      outputTokens: 240,
+      title: 'IF-01 决裂线',
+      subtitle: null,
+      createdAt: '2026-05-15T01:24:45.000Z',
+    },
+  ],
 }
 
 describe('WhatIfSessionView', () => {
@@ -82,6 +127,8 @@ describe('WhatIfSessionView', () => {
     expect(screen.getByText('魔改后的 What-if 正文')).toBeInTheDocument()
     expect(screen.getByTestId('what-if-delta-list')).toBeInTheDocument()
     expect(screen.getByText('两人关系在这里彻底破裂。')).toBeInTheDocument()
+    expect(screen.getByTestId('what-if-revision-history')).toHaveTextContent('第一版 What-if 正文')
+    expect(screen.queryByText('当前版本')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('what-if-jump-button'))
     fireEvent.click(screen.getByRole('button', { name: 'Regenerate What-if' }))

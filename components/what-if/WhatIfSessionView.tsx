@@ -68,9 +68,11 @@ export function WhatIfSessionView(props: {
   onRegenerateWhatIf: (detail: WhatIfSessionDetail) => void
   onContinueInBranch: (detail: WhatIfSessionDetail) => void
 }) {
+  const { onMetricsChange } = props
   const [detail, setDetail] = useState<WhatIfSessionDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const readableLabel = props.readableLineageLabel?.trim() || ''
 
   useEffect(() => {
     let cancelled = false
@@ -106,26 +108,31 @@ export function WhatIfSessionView(props: {
 
   useEffect(() => {
     if (!detail) return
-    props.onMetricsChange?.({
+    onMetricsChange?.({
       currentText: detail.generatedText,
       inputTokens: detail.inputTokens ?? null,
       outputTokens: detail.outputTokens ?? null,
     })
-  }, [detail, props.onMetricsChange])
+  }, [detail, onMetricsChange])
 
-  const resolvedTitle = props.readableLineageLabel?.trim() || detail?.title || props.nodeTitle || `IF · 第 ${props.anchorChapterNo} 章分支推演`
+  const resolvedTitle = readableLabel || detail?.title || props.nodeTitle || `IF · 第 ${props.anchorChapterNo} 章分支推演`
   const resolvedSubtitle = props.nodeSubtitle?.trim() || detail?.premise?.trim() || ''
   const instructionPreview = formatStoryBranchInstructionPreview(detail?.premise ?? props.nodeSubtitle)
   const canRunActions = Boolean(detail) && !loading
   const metaPills = useMemo(
     () => [
-      props.readableLineageLabel?.trim() || null,
+      readableLabel || null,
       instructionPreview ? `指令预览 ${instructionPreview}` : null,
       `source 第 ${detail?.sourceChapterNo ?? props.anchorChapterNo} 章`,
       detail ? `创建于 ${formatCreatedAt(detail.createdAt)}` : null,
     ].filter(Boolean) as string[],
-    [detail, instructionPreview, props.anchorChapterNo, props.readableLineageLabel]
+    [detail, instructionPreview, props.anchorChapterNo, readableLabel]
   )
+  const revisionEntries = useMemo(
+    () => [...(detail?.revisions ?? [])].sort((left, right) => right.revisionNo - left.revisionNo),
+    [detail?.revisions]
+  )
+  const historyEntries = revisionEntries.slice(1)
 
   return (
     <div className="space-y-4 px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-what-if-view">
@@ -217,6 +224,38 @@ export function WhatIfSessionView(props: {
           </div>
 
           <WhatIfDeltaPanel deltas={detail.deltas} />
+
+          {historyEntries.length ? (
+            <section className="rounded-[24px] border border-white/8 bg-black/20 p-5" data-testid="what-if-revision-history">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Revision history</p>
+                  <p className="mt-1 text-sm text-zinc-300">最新 What-if 正文保持在主阅读区，下方保留更早版本供回看。</p>
+                </div>
+                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{historyEntries.length} 条历史</span>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                {historyEntries.map((revision) => {
+                  const revisionPreview = formatStoryBranchInstructionPreview(revision.userInstruction)
+                  return (
+                    <article key={`${revision.revisionNo}-${revision.createdAt}`} className="rounded-[20px] border border-white/8 bg-white/[0.03] p-4" data-testid={`what-if-history-item-${revision.revisionNo}`}>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium text-zinc-100">第 {revision.revisionNo} 版 · {revision.revisionKind}</p>
+                          {revisionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">指令预览 · {revisionPreview}</p> : null}
+                        </div>
+                        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-400">{formatCreatedAt(revision.createdAt)}</span>
+                      </div>
+                      <div className="mt-3 rounded-[18px] border border-fuchsia-300/18 bg-fuchsia-500/10 p-4">
+                        {renderReaderBodyParagraphs(revision.generatedText, 'text-zinc-100')}
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+            </section>
+          ) : null}
         </>
       ) : null}
     </div>
