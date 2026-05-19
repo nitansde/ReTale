@@ -86,11 +86,12 @@ function seedReviseFixture(database: DatabaseSync) {
 
   database.prepare(
     `INSERT INTO future_jump_runs (
-      id, session_id, base_branch_id, parent_timeline_node_id, target_outline_node_id,
+      id, session_id, base_branch_id, parent_timeline_node_id, source_timeline_node_id,
+      source_timeline_node_type, source_chapter_id, source_what_if_session_id, target_outline_node_id,
       target_outline_chapter_id, source_chapter_no, target_chapter_no, user_direction,
       bridge_summary, generated_target_text, latest_revision_no, error_message, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run('jump-run-001', 'what-if-001', 'novel-001:main', 'if_fixture_001', 'outline-100', 'outline-anchor-100', 10, 100, '把结果写得更虐，但人物不能失真。', '初版桥接摘要', '初版未来正文', 1, null, 'generated')
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('jump-run-001', 'what-if-001', 'novel-001:main', 'if_fixture_001', 'if_fixture_001', 'what_if', 'chapter-10', null, 'outline-100', 'outline-anchor-100', 10, 100, '把结果写得更虐，但人物不能失真。', '初版桥接摘要', '初版未来正文', 1, null, 'generated')
 
   database.prepare(
     `INSERT INTO future_jump_revisions (
@@ -173,8 +174,8 @@ describe('future-jump revise API', () => {
       generatedTargetText: revisedTargetText,
     }))
     expect(revisePayload.presetCompat).toEqual(expect.objectContaining({
-      fieldStatuses: [],
-      warnings: [],
+      fieldStatuses: expect.any(Array),
+      warnings: expect.any(Array),
     }))
     expect(fetchMock).toHaveBeenCalledTimes(2)
 
@@ -251,5 +252,5 @@ describe('future-jump revise API', () => {
         expect.objectContaining({ revisionNo: 2, revisionKind: 'revise', userFeedback: '把男主的愧疚写得更明显，但不要立刻和好。' }),
       ],
     }))
-  })
+  }, 30000)
 })

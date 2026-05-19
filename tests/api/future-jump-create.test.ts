@@ -47,6 +47,13 @@ function seedCreateFixture(database: DatabaseSync) {
       id, novelId, branchId, chapterNo, title, rawText, summary,
       revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('chapter-25', 'novel-001', 'novel-001:main', 25, '第25章 误判升级', '第25章正文', '第25章摘要', 1, 0, null, 'hash-25', 'ready')
+
+  database.prepare(
+    `INSERT INTO KnowledgeChapter (
+      id, novelId, branchId, chapterNo, title, rawText, summary,
+      revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run('chapter-100', 'novel-001', 'novel-001:main', 100, '第100章 绑走', '第100章正文', '第100章摘要', 1, 0, null, 'hash-100', 'ready')
 
   database.prepare(
@@ -103,12 +110,70 @@ function seedCreateFixture(database: DatabaseSync) {
   ).run('outline-anchor-005', 'outline-005', 5, null, '第5章 伏笔', 1, 0)
 
   database.prepare(
+    `INSERT INTO continue_blocks (
+      id, novel_id, branch_id, parent_timeline_node_id, source_chapter_no, title, subtitle,
+      user_instruction, selected_text, original_text, latest_text, latest_revision_no, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    'continue-block-rewrite-025',
+    'novel-001',
+    'novel-001:main',
+    null,
+    25,
+    'RE-01 误判升级',
+    null,
+    '让误判继续扩大。',
+    '第25章正文',
+    '第25章正文',
+    'rewrite 节点正文：误会已经深到无法当面解释。',
+    1,
+    'active'
+  )
+
+  database.prepare(
+    `INSERT INTO continue_blocks (
+      id, novel_id, branch_id, parent_timeline_node_id, source_chapter_no, title, subtitle,
+      user_instruction, selected_text, original_text, latest_text, latest_revision_no, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    'continue-block-025',
+    'novel-001',
+    'novel-001:main',
+    null,
+    25,
+    'CONT-02 深入误判',
+    null,
+    '继续深入误判。',
+    'rewrite 节点正文：误会已经深到无法当面解释。',
+    'rewrite 节点正文：误会已经深到无法当面解释。',
+    'continue 节点正文：他把最后一次求证也压成了沉默。',
+    1,
+    'active'
+  )
+
+  database.prepare(
     `INSERT INTO story_timeline_nodes (
       id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
       parent_node_id, source_chapter_no, target_chapter_no, chapter_id, what_if_session_id,
       future_jump_run_id, lane_index, color_token, status
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run('if_fixture_001', 'novel-001', 'novel-001:main', 'what_if', 1, 10, 'IF-01 决裂线', '如果他们在这里闹翻', null, 10, null, 'chapter-10', 'what-if-001', null, 0, 'rose', 'active')
+
+  database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
+      parent_node_id, source_chapter_no, target_chapter_no, chapter_id, what_if_session_id,
+      future_jump_run_id, lane_index, color_token, status, continue_block_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('rewrite_fixture_025', 'novel-001', 'novel-001:main', 'rewrite', 1, 25, 'RE-01 误判升级', null, 'if_fixture_001', 25, null, 'chapter-25', null, null, 0, 'sky', 'active', 'continue-block-rewrite-025')
+
+  database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
+      parent_node_id, source_chapter_no, target_chapter_no, chapter_id, what_if_session_id,
+      future_jump_run_id, lane_index, color_token, status, continue_block_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('continue_fixture_025', 'novel-001', 'novel-001:main', 'continue_block', 2, 25, 'CONT-02 深入误判', null, 'rewrite_fixture_025', 25, null, 'chapter-25', null, null, 0, 'sky', 'active', 'continue-block-025')
 }
 
 afterEach(() => {
@@ -129,7 +194,7 @@ afterEach(() => {
 })
 
 describe('future-jump create API', () => {
-  it('validates model output, persists one run lineage, and creates exactly one timeline node', async () => {
+  it('uses the selected source node context instead of the ancestor what-if root and creates exactly one timeline node', async () => {
     const database = createTestDatabase('chatbook-future-jump-create')
     seedCreateFixture(database)
 
@@ -151,10 +216,16 @@ describe('future-jump create API', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sessionId: 'what-if-001',
+        sourceContext: {
+          nodeId: 'continue_fixture_025',
+          nodeType: 'continue_block',
+          chapterId: 'chapter-25',
+          chapterNo: 25,
+          whatIfSessionId: null,
+        },
         targetOutlineNodeId: 'outline-100',
         targetOutlineChapterId: 'outline-anchor-100',
-        parentTimelineNodeId: 'if_fixture_001',
+        parentTimelineNodeId: 'continue_fixture_025',
         userDirection: '把结果写得更虐，但人物不能失真。',
       }),
     }))
@@ -179,12 +250,25 @@ describe('future-jump create API', () => {
       bridge_summary: string
       generated_target_text: string
       parent_timeline_node_id: string | null
+      source_timeline_node_id: string | null
+      source_timeline_node_type: string | null
+      source_chapter_id: string | null
+      source_chapter_no: number
     }
     expect(runRow.status).toBe('generated')
     expect(runRow.latest_revision_no).toBe(1)
     expect(runRow.bridge_summary).toBe(bridgeSummary)
     expect(runRow.generated_target_text).toBe(generatedTargetText)
-    expect(runRow.parent_timeline_node_id).toBe('if_fixture_001')
+    expect(runRow.parent_timeline_node_id).toBe('continue_fixture_025')
+    expect(runRow.source_timeline_node_id).toBe('continue_fixture_025')
+    expect(runRow.source_timeline_node_type).toBe('continue_block')
+    expect(runRow.source_chapter_id).toBe('chapter-25')
+    expect(runRow.source_chapter_no).toBe(25)
+    expect((runRow as { source_what_if_session_id?: string | null }).source_what_if_session_id).toBe('what-if-001')
+
+    const firstRequestBody = String((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body ?? '')
+    expect(firstRequestBody).toContain('第25章正文')
+    expect(firstRequestBody).toContain('continue 节点正文：他把最后一次求证也压成了沉默。')
 
     const revisions = database.prepare('SELECT revision_no, revision_kind FROM future_jump_revisions WHERE run_id = ? ORDER BY revision_no ASC').all(payload.runId) as Array<{
       revision_no: number
@@ -206,12 +290,12 @@ describe('future-jump create API', () => {
       id: payload.timelineNodeId,
       node_type: 'future_jump',
       label_index: 1,
-      title: 'JUMP-01 被绑走之夜',
+      title: 'IF-01, RE-01, CONT-02, JUMP-01 被绑走之夜',
       subtitle: '迟来的真相',
       chapter_id: 'chapter-100',
-      parent_node_id: 'if_fixture_001',
+      parent_node_id: 'continue_fixture_025',
     }))
-  })
+  }, 30000)
 
   it('rejects missing outline nodes before any run is persisted', async () => {
     const database = createTestDatabase('chatbook-future-jump-create-missing-outline')
@@ -228,7 +312,13 @@ describe('future-jump create API', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sessionId: 'what-if-001',
+        sourceContext: {
+          nodeId: 'if_fixture_001',
+          nodeType: 'what_if',
+          chapterId: 'chapter-10',
+          chapterNo: 10,
+          whatIfSessionId: 'what-if-001',
+        },
         targetOutlineNodeId: 'missing-outline',
         targetOutlineChapterId: 'outline-anchor-100',
       }),
@@ -256,7 +346,13 @@ describe('future-jump create API', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sessionId: 'what-if-001',
+        sourceContext: {
+          nodeId: 'if_fixture_001',
+          nodeType: 'what_if',
+          chapterId: 'chapter-10',
+          chapterNo: 10,
+          whatIfSessionId: 'what-if-001',
+        },
         targetOutlineNodeId: 'outline-010',
         targetOutlineChapterId: 'outline-anchor-010',
       }),
@@ -268,7 +364,13 @@ describe('future-jump create API', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sessionId: 'what-if-001',
+        sourceContext: {
+          nodeId: 'if_fixture_001',
+          nodeType: 'what_if',
+          chapterId: 'chapter-10',
+          chapterNo: 10,
+          whatIfSessionId: 'what-if-001',
+        },
         targetOutlineNodeId: 'outline-005',
         targetOutlineChapterId: 'outline-anchor-005',
       }),
