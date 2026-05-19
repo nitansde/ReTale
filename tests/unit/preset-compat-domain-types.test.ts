@@ -15,21 +15,23 @@ describe('preset compat domain types', () => {
   it('keeps canonical product surface, action, and timeline node unions aligned with the simplified contract', () => {
     const branchSelections: TimelineSelection[] = [
       { kind: 'chapter', chapterId: 'chapter-1', chapterNo: 10 },
+      { kind: 'rewrite', nodeId: 'rewrite-node-1', continueBlockId: 'rewrite-block-1', anchorChapterNo: 10 },
       { kind: 'what_if', nodeId: 'if-node-1', sessionId: 'what-if-1', anchorChapterNo: 10 },
       { kind: 'continue_block', nodeId: 'continue-node-1', continueBlockId: 'continue-block-1', anchorChapterNo: 10 },
       { kind: 'future_jump', nodeId: 'jump-node-1', runId: 'jump-run-1', sourceChapterNo: 10, targetChapterNo: 100 },
     ]
-    const nodeTypes: StoryTimelineNodeType[] = ['what_if', 'continue_block', 'future_jump']
+    const nodeTypes: StoryTimelineNodeType[] = ['rewrite', 'what_if', 'continue_block', 'future_jump']
 
     expect(PRODUCT_SURFACE_IDS).toEqual(['rewrite', 'future_jump', 'roleplay'])
     expect(PRODUCT_ACTION_IDS).toEqual(['save', 'continue', 'regenerate'])
     expect(branchSelections.map((selection) => selection.kind)).toEqual([
       'chapter',
+      'rewrite',
       'what_if',
       'continue_block',
       'future_jump',
     ])
-    expect(nodeTypes).toEqual(['what_if', 'continue_block', 'future_jump'])
+    expect(nodeTypes).toEqual(['rewrite', 'what_if', 'continue_block', 'future_jump'])
   })
 
   it('locks the preset and library record shape required by the compatibility subsystem', () => {

@@ -121,6 +121,8 @@ describe('story branch stores', () => {
         selectedText: '原始选区',
         originalText: '原始片段',
         generatedText: '魔改片段',
+        inputTokens: 101,
+        outputTokens: 202,
         status: 'active',
       },
       testDb
@@ -208,6 +210,13 @@ describe('story branch stores', () => {
         sessionId: 'what-if-session-001',
         baseBranchId: 'novel-001:main',
         parentTimelineNodeId: 'if_fixture_001',
+        sourceContext: {
+          nodeId: 'if_fixture_001',
+          nodeType: 'what_if',
+          chapterId: 'chapter-10',
+          chapterNo: 10,
+          whatIfSessionId: 'what-if-session-001',
+        },
         targetOutlineNodeId: 'outline_event_100',
         targetOutlineChapterId: 'outline_chapter_100_primary',
         sourceChapterNo: 10,
@@ -215,6 +224,8 @@ describe('story branch stores', () => {
         userDirection: '男主没有第一时间救援。',
         bridgeSummary: '桥接摘要',
         generatedTargetText: '未来节点正文',
+        inputTokens: 303,
+        outputTokens: 404,
         latestRevisionNo: 1,
         errorMessage: null,
         status: 'generated',
@@ -253,6 +264,8 @@ describe('story branch stores', () => {
         userFeedback: '不够虐，让女主以为男主彻底放弃她。',
         bridgeSummary: '新的桥接摘要',
         generatedTargetText: '新的未来节点正文',
+        inputTokens: 505,
+        outputTokens: 606,
       },
       testDb
     )
@@ -260,6 +273,8 @@ describe('story branch stores', () => {
     expect(findWhatIfSessionById('what-if-session-001', testDb)?.deltas).toHaveLength(1)
     expect(whatIfDelta?.deltaType).toBe('relationship_change')
     expect(findWhatIfSessionById('what-if-session-001', testDb)?.title).toBe('IF-01 决裂线')
+    expect(findWhatIfSessionById('what-if-session-001', testDb)?.inputTokens).toBe(101)
+    expect(findWhatIfSessionById('what-if-session-001', testDb)?.outputTokens).toBe(202)
 
     expect(outlineNode?.title).toBe('女主被反派绑走')
     expect(outlineChapter?.chapterNo).toBe(100)
@@ -274,7 +289,11 @@ describe('story branch stores', () => {
     expect(futureJumpRun?.revisions).toHaveLength(1)
     expect(revisedRun?.latestRevisionNo).toBe(2)
     expect(revisedRun?.bridgeSummary).toBe('新的桥接摘要')
+    expect(revisedRun?.inputTokens).toBe(505)
+    expect(revisedRun?.outputTokens).toBe(606)
     expect(findFutureJumpRunById('jump-run-001', testDb)?.revisions).toHaveLength(2)
+    expect(findStoryTimelineNodeById('if_fixture_001', testDb)?.currentText).toBe('魔改片段')
+    expect(findStoryTimelineNodeById('jump_fixture_001', testDb)?.currentText).toBe('新的未来节点正文')
 
     fs.mkdirSync(EVIDENCE_DIR, { recursive: true })
     fs.writeFileSync(

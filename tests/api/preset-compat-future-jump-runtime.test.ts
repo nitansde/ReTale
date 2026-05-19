@@ -396,6 +396,14 @@ function seedFutureJumpFixture(database: DatabaseSync) {
       id, outline_node_id, chapter_no, chapter_id, chapter_title, is_primary, sort_order
     ) VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run('outline-anchor-100', 'outline-100', 100, 'chapter-100', '第100章 绑走', 1, 0)
+
+  database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
+      parent_node_id, source_chapter_no, target_chapter_no, chapter_id, what_if_session_id,
+      future_jump_run_id, lane_index, color_token, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('if_fixture_001', 'novel-001', 'novel-001:main', 'what_if', 1, 10, 'IF 决裂线', '让男女主在这里 ALPHA 决裂。', null, 10, null, 'chapter-10', 'what-if-001', null, 0, 'rose', 'active')
 }
 
 function seedWhatIfFixture(database: DatabaseSync) {
@@ -464,6 +472,13 @@ describe('preset compat future jump runtime', () => {
       novelId: 'novel-001',
       branchId: 'novel-001:main',
       whatIfSessionId: 'what-if-001',
+      sourceContext: {
+        nodeId: 'if_fixture_001',
+        nodeType: 'what_if',
+        chapterId: 'chapter-10',
+        chapterNo: 10,
+        whatIfSessionId: 'what-if-001',
+      },
       targetOutlineNodeId: 'outline-100',
       targetOutlineChapterId: 'outline-anchor-100',
       userDirection: '让结果更虐 ALPHA，但仍保持人物一致。',
@@ -690,6 +705,13 @@ describe('preset compat future jump runtime', () => {
       novelId: 'novel-001',
       branchId: 'novel-001:main',
       whatIfSessionId: 'what-if-001',
+      sourceContext: {
+        nodeId: 'if_fixture_001',
+        nodeType: 'what_if',
+        chapterId: 'chapter-10',
+        chapterNo: 10,
+        whatIfSessionId: 'what-if-001',
+      },
       targetOutlineNodeId: 'outline-100',
       targetOutlineChapterId: 'outline-anchor-100',
       userDirection: '让结果保持可预测。',
