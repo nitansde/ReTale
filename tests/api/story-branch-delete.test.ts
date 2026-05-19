@@ -112,6 +112,221 @@ function seedDeleteFixture(database: DatabaseSync) {
   ).run('if-node-002', 'novel-001', 'novel-001:main', 'what_if', 2, 10, 'IF-02 保留线', '未删除分支', null, 10, null, 'chapter-10', 'what-if-002', null, 0, 'sky', 'active')
 }
 
+function seedPromoteFixture(database: DatabaseSync) {
+  database.prepare(`INSERT INTO NovelRecord (id, title, author, sourceType) VALUES (?, ?, ?, ?)`).run('novel-promote', 'Promote Fixture', 'Fixture Author', 'txt')
+  database.prepare(`INSERT INTO StoryBranch (id, novelId, name, baseBranchId) VALUES (?, ?, ?, ?)`).run('novel-promote:main', 'novel-promote', 'main', null)
+
+  database.prepare(
+    `INSERT INTO KnowledgeChapter (
+      id, novelId, branchId, chapterNo, title, rawText, summary,
+      revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('chapter-promote-10', 'novel-promote', 'novel-promote:main', 10, '第10章', '第10章正文', '第10章摘要', 1, 0, null, 'hash-promote-10', 'ready')
+
+  database.prepare(
+    `INSERT INTO continue_blocks (
+      id, novel_id, branch_id, parent_timeline_node_id, source_chapter_no, title, subtitle,
+      user_instruction, selected_text, original_text, latest_text, latest_revision_no, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    'rewrite-block-promote',
+    'novel-promote',
+    'novel-promote:main',
+    null,
+    10,
+    'RE-01 第一版改写',
+    '首个保存的改写节点',
+    '重写这一段',
+    '原文',
+    '原文正文',
+    '改写正文',
+    1,
+    'active',
+    '2026-05-15T01:20:00.000Z',
+    '2026-05-15T01:20:00.000Z'
+  )
+
+  database.prepare(
+    `INSERT INTO continue_blocks (
+      id, novel_id, branch_id, parent_timeline_node_id, source_chapter_no, title, subtitle,
+      user_instruction, selected_text, original_text, latest_text, latest_revision_no, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    'continue-block-promote-a',
+    'novel-promote',
+    'novel-promote:main',
+    null,
+    10,
+    'RE-01, CONT-01 续写块',
+    '第一个直属子节点',
+    '继续推进',
+    '原文',
+    '原文正文',
+    '续写正文 A',
+    1,
+    'active',
+    '2026-05-15T01:21:00.000Z',
+    '2026-05-15T01:21:00.000Z'
+  )
+
+  database.prepare(
+    `INSERT INTO continue_blocks (
+      id, novel_id, branch_id, parent_timeline_node_id, source_chapter_no, title, subtitle,
+      user_instruction, selected_text, original_text, latest_text, latest_revision_no, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    'continue-block-promote-b',
+    'novel-promote',
+    'novel-promote:main',
+    null,
+    10,
+    'RE-01, CONT-02 续写块',
+    '第二个直属子节点',
+    '继续推进',
+    '原文',
+    '原文正文',
+    '续写正文 B',
+    1,
+    'active',
+    '2026-05-15T01:22:00.000Z',
+    '2026-05-15T01:22:00.000Z'
+  )
+
+  database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
+      parent_node_id, source_chapter_no, target_chapter_no, chapter_id, continue_block_id, what_if_session_id,
+      future_jump_run_id, readable_label, readable_lineage_label, lane_index, color_token, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    'rewrite-node-promote',
+    'novel-promote',
+    'novel-promote:main',
+    'rewrite',
+    1,
+    10,
+    'RE-01 第一版改写',
+    '首个保存的改写节点',
+    null,
+    10,
+    null,
+    null,
+    'rewrite-block-promote',
+    null,
+    null,
+    'RE-01',
+    'RE-01',
+    0,
+    'fuchsia',
+    'active',
+    '2026-05-15T01:20:00.000Z',
+    '2026-05-15T01:20:00.000Z'
+  )
+
+  database.prepare('UPDATE continue_blocks SET parent_timeline_node_id = ? WHERE id = ?').run('rewrite-node-promote', 'continue-block-promote-a')
+  database.prepare('UPDATE continue_blocks SET parent_timeline_node_id = ? WHERE id = ?').run('rewrite-node-promote', 'continue-block-promote-b')
+
+  database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
+      parent_node_id, source_chapter_no, target_chapter_no, chapter_id, continue_block_id, what_if_session_id,
+      future_jump_run_id, readable_label, readable_lineage_label, lane_index, color_token, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    'continue-node-promote-a',
+    'novel-promote',
+    'novel-promote:main',
+    'continue_block',
+    1,
+    10,
+    'RE-01, CONT-01 续写块',
+    '第一个直属子节点',
+    'rewrite-node-promote',
+    10,
+    null,
+    null,
+    'continue-block-promote-a',
+    null,
+    null,
+    'CONT-01',
+    'RE-01, CONT-01',
+    1,
+    'fuchsia',
+    'active',
+    '2026-05-15T01:21:00.000Z',
+    '2026-05-15T01:21:00.000Z'
+  )
+
+  database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
+      parent_node_id, source_chapter_no, target_chapter_no, chapter_id, continue_block_id, what_if_session_id,
+      future_jump_run_id, readable_label, readable_lineage_label, lane_index, color_token, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    'continue-node-promote-b',
+    'novel-promote',
+    'novel-promote:main',
+    'continue_block',
+    2,
+    10,
+    'RE-01, CONT-02 续写块',
+    '第二个直属子节点',
+    'rewrite-node-promote',
+    10,
+    null,
+    null,
+    'continue-block-promote-b',
+    null,
+    null,
+    'CONT-02',
+    'RE-01, CONT-02',
+    1,
+    'fuchsia',
+    'active',
+    '2026-05-15T01:22:00.000Z',
+    '2026-05-15T01:22:00.000Z'
+  )
+
+  database.prepare(
+    `INSERT INTO what_if_sessions (
+      id, novel_id, base_branch_id, source_chapter_no, title, premise,
+      selected_text, original_text, generated_text, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('what-if-promote-sibling', 'novel-promote', 'novel-promote:main', 10, 'IF-01 保留线', '保留另一条线', '原文', '原文正文', '另一条改写正文', 'active')
+
+  database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
+      parent_node_id, source_chapter_no, target_chapter_no, chapter_id, continue_block_id, what_if_session_id,
+      future_jump_run_id, readable_label, readable_lineage_label, lane_index, color_token, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    'if-node-promote-sibling',
+    'novel-promote',
+    'novel-promote:main',
+    'what_if',
+    1,
+    10,
+    'IF-01 保留线',
+    '未删除分支',
+    null,
+    10,
+    null,
+    'chapter-promote-10',
+    null,
+    'what-if-promote-sibling',
+    null,
+    'IF-01',
+    'IF-01',
+    0,
+    'rose',
+    'active',
+    '2026-05-15T01:25:00.000Z',
+    '2026-05-15T01:25:00.000Z'
+  )
+}
+
 afterEach(() => {
   vi.resetModules()
 
@@ -203,5 +418,96 @@ describe('story branch delete APIs', () => {
       ok: false,
       error: 'Future jump run not found for the requested branch context',
     })
+  })
+
+  it('deletes only the current timeline node and promotes its direct children at the deleted index', async () => {
+    const database = createTestDatabase('chatbook-story-branch-delete-promote')
+    seedPromoteFixture(database)
+    vi.resetModules()
+
+    const [{ DELETE }, { loadStoryTimeline }] = await Promise.all([
+      import('@/app/api/story-timeline/route'),
+      import('@/lib/server/story-timeline-store'),
+    ])
+    const response = await DELETE(
+      new Request('http://localhost/api/story-timeline?novelId=novel-promote&branchId=novel-promote:main', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodeId: 'rewrite-node-promote' }),
+      })
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ ok: true, nodeId: 'rewrite-node-promote' })
+
+    expect(database.prepare('SELECT id FROM story_timeline_nodes WHERE id = ?').get('rewrite-node-promote')).toBeUndefined()
+    expect(database.prepare('SELECT id FROM continue_blocks WHERE id = ?').get('rewrite-block-promote')).toBeUndefined()
+    expect(database.prepare('SELECT parent_node_id FROM story_timeline_nodes WHERE id = ?').get('continue-node-promote-a')).toEqual({ parent_node_id: null })
+    expect(database.prepare('SELECT parent_node_id FROM story_timeline_nodes WHERE id = ?').get('continue-node-promote-b')).toEqual({ parent_node_id: null })
+    expect(database.prepare('SELECT readable_lineage_label FROM story_timeline_nodes WHERE id = ?').get('continue-node-promote-a')).toEqual({ readable_lineage_label: 'RE-01, CONT-01' })
+    expect(database.prepare('SELECT readable_lineage_label FROM story_timeline_nodes WHERE id = ?').get('continue-node-promote-b')).toEqual({ readable_lineage_label: 'RE-01, CONT-02' })
+    expect(database.prepare('SELECT parent_timeline_node_id FROM continue_blocks WHERE id = ?').get('continue-block-promote-a')).toEqual({ parent_timeline_node_id: null })
+    expect(database.prepare('SELECT parent_timeline_node_id FROM continue_blocks WHERE id = ?').get('continue-block-promote-b')).toEqual({ parent_timeline_node_id: null })
+
+    const timeline = loadStoryTimeline('novel-promote', 'novel-promote:main')
+    expect(timeline.branchNodes).toEqual([
+      expect.objectContaining({
+        id: 'continue-node-promote-a',
+        nodeType: 'continue_block',
+        parentNodeId: null,
+        readableLabel: 'CONT-01',
+        readableLineageLabel: 'RE-01, CONT-01',
+      }),
+      expect.objectContaining({
+        id: 'continue-node-promote-b',
+        nodeType: 'continue_block',
+        parentNodeId: null,
+        readableLabel: 'CONT-02',
+        readableLineageLabel: 'RE-01, CONT-02',
+      }),
+      expect.objectContaining({
+        id: 'if-node-promote-sibling',
+        nodeType: 'what_if',
+        parentNodeId: null,
+      }),
+    ])
+    expect(timeline.edges).toEqual([])
+
+    const orderedNodes = database.prepare(
+      'SELECT id FROM story_timeline_nodes WHERE novel_id = ? AND branch_id = ? ORDER BY created_at ASC, id ASC'
+    ).all('novel-promote', 'novel-promote:main') as Array<{ id: string }>
+    expect(orderedNodes.map((node) => node.id)).toEqual([
+      'continue-node-promote-a',
+      'continue-node-promote-b',
+      'if-node-promote-sibling',
+    ])
+  })
+
+  it('deletes a leaf timeline node without disturbing surviving sibling order', async () => {
+    const database = createTestDatabase('chatbook-story-branch-delete-leaf')
+    seedPromoteFixture(database)
+    vi.resetModules()
+
+    const { DELETE } = await import('@/app/api/story-timeline/route')
+    const response = await DELETE(
+      new Request('http://localhost/api/story-timeline?novelId=novel-promote&branchId=novel-promote:main', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodeId: 'continue-node-promote-a' }),
+      })
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ ok: true, nodeId: 'continue-node-promote-a' })
+    expect(database.prepare('SELECT id FROM continue_blocks WHERE id = ?').get('continue-block-promote-a')).toBeUndefined()
+
+    const orderedNodes = database.prepare(
+      'SELECT id FROM story_timeline_nodes WHERE novel_id = ? AND branch_id = ? ORDER BY created_at ASC, id ASC'
+    ).all('novel-promote', 'novel-promote:main') as Array<{ id: string }>
+    expect(orderedNodes.map((node) => node.id)).toEqual([
+      'rewrite-node-promote',
+      'continue-node-promote-b',
+      'if-node-promote-sibling',
+    ])
   })
 })

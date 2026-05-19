@@ -1,4 +1,6 @@
 import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
+import { buildStoryBranchReadableLineageLabel, formatStoryBranchReadableLabel } from '@/lib/story-branch-labels'
+import { orderStoryTimelineBranchNodes } from '@/lib/story-branch-types'
 import { countChineseFriendlyWords } from '@/lib/utils'
 import type {
   ChapterTimelineItem,
@@ -34,10 +36,20 @@ type StoryTimelineNodeRow = {
   what_if_session_id: string | null
   future_jump_run_id: string | null
   continue_block_latest_text: string | null
+  continue_block_latest_input_tokens: number | null
+  continue_block_latest_output_tokens: number | null
   continue_block_latest_revision_no: number | null
   continue_block_user_instruction: string | null
   continue_block_selected_text: string | null
   continue_block_original_text: string | null
+  what_if_generated_text: string | null
+  what_if_input_tokens: number | null
+  what_if_output_tokens: number | null
+  future_jump_generated_target_text: string | null
+  future_jump_latest_input_tokens: number | null
+  future_jump_latest_output_tokens: number | null
+  readable_label: string | null
+  readable_lineage_label: string | null
   lane_index: number | null
   color_token: string | null
   status: string
@@ -45,16 +57,31 @@ type StoryTimelineNodeRow = {
   updated_at: string
 }
 
+type StoryTimelineNodeDeleteResult = {
+  deletedNode: StoryTimelineNodeRecord
+  promotedChildIds: string[]
+}
+
 const STORY_TIMELINE_NODE_SELECT = `
   SELECT
-    story_timeline_nodes.*,
-    continue_blocks.latest_text AS continue_block_latest_text,
-    continue_blocks.latest_revision_no AS continue_block_latest_revision_no,
-    continue_blocks.user_instruction AS continue_block_user_instruction,
-    continue_blocks.selected_text AS continue_block_selected_text,
-    continue_blocks.original_text AS continue_block_original_text
+     story_timeline_nodes.*,
+     continue_blocks.latest_text AS continue_block_latest_text,
+     continue_blocks.latest_input_tokens AS continue_block_latest_input_tokens,
+     continue_blocks.latest_output_tokens AS continue_block_latest_output_tokens,
+     continue_blocks.latest_revision_no AS continue_block_latest_revision_no,
+     continue_blocks.user_instruction AS continue_block_user_instruction,
+     continue_blocks.selected_text AS continue_block_selected_text,
+     continue_blocks.original_text AS continue_block_original_text,
+     what_if_sessions.generated_text AS what_if_generated_text,
+     what_if_sessions.input_tokens AS what_if_input_tokens,
+     what_if_sessions.output_tokens AS what_if_output_tokens,
+     future_jump_runs.generated_target_text AS future_jump_generated_target_text,
+     future_jump_runs.latest_input_tokens AS future_jump_latest_input_tokens,
+     future_jump_runs.latest_output_tokens AS future_jump_latest_output_tokens
   FROM story_timeline_nodes
   LEFT JOIN continue_blocks ON continue_blocks.id = story_timeline_nodes.continue_block_id
+  LEFT JOIN what_if_sessions ON what_if_sessions.id = story_timeline_nodes.what_if_session_id
+  LEFT JOIN future_jump_runs ON future_jump_runs.id = story_timeline_nodes.future_jump_run_id
 `
 
 type KnowledgeChapterRow = {
@@ -81,17 +108,54 @@ function toStoryTimelineNodeRecord(row: StoryTimelineNodeRow): StoryTimelineNode
     continueBlockId: row.continue_block_id,
     whatIfSessionId: row.what_if_session_id,
     futureJumpRunId: row.future_jump_run_id,
+    currentText: row.continue_block_latest_text ?? row.what_if_generated_text ?? row.future_jump_generated_target_text,
     latestText: row.continue_block_latest_text,
+    inputTokens: row.continue_block_latest_input_tokens ?? row.what_if_input_tokens ?? row.future_jump_latest_input_tokens,
+    outputTokens: row.continue_block_latest_output_tokens ?? row.what_if_output_tokens ?? row.future_jump_latest_output_tokens,
     latestRevisionNo: row.continue_block_latest_revision_no,
     userInstruction: row.continue_block_user_instruction,
     selectedText: row.continue_block_selected_text,
     originalText: row.continue_block_original_text,
+    readableLabel: row.readable_label ?? undefined,
+    readableLineageLabel: row.readable_lineage_label ?? undefined,
     laneIndex: row.lane_index ?? 0,
     colorToken: row.color_token,
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+function withReadableBranchMetadata<T extends StoryTimelineNodeRecord>(nodes: T[]) {
+  const nodesById = new Map(nodes.map((node) => [node.id, node]))
+  return nodes.map((node) => ({
+    ...node,
+    readableLabel: node.readableLabel ?? formatStoryBranchReadableLabel(node.nodeType, node.labelIndex),
+    readableLineageLabel: node.readableLineageLabel ?? buildStoryBranchReadableLineageLabel(node, nodesById),
+  }))
+}
+
+function loadStoryTimelineNodeLineageScope(nodeId: string, db: Db, scoped = new Map<string, StoryTimelineNodeRecord>()) {
+  if (scoped.has(nodeId)) return scoped
+
+  const row = db.queryOne<StoryTimelineNodeRow>(`${STORY_TIMELINE_NODE_SELECT} WHERE story_timeline_nodes.id = ?`, nodeId)
+  if (!row) return scoped
+
+  const node = toStoryTimelineNodeRecord(row)
+  scoped.set(node.id, node)
+
+  if (node.parentNodeId) {
+    loadStoryTimelineNodeLineageScope(node.parentNodeId, db, scoped)
+  }
+
+  return scoped
+}
+
+function withReadableBranchMetadataForNode(nodeId: string, db: Db) {
+  const lineageScope = loadStoryTimelineNodeLineageScope(nodeId, db)
+  if (!lineageScope.size) return null
+  const hydrated = withReadableBranchMetadata([...lineageScope.values()])
+  return hydrated.find((node) => node.id === nodeId) ?? null
 }
 
 export function getNextStoryTimelineLabelIndex(novelId: string, branchId: string, nodeType: StoryTimelineNodeType, db: Db = defaultDb) {
@@ -112,8 +176,8 @@ export function createStoryTimelineNode(input: Omit<StoryTimelineNodeRecord, 'cr
     `INSERT INTO story_timeline_nodes (
       id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
       parent_node_id, source_chapter_no, target_chapter_no, chapter_id, continue_block_id,
-      what_if_session_id, future_jump_run_id, lane_index, color_token, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      what_if_session_id, future_jump_run_id, readable_label, readable_lineage_label, lane_index, color_token, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.id,
     input.novelId,
     input.branchId,
@@ -129,6 +193,8 @@ export function createStoryTimelineNode(input: Omit<StoryTimelineNodeRecord, 'cr
     input.continueBlockId,
     input.whatIfSessionId,
     input.futureJumpRunId,
+    input.readableLabel ?? null,
+    input.readableLineageLabel ?? null,
     input.laneIndex,
     input.colorToken,
     input.status
@@ -138,8 +204,7 @@ export function createStoryTimelineNode(input: Omit<StoryTimelineNodeRecord, 'cr
 }
 
 export function findStoryTimelineNodeById(id: string, db: Db = defaultDb) {
-  const row = db.queryOne<StoryTimelineNodeRow>(`${STORY_TIMELINE_NODE_SELECT} WHERE story_timeline_nodes.id = ?`, id)
-  return row ? toStoryTimelineNodeRecord(row) : null
+  return withReadableBranchMetadataForNode(id, db)
 }
 
 export function findStoryTimelineNodeByFutureJumpRunId(futureJumpRunId: string, db: Db = defaultDb) {
@@ -147,7 +212,7 @@ export function findStoryTimelineNodeByFutureJumpRunId(futureJumpRunId: string, 
     `${STORY_TIMELINE_NODE_SELECT} WHERE story_timeline_nodes.future_jump_run_id = ? LIMIT 1`,
     futureJumpRunId
   )
-  return row ? toStoryTimelineNodeRecord(row) : null
+  return row ? withReadableBranchMetadataForNode(row.id, db) : null
 }
 
 export function findStoryTimelineNodeByContinueBlockId(continueBlockId: string, db: Db = defaultDb) {
@@ -155,7 +220,7 @@ export function findStoryTimelineNodeByContinueBlockId(continueBlockId: string, 
     `${STORY_TIMELINE_NODE_SELECT} WHERE story_timeline_nodes.continue_block_id = ? LIMIT 1`,
     continueBlockId
   )
-  return row ? toStoryTimelineNodeRecord(row) : null
+  return row ? withReadableBranchMetadataForNode(row.id, db) : null
 }
 
 export function findStoryTimelineNodeByWhatIfSessionId(whatIfSessionId: string, db: Db = defaultDb) {
@@ -163,7 +228,7 @@ export function findStoryTimelineNodeByWhatIfSessionId(whatIfSessionId: string, 
     `${STORY_TIMELINE_NODE_SELECT} WHERE story_timeline_nodes.what_if_session_id = ? LIMIT 1`,
     whatIfSessionId
   )
-  return row ? toStoryTimelineNodeRecord(row) : null
+  return row ? withReadableBranchMetadataForNode(row.id, db) : null
 }
 
 export function listStoryTimelineNodesByFutureJumpRunIds(futureJumpRunIds: string[], db: Db = defaultDb) {
@@ -177,7 +242,7 @@ export function listStoryTimelineNodesByFutureJumpRunIds(futureJumpRunIds: strin
     ...futureJumpRunIds
   )
 
-  return rows.map(toStoryTimelineNodeRecord)
+  return withReadableBranchMetadata(rows.map(toStoryTimelineNodeRecord))
 }
 
 export function listStoryTimelineNodes(novelId: string, branchId: string, db: Db = defaultDb) {
@@ -189,7 +254,7 @@ export function listStoryTimelineNodes(novelId: string, branchId: string, db: Db
     branchId
   )
 
-  return rows.map(toStoryTimelineNodeRecord)
+  return withReadableBranchMetadata(rows.map(toStoryTimelineNodeRecord))
 }
 
 export function listStoryTimelineDescendantNodeIds(rootNodeId: string, nodes: StoryTimelineNodeRecord[]) {
@@ -229,6 +294,53 @@ export function deleteStoryTimelineNodesByIds(nodeIds: string[], db: Db = defaul
       db.execute('DELETE FROM continue_blocks WHERE id = ?', row.continue_block_id)
     }
     db.execute('DELETE FROM story_timeline_nodes WHERE id = ?', nodeId)
+  }
+}
+
+export function deleteStoryTimelineNode(nodeId: string, db: Db = defaultDb): StoryTimelineNodeDeleteResult | null {
+  const deletedNode = findStoryTimelineNodeById(nodeId, db)
+  if (!deletedNode) return null
+
+  const branchNodes = orderStoryTimelineNodes(listStoryTimelineNodes(deletedNode.novelId, deletedNode.branchId, db))
+  const directChildren = branchNodes.filter((node) => node.parentNodeId === deletedNode.id)
+
+  for (const [index, child] of directChildren.entries()) {
+    const nextParentNodeId = deletedNode.parentNodeId
+    const createdAt = buildPromotionCreatedAt(deletedNode.createdAt, index)
+
+    db.execute(
+      'UPDATE story_timeline_nodes SET parent_node_id = ?, created_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      nextParentNodeId,
+      createdAt,
+      child.id
+    )
+
+    if (child.continueBlockId) {
+      db.execute(
+        'UPDATE continue_blocks SET parent_timeline_node_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        nextParentNodeId,
+        child.continueBlockId
+      )
+    }
+
+    if (child.futureJumpRunId) {
+      db.execute(
+        'UPDATE future_jump_runs SET parent_timeline_node_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        nextParentNodeId,
+        child.futureJumpRunId
+      )
+    }
+  }
+
+  if (deletedNode.continueBlockId) {
+    db.execute('DELETE FROM continue_blocks WHERE id = ?', deletedNode.continueBlockId)
+  }
+
+  db.execute('DELETE FROM story_timeline_nodes WHERE id = ?', nodeId)
+
+  return {
+    deletedNode,
+    promotedChildIds: directChildren.map((node) => node.id),
   }
 }
 
@@ -276,6 +388,8 @@ function toStoryTimelineBranchNode(node: StoryTimelineNodeRecord): StoryTimeline
     type: 'branch_node',
     id: node.id,
     nodeType: node.nodeType,
+    readableLabel: node.readableLabel ?? formatStoryBranchReadableLabel(node.nodeType, node.labelIndex),
+    readableLineageLabel: node.readableLineageLabel ?? formatStoryBranchReadableLabel(node.nodeType, node.labelIndex),
     anchorChapterNo: node.anchorChapterNo,
     parentNodeId: node.parentNodeId,
     title: node.title,
@@ -287,7 +401,10 @@ function toStoryTimelineBranchNode(node: StoryTimelineNodeRecord): StoryTimeline
     continueBlockId: node.continueBlockId,
     whatIfSessionId: node.whatIfSessionId,
     futureJumpRunId: node.futureJumpRunId,
+    currentText: node.currentText ?? null,
     latestText: node.latestText ?? null,
+    inputTokens: node.inputTokens ?? null,
+    outputTokens: node.outputTokens ?? null,
     latestRevisionNo: node.latestRevisionNo ?? null,
     userInstruction: node.userInstruction ?? null,
     selectedText: node.selectedText ?? null,
@@ -303,60 +420,14 @@ function compareStoryTimelineNodeChronology(left: StoryTimelineNodeRecord, right
   return left.id.localeCompare(right.id)
 }
 
-function resolveStoryTimelineNodeDepth(
-  node: StoryTimelineNodeRecord,
-  nodesById: Map<string, StoryTimelineNodeRecord>,
-  visited = new Set<string>()
-): number {
-  if (!node.parentNodeId) return 0
-  if (visited.has(node.id)) return 0
-
-  const parentNode = nodesById.get(node.parentNodeId)
-  if (!parentNode) return 0
-
-  visited.add(node.id)
-  return resolveStoryTimelineNodeDepth(parentNode, nodesById, visited) + 1
+function buildPromotionCreatedAt(createdAt: string, index: number) {
+  const parsed = Date.parse(createdAt)
+  if (!Number.isFinite(parsed)) return createdAt
+  return new Date(parsed + index).toISOString()
 }
 
 function orderStoryTimelineNodes(nodes: StoryTimelineNodeRecord[]): StoryTimelineNodeRecord[] {
-  const nodesById = new Map(nodes.map((node) => [node.id, node]))
-  const childrenByParentId = new Map<string, StoryTimelineNodeRecord[]>()
-  const rootNodes: StoryTimelineNodeRecord[] = []
-
-  for (const node of nodes) {
-    if (node.parentNodeId && nodesById.has(node.parentNodeId)) {
-      const current = childrenByParentId.get(node.parentNodeId) ?? []
-      current.push(node)
-      childrenByParentId.set(node.parentNodeId, current)
-      continue
-    }
-
-    rootNodes.push(node)
-  }
-
-  for (const children of childrenByParentId.values()) {
-    children.sort(compareStoryTimelineNodeChronology)
-  }
-
-  rootNodes.sort((left, right) => {
-    if (left.anchorChapterNo !== right.anchorChapterNo) return left.anchorChapterNo - right.anchorChapterNo
-    return compareStoryTimelineNodeChronology(left, right)
-  })
-
-  const nodeDepths = new Map(nodes.map((node) => [node.id, resolveStoryTimelineNodeDepth(node, nodesById)]))
-  const ordered: StoryTimelineNodeRecord[] = []
-  const visit = (node: StoryTimelineNodeRecord) => {
-    ordered.push({ ...node, laneIndex: nodeDepths.get(node.id) ?? node.laneIndex })
-    for (const child of childrenByParentId.get(node.id) ?? []) {
-      visit(child)
-    }
-  }
-
-  for (const rootNode of rootNodes) {
-    visit(rootNode)
-  }
-
-  return ordered
+  return orderStoryTimelineBranchNodes(nodes, compareStoryTimelineNodeChronology)
 }
 
 function buildTimelineEdges(nodes: StoryTimelineNodeRecord[]): StoryTimelineEdge[] {
