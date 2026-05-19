@@ -104,6 +104,7 @@ function getResetPhaseForSurface(): PresetCompatSessionPhase {
 function formatSurfaceSelectionLabel(selection: PresetCompatSessionWorkspaceSelection | null | undefined) {
   if (!selection) return '当前工作区上下文'
   if (selection.kind === 'chapter') return `章节 ${selection.chapterId}`
+  if (selection.kind === 'rewrite') return `改写节点 ${selection.continueBlockId}`
   if (selection.kind === 'continue_block') return `续写块 ${selection.continueBlockId}`
   if (selection.kind === 'what_if') return `What-if ${selection.sessionId}`
   return `Future Jump ${selection.runId}`

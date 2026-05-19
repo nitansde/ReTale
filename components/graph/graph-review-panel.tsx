@@ -1,10 +1,16 @@
-import type { GraphEdgeEditDraft, GenerationContextBuildData, GenerationContextEvidence, GraphReviewControls, GraphSelection } from '@/components/graph/types'
+import type { GraphEdgeEditDraft, GenerationContextBuildData, GenerationContextEvidence, GenerationContextPromptBlock, GraphReviewControls, GraphSelection } from '@/components/graph/types'
 import { RefreshCcw } from 'lucide-react'
 import { ContextPromptBlocks } from '@/components/graph/context-prompt-blocks'
 import { GraphEvidenceDrawer } from '@/components/graph/graph-evidence-drawer'
 import { GraphFlowCanvas } from '@/components/graph/graph-flow-canvas'
 import { GraphInspector } from '@/components/graph/graph-inspector'
 import type { GraphEdge, GraphNode } from '@/lib/server/graph-types'
+
+const HIDDEN_ADVANCED_CONTEXT_BLOCK_IDS = new Set(['output-constraints'])
+
+export function getVisibleAdvancedContextPromptBlocks(blocks: GenerationContextPromptBlock[]) {
+  return blocks.filter((block) => !HIDDEN_ADVANCED_CONTEXT_BLOCK_IDS.has(block.id))
+}
 
 export function GraphReviewPanel(props: {
   context: GenerationContextBuildData
@@ -40,6 +46,7 @@ export function GraphReviewPanel(props: {
 }) {
   const nodeById = new Map(props.graphNodes.map((node) => [node.id, node] as const))
   const selectedEdge = props.selection?.type === 'edge' ? props.selection.edge : null
+  const visiblePromptBlocks = getVisibleAdvancedContextPromptBlocks(props.context.promptBlocks)
 
   return (
     <section className="mb-4 rounded-[24px] border border-amber-400/20 bg-amber-500/10 p-4">
@@ -127,7 +134,7 @@ export function GraphReviewPanel(props: {
           onJumpToEvidenceSource={props.onJumpToEvidenceSource}
         />
         <ContextPromptBlocks
-          blocks={props.context.promptBlocks}
+          blocks={visiblePromptBlocks}
           disabledBlockIds={props.disabledBlockIds}
           onToggle={props.onTogglePromptBlock}
         />
