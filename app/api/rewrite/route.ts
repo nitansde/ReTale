@@ -422,6 +422,8 @@ export async function POST(request: Request) {
         title: `候选 ${String.fromCharCode(65 + index)}`,
         summary: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible' ? '来自 OpenAI-compatible API' : '来自 Ollama 本地模型',
         content: postRegexText,
+        inputTokens: result.usage?.inputTokens ?? null,
+        outputTokens: result.usage?.outputTokens ?? null,
       })),
       presetCompat: presetCompatMetadata,
     }, {

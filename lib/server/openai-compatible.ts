@@ -34,6 +34,10 @@ type RewriteRequest = {
 export type RewriteResult = {
   enabled: boolean
   content?: string[]
+  usage?: {
+    inputTokens: number | null
+    outputTokens: number | null
+  }
   error?: string
 }
 
@@ -72,6 +76,24 @@ type OpenAICompatibleChatCompletionResponse = {
       content?: unknown
     }
   }>
+  usage?: {
+    prompt_tokens?: unknown
+    completion_tokens?: unknown
+    input_tokens?: unknown
+    output_tokens?: unknown
+  }
+}
+
+function normalizeTokenCount(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null
+}
+
+function extractUsage(usage: OpenAICompatibleChatCompletionResponse['usage']) {
+  if (!usage) return { inputTokens: null, outputTokens: null }
+  return {
+    inputTokens: normalizeTokenCount(usage.input_tokens ?? usage.prompt_tokens),
+    outputTokens: normalizeTokenCount(usage.output_tokens ?? usage.completion_tokens),
+  }
 }
 
 export type OpenAICompatibleExtractionResult = {
@@ -604,6 +626,7 @@ export async function generateRewriteWithOpenAICompatible(
 
   const data = await response.json()
   const raw = extractChatCompletionResponseText(data)
+  const usage = extractUsage((data as OpenAICompatibleChatCompletionResponse).usage)
   if (!raw) {
     await writeLlmDebugLog({
       folder: 'rewrite',
@@ -646,7 +669,7 @@ export async function generateRewriteWithOpenAICompatible(
       request: { url, body: requestBody, messages },
       response: { status: response.status, rawText: extractChatCompletionText(raw), parsed },
     })
-    return { enabled: true, content: candidates }
+    return { enabled: true, content: candidates, usage }
   } catch (error) {
     await writeLlmDebugLog({
       folder: 'rewrite',

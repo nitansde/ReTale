@@ -33,6 +33,8 @@ type OllamaChatResponse = {
   message?: {
     content?: string
   }
+  prompt_eval_count?: number
+  eval_count?: number
 }
 
 type OllamaChatStreamChunk = {
@@ -90,7 +92,15 @@ type OllamaRewriteRequest = {
 type OllamaRewriteResult = {
   enabled: boolean
   content?: string[]
+  usage?: {
+    inputTokens: number | null
+    outputTokens: number | null
+  }
   error?: string
+}
+
+function normalizeTokenCount(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null
 }
 
 type OllamaStreamRewriteRequest = {
@@ -2217,7 +2227,14 @@ export async function generateRewriteWithOllama(
       return { enabled: true, error: 'Model returned empty candidates' }
     }
 
-    return { enabled: true, content: candidates }
+    return {
+      enabled: true,
+      content: candidates,
+      usage: {
+        inputTokens: normalizeTokenCount(response.prompt_eval_count),
+        outputTokens: normalizeTokenCount(response.eval_count),
+      },
+    }
   } catch (error) {
     return {
       enabled: true,
