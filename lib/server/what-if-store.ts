@@ -28,6 +28,8 @@ type WhatIfSessionRow = {
   selected_text: string
   original_text: string
   generated_text: string
+  input_tokens: number | null
+  output_tokens: number | null
   status: string
   created_at: string
   updated_at: string
@@ -61,6 +63,8 @@ function toWhatIfSessionRecord(row: WhatIfSessionRow): WhatIfSessionRecord {
     selectedText: row.selected_text,
     originalText: row.original_text,
     generatedText: row.generated_text,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -90,8 +94,8 @@ export function createWhatIfSession(input: Omit<WhatIfSessionRecord, 'createdAt'
   db.execute(
     `INSERT INTO what_if_sessions (
       id, novel_id, base_branch_id, source_chapter_no, title, premise,
-      selected_text, original_text, generated_text, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      selected_text, original_text, generated_text, input_tokens, output_tokens, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.id,
     input.novelId,
     input.baseBranchId,
@@ -101,6 +105,8 @@ export function createWhatIfSession(input: Omit<WhatIfSessionRecord, 'createdAt'
     input.selectedText,
     input.originalText,
     input.generatedText,
+    input.inputTokens ?? null,
+    input.outputTokens ?? null,
     input.status
   )
 
@@ -150,10 +156,18 @@ export function findWhatIfSessionById(id: string, db: Db = defaultDb): WhatIfSes
   }
 }
 
-export function updateWhatIfSessionGeneratedText(id: string, generatedText: string, status: string, db: Db = defaultDb) {
+export function updateWhatIfSessionGeneratedText(
+  id: string,
+  generatedText: string,
+  status: string,
+  tokenUsage: { inputTokens?: number | null; outputTokens?: number | null } = {},
+  db: Db = defaultDb
+) {
   db.execute(
-    'UPDATE what_if_sessions SET generated_text = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+    'UPDATE what_if_sessions SET generated_text = ?, input_tokens = ?, output_tokens = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
     generatedText,
+    tokenUsage.inputTokens ?? null,
+    tokenUsage.outputTokens ?? null,
     status,
     id
   )

@@ -146,6 +146,8 @@ describe('what-if create API', () => {
         selectedText: '男主和女主暂时结盟，准备一起行动。',
         originalText: '第10章内容',
         generatedText: '男主当场撕毁盟约，女主也不再相信他。',
+        inputTokens: 77,
+        outputTokens: 88,
         userInstruction: '让两人在这里彻底决裂，后面进入互不信任的状态。',
         titleHint: '决裂线',
       }),
@@ -180,10 +182,14 @@ describe('what-if create API', () => {
       title: string
       premise: string
       generated_text: string
+      input_tokens: number | null
+      output_tokens: number | null
     }
     expect(persistedSession.title).toBe('IF-02 决裂线')
     expect(persistedSession.premise).toBe('让两人在这里彻底决裂，后面进入互不信任的状态。')
     expect(persistedSession.generated_text).toBe('男主当场撕毁盟约，女主也不再相信他。')
+    expect(persistedSession.input_tokens).toBe(77)
+    expect(persistedSession.output_tokens).toBe(88)
 
     const persistedDeltas = database.prepare('SELECT * FROM what_if_deltas WHERE session_id = ? ORDER BY created_at ASC, id ASC').all(payload.sessionId) as Array<{
       session_id: string

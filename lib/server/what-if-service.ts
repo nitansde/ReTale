@@ -2,6 +2,7 @@ import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
 import { whatIfCreateRequestSchema, whatIfCreateResponseSchema, whatIfDeltaExtractionSchema } from '@/lib/server/story-branch-contracts'
 import { createStoryTimelineNode, getNextStoryTimelineLabelIndex } from '@/lib/server/story-timeline-store'
+import { formatStoryBranchReadableLabel, prefixStoryBranchTitle } from '@/lib/story-branch-labels'
 import { withTransaction } from '@/lib/server/sqlite'
 import { addWhatIfDelta, createWhatIfSession, findWhatIfSessionById } from '@/lib/server/what-if-store'
 import type { OllamaProviderSettings, OpenAICompatibleProviderSettings } from '@/lib/types'
@@ -333,10 +334,6 @@ async function extractWhatIfDeltas(input: WhatIfCreateRequest) {
   return normalized.length ? normalized : [buildFallbackDelta(input)]
 }
 
-function formatWhatIfLabel(labelIndex: number) {
-  return `IF-${String(labelIndex).padStart(2, '0')}`
-}
-
 function sanitizeLineTitle(value: string) {
   const trimmed = value
     .replace(/[\r\n]+/g, ' ')
@@ -378,9 +375,10 @@ export async function createWhatIfSessionFromRewrite(rawInput: WhatIfCreateReque
   const input = whatIfCreateRequestSchema.parse(rawInput)
   const deltas = await extractWhatIfDeltas(input)
   const labelIndex = getNextStoryTimelineLabelIndex(input.novelId, input.branchId, 'what_if')
-  const label = formatWhatIfLabel(labelIndex)
+  const readableLabel = formatStoryBranchReadableLabel('what_if', labelIndex)
+  const readableLineageLabel = readableLabel
   const topDelta = deltas[0] ?? buildFallbackDelta(input)
-  const title = `${label} ${buildLineTitle(input, topDelta)}`
+  const title = prefixStoryBranchTitle(readableLineageLabel, buildLineTitle(input, topDelta))
   const subtitle = buildSubtitle(input, topDelta)
   const sessionId = uid('what-if-session')
   const timelineNodeId = uid('timeline-node')
@@ -396,6 +394,8 @@ export async function createWhatIfSessionFromRewrite(rawInput: WhatIfCreateReque
       selectedText: input.selectedText,
       originalText: input.originalText,
       generatedText: input.generatedText,
+      inputTokens: input.inputTokens ?? null,
+      outputTokens: input.outputTokens ?? null,
       status: 'active',
     })
 
@@ -423,6 +423,8 @@ export async function createWhatIfSessionFromRewrite(rawInput: WhatIfCreateReque
       branchId: input.branchId,
       nodeType: 'what_if',
       labelIndex,
+      readableLabel,
+      readableLineageLabel,
       anchorChapterNo: input.sourceChapterNo,
       title,
       subtitle,
