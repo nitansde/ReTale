@@ -2,12 +2,19 @@ import { z } from 'zod'
 
 const positiveInt = z.number().int().positive()
 const optionalNullableString = z.string().nullable().optional()
+const optionalNullableInt = z.number().int().nonnegative().nullable().optional()
 
 export const timelineSelectionSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('chapter'),
     chapterId: z.string().min(1),
     chapterNo: positiveInt,
+  }),
+  z.object({
+    kind: z.literal('rewrite'),
+    nodeId: z.string().min(1),
+    continueBlockId: z.string().min(1),
+    anchorChapterNo: positiveInt,
   }),
   z.object({
     kind: z.literal('continue_block'),
@@ -57,6 +64,8 @@ export const whatIfSessionCreateSchema = z.object({
   selectedText: z.string(),
   originalText: z.string(),
   generatedText: z.string(),
+  inputTokens: optionalNullableInt,
+  outputTokens: optionalNullableInt,
   status: z.string().min(1).default('active'),
 })
 
@@ -90,6 +99,8 @@ export const whatIfCreateRequestSchema = z.object({
   originalText: z.string(),
   generatedText: z.string().min(1),
   userInstruction: z.string().min(1),
+  inputTokens: optionalNullableInt,
+  outputTokens: optionalNullableInt,
   titleHint: z.string().nullable().optional(),
   subtitleHint: z.string().nullable().optional(),
 })
@@ -121,7 +132,7 @@ export const storyTimelineNodeCreateSchema = z.object({
   id: z.string().min(1),
   novelId: z.string().min(1),
   branchId: z.string().min(1),
-  nodeType: z.enum(['what_if', 'continue_block', 'future_jump']),
+  nodeType: z.enum(['rewrite', 'what_if', 'continue_block', 'future_jump']),
   labelIndex: z.number().int().nonnegative(),
   anchorChapterNo: positiveInt,
   title: z.string().min(1),
@@ -173,6 +184,8 @@ export const futureJumpRevisionSchema = z.object({
   userFeedback: z.string().nullable(),
   bridgeSummary: z.string().min(1),
   generatedTargetText: z.string().min(1),
+  inputTokens: optionalNullableInt,
+  outputTokens: optionalNullableInt,
   createdAt: z.string().min(1),
 })
 
@@ -181,6 +194,13 @@ export const futureJumpRunCreateSchema = z.object({
   sessionId: z.string().min(1),
   baseBranchId: z.string().min(1),
   parentTimelineNodeId: z.string().nullable(),
+  sourceContext: z.object({
+    nodeId: z.string().min(1).nullable(),
+    nodeType: z.enum(['chapter', 'rewrite', 'continue_block', 'what_if', 'future_jump']),
+    chapterId: z.string().min(1).nullable(),
+    chapterNo: positiveInt,
+    whatIfSessionId: z.string().min(1).nullable(),
+  }),
   targetOutlineNodeId: z.string().min(1),
   targetOutlineChapterId: z.string().min(1),
   sourceChapterNo: positiveInt,
@@ -188,6 +208,8 @@ export const futureJumpRunCreateSchema = z.object({
   userDirection: z.string(),
   bridgeSummary: z.string().min(1),
   generatedTargetText: z.string().min(1),
+  inputTokens: optionalNullableInt,
+  outputTokens: optionalNullableInt,
   latestRevisionNo: positiveInt.default(1),
   errorMessage: z.string().nullable().default(null),
   status: z.string().min(1),
@@ -208,7 +230,13 @@ export const futureJumpRunDetailSchema = futureJumpRunCreateSchema.extend({
 })
 
 export const futureJumpCreateRequestSchema = z.object({
-  sessionId: z.string().min(1),
+  sourceContext: z.object({
+    nodeId: z.string().min(1).nullable(),
+    nodeType: z.enum(['chapter', 'rewrite', 'continue_block', 'what_if', 'future_jump']),
+    chapterId: z.string().min(1).nullable(),
+    chapterNo: positiveInt,
+    whatIfSessionId: z.string().min(1).nullable(),
+  }),
   targetOutlineNodeId: z.string().min(1),
   targetOutlineChapterId: z.string().min(1),
   parentTimelineNodeId: z.string().nullable().optional(),
@@ -251,6 +279,8 @@ export const continueBlockRevisionSchema = z.object({
   selectedText: z.string(),
   originalText: z.string(),
   generatedText: z.string().min(1),
+  inputTokens: optionalNullableInt,
+  outputTokens: optionalNullableInt,
   title: z.string().min(1),
   subtitle: z.string().nullable(),
   createdAt: z.string().min(1),
@@ -265,6 +295,8 @@ export const continueBlockCreateRequestSchema = z.object({
   originalText: z.string(),
   generatedText: z.string().min(1),
   userInstruction: z.string().min(1),
+  inputTokens: optionalNullableInt,
+  outputTokens: optionalNullableInt,
   titleHint: z.string().nullable().optional(),
   subtitleHint: z.string().nullable().optional(),
 })
@@ -275,6 +307,8 @@ export const continueBlockRegenerateRequestSchema = z.object({
   userInstruction: z.string().min(1),
   selectedText: z.string(),
   originalText: z.string(),
+  inputTokens: optionalNullableInt,
+  outputTokens: optionalNullableInt,
   titleHint: z.string().nullable().optional(),
   subtitleHint: z.string().nullable().optional(),
 })
@@ -282,6 +316,7 @@ export const continueBlockRegenerateRequestSchema = z.object({
 export const continueBlockMutationResponseSchema = z.object({
   continueBlockId: z.string().min(1),
   timelineNodeId: z.string().min(1),
+  nodeType: z.enum(['rewrite', 'continue_block']),
   generatedText: z.string().min(1),
   title: z.string().min(1),
   subtitle: z.string().nullable(),
@@ -300,6 +335,8 @@ export const continueBlockDetailSchema = z.object({
   selectedText: z.string(),
   originalText: z.string(),
   latestText: z.string().min(1),
+  inputTokens: optionalNullableInt,
+  outputTokens: optionalNullableInt,
   latestRevisionNo: positiveInt,
   status: z.string().min(1),
   createdAt: z.string().min(1),

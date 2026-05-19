@@ -76,6 +76,21 @@ function columnExists(database: DatabaseSync, tableName: string, columnName: str
   return getTableColumns(database, tableName).some((column) => column.name === columnName)
 }
 
+function addColumnIfMissing(database: DatabaseSync, tableName: string, columnName: string, columnSql: string) {
+  if (columnExists(database, tableName, columnName)) {
+    return
+  }
+
+  try {
+    database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql}`)
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('duplicate column name')) {
+      return
+    }
+    throw error
+  }
+}
+
 function needsCanonicalIntervalRebuild(database: DatabaseSync, tableName: CanonicalTableRebuild['tableName']) {
   const columns = getTableColumns(database, tableName)
   if (!columns.length) return false
@@ -366,15 +381,21 @@ function runBootMigrations(database: DatabaseSync) {
   database.exec('CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_label_scope ON story_timeline_nodes(novel_id, branch_id, node_type, label_index)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_anchor_chapter ON story_timeline_nodes(novel_id, branch_id, anchor_chapter_no)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_parent ON story_timeline_nodes(parent_node_id)')
-  if (!columnExists(database, 'story_timeline_nodes', 'continue_block_id')) {
-    database.exec('ALTER TABLE story_timeline_nodes ADD COLUMN continue_block_id TEXT')
-  }
+  addColumnIfMissing(database, 'story_timeline_nodes', 'continue_block_id', 'continue_block_id TEXT')
+  addColumnIfMissing(database, 'story_timeline_nodes', 'readable_label', 'readable_label TEXT')
+  addColumnIfMissing(database, 'story_timeline_nodes', 'readable_lineage_label', 'readable_lineage_label TEXT')
   database.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_story_timeline_nodes_continue_block ON story_timeline_nodes(continue_block_id) WHERE continue_block_id IS NOT NULL')
   database.exec('CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_continue_block ON story_timeline_nodes(continue_block_id)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_session ON story_timeline_nodes(what_if_session_id)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_run ON story_timeline_nodes(future_jump_run_id)')
   database.exec('CREATE TABLE IF NOT EXISTS continue_blocks (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_timeline_node_id TEXT, source_chapter_no INTEGER NOT NULL, title TEXT NOT NULL, subtitle TEXT, user_instruction TEXT NOT NULL, selected_text TEXT NOT NULL, original_text TEXT NOT NULL, latest_text TEXT NOT NULL, latest_revision_no INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT \"active\", created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE, FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE, FOREIGN KEY (parent_timeline_node_id) REFERENCES story_timeline_nodes(id) ON DELETE SET NULL)')
   database.exec('CREATE TABLE IF NOT EXISTS continue_block_revisions (id TEXT PRIMARY KEY, continue_block_id TEXT NOT NULL, revision_no INTEGER NOT NULL, revision_kind TEXT NOT NULL, user_instruction TEXT NOT NULL, selected_text TEXT NOT NULL, original_text TEXT NOT NULL, generated_text TEXT NOT NULL, title TEXT NOT NULL, subtitle TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (continue_block_id) REFERENCES continue_blocks(id) ON DELETE CASCADE, UNIQUE (continue_block_id, revision_no))')
+  addColumnIfMissing(database, 'continue_blocks', 'latest_input_tokens', 'latest_input_tokens INTEGER')
+  addColumnIfMissing(database, 'continue_blocks', 'latest_output_tokens', 'latest_output_tokens INTEGER')
+  addColumnIfMissing(database, 'continue_block_revisions', 'input_tokens', 'input_tokens INTEGER')
+  addColumnIfMissing(database, 'continue_block_revisions', 'output_tokens', 'output_tokens INTEGER')
+  addColumnIfMissing(database, 'what_if_sessions', 'input_tokens', 'input_tokens INTEGER')
+  addColumnIfMissing(database, 'what_if_sessions', 'output_tokens', 'output_tokens INTEGER')
   database.exec('CREATE INDEX IF NOT EXISTS idx_continue_blocks_branch_source ON continue_blocks(branch_id, source_chapter_no)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_continue_blocks_parent_node ON continue_blocks(parent_timeline_node_id)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_continue_block_revisions_block ON continue_block_revisions(continue_block_id)')
@@ -385,8 +406,18 @@ function runBootMigrations(database: DatabaseSync) {
   database.exec('CREATE INDEX IF NOT EXISTS idx_outline_nodes_source_type ON outline_nodes(branch_id, source_type)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_outline_node_chapters_outline_primary_sort ON outline_node_chapters(outline_node_id, is_primary, sort_order)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_outline_node_chapters_chapter_anchor ON outline_node_chapters(chapter_no, chapter_id)')
+  addColumnIfMissing(database, 'future_jump_runs', 'source_timeline_node_id', 'source_timeline_node_id TEXT')
+  addColumnIfMissing(database, 'future_jump_runs', 'source_timeline_node_type', 'source_timeline_node_type TEXT')
+  addColumnIfMissing(database, 'future_jump_runs', 'source_chapter_id', 'source_chapter_id TEXT')
+  addColumnIfMissing(database, 'future_jump_runs', 'source_what_if_session_id', 'source_what_if_session_id TEXT')
+  addColumnIfMissing(database, 'future_jump_runs', 'latest_input_tokens', 'latest_input_tokens INTEGER')
+  addColumnIfMissing(database, 'future_jump_runs', 'latest_output_tokens', 'latest_output_tokens INTEGER')
+  addColumnIfMissing(database, 'future_jump_revisions', 'input_tokens', 'input_tokens INTEGER')
+  addColumnIfMissing(database, 'future_jump_revisions', 'output_tokens', 'output_tokens INTEGER')
   database.exec('CREATE INDEX IF NOT EXISTS idx_future_jump_runs_session ON future_jump_runs(session_id)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_future_jump_runs_parent_node ON future_jump_runs(parent_timeline_node_id)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_future_jump_runs_source_node ON future_jump_runs(source_timeline_node_id)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_future_jump_runs_source_chapter ON future_jump_runs(source_chapter_id)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_future_jump_runs_target_outline ON future_jump_runs(target_outline_node_id)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_future_jump_runs_target_outline_chapter ON future_jump_runs(target_outline_chapter_id)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_future_jump_runs_branch_target_chapter ON future_jump_runs(base_branch_id, target_chapter_no)')
