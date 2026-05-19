@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { FUTURE_MAP_MISSING_SUMMARY_FALLBACK } from '@/lib/story-branch-types'
 import { initializeDatabase } from '@/lib/server/sqlite'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
@@ -123,6 +124,82 @@ function seedFutureJumpDetailFixture(database: DatabaseSync) {
       id, run_id, revision_no, revision_kind, user_feedback, bridge_summary, generated_target_text
     ) VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run('future-jump-revision-002', 'jump-run-001', 2, 'revise', '更虐一点', '新的桥接摘要', '新的未来节点正文')
+}
+
+function seedWorkspaceDirectChapterFallbackFixture(database: DatabaseSync) {
+  database.prepare(
+    `INSERT INTO NovelRecord (id, title, author, sourceType)
+     VALUES (?, ?, ?, ?)`
+  ).run('novel-002', 'Workspace Future Map Novel', 'Fixture Author', 'txt')
+
+  database.prepare(
+    `INSERT INTO StoryBranch (id, novelId, name, baseBranchId)
+     VALUES (?, ?, ?, ?)`
+  ).run('novel-002:main', 'novel-002', 'main', null)
+
+  database.prepare(
+    `INSERT INTO KnowledgeChapter (
+      id, novelId, branchId, chapterNo, title, rawText, summary,
+      revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('chapter-25', 'novel-002', 'novel-002:main', 25, '第25章', '第25章正文', '第25章摘要', 1, 0, null, 'hash-25', 'ready')
+
+  database.prepare(
+    `INSERT INTO outline_nodes (
+      id, novel_id, branch_id, chapter_no, title, summary, original_outcome,
+      track_key, phase_label, source_type, confidence, involved_entities_json, key_events_json, sort_order
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('workspace-outline-80', 'novel-002', 'novel-002:main', 80, '第80章 失控分岔', '', null, 'workspace-phase', '工作区阶段', 'authored', 1, '[]', '["失控分岔"]', 80)
+
+  database.prepare(
+    `INSERT INTO WorkspaceState (id, payload)
+     VALUES (?, ?)
+     ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updatedAt = CURRENT_TIMESTAMP`
+  ).run('singleton', JSON.stringify({
+    currentNovelId: 'novel-002',
+    currentChapterId: 'chapter-25',
+    localNovels: [{ id: 'novel-002', title: 'Workspace Future Map Novel', summary: '', tags: [] }],
+    localVolumes: [{ id: 'volume-1', novelId: 'novel-002', title: '卷一', order: 1 }],
+    localChapters: [
+      {
+        id: 'chapter-25',
+        novelId: 'novel-002',
+        volumeId: 'volume-1',
+        title: '第25章',
+        order: 25,
+        content: '第25章正文',
+        status: 'done',
+        wordCount: 1200,
+        updatedAt: '2026-05-18T00:00:00.000Z',
+      },
+      {
+        id: 'chapter-80',
+        novelId: 'novel-002',
+        volumeId: 'volume-1',
+        title: '第80章 失控分岔',
+        order: 80,
+        content: '第80章正文',
+        status: 'draft',
+        wordCount: 1500,
+        updatedAt: '2026-05-18T00:00:00.000Z',
+      },
+    ],
+    localOutlines: [{
+      id: 'workspace-outline-80',
+      novelId: 'novel-002',
+      title: '第80章 失控分岔',
+      type: 'main',
+      summary: '',
+      relatedChapterIds: ['chapter-80'],
+    }],
+    localCharacters: [],
+    localCharacterRelations: [],
+    localWorldEntries: [],
+    localTimelineEvents: [],
+    rewriteCandidates: [],
+    rewriteHistory: [],
+    trajectories: [],
+  }))
 }
 
 afterEach(() => {
@@ -279,5 +356,34 @@ describe('story-future-map-read', () => {
       ok: false,
       error: 'Future jump run not found for the requested branch context',
     })
+  })
+
+  it('keeps direct-chapter options available from workspace chapters even when persisted summaries and anchors are missing', async () => {
+    const database = createTestDatabase('chatbook-story-future-map-workspace-fallback')
+    seedWorkspaceDirectChapterFallbackFixture(database)
+    vi.resetModules()
+
+    const { GET: getFutureMap } = await import('@/app/api/story-future-map/route')
+
+    const response = await getFutureMap(
+      new Request('http://localhost/api/story-future-map?novelId=novel-002&branchId=novel-002:main&sourceChapterNo=25')
+    )
+    expect(response.status).toBe(200)
+
+    const payload = await response.json()
+    expect(payload.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'workspace-outline-80',
+        summary: FUTURE_MAP_MISSING_SUMMARY_FALLBACK,
+      }),
+    ]))
+    expect(payload.chaptersByEvent['workspace-outline-80']).toEqual([
+      expect.objectContaining({
+        chapterNo: 80,
+        chapterId: null,
+        chapterTitle: '第80章 失控分岔',
+      }),
+    ])
+    expect(payload.events.every((event: { id: string }) => payload.chaptersByEvent[event.id].every((chapter: { chapterNo: number }) => chapter.chapterNo > 25))).toBe(true)
   })
 })

@@ -2,7 +2,7 @@
 
 import { ArrowRight, Clock3, GitBranch, Sparkles } from 'lucide-react'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
-import type { FutureJumpRevisionHistoryItem, FutureJumpRunDetail, FutureMapEvent, OutlineNodeChapterRecord, WhatIfSessionDetail } from '@/lib/story-branch-types'
+import type { FutureJumpRevisionRecord, FutureJumpRunDetail, FutureMapEvent, OutlineNodeChapterRecord, WhatIfSessionDetail } from '@/lib/story-branch-types'
 import { cn } from '@/lib/utils'
 
 function formatCreatedAt(value: string) {
@@ -28,7 +28,7 @@ export function BridgeSummaryPanel(props: {
   parentSession: WhatIfSessionDetail | null
   targetEvent: FutureMapEvent | null
   targetChapter: OutlineNodeChapterRecord | null
-  revisionHistory: FutureJumpRevisionHistoryItem[]
+  revisions: FutureJumpRevisionRecord[]
   readableLineageLabel?: string | null
 }) {
   const instructionPreview = formatStoryBranchInstructionPreview(props.detail.userDirection)
@@ -112,26 +112,38 @@ export function BridgeSummaryPanel(props: {
         </div>
       </div>
 
-      <div className="mt-4 rounded-[22px] border border-white/8 bg-black/20 p-4">
+      <div className="mt-4 rounded-[22px] border border-white/8 bg-black/20 p-4" data-testid="future-jump-revision-history">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Revision history summary</p>
-            <p className="mt-1 text-sm text-zinc-300">按 newest-first 展示修订摘要；主展示内容仍以 run 的最新镜像字段为准。</p>
+            <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Revision history</p>
+            <p className="mt-1 text-sm text-zinc-300">当前主面板继续锁定最新镜像；这里保留每一版桥接摘要和未来正文，方便回看历史版本。</p>
           </div>
-          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{props.revisionHistory.length} 版</span>
+          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{props.revisions.length} 版</span>
         </div>
 
         <ul className="mt-4 space-y-3">
-          {props.revisionHistory.map((item) => (
-            <li key={`${item.revisionNo}-${item.createdAt}`} className="rounded-[18px] border border-white/8 bg-white/[0.03] p-3">
+          {props.revisions.map((item, index) => (
+            <li key={`${item.revisionNo}-${item.createdAt}`} className="rounded-[18px] border border-white/8 bg-white/[0.03] p-3" data-testid={`future-jump-history-item-${item.revisionNo}`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-medium text-zinc-100">第 {item.revisionNo} 版 · {item.revisionKind}</p>
                   <p className="mt-2 text-xs leading-6 text-zinc-300">{item.userFeedback?.trim() || '初始生成版，没有额外反馈。'}</p>
+                  {index === 0 ? <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-sky-100">当前版本</p> : null}
                 </div>
                 <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-400">
                   <Clock3 className="h-3.5 w-3.5" />
                   {formatCreatedAt(item.createdAt)}
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                <div className="rounded-[16px] border border-sky-300/18 bg-sky-500/10 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-sky-100/75">Bridge</p>
+                  <p className="mt-2 whitespace-pre-wrap text-xs leading-6 text-sky-50">{item.bridgeSummary}</p>
+                </div>
+                <div className="rounded-[16px] border border-white/8 bg-black/20 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Future text</p>
+                  <p className="mt-2 whitespace-pre-wrap text-xs leading-6 text-zinc-200">{item.generatedTargetText}</p>
                 </div>
               </div>
             </li>

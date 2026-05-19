@@ -1,5 +1,5 @@
-import type { PersistedNovelState, TimelineEvent } from '@/lib/types'
-import type { FutureMapResponse, OutlineNodeChapterRecord, OutlineNodeRecord } from '@/lib/story-branch-types'
+import type { Chapter, PersistedNovelState, TimelineEvent } from '@/lib/types'
+import { FUTURE_MAP_MISSING_SUMMARY_FALLBACK, type FutureMapResponse, type OutlineNodeChapterRecord, type OutlineNodeRecord } from '@/lib/story-branch-types'
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
 import { createOutlineNode, createOutlineNodeChapter, listOutlineNodeChapters, listOutlineNodes } from '@/lib/server/outline-node-store'
 import { findWorkspaceState } from '@/lib/server/persistence'
@@ -18,6 +18,16 @@ type KnowledgeChapterRow = {
   chapterNo: number
   title: string | null
   summary: string | null
+}
+
+type ChapterAnchorSourceRow = KnowledgeChapterRow & {
+  anchorChapterId: string | null
+}
+
+type WorkspaceChapterRow = {
+  id: string
+  chapterNo: number
+  title: string | null
 }
 
 type KnowledgeEventRow = {
@@ -179,14 +189,14 @@ function getPrimaryAnchor(anchors: ChapterAnchor[]) {
   return anchors.find((anchor) => anchor.isPrimary) ?? anchors[0] ?? null
 }
 
-function buildChapterAnchorsFromRows(chapterRows: KnowledgeChapterRow[], relatedChapterIds: string[]) {
+function buildChapterAnchorsFromRows(chapterRows: Array<ChapterAnchorSourceRow | KnowledgeChapterRow>, relatedChapterIds: string[]) {
   const chapterById = new Map(chapterRows.map((chapter) => [chapter.id, chapter]))
   const anchors: ChapterAnchor[] = relatedChapterIds
     .map<ChapterAnchor | null>((chapterId, index) => {
       const chapter = chapterById.get(chapterId)
       if (!chapter) return null
       return {
-        chapterId: chapter.id,
+        chapterId: 'anchorChapterId' in chapter ? chapter.anchorChapterId : chapter.id,
         chapterNo: chapter.chapterNo,
         chapterTitle: chapter.title,
         isPrimary: index === 0,
@@ -201,6 +211,41 @@ function buildChapterAnchorsFromRows(chapterRows: KnowledgeChapterRow[], related
     isPrimary: index === 0,
     sortOrder: index,
   }))
+}
+
+function buildWorkspaceChapterRows(workspaceState: PersistedNovelState | null, novelId: string) {
+  return (workspaceState?.localChapters ?? [])
+    .filter((chapter) => chapter.novelId === novelId)
+    .map<WorkspaceChapterRow>((chapter) => ({
+      id: chapter.id,
+      chapterNo: resolveWorkspaceChapterNo(chapter),
+      title: normalizeText(chapter.title) || null,
+    }))
+    .filter((chapter) => chapter.chapterNo >= 1)
+}
+
+function resolveWorkspaceChapterNo(chapter: Chapter) {
+  return Number.isInteger(chapter.order) && chapter.order > 0 ? chapter.order : 0
+}
+
+function mergeChapterRows(chapterRows: KnowledgeChapterRow[], workspaceChapterRows: WorkspaceChapterRow[]) {
+  const mergedById = new Map<string, ChapterAnchorSourceRow>()
+  for (const chapter of workspaceChapterRows) {
+    mergedById.set(chapter.id, {
+      id: chapter.id,
+      chapterNo: chapter.chapterNo,
+      title: chapter.title,
+      summary: null,
+      anchorChapterId: null,
+    })
+  }
+  for (const chapter of chapterRows) {
+    mergedById.set(chapter.id, {
+      ...chapter,
+      anchorChapterId: chapter.id,
+    })
+  }
+  return Array.from(mergedById.values()).sort((left, right) => left.chapterNo - right.chapterNo || left.id.localeCompare(right.id))
 }
 
 function pickTimelineEventForOutline(timelineEvents: TimelineEvent[], outlineChapterIds: string[]) {
@@ -308,7 +353,7 @@ function loadOpenThreads(novelId: string, branchId: string, db: Db) {
 function buildAuthoredOutlineCandidates(params: {
   novelId: string
   branchId: string
-  chapterRows: KnowledgeChapterRow[]
+  chapterRows: ChapterAnchorSourceRow[]
   timelineEvents: TimelineEvent[]
   workspaceState: PersistedNovelState | null
 }) {
@@ -339,7 +384,7 @@ function buildAuthoredOutlineCandidates(params: {
 
 function buildAuthoredTimelineCandidates(params: {
   novelId: string
-  chapterRows: KnowledgeChapterRow[]
+  chapterRows: ChapterAnchorSourceRow[]
   timelineEvents: TimelineEvent[]
 }) {
   return params.timelineEvents
@@ -368,7 +413,7 @@ function buildAuthoredTimelineCandidates(params: {
 }
 
 function buildDerivedEventCandidates(params: {
-  chapterRows: KnowledgeChapterRow[]
+  chapterRows: ChapterAnchorSourceRow[]
   knowledgeEvents: KnowledgeEventRow[]
   timelineByChapterNo: Map<number, TimelineEvent>
   eventParticipantsById: Map<string, string[]>
@@ -392,14 +437,14 @@ function buildDerivedEventCandidates(params: {
       keyEvents: [normalizeText(event.name)].filter(Boolean),
       sortOrder: event.chapterNo * 100 + index,
       chapterAnchors: chapter
-        ? [{ chapterId: chapter.id, chapterNo: chapter.chapterNo, chapterTitle: chapter.title, isPrimary: true, sortOrder: 0 }]
+        ? [{ chapterId: chapter.anchorChapterId, chapterNo: chapter.chapterNo, chapterTitle: chapter.title, isPrimary: true, sortOrder: 0 }]
         : [],
     } satisfies OutlineBootstrapCandidate
   })
 }
 
 function buildDerivedOpenThreadCandidates(params: {
-  chapterRows: KnowledgeChapterRow[]
+  chapterRows: ChapterAnchorSourceRow[]
   openThreads: OpenThreadRow[]
   timelineByChapterNo: Map<number, TimelineEvent>
 }) {
@@ -422,7 +467,7 @@ function buildDerivedOpenThreadCandidates(params: {
       keyEvents: [normalizeText(fact.predicate)].filter(Boolean),
       sortOrder: fact.sourceChapter * 100 + 25 + index,
       chapterAnchors: chapter
-        ? [{ chapterId: chapter.id, chapterNo: chapter.chapterNo, chapterTitle: chapter.title, isPrimary: true, sortOrder: 0 }]
+        ? [{ chapterId: chapter.anchorChapterId, chapterNo: chapter.chapterNo, chapterTitle: chapter.title, isPrimary: true, sortOrder: 0 }]
         : [],
     } satisfies OutlineBootstrapCandidate
   })
@@ -523,12 +568,14 @@ export async function bootstrapOutlineNodesForFutureMap(params: BootstrapParams)
   const branchId = params.branchId ?? getMainBranchId(params.novelId)
   const workspaceState = loadWorkspaceStatePayload(params.workspaceState)
   const chapterRows = loadKnowledgeChapters(params.novelId, branchId, db)
+  const workspaceChapterRows = buildWorkspaceChapterRows(workspaceState, params.novelId)
+  const chapterAnchorRows = mergeChapterRows(chapterRows, workspaceChapterRows)
   const timelineEvents = (workspaceState?.localTimelineEvents ?? [])
     .filter((event) => event.novelId === params.novelId)
     .slice()
     .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id))
   const timelineByChapterNo = new Map<number, TimelineEvent>()
-  const chapterNoById = new Map(chapterRows.map((chapter) => [chapter.id, chapter.chapterNo]))
+  const chapterNoById = new Map(chapterAnchorRows.map((chapter) => [chapter.id, chapter.chapterNo]))
 
   for (const event of timelineEvents) {
     for (const chapterId of event.chapterIds) {
@@ -543,10 +590,10 @@ export async function bootstrapOutlineNodesForFutureMap(params: BootstrapParams)
   const openThreads = loadOpenThreads(params.novelId, branchId, db)
   const eventParticipantsById = loadKnowledgeEventParticipants(knowledgeEvents.map((event) => event.id), db)
   const candidates = [
-    ...buildAuthoredOutlineCandidates({ novelId: params.novelId, branchId, chapterRows, timelineEvents, workspaceState }),
-    ...buildAuthoredTimelineCandidates({ novelId: params.novelId, chapterRows, timelineEvents }),
-    ...buildDerivedEventCandidates({ chapterRows, knowledgeEvents, timelineByChapterNo, eventParticipantsById }),
-    ...buildDerivedOpenThreadCandidates({ chapterRows, openThreads, timelineByChapterNo }),
+    ...buildAuthoredOutlineCandidates({ novelId: params.novelId, branchId, chapterRows: chapterAnchorRows, timelineEvents, workspaceState }),
+    ...buildAuthoredTimelineCandidates({ novelId: params.novelId, chapterRows: chapterAnchorRows, timelineEvents }),
+    ...buildDerivedEventCandidates({ chapterRows: chapterAnchorRows, knowledgeEvents, timelineByChapterNo, eventParticipantsById }),
+    ...buildDerivedOpenThreadCandidates({ chapterRows: chapterAnchorRows, openThreads, timelineByChapterNo }),
     ...buildDerivedSummaryCandidates({ chapterRows, timelineByChapterNo }),
   ]
 
@@ -622,7 +669,7 @@ export async function loadFutureMapSourceData(params: BootstrapParams): Promise<
     id: node.id,
     chapterNo: node.chapterNo,
     title: node.title,
-    summary: node.summary,
+    summary: normalizeText(node.summary) || FUTURE_MAP_MISSING_SUMMARY_FALLBACK,
     originalOutcome: node.originalOutcome,
     trackKey: node.trackKey,
     phaseLabel: node.phaseLabel,
