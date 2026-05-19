@@ -1369,4 +1369,59 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.messages[1]?.content).toContain('[SCENARIO]\n# 当前章节摘要\n雨夜里的对峙一触即发。\n[/SCENARIO]')
     expect(requestBody.messages[1]?.content).toContain('[PERSONALITY]\n# 相关人物\n- 林澈｜状态：克制｜话少但护短\n[/PERSONALITY]')
   })
+
+  it('forwards branch lineage selectors into buildGenerationContext for rewrite requests', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createCreativeLibrary(),
+    }))
+    const buildGenerationContext = vi.fn(async () => ({
+      novelId: 'novel-lineage',
+      branchId: 'novel-lineage:main',
+      chapterId: 'chapter-lineage',
+      chapterNo: 10,
+      selectedLineStart: 1,
+      selectedLineEnd: 2,
+      warnings: [],
+      promptBlocks: [
+        { id: 'branch-lineage-full-text', label: '当前分支谱系全文', enabled: true, priority: 'highest' as const, content: '# 当前分支谱系全文\n原始章节正文：\n原始正文\n\nRewrite 根节点全文（RE-01）：\n重写正文\n\nContinue 祖先全文（CONT-01）：\n续写正文' },
+      ],
+      assembledContext: '# 当前分支谱系全文\n原始章节正文：\n原始正文\n\nRewrite 根节点全文（RE-01）：\n重写正文\n\nContinue 祖先全文（CONT-01）：\n续写正文',
+      graphContext: { nodes: [], edges: [], seedEntities: [], contextText: '', warnings: [] },
+      lanceEvidence: [],
+      tokenEstimate: 0,
+    }))
+    vi.doMock('@/lib/server/context-builder', () => ({
+      buildGenerationContext,
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT'] }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', {
+      stream: false,
+      novelId: 'novel-lineage',
+      chapterId: 'chapter-lineage',
+      branchContextNodeId: 'continue-node-7',
+      branchContextInclusion: 'include_selected',
+    }))
+
+    expect(response.status).toBe(200)
+    expect(buildGenerationContext).toHaveBeenCalledWith(expect.objectContaining({
+      branchContextNodeId: 'continue-node-7',
+      branchContextInclusion: 'include_selected',
+    }))
+
+    const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    expect(requestBody.messages[1]?.content).toContain('原始章节正文：')
+    expect(requestBody.messages[1]?.content).toContain('重写正文')
+    expect(requestBody.messages[1]?.content).toContain('续写正文')
+  })
 })

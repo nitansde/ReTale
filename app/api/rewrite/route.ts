@@ -140,6 +140,12 @@ function normalizeStringArray(value: unknown) {
   return Array.from(new Set(value.map((item: unknown) => String(item ?? '').trim()).filter(Boolean)))
 }
 
+function normalizeBranchContextInclusion(value: unknown) {
+  return value === 'include_selected' || value === 'ancestors_only'
+    ? value
+    : undefined
+}
+
 function buildUserPrompt(params: {
   operationType: string
   userInstruction: string
@@ -243,6 +249,8 @@ export async function POST(request: Request) {
         excludedEvidenceIds,
         whatIfSessionId: body.whatIfSessionId ? String(body.whatIfSessionId) : undefined,
         futureJumpRunId: body.futureJumpRunId ? String(body.futureJumpRunId) : undefined,
+        branchContextNodeId: body.branchContextNodeId ? String(body.branchContextNodeId) : undefined,
+        branchContextInclusion: normalizeBranchContextInclusion(body.branchContextInclusion),
       })
     : null
   const activePromptBlocks = context
