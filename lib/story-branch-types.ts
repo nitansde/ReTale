@@ -5,6 +5,12 @@ export type TimelineSelection =
       chapterNo: number
     }
   | {
+      kind: 'rewrite'
+      nodeId: string
+      continueBlockId: string
+      anchorChapterNo: number
+    }
+  | {
       kind: 'continue_block'
       nodeId: string
       continueBlockId: string
@@ -24,7 +30,12 @@ export type TimelineSelection =
       targetChapterNo: number
     }
 
-export type StoryTimelineNodeType = 'what_if' | 'continue_block' | 'future_jump'
+export type VersionTokenUsage = {
+  inputTokens: number | null
+  outputTokens: number | null
+}
+
+export type StoryTimelineNodeType = 'rewrite' | 'what_if' | 'continue_block' | 'future_jump'
 
 export type ChapterTimelineItem = {
   type: 'chapter'
@@ -50,11 +61,16 @@ export type StoryTimelineNodeRecord = {
   continueBlockId: string | null
   whatIfSessionId: string | null
   futureJumpRunId: string | null
+  currentText?: string | null
   latestText?: string | null
   latestRevisionNo?: number | null
   userInstruction?: string | null
   selectedText?: string | null
   originalText?: string | null
+  inputTokens?: number | null
+  outputTokens?: number | null
+  readableLabel?: string
+  readableLineageLabel?: string
   laneIndex: number
   colorToken: string | null
   status: string
@@ -66,6 +82,8 @@ export type StoryTimelineBranchNode = {
   type: 'branch_node'
   id: string
   nodeType: StoryTimelineNodeType
+  readableLabel?: string
+  readableLineageLabel?: string
   anchorChapterNo: number
   parentNodeId: string | null
   title: string
@@ -77,11 +95,14 @@ export type StoryTimelineBranchNode = {
   continueBlockId: string | null
   whatIfSessionId: string | null
   futureJumpRunId: string | null
+  currentText?: string | null
   latestText?: string | null
   latestRevisionNo?: number | null
   userInstruction?: string | null
   selectedText?: string | null
   originalText?: string | null
+  inputTokens?: number | null
+  outputTokens?: number | null
   createdAt?: string
   updatedAt?: string
   status: string
@@ -98,6 +119,76 @@ export type StoryTimelineResponse = {
   chapters: ChapterTimelineItem[]
   branchNodes: StoryTimelineBranchNode[]
   edges: StoryTimelineEdge[]
+}
+
+type StoryTimelineOrderedNode = {
+  id: string
+  nodeType: StoryTimelineNodeType
+  anchorChapterNo: number
+  parentNodeId: string | null
+  laneIndex: number
+}
+
+function resolveStoryTimelineVisibleDepth<T extends StoryTimelineOrderedNode>(
+  node: T,
+  nodesById: Map<string, T>,
+  visited = new Set<string>()
+): number {
+  if (!node.parentNodeId) return 0
+  if (visited.has(node.id)) return 0
+
+  const parentNode = nodesById.get(node.parentNodeId)
+  if (!parentNode) return 0
+
+  visited.add(node.id)
+  const parentDepth = resolveStoryTimelineVisibleDepth(parentNode, nodesById, visited)
+
+  if (node.nodeType !== 'continue_block') return parentDepth
+  return Math.max(parentDepth, 1)
+}
+
+export function orderStoryTimelineBranchNodes<T extends StoryTimelineOrderedNode>(
+  nodes: T[],
+  compareNode: (left: T, right: T) => number
+): T[] {
+  const nodesById = new Map(nodes.map((node) => [node.id, node]))
+  const childrenByParentId = new Map<string, T[]>()
+  const rootNodes: T[] = []
+
+  for (const node of nodes) {
+    if (node.parentNodeId && nodesById.has(node.parentNodeId)) {
+      const current = childrenByParentId.get(node.parentNodeId) ?? []
+      current.push(node)
+      childrenByParentId.set(node.parentNodeId, current)
+      continue
+    }
+
+    rootNodes.push(node)
+  }
+
+  for (const children of childrenByParentId.values()) {
+    children.sort(compareNode)
+  }
+
+  rootNodes.sort((left, right) => {
+    if (left.anchorChapterNo !== right.anchorChapterNo) return left.anchorChapterNo - right.anchorChapterNo
+    return compareNode(left, right)
+  })
+
+  const nodeDepths = new Map(nodes.map((node) => [node.id, resolveStoryTimelineVisibleDepth(node, nodesById)]))
+  const ordered: T[] = []
+  const visit = (node: T) => {
+    ordered.push({ ...node, laneIndex: nodeDepths.get(node.id) ?? node.laneIndex })
+    for (const child of childrenByParentId.get(node.id) ?? []) {
+      visit(child)
+    }
+  }
+
+  for (const rootNode of rootNodes) {
+    visit(rootNode)
+  }
+
+  return ordered
 }
 
 export type OutlineNodeChapterRecord = {
@@ -165,6 +256,16 @@ export type FutureMapResponse = {
   defaults: FutureMapDefaults
 }
 
+export type FutureJumpSourceNodeType = TimelineSelection['kind']
+
+export type FutureJumpSourceContext = {
+  nodeId: string | null
+  nodeType: FutureJumpSourceNodeType
+  chapterId: string | null
+  chapterNo: number
+  whatIfSessionId: string | null
+}
+
 export type WhatIfSessionRecord = {
   id: string
   novelId: string
@@ -175,6 +276,8 @@ export type WhatIfSessionRecord = {
   selectedText: string
   originalText: string
   generatedText: string
+  inputTokens?: number | null
+  outputTokens?: number | null
   status: string
   createdAt: string
   updatedAt: string
@@ -209,6 +312,8 @@ export type WhatIfCreateRequest = {
   originalText: string
   generatedText: string
   userInstruction: string
+  inputTokens?: number | null
+  outputTokens?: number | null
   titleHint?: string | null
   subtitleHint?: string | null
 }
@@ -230,6 +335,8 @@ export type FutureJumpRevisionRecord = {
   userFeedback: string | null
   bridgeSummary: string
   generatedTargetText: string
+  inputTokens?: number | null
+  outputTokens?: number | null
   createdAt: string
 }
 
@@ -245,6 +352,7 @@ export type FutureJumpRunRecord = {
   sessionId: string
   baseBranchId: string
   parentTimelineNodeId: string | null
+  sourceContext: FutureJumpSourceContext
   targetOutlineNodeId: string
   targetOutlineChapterId: string
   sourceChapterNo: number
@@ -252,6 +360,8 @@ export type FutureJumpRunRecord = {
   userDirection: string
   bridgeSummary: string
   generatedTargetText: string
+  inputTokens?: number | null
+  outputTokens?: number | null
   latestRevisionNo: number
   errorMessage: string | null
   status: string
@@ -260,7 +370,7 @@ export type FutureJumpRunRecord = {
 }
 
 export type FutureJumpCreateRequest = {
-  sessionId: string
+  sourceContext: FutureJumpSourceContext
   targetOutlineNodeId: string
   targetOutlineChapterId: string
   parentTimelineNodeId?: string | null
@@ -295,6 +405,8 @@ export type ContinueBlockRevisionRecord = {
   selectedText: string
   originalText: string
   generatedText: string
+  inputTokens?: number | null
+  outputTokens?: number | null
   title: string
   subtitle: string | null
   createdAt: string
@@ -318,6 +430,8 @@ export type ContinueBlockRecord = {
   selectedText: string
   originalText: string
   latestText: string
+  inputTokens?: number | null
+  outputTokens?: number | null
   latestRevisionNo: number
   status: string
   createdAt: string
@@ -340,6 +454,8 @@ export type ContinueBlockCreateRequest = {
   originalText: string
   generatedText: string
   userInstruction: string
+  inputTokens?: number | null
+  outputTokens?: number | null
   titleHint?: string | null
   subtitleHint?: string | null
 }
@@ -350,6 +466,8 @@ export type ContinueBlockRegenerateRequest = {
   userInstruction: string
   selectedText: string
   originalText: string
+  inputTokens?: number | null
+  outputTokens?: number | null
   titleHint?: string | null
   subtitleHint?: string | null
 }
@@ -357,6 +475,7 @@ export type ContinueBlockRegenerateRequest = {
 export type ContinueBlockMutationResponse = {
   continueBlockId: string
   timelineNodeId: string
+  nodeType: Extract<StoryTimelineNodeType, 'rewrite' | 'continue_block'>
   generatedText: string
   title: string
   subtitle: string | null

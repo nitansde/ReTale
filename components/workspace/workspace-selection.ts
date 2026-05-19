@@ -25,6 +25,10 @@ function matchesBranchSelectionNode(selection: Exclude<TimelineSelection, { kind
     return node.nodeType === 'what_if' && node.whatIfSessionId === selection.sessionId
   }
 
+  if (selection.kind === 'rewrite') {
+    return node.nodeType === 'rewrite' && node.continueBlockId === selection.continueBlockId
+  }
+
   if (selection.kind === 'continue_block') {
     return node.nodeType === 'continue_block' && node.continueBlockId === selection.continueBlockId
   }
@@ -33,6 +37,17 @@ function matchesBranchSelectionNode(selection: Exclude<TimelineSelection, { kind
 }
 
 export function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelection | null {
+  if (node.nodeType === 'rewrite') {
+    return node.continueBlockId
+      ? {
+          kind: 'rewrite',
+          nodeId: node.id,
+          continueBlockId: node.continueBlockId,
+          anchorChapterNo: node.anchorChapterNo,
+        }
+      : null
+  }
+
   if (node.nodeType === 'continue_block') {
     return node.continueBlockId
       ? {
@@ -72,6 +87,56 @@ export function toChapterTimelineSelection(chapter: Pick<Chapter, 'id' | 'order'
     chapterId: chapter.id,
     chapterNo: chapter.order,
   }
+}
+
+function resolveDeletedBranchNodeParentSelection(
+  deletedNode: StoryTimelineBranchNode,
+  branchNodes: StoryTimelineBranchNode[]
+): TimelineSelection | null {
+  const branchNodesById = new Map(branchNodes.map((node) => [node.id, node]))
+  let parentNodeId = deletedNode.parentNodeId
+
+  while (parentNodeId) {
+    const parentNode = branchNodesById.get(parentNodeId)
+    if (!parentNode) break
+
+    const parentSelection = toBranchTimelineSelection(parentNode)
+    if (parentSelection) return parentSelection
+
+    parentNodeId = parentNode.parentNodeId
+  }
+
+  return null
+}
+
+export function resolveSelectionAfterDeletedBranchNode(options: {
+  deletedNode: StoryTimelineBranchNode
+  previousSelection: TimelineSelection
+  currentChapter: Pick<Chapter, 'id' | 'order'> | null
+  chapters: Array<Pick<Chapter, 'id' | 'order' | 'parentChapterId'>>
+  branchNodes: StoryTimelineBranchNode[]
+}): TimelineSelection | null {
+  const { deletedNode, previousSelection, currentChapter, chapters, branchNodes } = options
+  if (!currentChapter) return previousSelection
+
+  const fallbackSelection = toChapterTimelineSelection(currentChapter)
+
+  if (previousSelection.kind !== 'chapter' && previousSelection.nodeId === deletedNode.id) {
+    const parentSelection = resolveDeletedBranchNodeParentSelection(deletedNode, branchNodes)
+    if (parentSelection) return parentSelection
+
+    const fallbackChapterNo = deletedNode.nodeType === 'future_jump'
+      ? deletedNode.sourceChapterNo ?? deletedNode.anchorChapterNo
+      : deletedNode.anchorChapterNo
+    const fallbackChapter = chapters.find((chapter) => !chapter.parentChapterId && chapter.order === fallbackChapterNo)
+    return fallbackChapter ? toChapterTimelineSelection(fallbackChapter) : fallbackSelection
+  }
+
+  return resolveWorkspaceSelection({
+    currentSelection: previousSelection,
+    currentChapter,
+    branchNodes,
+  }) ?? fallbackSelection
 }
 
 export function resolveWorkspaceSelection(options: {
@@ -121,6 +186,20 @@ export function readWorkspaceSelectionFromSearchParams(searchParams: URLSearchPa
       kind: 'what_if',
       nodeId,
       sessionId,
+      anchorChapterNo,
+    }
+  }
+
+  if (selectionKind === 'rewrite') {
+    const nodeId = searchParams.get('selectionNodeId')
+    const continueBlockId = searchParams.get('selectionContinueBlockId')
+    const anchorChapterNo = parseSelectionNumber(searchParams.get('selectionAnchorChapterNo'))
+    if (!nodeId || !continueBlockId || anchorChapterNo === null) return null
+
+    return {
+      kind: 'rewrite',
+      nodeId,
+      continueBlockId,
       anchorChapterNo,
     }
   }
@@ -177,6 +256,14 @@ export function writeWorkspaceSelectionToSearchParams(searchParams: URLSearchPar
     nextSearchParams.set('selectionKind', 'what_if')
     nextSearchParams.set('selectionNodeId', selection.nodeId)
     nextSearchParams.set('selectionSessionId', selection.sessionId)
+    nextSearchParams.set('selectionAnchorChapterNo', String(selection.anchorChapterNo))
+    return nextSearchParams
+  }
+
+  if (selection.kind === 'rewrite') {
+    nextSearchParams.set('selectionKind', 'rewrite')
+    nextSearchParams.set('selectionNodeId', selection.nodeId)
+    nextSearchParams.set('selectionContinueBlockId', selection.continueBlockId)
     nextSearchParams.set('selectionAnchorChapterNo', String(selection.anchorChapterNo))
     return nextSearchParams
   }
