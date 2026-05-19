@@ -26,7 +26,7 @@ import {
 } from 'lucide-react'
 import { FutureJumpView, type FutureJumpContinueContext } from '@/components/future-jump/FutureJumpView'
 import { ChapterGraphBrowser } from '@/components/graph/chapter-graph-browser'
-import { GraphReviewPanel } from '@/components/graph/graph-review-panel'
+import { getVisibleAdvancedContextPromptBlocks, GraphReviewPanel } from '@/components/graph/graph-review-panel'
 import { FutureMapOverlay } from '@/components/what-if/FutureMapOverlay'
 import { WhatIfSessionView } from '@/components/what-if/WhatIfSessionView'
 import { PresetCompatLibraryModal } from '@/components/workspace/PresetCompatLibraryModal'
@@ -44,12 +44,15 @@ import {
 import { useWorkspacePaneState } from '@/components/workspace/use-workspace-pane-state'
 import {
   readWorkspaceSelectionFromSearchParams,
+  resolveSelectionAfterDeletedBranchNode,
   resolveWorkspaceSelection,
+  toBranchTimelineSelection,
   toChapterTimelineSelection,
   writeWorkspaceSelectionToSearchParams,
 } from '@/components/workspace/workspace-selection'
 import { normalizeAISettings } from '@/lib/ai-settings'
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
+import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import { createPresetCompatSessionStateKey } from '@/lib/workspace-state'
 import type {
   ChapterGraphContextData,
@@ -63,10 +66,12 @@ import type {
 } from '@/components/graph/types'
 import type { GraphEdge } from '@/lib/server/graph-types'
 import { useNovelStore } from '@/store/novel-store'
-import { cn, countChineseFriendlyWords, htmlToPlainText, plainTextToHtml } from '@/lib/utils'
+import { cn, countChineseFriendlyWords, htmlToPlainText, plainTextToHtml, splitPlainTextParagraphs } from '@/lib/utils'
 import type {
   ChapterTimelineItem,
+  ContinueBlockMutationResponse,
   FutureJumpMutationResponse,
+  FutureJumpSourceContext,
   FutureJumpRunDetail,
   StoryTimelineBranchNode,
   StoryTimelineResponse,
@@ -78,6 +83,7 @@ import type { AIProvider, AISettings, AIScenarioKey, Chapter, Character, Charact
 
 const TOOLBAR_EDGE_PADDING = 12
 const TOOLBAR_OFFSET_Y = 56
+export const DEFAULT_REWRITE_PROMPT = '保留核心剧情，围绕选中部分做更大胆、更有戏剧张力的整章重写。'
 
 type GenerationState = {
   loading: boolean
@@ -89,6 +95,8 @@ type RewriteApiCandidate = {
   title: string
   summary: string
   content: string
+  inputTokens?: number | null
+  outputTokens?: number | null
 }
 
 type RewriteFlowState = {
@@ -113,6 +121,8 @@ type PendingFutureJumpRewriteLaunch = {
   selectedText: string
   originalText: string
   userInstruction: string
+  inputTokens?: number | null
+  outputTokens?: number | null
 }
 
 type PendingContinueBlockRewriteLaunch = {
@@ -125,6 +135,8 @@ type PendingContinueBlockRewriteLaunch = {
   originalText: string
   title: string
   subtitle: string | null
+  inputTokens?: number | null
+  outputTokens?: number | null
   targetChapterId: string
   variant: 'continue' | 'regenerate'
 }
@@ -134,8 +146,7 @@ type RewriteLaunchSource = 'chapter' | 'what_if' | 'future_jump' | 'continue_blo
 type FutureMapLaunchState = {
   novelId: string
   branchId: string
-  sessionId: string
-  sourceChapterNo: number
+  sourceContext: FutureJumpSourceContext
   title: string
   parentTimelineNodeId: string | null
 }
@@ -165,6 +176,36 @@ type KnowledgeRebuildStatus = {
     model: string
     embeddingBatchSize: number
   }
+}
+
+export function resolveCurrentNodeMetrics(params: {
+  selection: TimelineSelection
+  chapterText: string
+  selectedNode: StoryTimelineBranchNode | null
+  override?: { currentText: string; inputTokens: number | null; outputTokens: number | null } | null
+}) {
+  const visibleText = params.selection.kind === 'chapter'
+    ? params.chapterText
+    : params.override?.currentText ?? params.selectedNode?.currentText ?? params.selectedNode?.latestText ?? ''
+
+  return {
+    wordCount: countChineseFriendlyWords(visibleText),
+    inputTokens: params.selection.kind === 'chapter' ? null : params.override?.inputTokens ?? params.selectedNode?.inputTokens ?? null,
+    outputTokens: params.selection.kind === 'chapter' ? null : params.override?.outputTokens ?? params.selectedNode?.outputTokens ?? null,
+  }
+}
+
+function renderReaderBodyParagraphs(text: string, className?: string, dataTestId?: string) {
+  const paragraphs = splitPlainTextParagraphs(text)
+  const visibleParagraphs = paragraphs.length ? paragraphs : [text.trim() || '　']
+
+  return (
+    <div className={cn('reader-body-prose', className)} data-testid={dataTestId}>
+      {visibleParagraphs.map((paragraph, index) => (
+        <p key={`${index}-${paragraph.slice(0, 24)}`}>{paragraph}</p>
+      ))}
+    </div>
+  )
 }
 
 type OllamaModelOption = {
@@ -583,7 +624,10 @@ async function callCreateWhatIfSessionApi(payload: Record<string, unknown>): Pro
 async function callCreateContinueBlockApi(payload: Record<string, unknown>): Promise<{
   continueBlockId: string
   timelineNodeId: string
+  nodeType: 'rewrite' | 'continue_block'
   generatedText: string
+  inputTokens?: number | null
+  outputTokens?: number | null
   title: string
   subtitle: string | null
   latestRevisionNo: number
@@ -597,6 +641,7 @@ async function callCreateContinueBlockApi(payload: Record<string, unknown>): Pro
   const data = await response.json() as {
     continueBlockId: string
     timelineNodeId: string
+    nodeType: 'rewrite' | 'continue_block'
     generatedText: string
     title: string
     subtitle: string | null
@@ -613,7 +658,10 @@ async function callCreateContinueBlockApi(payload: Record<string, unknown>): Pro
 async function callRegenerateContinueBlockApi(payload: Record<string, unknown>): Promise<{
   continueBlockId: string
   timelineNodeId: string
+  nodeType: 'rewrite' | 'continue_block'
   generatedText: string
+  inputTokens?: number | null
+  outputTokens?: number | null
   title: string
   subtitle: string | null
   latestRevisionNo: number
@@ -627,6 +675,7 @@ async function callRegenerateContinueBlockApi(payload: Record<string, unknown>):
   const data = await response.json() as {
     continueBlockId: string
     timelineNodeId: string
+    nodeType: 'rewrite' | 'continue_block'
     generatedText: string
     title: string
     subtitle: string | null
@@ -640,62 +689,50 @@ async function callRegenerateContinueBlockApi(payload: Record<string, unknown>):
   return data
 }
 
-async function callDeleteWhatIfSessionApi(sessionId: string, novelId: string, branchId: string) {
+async function callDeleteStoryTimelineNodeApi(nodeId: string, novelId: string, branchId: string) {
   const searchParams = new URLSearchParams({ novelId, branchId })
-  const response = await fetch(`/api/what-if/sessions/${sessionId}?${searchParams.toString()}`, {
+  const response = await fetch(`/api/story-timeline?${searchParams.toString()}`, {
     method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nodeId }),
   })
 
   const data = await response.json() as { ok?: boolean; error?: string }
   if (!response.ok || !data.ok) {
-    throw new Error(data.error || '删除 What-if 失败')
+    throw new Error(data.error || '删除时间线节点失败')
   }
 }
 
-async function callDeleteFutureJumpRunApi(runId: string, branchId: string) {
-  const searchParams = new URLSearchParams({ branchId })
-  const response = await fetch(`/api/future-jump/runs/${runId}?${searchParams.toString()}`, {
-    method: 'DELETE',
-  })
-
-  const data = await response.json() as { ok?: boolean; error?: string }
-  if (!response.ok || !data.ok) {
-    throw new Error(data.error || '删除 Future jump 失败')
-  }
+function toContinueBranchSelection(selection: Extract<TimelineSelection, { kind: 'rewrite' | 'continue_block' }>) {
+  return {
+    kind: selection.kind,
+    nodeId: selection.nodeId,
+    continueBlockId: selection.continueBlockId,
+    anchorChapterNo: selection.anchorChapterNo,
+  } satisfies Extract<TimelineSelection, { kind: 'rewrite' | 'continue_block' }>
 }
 
-function toBranchTimelineSelection(node: StoryTimelineBranchNode): TimelineSelection | null {
-  if (node.nodeType === 'continue_block') {
-    return node.continueBlockId
-      ? {
-          kind: 'continue_block',
-          nodeId: node.id,
-          continueBlockId: node.continueBlockId,
-          anchorChapterNo: node.anchorChapterNo,
-        }
-      : null
+export function resolveContinueBlockSelectionAfterSave(params: {
+  matchingNode: StoryTimelineBranchNode | null | undefined
+  result: Pick<ContinueBlockMutationResponse, 'timelineNodeId' | 'continueBlockId' | 'nodeType'>
+  fallbackAnchorChapterNo: number
+  parentTimelineNodeId: string | null
+}) {
+  const { matchingNode, result, fallbackAnchorChapterNo } = params
+
+  if (matchingNode) {
+    const selection = toBranchTimelineSelection(matchingNode)
+    if (selection?.kind === 'rewrite' || selection?.kind === 'continue_block') {
+      return selection
+    }
   }
 
-  if (node.nodeType === 'what_if') {
-    return node.whatIfSessionId
-      ? {
-          kind: 'what_if',
-          nodeId: node.id,
-          sessionId: node.whatIfSessionId,
-          anchorChapterNo: node.anchorChapterNo,
-        }
-      : null
-  }
-
-  return node.futureJumpRunId && node.sourceChapterNo !== null && node.targetChapterNo !== null
-    ? {
-        kind: 'future_jump',
-        nodeId: node.id,
-        runId: node.futureJumpRunId,
-        sourceChapterNo: node.sourceChapterNo,
-        targetChapterNo: node.targetChapterNo,
-      }
-    : null
+  return {
+    kind: result.nodeType,
+    nodeId: result.timelineNodeId,
+    continueBlockId: result.continueBlockId,
+    anchorChapterNo: fallbackAnchorChapterNo,
+  } satisfies Extract<TimelineSelection, { kind: 'rewrite' | 'continue_block' }>
 }
 
 function toPresetCompatSessionSurfaceId(mode: WorkspaceActionMode): PresetCompatSurfaceId {
@@ -794,7 +831,7 @@ export function SelectionNovelStudio() {
   const [lockedSelectionText, setLockedSelectionText] = useState('')
   const [toolbarPos, setToolbarPos] = useState<WorkspaceFloatingPosition | null>(null)
   const [activeMode, setActiveMode] = useState<WorkspaceActionMode | null>(null)
-  const [rewritePrompt, setRewritePrompt] = useState('保留核心剧情，围绕选中部分做更大胆、更有戏剧张力的整章重写。')
+  const [rewritePrompt, setRewritePrompt] = useState(DEFAULT_REWRITE_PROMPT)
   const [rewriteState, setRewriteState] = useState<GenerationState>({ loading: false, result: '', error: '' })
   const [rewriteFlow, setRewriteFlow] = useState<RewriteFlowState>({
     loading: false,
@@ -808,6 +845,50 @@ export function SelectionNovelStudio() {
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false)
   const [contextPreviewError, setContextPreviewError] = useState('')
   const [graphReviewLoading, setGraphReviewLoading] = useState(false)
+  const [currentBranchMetricsOverride, setCurrentBranchMetricsOverride] = useState<{
+    nodeId: string
+    currentText: string
+    inputTokens: number | null
+    outputTokens: number | null
+  } | null>(null)
+  const whatIfMetricsNodeIdRef = useRef<string | null>(null)
+  const futureJumpMetricsNodeIdRef = useRef<string | null>(null)
+  const updateBranchMetricsOverride = useCallback((nodeId: string, metrics: {
+    currentText: string
+    inputTokens: number | null
+    outputTokens: number | null
+  }) => {
+    setCurrentBranchMetricsOverride((current) => {
+      if (
+        current?.nodeId === nodeId
+        && current.currentText === metrics.currentText
+        && current.inputTokens === metrics.inputTokens
+        && current.outputTokens === metrics.outputTokens
+      ) {
+        return current
+      }
+
+      return { nodeId, ...metrics }
+    })
+  }, [])
+  const handleWhatIfMetricsChange = useCallback((metrics: {
+    currentText: string
+    inputTokens: number | null
+    outputTokens: number | null
+  }) => {
+    const nodeId = whatIfMetricsNodeIdRef.current
+    if (!nodeId) return
+    updateBranchMetricsOverride(nodeId, metrics)
+  }, [updateBranchMetricsOverride])
+  const handleFutureJumpMetricsChange = useCallback((metrics: {
+    currentText: string
+    inputTokens: number | null
+    outputTokens: number | null
+  }) => {
+    const nodeId = futureJumpMetricsNodeIdRef.current
+    if (!nodeId) return
+    updateBranchMetricsOverride(nodeId, metrics)
+  }, [updateBranchMetricsOverride])
   const [graphReviewControls, setGraphReviewControls] = useState<GraphReviewControls>(DEFAULT_GRAPH_REVIEW_CONTROLS)
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [graphSelection, setGraphSelection] = useState<GraphSelection>(null)
@@ -1727,7 +1808,9 @@ export function SelectionNovelStudio() {
 
   const selectedRewriteCandidate = rewriteFlow.candidates[rewriteFlow.selectedIndex]
   const activeGraphContext = graphContext ?? generationContext?.graphContext ?? null
-  const activePromptBlockCount = generationContext?.promptBlocks.length ?? 0
+  const activePromptBlockCount = generationContext
+    ? getVisibleAdvancedContextPromptBlocks(generationContext.promptBlocks).length
+    : 0
   const activeSeedEntityCount = activeGraphContext?.seedEntities.length ?? 0
   const activeGraphEdgeCount = activeGraphContext?.edges.length ?? 0
   const activeEvidenceCount = generationContext?.lanceEvidence.length ?? 0
@@ -1767,6 +1850,7 @@ export function SelectionNovelStudio() {
   const loadContextPreview = useCallback(async (
     mode: WorkspaceActionMode,
     instructionOverride?: string,
+    selectionOverride?: string,
     options?: {
       preserveDisabledBlocks?: boolean
       excludedGraphEdgeIds?: string[]
@@ -1779,7 +1863,7 @@ export function SelectionNovelStudio() {
       setContextPreviewError('当前分支没有可继承的父章节图谱。')
       return null
     }
-    const targetSelection = (lockedSelectionText || selectionText).trim()
+    const targetSelection = ((selectionOverride ?? lockedSelectionText) || selectionText).trim()
     if (!targetSelection) return null
 
     setContextPreviewLoading(true)
@@ -1865,7 +1949,7 @@ export function SelectionNovelStudio() {
     setExcludedEvidenceIds([])
     setGraphMutationPendingId(null)
     setGraphMutationError('')
-    setRewritePrompt(instruction)
+    setRewritePrompt(DEFAULT_REWRITE_PROMPT)
     setRewriteLaunchSource('what_if')
     setRewriteSourceTextOverride(detail.generatedText)
     setRewriteState({ loading: false, result: detail.generatedText, error: '' })
@@ -1880,6 +1964,8 @@ export function SelectionNovelStudio() {
             ? '从已持久化的 What-if 会话继续衍生分支版本。'
             : '从已持久化的 What-if 会话重新进入改写流程。',
           content: detail.generatedText,
+          inputTokens: detail.inputTokens ?? null,
+          outputTokens: detail.outputTokens ?? null,
         },
       ],
       selectedIndex: 0,
@@ -1888,7 +1974,7 @@ export function SelectionNovelStudio() {
     setPendingWhatIfRewriteLaunch(null)
 
     window.setTimeout(() => {
-      void loadContextPreview('rewrite', instruction)
+      void loadContextPreview('rewrite', instruction, detail.selectedText)
     }, 0)
   }, [currentChapter, pendingWhatIfRewriteLaunch, loadContextPreview])
 
@@ -1912,7 +1998,7 @@ export function SelectionNovelStudio() {
     setExcludedEvidenceIds([])
     setGraphMutationPendingId(null)
     setGraphMutationError('')
-    setRewritePrompt(userInstruction)
+    setRewritePrompt(DEFAULT_REWRITE_PROMPT)
     setRewriteLaunchSource('future_jump')
     setRewriteSourceTextOverride(originalText)
     setRewriteState({ loading: false, result: originalText, error: '' })
@@ -1925,6 +2011,8 @@ export function SelectionNovelStudio() {
           title: '当前 Future 版本',
           summary: '从已持久化的 Future Jump 最新修订继续推进，不默认回写主线章节。',
           content: originalText,
+          inputTokens: detail.inputTokens ?? null,
+          outputTokens: detail.outputTokens ?? null,
         },
       ],
       selectedIndex: 0,
@@ -1935,7 +2023,7 @@ export function SelectionNovelStudio() {
     setPendingFutureJumpRewriteLaunch(null)
 
     window.setTimeout(() => {
-      void loadContextPreview('rewrite', userInstruction)
+      void loadContextPreview('rewrite', userInstruction, selectedText)
     }, 0)
   }, [currentChapter, pendingFutureJumpRewriteLaunch, loadContextPreview])
 
@@ -1969,7 +2057,7 @@ export function SelectionNovelStudio() {
     setExcludedEvidenceIds([])
     setGraphMutationPendingId(null)
     setGraphMutationError('')
-    setRewritePrompt(instruction)
+    setRewritePrompt(DEFAULT_REWRITE_PROMPT)
     setRewriteLaunchSource('continue_block')
     setRewriteSourceTextOverride(pendingContinueBlockRewriteLaunch.latestText)
     setRewriteState({ loading: false, result: pendingContinueBlockRewriteLaunch.latestText, error: '' })
@@ -1984,6 +2072,8 @@ export function SelectionNovelStudio() {
             ? '会复用 rewrite 工作台，但保存时创建新的子续写块。'
             : '会复用 rewrite 工作台，但保存时覆盖当前续写块并追加历史。',
           content: pendingContinueBlockRewriteLaunch.latestText,
+          inputTokens: pendingContinueBlockRewriteLaunch.inputTokens ?? null,
+          outputTokens: pendingContinueBlockRewriteLaunch.outputTokens ?? null,
         },
       ],
       selectedIndex: 0,
@@ -1994,7 +2084,7 @@ export function SelectionNovelStudio() {
     setPendingContinueBlockRewriteLaunch(null)
 
     window.setTimeout(() => {
-      void loadContextPreview('rewrite', instruction)
+      void loadContextPreview('rewrite', instruction, pendingContinueBlockRewriteLaunch.selectedText)
     }, 0)
   }, [currentChapter, pendingContinueBlockRewriteLaunch, loadContextPreview])
 
@@ -2091,7 +2181,7 @@ export function SelectionNovelStudio() {
     preserveDisabledBlocks?: boolean
   }) => {
     if (!activeMode) return
-    const nextContext = await loadContextPreview(activeMode, undefined, {
+    const nextContext = await loadContextPreview(activeMode, undefined, undefined, {
       preserveDisabledBlocks: options?.preserveDisabledBlocks ?? true,
       excludedGraphEdgeIds: options?.excludedGraphEdgeIds,
       excludedEvidenceIds: options?.excludedEvidenceIds,
@@ -2522,87 +2612,48 @@ export function SelectionNovelStudio() {
     }
   }, [handleDeleteChapter, sortedChapters])
 
-  const resolveTimelineSelectionAfterBranchDelete = useCallback((
-    deletedNode: StoryTimelineBranchNode,
-    previousSelection: TimelineSelection,
-    refreshedTimeline: StoryTimelineResponse | null
-  ) => {
-    if (!currentChapter) return previousSelection
+  const handleDeleteBranchNode = useCallback(async (targetNode: StoryTimelineBranchNode) => {
+    if (!currentNovelId || deletingBranchNodeId || !currentChapter) return
 
-    const nextTimelineNodes = refreshedTimeline?.branchNodes ?? []
+    const directChildCount = resolvedStoryTimeline.branchNodes.filter((node) => node.parentNodeId === targetNode.id).length
+    const promotedChildrenMessage = directChildCount > 0
+      ? `它的 ${directChildCount} 个直属子节点会提升到上一级。`
+      : '它不会影响其他分支节点。'
+    const branchKindLabel = targetNode.nodeType === 'rewrite'
+      ? 'Rewrite'
+      : targetNode.nodeType === 'continue_block'
+        ? 'Continue block'
+        : targetNode.nodeType === 'what_if'
+          ? 'What-if'
+          : 'Future Jump'
 
-    if (previousSelection.kind !== 'chapter' && previousSelection.nodeId === deletedNode.id) {
-      if (deletedNode.nodeType === 'future_jump' && deletedNode.parentNodeId) {
-        const parentNode = nextTimelineNodes.find((node) => node.id === deletedNode.parentNodeId)
-        const parentSelection = parentNode ? toBranchTimelineSelection(parentNode) : null
-        if (parentSelection) return parentSelection
-      }
-
-      const fallbackChapterNo = deletedNode.nodeType === 'future_jump'
-        ? deletedNode.sourceChapterNo ?? deletedNode.anchorChapterNo
-        : deletedNode.anchorChapterNo
-      const fallbackChapter = sortedChapters.find((chapter) => !chapter.parentChapterId && chapter.order === fallbackChapterNo)
-      return fallbackChapter ? toChapterTimelineSelection(fallbackChapter) : toChapterTimelineSelection(currentChapter)
-    }
-
-    return resolveWorkspaceSelection({
-      currentSelection: previousSelection,
-      currentChapter,
-      branchNodes: nextTimelineNodes,
-    }) ?? toChapterTimelineSelection(currentChapter)
-  }, [currentChapter, sortedChapters])
-
-  const handleDeleteWhatIfNode = useCallback(async (nodeId: string) => {
-    const targetNode = resolvedStoryTimeline.branchNodes.find((node) => node.id === nodeId && node.nodeType === 'what_if')
-    if (!targetNode?.whatIfSessionId || !currentNovelId || deletingBranchNodeId) return
-
-    if (!window.confirm(`确认删除 What-if《${targetNode.title}》吗？这会同时删除它派生出的 Future Jump。`)) {
+    if (!window.confirm(`确认删除 ${branchKindLabel}《${targetNode.title}》吗？${promotedChildrenMessage}`)) {
       return
     }
 
     const previousSelection = workspaceSelection ?? toChapterTimelineSelection(currentChapter)
     setDeletingBranchNodeId(targetNode.id)
     try {
-      await callDeleteWhatIfSessionApi(targetNode.whatIfSessionId, currentNovelId, storyTimelineBranchId)
+      await callDeleteStoryTimelineNodeApi(targetNode.id, currentNovelId, storyTimelineBranchId)
       const refreshed = await loadStoryTimeline()
-      const nextSelection = resolveTimelineSelectionAfterBranchDelete(targetNode, previousSelection, refreshed)
+      const nextSelection = resolveSelectionAfterDeletedBranchNode({
+        deletedNode: targetNode,
+        previousSelection,
+        currentChapter,
+        chapters: sortedChapters,
+        branchNodes: refreshed?.branchNodes ?? [],
+      }) ?? toChapterTimelineSelection(currentChapter)
       handleTimelineSelection(nextSelection)
       setToast(`已删除 ${targetNode.title}`)
       window.setTimeout(() => setToast(''), 2000)
     } catch (error) {
-      const message = error instanceof Error ? error.message : '删除 What-if 失败'
+      const message = error instanceof Error ? error.message : '删除时间线节点失败'
       setToast(message)
       window.setTimeout(() => setToast(''), 2400)
     } finally {
       setDeletingBranchNodeId(null)
     }
-  }, [currentChapter, currentNovelId, deletingBranchNodeId, handleTimelineSelection, loadStoryTimeline, resolveTimelineSelectionAfterBranchDelete, resolvedStoryTimeline.branchNodes, storyTimelineBranchId, workspaceSelection])
-
-  const handleDeleteFutureJumpNode = useCallback(async (nodeId: string) => {
-    const targetNode = resolvedStoryTimeline.branchNodes.find((node) => node.id === nodeId && node.nodeType === 'future_jump')
-    if (!targetNode?.futureJumpRunId || deletingBranchNodeId) return
-
-    if (!window.confirm(`确认删除 Future Jump《${targetNode.title}》吗？这会移除它的时间线节点和全部修订。`)) {
-      return
-    }
-
-    const previousSelection = workspaceSelection ?? toChapterTimelineSelection(currentChapter)
-    setDeletingBranchNodeId(targetNode.id)
-    try {
-      await callDeleteFutureJumpRunApi(targetNode.futureJumpRunId, storyTimelineBranchId)
-      const refreshed = await loadStoryTimeline()
-      const nextSelection = resolveTimelineSelectionAfterBranchDelete(targetNode, previousSelection, refreshed)
-      handleTimelineSelection(nextSelection)
-      setToast(`已删除 ${targetNode.title}`)
-      window.setTimeout(() => setToast(''), 2000)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '删除 Future jump 失败'
-      setToast(message)
-      window.setTimeout(() => setToast(''), 2400)
-    } finally {
-      setDeletingBranchNodeId(null)
-    }
-  }, [currentChapter, deletingBranchNodeId, handleTimelineSelection, loadStoryTimeline, resolveTimelineSelectionAfterBranchDelete, resolvedStoryTimeline.branchNodes, storyTimelineBranchId, workspaceSelection])
+  }, [currentChapter, currentNovelId, deletingBranchNodeId, handleTimelineSelection, loadStoryTimeline, resolvedStoryTimeline.branchNodes, sortedChapters, storyTimelineBranchId, workspaceSelection])
 
   const handleDeleteNovel = async () => {
     if (!currentNovelId) return
@@ -2760,6 +2811,8 @@ export function SelectionNovelStudio() {
                 title: '流式版本',
                 summary: '基于当前章节知识状态与证据装配生成。',
                 content: finalText,
+                inputTokens: null,
+                outputTokens: null,
               },
             ]
           : [],
@@ -2781,6 +2834,14 @@ export function SelectionNovelStudio() {
       || chapterText
     if (!currentNovelId || !currentChapter || !targetSelection || !selectedCandidate || saveContinueBlockPending) return
 
+    const parentTimelineNodeId = rewriteLaunchSource === 'continue_block'
+      ? activeContinueBlockRewriteContext?.nodeId ?? (activeWorkspaceSelection.kind === 'chapter' ? null : activeWorkspaceSelection.nodeId)
+      : rewriteLaunchSource === 'future_jump'
+        ? activeFutureJumpRewriteContext?.parentTimelineNodeId ?? (activeWorkspaceSelection.kind === 'chapter' ? null : activeWorkspaceSelection.nodeId)
+        : activeWorkspaceSelection.kind === 'chapter'
+          ? null
+          : activeWorkspaceSelection.nodeId
+
     setSaveContinueBlockPending(true)
     setSaveContinueBlockError('')
     try {
@@ -2791,6 +2852,8 @@ export function SelectionNovelStudio() {
             selectedText: targetSelection,
             originalText,
             generatedText: selectedCandidate,
+            inputTokens: selectedRewriteCandidate?.inputTokens ?? null,
+            outputTokens: selectedRewriteCandidate?.outputTokens ?? null,
             userInstruction: rewritePrompt.trim() || activeContinueBlockRewriteContext.userInstruction.trim() || '重新生成当前续写块',
             titleHint: selectedRewriteCandidate?.title?.trim() || rewritePrompt.trim().slice(0, 24),
             subtitleHint: selectedRewriteCandidate?.summary?.trim() || null,
@@ -2799,16 +2862,12 @@ export function SelectionNovelStudio() {
             novelId: currentNovelId,
             branchId: storyTimelineBranchId,
             sourceChapterNo: currentChapter.order,
-            parentTimelineNodeId: rewriteLaunchSource === 'continue_block'
-              ? activeContinueBlockRewriteContext?.nodeId ?? (activeWorkspaceSelection.kind === 'chapter' ? null : activeWorkspaceSelection.nodeId)
-              : rewriteLaunchSource === 'future_jump'
-                ? activeFutureJumpRewriteContext?.parentTimelineNodeId ?? (activeWorkspaceSelection.kind === 'chapter' ? null : activeWorkspaceSelection.nodeId)
-                : activeWorkspaceSelection.kind === 'chapter'
-                  ? null
-                  : activeWorkspaceSelection.nodeId,
+            parentTimelineNodeId,
             selectedText: targetSelection,
             originalText,
             generatedText: selectedCandidate,
+            inputTokens: selectedRewriteCandidate?.inputTokens ?? null,
+            outputTokens: selectedRewriteCandidate?.outputTokens ?? null,
             userInstruction: rewritePrompt.trim() || activeFutureJumpRewriteContext?.userInstruction.trim() || '保存当前改写结果',
             titleHint: selectedRewriteCandidate?.title?.trim() || rewritePrompt.trim().slice(0, 24),
             subtitleHint: selectedRewriteCandidate?.summary?.trim() || null,
@@ -2821,21 +2880,12 @@ export function SelectionNovelStudio() {
 
       closePanel()
       setCenterPaneView('body')
-      setWorkspaceSelection(
-        matchingNode?.continueBlockId
-          ? {
-              kind: 'continue_block',
-              nodeId: matchingNode.id,
-              continueBlockId: matchingNode.continueBlockId,
-              anchorChapterNo: matchingNode.anchorChapterNo,
-            }
-          : {
-              kind: 'continue_block',
-              nodeId: result.timelineNodeId,
-              continueBlockId: result.continueBlockId,
-              anchorChapterNo: currentChapter.order,
-            }
-      )
+      setWorkspaceSelection(resolveContinueBlockSelectionAfterSave({
+        matchingNode,
+        result,
+        fallbackAnchorChapterNo: currentChapter.order,
+        parentTimelineNodeId,
+      }))
       setLeftPanelOpen(false)
 
       setToast(`${isContinueBlockRegenerate ? '已更新' : '已创建'} ${result.title}`)
@@ -2864,6 +2914,8 @@ export function SelectionNovelStudio() {
         selectedText: targetSelection,
         originalText: chapterText,
         generatedText: selectedCandidate,
+        inputTokens: selectedRewriteCandidate?.inputTokens ?? null,
+        outputTokens: selectedRewriteCandidate?.outputTokens ?? null,
         userInstruction: rewritePrompt.trim(),
         titleHint: rewritePrompt.trim().slice(0, 24),
       })
@@ -3007,37 +3059,52 @@ export function SelectionNovelStudio() {
   const selectedTimelineNode = activeWorkspaceSelection.kind === 'chapter'
     ? null
     : timelineNodeById.get(activeWorkspaceSelection.nodeId) ?? null
-  const selectedContinueBlockNode = activeWorkspaceSelection.kind === 'continue_block' ? selectedTimelineNode : null
+  const selectedContinueBlockNode = activeWorkspaceSelection.kind === 'rewrite' || activeWorkspaceSelection.kind === 'continue_block'
+    ? selectedTimelineNode
+    : null
   const selectedContinueBlockFutureMapLaunch = (() => {
     if (
-      activeWorkspaceSelection.kind !== 'continue_block'
+      (activeWorkspaceSelection.kind !== 'rewrite' && activeWorkspaceSelection.kind !== 'continue_block')
       || !selectedContinueBlockNode
       || !currentNovelId
     ) {
       return null
     }
 
-    let cursor: StoryTimelineBranchNode | null = selectedContinueBlockNode
-    while (cursor) {
-      if (cursor.whatIfSessionId) {
-        const sourceChapterNo = cursor.sourceChapterNo ?? cursor.anchorChapterNo
-        return {
-          novelId: currentNovelId,
-          branchId: storyTimelineBranchId,
-          sessionId: cursor.whatIfSessionId,
-          sourceChapterNo,
-          title: selectedContinueBlockNode.title,
-          parentTimelineNodeId: activeWorkspaceSelection.nodeId,
-        }
-      }
+    const sourceChapterNo = selectedContinueBlockNode.sourceChapterNo ?? selectedContinueBlockNode.anchorChapterNo
+    const sourceChapter = resolveSourceChapter({ chapterId: null, chapterNo: sourceChapterNo })
 
-      cursor = cursor.parentNodeId ? timelineNodeById.get(cursor.parentNodeId) ?? null : null
+    return {
+      novelId: currentNovelId,
+      branchId: storyTimelineBranchId,
+      sourceContext: {
+        nodeId: activeWorkspaceSelection.nodeId,
+        nodeType: activeWorkspaceSelection.kind,
+        chapterId: sourceChapter?.id ?? null,
+        chapterNo: sourceChapterNo,
+        whatIfSessionId: selectedContinueBlockNode.whatIfSessionId ?? null,
+      },
+      title: selectedContinueBlockNode.title,
+      parentTimelineNodeId: activeWorkspaceSelection.nodeId,
     }
-
-    return null
   })()
   const continueBlockBodyText = selectedContinueBlockNode?.latestText?.trim() || '当前续写块还没有可展示的已保存正文。'
-  const workspaceHeaderTitle = selectedTimelineNode?.title ?? currentChapter.title
+  const selectedTimelineLineageLabel = selectedTimelineNode?.readableLineageLabel?.trim() || selectedTimelineNode?.readableLabel?.trim() || selectedTimelineNode?.title?.trim() || ''
+  const selectedTimelineInstructionText = selectedTimelineNode?.userInstruction?.trim() || selectedTimelineNode?.subtitle?.trim() || ''
+  const selectedTimelineInstructionPreview = formatStoryBranchInstructionPreview(selectedTimelineInstructionText)
+  const workspaceHeaderTitle = activeWorkspaceSelection.kind === 'chapter'
+    ? currentChapter.title
+    : selectedTimelineLineageLabel || selectedTimelineNode?.title || currentChapter.title
+  const currentNodeMetrics = resolveCurrentNodeMetrics({
+    selection: activeWorkspaceSelection,
+    chapterText,
+    selectedNode: selectedTimelineNode,
+    override: activeWorkspaceSelection.kind !== 'chapter' && currentBranchMetricsOverride?.nodeId === activeWorkspaceSelection.nodeId
+      ? currentBranchMetricsOverride
+      : null,
+  })
+  whatIfMetricsNodeIdRef.current = activeWorkspaceSelection.kind === 'what_if' ? activeWorkspaceSelection.nodeId : null
+  futureJumpMetricsNodeIdRef.current = activeWorkspaceSelection.kind === 'future_jump' ? activeWorkspaceSelection.nodeId : null
   const chapterSelectionSummary = (lockedSelectionText || selectionText)
     ? `当前选区：${(lockedSelectionText || selectionText).slice(0, 24)}${(lockedSelectionText || selectionText).length > 24 ? '…' : ''}`
     : '当前选区：未选择'
@@ -3073,11 +3140,17 @@ export function SelectionNovelStudio() {
   }
 
   function launchFutureMapFromWhatIf(detail: WhatIfSessionDetail) {
+    const sourceChapter = resolveSourceChapter({ chapterId: null, chapterNo: detail.sourceChapterNo })
     setFutureMapLaunch({
       novelId: detail.novelId,
       branchId: detail.baseBranchId,
-      sessionId: detail.id,
-      sourceChapterNo: detail.sourceChapterNo,
+      sourceContext: {
+        nodeId: activeWorkspaceSelection.kind === 'what_if' ? activeWorkspaceSelection.nodeId : null,
+        nodeType: 'what_if',
+        chapterId: sourceChapter?.id ?? null,
+        chapterNo: detail.sourceChapterNo,
+        whatIfSessionId: detail.id,
+      },
       title: detail.title,
       parentTimelineNodeId: activeWorkspaceSelection.kind === 'what_if' ? activeWorkspaceSelection.nodeId : null,
     })
@@ -3159,12 +3232,19 @@ export function SelectionNovelStudio() {
       selectedText,
       originalText: selectedText,
       userInstruction,
+      inputTokens: context.detail.inputTokens ?? null,
+      outputTokens: context.detail.outputTokens ?? null,
     })
     setCurrentChapterId(targetChapter.id)
   }
 
   function reopenContinueBlockRewriteFlow(variant: 'continue' | 'regenerate') {
-    if (activeWorkspaceSelection.kind !== 'continue_block' || !selectedContinueBlockNode?.continueBlockId) return
+    if (
+      (activeWorkspaceSelection.kind !== 'rewrite' && activeWorkspaceSelection.kind !== 'continue_block')
+      || !selectedContinueBlockNode?.continueBlockId
+    ) {
+      return
+    }
 
     const anchorChapter = resolveSourceChapter({ chapterId: null, chapterNo: activeWorkspaceSelection.anchorChapterNo })
     if (!anchorChapter) {
@@ -3176,12 +3256,7 @@ export function SelectionNovelStudio() {
     setCenterPaneView('body')
     setLeftPanelOpen(false)
     setPresetCompatSessionPhase(
-      {
-        kind: 'continue_block',
-        nodeId: activeWorkspaceSelection.nodeId,
-        continueBlockId: activeWorkspaceSelection.continueBlockId,
-        anchorChapterNo: activeWorkspaceSelection.anchorChapterNo,
-      },
+      toContinueBranchSelection(activeWorkspaceSelection),
       'rewrite',
       variant === 'continue' ? 'continue' : 'new_chat',
       variant !== 'continue'
@@ -3196,6 +3271,8 @@ export function SelectionNovelStudio() {
       originalText: selectedContinueBlockNode.originalText?.trim() || selectedContinueBlockNode.latestText?.trim() || '',
       title: selectedContinueBlockNode.title,
       subtitle: selectedContinueBlockNode.subtitle ?? null,
+      inputTokens: selectedContinueBlockNode.inputTokens ?? null,
+      outputTokens: selectedContinueBlockNode.outputTokens ?? null,
       targetChapterId: anchorChapter.id,
       variant,
     })
@@ -3243,15 +3320,16 @@ export function SelectionNovelStudio() {
         })}
       </div>
     </div>
-  ) : activeWorkspaceSelection.kind === 'continue_block' ? (
+  ) : activeWorkspaceSelection.kind === 'rewrite' || activeWorkspaceSelection.kind === 'continue_block' ? (
     <div className="mb-4 rounded-[24px] border border-fuchsia-400/20 bg-fuchsia-500/10 p-4" data-testid="workspace-continue-block-actions">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">续写块动作</p>
-          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineNode?.title ?? '续写块'}</h3>
+          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineLineageLabel || selectedTimelineNode?.title || '续写块'}</h3>
+          {selectedTimelineInstructionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">指令预览 · {selectedTimelineInstructionPreview}</p> : null}
           <p className="mt-2 text-xs leading-6 text-zinc-300">续写块保存后会直接落到这个 reader 视图，并继续保留续写、重生与 Future Jump 三个稳定节点动作入口。</p>
         </div>
-        <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{activeWorkspaceSelection.continueBlockId}</span>
+        <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{selectedTimelineLineageLabel || '续写块'}</span>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <button
@@ -3299,10 +3377,11 @@ export function SelectionNovelStudio() {
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">What-if actions</p>
-          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineNode?.title ?? 'What-if session'}</h3>
+          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineLineageLabel || selectedTimelineNode?.title || 'What-if session'}</h3>
+          {selectedTimelineInstructionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">指令预览 · {selectedTimelineInstructionPreview}</p> : null}
           <p className="mt-2 text-xs leading-6 text-zinc-300">当前会话详情已经在中心面板按持久化结果加载。这里保留回到锚点章节的快捷入口，避免在 IF / 主章节之间来回迷路。</p>
         </div>
-        <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{activeWorkspaceSelection.sessionId}</span>
+        <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{selectedTimelineLineageLabel || 'What-if session'}</span>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <button
@@ -3322,10 +3401,11 @@ export function SelectionNovelStudio() {
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.22em] text-sky-200/70">Future jump actions</p>
-          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineNode?.title ?? 'Future jump run'}</h3>
+          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineLineageLabel || selectedTimelineNode?.title || 'Future jump run'}</h3>
+          {selectedTimelineInstructionPreview ? <p className="mt-2 text-xs leading-6 text-sky-100">指令预览 · {selectedTimelineInstructionPreview}</p> : null}
           <p className="mt-2 text-xs leading-6 text-zinc-300">中心面板会直接读取持久化的 run 详情、最新修订与继续改写入口；右侧保留源/目标章节跳转，方便在主线与未来节点之间对照。</p>
         </div>
-        <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1 text-[11px] text-sky-100">{activeWorkspaceSelection.runId}</span>
+        <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1 text-[11px] text-sky-100">{selectedTimelineLineageLabel || 'Future jump'}</span>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <button
@@ -3554,8 +3634,9 @@ export function SelectionNovelStudio() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5">{countChineseFriendlyWords(chapterText).toLocaleString()} 字</span>
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5">{currentChapter.status}</span>
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5" data-testid="workspace-current-word-count">{currentNodeMetrics.wordCount.toLocaleString()} 字</span>
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5" data-testid="workspace-current-input-tokens">输入 {currentNodeMetrics.inputTokens?.toLocaleString() ?? '—'} tokens</span>
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5" data-testid="workspace-current-output-tokens">输出 {currentNodeMetrics.outputTokens?.toLocaleString() ?? '—'} tokens</span>
               <button
                 onClick={() => {
                   void handleDeleteNovel()
@@ -3611,9 +3692,8 @@ export function SelectionNovelStudio() {
             onSelectionChange={handleTimelineSelection}
             onDeleteChapter={handleTimelineDeleteChapter}
             deletingBranchNodeId={deletingBranchNodeId}
-            onDeleteWhatIfSession={handleDeleteWhatIfNode}
-            onDeleteFutureJumpRun={handleDeleteFutureJumpNode}
-          />
+                    onDeleteBranchNode={handleDeleteBranchNode}
+                  />
 
           <WorkspaceCenterPane
             selection={activeWorkspaceSelection}
@@ -3622,6 +3702,8 @@ export function SelectionNovelStudio() {
             onCenterPaneViewChange={setCenterPaneView}
             chapterSelectionSummary={chapterSelectionSummary}
             chapterGraphSummary={chapterGraphSummary}
+            branchReadableLineageLabel={selectedTimelineLineageLabel || null}
+            branchInstructionText={selectedTimelineInstructionText || null}
             chapterBodyView={
               <div className="px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-chapter-body-view">
                 <div className="min-h-[62vh] rounded-[28px] border border-white/8 bg-[#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
@@ -3668,18 +3750,19 @@ export function SelectionNovelStudio() {
               />
             }
             continueBlockView={
-              activeWorkspaceSelection.kind === 'continue_block' ? (
+              activeWorkspaceSelection.kind === 'rewrite' || activeWorkspaceSelection.kind === 'continue_block' ? (
                 <div className="space-y-4 px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-continue-block-view">
                   <section className="overflow-hidden rounded-[28px] border border-fuchsia-400/20 bg-[radial-gradient(circle_at_top,_rgba(217,70,239,0.12),_transparent_42%),#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                     <div className="flex flex-col gap-5 px-5 py-5 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between">
                       <div className="max-w-3xl">
                         <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">已保存续写块</p>
-                        <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{selectedContinueBlockNode?.title ?? '续写块'}</h3>
+                        <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{selectedTimelineLineageLabel || selectedContinueBlockNode?.title || '续写块'}</h3>
+                        {selectedTimelineInstructionPreview ? <p className="mt-2 text-sm text-fuchsia-100">指令预览 · {selectedTimelineInstructionPreview}</p> : null}
                         <p className="mt-3 text-sm leading-7 text-zinc-300">{selectedContinueBlockNode?.subtitle?.trim() || '这里展示已保存的续写块最新版本。默认以只读 reader 打开，不再回到候选选择或编辑态。'}</p>
                         <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-zinc-300">
                           <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">reader mode</span>
                           <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">revision {selectedContinueBlockNode?.latestRevisionNo ?? 1}</span>
-                          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">anchor 第 {activeWorkspaceSelection.anchorChapterNo} 章</span>
+                          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{selectedTimelineLineageLabel || `第 ${activeWorkspaceSelection.anchorChapterNo} 章`}</span>
                         </div>
                       </div>
                       <div className="rounded-[22px] border border-fuchsia-300/20 bg-black/20 px-4 py-3 text-xs uppercase tracking-[0.18em] text-fuchsia-100" data-testid="workspace-continue-block-reader-mode">
@@ -3691,10 +3774,10 @@ export function SelectionNovelStudio() {
                   <section className="rounded-[28px] border border-white/8 bg-[#0b0d12] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:p-6">
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Latest saved revision</p>
-                      <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{activeWorkspaceSelection.continueBlockId}</span>
+                      {selectedTimelineInstructionPreview ? <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">指令预览 {selectedTimelineInstructionPreview}</span> : null}
                     </div>
                     <div className="rounded-[24px] border border-white/8 bg-black/20 p-5">
-                      <p className="whitespace-pre-wrap text-sm leading-8 text-zinc-200" data-testid="workspace-continue-block-reader-body">{continueBlockBodyText}</p>
+                      {renderReaderBodyParagraphs(continueBlockBodyText, 'text-zinc-200', 'workspace-continue-block-reader-body')}
                     </div>
                   </section>
                 </div>
@@ -3709,6 +3792,8 @@ export function SelectionNovelStudio() {
                   anchorChapterNo={activeWorkspaceSelection.anchorChapterNo}
                   nodeTitle={selectedTimelineNode?.title ?? null}
                   nodeSubtitle={selectedTimelineNode?.subtitle ?? null}
+                  readableLineageLabel={selectedTimelineLineageLabel || null}
+                  onMetricsChange={handleWhatIfMetricsChange}
                   onJumpToFuture={launchFutureMapFromWhatIf}
                   onRegenerateWhatIf={(detail) => reopenWhatIfRewriteFlow(detail, 'regenerate')}
                   onContinueInBranch={(detail) => reopenWhatIfRewriteFlow(detail, 'continue')}
@@ -3724,6 +3809,9 @@ export function SelectionNovelStudio() {
                   sourceChapterNo={activeWorkspaceSelection.sourceChapterNo}
                   targetChapterNo={activeWorkspaceSelection.targetChapterNo}
                   nodeTitle={selectedTimelineNode?.title ?? null}
+                  readableLineageLabel={selectedTimelineLineageLabel || null}
+                  nodeSubtitle={selectedTimelineNode?.subtitle ?? null}
+                  onMetricsChange={handleFutureJumpMetricsChange}
                   onContinueInFuture={reopenFutureJumpRewriteFlow}
                 />
               ) : null
@@ -4376,8 +4464,7 @@ export function SelectionNovelStudio() {
         <FutureMapOverlay
           novelId={futureMapLaunch.novelId}
           branchId={futureMapLaunch.branchId}
-          sessionId={futureMapLaunch.sessionId}
-          sourceChapterNo={futureMapLaunch.sourceChapterNo}
+          sourceContext={futureMapLaunch.sourceContext}
           title={futureMapLaunch.title}
           parentTimelineNodeId={futureMapLaunch.parentTimelineNodeId}
           onClose={() => setFutureMapLaunch(null)}
