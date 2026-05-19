@@ -1,11 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
+import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
+import { DEFAULT_REWRITE_PROMPT } from '@/components/workspace/selection-novel-studio'
 import { storyBranchFixtureIds } from '@/tests/helpers/fixture-ids'
 import type { StoryTimelineResponse } from '@/lib/story-branch-types'
 
-const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/task-14-future-map')
-const futureJumpEvidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/task-15-future-jump-view')
+const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/task-15-branch-ux-playwright-future-map')
+const futureJumpEvidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/task-15-branch-ux-playwright-future-jump-view')
+const rewritePromptPlaceholder = '例如：保留剧情走向，但把这段写得更压迫、更像命运在逼近。'
 
 function buildWhatIfSessionDetail() {
   return {
@@ -18,6 +21,8 @@ function buildWhatIfSessionDetail() {
     selectedText: '“你根本没信过我。”',
     originalText: '原始章节正文',
     generatedText: '魔改后的 What-if 正文',
+    inputTokens: 321,
+    outputTokens: 654,
     status: 'active',
     createdAt: '2026-05-15T01:23:45.000Z',
     updatedAt: '2026-05-15T01:23:45.000Z',
@@ -167,6 +172,13 @@ function buildFutureJumpRunDetail(latestRevisionNo = 2) {
     sessionId: 'what-if-session-001',
     baseBranchId: 'novel-001:main',
     parentTimelineNodeId: storyBranchFixtureIds.whatIfNodeId,
+    sourceContext: {
+      nodeId: storyBranchFixtureIds.whatIfNodeId,
+      nodeType: 'what_if',
+      chapterId: 'chapter-10',
+      chapterNo: 10,
+      whatIfSessionId: 'what-if-session-001',
+    },
     targetOutlineNodeId: storyBranchFixtureIds.outlineEventId,
     targetOutlineChapterId: storyBranchFixtureIds.outlineChapterAnchorId,
     sourceChapterNo: 10,
@@ -174,6 +186,8 @@ function buildFutureJumpRunDetail(latestRevisionNo = 2) {
     userDirection: '让救援更晚到来',
     bridgeSummary,
     generatedTargetText,
+    inputTokens: latestRevisionNo >= 3 ? 777 : 555,
+    outputTokens: latestRevisionNo >= 3 ? 888 : 666,
     latestRevisionNo,
     errorMessage: null,
     status: latestRevisionNo >= 3 ? 'revised' : 'generated',
@@ -301,12 +315,17 @@ function buildStoryTimelinePayload(options?: { includeWhatIf?: boolean; includeF
           type: 'branch_node' as const,
           id: storyBranchFixtureIds.whatIfNodeId,
           nodeType: 'what_if' as const,
+          readableLabel: 'IF-01',
+          readableLineageLabel: 'IF-01',
         anchorChapterNo: 10,
         parentNodeId: null,
         title: 'IF-01 决裂线',
         subtitle: '如果他们在这里闹翻',
         laneIndex: 0,
         colorToken: 'rose',
+          currentText: '魔改后的 What-if 正文',
+          inputTokens: 321,
+          outputTokens: 654,
           sourceChapterNo: 10,
           targetChapterNo: null,
           continueBlockId: null,
@@ -320,12 +339,17 @@ function buildStoryTimelinePayload(options?: { includeWhatIf?: boolean; includeF
             type: 'branch_node' as const,
             id: storyBranchFixtureIds.futureJumpNodeId,
             nodeType: 'future_jump' as const,
+            readableLabel: 'JUMP-01',
+            readableLineageLabel: 'IF-01, JUMP-01',
             anchorChapterNo: 100,
             parentNodeId: storyBranchFixtureIds.whatIfNodeId,
             title: 'JUMP-01 第100章',
             subtitle: '跳到被绑走后的未来',
-            laneIndex: 1,
+            laneIndex: 0,
             colorToken: 'violet',
+            currentText: '第二版未来正文：她被带走后，误会已经先一步封死所有退路。',
+            inputTokens: 555,
+            outputTokens: 666,
             sourceChapterNo: 10,
             targetChapterNo: 100,
             continueBlockId: null,
@@ -353,6 +377,8 @@ function buildContinueBlockTimelinePayload(): StoryTimelineResponse {
         type: 'branch_node' as const,
         id: 'continue-node-1',
         nodeType: 'continue_block' as const,
+        readableLabel: 'CONT-01',
+        readableLineageLabel: 'CONT-01',
         anchorChapterNo: 10,
         parentNodeId: null,
         title: 'CONT-01 续写块',
@@ -365,6 +391,9 @@ function buildContinueBlockTimelinePayload(): StoryTimelineResponse {
         whatIfSessionId: null,
         futureJumpRunId: null,
         latestText: '已保存的续写块正文：她在门后听见誓言改变了方向。',
+        currentText: '已保存的续写块正文：她在门后听见誓言改变了方向。',
+        inputTokens: 41,
+        outputTokens: 59,
         latestRevisionNo: 1,
         userInstruction: '把誓言后的情绪变化压进同一场景。',
         selectedText: '第10章正文',
@@ -389,6 +418,8 @@ function buildMixedContinueTreeTimelinePayload(): StoryTimelineResponse {
         type: 'branch_node' as const,
         id: storyBranchFixtureIds.whatIfNodeId,
         nodeType: 'what_if' as const,
+        readableLabel: 'IF-01',
+        readableLineageLabel: 'IF-01',
         anchorChapterNo: 10,
         parentNodeId: null,
         title: 'IF-01 决裂线',
@@ -407,11 +438,13 @@ function buildMixedContinueTreeTimelinePayload(): StoryTimelineResponse {
         type: 'branch_node' as const,
         id: 'continue-node-1',
         nodeType: 'continue_block' as const,
+        readableLabel: 'CONT-01',
+        readableLineageLabel: 'IF-01, CONT-01',
         anchorChapterNo: 10,
         parentNodeId: storyBranchFixtureIds.whatIfNodeId,
         title: 'CONT-01 续写块',
         subtitle: '沿着分支继续推进',
-        laneIndex: 0,
+        laneIndex: 1,
         colorToken: 'fuchsia',
         sourceChapterNo: 10,
         targetChapterNo: null,
@@ -430,11 +463,13 @@ function buildMixedContinueTreeTimelinePayload(): StoryTimelineResponse {
         type: 'branch_node' as const,
         id: storyBranchFixtureIds.futureJumpNodeId,
         nodeType: 'future_jump' as const,
+        readableLabel: 'JUMP-01',
+        readableLineageLabel: 'IF-01, CONT-01, JUMP-01',
         anchorChapterNo: 100,
         parentNodeId: 'continue-node-1',
         title: 'JUMP-01 第100章',
         subtitle: '跳到被绑走后的未来',
-        laneIndex: 0,
+        laneIndex: 1,
         colorToken: 'violet',
         sourceChapterNo: 10,
         targetChapterNo: 100,
@@ -448,11 +483,13 @@ function buildMixedContinueTreeTimelinePayload(): StoryTimelineResponse {
         type: 'branch_node' as const,
         id: 'continue-node-2',
         nodeType: 'continue_block' as const,
+        readableLabel: 'CONT-02',
+        readableLineageLabel: 'IF-01, CONT-01, JUMP-01, CONT-02',
         anchorChapterNo: 100,
         parentNodeId: storyBranchFixtureIds.futureJumpNodeId,
         title: 'CONT-02 未来续写块',
         subtitle: '沿着未来跳转继续推进',
-        laneIndex: 0,
+        laneIndex: 1,
         colorToken: 'fuchsia',
         sourceChapterNo: 100,
         targetChapterNo: null,
@@ -473,6 +510,134 @@ function buildMixedContinueTreeTimelinePayload(): StoryTimelineResponse {
       { fromNodeId: 'continue-node-1', toNodeId: storyBranchFixtureIds.futureJumpNodeId },
       { fromNodeId: storyBranchFixtureIds.futureJumpNodeId, toNodeId: 'continue-node-2' },
     ],
+  }
+}
+
+function buildDeleteAffordanceTimelinePayload(): StoryTimelineResponse {
+  return {
+    novelId: 'novel-001',
+    branchId: 'novel-001:main',
+    chapters: [
+      { type: 'chapter', chapterNo: 10, chapterId: 'chapter-10', title: '第10章 结盟', wordCount: 1200 },
+      { type: 'chapter', chapterNo: 100, chapterId: 'chapter-100', title: '第100章 被绑走', wordCount: 1900 },
+    ],
+    branchNodes: [
+      {
+        type: 'branch_node' as const,
+        id: 'rewrite-node-1',
+        nodeType: 'rewrite' as const,
+        readableLabel: 'RE-01',
+        readableLineageLabel: 'RE-01',
+        anchorChapterNo: 10,
+        parentNodeId: null,
+        title: 'RE-01 第一版改写',
+        subtitle: '首个保存的改写节点',
+        laneIndex: 0,
+        colorToken: 'fuchsia',
+        sourceChapterNo: 10,
+        targetChapterNo: null,
+        continueBlockId: 'rewrite-block-1',
+        whatIfSessionId: null,
+        futureJumpRunId: null,
+        latestText: '改写正文：她在门后听见誓言改变了方向。',
+        latestRevisionNo: 1,
+        userInstruction: '让誓言转向更冷的情绪。',
+        selectedText: '第10章正文',
+        originalText: '第10章正文',
+        createdAt: '2026-05-15T01:20:00.000Z',
+        status: 'active',
+      },
+      {
+        type: 'branch_node' as const,
+        id: 'continue-node-1',
+        nodeType: 'continue_block' as const,
+        readableLabel: 'CONT-01',
+        readableLineageLabel: 'RE-01, CONT-01',
+        anchorChapterNo: 10,
+        parentNodeId: 'rewrite-node-1',
+        title: 'RE-01, CONT-01 续写块',
+        subtitle: '沿着改写结果继续推进',
+        laneIndex: 1,
+        colorToken: 'fuchsia',
+        sourceChapterNo: 10,
+        targetChapterNo: null,
+        continueBlockId: 'continue-block-1',
+        whatIfSessionId: null,
+        futureJumpRunId: null,
+        latestText: '续写正文：她决定把誓言藏进下一次沉默。',
+        latestRevisionNo: 1,
+        userInstruction: '继续压低场景里的情绪。',
+        selectedText: '第10章正文',
+        originalText: '改写正文：她在门后听见誓言改变了方向。',
+        createdAt: '2026-05-15T01:21:00.000Z',
+        status: 'active',
+      },
+      {
+        type: 'branch_node' as const,
+        id: storyBranchFixtureIds.whatIfNodeId,
+        nodeType: 'what_if' as const,
+        readableLabel: 'IF-01',
+        readableLineageLabel: 'IF-01',
+        anchorChapterNo: 10,
+        parentNodeId: null,
+        title: 'IF-01 决裂线',
+        subtitle: '如果他们在这里闹翻',
+        laneIndex: 0,
+        colorToken: 'rose',
+        sourceChapterNo: 10,
+        targetChapterNo: null,
+        continueBlockId: null,
+        whatIfSessionId: 'what-if-session-001',
+        futureJumpRunId: null,
+        createdAt: '2026-05-15T01:22:00.000Z',
+        status: 'active',
+      },
+      {
+        type: 'branch_node' as const,
+        id: storyBranchFixtureIds.futureJumpNodeId,
+        nodeType: 'future_jump' as const,
+        readableLabel: 'JUMP-01',
+        readableLineageLabel: 'IF-01, JUMP-01',
+        anchorChapterNo: 100,
+        parentNodeId: storyBranchFixtureIds.whatIfNodeId,
+        title: 'IF-01, JUMP-01 第100章',
+        subtitle: '跳到被绑走后的未来',
+        laneIndex: 0,
+        colorToken: 'violet',
+        sourceChapterNo: 10,
+        targetChapterNo: 100,
+        continueBlockId: null,
+        whatIfSessionId: null,
+        futureJumpRunId: 'jump-run-001',
+        createdAt: '2026-05-15T01:23:00.000Z',
+        status: 'generated',
+      },
+    ],
+    edges: [
+      { fromNodeId: 'rewrite-node-1', toNodeId: 'continue-node-1' },
+      { fromNodeId: storyBranchFixtureIds.whatIfNodeId, toNodeId: storyBranchFixtureIds.futureJumpNodeId },
+    ],
+  }
+}
+
+function deleteTimelineNodeFromPayload(timeline: StoryTimelineResponse, nodeId: string): StoryTimelineResponse {
+  const targetNode = timeline.branchNodes.find((node) => node.id === nodeId)
+  if (!targetNode) return timeline
+
+  const reorderedBranchNodes = timeline.branchNodes
+    .filter((node) => node.id !== nodeId)
+    .map((node) => (
+    node.parentNodeId === nodeId
+      ? { ...node, parentNodeId: targetNode.parentNodeId }
+      : node
+  ))
+
+  return {
+    ...timeline,
+    branchNodes: reorderedBranchNodes,
+    edges: reorderedBranchNodes
+      .filter((node) => node.parentNodeId)
+      .map((node) => ({ fromNodeId: node.parentNodeId!, toNodeId: node.id })),
   }
 }
 
@@ -523,6 +688,9 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
   await page.goto('/workspace', { waitUntil: 'networkidle' })
   const chapterCard = page.getByRole('button', { name: 'Chapter 10 第10章 结盟 1200 字' })
   await chapterCard.evaluate((node: HTMLButtonElement) => node.click())
+  await expect(page.getByTestId('workspace-current-word-count')).not.toContainText('1,200 字')
+  await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 — tokens')
+  await expect(page.getByTestId('workspace-current-output-tokens')).toContainText('输出 — tokens')
 
   await page.locator('[contenteditable="true"]').evaluate((editor) => {
     const paragraph = editor.querySelector('p')
@@ -558,9 +726,18 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
+  await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 41 tokens')
+  await expect(page.getByTestId('workspace-current-output-tokens')).toContainText('输出 59 tokens')
   await expect(page.getByTestId('workspace-continue-block-continue-entry')).toBeEnabled()
   await expect(page.getByTestId('workspace-continue-block-regenerate-entry')).toBeEnabled()
-  await expect(page.getByTestId('workspace-continue-block-future-jump-entry')).toBeDisabled()
+  await expect(page.getByTestId('workspace-continue-block-future-jump-entry')).toBeEnabled()
+  await expect(page.getByTestId('timeline-node-continue-node-1')).toContainText('CONT-01')
+  await expect(page.getByTestId('workspace-center-pane')).toContainText('CONT-01')
+  await expect(page.getByTestId('workspace-continue-block-actions')).toContainText(`指令预览 · ${formatStoryBranchInstructionPreview('把誓言后的情绪变化压进同一场景。')}`)
+  await expect(page.getByTestId('workspace-continue-block-view')).toContainText(`指令预览 · ${formatStoryBranchInstructionPreview('把誓言后的情绪变化压进同一场景。')}`)
+  await expect(page.getByText('continue-block-1')).toHaveCount(0)
+  await expect(page.getByText(/anchor 第/i)).toHaveCount(0)
+  await expect(page.getByText(/^draft$/i)).toHaveCount(0)
 
   await page.reload({ waitUntil: 'networkidle' })
 
@@ -568,6 +745,87 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
+})
+
+test('delete affordances stay visible across rewrite/continue/what-if/future-jump nodes and selected deletes recover URL state deterministically', async ({ page }) => {
+  let timelineState = buildDeleteAffordanceTimelinePayload()
+
+  await page.route('**/api/workspace', async (route) => {
+    await route.fulfill({ json: buildWorkspacePayload() })
+  })
+  await page.route('**/api/story-timeline*', async (route) => {
+    if (route.request().method() === 'DELETE') {
+      const { nodeId } = route.request().postDataJSON() as { nodeId: string }
+      timelineState = deleteTimelineNodeFromPayload(timelineState, nodeId)
+      await route.fulfill({ json: { ok: true } })
+      return
+    }
+
+    await route.fulfill({ json: timelineState })
+  })
+  await page.route('**/api/knowledge-view*', async (route) => {
+    await route.fulfill({
+      json: {
+        ok: true,
+        localOutlines: [],
+        localCharacters: [],
+        localCharacterRelations: [],
+        localWorldEntries: [],
+        localTimelineEvents: [],
+        knowledgeRebuildStatus: null,
+        jobOutcome: null,
+      },
+    })
+  })
+  await page.route('**/api/what-if/sessions/what-if-session-001?*', async (route) => {
+    await route.fulfill({ json: buildWhatIfSessionDetail() })
+  })
+  await page.route('**/api/future-jump/runs/jump-run-001?*', async (route) => {
+    await route.fulfill({ json: buildFutureJumpRunDetail(2) })
+  })
+
+  await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
+
+  await expect(page.getByLabel('删除 Rewrite 节点 RE-01')).toBeVisible()
+  await expect(page.getByLabel('删除 Continue block 节点 RE-01, CONT-01')).toBeVisible()
+  await expect(page.getByLabel('删除 What if 节点 IF-01')).toBeVisible()
+  await expect(page.getByLabel('删除 Future jump 节点 IF-01, JUMP-01')).toBeVisible()
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByLabel('删除 Continue block 节点 RE-01, CONT-01').click()
+  await expect(page).toHaveURL(/selectionKind=rewrite/)
+  await expect(page).toHaveURL(/selectionNodeId=rewrite-node-1/)
+  await expect(page).not.toHaveURL(/selectionNodeId=continue-node-1/)
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('rewrite')
+
+  timelineState = buildDeleteAffordanceTimelinePayload()
+  await page.goto(`/workspace?selectionKind=future_jump&selectionNodeId=${storyBranchFixtureIds.futureJumpNodeId}&selectionRunId=jump-run-001&selectionSourceChapterNo=10&selectionTargetChapterNo=100`, { waitUntil: 'networkidle' })
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByLabel('删除 Future jump 节点 IF-01, JUMP-01').click()
+  await expect(page).toHaveURL(/selectionKind=what_if/)
+  await expect(page).toHaveURL(new RegExp(`selectionNodeId=${storyBranchFixtureIds.whatIfNodeId}`))
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('what-if')
+
+  timelineState = buildDeleteAffordanceTimelinePayload()
+  await page.goto('/workspace?selectionKind=rewrite&selectionNodeId=rewrite-node-1&selectionContinueBlockId=rewrite-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByLabel('删除 Rewrite 节点 RE-01').click()
+  await expect(page).toHaveURL(/selectionKind=chapter/)
+  await expect(page).toHaveURL(/selectionChapterId=chapter-10/)
+  await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
+
+  timelineState = buildDeleteAffordanceTimelinePayload()
+  await page.goto(`/workspace?selectionKind=what_if&selectionNodeId=${storyBranchFixtureIds.whatIfNodeId}&selectionSessionId=what-if-session-001&selectionAnchorChapterNo=10`, { waitUntil: 'networkidle' })
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByLabel('删除 What if 节点 IF-01').click()
+  await expect(page).toHaveURL(/selectionKind=chapter/)
+  await expect(page).toHaveURL(/selectionChapterId=chapter-10/)
+  await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
+  await expect(page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`)).toBeVisible()
+  await expect(page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`)).toContainText('IF-01, JUMP-01')
+  await page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`).click()
+  await expect(page.getByTestId('workspace-future-jump-view')).toBeVisible()
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('future-jump')
 })
 
 test('full speculative branching flow persists through revise, reload, and reopened jump selection', async ({ page }) => {
@@ -673,7 +931,11 @@ test('full speculative branching flow persists through revise, reload, and reope
     await route.fulfill({ json: buildGenerationContextPayload() })
   })
   await page.route('**/api/rewrite', async (route) => {
-    await route.fulfill({ status: 200, body: '魔改后的 What-if 正文' })
+    await route.fulfill({
+      status: 200,
+      body: '魔改后的 What-if 正文',
+      contentType: 'text/plain; charset=utf-8',
+    })
   })
   await page.route('**/api/future-jump/runs', async (route) => {
     createPayload = route.request().postDataJSON()
@@ -746,6 +1008,10 @@ test('full speculative branching flow persists through revise, reload, and reope
   await expect(page.getByTestId('workspace-context-panel-toggle')).toHaveAttribute('aria-expanded', 'true')
   await expect(page.getByTestId('workspace-context-panel')).toBeVisible()
   await expect(page.getByText('Future jump context')).toBeVisible()
+  await expect(page.getByTestId('workspace-context-panel')).not.toContainText('输出要求')
+  await expect(page.getByTestId('workspace-current-word-count')).not.toContainText('1,200 字')
+  await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 — tokens')
+  await expect(page.getByTestId('workspace-current-output-tokens')).toContainText('输出 — tokens')
   const contextBlockToggle = page.getByTestId('workspace-context-panel').getByRole('checkbox').first()
   await expect(contextBlockToggle).toBeChecked()
   await contextBlockToggle.uncheck()
@@ -756,7 +1022,8 @@ test('full speculative branching flow persists through revise, reload, and reope
   await expect(page.getByTestId('workspace-context-panel')).toBeVisible()
   await expect(page.getByTestId('workspace-context-panel').getByRole('checkbox').first()).not.toBeChecked()
   await page.getByRole('button', { name: '生成候选版本' }).click()
-  await expect(page.getByTestId('workspace-action-overlay').getByText('魔改后的 What-if 正文').nth(1)).toBeVisible()
+  await expect(page.getByRole('button', { name: '创建 What-if' })).toBeEnabled()
+  await expect(page.getByTestId('workspace-action-overlay')).toContainText('魔改后的 What-if 正文')
   await page.getByRole('button', { name: '创建 What-if' }).click()
 
   expect(whatIfPayload).toMatchObject({
@@ -772,22 +1039,36 @@ test('full speculative branching flow persists through revise, reload, and reope
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('what-if')
   await expect(page.getByText('魔改后的 What-if 正文')).toBeVisible()
   await expect(page.getByTestId('what-if-delta-list')).toBeVisible()
+  await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 321 tokens')
+  await expect(page.getByTestId('workspace-current-output-tokens')).toContainText('输出 654 tokens')
+
+  await page.getByRole('button', { name: 'Regenerate What-if' }).click()
+  await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
+  await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue(DEFAULT_REWRITE_PROMPT)
+  await page.getByTestId('workspace-action-overlay').click({ position: { x: 8, y: 8 } })
+  await expect(page.getByTestId('workspace-action-overlay')).toBeHidden()
 
   await ifNode.click()
   await page.getByTestId('what-if-jump-button').click()
   await expect(page.getByTestId('future-map-overlay')).toBeVisible()
+  await expect(page.getByTestId('future-map-overlay')).not.toContainText('novel-001:main')
   await expect(page.getByTestId('future-map-confirm')).toBeDisabled()
   await page.getByTestId('future-map-track-phase-3').click()
   await page.getByTestId('future-map-event-outline_event_100').click()
-  await expect(page.getByTestId('future-map-confirm')).toBeDisabled()
-  await page.getByTestId('future-map-chapter-100').click()
+  await expect(page.getByTestId('future-map-resolved-chapter')).toContainText('第 100 章')
   await expect(page.getByTestId('future-map-confirm')).toBeEnabled()
   await page.getByPlaceholder('可选：给这次 Future Jump 一句额外方向，例如“先保留误会，再让救援更晚到来”。').fill('让救援更晚到来')
   await page.screenshot({ path: path.join(evidenceDirectory, 'event-chapter-select.png'), fullPage: true })
   await page.getByTestId('future-map-confirm').click()
 
   expect(createPayload).toEqual({
-    sessionId: 'what-if-session-001',
+    sourceContext: {
+      nodeId: storyBranchFixtureIds.whatIfNodeId,
+      nodeType: 'what_if',
+      chapterId: 'chapter-10',
+      chapterNo: 10,
+      whatIfSessionId: 'what-if-session-001',
+    },
     targetOutlineNodeId: 'outline_event_100',
     targetOutlineChapterId: 'outline_chapter_100_primary',
     parentTimelineNodeId: storyBranchFixtureIds.whatIfNodeId,
@@ -802,11 +1083,22 @@ test('full speculative branching flow persists through revise, reload, and reope
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('future-jump')
   await expect(jumpNode).toHaveAttribute('data-active', 'true')
   await expect(edge).toHaveAttribute('data-active', 'true')
+  await expect(jumpNode).toContainText('IF-01, JUMP-01')
+  await expect(page.getByTestId('workspace-center-pane')).toContainText('IF-01, JUMP-01')
+  await expect(page.getByTestId('workspace-future-jump-view')).toContainText(`指令预览 · ${formatStoryBranchInstructionPreview('让救援更晚到来')}`)
+  await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 555 tokens')
+  await expect(page.getByTestId('workspace-current-output-tokens')).toContainText('输出 666 tokens')
+  await expect(page.getByText('jump-run-001')).toHaveCount(0)
+  await expect(page.getByText(/anchor 第/i)).toHaveCount(0)
+  await expect(page.getByText(/^draft$/i)).toHaveCount(0)
+  await expect(page.getByText(/^from\b/i)).toHaveCount(0)
 
   await page.getByTestId('future-jump-feedback').fill('把救援再推迟一章')
   await page.getByTestId('future-jump-regenerate').click()
   await expect(page.getByTestId('future-jump-bridge')).toContainText('第三版桥接摘要：误会被拉长，救援明显延后。')
   await expect(page.getByTestId('future-jump-text')).toContainText('第三版未来正文：她被带走后，所有误会都在更慢地发酵。')
+  await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 777 tokens')
+  await expect(page.getByTestId('workspace-current-output-tokens')).toContainText('输出 888 tokens')
   expect(revisePayload).toEqual({ userFeedback: '把救援再推迟一章' })
 
   await expect(page).toHaveURL(/selectionKind=future_jump/)
@@ -882,9 +1174,11 @@ test('future map shows derived provenance badges on inferred candidates', async 
   await page.getByTestId('what-if-jump-button').click()
   await expect(page.getByTestId('future-map-overlay')).toBeVisible()
 
+  await page.getByTestId('future-map-mode-direct-chapter').click()
   await page.getByTestId('future-map-track-phase-4').click()
-  await expect(page.getByTestId('future-map-event-outline_event_120')).toBeVisible()
+  await expect(page.getByTestId('future-map-direct-chapter-120')).toBeVisible()
   await expect(page.getByText('derived event')).toBeVisible()
+  await expect(page.getByText('基于现有线索推导出的重逢节点。')).toBeVisible()
   await expect(page.getByText(/置信度 74%/)).toBeVisible()
   await page.screenshot({ path: path.join(evidenceDirectory, 'derived-badges.png'), fullPage: true })
 })
@@ -1015,6 +1309,7 @@ test('future jump view renders latest revision, revises in place, and reopens re
   await page.getByTestId('future-jump-continue').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
   await expect(page.getByText('默认不替换正文')).toBeVisible()
+  await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue(DEFAULT_REWRITE_PROMPT)
   await expect(page.getByTestId('workspace-action-overlay').getByText('第三版未来正文：她被带走后，所有误会都在更慢地发酵。').first()).toBeVisible()
   await page.getByRole('button', { name: '生成候选版本' }).click()
   await page.getByRole('button', { name: '保存为续写块' }).click()
@@ -1072,7 +1367,7 @@ test('continue-block selection restores on reload and exposes the reader action 
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
   await expect(page.getByTestId('workspace-continue-block-continue-entry')).toBeEnabled()
   await expect(page.getByTestId('workspace-continue-block-regenerate-entry')).toBeEnabled()
-  await expect(page.getByTestId('workspace-continue-block-future-jump-entry')).toBeDisabled()
+  await expect(page.getByTestId('workspace-continue-block-future-jump-entry')).toBeEnabled()
 
   await page.reload({ waitUntil: 'networkidle' })
 
@@ -1153,7 +1448,7 @@ test('continue-block continue creates a child node while regenerate updates the 
           parentNodeId: 'continue-node-1',
           title: 'CONT-02 子续写块',
           subtitle: '沿着当前续写块继续推进',
-          laneIndex: 0,
+          laneIndex: 1,
           colorToken: 'fuchsia',
           sourceChapterNo: 10,
           targetChapterNo: null,
@@ -1240,6 +1535,9 @@ test('mixed continue and future-jump trees keep continue-block navigation select
   await expect(page.getByTestId('timeline-node-continue-node-1')).toBeVisible()
   await expect(page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`)).toBeVisible()
   await expect(page.getByTestId('timeline-node-continue-node-2')).toBeVisible()
+  await expect(page.getByTestId('timeline-node-continue-node-1')).toHaveAttribute('data-visible-depth', '1')
+  await expect(page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`)).toHaveAttribute('data-visible-depth', '1')
+  await expect(page.getByTestId('timeline-node-continue-node-2')).toHaveAttribute('data-visible-depth', '1')
 
   await page.getByTestId('timeline-node-continue-node-2').click()
 
@@ -1255,4 +1553,235 @@ test('mixed continue and future-jump trees keep continue-block navigation select
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('未来续写块正文：她被带走后，誓言开始在更远的地方回响。')
+  await expect(page.getByTestId('timeline-node-continue-node-1')).toHaveAttribute('data-visible-depth', '1')
+  await expect(page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`)).toHaveAttribute('data-visible-depth', '1')
+  await expect(page.getByTestId('timeline-node-continue-node-2')).toHaveAttribute('data-visible-depth', '1')
+})
+
+test('future jump launched from a continue node stays attached under that current node after reload', async ({ page }) => {
+  let createPayload: Record<string, unknown> | null = null
+  let timelineState: StoryTimelineResponse = {
+    ...buildMixedContinueTreeTimelinePayload(),
+    branchNodes: buildMixedContinueTreeTimelinePayload().branchNodes.filter(
+      (node) => node.id !== storyBranchFixtureIds.futureJumpNodeId && node.id !== 'continue-node-2'
+    ),
+    edges: [{ fromNodeId: storyBranchFixtureIds.whatIfNodeId, toNodeId: 'continue-node-1' }],
+  }
+  const currentDetail = {
+    ...buildFutureJumpRunDetail(2),
+    parentTimelineNodeId: 'continue-node-1',
+    sourceContext: {
+      nodeId: 'continue-node-1',
+      nodeType: 'continue_block' as const,
+      chapterId: 'chapter-10',
+      chapterNo: 10,
+      whatIfSessionId: 'what-if-session-001',
+    },
+    timelineNodeId: storyBranchFixtureIds.futureJumpNodeId,
+  }
+
+  await page.route('**/api/workspace', async (route) => {
+    await route.fulfill({ json: buildWorkspacePayload() })
+  })
+  await page.route('**/api/story-timeline*', async (route) => {
+    await route.fulfill({ json: timelineState })
+  })
+  await page.route('**/api/knowledge-view*', async (route) => {
+    await route.fulfill({ json: { ok: true, localOutlines: [], localCharacters: [], localCharacterRelations: [], localWorldEntries: [], localTimelineEvents: [], knowledgeRebuildStatus: null, jobOutcome: null } })
+  })
+  await page.route('**/api/what-if/sessions/what-if-session-001?*', async (route) => {
+    await route.fulfill({ json: buildWhatIfSessionDetail() })
+  })
+  await page.route('**/api/story-future-map*', async (route) => {
+    await route.fulfill({ json: buildFutureMapPayload() })
+  })
+  await page.route('**/api/future-jump/runs', async (route) => {
+    createPayload = route.request().postDataJSON()
+    timelineState = {
+      ...timelineState,
+      branchNodes: [
+        ...timelineState.branchNodes,
+        {
+          type: 'branch_node' as const,
+          id: storyBranchFixtureIds.futureJumpNodeId,
+          nodeType: 'future_jump' as const,
+          readableLabel: 'JUMP-01',
+          readableLineageLabel: 'IF-01, CONT-01, JUMP-01',
+          anchorChapterNo: 100,
+          parentNodeId: 'continue-node-1',
+          title: 'IF-01, CONT-01, JUMP-01 第100章',
+          subtitle: '跳到被绑走后的未来',
+          laneIndex: 1,
+          colorToken: 'violet',
+          sourceChapterNo: 10,
+          targetChapterNo: 100,
+          continueBlockId: null,
+          whatIfSessionId: null,
+          futureJumpRunId: 'jump-run-001',
+          createdAt: '2026-05-15T01:23:00.000Z',
+          status: 'generated',
+        },
+      ],
+      edges: [...timelineState.edges, { fromNodeId: 'continue-node-1', toNodeId: storyBranchFixtureIds.futureJumpNodeId }],
+    }
+    await route.fulfill({
+      json: {
+        runId: 'jump-run-001',
+        timelineNodeId: storyBranchFixtureIds.futureJumpNodeId,
+        bridgeSummary: 'bridge summary',
+        generatedTargetText: 'future jump text',
+      },
+    })
+  })
+  await page.route('**/api/future-jump/runs/jump-run-001?*', async (route) => {
+    await route.fulfill({ json: currentDetail })
+  })
+
+  await page.goto('/workspace', { waitUntil: 'networkidle' })
+  await page.getByTestId('timeline-node-continue-node-1').click()
+  await expect(page.getByTestId('workspace-continue-block-future-jump-entry')).toBeEnabled()
+  await page.getByTestId('workspace-continue-block-future-jump-entry').click()
+  await expect(page.getByTestId('future-map-overlay')).toBeVisible()
+  await page.getByTestId('future-map-event-outline_event_100').click()
+  await expect(page.getByTestId('future-map-resolved-chapter')).toContainText('第 100 章')
+  await page.getByTestId('future-map-confirm').click()
+
+  expect(createPayload).toEqual({
+    sourceContext: {
+      nodeId: 'continue-node-1',
+      nodeType: 'continue_block',
+      chapterId: 'chapter-10',
+      chapterNo: 10,
+      whatIfSessionId: null,
+    },
+    targetOutlineNodeId: 'outline_event_100',
+    targetOutlineChapterId: 'outline_chapter_100_primary',
+    parentTimelineNodeId: 'continue-node-1',
+  })
+
+  const jumpNode = page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`)
+  const jumpEdge = page.getByTestId(`timeline-edge-continue-node-1-${storyBranchFixtureIds.futureJumpNodeId}`)
+  await expect(jumpNode).toBeVisible()
+  await expect(jumpEdge).toHaveAttribute('data-active', 'true')
+  await expect(page).toHaveURL(/selectionKind=future_jump/)
+  await expect(page).toHaveURL(new RegExp(`selectionNodeId=${storyBranchFixtureIds.futureJumpNodeId}`))
+  await expect(page.getByTestId('workspace-future-jump-view')).toBeVisible()
+
+  await page.reload({ waitUntil: 'networkidle' })
+
+  await expect(page.getByTestId(`timeline-edge-continue-node-1-${storyBranchFixtureIds.futureJumpNodeId}`)).toBeVisible()
+  await expect(page.getByTestId('workspace-future-jump-view')).toBeVisible()
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('future-jump')
+})
+
+test('focused future jump chooser history mode from what-if binds the chapter immediately', async ({ page }) => {
+  let createPayload: Record<string, unknown> | null = null
+
+  await page.route('**/api/workspace', async (route) => {
+    await route.fulfill({ json: buildWorkspacePayload() })
+  })
+  await page.route('**/api/story-timeline*', async (route) => {
+    await route.fulfill({ json: buildStoryTimelinePayload({ includeWhatIf: true, includeFutureJump: false }) })
+  })
+  await page.route('**/api/knowledge-view*', async (route) => {
+    await route.fulfill({ json: { ok: true, localOutlines: [], localCharacters: [], localCharacterRelations: [], localWorldEntries: [], localTimelineEvents: [], knowledgeRebuildStatus: null, jobOutcome: null } })
+  })
+  await page.route('**/api/what-if/sessions/what-if-session-001?*', async (route) => {
+    await route.fulfill({ json: buildWhatIfSessionDetail() })
+  })
+  await page.route('**/api/story-future-map*', async (route) => {
+    await route.fulfill({ json: buildFutureMapPayload() })
+  })
+  await page.route('**/api/future-jump/runs', async (route) => {
+    createPayload = route.request().postDataJSON()
+    await route.fulfill({
+      json: {
+        runId: 'jump-run-002',
+        timelineNodeId: storyBranchFixtureIds.futureJumpNodeId,
+        bridgeSummary: 'bridge',
+        generatedTargetText: 'future jump text',
+      },
+    })
+  })
+
+  await page.goto(`/workspace?selectionKind=what_if&selectionNodeId=${storyBranchFixtureIds.whatIfNodeId}&selectionSessionId=what-if-session-001&selectionAnchorChapterNo=10`, { waitUntil: 'networkidle' })
+  await expect(page.getByTestId('workspace-what-if-view')).toBeVisible()
+  await page.getByTestId('what-if-jump-button').click()
+  await expect(page.getByTestId('future-map-overlay')).toBeVisible()
+  await page.getByTestId('future-map-event-outline_event_100').click()
+  await expect(page.getByTestId('future-map-resolved-chapter')).toContainText('第 100 章')
+  await expect(page.getByTestId('future-map-confirm')).toBeEnabled()
+  await page.getByTestId('future-map-confirm').click()
+
+  expect(createPayload).toEqual({
+    sourceContext: {
+      nodeId: storyBranchFixtureIds.whatIfNodeId,
+      nodeType: 'what_if',
+      chapterId: 'chapter-10',
+      chapterNo: 10,
+      whatIfSessionId: 'what-if-session-001',
+    },
+    targetOutlineNodeId: 'outline_event_100',
+    targetOutlineChapterId: 'outline_chapter_100_primary',
+    parentTimelineNodeId: storyBranchFixtureIds.whatIfNodeId,
+  })
+})
+
+test('focused future jump chooser direct-chapter mode shows real summaries and keeps invalid state deterministic', async ({ page }) => {
+  let createPayload: Record<string, unknown> | null = null
+
+  await page.route('**/api/workspace', async (route) => {
+    await route.fulfill({ json: buildWorkspacePayload() })
+  })
+  await page.route('**/api/story-timeline*', async (route) => {
+    await route.fulfill({ json: buildStoryTimelinePayload({ includeWhatIf: true, includeFutureJump: false }) })
+  })
+  await page.route('**/api/knowledge-view*', async (route) => {
+    await route.fulfill({ json: { ok: true, localOutlines: [], localCharacters: [], localCharacterRelations: [], localWorldEntries: [], localTimelineEvents: [], knowledgeRebuildStatus: null, jobOutcome: null } })
+  })
+  await page.route('**/api/what-if/sessions/what-if-session-001?*', async (route) => {
+    await route.fulfill({ json: buildWhatIfSessionDetail() })
+  })
+  await page.route('**/api/story-future-map*', async (route) => {
+    await route.fulfill({ json: buildFutureMapPayload() })
+  })
+  await page.route('**/api/future-jump/runs', async (route) => {
+    createPayload = route.request().postDataJSON()
+    await route.fulfill({
+      json: {
+        runId: 'jump-run-003',
+        timelineNodeId: storyBranchFixtureIds.futureJumpNodeId,
+        bridgeSummary: 'bridge',
+        generatedTargetText: 'future jump text',
+      },
+    })
+  })
+
+  await page.goto(`/workspace?selectionKind=what_if&selectionNodeId=${storyBranchFixtureIds.whatIfNodeId}&selectionSessionId=what-if-session-001&selectionAnchorChapterNo=10`, { waitUntil: 'networkidle' })
+  await page.getByTestId('what-if-jump-button').click()
+  await expect(page.getByTestId('future-map-overlay')).toBeVisible()
+  await expect(page.getByTestId('future-map-overlay')).not.toContainText('novel-001:main')
+  await expect(page.getByTestId('future-map-confirm')).toBeDisabled()
+  await page.getByTestId('future-map-mode-direct-chapter').click()
+  await expect(page.getByTestId('future-map-confirm')).toBeDisabled()
+  await page.getByTestId('future-map-track-phase-4').click()
+  await expect(page.getByTestId('future-map-direct-chapter-120')).toBeVisible()
+  await expect(page.getByText('基于现有线索推导出的重逢节点。')).toBeVisible()
+  await page.getByTestId('future-map-direct-chapter-120').click()
+  await expect(page.getByTestId('future-map-resolved-chapter')).toContainText('第 120 章')
+  await expect(page.getByTestId('future-map-confirm')).toBeEnabled()
+  await page.getByTestId('future-map-confirm').click()
+
+  expect(createPayload).toEqual({
+    sourceContext: {
+      nodeId: storyBranchFixtureIds.whatIfNodeId,
+      nodeType: 'what_if',
+      chapterId: 'chapter-10',
+      chapterNo: 10,
+      whatIfSessionId: 'what-if-session-001',
+    },
+    targetOutlineNodeId: 'outline_event_120',
+    targetOutlineChapterId: 'outline_chapter_120_primary',
+    parentTimelineNodeId: storyBranchFixtureIds.whatIfNodeId,
+  })
 })

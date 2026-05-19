@@ -3,13 +3,14 @@ import path from 'node:path'
 import { test, expect } from '@playwright/test'
 
 const fixturePath = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
-const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/task-1-test-harness/ui')
+const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/task-15-branch-ux-playwright-harness')
 
 test('future-jump harness smoke', async ({ page }) => {
   fs.mkdirSync(evidenceDirectory, { recursive: true })
 
   await page.goto('/library', { waitUntil: 'networkidle' })
   await expect(page.getByText('导入 TXT 小说')).toBeVisible()
+  await expect(page).toHaveURL(/127\.0\.0\.1:3000\/library/)
 
   const importResponsePromise = page.waitForResponse(
     (response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST'

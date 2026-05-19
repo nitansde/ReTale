@@ -1,12 +1,15 @@
 import path from 'node:path'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
+import { DEFAULT_REWRITE_PROMPT } from '@/components/workspace/selection-novel-studio'
 import { ensureEvidenceDir, writeEvidenceFile } from '@/tests/helpers/evidence'
 import { storyBranchFixtureIds } from '@/tests/helpers/fixture-ids'
 import type { StoryTimelineResponse } from '@/lib/story-branch-types'
 
 const fixturePath = process.cwd() + '/scripts/fixtures/workspace-import-smoke.txt'
-const evidenceDirectory = ensureEvidenceDir('task-14-mode-ux-simplification')
+const evidenceDirectory = ensureEvidenceDir('task-15-branch-ux-playwright-mode-ux-simplification')
+const readerTypographyEvidenceDirectory = ensureEvidenceDir('task-9-reader-typography')
+const rewritePromptPlaceholder = '例如：保留剧情走向，但把这段写得更压迫、更像命运在逼近。'
 
 function buildEmptyWorkspacePayload() {
   return {
@@ -281,6 +284,13 @@ function buildFutureJumpRunDetail() {
     sessionId: 'what-if-session-001',
     baseBranchId: 'novel-001:main',
     parentTimelineNodeId: 'continue-node-1',
+    sourceContext: {
+      nodeId: 'continue-node-1',
+      nodeType: 'continue_block',
+      chapterId: 'chapter-10',
+      chapterNo: 10,
+      whatIfSessionId: 'what-if-session-001',
+    },
     targetOutlineNodeId: storyBranchFixtureIds.outlineEventId,
     targetOutlineChapterId: storyBranchFixtureIds.outlineChapterAnchorId,
     sourceChapterNo: 10,
@@ -346,15 +356,15 @@ function buildBaseTimeline(): StoryTimelineResponse {
   }
 }
 
-function buildContinueParentNode(overrides?: Partial<StoryTimelineResponse['branchNodes'][number]>) {
+function buildRewriteRootNode(overrides?: Partial<StoryTimelineResponse['branchNodes'][number]>) {
   return {
     type: 'branch_node' as const,
-    id: 'continue-node-1',
-    nodeType: 'continue_block' as const,
+    id: 'rewrite-node-1',
+    nodeType: 'rewrite' as const,
     anchorChapterNo: 10,
-    parentNodeId: storyBranchFixtureIds.whatIfNodeId,
-    title: 'CONT-01 续写块',
-    subtitle: '沿着分支继续推进',
+    parentNodeId: null,
+    title: 'RE-01 改写节点',
+    subtitle: '首个保存的改写结果',
     laneIndex: 0,
     colorToken: 'fuchsia',
     sourceChapterNo: 10,
@@ -397,8 +407,8 @@ function buildWhatIfAncestorNode() {
 function buildAfterSaveTimeline(): StoryTimelineResponse {
   return {
     ...buildBaseTimeline(),
-    branchNodes: [buildWhatIfAncestorNode(), buildContinueParentNode()],
-    edges: [{ fromNodeId: storyBranchFixtureIds.whatIfNodeId, toNodeId: 'continue-node-1' }],
+    branchNodes: [buildRewriteRootNode()],
+    edges: [],
   }
 }
 
@@ -406,14 +416,13 @@ function buildAfterContinueTimeline(): StoryTimelineResponse {
   return {
     ...buildAfterSaveTimeline(),
     branchNodes: [
-      buildWhatIfAncestorNode(),
-      buildContinueParentNode(),
+      buildRewriteRootNode(),
       {
         type: 'branch_node' as const,
         id: 'continue-node-2',
         nodeType: 'continue_block' as const,
         anchorChapterNo: 10,
-        parentNodeId: 'continue-node-1',
+        parentNodeId: 'rewrite-node-1',
         title: 'CONT-02 子续写块',
         subtitle: '沿着当前续写块继续推进',
         laneIndex: 0,
@@ -433,8 +442,7 @@ function buildAfterContinueTimeline(): StoryTimelineResponse {
       },
     ],
     edges: [
-      { fromNodeId: storyBranchFixtureIds.whatIfNodeId, toNodeId: 'continue-node-1' },
-      { fromNodeId: 'continue-node-1', toNodeId: 'continue-node-2' },
+      { fromNodeId: 'rewrite-node-1', toNodeId: 'continue-node-2' },
     ],
   }
 }
@@ -443,9 +451,9 @@ function buildAfterRegenerateTimeline(): StoryTimelineResponse {
   const afterContinue = buildAfterContinueTimeline()
   return {
     ...afterContinue,
-    branchNodes: afterContinue.branchNodes.map((node) => node.id === 'continue-node-1'
-      ? buildContinueParentNode({
-          title: 'CONT-01 重生版',
+    branchNodes: afterContinue.branchNodes.map((node) => node.id === 'rewrite-node-1'
+      ? buildRewriteRootNode({
+          title: 'RE-01 重生版',
           subtitle: '同节点重生后保留修订历史',
           latestText: '重生后的续写块正文：保留修订历史的新版。',
           latestRevisionNo: 2,
@@ -461,12 +469,12 @@ function buildAfterFutureJumpTimeline(): StoryTimelineResponse {
     ...afterRegenerate,
     branchNodes: [
       ...afterRegenerate.branchNodes,
-      {
-        type: 'branch_node' as const,
-        id: storyBranchFixtureIds.futureJumpNodeId,
-        nodeType: 'future_jump' as const,
-        anchorChapterNo: 100,
-        parentNodeId: 'continue-node-1',
+        {
+          type: 'branch_node' as const,
+          id: storyBranchFixtureIds.futureJumpNodeId,
+          nodeType: 'future_jump' as const,
+          anchorChapterNo: 100,
+          parentNodeId: 'rewrite-node-1',
         title: 'JUMP-01 第100章',
         subtitle: '跳到被绑走后的未来',
         laneIndex: 0,
@@ -482,7 +490,7 @@ function buildAfterFutureJumpTimeline(): StoryTimelineResponse {
     ],
     edges: [
       ...afterRegenerate.edges,
-      { fromNodeId: 'continue-node-1', toNodeId: storyBranchFixtureIds.futureJumpNodeId },
+      { fromNodeId: 'rewrite-node-1', toNodeId: storyBranchFixtureIds.futureJumpNodeId },
     ],
   }
 }
@@ -540,6 +548,29 @@ async function selectWholeEditorParagraph(page: Page) {
     selection?.addRange(range)
     document.dispatchEvent(new Event('selectionchange'))
   })
+}
+
+async function readTypography(locator: Locator) {
+  return locator.evaluate((element) => {
+    const paragraph = element.querySelector('p')
+    if (!paragraph) {
+      throw new Error('Failed to resolve prose paragraph for typography snapshot')
+    }
+
+    const rootStyle = window.getComputedStyle(element)
+    const paragraphStyle = window.getComputedStyle(paragraph)
+
+    return {
+      fontFamily: rootStyle.fontFamily,
+      fontSize: rootStyle.fontSize,
+      lineHeight: rootStyle.lineHeight,
+      paragraphMarginBottom: paragraphStyle.marginBottom,
+    }
+  })
+}
+
+function expectTypographyToMatch(actual: Awaited<ReturnType<typeof readTypography>>, expected: Awaited<ReturnType<typeof readTypography>>) {
+  expect(actual).toEqual(expected)
 }
 
 test('simplified mode flow covers import, continue-block lineage, future-jump continue, collapsed context, and obsolete-surface absence', async ({ page }) => {
@@ -619,9 +650,10 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
         status: 200,
         body: JSON.stringify({
           continueBlockId: 'continue-block-1',
-          timelineNodeId: 'continue-node-1',
+          timelineNodeId: 'rewrite-node-1',
+          nodeType: 'rewrite',
           generatedText: '重生后的续写块正文：保留修订历史的新版。',
-          title: 'CONT-01 重生版',
+          title: 'RE-01 重生版',
           subtitle: '同节点重生后保留修订历史',
           latestRevisionNo: 2,
         }),
@@ -637,6 +669,7 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
         body: JSON.stringify({
           continueBlockId: 'continue-block-3',
           timelineNodeId: 'continue-node-3',
+          nodeType: 'continue_block',
           generatedText: '未来续写块正文：她被带走后，誓言开始在更远的地方回响。',
           title: 'CONT-03 未来续写块',
           subtitle: '沿着未来跳转继续推进',
@@ -647,13 +680,14 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
       return
     }
 
-    if (payload.parentTimelineNodeId === 'continue-node-1') {
+    if (payload.parentTimelineNodeId === 'rewrite-node-1') {
       timelineState = buildAfterContinueTimeline()
       await route.fulfill({
         status: 200,
         body: JSON.stringify({
           continueBlockId: 'continue-block-2',
           timelineNodeId: 'continue-node-2',
+          nodeType: 'continue_block',
           generatedText: '子续写块正文：誓言之后，她选择独自离开。',
           title: 'CONT-02 子续写块',
           subtitle: '沿着当前续写块继续推进',
@@ -669,10 +703,11 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
       status: 200,
       body: JSON.stringify({
         continueBlockId: 'continue-block-1',
-        timelineNodeId: 'continue-node-1',
+        timelineNodeId: 'rewrite-node-1',
+        nodeType: 'rewrite',
         generatedText: '已保存的续写块正文：她在门后听见誓言改变了方向。',
-        title: 'CONT-01 续写块',
-        subtitle: '沿着分支继续推进',
+        title: 'RE-01 改写节点',
+        subtitle: '首个保存的改写结果',
         latestRevisionNo: 1,
       }),
       contentType: 'application/json',
@@ -746,68 +781,82 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   await expect(page.getByText('已保存的续写块正文：她在门后听见誓言改变了方向。').first()).toBeVisible()
   await page.getByRole('button', { name: '保存为续写块' }).click()
 
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('rewrite')
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
+  await expect(page.getByTestId('workspace-current-word-count')).not.toContainText('1,200 字')
+  await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 — tokens')
+  await expect(page.getByTestId('workspace-current-output-tokens')).toContainText('输出 — tokens')
+  await expect(page).toHaveURL(/selectionKind=rewrite/)
+  await expect(page).toHaveURL(/selectionNodeId=rewrite-node-1/)
   await expect(page.getByTestId('workspace-continue-block-continue-entry')).toBeEnabled()
   await expect(page.getByTestId('workspace-continue-block-regenerate-entry')).toBeEnabled()
   await expect(page.getByTestId('workspace-continue-block-future-jump-entry')).toBeEnabled()
+  await page.getByTestId('workspace-continue-block-future-jump-entry').click()
+  await expect(page.getByTestId('future-map-overlay')).toBeVisible()
+  await expect(page.getByTestId('future-map-overlay')).not.toContainText('novel-001:main')
+  await expect(page.getByTestId('future-map-mode-history-node')).toBeVisible()
+  await expect(page.getByTestId('future-map-mode-direct-chapter')).toBeVisible()
+  await page.getByTestId('future-map-close').click()
+  await expect(page.getByTestId('future-map-overlay')).toBeHidden()
+
+  await page.reload({ waitUntil: 'networkidle' })
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('rewrite')
+  await expect(page).toHaveURL(/selectionKind=rewrite/)
+  await expect(page).toHaveURL(/selectionNodeId=rewrite-node-1/)
+  await expect(page.getByTestId('workspace-center-pane-kind')).toContainText('改写节点工作区')
+
+  await page.getByTestId('workspace-continue-block-regenerate-entry').click()
+  await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
+  await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue(DEFAULT_REWRITE_PROMPT)
+  await expect(page.getByTestId('workspace-context-panel-toggle')).toHaveAttribute('aria-expanded', 'false')
+  await page.getByTestId('workspace-context-panel-toggle').click()
+  await expect(page.getByTestId('workspace-context-panel')).toBeVisible()
+  await expect(page.getByTestId('workspace-context-panel')).not.toContainText('输出要求')
+  await expect(page.getByText(/^from\b/i)).toHaveCount(0)
+  await page.getByTestId('workspace-action-overlay').click({ position: { x: 8, y: 8 } })
+  await expect(page.getByTestId('workspace-action-overlay')).toBeHidden()
 
   await page.getByTestId('workspace-continue-block-continue-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
   await expect(page.getByRole('button', { name: /当前续写块版本/ })).toBeVisible()
+  await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue(DEFAULT_REWRITE_PROMPT)
+  await expect(page.getByTestId('workspace-context-panel-toggle')).toHaveAttribute('aria-expanded', 'false')
+  await page.getByTestId('workspace-context-panel-toggle').click()
+  await expect(page.getByTestId('workspace-context-panel')).toBeVisible()
+  await expect(page.getByTestId('workspace-context-panel')).not.toContainText('输出要求')
+  await expect(page.getByText(/^from\b/i)).toHaveCount(0)
+  await page.getByTestId('workspace-context-panel-toggle').click()
+  await expect(page.getByTestId('workspace-context-panel')).toHaveCount(0)
   await page.getByRole('button', { name: '生成候选版本' }).click()
   await expect(page.getByText('子续写块正文：誓言之后，她选择独自离开。').first()).toBeVisible()
   await page.getByRole('button', { name: '保存为续写块' }).click()
   await expect(page).toHaveURL(/selectionNodeId=continue-node-2/)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('子续写块正文：誓言之后，她选择独自离开。')
+  await expect(page.getByTestId('workspace-current-word-count')).not.toContainText('1,200 字')
+  await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 — tokens')
+  await expect(page.getByTestId('workspace-current-output-tokens')).toContainText('输出 — tokens')
+  await expect(page.getByTestId('workspace-continue-block-future-jump-entry')).toBeEnabled()
+  await page.getByTestId('workspace-continue-block-future-jump-entry').click()
+  await expect(page.getByTestId('future-map-overlay')).toBeVisible()
+  await expect(page.getByTestId('future-map-overlay')).not.toContainText('novel-001:main')
+  await expect(page.getByTestId('future-map-mode-history-node')).toBeVisible()
+  await page.getByTestId('future-map-close').click()
+  await expect(page.getByTestId('future-map-overlay')).toBeHidden()
 
-  await page.getByTestId('timeline-node-continue-node-1').click()
-  await expect(page).toHaveURL(/selectionNodeId=continue-node-1/)
+  await page.getByTestId('timeline-node-rewrite-node-1').click()
+  await expect(page).toHaveURL(/selectionNodeId=rewrite-node-1/)
+  await expect(page).toHaveURL(/selectionKind=rewrite/)
   await page.getByTestId('workspace-continue-block-regenerate-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
   await expect(page.getByRole('button', { name: /当前待重生版本/ })).toBeVisible()
   await page.getByRole('button', { name: '生成候选版本' }).click()
   await expect(page.getByText('重生后的续写块正文：保留修订历史的新版。').first()).toBeVisible()
   await page.getByRole('button', { name: '保存为续写块' }).click()
-  await expect(page).toHaveURL(/selectionNodeId=continue-node-1/)
+  await expect(page).toHaveURL(/selectionNodeId=rewrite-node-1/)
+  await expect(page).toHaveURL(/selectionKind=rewrite/)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('重生后的续写块正文：保留修订历史的新版。')
   await expect(page.getByTestId('workspace-continue-block-view')).toContainText('revision 2')
-
-  await page.getByTestId('workspace-continue-block-future-jump-entry').click()
-  await expect(page.getByTestId('future-map-overlay')).toBeVisible()
-  await expect(page.getByTestId('future-map-confirm')).toBeDisabled()
-  await page.getByTestId('future-map-track-phase-3').click()
-  await page.getByTestId('future-map-event-outline_event_100').click()
-  await page.getByTestId('future-map-chapter-100').click()
-  await page.getByPlaceholder('可选：给这次 Future Jump 一句额外方向，例如“先保留误会，再让救援更晚到来”。').fill('让救援更晚到来')
-  await page.getByTestId('future-map-confirm').click()
-
-  expect(futureJumpPayload).toEqual({
-    sessionId: 'what-if-session-001',
-    targetOutlineNodeId: 'outline_event_100',
-    targetOutlineChapterId: 'outline_chapter_100_primary',
-    parentTimelineNodeId: 'continue-node-1',
-    userDirection: '让救援更晚到来',
-  })
-
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('future-jump')
-  await expect(page.getByTestId('workspace-future-jump-view')).toBeVisible()
-  await expect(page.getByTestId('future-jump-bridge')).toContainText('第二版桥接摘要：误会升级，救援晚到一步。')
-  await expect(page.getByTestId('future-jump-text')).toContainText('第二版未来正文：她被带走后，误会已经先一步封死所有退路。')
-
-  await page.getByTestId('future-jump-continue').click()
-  await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
-  await expect(page.getByText('默认不替换正文')).toBeVisible()
-  await expect(page.getByTestId('workspace-action-overlay').getByText('第二版未来正文：她被带走后，误会已经先一步封死所有退路。').first()).toBeVisible()
-  await page.getByRole('button', { name: '生成候选版本' }).click()
-  await expect(page.getByText('未来续写块正文：她被带走后，誓言开始在更远的地方回响。').first()).toBeVisible()
-  await page.getByRole('button', { name: '保存为续写块' }).click()
-
-  await expect(page).toHaveURL(/selectionKind=continue_block/)
-  await expect(page).toHaveURL(/selectionNodeId=continue-node-3/)
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
-  await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('未来续写块正文：她被带走后，誓言开始在更远的地方回响。')
 
   await page.screenshot({ path: path.join(evidenceDirectory, 'mode-ux-simplification-flow.png'), fullPage: true })
   writeEvidenceFile('task-14-mode-ux-simplification/report.txt', [
@@ -815,7 +864,7 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
     `finalUrl=${page.url()}`,
     'chapterEntryModes=rewrite,roleplay',
     'obsoletePresetModesAbsent=expand,polish,continue',
-    'flow=import>rewrite>save-continue>continue-child>regenerate-parent>future-jump>future-jump-continue-child',
+    'flow=import>rewrite>save-rewrite>reload>continue-child>regenerate-root',
   ].join('\n'))
 })
 
@@ -898,13 +947,14 @@ test('continue-block rewrite does not collide with workspace autosave preset sav
   await page.route('**/api/continue-blocks', async (route) => {
     const payload = route.request().postDataJSON() as { parentTimelineNodeId?: string | null }
 
-    if (payload.parentTimelineNodeId === 'continue-node-1') {
+    if (payload.parentTimelineNodeId === 'rewrite-node-1') {
       timelineState = buildAfterContinueTimeline()
       await route.fulfill({
         status: 200,
         body: JSON.stringify({
           continueBlockId: 'continue-block-2',
           timelineNodeId: 'continue-node-2',
+          nodeType: 'continue_block',
           generatedText: '子续写块正文：誓言之后，她选择独自离开。',
           title: 'CONT-02 子续写块',
           subtitle: '沿着当前续写块继续推进',
@@ -920,10 +970,11 @@ test('continue-block rewrite does not collide with workspace autosave preset sav
       status: 200,
       body: JSON.stringify({
         continueBlockId: 'continue-block-1',
-        timelineNodeId: 'continue-node-1',
+        timelineNodeId: 'rewrite-node-1',
+        nodeType: 'rewrite',
         generatedText: '已保存的续写块正文：她在门后听见誓言改变了方向。',
-        title: 'CONT-01 续写块',
-        subtitle: '沿着分支继续推进',
+        title: 'RE-01 改写节点',
+        subtitle: '首个保存的改写结果',
         latestRevisionNo: 1,
       }),
       contentType: 'application/json',
@@ -940,6 +991,8 @@ test('continue-block rewrite does not collide with workspace autosave preset sav
   await expect(page.getByText('已保存的续写块正文：她在门后听见誓言改变了方向。').first()).toBeVisible()
   await page.getByRole('button', { name: '保存为续写块' }).click()
 
+  await expect(page).toHaveURL(/selectionKind=rewrite/)
+  await expect(page).toHaveURL(/selectionNodeId=rewrite-node-1/)
   await expect(page.getByTestId('workspace-continue-block-continue-entry')).toBeEnabled()
   await page.getByTestId('workspace-continue-block-continue-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
@@ -951,4 +1004,173 @@ test('continue-block rewrite does not collide with workspace autosave preset sav
   await expect(page).toHaveURL(/selectionNodeId=continue-node-2/)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('子续写块正文：誓言之后，她选择独自离开。')
   await expect(page.getByText('revision_mismatch')).toHaveCount(0)
+})
+
+test('focused rewrite and continue nodes launch future jump with history/direct chooser payloads', async ({ page }) => {
+  let timelineState = buildAfterContinueTimeline()
+  const createPayloads: Array<Record<string, unknown>> = []
+
+  await page.route('**/api/workspace', async (route) => {
+    await route.fulfill({ json: buildWorkspacePayload() })
+  })
+  await page.route('**/api/story-timeline*', async (route) => {
+    await route.fulfill({ json: timelineState })
+  })
+  await page.route('**/api/knowledge-view*', async (route) => {
+    await route.fulfill({ json: buildKnowledgeViewPayload() })
+  })
+  await page.route('**/api/story-future-map*', async (route) => {
+    await route.fulfill({ json: buildFutureMapPayload() })
+  })
+  await page.route('**/api/future-jump/runs', async (route) => {
+    createPayloads.push(route.request().postDataJSON())
+    timelineState = buildAfterFutureJumpTimeline()
+    await route.fulfill({
+      json: {
+        runId: 'jump-run-001',
+        timelineNodeId: storyBranchFixtureIds.futureJumpNodeId,
+        bridgeSummary: '第二版桥接摘要：误会升级，救援晚到一步。',
+        generatedTargetText: '第二版未来正文：她被带走后，误会已经先一步封死所有退路。',
+      },
+    })
+  })
+  await page.route('**/api/future-jump/runs/jump-run-001?*', async (route) => {
+    await route.fulfill({ json: buildFutureJumpRunDetail() })
+  })
+
+  await page.goto('/workspace?selectionKind=rewrite&selectionNodeId=rewrite-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
+  await expect(page.getByTestId('workspace-continue-block-future-jump-entry')).toBeEnabled()
+  await page.getByTestId('workspace-continue-block-future-jump-entry').click()
+  await expect(page.getByTestId('future-map-overlay')).toBeVisible()
+  await expect(page.getByTestId('future-map-mode-history-node')).toBeVisible()
+  await expect(page.getByTestId('future-map-mode-direct-chapter')).toBeVisible()
+  await page.getByTestId('future-map-event-outline_event_100').click()
+  await expect(page.getByTestId('future-map-resolved-chapter')).toContainText('第 100 章')
+  await expect(page.getByTestId('future-map-confirm')).toBeEnabled()
+  await page.getByTestId('future-map-confirm').click()
+  await expect(page.getByTestId('workspace-future-jump-view')).toBeVisible()
+
+  expect(createPayloads[0]).toEqual({
+    sourceContext: {
+      nodeId: 'rewrite-node-1',
+      nodeType: 'rewrite',
+      chapterId: 'chapter-10',
+      chapterNo: 10,
+      whatIfSessionId: null,
+    },
+    targetOutlineNodeId: 'outline_event_100',
+    targetOutlineChapterId: 'outline_chapter_100_primary',
+    parentTimelineNodeId: 'rewrite-node-1',
+  })
+
+  await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-2&selectionContinueBlockId=continue-block-2&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
+  await expect(page.getByTestId('workspace-continue-block-future-jump-entry')).toBeEnabled()
+  await page.getByTestId('workspace-continue-block-future-jump-entry').click()
+  await expect(page.getByTestId('future-map-overlay')).toBeVisible()
+  await page.getByTestId('future-map-mode-direct-chapter').click()
+  await expect(page.getByTestId('future-map-confirm')).toBeDisabled()
+  await page.getByTestId('future-map-track-phase-4').click()
+  await page.getByTestId('future-map-direct-chapter-120').click()
+  await expect(page.getByTestId('future-map-resolved-chapter')).toContainText('第 120 章')
+  await expect(page.getByTestId('future-map-confirm')).toBeEnabled()
+  await page.getByTestId('future-map-confirm').click()
+
+  expect(createPayloads[1]).toEqual({
+    sourceContext: {
+      nodeId: 'continue-node-2',
+      nodeType: 'continue_block',
+      chapterId: 'chapter-10',
+      chapterNo: 10,
+      whatIfSessionId: null,
+    },
+    targetOutlineNodeId: 'outline_event_120',
+    targetOutlineChapterId: 'outline_chapter_120_primary',
+    parentTimelineNodeId: 'continue-node-2',
+  })
+})
+
+test('chapter prose typography matches rewrite, what-if, and future-jump readers', async ({ page }) => {
+  const futureJumpNode = buildAfterFutureJumpTimeline().branchNodes.find((node) => node.id === storyBranchFixtureIds.futureJumpNodeId)
+  if (!futureJumpNode) {
+    throw new Error('Failed to seed future-jump node for typography parity test')
+  }
+
+  const timelineState: StoryTimelineResponse = {
+    ...buildBaseTimeline(),
+    branchNodes: [buildRewriteRootNode(), buildWhatIfAncestorNode(), futureJumpNode],
+    edges: [{ fromNodeId: 'rewrite-node-1', toNodeId: storyBranchFixtureIds.futureJumpNodeId }],
+  }
+
+  await page.route('**/api/workspace', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
+      return
+    }
+
+    await route.fulfill({ status: 200, body: JSON.stringify(buildWorkspacePayload()), contentType: 'application/json' })
+  })
+  await page.route('**/api/settings/ai', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
+      return
+    }
+
+    await route.fulfill({ status: 200, body: JSON.stringify(buildWorkspacePayload().aiSettings), contentType: 'application/json' })
+  })
+  await page.route('**/api/story-timeline*', async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify(timelineState), contentType: 'application/json' })
+  })
+  await page.route('**/api/knowledge-view*', async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify(buildKnowledgeViewPayload()), contentType: 'application/json' })
+  })
+  await page.route('**/api/what-if/sessions/what-if-session-001?*', async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify(buildWhatIfSessionDetail()), contentType: 'application/json' })
+  })
+  await page.route('**/api/future-jump/runs/jump-run-001?*', async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify(buildFutureJumpRunDetail()), contentType: 'application/json' })
+  })
+  await page.route('**/api/story-future-map?*', async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify(buildFutureMapPayload()), contentType: 'application/json' })
+  })
+
+  await page.goto('/workspace', { waitUntil: 'networkidle' })
+  const chapterProse = page.locator('.ProseMirror')
+  await expect(chapterProse).toBeVisible()
+  const chapterTypography = await readTypography(chapterProse)
+
+  await page.goto('/workspace?selectionKind=rewrite&selectionNodeId=rewrite-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
+  const rewriteReader = page.getByTestId('workspace-continue-block-reader-body')
+  await expect(rewriteReader).toBeVisible()
+  const rewriteTypography = await readTypography(rewriteReader)
+  expectTypographyToMatch(rewriteTypography, chapterTypography)
+
+  await page.goto(`/workspace?selectionKind=what_if&selectionNodeId=${storyBranchFixtureIds.whatIfNodeId}&selectionSessionId=what-if-session-001&selectionAnchorChapterNo=10`, { waitUntil: 'networkidle' })
+  await expect(page.getByTestId('workspace-what-if-view')).toBeVisible()
+  await expect(page.getByTestId('what-if-view')).toBeVisible()
+  await expect(page.getByText('魔改后的 What-if 正文')).toBeVisible()
+  const whatIfReaders = page.getByTestId('workspace-what-if-view').locator('.reader-body-prose')
+  await expect(whatIfReaders).toHaveCount(2)
+  const whatIfOriginalTypography = await readTypography(whatIfReaders.first())
+  const whatIfGeneratedTypography = await readTypography(whatIfReaders.nth(1))
+  expectTypographyToMatch(whatIfOriginalTypography, chapterTypography)
+  expectTypographyToMatch(whatIfGeneratedTypography, chapterTypography)
+
+  await page.goto(`/workspace?selectionKind=future_jump&selectionNodeId=${storyBranchFixtureIds.futureJumpNodeId}&selectionRunId=jump-run-001&selectionSourceChapterNo=10&selectionTargetChapterNo=100`, { waitUntil: 'networkidle' })
+  await expect(page.getByTestId('workspace-future-jump-view')).toBeVisible()
+  await expect(page.getByTestId('future-jump-view')).toBeVisible()
+  await expect(page.getByText('第二版未来正文：她被带走后，误会已经先一步封死所有退路。')).toBeVisible()
+  const futureJumpReader = page.getByTestId('future-jump-text').locator('.reader-body-prose')
+  const futureJumpTypography = await readTypography(futureJumpReader)
+  expectTypographyToMatch(futureJumpTypography, chapterTypography)
+
+  writeEvidenceFile('task-9-reader-typography/typography-parity.json', JSON.stringify({
+    chapterTypography,
+    rewriteTypography,
+    whatIfOriginalTypography,
+    whatIfGeneratedTypography,
+    futureJumpTypography,
+    evidenceDirectory: readerTypographyEvidenceDirectory,
+  }, null, 2))
+  await page.screenshot({ path: path.join(readerTypographyEvidenceDirectory, 'typography-parity.png'), fullPage: true })
 })
