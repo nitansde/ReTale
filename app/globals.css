@@ -26,11 +26,15 @@ body {
   font-family: var(--font-noto-sans-sc), var(--font-geist-sans), sans-serif;
 }
 
-.ProseMirror {
-  min-height: 62vh;
+.ProseMirror,
+.reader-body-prose {
   font-family: var(--font-noto-serif-sc), serif;
   font-size: 1.04rem;
   line-height: 2;
+}
+
+.ProseMirror {
+  min-height: 62vh;
   color: #e4e4e7;
 }
 
@@ -38,7 +42,8 @@ body {
   outline: none;
 }
 
-.ProseMirror p {
+.ProseMirror p,
+.reader-body-prose p {
   margin: 0 0 1.15rem;
 }
 
