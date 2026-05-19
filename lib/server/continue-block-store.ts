@@ -29,6 +29,8 @@ type ContinueBlockRow = {
   selected_text: string
   original_text: string
   latest_text: string
+  latest_input_tokens: number | null
+  latest_output_tokens: number | null
   latest_revision_no: number
   status: string
   created_at: string
@@ -44,6 +46,8 @@ type ContinueBlockRevisionRow = {
   selected_text: string
   original_text: string
   generated_text: string
+  input_tokens: number | null
+  output_tokens: number | null
   title: string
   subtitle: string | null
   created_at: string
@@ -62,6 +66,8 @@ function toContinueBlockRecord(row: ContinueBlockRow): ContinueBlockRecord {
     selectedText: row.selected_text,
     originalText: row.original_text,
     latestText: row.latest_text,
+    inputTokens: row.latest_input_tokens,
+    outputTokens: row.latest_output_tokens,
     latestRevisionNo: row.latest_revision_no,
     status: row.status,
     createdAt: row.created_at,
@@ -79,6 +85,8 @@ function toContinueBlockRevisionRecord(row: ContinueBlockRevisionRow): ContinueB
     selectedText: row.selected_text,
     originalText: row.original_text,
     generatedText: row.generated_text,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
     title: row.title,
     subtitle: row.subtitle,
     createdAt: row.created_at,
@@ -126,8 +134,8 @@ export async function createContinueBlockWithInitialRevision(
     db.execute(
       `INSERT INTO continue_blocks (
         id, novel_id, branch_id, parent_timeline_node_id, source_chapter_no, title, subtitle,
-        user_instruction, selected_text, original_text, latest_text, latest_revision_no, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        user_instruction, selected_text, original_text, latest_text, latest_input_tokens, latest_output_tokens, latest_revision_no, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       input.id,
       input.novelId,
       input.branchId,
@@ -139,6 +147,8 @@ export async function createContinueBlockWithInitialRevision(
       input.selectedText,
       input.originalText,
       input.latestText,
+      input.inputTokens ?? null,
+      input.outputTokens ?? null,
       input.latestRevisionNo,
       input.status
     )
@@ -146,14 +156,16 @@ export async function createContinueBlockWithInitialRevision(
     db.execute(
       `INSERT INTO continue_block_revisions (
         id, continue_block_id, revision_no, revision_kind, user_instruction,
-        selected_text, original_text, generated_text, title, subtitle
-      ) VALUES (?, ?, 1, 'initial', ?, ?, ?, ?, ?, ?)`,
+        selected_text, original_text, generated_text, input_tokens, output_tokens, title, subtitle
+      ) VALUES (?, ?, 1, 'initial', ?, ?, ?, ?, ?, ?, ?, ?)`,
       uid('continue-block-revision'),
       input.id,
       input.userInstruction,
       input.selectedText,
       input.originalText,
       input.latestText,
+      input.inputTokens ?? null,
+      input.outputTokens ?? null,
       input.title,
       input.subtitle
     )
@@ -170,6 +182,8 @@ export async function appendContinueBlockRevision(
     selectedText: string
     originalText: string
     generatedText: string
+    inputTokens?: number | null
+    outputTokens?: number | null
     title: string
     subtitle: string | null
     status?: string
@@ -186,8 +200,8 @@ export async function appendContinueBlockRevision(
     db.execute(
       `INSERT INTO continue_block_revisions (
         id, continue_block_id, revision_no, revision_kind, user_instruction,
-        selected_text, original_text, generated_text, title, subtitle
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        selected_text, original_text, generated_text, input_tokens, output_tokens, title, subtitle
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       uid('continue-block-revision'),
       input.continueBlockId,
       nextRevisionNo,
@@ -196,6 +210,8 @@ export async function appendContinueBlockRevision(
       input.selectedText,
       input.originalText,
       input.generatedText,
+      input.inputTokens ?? null,
+      input.outputTokens ?? null,
       input.title,
       input.subtitle
     )
@@ -203,7 +219,7 @@ export async function appendContinueBlockRevision(
     db.execute(
       `UPDATE continue_blocks
        SET title = ?, subtitle = ?, user_instruction = ?, selected_text = ?, original_text = ?, latest_text = ?,
-           latest_revision_no = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+           latest_input_tokens = ?, latest_output_tokens = ?, latest_revision_no = ?, status = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
       input.title,
       input.subtitle,
@@ -211,6 +227,8 @@ export async function appendContinueBlockRevision(
       input.selectedText,
       input.originalText,
       input.generatedText,
+      input.inputTokens ?? null,
+      input.outputTokens ?? null,
       nextRevisionNo,
       input.status ?? 'revised',
       input.continueBlockId

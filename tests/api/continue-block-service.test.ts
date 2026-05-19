@@ -160,6 +160,8 @@ describe('continue-block service', () => {
       selectedText: '原始选区',
       originalText: '原始片段',
       generatedText: '第一版续写正文',
+      inputTokens: 10,
+      outputTokens: 20,
       userInstruction: '保存这版续写结果',
       titleHint: '第一版续写',
     })
@@ -172,6 +174,8 @@ describe('continue-block service', () => {
       selectedText: '第一版续写正文',
       originalText: '第一版续写正文',
       generatedText: '第二版子续写正文',
+      inputTokens: 30,
+      outputTokens: 40,
       userInstruction: '沿着当前 continue block 继续写',
       titleHint: '第二版子续写',
     })
@@ -184,6 +188,8 @@ describe('continue-block service', () => {
       selectedText: '未来跳转后的正文',
       originalText: '未来跳转后的正文',
       generatedText: '沿着 future jump 继续写出的子续写正文',
+      inputTokens: null,
+      outputTokens: 50,
       userInstruction: '沿着当前 Future Jump 继续推进',
       titleHint: 'Future Jump 子续写',
     })
@@ -194,6 +200,8 @@ describe('continue-block service', () => {
       userInstruction: '重新生成同一个 continue block',
       selectedText: '原始选区',
       originalText: '原始片段',
+      inputTokens: 60,
+      outputTokens: 70,
       titleHint: '第一版重生',
     })
 
@@ -205,6 +213,8 @@ describe('continue-block service', () => {
 
     expect(rootDetail?.timelineNodeId).toBe(root.timelineNodeId)
     expect(rootDetail?.latestText).toBe('第一版续写正文（重生）')
+    expect(rootDetail?.inputTokens).toBe(60)
+    expect(rootDetail?.outputTokens).toBe(70)
     expect(rootDetail?.latestRevisionNo).toBe(2)
     expect(rootDetail?.revisionHistory.map((item) => item.revisionKind)).toEqual(['initial', 'regenerate'])
     expect(rootDetail?.revisions.at(-1)).toEqual(expect.objectContaining({
@@ -215,22 +225,36 @@ describe('continue-block service', () => {
     expect(childDetail?.parentTimelineNodeId).toBe(root.timelineNodeId)
     expect(futureJumpChildDetail?.parentTimelineNodeId).toBe('jump-parent-1')
     expect(childDetail?.latestRevisionNo).toBe(1)
+    expect(childDetail?.inputTokens).toBe(30)
+    expect(childDetail?.outputTokens).toBe(40)
     expect(futureJumpChildDetail?.latestRevisionNo).toBe(1)
+    expect(futureJumpChildDetail?.inputTokens).toBeNull()
+    expect(futureJumpChildDetail?.outputTokens).toBe(50)
     expect(regenerated.latestRevisionNo).toBe(2)
     expect(regenerated.timelineNodeId).toBe(root.timelineNodeId)
+    expect(root.nodeType).toBe('rewrite')
+    expect(child.nodeType).toBe('continue_block')
+    expect(futureJumpChild.nodeType).toBe('continue_block')
+    expect(regenerated.nodeType).toBe('rewrite')
     expect(rootTimelineNodes).toHaveLength(1)
     expect(timeline.branchNodes).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: root.timelineNodeId,
-        nodeType: 'continue_block',
+        nodeType: 'rewrite',
         continueBlockId: root.continueBlockId,
         parentNodeId: null,
+        currentText: '第一版续写正文（重生）',
+        inputTokens: 60,
+        outputTokens: 70,
       }),
       expect.objectContaining({
         id: child.timelineNodeId,
         nodeType: 'continue_block',
         continueBlockId: child.continueBlockId,
         parentNodeId: root.timelineNodeId,
+        currentText: '第二版子续写正文',
+        inputTokens: 30,
+        outputTokens: 40,
       }),
       expect.objectContaining({
         id: futureJumpChild.timelineNodeId,
@@ -253,7 +277,7 @@ describe('continue-block service', () => {
         futureJumpChild,
         regenerated,
         rootRevisionKinds: rootDetail?.revisionHistory.map((item) => item.revisionKind),
-        branchNodes: timeline.branchNodes.filter((node) => node.nodeType === 'continue_block'),
+        branchNodes: timeline.branchNodes.filter((node) => ['rewrite', 'continue_block'].includes(node.nodeType)),
       }, null, 2)
     )
   })

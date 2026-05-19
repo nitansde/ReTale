@@ -10,14 +10,17 @@ import {
 } from '@/lib/server/continue-block-store'
 import {
   createStoryTimelineNode,
+  findStoryTimelineNodeById,
   findStoryTimelineNodeByContinueBlockId,
   getNextStoryTimelineLabelIndex,
   updateStoryTimelineNodePresentation,
 } from '@/lib/server/story-timeline-store'
+import { formatStoryBranchReadableLabel, prefixStoryBranchTitle } from '@/lib/story-branch-labels'
 import type {
   ContinueBlockCreateRequest,
   ContinueBlockMutationResponse,
   ContinueBlockRegenerateRequest,
+  StoryTimelineNodeType,
 } from '@/lib/story-branch-types'
 import { uid } from '@/lib/utils'
 
@@ -32,12 +35,8 @@ function sanitizeLineTitle(value: string) {
   return trimmed.length > 18 ? `${trimmed.slice(0, 18).trim()}…` : trimmed
 }
 
-function formatContinueBlockLabel(labelIndex: number) {
-  return `CONT-${String(labelIndex).padStart(2, '0')}`
-}
-
 function buildContinueBlockTitle(params: {
-  labelIndex: number
+  readableLineageLabel: string
   titleHint?: string | null
   userInstruction: string
   selectedText: string
@@ -46,7 +45,7 @@ function buildContinueBlockTitle(params: {
   const instruction = sanitizeLineTitle(params.userInstruction)
   const selected = sanitizeLineTitle(params.selectedText)
   const suffix = explicit || instruction || selected || '续写块'
-  return `${formatContinueBlockLabel(params.labelIndex)} ${suffix}`
+  return prefixStoryBranchTitle(params.readableLineageLabel, suffix)
 }
 
 function buildContinueBlockSubtitle(params: {
@@ -61,9 +60,13 @@ function buildContinueBlockSubtitle(params: {
 
 export async function createContinueBlockFromRewrite(rawInput: ContinueBlockCreateRequest): Promise<ContinueBlockMutationResponse> {
   const input = continueBlockCreateRequestSchema.parse(rawInput)
-  const labelIndex = getNextStoryTimelineLabelIndex(input.novelId, input.branchId, 'continue_block')
+  const nodeType: StoryTimelineNodeType = input.parentTimelineNodeId ? 'continue_block' : 'rewrite'
+  const labelIndex = getNextStoryTimelineLabelIndex(input.novelId, input.branchId, nodeType)
+  const readableLabel = formatStoryBranchReadableLabel(nodeType, labelIndex)
+  const parentNode = input.parentTimelineNodeId ? findStoryTimelineNodeById(input.parentTimelineNodeId) : null
+  const readableLineageLabel = parentNode?.readableLineageLabel ? `${parentNode.readableLineageLabel}, ${readableLabel}` : readableLabel
   const title = buildContinueBlockTitle({
-    labelIndex,
+    readableLineageLabel,
     titleHint: input.titleHint,
     userInstruction: input.userInstruction,
     selectedText: input.selectedText,
@@ -81,6 +84,8 @@ export async function createContinueBlockFromRewrite(rawInput: ContinueBlockCrea
     selectedText: input.selectedText,
     originalText: input.originalText,
     latestText: input.generatedText,
+    inputTokens: input.inputTokens ?? null,
+    outputTokens: input.outputTokens ?? null,
     latestRevisionNo: 1,
     status: 'active',
   })
@@ -93,8 +98,10 @@ export async function createContinueBlockFromRewrite(rawInput: ContinueBlockCrea
     id: uid('timeline-node'),
     novelId: input.novelId,
     branchId: input.branchId,
-    nodeType: 'continue_block',
+    nodeType,
     labelIndex,
+    readableLabel,
+    readableLineageLabel,
     anchorChapterNo: input.sourceChapterNo,
     title,
     subtitle,
@@ -117,6 +124,7 @@ export async function createContinueBlockFromRewrite(rawInput: ContinueBlockCrea
   return continueBlockMutationResponseSchema.parse({
     continueBlockId: continueBlock.id,
     timelineNodeId: timelineNode.id,
+    nodeType: timelineNode.nodeType,
     generatedText: continueBlock.latestText,
     title: continueBlock.title,
     subtitle: continueBlock.subtitle,
@@ -131,9 +139,12 @@ export async function regenerateContinueBlock(rawInput: ContinueBlockRegenerateR
     throw new Error(`Continue block not found: ${input.continueBlockId}`)
   }
 
-  const labelIndex = findStoryTimelineNodeByContinueBlockId(existing.id)?.labelIndex ?? existing.latestRevisionNo
+  const timelineNode = findStoryTimelineNodeByContinueBlockId(existing.id)
+  const labelIndex = timelineNode?.labelIndex ?? existing.latestRevisionNo
+  const readableLineageLabel = timelineNode?.readableLineageLabel
+    ?? formatStoryBranchReadableLabel(timelineNode?.nodeType ?? 'continue_block', labelIndex)
   const title = buildContinueBlockTitle({
-    labelIndex,
+    readableLineageLabel,
     titleHint: input.titleHint,
     userInstruction: input.userInstruction,
     selectedText: input.selectedText,
@@ -146,6 +157,8 @@ export async function regenerateContinueBlock(rawInput: ContinueBlockRegenerateR
     selectedText: input.selectedText,
     originalText: input.originalText,
     generatedText: input.generatedText,
+    inputTokens: input.inputTokens ?? null,
+    outputTokens: input.outputTokens ?? null,
     title,
     subtitle,
     status: 'revised',
@@ -155,12 +168,12 @@ export async function regenerateContinueBlock(rawInput: ContinueBlockRegenerateR
     throw new Error(`Failed to regenerate continue block: ${input.continueBlockId}`)
   }
 
-  const timelineNode = findStoryTimelineNodeByContinueBlockId(existing.id)
-  if (!timelineNode) {
+  const refreshedTimelineNode = timelineNode ?? findStoryTimelineNodeByContinueBlockId(existing.id)
+  if (!refreshedTimelineNode) {
     throw new Error(`Continue block timeline node not found: ${input.continueBlockId}`)
   }
 
-  updateStoryTimelineNodePresentation(timelineNode.id, {
+  updateStoryTimelineNodePresentation(refreshedTimelineNode.id, {
     title: updated.title,
     subtitle: updated.subtitle,
     status: updated.status,
@@ -168,7 +181,8 @@ export async function regenerateContinueBlock(rawInput: ContinueBlockRegenerateR
 
   return continueBlockMutationResponseSchema.parse({
     continueBlockId: updated.id,
-    timelineNodeId: timelineNode.id,
+    timelineNodeId: refreshedTimelineNode.id,
+    nodeType: refreshedTimelineNode.nodeType,
     generatedText: updated.latestText,
     title: updated.title,
     subtitle: updated.subtitle,

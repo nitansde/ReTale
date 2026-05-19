@@ -12,6 +12,8 @@ export async function POST(request: Request) {
       selectedText: String(body.selectedText ?? ''),
       originalText: String(body.originalText ?? ''),
       generatedText: String(body.generatedText ?? ''),
+      inputTokens: typeof body.inputTokens === 'number' ? body.inputTokens : null,
+      outputTokens: typeof body.outputTokens === 'number' ? body.outputTokens : null,
       userInstruction: String(body.userInstruction ?? ''),
       titleHint: typeof body.titleHint === 'string' ? body.titleHint : null,
       subtitleHint: typeof body.subtitleHint === 'string' ? body.subtitleHint : null,
@@ -33,6 +35,8 @@ export async function PUT(request: Request) {
       userInstruction: String(body.userInstruction ?? ''),
       selectedText: String(body.selectedText ?? ''),
       originalText: String(body.originalText ?? ''),
+      inputTokens: typeof body.inputTokens === 'number' ? body.inputTokens : null,
+      outputTokens: typeof body.outputTokens === 'number' ? body.outputTokens : null,
       titleHint: typeof body.titleHint === 'string' ? body.titleHint : null,
       subtitleHint: typeof body.subtitleHint === 'string' ? body.subtitleHint : null,
     })
