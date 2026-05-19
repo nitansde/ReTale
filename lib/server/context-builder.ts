@@ -1,6 +1,7 @@
 import { buildChapterScopedGraphContext, buildGraphAwareContext } from '@/lib/server/graph-context'
 import { loadExplicitAuthoredContext, type ExplicitAuthoredContext } from '@/lib/server/authored-context'
 import { loadEntityStatesByEntityIds } from '@/lib/server/graph-store'
+import { findStoryTimelineNodeById } from '@/lib/server/story-timeline-store'
 import type { GraphAwareResult } from '@/lib/server/graph-types'
 import { estimateTokenCount, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { searchLanceEvidence, type RetrievalDocSourceType } from '@/lib/server/retrieval-index'
@@ -13,7 +14,10 @@ import {
   normalizeCharacterRoleCardProfile,
   type CharacterRoleCardProfile,
 } from '@/lib/story-knowledge'
+import type { StoryTimelineNodeRecord } from '@/lib/story-branch-types'
 import type { ProductSurfaceId } from '@/lib/types'
+
+type BranchLineageInclusion = 'ancestors_only' | 'include_selected'
 
 export type GenerationContextRequest = {
   novelId: string
@@ -26,6 +30,8 @@ export type GenerationContextRequest = {
   excludedEvidenceIds?: string[]
   whatIfSessionId?: string
   futureJumpRunId?: string
+  branchContextNodeId?: string
+  branchContextInclusion?: BranchLineageInclusion
 }
 
 export function resolveGenerationContextOperationType(operationType: ProductSurfaceId): ProductSurfaceId {
@@ -240,6 +246,12 @@ function renderBlock(label: string, lines: string[]) {
   return [`# ${label}`, ...lines].join('\n')
 }
 
+function buildFullChapterText(rawText: string | null, lines: Array<{ lineNo: number; text: string }>) {
+  const trimmedRawText = rawText?.trim()
+  if (trimmedRawText) return trimmedRawText
+  return lines.map((line) => line.text.trimEnd()).join('\n').trim()
+}
+
 function buildCompactExcerpt(text: string, maxLength = 280) {
   const normalized = text.split(/\s+/).filter(Boolean).join(' ').trim()
   if (!normalized) return ''
@@ -268,6 +280,58 @@ function buildNeighborhoodExcerpt(text: string, maxLines = 10) {
     .filter(Boolean)
     .slice(0, maxLines)
     .join(' ')
+}
+
+function collectBranchLineageNodes(nodeId: string, inclusion: BranchLineageInclusion) {
+  const lineage: StoryTimelineNodeRecord[] = []
+  const visited = new Set<string>()
+  let current = findStoryTimelineNodeById(nodeId)
+
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id)
+    lineage.push(current)
+    current = current.parentNodeId ? findStoryTimelineNodeById(current.parentNodeId) : null
+  }
+
+  return lineage
+    .reverse()
+    .filter((node) => node.nodeType === 'rewrite' || node.nodeType === 'continue_block')
+    .filter((node) => inclusion === 'include_selected' || node.id !== nodeId)
+}
+
+function buildBranchLineageContextBlock(params: {
+  chapterText: string
+  branchContextNodeId?: string
+  branchContextInclusion?: BranchLineageInclusion
+}) {
+  const nodeId = params.branchContextNodeId?.trim()
+  if (!nodeId) return null
+
+  const chapterText = params.chapterText.trim()
+  if (!chapterText) return null
+
+  const lineageNodes = collectBranchLineageNodes(nodeId, params.branchContextInclusion ?? 'ancestors_only')
+  if (!lineageNodes.length) return null
+
+  const lines: string[] = ['原始章节正文：', chapterText]
+
+  for (const node of lineageNodes) {
+    const nodeText = node.latestText?.trim() || node.currentText?.trim() || node.originalText?.trim() || ''
+    if (!nodeText) continue
+    const sectionLabel = node.nodeType === 'rewrite' ? 'Rewrite 根节点全文' : 'Continue 祖先全文'
+    const nodeLabel = node.readableLabel?.trim() || node.title.trim() || node.id
+    lines.push('', `${sectionLabel}（${nodeLabel}）：`, nodeText)
+  }
+
+  if (lines.length <= 2) return null
+
+  return {
+    id: 'branch-lineage-full-text',
+    label: '当前分支谱系全文',
+    enabled: true,
+    priority: 'highest' as const,
+    content: renderBlock('当前分支谱系全文', lines),
+  }
 }
 
 function looksLikeRelationshipDelta(deltaType: string, key: string) {
@@ -789,8 +853,8 @@ export async function buildGenerationContext(request: GenerationContextRequest):
   const excludedGraphEdgeIds = new Set((request.excludedGraphEdgeIds ?? []).map((item) => item.trim()).filter(Boolean))
   const excludedEvidenceIds = new Set((request.excludedEvidenceIds ?? []).map((item) => item.trim()).filter(Boolean))
   const branchId = normalizeBranchId(request.novelId, request.branchId)
-  const chapter = queryOne<{ id: string; chapterNo: number; summary: string | null }>(
-    'SELECT id, chapterNo, summary FROM KnowledgeChapter WHERE id = ? AND novelId = ? AND branchId = ? LIMIT 1',
+  const chapter = queryOne<{ id: string; chapterNo: number; title: string | null; rawText: string | null; summary: string | null }>(
+    'SELECT id, chapterNo, title, rawText, summary FROM KnowledgeChapter WHERE id = ? AND novelId = ? AND branchId = ? LIMIT 1',
     request.chapterId,
     request.novelId,
     branchId
@@ -888,6 +952,12 @@ export async function buildGenerationContext(request: GenerationContextRequest):
 
   const selectionRange = inferSelectionRange(lines, request.selectedText)
   const neighborhoodText = buildNeighborhoodText(lines, selectionRange.lineStart, selectionRange.lineEnd)
+  const fullChapterText = buildFullChapterText(chapter.rawText, lines)
+  const branchLineageContextBlock = buildBranchLineageContextBlock({
+    chapterText: fullChapterText,
+    branchContextNodeId: request.branchContextNodeId,
+    branchContextInclusion: request.branchContextInclusion,
+  })
   const graphContext = await buildGraphAwareContext({
     novelId: request.novelId,
     branchId,
@@ -1036,6 +1106,7 @@ export async function buildGenerationContext(request: GenerationContextRequest):
       priority: 'highest',
       content: renderBlock('选中文本', [request.selectedText || '（未提供选中文本）']),
     },
+    ...(branchLineageContextBlock ? [branchLineageContextBlock] : []),
     {
       id: 'neighborhood',
       label: '选区附近原文',

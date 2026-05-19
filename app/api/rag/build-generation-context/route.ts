@@ -20,6 +20,12 @@ function normalizeStringArray(value: unknown) {
   return Array.from(new Set(value.map((item) => String(item ?? '').trim()).filter(Boolean)))
 }
 
+function normalizeBranchContextInclusion(value: unknown) {
+  return value === 'include_selected' || value === 'ancestors_only'
+    ? value
+    : undefined
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => null)
@@ -50,6 +56,8 @@ export async function POST(request: Request) {
       excludedEvidenceIds: normalizeStringArray(body.excludedEvidenceIds),
       whatIfSessionId: body.whatIfSessionId ? String(body.whatIfSessionId) : undefined,
       futureJumpRunId: body.futureJumpRunId ? String(body.futureJumpRunId) : undefined,
+      branchContextNodeId: body.branchContextNodeId ? String(body.branchContextNodeId) : undefined,
+      branchContextInclusion: normalizeBranchContextInclusion(body.branchContextInclusion),
     })
 
     return NextResponse.json({ ok: true, ...result })

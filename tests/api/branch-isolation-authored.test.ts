@@ -21,8 +21,21 @@ function seedIsolationFixture(database: DatabaseSync) {
     `INSERT INTO KnowledgeChapter (
       id, novelId, branchId, chapterNo, title, rawText, summary,
       revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run('chapter-10', 'novel-001', 'novel-001:main', 10, '第10章', '第10章内容', '第10章摘要', 1, 0, null, 'hash-10', 'ready')
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    'chapter-10',
+    'novel-001',
+    'novel-001:main',
+    10,
+    '第10章',
+    '男主和女主暂时结盟，准备一起行动。\n他们都还相信对方。',
+    '第10章摘要',
+    1,
+    0,
+    null,
+    'hash-10',
+    'ready'
+  )
 
   database.prepare(
     `INSERT INTO KnowledgeChapter (
@@ -84,8 +97,38 @@ function seedIsolationFixture(database: DatabaseSync) {
   database.prepare(
     `INSERT INTO future_jump_revisions (
       id, run_id, revision_no, revision_kind, user_feedback, bridge_summary, generated_target_text
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+     ) VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run('future-jump-revision-002', 'jump-run-001', 2, 'revise', '更虐一点', '新的桥接摘要', '新的未来节点正文')
+
+  database.prepare(
+    `INSERT INTO continue_blocks (
+      id, novel_id, branch_id, parent_timeline_node_id, source_chapter_no, title, subtitle,
+      user_instruction, selected_text, original_text, latest_text, latest_revision_no, status
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('continue-block-root', 'novel-001', 'novel-001:main', null, 10, 'RE-01 第一版改写', '首个改写结果', '保存这版改写。', '原始选区', '原始片段', '改写根正文：誓言让他们决定一起冒险。', 1, 'active')
+
+  database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
+      parent_node_id, source_chapter_no, target_chapter_no, chapter_id, continue_block_id,
+      what_if_session_id, future_jump_run_id, lane_index, color_token, status
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('rewrite-node-001', 'novel-001', 'novel-001:main', 'rewrite', 1, 10, 'RE-01 第一版改写', '首个改写结果', null, 10, null, null, 'continue-block-root', null, null, 0, 'fuchsia', 'active')
+
+  database.prepare(
+    `INSERT INTO continue_blocks (
+      id, novel_id, branch_id, parent_timeline_node_id, source_chapter_no, title, subtitle,
+      user_instruction, selected_text, original_text, latest_text, latest_revision_no, status
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('continue-block-child', 'novel-001', 'novel-001:main', 'rewrite-node-001', 10, 'RE-01, CONT-01 续写块', '沿着分支继续推进', '继续沿着当前分支扩展。', '改写根正文：誓言让他们决定一起冒险。', '改写根正文：誓言让他们决定一起冒险。', '续写正文：他们在雨夜里正式立下共同誓言。', 1, 'active')
+
+  database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
+      parent_node_id, source_chapter_no, target_chapter_no, chapter_id, continue_block_id,
+      what_if_session_id, future_jump_run_id, lane_index, color_token, status
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('continue-node-001', 'novel-001', 'novel-001:main', 'continue_block', 1, 10, 'RE-01, CONT-01 续写块', '沿着分支继续推进', 'rewrite-node-001', 10, null, null, 'continue-block-child', null, null, 1, 'fuchsia', 'active')
 }
 
 function createMockAISettings() {
@@ -208,5 +251,53 @@ describe('branch-isolation-authored', () => {
     expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
       count: 1,
     })
+  })
+
+  it('assembles full chapter text plus rewrite/continue lineage in chronological order for continue flows', async () => {
+    const tempDatabase = createTempDatabaseCopy('chatbook-branch-lineage-context')
+    cleanups.push(tempDatabase.cleanup)
+
+    const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+    globalForSqlite.sqlite = database
+    seedIsolationFixture(database)
+
+    vi.resetModules()
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createMockAISettings(),
+    }))
+    vi.doMock('@/lib/server/ollama-local', () => ({
+      embedTextsWithOllama: vi.fn(async (input: string | string[]) => ({
+        enabled: true,
+        embeddings: (Array.isArray(input) ? input : [input]).map(() => [2, 2, 2]),
+        model: 'branch-isolation-embedding-model',
+      })),
+    }))
+
+    const { buildGenerationContext } = await import('@/lib/server/context-builder')
+    const context = await buildGenerationContext({
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      chapterId: 'chapter-10',
+      selectedText: '男主和女主暂时结盟',
+      operationType: 'rewrite',
+      userInstruction: '继续沿着当前续写块扩展新的版本。',
+      branchContextNodeId: 'continue-node-001',
+      branchContextInclusion: 'include_selected',
+    })
+
+    const branchLineageBlock = context.promptBlocks.find((block) => block.id === 'branch-lineage-full-text')
+    expect(branchLineageBlock?.content).toContain('原始章节正文：')
+    expect(branchLineageBlock?.content).toContain('男主和女主暂时结盟，准备一起行动。\n他们都还相信对方。')
+    expect(branchLineageBlock?.content).toContain('改写根正文：誓言让他们决定一起冒险。')
+    expect(branchLineageBlock?.content).toContain('续写正文：他们在雨夜里正式立下共同誓言。')
+
+    const assembled = context.assembledContext
+    const chapterIndex = assembled.indexOf('男主和女主暂时结盟，准备一起行动。\n他们都还相信对方。')
+    const rewriteIndex = assembled.indexOf('改写根正文：誓言让他们决定一起冒险。')
+    const continueIndex = assembled.indexOf('续写正文：他们在雨夜里正式立下共同誓言。')
+
+    expect(chapterIndex).toBeGreaterThanOrEqual(0)
+    expect(rewriteIndex).toBeGreaterThan(chapterIndex)
+    expect(continueIndex).toBeGreaterThan(rewriteIndex)
   })
 })

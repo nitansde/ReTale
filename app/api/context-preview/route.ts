@@ -11,6 +11,12 @@ function parseOperationType(value: unknown): ProductSurfaceId | null {
     : null
 }
 
+function normalizeBranchContextInclusion(value: unknown) {
+  return value === 'include_selected' || value === 'ancestors_only'
+    ? value
+    : undefined
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json()
@@ -28,6 +34,8 @@ export async function POST(request: Request) {
       userInstruction: String(body.userInstruction ?? ''),
       whatIfSessionId: body.whatIfSessionId ? String(body.whatIfSessionId) : undefined,
       futureJumpRunId: body.futureJumpRunId ? String(body.futureJumpRunId) : undefined,
+      branchContextNodeId: body.branchContextNodeId ? String(body.branchContextNodeId) : undefined,
+      branchContextInclusion: normalizeBranchContextInclusion(body.branchContextInclusion),
     })
 
     return NextResponse.json({ ok: true, preview })
