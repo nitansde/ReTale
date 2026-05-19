@@ -2,7 +2,7 @@
 
 import { forwardRef } from 'react'
 import { GitBranch, LoaderCircle, Sparkles, Trash2 } from 'lucide-react'
-import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
+import { formatStoryBranchInstructionPreview, resolveStoryBranchDisplayLabel } from '@/lib/story-branch-labels'
 import type { StoryTimelineBranchNode } from '@/lib/story-branch-types'
 import { cn } from '@/lib/utils'
 
@@ -31,7 +31,7 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
       : props.node.nodeType === 'what_if'
         ? 'What if'
         : 'Future jump'
-  const readableLineageLabel = props.node.readableLineageLabel?.trim() || props.node.readableLabel?.trim() || props.node.title
+  const displayLabel = resolveStoryBranchDisplayLabel(props.node)
   const instructionPreview = formatStoryBranchInstructionPreview(props.node.userInstruction ?? props.node.subtitle)
 
   return (
@@ -73,7 +73,7 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
             <p className={cn('text-[11px] uppercase tracking-[0.16em]', isWhatIfLike ? 'text-fuchsia-100/70' : 'text-sky-100/75')}>
               {branchKindLabel}
             </p>
-            <p className="mt-1 text-sm font-medium text-zinc-50">{readableLineageLabel}</p>
+            <p className="mt-1 text-sm font-medium text-zinc-50">{displayLabel}</p>
             {instructionPreview ? <p className="mt-2 text-xs leading-5 text-zinc-300">指令预览 · {instructionPreview}</p> : null}
             {!instructionPreview && props.node.subtitle ? <p className="mt-2 text-xs leading-5 text-zinc-300">{props.node.subtitle}</p> : null}
           </div>
@@ -85,7 +85,7 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
           disabled={props.deleting}
           onClick={props.onDelete}
           className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-2 text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-          aria-label={`删除 ${branchKindLabel} 节点 ${readableLineageLabel}`}
+          aria-label={`删除 ${branchKindLabel} 节点 ${displayLabel}`}
         >
           {props.deleting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
         </button>

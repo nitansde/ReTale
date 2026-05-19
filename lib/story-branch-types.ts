@@ -242,6 +242,8 @@ export type FutureMapEvent = {
   sortOrder: number
 }
 
+export const FUTURE_MAP_MISSING_SUMMARY_FALLBACK = '暂无摘要，仍可直接跳转到本章。'
+
 export type FutureMapDefaults = {
   selectedTrackKey: string | null
   selectedOutlineNodeId: string | null
@@ -300,8 +302,31 @@ export type WhatIfDeltaRecord = {
   createdAt: string
 }
 
+export type WhatIfSessionRevisionRecord = {
+  revisionNo: number
+  revisionKind: string
+  userInstruction: string
+  selectedText: string
+  originalText: string
+  generatedText: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  title: string
+  subtitle: string | null
+  createdAt: string
+}
+
+export type WhatIfSessionRevisionHistoryItem = {
+  revisionNo: number
+  revisionKind: string
+  createdAt: string
+}
+
 export type WhatIfSessionDetail = WhatIfSessionRecord & {
   deltas: WhatIfDeltaRecord[]
+  latestRevision?: WhatIfSessionRevisionRecord | null
+  revisionHistory?: WhatIfSessionRevisionHistoryItem[]
+  revisions?: WhatIfSessionRevisionRecord[]
 }
 
 export type WhatIfCreateRequest = {

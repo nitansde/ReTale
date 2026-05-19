@@ -342,9 +342,9 @@ describe('StoryTimeline', () => {
     )
 
     fireEvent.click(screen.getByLabelText('删除 Rewrite 节点 RE-01'))
-    fireEvent.click(screen.getByLabelText('删除 Continue block 节点 IF-01, CONT-01'))
+    fireEvent.click(screen.getByLabelText('删除 Continue block 节点 CONT-01'))
     fireEvent.click(screen.getByLabelText('删除 What if 节点 IF-01'))
-    fireEvent.click(screen.getByLabelText('删除 Future jump 节点 IF-01, JUMP-01'))
+    fireEvent.click(screen.getByLabelText('删除 Future jump 节点 JUMP-01'))
 
     expect(onDeleteBranchNode).toHaveBeenNthCalledWith(1, branchNodes[0])
     expect(onDeleteBranchNode).toHaveBeenNthCalledWith(2, branchNodes[2])
@@ -352,7 +352,7 @@ describe('StoryTimeline', () => {
     expect(onDeleteBranchNode).toHaveBeenNthCalledWith(4, branchNodes[3])
   })
 
-  it('renders readable lineage labels and instruction previews instead of raw branch titles', () => {
+  it('renders current readable labels and instruction previews instead of lineage-heavy branch titles', () => {
     render(
       <StoryTimeline
         chapters={[
@@ -372,8 +372,9 @@ describe('StoryTimeline', () => {
       />
     )
 
-    expect(screen.getByText('IF-01, CONT-01')).toBeInTheDocument()
+    expect(screen.getByText('CONT-01')).toBeInTheDocument()
     expect(screen.getByText('指令预览 · 继续压低场景里的情绪。')).toBeInTheDocument()
+    expect(screen.queryByText('IF-01, CONT-01')).not.toBeInTheDocument()
     expect(screen.queryByText('CONT-01 续写块')).not.toBeInTheDocument()
   })
 })
