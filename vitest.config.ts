@@ -17,6 +17,7 @@ export default defineConfig({
     globals: true,
     passWithNoTests: false,
     pool: 'forks',
+    fileParallelism: false,
     reporters: ['default'],
   },
 })
