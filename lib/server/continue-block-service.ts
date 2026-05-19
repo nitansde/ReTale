@@ -12,6 +12,7 @@ import {
   createStoryTimelineNode,
   findStoryTimelineNodeById,
   findStoryTimelineNodeByContinueBlockId,
+  getNextContinueReadableLabelIndex,
   getNextStoryTimelineLabelIndex,
   updateStoryTimelineNodePresentation,
 } from '@/lib/server/story-timeline-store'
@@ -62,7 +63,10 @@ export async function createContinueBlockFromRewrite(rawInput: ContinueBlockCrea
   const input = continueBlockCreateRequestSchema.parse(rawInput)
   const nodeType: StoryTimelineNodeType = input.parentTimelineNodeId ? 'continue_block' : 'rewrite'
   const labelIndex = getNextStoryTimelineLabelIndex(input.novelId, input.branchId, nodeType)
-  const readableLabel = formatStoryBranchReadableLabel(nodeType, labelIndex)
+  const readableLabelIndex = nodeType === 'continue_block' && input.parentTimelineNodeId
+    ? getNextContinueReadableLabelIndex(input.novelId, input.branchId, input.parentTimelineNodeId)
+    : labelIndex
+  const readableLabel = formatStoryBranchReadableLabel(nodeType, readableLabelIndex)
   const parentNode = input.parentTimelineNodeId ? findStoryTimelineNodeById(input.parentTimelineNodeId) : null
   const readableLineageLabel = parentNode?.readableLineageLabel ? `${parentNode.readableLineageLabel}, ${readableLabel}` : readableLabel
   const title = buildContinueBlockTitle({
