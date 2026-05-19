@@ -270,6 +270,12 @@ export type PresetCompatSessionWorkspaceSelection =
       chapterId: string
     }
   | {
+      kind: 'rewrite'
+      nodeId: string
+      continueBlockId: string
+      anchorChapterNo: number
+    }
+  | {
       kind: 'continue_block'
       nodeId: string
       continueBlockId: string

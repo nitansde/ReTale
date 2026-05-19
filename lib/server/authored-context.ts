@@ -44,6 +44,9 @@ function formatDeltaSummary(delta: WhatIfDeltaRecord) {
 function validateWhatIfSession(request: ExplicitAuthoredContextRequest, session: WhatIfSessionDetail | null, requestedId?: string) {
   if (!requestedId) return
   if (!session) {
+    if (requestedId.startsWith('standalone:')) {
+      return
+    }
     throw new Error(`What-if session not found: ${requestedId}`)
   }
   if (session.novelId !== request.novelId || session.baseBranchId !== request.branchId) {
@@ -61,6 +64,23 @@ function validateFutureJumpRun(request: ExplicitAuthoredContextRequest, run: Fut
   }
 }
 
+function resolveFutureJumpWhatIfSessionId(run: FutureJumpRunDetail | null) {
+  return run?.sourceContext.whatIfSessionId?.trim() || run?.sessionId || undefined
+}
+
+function formatFutureJumpSourceContextLine(run: FutureJumpRunDetail) {
+  const nodeLabel = run.sourceContext.nodeType === 'continue_block'
+    ? 'continue 节点'
+    : run.sourceContext.nodeType === 'rewrite'
+      ? 'rewrite 节点'
+      : run.sourceContext.nodeType === 'what_if'
+        ? 'what-if 节点'
+        : run.sourceContext.nodeType === 'future_jump'
+          ? 'future jump 节点'
+          : '章节'
+  return `- Future Jump 来源：第 ${run.sourceContext.chapterNo} 章 / ${nodeLabel}`
+}
+
 export function hasExplicitAuthoredContextSelection(request: Pick<ExplicitAuthoredContextRequest, 'whatIfSessionId' | 'futureJumpRunId'>) {
   return Boolean(request.whatIfSessionId?.trim() || request.futureJumpRunId?.trim())
 }
@@ -72,11 +92,11 @@ export function loadExplicitAuthoredContext(request: ExplicitAuthoredContextRequ
   const futureJumpRun = futureJumpRunId ? findFutureJumpRunById(futureJumpRunId) : null
   validateFutureJumpRun(request, futureJumpRun, futureJumpRunId)
 
-  const resolvedWhatIfSessionId = requestedWhatIfSessionId ?? futureJumpRun?.sessionId ?? undefined
+  const resolvedWhatIfSessionId = requestedWhatIfSessionId ?? resolveFutureJumpWhatIfSessionId(futureJumpRun)
   const whatIfSession = resolvedWhatIfSessionId ? findWhatIfSessionById(resolvedWhatIfSessionId) : null
   validateWhatIfSession(request, whatIfSession, resolvedWhatIfSessionId)
 
-  if (futureJumpRun && whatIfSession && futureJumpRun.sessionId !== whatIfSession.id) {
+  if (futureJumpRun && whatIfSession && resolveFutureJumpWhatIfSessionId(futureJumpRun) !== whatIfSession.id) {
     throw new Error('Future jump run does not belong to the requested what-if session')
   }
 
@@ -94,6 +114,7 @@ export function loadExplicitAuthoredContext(request: ExplicitAuthoredContextRequ
   authoredPromptLines.push(...deltaLines)
 
   if (futureJumpRun?.bridgeSummary.trim()) {
+    authoredPromptLines.push(formatFutureJumpSourceContextLine(futureJumpRun))
     authoredPromptLines.push(`- Future Jump 桥接摘要：${futureJumpRun.bridgeSummary.trim()}`)
   }
 

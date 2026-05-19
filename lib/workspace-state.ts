@@ -83,6 +83,15 @@ export function createPresetCompatSessionSelectionKey(selection: PresetCompatSes
     ].join(':')
   }
 
+  if (selection.kind === 'rewrite') {
+    return [
+      'rewrite',
+      encodePresetCompatSessionKeyPart(selection.nodeId),
+      encodePresetCompatSessionKeyPart(selection.continueBlockId),
+      selection.anchorChapterNo,
+    ].join(':')
+  }
+
   if (selection.kind === 'continue_block') {
     return [
       'continue_block',

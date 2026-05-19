@@ -329,6 +329,13 @@ function mergeExplicitAuthoredContextIntoChapterState(chapterState: ChapterState
     })
   }
 
+  if (authoredContext.futureJumpRun) {
+    chapterState.open_threads.unshift({
+      name: 'future_jump_source_context',
+      description: `当前 Future Jump 来源于第 ${authoredContext.futureJumpRun.sourceContext.chapterNo} 章的 ${authoredContext.futureJumpRun.sourceContext.nodeType} 上下文。`,
+    })
+  }
+
   if (authoredContext.latestFutureJumpRevisionText) {
     chapterState.recent_events.unshift({
       chapter: authoredContext.futureJumpRun?.targetChapterNo ?? 0,
