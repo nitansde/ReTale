@@ -25,17 +25,21 @@ import {
 } from '@/lib/server/story-branch-contracts'
 import {
   createStoryTimelineNode,
+  findStoryTimelineNodeById,
   findStoryTimelineNodeByFutureJumpRunId,
   getNextStoryTimelineLabelIndex,
 } from '@/lib/server/story-timeline-store'
+import { formatStoryBranchReadableLabel, prefixStoryBranchTitle } from '@/lib/story-branch-labels'
 import { queryOne } from '@/lib/server/sqlite'
 import { findWhatIfSessionById } from '@/lib/server/what-if-store'
+import { createWhatIfSession } from '@/lib/server/what-if-store'
 import type {
   FutureJumpCreateRequest,
   FutureJumpMutationResponse,
   FutureJumpRevisionRecord,
   FutureJumpReviseRequest,
   FutureJumpRunDetail,
+  FutureJumpSourceContext,
   OutlineNodeChapterRecord,
   OutlineNodeRecord,
   WhatIfDeltaRecord,
@@ -54,7 +58,8 @@ type StageKey = 'bridge' | 'rewrite'
 type GenerateFutureJumpInput = {
   novelId: string
   branchId: string
-  whatIfSessionId: string
+  whatIfSessionId: string | null
+  sourceContext: FutureJumpSourceContext
   targetOutlineNodeId: string
   targetOutlineChapterId: string
   parentTimelineNodeId?: string | null
@@ -80,6 +85,12 @@ type FutureJumpMutationResult = {
 
 type LoadedFutureJumpGenerationContext = {
   session: WhatIfSessionDetail
+  sourceContext: FutureJumpSourceContext
+  sourceNodeContext: {
+    nodeType: FutureJumpSourceContext['nodeType']
+    nodeTitle: string | null
+    authoredText: string | null
+  } | null
   outlineNode: OutlineNodeRecord
   targetAnchor: OutlineNodeChapterRecord
   sourceChapter: {
@@ -105,23 +116,79 @@ type LoadedFutureJumpGenerationContext = {
   } | null
 }
 
+function buildStandaloneWhatIfSession(params: {
+  novelId: string
+  branchId: string
+  sourceChapterNo: number
+  sourceNodeType: FutureJumpSourceContext['nodeType']
+  sourceNodeId: string | null
+  sourceNodeTitle?: string | null
+  sourceNodeText?: string | null
+}): WhatIfSessionDetail {
+  const timestamp = new Date(0).toISOString()
+  const sourceNodeLabel = params.sourceNodeTitle?.trim() || params.sourceNodeType
+  const sourceNodeText = params.sourceNodeText?.trim() || ''
+
+  return {
+    id: `standalone:${params.sourceNodeId ?? `${params.branchId}:${params.sourceChapterNo}`}`,
+    novelId: params.novelId,
+    baseBranchId: params.branchId,
+    sourceChapterNo: params.sourceChapterNo,
+    title: `Standalone Future Jump · ${sourceNodeLabel}`,
+    premise: `直接从当前${params.sourceNodeType}节点启动 Future Jump，并以该节点的已保存正文作为显式分支上下文。`,
+    selectedText: sourceNodeText,
+    originalText: sourceNodeText,
+    generatedText: sourceNodeText,
+    status: 'standalone',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    deltas: [],
+  }
+}
+
 type OpenAICompatibleChatCompletionResponse = {
   choices?: Array<{
     message?: {
       content?: unknown
     }
   }>
+  usage?: {
+    prompt_tokens?: unknown
+    completion_tokens?: unknown
+    input_tokens?: unknown
+    output_tokens?: unknown
+  }
 }
 
 type OllamaChatResponse = {
   message?: {
     content?: string | null
   }
+  prompt_eval_count?: number
+  eval_count?: number
 }
 
 type StructuredResponse = {
   raw: string
   parsed: unknown
+  usage: {
+    inputTokens: number | null
+    outputTokens: number | null
+  }
+}
+
+function normalizeTokenCount(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null
+}
+
+function addTokenUsage(
+  left: { inputTokens: number | null; outputTokens: number | null },
+  right: { inputTokens: number | null; outputTokens: number | null },
+) {
+  return {
+    inputTokens: left.inputTokens === null && right.inputTokens === null ? null : (left.inputTokens ?? 0) + (right.inputTokens ?? 0),
+    outputTokens: left.outputTokens === null && right.outputTokens === null ? null : (left.outputTokens ?? 0) + (right.outputTokens ?? 0),
+  }
 }
 
 function formatDeltaSummary(delta: WhatIfDeltaRecord) {
@@ -151,10 +218,6 @@ function getRequiredString(value: string, fieldName: string) {
   return trimmed
 }
 
-function formatFutureJumpLabel(labelIndex: number) {
-  return `JUMP-${String(labelIndex).padStart(2, '0')}`
-}
-
 function sanitizeLineTitle(value: string) {
   const trimmed = value
     .replace(/[\r\n]+/g, ' ')
@@ -167,28 +230,27 @@ function sanitizeLineTitle(value: string) {
 }
 
 function buildFutureJumpNodeTitle(params: {
-  labelIndex: number
+  readableLineageLabel: string
   titleHint: string | null
   outlineNode: OutlineNodeRecord
   targetAnchor: OutlineNodeChapterRecord
 }) {
-  const label = formatFutureJumpLabel(params.labelIndex)
   const hinted = sanitizeLineTitle(params.titleHint ?? '')
   if (hinted) {
-    return `${label} ${hinted}`
+    return prefixStoryBranchTitle(params.readableLineageLabel, hinted)
   }
 
   const outlineTitle = sanitizeLineTitle(params.outlineNode.title)
   if (outlineTitle) {
-    return `${label} ${outlineTitle}`
+    return prefixStoryBranchTitle(params.readableLineageLabel, outlineTitle)
   }
 
   const anchorTitle = sanitizeLineTitle(params.targetAnchor.chapterTitle ?? '')
   if (anchorTitle) {
-    return `${label} ${anchorTitle}`
+    return prefixStoryBranchTitle(params.readableLineageLabel, anchorTitle)
   }
 
-  return `${label} 第${params.targetAnchor.chapterNo}章`
+  return prefixStoryBranchTitle(params.readableLineageLabel, `第${params.targetAnchor.chapterNo}章`)
 }
 
 function buildFutureJumpNodeSubtitle(params: {
@@ -325,6 +387,119 @@ function buildSourceChapterExcerpt(sourceChapter: LoadedFutureJumpGenerationCont
     .slice(0, 18)
 
   return lines.join('\n') || '（源章节正文缺失）'
+}
+
+function buildSourceNodeAuthoredExcerpt(sourceNodeContext: LoadedFutureJumpGenerationContext['sourceNodeContext']) {
+  const text = sourceNodeContext?.authoredText?.trim()
+  if (!text) return '（当前节点没有可用的已保存正文）'
+
+  return text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 18)
+    .join('\n') || '（当前节点没有可用的已保存正文）'
+}
+
+function resolveSourceNodeContext(sourceNode: ReturnType<typeof findStoryTimelineNodeById>, session: WhatIfSessionDetail | null) {
+  if (!sourceNode) return null
+
+  let authoredText: string | null = null
+  if (sourceNode.nodeType === 'rewrite' || sourceNode.nodeType === 'continue_block') {
+    authoredText = sourceNode.latestText?.trim() || null
+  } else if (sourceNode.nodeType === 'what_if') {
+    authoredText = session?.generatedText?.trim() || null
+  } else if (sourceNode.nodeType === 'future_jump') {
+    const sourceRun = sourceNode.futureJumpRunId ? findFutureJumpRunById(sourceNode.futureJumpRunId) : null
+    authoredText = sourceRun?.revisions.at(-1)?.generatedTargetText?.trim()
+      || sourceRun?.generatedTargetText?.trim()
+      || null
+  }
+
+  return {
+    nodeType: sourceNode.nodeType,
+    nodeTitle: sourceNode.title?.trim() || null,
+    authoredText,
+  }
+}
+
+function resolveCompatibilityWhatIfSessionIdFromSourceNode(sourceNode: ReturnType<typeof findStoryTimelineNodeById>) {
+  let cursor = sourceNode
+  while (cursor) {
+    if (cursor.whatIfSessionId?.trim()) {
+      return cursor.whatIfSessionId.trim()
+    }
+    cursor = cursor.parentNodeId ? findStoryTimelineNodeById(cursor.parentNodeId) : null
+  }
+
+  return null
+}
+
+function ensureStandaloneWhatIfSession(params: {
+  novelId: string
+  branchId: string
+  sourceContext: FutureJumpSourceContext
+  sourceNode: ReturnType<typeof findStoryTimelineNodeById>
+}) {
+  const sourceNodeContext = resolveSourceNodeContext(params.sourceNode, null)
+  const standaloneSession = buildStandaloneWhatIfSession({
+    novelId: params.novelId,
+    branchId: params.branchId,
+    sourceChapterNo: params.sourceContext.chapterNo,
+    sourceNodeType: params.sourceContext.nodeType,
+    sourceNodeId: params.sourceContext.nodeId,
+    sourceNodeTitle: sourceNodeContext?.nodeTitle,
+    sourceNodeText: sourceNodeContext?.authoredText,
+  })
+
+  const existing = findWhatIfSessionById(standaloneSession.id)
+  if (existing) {
+    return existing.id
+  }
+
+  createWhatIfSession({
+    id: standaloneSession.id,
+    novelId: standaloneSession.novelId,
+    baseBranchId: standaloneSession.baseBranchId,
+    sourceChapterNo: standaloneSession.sourceChapterNo,
+    title: standaloneSession.title,
+    premise: standaloneSession.premise,
+    selectedText: standaloneSession.selectedText,
+    originalText: standaloneSession.originalText,
+    generatedText: standaloneSession.generatedText,
+    status: standaloneSession.status,
+  })
+
+  return standaloneSession.id
+}
+
+function resolveFutureJumpCompatibilityWhatIfSessionId(params: {
+  novelId: string
+  branchId: string
+  sourceContext: FutureJumpSourceContext
+}) {
+  const explicitWhatIfSessionId = params.sourceContext.whatIfSessionId?.trim()
+  if (explicitWhatIfSessionId) {
+    const session = findWhatIfSessionById(explicitWhatIfSessionId)
+    if (!session) {
+      throw new Error(`What-if session not found: ${explicitWhatIfSessionId}`)
+    }
+    return session.id
+  }
+
+  const sourceNode = params.sourceContext.nodeId ? findStoryTimelineNodeById(params.sourceContext.nodeId) : null
+  const compatibilityFromLineage = resolveCompatibilityWhatIfSessionIdFromSourceNode(sourceNode)
+  if (compatibilityFromLineage) {
+    return compatibilityFromLineage
+  }
+
+  return ensureStandaloneWhatIfSession({
+    novelId: params.novelId,
+    branchId: params.branchId,
+    sourceContext: params.sourceContext,
+    sourceNode,
+  })
 }
 
 function buildTargetReferenceBlock(context: LoadedFutureJumpGenerationContext) {
@@ -483,6 +658,10 @@ async function requestStructuredResponse(params: {
     return {
       raw,
       parsed,
+      usage: {
+        inputTokens: normalizeTokenCount(data.usage?.input_tokens ?? data.usage?.prompt_tokens),
+        outputTokens: normalizeTokenCount(data.usage?.output_tokens ?? data.usage?.completion_tokens),
+      },
     } satisfies StructuredResponse
   }
 
@@ -597,6 +776,10 @@ async function requestStructuredResponse(params: {
   return {
     raw,
     parsed,
+    usage: {
+      inputTokens: normalizeTokenCount(data.prompt_eval_count),
+      outputTokens: normalizeTokenCount(data.eval_count),
+    },
   } satisfies StructuredResponse
 }
 
@@ -667,7 +850,10 @@ async function runValidatedStage<T>(params: {
 
     try {
       const validated = params.validate(response.parsed)
-      return params.postProcess ? params.postProcess(validated) : validated
+      return {
+        value: params.postProcess ? params.postProcess(validated) : validated,
+        usage: response.usage,
+      }
     } catch (error) {
       lastError = error instanceof Error ? error.message : 'Unknown parse or validation failure'
       if (!isRetry) {
@@ -708,6 +894,14 @@ function buildBridgeUserPrompt(params: {
     params.context.sourceChapter.summary?.trim() ? `源章节摘要：${params.context.sourceChapter.summary.trim()}` : '源章节摘要：未提供',
     '源章节正文摘录：',
     buildSourceChapterExcerpt(params.context.sourceChapter),
+    ...(params.context.sourceNodeContext?.authoredText
+      ? [
+          '',
+          '# 当前源节点已保存正文',
+          `当前源节点：${params.context.sourceNodeContext.nodeTitle ?? params.context.sourceNodeContext.nodeType}`,
+          buildSourceNodeAuthoredExcerpt(params.context.sourceNodeContext),
+        ]
+      : []),
     '',
     '# What-if 分歧与显式变更',
     params.context.deltaSummary,
@@ -739,6 +933,14 @@ function buildRewriteUserPrompt(params: {
     '',
     '# 已确认桥接摘要',
     params.bridgeSummary,
+    ...(params.context.sourceNodeContext?.authoredText
+      ? [
+          '',
+          '# 当前源节点已保存正文',
+          `当前源节点：${params.context.sourceNodeContext.nodeTitle ?? params.context.sourceNodeContext.nodeType}`,
+          buildSourceNodeAuthoredExcerpt(params.context.sourceNodeContext),
+        ]
+      : []),
     '',
     '# What-if 分歧与显式变更',
     params.context.deltaSummary,
@@ -761,12 +963,21 @@ function buildDeltaSummary(session: WhatIfSessionDetail) {
 async function loadGenerationContext(params: {
   novelId: string
   branchId: string
-  whatIfSessionId: string
+  whatIfSessionId: string | null
+  sourceContext: FutureJumpSourceContext
   targetOutlineNodeId: string
   targetOutlineChapterId: string
   futureJumpRunId?: string
 }) {
-  const session = findWhatIfSessionById(params.whatIfSessionId)
+  const session = params.whatIfSessionId
+    ? findWhatIfSessionById(params.whatIfSessionId)
+    : buildStandaloneWhatIfSession({
+        novelId: params.novelId,
+        branchId: params.branchId,
+        sourceChapterNo: params.sourceContext.chapterNo,
+        sourceNodeType: params.sourceContext.nodeType,
+        sourceNodeId: params.sourceContext.nodeId,
+      })
   if (!session) {
     throw new Error(`What-if session not found: ${params.whatIfSessionId}`)
   }
@@ -786,25 +997,48 @@ async function loadGenerationContext(params: {
   if (!targetAnchor) {
     throw new Error(`Target outline chapter anchor not found: ${params.targetOutlineChapterId}`)
   }
-  if (targetAnchor.chapterNo <= session.sourceChapterNo) {
+  if (targetAnchor.chapterNo <= params.sourceContext.chapterNo) {
     throw new Error(
-      targetAnchor.chapterNo === session.sourceChapterNo
+      targetAnchor.chapterNo === params.sourceContext.chapterNo
         ? 'Target chapter must be after the source chapter'
         : 'Target chapter must not be before the source chapter'
     )
   }
 
-  const sourceChapter = queryOne<LoadedFutureJumpGenerationContext['sourceChapter']>(
-    `SELECT id, chapterNo, title, summary, rawText
-       FROM KnowledgeChapter
-      WHERE novelId = ? AND branchId = ? AND chapterNo = ?
-      LIMIT 1`,
-    params.novelId,
-    params.branchId,
-    session.sourceChapterNo,
-  )
+  const sourceNode = params.sourceContext.nodeId
+    ? findStoryTimelineNodeById(params.sourceContext.nodeId)
+    : null
+
+  if (params.sourceContext.nodeId) {
+    if (!sourceNode || sourceNode.branchId !== params.branchId || sourceNode.novelId !== params.novelId) {
+      throw new Error(`Source timeline node not found: ${params.sourceContext.nodeId}`)
+    }
+  }
+
+  const sourceChapter = params.sourceContext.chapterId
+    ? queryOne<LoadedFutureJumpGenerationContext['sourceChapter']>(
+        `SELECT id, chapterNo, title, summary, rawText
+           FROM KnowledgeChapter
+          WHERE id = ? AND novelId = ? AND branchId = ?
+          LIMIT 1`,
+        params.sourceContext.chapterId,
+        params.novelId,
+        params.branchId,
+      )
+    : queryOne<LoadedFutureJumpGenerationContext['sourceChapter']>(
+        `SELECT id, chapterNo, title, summary, rawText
+           FROM KnowledgeChapter
+          WHERE novelId = ? AND branchId = ? AND chapterNo = ?
+          LIMIT 1`,
+        params.novelId,
+        params.branchId,
+        params.sourceContext.chapterNo,
+      )
   if (!sourceChapter) {
-    throw new Error(`Source chapter not found for what-if session: chapter ${session.sourceChapterNo}`)
+    throw new Error(`Source chapter not found for branch context: chapter ${params.sourceContext.chapterNo}`)
+  }
+  if (sourceChapter.chapterNo !== params.sourceContext.chapterNo) {
+    throw new Error('sourceContext.chapterId must match sourceContext.chapterNo')
   }
 
   const targetChapter = targetAnchor.chapterId
@@ -839,6 +1073,12 @@ async function loadGenerationContext(params: {
 
   return {
     session,
+    sourceContext: {
+      ...params.sourceContext,
+      chapterId: sourceChapter.id,
+      chapterNo: sourceChapter.chapterNo,
+    },
+    sourceNodeContext: resolveSourceNodeContext(sourceNode, session),
     outlineNode,
     targetAnchor,
     sourceChapter,
@@ -852,7 +1092,7 @@ async function loadGenerationContext(params: {
     baseWorldState: buildKnowledgeExtractionStoryState({
       novelId: params.novelId,
       branchId: params.branchId,
-      asOfChapter: session.sourceChapterNo,
+      asOfChapter: sourceChapter.chapterNo,
       currentChapterText: sourceChapter.rawText,
     }),
     deltaSummary: buildDeltaSummary(session),
@@ -941,19 +1181,20 @@ export async function generateTargetNodeRewrite(params: {
   })
 
   return {
-    ...rewrite,
+    ...rewrite.value,
+    usage: rewrite.usage,
     presetCompat,
   }
 }
 
 export async function generateFutureJump(input: GenerateFutureJumpInput): Promise<FutureJumpMutationResult> {
-  const whatIfSessionId = getRequiredString(input.whatIfSessionId, 'whatIfSessionId')
   const targetOutlineNodeId = getRequiredString(input.targetOutlineNodeId, 'targetOutlineNodeId')
   const targetOutlineChapterId = getRequiredString(input.targetOutlineChapterId, 'targetOutlineChapterId')
   const context = await loadGenerationContext({
     novelId: getRequiredString(input.novelId, 'novelId'),
     branchId: getRequiredString(input.branchId, 'branchId'),
-    whatIfSessionId,
+    whatIfSessionId: input.whatIfSessionId?.trim() || null,
+    sourceContext: input.sourceContext,
     targetOutlineNodeId,
     targetOutlineChapterId,
   })
@@ -963,9 +1204,10 @@ export async function generateFutureJump(input: GenerateFutureJumpInput): Promis
     sessionId: context.session.id,
     baseBranchId: context.session.baseBranchId,
     parentTimelineNodeId: input.parentTimelineNodeId ?? null,
+    sourceContext: context.sourceContext,
     targetOutlineNodeId: context.outlineNode.id,
     targetOutlineChapterId: context.targetAnchor.id,
-    sourceChapterNo: context.session.sourceChapterNo,
+    sourceChapterNo: context.sourceContext.chapterNo,
     targetChapterNo: context.targetAnchor.chapterNo,
     userDirection: input.userDirection?.trim() || '',
     bridgeSummary: 'pending',
@@ -980,10 +1222,11 @@ export async function generateFutureJump(input: GenerateFutureJumpInput): Promis
   }
 
   try {
-    const { bridgeSummary } = await generateBridgeSummary({
+    const { value: bridgeResult, usage: bridgeUsage } = await generateBridgeSummary({
       context,
       userDirection: input.userDirection,
     })
+    const bridgeSummary = bridgeResult.bridgeSummary
     const rewrite = await generateTargetNodeRewrite({
       context,
       bridgeSummary,
@@ -1000,6 +1243,7 @@ export async function generateFutureJump(input: GenerateFutureJumpInput): Promis
       userFeedback: null,
       bridgeSummary,
       generatedTargetText: rewrite.generatedTargetText,
+      ...addTokenUsage(bridgeUsage, rewrite.usage),
       status: 'generated',
     })
 
@@ -1040,18 +1284,20 @@ export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<Fu
   const context = await loadGenerationContext({
     novelId: getRequiredString(input.novelId, 'novelId'),
     branchId: getRequiredString(input.branchId, 'branchId'),
-    whatIfSessionId: run.sessionId,
+    whatIfSessionId: run.sourceContext.whatIfSessionId,
+    sourceContext: run.sourceContext,
     targetOutlineNodeId: run.targetOutlineNodeId,
     targetOutlineChapterId: run.targetOutlineChapterId,
     futureJumpRunId: run.id,
   })
 
   try {
-    const { bridgeSummary } = await generateBridgeSummary({
+    const { value: bridgeResult, usage: bridgeUsage } = await generateBridgeSummary({
       context,
       userDirection: run.userDirection,
       userFeedback,
     })
+    const bridgeSummary = bridgeResult.bridgeSummary
     const rewrite = await generateTargetNodeRewrite({
       context,
       bridgeSummary,
@@ -1069,6 +1315,7 @@ export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<Fu
       userFeedback,
       bridgeSummary,
       generatedTargetText: rewrite.generatedTargetText,
+      ...addTokenUsage(bridgeUsage, rewrite.usage),
       status: 'revised',
     })
 
@@ -1097,15 +1344,25 @@ export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<Fu
 
 export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Promise<FutureJumpMutationResponse> {
   const input = futureJumpCreateRequestSchema.parse(rawInput)
-  const session = findWhatIfSessionById(input.sessionId)
-  if (!session) {
-    throw new Error(`What-if session not found: ${input.sessionId}`)
+  const outlineNode = findOutlineNodeById(input.targetOutlineNodeId)
+  if (!outlineNode) {
+    throw new Error(`Target outline node not found: ${input.targetOutlineNodeId}`)
   }
 
+  const compatibilityWhatIfSessionId = resolveFutureJumpCompatibilityWhatIfSessionId({
+    novelId: outlineNode.novelId,
+    branchId: outlineNode.branchId,
+    sourceContext: input.sourceContext,
+  })
+
   const generated = await generateFutureJump({
-    novelId: session.novelId,
-    branchId: session.baseBranchId,
-    whatIfSessionId: session.id,
+    novelId: outlineNode.novelId,
+    branchId: outlineNode.branchId,
+    whatIfSessionId: compatibilityWhatIfSessionId,
+    sourceContext: {
+      ...input.sourceContext,
+      whatIfSessionId: compatibilityWhatIfSessionId,
+    },
     targetOutlineNodeId: input.targetOutlineNodeId,
     targetOutlineChapterId: input.targetOutlineChapterId,
     parentTimelineNodeId: input.parentTimelineNodeId,
@@ -1116,11 +1373,6 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
   let timelineNode = existingNode
 
   if (!timelineNode) {
-    const outlineNode = findOutlineNodeById(generated.run.targetOutlineNodeId)
-    if (!outlineNode) {
-      throw new Error(`Target outline node not found: ${generated.run.targetOutlineNodeId}`)
-    }
-
     const targetAnchor = listOutlineNodeChapters(generated.run.targetOutlineNodeId).find(
       (chapter) => chapter.id === generated.run.targetOutlineChapterId
     )
@@ -1128,16 +1380,21 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
       throw new Error(`Target outline chapter anchor not found: ${generated.run.targetOutlineChapterId}`)
     }
 
-    const labelIndex = getNextStoryTimelineLabelIndex(session.novelId, session.baseBranchId, 'future_jump')
-    timelineNode = createStoryTimelineNode({
-      id: uid('timeline-node'),
-      novelId: session.novelId,
-      branchId: session.baseBranchId,
-      nodeType: 'future_jump',
-      labelIndex,
-      anchorChapterNo: targetAnchor.chapterNo,
-      title: buildFutureJumpNodeTitle({
+    const labelIndex = getNextStoryTimelineLabelIndex(outlineNode.novelId, outlineNode.branchId, 'future_jump')
+    const readableLabel = formatStoryBranchReadableLabel('future_jump', labelIndex)
+    const parentNode = generated.run.parentTimelineNodeId ? findStoryTimelineNodeById(generated.run.parentTimelineNodeId) : null
+    const readableLineageLabel = parentNode?.readableLineageLabel ? `${parentNode.readableLineageLabel}, ${readableLabel}` : readableLabel
+      timelineNode = createStoryTimelineNode({
+        id: uid('timeline-node'),
+        novelId: outlineNode.novelId,
+        branchId: outlineNode.branchId,
+        nodeType: 'future_jump',
         labelIndex,
+        readableLabel,
+        readableLineageLabel,
+        anchorChapterNo: targetAnchor.chapterNo,
+      title: buildFutureJumpNodeTitle({
+        readableLineageLabel,
         titleHint: generated.titleHint,
         outlineNode,
         targetAnchor,
@@ -1176,15 +1433,15 @@ export async function reviseFutureJumpRun(rawInput: Pick<ReviseFutureJumpInput, 
     throw new Error(`Future jump run not found: ${rawInput.runId}`)
   }
 
-  const session = findWhatIfSessionById(run.sessionId)
-  if (!session) {
-    throw new Error(`What-if session not found: ${run.sessionId}`)
+  const outlineNode = findOutlineNodeById(run.targetOutlineNodeId)
+  if (!outlineNode) {
+    throw new Error(`Target outline node not found: ${run.targetOutlineNodeId}`)
   }
 
   const revised = await reviseFutureJump({
     runId: rawInput.runId,
-    novelId: session.novelId,
-    branchId: session.baseBranchId,
+    novelId: outlineNode.novelId,
+    branchId: outlineNode.branchId,
     userFeedback: input.userFeedback,
   })
   const timelineNode = findStoryTimelineNodeByFutureJumpRunId(revised.run.id)

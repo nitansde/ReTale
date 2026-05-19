@@ -1,6 +1,7 @@
 import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
 import { deleteStoryTimelineNodesByIds, findStoryTimelineNodeByFutureJumpRunId } from '@/lib/server/story-timeline-store'
 import type {
+  FutureJumpSourceContext,
   FutureJumpRevisionHistoryItem,
   FutureJumpRevisionRecord,
   FutureJumpRunDetail,
@@ -22,6 +23,10 @@ type FutureJumpRunRow = {
   session_id: string
   base_branch_id: string
   parent_timeline_node_id: string | null
+  source_timeline_node_id: string | null
+  source_timeline_node_type: string | null
+  source_chapter_id: string | null
+  source_what_if_session_id: string | null
   target_outline_node_id: string
   target_outline_chapter_id: string
   source_chapter_no: number
@@ -29,6 +34,8 @@ type FutureJumpRunRow = {
   user_direction: string
   bridge_summary: string
   generated_target_text: string
+  latest_input_tokens: number | null
+  latest_output_tokens: number | null
   latest_revision_no: number
   error_message: string | null
   status: string
@@ -44,7 +51,25 @@ type FutureJumpRevisionRow = {
   user_feedback: string | null
   bridge_summary: string
   generated_target_text: string
+  input_tokens: number | null
+  output_tokens: number | null
   created_at: string
+}
+
+function toFutureJumpSourceContext(row: FutureJumpRunRow): FutureJumpSourceContext {
+  return {
+    nodeId: row.source_timeline_node_id,
+    nodeType: row.source_timeline_node_type === 'chapter'
+      || row.source_timeline_node_type === 'rewrite'
+      || row.source_timeline_node_type === 'continue_block'
+      || row.source_timeline_node_type === 'what_if'
+      || row.source_timeline_node_type === 'future_jump'
+      ? row.source_timeline_node_type
+      : 'what_if',
+    chapterId: row.source_chapter_id,
+    chapterNo: row.source_chapter_no,
+    whatIfSessionId: row.source_what_if_session_id ?? row.session_id,
+  }
 }
 
 function toFutureJumpRunRecord(row: FutureJumpRunRow): FutureJumpRunRecord {
@@ -53,6 +78,7 @@ function toFutureJumpRunRecord(row: FutureJumpRunRow): FutureJumpRunRecord {
     sessionId: row.session_id,
     baseBranchId: row.base_branch_id,
     parentTimelineNodeId: row.parent_timeline_node_id,
+    sourceContext: toFutureJumpSourceContext(row),
     targetOutlineNodeId: row.target_outline_node_id,
     targetOutlineChapterId: row.target_outline_chapter_id,
     sourceChapterNo: row.source_chapter_no,
@@ -60,6 +86,8 @@ function toFutureJumpRunRecord(row: FutureJumpRunRow): FutureJumpRunRecord {
     userDirection: row.user_direction,
     bridgeSummary: row.bridge_summary,
     generatedTargetText: row.generated_target_text,
+    inputTokens: row.latest_input_tokens,
+    outputTokens: row.latest_output_tokens,
     latestRevisionNo: row.latest_revision_no,
     errorMessage: row.error_message,
     status: row.status,
@@ -77,6 +105,8 @@ function toFutureJumpRevisionRecord(row: FutureJumpRevisionRow): FutureJumpRevis
     userFeedback: row.user_feedback,
     bridgeSummary: row.bridge_summary,
     generatedTargetText: row.generated_target_text,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
     createdAt: row.created_at,
   }
 }
@@ -128,14 +158,19 @@ export function listFutureJumpRunsBySessionId(sessionId: string, db: Db = defaul
 export function createFutureJumpRun(input: Omit<FutureJumpRunRecord, 'createdAt' | 'updatedAt'>, db: Db = defaultDb) {
   db.execute(
     `INSERT INTO future_jump_runs (
-      id, session_id, base_branch_id, parent_timeline_node_id, target_outline_node_id,
+      id, session_id, base_branch_id, parent_timeline_node_id, source_timeline_node_id,
+      source_timeline_node_type, source_chapter_id, source_what_if_session_id, target_outline_node_id,
       target_outline_chapter_id, source_chapter_no, target_chapter_no, user_direction,
-      bridge_summary, generated_target_text, latest_revision_no, error_message, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      bridge_summary, generated_target_text, latest_input_tokens, latest_output_tokens, latest_revision_no, error_message, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.id,
     input.sessionId,
     input.baseBranchId,
     input.parentTimelineNodeId,
+    input.sourceContext.nodeId,
+    input.sourceContext.nodeType,
+    input.sourceContext.chapterId,
+    input.sourceContext.whatIfSessionId,
     input.targetOutlineNodeId,
     input.targetOutlineChapterId,
     input.sourceChapterNo,
@@ -143,6 +178,8 @@ export function createFutureJumpRun(input: Omit<FutureJumpRunRecord, 'createdAt'
     input.userDirection,
     input.bridgeSummary,
     input.generatedTargetText,
+    input.inputTokens ?? null,
+    input.outputTokens ?? null,
     input.latestRevisionNo,
     input.errorMessage,
     input.status,
@@ -158,14 +195,19 @@ export async function createFutureJumpRunWithInitialRevision(
   await db.withTransaction(async () => {
     db.execute(
       `INSERT INTO future_jump_runs (
-        id, session_id, base_branch_id, parent_timeline_node_id, target_outline_node_id,
+        id, session_id, base_branch_id, parent_timeline_node_id, source_timeline_node_id,
+        source_timeline_node_type, source_chapter_id, source_what_if_session_id, target_outline_node_id,
         target_outline_chapter_id, source_chapter_no, target_chapter_no, user_direction,
-        bridge_summary, generated_target_text, latest_revision_no, error_message, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        bridge_summary, generated_target_text, latest_input_tokens, latest_output_tokens, latest_revision_no, error_message, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       input.id,
       input.sessionId,
       input.baseBranchId,
       input.parentTimelineNodeId,
+      input.sourceContext.nodeId,
+      input.sourceContext.nodeType,
+      input.sourceContext.chapterId,
+      input.sourceContext.whatIfSessionId,
       input.targetOutlineNodeId,
       input.targetOutlineChapterId,
       input.sourceChapterNo,
@@ -173,6 +215,8 @@ export async function createFutureJumpRunWithInitialRevision(
       input.userDirection,
       input.bridgeSummary,
       input.generatedTargetText,
+      input.inputTokens ?? null,
+      input.outputTokens ?? null,
       input.latestRevisionNo,
       input.errorMessage,
       input.status
@@ -180,12 +224,14 @@ export async function createFutureJumpRunWithInitialRevision(
 
     db.execute(
       `INSERT INTO future_jump_revisions (
-        id, run_id, revision_no, revision_kind, user_feedback, bridge_summary, generated_target_text
-      ) VALUES (?, ?, 1, 'initial', NULL, ?, ?)`,
+        id, run_id, revision_no, revision_kind, user_feedback, bridge_summary, generated_target_text, input_tokens, output_tokens
+      ) VALUES (?, ?, 1, 'initial', NULL, ?, ?, ?, ?)`,
       uid('future-jump-revision'),
       input.id,
       input.bridgeSummary,
-      input.generatedTargetText
+      input.generatedTargetText,
+      input.inputTokens ?? null,
+      input.outputTokens ?? null
     )
   })
 
@@ -199,6 +245,8 @@ export async function appendFutureJumpRevision(
     userFeedback: string | null
     bridgeSummary: string
     generatedTargetText: string
+    inputTokens?: number | null
+    outputTokens?: number | null
     status?: string
   },
   db: Db = defaultDb
@@ -212,24 +260,28 @@ export async function appendFutureJumpRevision(
 
     db.execute(
       `INSERT INTO future_jump_revisions (
-        id, run_id, revision_no, revision_kind, user_feedback, bridge_summary, generated_target_text
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        id, run_id, revision_no, revision_kind, user_feedback, bridge_summary, generated_target_text, input_tokens, output_tokens
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       uid('future-jump-revision'),
       input.runId,
       nextRevisionNo,
       input.revisionKind,
       input.userFeedback,
       input.bridgeSummary,
-      input.generatedTargetText
+      input.generatedTargetText,
+      input.inputTokens ?? null,
+      input.outputTokens ?? null
     )
 
     db.execute(
       `UPDATE future_jump_runs
-       SET latest_revision_no = ?, bridge_summary = ?, generated_target_text = ?, error_message = NULL, status = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?`,
+       SET latest_revision_no = ?, bridge_summary = ?, generated_target_text = ?, latest_input_tokens = ?, latest_output_tokens = ?, error_message = NULL, status = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
       nextRevisionNo,
       input.bridgeSummary,
       input.generatedTargetText,
+      input.inputTokens ?? null,
+      input.outputTokens ?? null,
       input.status ?? 'revised',
       input.runId
     )
