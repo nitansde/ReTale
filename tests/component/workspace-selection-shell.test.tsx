@@ -121,6 +121,8 @@ function renderPane(selection: TimelineSelection) {
       continueBlockView={<div data-testid="continue-block-slot">continue-block seam</div>}
       whatIfView={<div data-testid="what-if-slot">what-if seam</div>}
       futureJumpView={<div data-testid="future-jump-slot">future-jump seam</div>}
+      branchReadableLabel={selection.kind === 'chapter' ? null : branchNodes.find((node) => node.id === selection.nodeId)?.readableLabel ?? null}
+      branchInstructionText={selection.kind === 'chapter' ? null : branchNodes.find((node) => node.id === selection.nodeId)?.subtitle ?? null}
     />
   )
 
@@ -212,6 +214,20 @@ describe('workspace selection shell', () => {
       sourceChapterNo: 10,
       targetChapterNo: 100,
     })
+  })
+
+  it('uses the current node readable label in workspace branch chrome while keeping lineage metadata available on the node', () => {
+    renderPane({
+      kind: 'continue_block',
+      nodeId: 'continue-node-1',
+      continueBlockId: 'continue-block-1',
+      anchorChapterNo: 10,
+    })
+
+    expect(screen.getByRole('heading', { level: 2, name: 'CONT-01' })).toBeInTheDocument()
+    expect(screen.getAllByText('CONT-01')).toHaveLength(2)
+    expect(screen.queryByText('RE-01, CONT-01')).not.toBeInTheDocument()
+    expect(branchNodes.find((node) => node.id === 'continue-node-1')?.readableLineageLabel).toBe('RE-01, CONT-01')
   })
 
   it('round-trips chapter, rewrite, what-if, and future-jump selections through URL search params', () => {
@@ -492,7 +508,7 @@ describe('workspace selection shell', () => {
     expect(screen.queryByTestId('workspace-chapter-view-toggle')).not.toBeInTheDocument()
     expect(screen.getByTestId('workspace-center-pane-kind')).toHaveTextContent('续写块工作区')
     expect(screen.getByText(/默认停留在干净的 reader 视图里/)).toBeInTheDocument()
-    expect(screen.getByText('Branch view')).toBeInTheDocument()
+    expect(screen.getAllByText('CONT-01')).toHaveLength(2)
     cleanup()
 
     renderPane({
@@ -572,6 +588,32 @@ describe('workspace selection shell', () => {
       wordCount: 10,
       inputTokens: 888,
       outputTokens: 777,
+    })
+
+    expect(resolveCurrentNodeMetrics({
+      selection: { kind: 'future_jump', nodeId: 'jump-node-1', runId: 'jump-run-1', sourceChapterNo: 10, targetChapterNo: 100 },
+      chapterText: '不会被使用的章节正文',
+      selectedNode: branchNodes[3],
+      override: {
+        currentText: '没有 token 的当前版本正文',
+        inputTokens: null,
+        outputTokens: null,
+      },
+    })).toEqual({
+      wordCount: 14,
+      inputTokens: null,
+      outputTokens: null,
+    })
+
+    expect(resolveCurrentNodeMetrics({
+      selection: { kind: 'future_jump', nodeId: 'jump-node-1', runId: 'jump-run-1', sourceChapterNo: 10, targetChapterNo: 100 },
+      chapterText: '不会被使用的章节正文',
+      selectedNode: branchNodes[3],
+      override: undefined,
+    })).toEqual({
+      wordCount: 6,
+      inputTokens: 555,
+      outputTokens: 666,
     })
   })
 

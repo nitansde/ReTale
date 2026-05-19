@@ -29,6 +29,7 @@ import { ChapterGraphBrowser } from '@/components/graph/chapter-graph-browser'
 import { getVisibleAdvancedContextPromptBlocks, GraphReviewPanel } from '@/components/graph/graph-review-panel'
 import { FutureMapOverlay } from '@/components/what-if/FutureMapOverlay'
 import { WhatIfSessionView } from '@/components/what-if/WhatIfSessionView'
+import { ContinueBlockDetailView } from '@/components/workspace/ContinueBlockDetailView'
 import { PresetCompatLibraryModal } from '@/components/workspace/PresetCompatLibraryModal'
 import { WorkspaceCenterPane } from '@/components/workspace/WorkspaceCenterPane'
 import { WorkspaceChapterNav } from '@/components/workspace/WorkspaceChapterNav'
@@ -66,7 +67,7 @@ import type {
 } from '@/components/graph/types'
 import type { GraphEdge } from '@/lib/server/graph-types'
 import { useNovelStore } from '@/store/novel-store'
-import { cn, countChineseFriendlyWords, htmlToPlainText, plainTextToHtml, splitPlainTextParagraphs } from '@/lib/utils'
+import { cn, countChineseFriendlyWords, htmlToPlainText, plainTextToHtml } from '@/lib/utils'
 import type {
   ChapterTimelineItem,
   ContinueBlockMutationResponse,
@@ -143,6 +144,11 @@ type PendingContinueBlockRewriteLaunch = {
 
 type RewriteLaunchSource = 'chapter' | 'what_if' | 'future_jump' | 'continue_block'
 
+type BranchContextPreviewOptions = {
+  branchContextNodeId?: string
+  branchContextInclusion?: 'ancestors_only' | 'include_selected'
+}
+
 type FutureMapLaunchState = {
   novelId: string
   branchId: string
@@ -184,28 +190,34 @@ export function resolveCurrentNodeMetrics(params: {
   selectedNode: StoryTimelineBranchNode | null
   override?: { currentText: string; inputTokens: number | null; outputTokens: number | null } | null
 }) {
+  const override = params.override ?? null
   const visibleText = params.selection.kind === 'chapter'
     ? params.chapterText
-    : params.override?.currentText ?? params.selectedNode?.currentText ?? params.selectedNode?.latestText ?? ''
+    : override?.currentText ?? params.selectedNode?.currentText ?? params.selectedNode?.latestText ?? ''
 
   return {
     wordCount: countChineseFriendlyWords(visibleText),
-    inputTokens: params.selection.kind === 'chapter' ? null : params.override?.inputTokens ?? params.selectedNode?.inputTokens ?? null,
-    outputTokens: params.selection.kind === 'chapter' ? null : params.override?.outputTokens ?? params.selectedNode?.outputTokens ?? null,
+    inputTokens: params.selection.kind === 'chapter'
+      ? null
+      : override
+        ? override.inputTokens
+        : params.selectedNode?.inputTokens ?? null,
+    outputTokens: params.selection.kind === 'chapter'
+      ? null
+      : override
+        ? override.outputTokens
+        : params.selectedNode?.outputTokens ?? null,
   }
 }
 
-function renderReaderBodyParagraphs(text: string, className?: string, dataTestId?: string) {
-  const paragraphs = splitPlainTextParagraphs(text)
-  const visibleParagraphs = paragraphs.length ? paragraphs : [text.trim() || '　']
+function buildContinueBlockLineageRequestContext(context: PendingContinueBlockRewriteLaunch | null): BranchContextPreviewOptions {
+  const nodeId = context?.nodeId?.trim()
+  if (!nodeId) return {}
 
-  return (
-    <div className={cn('reader-body-prose', className)} data-testid={dataTestId}>
-      {visibleParagraphs.map((paragraph, index) => (
-        <p key={`${index}-${paragraph.slice(0, 24)}`}>{paragraph}</p>
-      ))}
-    </div>
-  )
+  return {
+    branchContextNodeId: nodeId,
+    branchContextInclusion: 'include_selected',
+  }
 }
 
 type OllamaModelOption = {
@@ -851,6 +863,7 @@ export function SelectionNovelStudio() {
     inputTokens: number | null
     outputTokens: number | null
   } | null>(null)
+  const continueBlockMetricsNodeIdRef = useRef<string | null>(null)
   const whatIfMetricsNodeIdRef = useRef<string | null>(null)
   const futureJumpMetricsNodeIdRef = useRef<string | null>(null)
   const updateBranchMetricsOverride = useCallback((nodeId: string, metrics: {
@@ -877,6 +890,15 @@ export function SelectionNovelStudio() {
     outputTokens: number | null
   }) => {
     const nodeId = whatIfMetricsNodeIdRef.current
+    if (!nodeId) return
+    updateBranchMetricsOverride(nodeId, metrics)
+  }, [updateBranchMetricsOverride])
+  const handleContinueBlockMetricsChange = useCallback((metrics: {
+    currentText: string
+    inputTokens: number | null
+    outputTokens: number | null
+  }) => {
+    const nodeId = continueBlockMetricsNodeIdRef.current
     if (!nodeId) return
     updateBranchMetricsOverride(nodeId, metrics)
   }, [updateBranchMetricsOverride])
@@ -1568,6 +1590,38 @@ export function SelectionNovelStudio() {
     }
   }, [centerPaneView, currentChapter, pendingSourceJump])
 
+  const closePanel = useCallback(() => {
+    if (activeMode && currentChapter) {
+      resetPresetCompatSessionStateForSelection(
+        workspaceSelection ?? toChapterTimelineSelection(currentChapter),
+        [toPresetCompatSessionSurfaceId(activeMode)]
+      )
+    }
+
+    setActiveMode(null)
+    setLockedSelectionText('')
+    setSaveContinueBlockError('')
+    setRewriteLaunchSource('chapter')
+    setRewriteSourceTextOverride('')
+    setActiveFutureJumpRewriteContext(null)
+    setActiveContinueBlockRewriteContext(null)
+    setPendingFutureJumpRewriteLaunch(null)
+    setPendingContinueBlockRewriteLaunch(null)
+    setGenerationContext(null)
+    setGraphContext(null)
+    setContextPreviewError('')
+    setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
+    setContextPanelOpen(false)
+    setGraphSelection(null)
+    setEvidenceDrawerOpen(false)
+    setDisabledContextBlockIds([])
+    setExcludedGraphEdgeIds([])
+    setExcludedEvidenceIds([])
+    setGraphMutationPendingId(null)
+    setGraphMutationError('')
+    setRewriteState((current) => ({ ...current, error: '' }))
+  }, [activeMode, currentChapter, resetPresetCompatSessionStateForSelection, workspaceSelection])
+
   useEffect(() => {
     if (centerPaneView === 'body') return
     const timer = window.setTimeout(() => {
@@ -1582,7 +1636,7 @@ export function SelectionNovelStudio() {
     return () => {
       window.clearTimeout(timer)
     }
-  }, [activeMode, centerPaneView])
+  }, [activeMode, centerPaneView, closePanel])
 
   useEffect(() => {
     if (editor) {
@@ -1650,38 +1704,6 @@ export function SelectionNovelStudio() {
       setToolbarPos({ top: nextTop, left: nextLeft })
     }
   }, [activeMode, toolbarPos])
-
-  const closePanel = () => {
-    if (activeMode && currentChapter) {
-      resetPresetCompatSessionStateForSelection(
-        workspaceSelection ?? toChapterTimelineSelection(currentChapter),
-        [toPresetCompatSessionSurfaceId(activeMode)]
-      )
-    }
-
-    setActiveMode(null)
-    setLockedSelectionText('')
-    setSaveContinueBlockError('')
-    setRewriteLaunchSource('chapter')
-    setRewriteSourceTextOverride('')
-    setActiveFutureJumpRewriteContext(null)
-    setActiveContinueBlockRewriteContext(null)
-    setPendingFutureJumpRewriteLaunch(null)
-    setPendingContinueBlockRewriteLaunch(null)
-    setGenerationContext(null)
-    setGraphContext(null)
-    setContextPreviewError('')
-    setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
-    setContextPanelOpen(false)
-    setGraphSelection(null)
-    setEvidenceDrawerOpen(false)
-    setDisabledContextBlockIds([])
-    setExcludedGraphEdgeIds([])
-    setExcludedEvidenceIds([])
-    setGraphMutationPendingId(null)
-    setGraphMutationError('')
-    setRewriteState((current) => ({ ...current, error: '' }))
-  }
 
   const loadChapterGraph = useCallback(async (chapter: Chapter, controls = chapterGraphControls, preserveData = false) => {
     const requestId = chapterGraphRequestRef.current + 1
@@ -1855,6 +1877,8 @@ export function SelectionNovelStudio() {
       preserveDisabledBlocks?: boolean
       excludedGraphEdgeIds?: string[]
       excludedEvidenceIds?: string[]
+      branchContextNodeId?: string
+      branchContextInclusion?: 'ancestors_only' | 'include_selected'
     }
   ) => {
     if (!currentChapter) return null
@@ -1869,6 +1893,13 @@ export function SelectionNovelStudio() {
     setContextPreviewLoading(true)
     setContextPreviewError('')
     try {
+      const branchContext = mode === 'rewrite'
+        ? {
+            ...buildContinueBlockLineageRequestContext(activeContinueBlockRewriteContext),
+            branchContextNodeId: options?.branchContextNodeId ?? buildContinueBlockLineageRequestContext(activeContinueBlockRewriteContext).branchContextNodeId,
+            branchContextInclusion: options?.branchContextInclusion ?? buildContinueBlockLineageRequestContext(activeContinueBlockRewriteContext).branchContextInclusion,
+          }
+        : {}
       const data = await callGenerationContextApi({
         novelId: currentNovelId,
         chapterId: sourceChapter.id,
@@ -1877,6 +1908,7 @@ export function SelectionNovelStudio() {
         userInstruction: instructionOverride ?? getInstructionForMode(mode),
         excludedGraphEdgeIds: options?.excludedGraphEdgeIds ?? excludedGraphEdgeIds,
         excludedEvidenceIds: options?.excludedEvidenceIds ?? excludedEvidenceIds,
+        ...branchContext,
       })
 
       if (!data.ok || !data.graphContext || !data.promptBlocks || !data.lanceEvidence) {
@@ -1918,6 +1950,7 @@ export function SelectionNovelStudio() {
   }, [
     currentChapter,
     currentNovelId,
+    activeContinueBlockRewriteContext,
     excludedEvidenceIds,
     excludedGraphEdgeIds,
     getInstructionForMode,
@@ -2084,7 +2117,9 @@ export function SelectionNovelStudio() {
     setPendingContinueBlockRewriteLaunch(null)
 
     window.setTimeout(() => {
-      void loadContextPreview('rewrite', instruction, pendingContinueBlockRewriteLaunch.selectedText)
+      void loadContextPreview('rewrite', instruction, pendingContinueBlockRewriteLaunch.selectedText, {
+        ...buildContinueBlockLineageRequestContext(pendingContinueBlockRewriteLaunch),
+      })
     }, 0)
   }, [currentChapter, pendingContinueBlockRewriteLaunch, loadContextPreview])
 
@@ -2770,7 +2805,9 @@ export function SelectionNovelStudio() {
     setRewriteFlow((current) => ({ ...current, loading: true, error: '', provider: 'context-stream', candidates: [], selectedIndex: 0 }))
     try {
       await savePresetCompatLibrary()
-      await loadContextPreview('rewrite', rewritePrompt)
+      await loadContextPreview('rewrite', rewritePrompt, undefined, {
+        ...buildContinueBlockLineageRequestContext(activeContinueBlockRewriteContext),
+      })
       let streamed = ''
       await streamRewriteApi(
         {
@@ -2783,6 +2820,7 @@ export function SelectionNovelStudio() {
           disabledBlockIds: disabledContextBlockIds,
           excludedGraphEdgeIds,
           excludedEvidenceIds,
+          ...buildContinueBlockLineageRequestContext(activeContinueBlockRewriteContext),
           presetCompatRuntimeContext: buildPresetCompatRuntimeContext('rewrite'),
           scope: 'chapter',
           mode: 'heavy',
@@ -3088,13 +3126,13 @@ export function SelectionNovelStudio() {
       parentTimelineNodeId: activeWorkspaceSelection.nodeId,
     }
   })()
-  const continueBlockBodyText = selectedContinueBlockNode?.latestText?.trim() || '当前续写块还没有可展示的已保存正文。'
   const selectedTimelineLineageLabel = selectedTimelineNode?.readableLineageLabel?.trim() || selectedTimelineNode?.readableLabel?.trim() || selectedTimelineNode?.title?.trim() || ''
+  const selectedTimelineDisplayLabel = selectedTimelineNode?.readableLabel?.trim() || selectedTimelineLineageLabel || selectedTimelineNode?.title?.trim() || ''
   const selectedTimelineInstructionText = selectedTimelineNode?.userInstruction?.trim() || selectedTimelineNode?.subtitle?.trim() || ''
   const selectedTimelineInstructionPreview = formatStoryBranchInstructionPreview(selectedTimelineInstructionText)
   const workspaceHeaderTitle = activeWorkspaceSelection.kind === 'chapter'
     ? currentChapter.title
-    : selectedTimelineLineageLabel || selectedTimelineNode?.title || currentChapter.title
+    : selectedTimelineDisplayLabel || selectedTimelineNode?.title || currentChapter.title
   const currentNodeMetrics = resolveCurrentNodeMetrics({
     selection: activeWorkspaceSelection,
     chapterText,
@@ -3103,6 +3141,9 @@ export function SelectionNovelStudio() {
       ? currentBranchMetricsOverride
       : null,
   })
+  continueBlockMetricsNodeIdRef.current = activeWorkspaceSelection.kind === 'rewrite' || activeWorkspaceSelection.kind === 'continue_block'
+    ? activeWorkspaceSelection.nodeId
+    : null
   whatIfMetricsNodeIdRef.current = activeWorkspaceSelection.kind === 'what_if' ? activeWorkspaceSelection.nodeId : null
   futureJumpMetricsNodeIdRef.current = activeWorkspaceSelection.kind === 'future_jump' ? activeWorkspaceSelection.nodeId : null
   const chapterSelectionSummary = (lockedSelectionText || selectionText)
@@ -3325,11 +3366,11 @@ export function SelectionNovelStudio() {
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">续写块动作</p>
-          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineLineageLabel || selectedTimelineNode?.title || '续写块'}</h3>
+          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineDisplayLabel || selectedTimelineNode?.title || '续写块'}</h3>
           {selectedTimelineInstructionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">指令预览 · {selectedTimelineInstructionPreview}</p> : null}
           <p className="mt-2 text-xs leading-6 text-zinc-300">续写块保存后会直接落到这个 reader 视图，并继续保留续写、重生与 Future Jump 三个稳定节点动作入口。</p>
         </div>
-        <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{selectedTimelineLineageLabel || '续写块'}</span>
+         <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{selectedTimelineDisplayLabel || '续写块'}</span>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <button
@@ -3377,11 +3418,11 @@ export function SelectionNovelStudio() {
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">What-if actions</p>
-          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineLineageLabel || selectedTimelineNode?.title || 'What-if session'}</h3>
+          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineDisplayLabel || selectedTimelineNode?.title || 'What-if session'}</h3>
           {selectedTimelineInstructionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">指令预览 · {selectedTimelineInstructionPreview}</p> : null}
           <p className="mt-2 text-xs leading-6 text-zinc-300">当前会话详情已经在中心面板按持久化结果加载。这里保留回到锚点章节的快捷入口，避免在 IF / 主章节之间来回迷路。</p>
         </div>
-        <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{selectedTimelineLineageLabel || 'What-if session'}</span>
+         <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{selectedTimelineDisplayLabel || 'What-if session'}</span>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <button
@@ -3401,11 +3442,11 @@ export function SelectionNovelStudio() {
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.22em] text-sky-200/70">Future jump actions</p>
-          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineLineageLabel || selectedTimelineNode?.title || 'Future jump run'}</h3>
+          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineDisplayLabel || selectedTimelineNode?.title || 'Future jump run'}</h3>
           {selectedTimelineInstructionPreview ? <p className="mt-2 text-xs leading-6 text-sky-100">指令预览 · {selectedTimelineInstructionPreview}</p> : null}
           <p className="mt-2 text-xs leading-6 text-zinc-300">中心面板会直接读取持久化的 run 详情、最新修订与继续改写入口；右侧保留源/目标章节跳转，方便在主线与未来节点之间对照。</p>
         </div>
-        <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1 text-[11px] text-sky-100">{selectedTimelineLineageLabel || 'Future jump'}</span>
+         <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1 text-[11px] text-sky-100">{selectedTimelineDisplayLabel || 'Future jump'}</span>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <button
@@ -3702,7 +3743,7 @@ export function SelectionNovelStudio() {
             onCenterPaneViewChange={setCenterPaneView}
             chapterSelectionSummary={chapterSelectionSummary}
             chapterGraphSummary={chapterGraphSummary}
-            branchReadableLineageLabel={selectedTimelineLineageLabel || null}
+            branchReadableLabel={selectedTimelineDisplayLabel || null}
             branchInstructionText={selectedTimelineInstructionText || null}
             chapterBodyView={
               <div className="px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-chapter-body-view">
@@ -3751,36 +3792,19 @@ export function SelectionNovelStudio() {
             }
             continueBlockView={
               activeWorkspaceSelection.kind === 'rewrite' || activeWorkspaceSelection.kind === 'continue_block' ? (
-                <div className="space-y-4 px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-continue-block-view">
-                  <section className="overflow-hidden rounded-[28px] border border-fuchsia-400/20 bg-[radial-gradient(circle_at_top,_rgba(217,70,239,0.12),_transparent_42%),#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-                    <div className="flex flex-col gap-5 px-5 py-5 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between">
-                      <div className="max-w-3xl">
-                        <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">已保存续写块</p>
-                        <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{selectedTimelineLineageLabel || selectedContinueBlockNode?.title || '续写块'}</h3>
-                        {selectedTimelineInstructionPreview ? <p className="mt-2 text-sm text-fuchsia-100">指令预览 · {selectedTimelineInstructionPreview}</p> : null}
-                        <p className="mt-3 text-sm leading-7 text-zinc-300">{selectedContinueBlockNode?.subtitle?.trim() || '这里展示已保存的续写块最新版本。默认以只读 reader 打开，不再回到候选选择或编辑态。'}</p>
-                        <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-zinc-300">
-                          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">reader mode</span>
-                          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">revision {selectedContinueBlockNode?.latestRevisionNo ?? 1}</span>
-                          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{selectedTimelineLineageLabel || `第 ${activeWorkspaceSelection.anchorChapterNo} 章`}</span>
-                        </div>
-                      </div>
-                      <div className="rounded-[22px] border border-fuchsia-300/20 bg-black/20 px-4 py-3 text-xs uppercase tracking-[0.18em] text-fuchsia-100" data-testid="workspace-continue-block-reader-mode">
-                        Read mode
-                      </div>
-                    </div>
-                  </section>
-
-                  <section className="rounded-[28px] border border-white/8 bg-[#0b0d12] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:p-6">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Latest saved revision</p>
-                      {selectedTimelineInstructionPreview ? <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">指令预览 {selectedTimelineInstructionPreview}</span> : null}
-                    </div>
-                    <div className="rounded-[24px] border border-white/8 bg-black/20 p-5">
-                      {renderReaderBodyParagraphs(continueBlockBodyText, 'text-zinc-200', 'workspace-continue-block-reader-body')}
-                    </div>
-                  </section>
-                </div>
+                selectedContinueBlockNode?.continueBlockId ? (
+                  <ContinueBlockDetailView
+                    novelId={currentNovelId ?? ''}
+                    branchId={storyTimelineBranchId}
+                    continueBlockId={selectedContinueBlockNode.continueBlockId}
+                    latestRevisionNo={selectedContinueBlockNode.latestRevisionNo ?? null}
+                    anchorChapterNo={activeWorkspaceSelection.anchorChapterNo}
+                    nodeTitle={selectedContinueBlockNode.title}
+                    nodeSubtitle={selectedContinueBlockNode.subtitle ?? null}
+                    readableLineageLabel={selectedTimelineDisplayLabel || null}
+                    onMetricsChange={handleContinueBlockMetricsChange}
+                  />
+                ) : null
               ) : null
             }
             whatIfView={
@@ -3792,7 +3816,7 @@ export function SelectionNovelStudio() {
                   anchorChapterNo={activeWorkspaceSelection.anchorChapterNo}
                   nodeTitle={selectedTimelineNode?.title ?? null}
                   nodeSubtitle={selectedTimelineNode?.subtitle ?? null}
-                  readableLineageLabel={selectedTimelineLineageLabel || null}
+                  readableLineageLabel={selectedTimelineDisplayLabel || null}
                   onMetricsChange={handleWhatIfMetricsChange}
                   onJumpToFuture={launchFutureMapFromWhatIf}
                   onRegenerateWhatIf={(detail) => reopenWhatIfRewriteFlow(detail, 'regenerate')}
@@ -3809,7 +3833,7 @@ export function SelectionNovelStudio() {
                   sourceChapterNo={activeWorkspaceSelection.sourceChapterNo}
                   targetChapterNo={activeWorkspaceSelection.targetChapterNo}
                   nodeTitle={selectedTimelineNode?.title ?? null}
-                  readableLineageLabel={selectedTimelineLineageLabel || null}
+                  readableLineageLabel={selectedTimelineDisplayLabel || null}
                   nodeSubtitle={selectedTimelineNode?.subtitle ?? null}
                   onMetricsChange={handleFutureJumpMetricsChange}
                   onContinueInFuture={reopenFutureJumpRewriteFlow}

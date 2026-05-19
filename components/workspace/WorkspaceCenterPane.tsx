@@ -18,7 +18,7 @@ export function WorkspaceCenterPane(props: {
   continueBlockView: ReactNode
   whatIfView: ReactNode
   futureJumpView: ReactNode
-  branchReadableLineageLabel?: string | null
+  branchReadableLabel?: string | null
   branchInstructionText?: string | null
 }) {
   const isChapter = props.selection.kind === 'chapter'
@@ -28,27 +28,27 @@ export function WorkspaceCenterPane(props: {
     ? '先选章节，再在正文里直接选中想处理的文本。章节正文入口只保留魔改和角色扮演，避免在主线章节里提前暴露不稳定的续写分支动作。'
     : '切到图谱后会持续停留在这个浏览视角；你从左侧切换章节时，中心面板会直接换成对应章节的已检索图谱。'
   let statusSummary = props.centerPaneView === 'body' ? props.chapterSelectionSummary : props.chapterGraphSummary
-  const branchReadableLineageLabel = props.branchReadableLineageLabel?.trim() || ''
+  const branchReadableLabel = props.branchReadableLabel?.trim() || ''
   const instructionPreview = formatStoryBranchInstructionPreview(props.branchInstructionText)
 
   if (props.selection.kind === 'what_if') {
     eyebrow = 'What-if session workspace'
-    title = branchReadableLineageLabel || `IF · 第 ${props.selection.anchorChapterNo} 章分支推演`
+    title = branchReadableLabel || `IF · 第 ${props.selection.anchorChapterNo} 章分支推演`
     description = '这里展示已持久化的 What-if 会话详情：原始片段、推演正文、变化清单，以及继续进入未来跳转或重开改写流的入口。'
     statusSummary = `锚点章节：第 ${props.selection.anchorChapterNo} 章`
   } else if (props.selection.kind === 'rewrite') {
     eyebrow = '改写节点工作区'
-    title = branchReadableLineageLabel || `RE · 第 ${props.selection.anchorChapterNo} 章改写节点`
+    title = branchReadableLabel || `RE · 第 ${props.selection.anchorChapterNo} 章改写节点`
     description = '这里直接读取首个已保存改写节点的最新版本，继续保留 reader 视图与节点级动作入口，但不再把它伪装成 continue-only 分支。'
     statusSummary = `锚点章节：第 ${props.selection.anchorChapterNo} 章`
   } else if (props.selection.kind === 'continue_block') {
     eyebrow = '续写块工作区'
-    title = branchReadableLineageLabel || `CONT · 第 ${props.selection.anchorChapterNo} 章续写块`
+    title = branchReadableLabel || `CONT · 第 ${props.selection.anchorChapterNo} 章续写块`
     description = '这里直接读取已保存的续写块最新版本，默认停留在干净的 reader 视图里；续写、重生与 Future Jump 仍保留为稳定的节点级动作入口。'
     statusSummary = `锚点章节：第 ${props.selection.anchorChapterNo} 章`
   } else if (props.selection.kind === 'future_jump') {
     eyebrow = 'Future jump workspace'
-    title = branchReadableLineageLabel || `JUMP · 第 ${props.selection.sourceChapterNo} → ${props.selection.targetChapterNo} 章`
+    title = branchReadableLabel || `JUMP · 第 ${props.selection.sourceChapterNo} → ${props.selection.targetChapterNo} 章`
     description = '这里展示已持久化的 Future Jump run 详情、最新修订内容，以及 continue / regenerate 两个节点级动作入口。'
     statusSummary = `源 / 目标章节：第 ${props.selection.sourceChapterNo} 章 → 第 ${props.selection.targetChapterNo} 章`
   }
@@ -83,7 +83,7 @@ export function WorkspaceCenterPane(props: {
             ) : (
               <div className="inline-flex items-center gap-2 rounded-[22px] border border-fuchsia-300/20 bg-fuchsia-500/10 px-4 py-3 text-xs text-fuchsia-100">
                 <GitBranch className="h-4 w-4" />
-                <span className="font-medium">{branchReadableLineageLabel || 'Branch view'}</span>
+                <span className="font-medium">{branchReadableLabel || 'Branch view'}</span>
                 {instructionPreview ? <span className="text-fuchsia-100/70">· {instructionPreview}</span> : null}
               </div>
             )}
