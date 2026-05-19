@@ -49,6 +49,13 @@ function seedFutureMapFixture(database: DatabaseSync) {
       id, novelId, branchId, chapterNo, title, rawText, summary,
       revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('chapter-25', 'novel-001', 'novel-001:main', 25, '第25章', '第25章正文', '第25章摘要', 1, 0, null, 'hash-25', 'ready')
+
+  database.prepare(
+    `INSERT INTO KnowledgeChapter (
+      id, novelId, branchId, chapterNo, title, rawText, summary,
+      revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run('chapter-100', 'novel-001', 'novel-001:main', 100, '第100章 女主被反派绑走', '第100章正文', '原线里男主会及时救人。', 1, 0, null, 'hash-100', 'ready')
 
   database.prepare(
@@ -89,12 +96,21 @@ function seedFutureJumpDetailFixture(database: DatabaseSync) {
   ).run('outline_chapter_100_primary', 'outline_event_100', 100, 'chapter-100', '第100章 女主被反派绑走', 1, 0)
 
   database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
+      parent_node_id, source_chapter_no, target_chapter_no, chapter_id, what_if_session_id,
+      future_jump_run_id, lane_index, color_token, status, continue_block_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('continue-node-025', 'novel-001', 'novel-001:main', 'continue_block', 2, 25, 'CONT-02 深入误判', null, null, 25, null, 'chapter-25', null, null, 0, 'sky', 'active', 'continue-block-025')
+
+  database.prepare(
     `INSERT INTO future_jump_runs (
-      id, session_id, base_branch_id, parent_timeline_node_id, target_outline_node_id,
+      id, session_id, base_branch_id, parent_timeline_node_id, source_timeline_node_id,
+      source_timeline_node_type, source_chapter_id, source_what_if_session_id, target_outline_node_id,
       target_outline_chapter_id, source_chapter_no, target_chapter_no, user_direction,
       bridge_summary, generated_target_text, latest_revision_no, error_message, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run('jump-run-001', 'what-if-session-001', 'novel-001:main', null, 'outline_event_100', 'outline_chapter_100_primary', 10, 100, '男主没有第一时间救援。', '桥接摘要', '未来节点正文', 2, null, 'generated')
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('jump-run-001', 'what-if-session-001', 'novel-001:main', null, 'continue-node-025', 'continue_block', 'chapter-25', 'what-if-session-001', 'outline_event_100', 'outline_chapter_100_primary', 25, 100, '男主没有第一时间救援。', '桥接摘要', '未来节点正文', 2, null, 'generated')
 
   database.prepare(
     `INSERT INTO future_jump_revisions (
@@ -138,7 +154,7 @@ describe('story-future-map-read', () => {
     ])
 
     const futureMapResponse = await getFutureMap(
-      new Request('http://localhost/api/story-future-map?novelId=novel-001&branchId=novel-001:main&sourceChapterNo=10&parentSessionId=what-if-session-001')
+      new Request('http://localhost/api/story-future-map?novelId=novel-001&branchId=novel-001:main&sourceChapterNo=25&sourceChapterId=chapter-25&sourceNodeId=continue-node-025&sourceNodeType=continue_block&parentSessionId=what-if-session-001')
     )
     expect(futureMapResponse.status).toBe(200)
 
@@ -158,7 +174,7 @@ describe('story-future-map-read', () => {
         chapterId: 'chapter-100',
       }),
     ])
-    expect(futureMapPayload.events.every((event: { id: string }) => futureMapPayload.chaptersByEvent[event.id].every((chapter: { chapterNo: number }) => chapter.chapterNo > 10))).toBe(true)
+    expect(futureMapPayload.events.every((event: { id: string }) => futureMapPayload.chaptersByEvent[event.id].every((chapter: { chapterNo: number }) => chapter.chapterNo > 25))).toBe(true)
     expect(futureMapPayload.events.find((event: { title: string }) => event.title === '早期伏笔节点')).toBeUndefined()
     expect(futureMapPayload.defaults.selectedTrackKey).toBe(futureMapPayload.events[0].trackKey)
     expect(futureMapPayload.defaults.selectedOutlineNodeId).toBe('outline_event_100')
@@ -173,6 +189,14 @@ describe('story-future-map-read', () => {
     expect(runPayload).toEqual(expect.objectContaining({
       id: 'jump-run-001',
       baseBranchId: 'novel-001:main',
+      sessionId: 'what-if-session-001',
+      sourceContext: {
+        nodeId: 'continue-node-025',
+        nodeType: 'continue_block',
+        chapterId: 'chapter-25',
+        chapterNo: 25,
+        whatIfSessionId: 'what-if-session-001',
+      },
       latestRevisionNo: 2,
       bridgeSummary: '桥接摘要',
     }))
@@ -231,12 +255,12 @@ describe('story-future-map-read', () => {
     })
 
     const conflictingSourceChapterResponse = await getFutureMap(
-      new Request('http://localhost/api/story-future-map?novelId=novel-001&branchId=novel-001:main&sourceChapterNo=11&parentSessionId=what-if-session-001')
+      new Request('http://localhost/api/story-future-map?novelId=novel-001&branchId=novel-001:main&sourceChapterNo=10&sourceChapterId=chapter-25&parentSessionId=what-if-session-001')
     )
     expect(conflictingSourceChapterResponse.status).toBe(400)
     await expect(conflictingSourceChapterResponse.json()).resolves.toEqual({
       ok: false,
-      error: 'sourceChapterNo must match parentSessionId source chapter',
+      error: 'sourceChapterId must match sourceChapterNo',
     })
 
     const missingContextResponse = await getFutureJumpRun(

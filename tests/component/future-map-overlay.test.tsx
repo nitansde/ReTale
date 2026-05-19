@@ -77,7 +77,7 @@ afterEach(() => {
 })
 
 describe('FutureMapOverlay', () => {
-  it('enforces track -> event -> chapter selection before confirm and posts the create payload', async () => {
+  it('history-node mode resolves the chapter immediately and posts the unified create payload', async () => {
     const fetchMock = vi.fn<typeof fetch>()
     fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify(futureMapPayload), { status: 200 }))
@@ -95,8 +95,13 @@ describe('FutureMapOverlay', () => {
       <FutureMapOverlay
         novelId="novel-001"
         branchId="novel-001:main"
-        sessionId="what-if-session-001"
-        sourceChapterNo={10}
+        sourceContext={{
+          nodeId: 'continue-node-025',
+          nodeType: 'continue_block',
+          chapterId: 'chapter-25',
+          chapterNo: 25,
+          whatIfSessionId: 'what-if-session-001',
+        }}
         title="IF-01 决裂线"
         parentTimelineNodeId="if-node-1"
         onClose={() => undefined}
@@ -110,7 +115,8 @@ describe('FutureMapOverlay', () => {
 
     const confirmButton = screen.getByTestId('future-map-confirm')
     expect(confirmButton).toBeDisabled()
-    expect(screen.queryByTestId('future-map-chapter-100')).not.toBeInTheDocument()
+    expect(screen.getByTestId('future-map-mode-history-node')).toBeInTheDocument()
+    expect(screen.getByTestId('future-map-mode-direct-chapter')).toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('future-map-track-phase-4'))
     expect(screen.getByTestId('future-map-event-outline_event_120')).toBeInTheDocument()
@@ -120,11 +126,8 @@ describe('FutureMapOverlay', () => {
 
     fireEvent.click(screen.getByTestId('future-map-track-phase-3'))
     fireEvent.click(screen.getByTestId('future-map-event-outline_event_100'))
-    expect(screen.getByTestId('future-map-chapter-100')).toBeInTheDocument()
-    expect(confirmButton).toBeDisabled()
-
-    fireEvent.click(screen.getByTestId('future-map-chapter-100'))
     expect(confirmButton).not.toBeDisabled()
+    expect(screen.getByTestId('future-map-resolved-chapter')).toHaveTextContent('第 100 章')
 
     fireEvent.change(screen.getByPlaceholderText(/可选：给这次 Future Jump 一句额外方向/), {
       target: { value: '让救援更晚到来' },
@@ -135,7 +138,7 @@ describe('FutureMapOverlay', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2)
       expect(onCreated).toHaveBeenCalledWith(
         expect.objectContaining({ runId: 'jump-run-002', timelineNodeId: 'timeline-node-jump-002' }),
-        { sourceChapterNo: 10, targetChapterNo: 100 }
+        { sourceChapterNo: 25, targetChapterNo: 100 }
       )
     })
 
@@ -150,11 +153,84 @@ describe('FutureMapOverlay', () => {
 
     const requestBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1] && (fetchMock.mock.calls[1][1] as RequestInit).body))
     expect(requestBody).toEqual({
-      sessionId: 'what-if-session-001',
+      sourceContext: {
+        nodeId: 'continue-node-025',
+        nodeType: 'continue_block',
+        chapterId: 'chapter-25',
+        chapterNo: 25,
+        whatIfSessionId: 'what-if-session-001',
+      },
       targetOutlineNodeId: 'outline_event_100',
       targetOutlineChapterId: 'outline_chapter_100_primary',
       parentTimelineNodeId: 'if-node-1',
       userDirection: '让救援更晚到来',
+    })
+  })
+
+  it('direct-chapter mode lists chapter summaries and confirms after one direct chapter selection', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify(futureMapPayload), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        runId: 'jump-run-003',
+        timelineNodeId: 'timeline-node-jump-003',
+        bridgeSummary: 'bridge',
+        generatedTargetText: 'text',
+      }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const onCreated = vi.fn()
+
+    render(
+      <FutureMapOverlay
+        novelId="novel-001"
+        branchId="novel-001:main"
+        sourceContext={{
+          nodeId: 'rewrite-node-001',
+          nodeType: 'rewrite',
+          chapterId: 'chapter-25',
+          chapterNo: 25,
+          whatIfSessionId: null,
+        }}
+        title="RE-01 改写节点"
+        parentTimelineNodeId="rewrite-node-001"
+        onClose={() => undefined}
+        onCreated={onCreated}
+      />
+    )
+
+    expect(await screen.findByTestId('future-map-track-phase-3')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('future-map-mode-direct-chapter'))
+    expect(screen.getByText('女主被带走。')).toBeInTheDocument()
+
+    const confirmButton = screen.getByTestId('future-map-confirm')
+    expect(confirmButton).toBeDisabled()
+
+    fireEvent.click(screen.getByTestId('future-map-direct-chapter-100'))
+    expect(confirmButton).not.toBeDisabled()
+    expect(screen.getByTestId('future-map-resolved-chapter')).toHaveTextContent('第 100 章')
+
+    fireEvent.click(confirmButton)
+
+    await waitFor(() => {
+      expect(onCreated).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'jump-run-003', timelineNodeId: 'timeline-node-jump-003' }),
+        { sourceChapterNo: 25, targetChapterNo: 100 }
+      )
+    })
+
+    const requestBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1] && (fetchMock.mock.calls[1][1] as RequestInit).body))
+    expect(requestBody).toEqual({
+      sourceContext: {
+        nodeId: 'rewrite-node-001',
+        nodeType: 'rewrite',
+        chapterId: 'chapter-25',
+        chapterNo: 25,
+        whatIfSessionId: null,
+      },
+      targetOutlineNodeId: 'outline_event_100',
+      targetOutlineChapterId: 'outline_chapter_100_primary',
+      parentTimelineNodeId: 'rewrite-node-001',
     })
   })
 
@@ -169,8 +245,13 @@ describe('FutureMapOverlay', () => {
       <FutureMapOverlay
         novelId="novel-001"
         branchId="novel-001:main"
-        sessionId="what-if-session-001"
-        sourceChapterNo={10}
+        sourceContext={{
+          nodeId: 'continue-node-025',
+          nodeType: 'continue_block',
+          chapterId: 'chapter-25',
+          chapterNo: 25,
+          whatIfSessionId: 'what-if-session-001',
+        }}
         title="IF-01 决裂线"
         parentTimelineNodeId="if-node-1"
         onClose={() => undefined}
@@ -180,7 +261,6 @@ describe('FutureMapOverlay', () => {
 
     expect(await screen.findByTestId('future-map-track-phase-3')).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('future-map-event-outline_event_100'))
-    fireEvent.click(screen.getByTestId('future-map-chapter-100'))
     fireEvent.click(screen.getByTestId('future-map-confirm'))
 
     await waitFor(() => {

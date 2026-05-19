@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { findStoryBranch, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { loadFutureMapSourceData } from '@/lib/server/outline-bootstrap'
+import { queryOne } from '@/lib/server/sqlite'
 import { findWhatIfSessionById } from '@/lib/server/what-if-store'
 
 function parsePositiveSourceChapterNo(value: string | null) {
@@ -16,7 +17,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const novelId = searchParams.get('novelId')?.trim() ?? ''
     const rawBranchId = searchParams.get('branchId')?.trim() ?? ''
-    const parentSessionId = searchParams.get('parentSessionId')?.trim() ?? ''
+    const parentSessionId = searchParams.get('parentSessionId')?.trim() || searchParams.get('whatIfSessionId')?.trim() || ''
 
     if (!novelId) {
       return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
@@ -36,13 +37,29 @@ export async function GET(request: Request) {
       return NextResponse.json({ ok: false, error: 'sourceChapterNo must be a positive integer' }, { status: 400 })
     }
 
+    const sourceChapterId = searchParams.get('sourceChapterId')?.trim() ?? ''
+    if (sourceChapterId) {
+      const sourceChapter = queryOne<{ id: string; chapterNo: number }>(
+        `SELECT id, chapterNo
+           FROM KnowledgeChapter
+          WHERE id = ? AND novelId = ? AND branchId = ?
+          LIMIT 1`,
+        sourceChapterId,
+        novelId,
+        branchId,
+      )
+      if (!sourceChapter) {
+        return NextResponse.json({ ok: false, error: 'sourceChapterId not found for the requested branch context' }, { status: 404 })
+      }
+      if (sourceChapter.chapterNo !== sourceChapterNo) {
+        return NextResponse.json({ ok: false, error: 'sourceChapterId must match sourceChapterNo' }, { status: 400 })
+      }
+    }
+
     if (parentSessionId) {
       const session = findWhatIfSessionById(parentSessionId)
       if (!session || session.novelId !== novelId || session.baseBranchId !== branchId) {
         return NextResponse.json({ ok: false, error: 'parentSessionId not found for the requested branch context' }, { status: 404 })
-      }
-      if (session.sourceChapterNo !== sourceChapterNo) {
-        return NextResponse.json({ ok: false, error: 'sourceChapterNo must match parentSessionId source chapter' }, { status: 400 })
       }
     }
 
