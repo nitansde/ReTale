@@ -1,6 +1,7 @@
 "use client"
 
 import { ArrowRight, Clock3, GitBranch, Sparkles } from 'lucide-react'
+import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import type { FutureJumpRevisionHistoryItem, FutureJumpRunDetail, FutureMapEvent, OutlineNodeChapterRecord, WhatIfSessionDetail } from '@/lib/story-branch-types'
 import { cn } from '@/lib/utils'
 
@@ -28,19 +29,23 @@ export function BridgeSummaryPanel(props: {
   targetEvent: FutureMapEvent | null
   targetChapter: OutlineNodeChapterRecord | null
   revisionHistory: FutureJumpRevisionHistoryItem[]
+  readableLineageLabel?: string | null
 }) {
+  const instructionPreview = formatStoryBranchInstructionPreview(props.detail.userDirection)
+
   return (
     <section className="rounded-[24px] border border-sky-400/20 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_42%),#0b0d12] p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.18em] text-sky-200/70">Bridge summary</p>
           <h3 className="mt-2 text-lg font-semibold text-zinc-100">最新桥接摘要与修订脉络</h3>
+          {instructionPreview ? <p className="mt-2 text-sm text-sky-100">指令预览 · {instructionPreview}</p> : null}
           <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-300">
             主面板始终读取当前 run 上镜像出的最新桥接摘要；下方修订记录只负责回顾每一版是怎样演化过来的。
           </p>
         </div>
         <div className="flex flex-wrap gap-2 text-[11px] text-zinc-300">
-          <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1.5">run {props.detail.id}</span>
+          {props.readableLineageLabel?.trim() ? <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1.5">{props.readableLineageLabel.trim()}</span> : null}
           <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">revision {props.detail.latestRevisionNo}</span>
           <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">status {props.detail.status}</span>
         </div>
@@ -67,7 +72,7 @@ export function BridgeSummaryPanel(props: {
                 <p className="mt-2 text-xs leading-6 text-zinc-300">{props.parentSession?.premise?.trim() || '当前 Future Jump 继承自已持久化的 What-if 分支前提。'}</p>
                 <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-zinc-300">
                   <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">source 第 {props.detail.sourceChapterNo} 章</span>
-                  <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">session {props.detail.sessionId}</span>
+                  {props.parentSession?.premise?.trim() ? <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">指令预览 {formatStoryBranchInstructionPreview(props.parentSession.premise)}</span> : null}
                 </div>
               </div>
             </div>

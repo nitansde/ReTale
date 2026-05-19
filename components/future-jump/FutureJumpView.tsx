@@ -5,6 +5,7 @@ import { LoaderCircle } from 'lucide-react'
 import { BridgeSummaryPanel } from '@/components/future-jump/BridgeSummaryPanel'
 import { FutureJumpControlPanel } from '@/components/future-jump/FutureJumpControlPanel'
 import { FutureNodeTextPanel } from '@/components/future-jump/FutureNodeTextPanel'
+import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import type {
   FutureJumpMutationResponse,
   FutureJumpRunDetail,
@@ -112,6 +113,9 @@ export function FutureJumpView(props: {
   sourceChapterNo: number
   targetChapterNo: number
   nodeTitle?: string | null
+  readableLineageLabel?: string | null
+  nodeSubtitle?: string | null
+  onMetricsChange?: (metrics: { currentText: string; inputTokens: number | null; outputTokens: number | null }) => void
   onContinueInFuture: (context: FutureJumpContinueContext) => void
 }) {
   const [bundle, setBundle] = useState<FutureJumpBundle | null>(null)
@@ -159,10 +163,21 @@ export function FutureJumpView(props: {
     [bundle?.detail.revisionHistory]
   )
 
+  useEffect(() => {
+    if (!bundle) return
+    props.onMetricsChange?.({
+      currentText: bundle.detail.generatedTargetText,
+      inputTokens: bundle.detail.inputTokens ?? null,
+      outputTokens: bundle.detail.outputTokens ?? null,
+    })
+  }, [bundle, props.onMetricsChange])
+
   const targetTitle = bundle?.targetChapter?.chapterTitle?.trim()
     || bundle?.targetEvent?.title?.trim()
     || props.nodeTitle?.trim()
     || `第 ${bundle?.detail.targetChapterNo ?? props.targetChapterNo} 章未来版本`
+  const readableLineageLabel = props.readableLineageLabel?.trim() || ''
+  const instructionPreview = formatStoryBranchInstructionPreview(bundle?.detail.userDirection ?? props.nodeSubtitle)
 
   const handleRegenerate = async () => {
     if (!bundle || regenerating) return
@@ -203,11 +218,13 @@ export function FutureJumpView(props: {
         <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-5 sm:px-6 sm:py-6">
           <div className="max-w-4xl">
             <p className="text-[11px] uppercase tracking-[0.22em] text-sky-200/70">Persisted Future Jump run</p>
-            <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{props.nodeTitle?.trim() || `JUMP · 第 ${props.sourceChapterNo} → ${props.targetChapterNo} 章`}</h3>
+            <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{readableLineageLabel || props.nodeTitle?.trim() || `JUMP · 第 ${props.sourceChapterNo} → ${props.targetChapterNo} 章`}</h3>
+            {instructionPreview ? <p className="mt-2 text-sm text-sky-100">指令预览 · {instructionPreview}</p> : null}
             <p className="mt-3 text-sm leading-7 text-zinc-300">这个视图会直接读取持久化的 Future Jump run 详情，并始终把最新修订镜像到桥接摘要、目标正文与继续改写入口上。</p>
           </div>
           <div className="flex flex-wrap gap-2 text-[11px] text-zinc-300">
-            <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1.5">branch {props.branchId}</span>
+            {readableLineageLabel ? <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1.5">{readableLineageLabel}</span> : null}
+            {instructionPreview ? <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">指令预览 {instructionPreview}</span> : null}
             <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">source 第 {props.sourceChapterNo} 章</span>
             <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">target 第 {props.targetChapterNo} 章</span>
           </div>
@@ -237,6 +254,7 @@ export function FutureJumpView(props: {
             targetEvent={bundle.targetEvent}
             targetChapter={bundle.targetChapter}
             revisionHistory={revisionHistory}
+            readableLineageLabel={readableLineageLabel}
           />
 
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1.18fr)_minmax(320px,0.82fr)]">

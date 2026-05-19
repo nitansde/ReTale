@@ -67,6 +67,13 @@ function buildRunDetail(latestRevisionNo: number, bridgeSummary: string, generat
     sessionId: 'what-if-session-001',
     baseBranchId: 'novel-001:main',
     parentTimelineNodeId: 'if-node-1',
+    sourceContext: {
+      nodeId: 'if-node-1',
+      nodeType: 'what_if',
+      chapterId: 'chapter-10',
+      chapterNo: 10,
+      whatIfSessionId: 'what-if-session-001',
+    },
     targetOutlineNodeId: 'outline_event_100',
     targetOutlineChapterId: 'outline_chapter_100_primary',
     sourceChapterNo: 10,

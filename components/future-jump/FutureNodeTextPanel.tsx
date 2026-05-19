@@ -1,12 +1,16 @@
 "use client"
 
 import { FileText } from 'lucide-react'
+import { splitPlainTextParagraphs } from '@/lib/utils'
 
 export function FutureNodeTextPanel(props: {
   targetTitle: string
   targetChapterLabel: string
   generatedTargetText: string
 }) {
+  const paragraphs = splitPlainTextParagraphs(props.generatedTargetText)
+  const visibleParagraphs = paragraphs.length ? paragraphs : [props.generatedTargetText.trim() || '　']
+
   return (
     <section className="rounded-[24px] border border-white/8 bg-black/20 p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -23,7 +27,11 @@ export function FutureNodeTextPanel(props: {
           <FileText className="h-4 w-4" />
           <p className="text-[11px] uppercase tracking-[0.16em] text-sky-100/75">Latest generated text</p>
         </div>
-        <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-sky-50">{props.generatedTargetText}</p>
+        <div className="reader-body-prose mt-3 text-sky-50">
+          {visibleParagraphs.map((paragraph, index) => (
+            <p key={`${index}-${paragraph.slice(0, 24)}`}>{paragraph}</p>
+          ))}
+        </div>
       </div>
     </section>
   )
