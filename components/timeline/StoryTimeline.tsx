@@ -4,13 +4,28 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BranchBlock } from '@/components/timeline/BranchBlock'
 import { BranchLineLayer } from '@/components/timeline/BranchLineLayer'
 import { ChapterTimelineCard } from '@/components/timeline/ChapterTimelineCard'
-import type { ChapterTimelineItem, StoryTimelineBranchNode, StoryTimelineEdge, TimelineSelection } from '@/lib/story-branch-types'
+import { orderStoryTimelineBranchNodes, type ChapterTimelineItem, type StoryTimelineBranchNode, type StoryTimelineEdge, type TimelineSelection } from '@/lib/story-branch-types'
 import { toBranchTimelineSelection } from '@/components/workspace/workspace-selection'
 import type { Chapter } from '@/lib/types'
 
 type NodePosition = {
   x: number
   y: number
+}
+
+function areNodePositionsEqual(left: Record<string, NodePosition>, right: Record<string, NodePosition>) {
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  if (leftKeys.length !== rightKeys.length) return false
+
+  for (const key of leftKeys) {
+    const leftPosition = left[key]
+    const rightPosition = right[key]
+    if (!rightPosition) return false
+    if (leftPosition.x !== rightPosition.x || leftPosition.y !== rightPosition.y) return false
+  }
+
+  return true
 }
 
 function compareNodeCreation(left: StoryTimelineBranchNode, right: StoryTimelineBranchNode): number {
@@ -20,56 +35,8 @@ function compareNodeCreation(left: StoryTimelineBranchNode, right: StoryTimeline
   return left.id.localeCompare(right.id)
 }
 
-function resolveNodeDepth(node: StoryTimelineBranchNode, nodesById: Map<string, StoryTimelineBranchNode>, visited = new Set<string>()): number {
-  if (!node.parentNodeId) return 0
-  if (visited.has(node.id)) return 0
-
-  const parentNode = nodesById.get(node.parentNodeId)
-  if (!parentNode) return 0
-
-  visited.add(node.id)
-  return resolveNodeDepth(parentNode, nodesById, visited) + 1
-}
-
 function orderBranchNodes(branchNodes: StoryTimelineBranchNode[]): StoryTimelineBranchNode[] {
-  const nodesById = new Map(branchNodes.map((node) => [node.id, node]))
-  const childrenByParentId = new Map<string, StoryTimelineBranchNode[]>()
-  const rootNodes: StoryTimelineBranchNode[] = []
-
-  for (const node of branchNodes) {
-    if (node.parentNodeId && nodesById.has(node.parentNodeId)) {
-      const current = childrenByParentId.get(node.parentNodeId) ?? []
-      current.push(node)
-      childrenByParentId.set(node.parentNodeId, current)
-      continue
-    }
-
-    rootNodes.push(node)
-  }
-
-  for (const children of childrenByParentId.values()) {
-    children.sort(compareNodeCreation)
-  }
-
-  rootNodes.sort((left, right) => {
-    if (left.anchorChapterNo !== right.anchorChapterNo) return left.anchorChapterNo - right.anchorChapterNo
-    return compareNodeCreation(left, right)
-  })
-
-  const nodeDepths = new Map(branchNodes.map((node) => [node.id, resolveNodeDepth(node, nodesById)]))
-  const ordered: StoryTimelineBranchNode[] = []
-  const visit = (node: StoryTimelineBranchNode) => {
-    ordered.push({ ...node, laneIndex: nodeDepths.get(node.id) ?? node.laneIndex })
-    for (const child of childrenByParentId.get(node.id) ?? []) {
-      visit(child)
-    }
-  }
-
-  for (const rootNode of rootNodes) {
-    visit(rootNode)
-  }
-
-  return ordered
+  return orderStoryTimelineBranchNodes(branchNodes, compareNodeCreation)
 }
 
 export function StoryTimeline(props: {
@@ -83,8 +50,7 @@ export function StoryTimeline(props: {
   onDeleteChapter: (chapterId: string) => void
   onDeleteBranchChapter: (chapterId: string) => void
   deletingBranchNodeId: string | null
-  onDeleteWhatIfSession: (node: StoryTimelineBranchNode) => void
-  onDeleteFutureJumpRun: (node: StoryTimelineBranchNode) => void
+  onDeleteBranchNode: (node: StoryTimelineBranchNode) => void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chapterRefs = useRef(new Map<string, HTMLButtonElement | null>())
@@ -123,10 +89,20 @@ export function StoryTimeline(props: {
         }
       })
 
-    setLayout({
-      width: bounds.width,
-      height: bounds.height,
-      nodePositions,
+    setLayout((current) => {
+      if (
+        current.width === bounds.width
+        && current.height === bounds.height
+        && areNodePositionsEqual(current.nodePositions, nodePositions)
+      ) {
+        return current
+      }
+
+      return {
+        width: bounds.width,
+        height: bounds.height,
+        nodePositions,
+      }
     })
   }, [])
 
@@ -205,13 +181,12 @@ export function StoryTimeline(props: {
                         if (selection) props.onSelectionChange(selection)
                       }}
                       onDelete={
-                        node.nodeType === 'what_if'
-                          ? node.whatIfSessionId
-                            ? () => props.onDeleteWhatIfSession(node)
-                            : undefined
-                          : node.nodeType === 'future_jump' && node.futureJumpRunId
-                            ? () => props.onDeleteFutureJumpRun(node)
-                            : undefined
+                        node.nodeType === 'rewrite'
+                          || node.nodeType === 'continue_block'
+                          || node.nodeType === 'what_if'
+                          || node.nodeType === 'future_jump'
+                          ? () => props.onDeleteBranchNode(node)
+                          : undefined
                       }
                       onHoverChange={(hovered) => {
                         setHoveredNodeId((current) => (hovered ? node.id : current === node.id ? null : current))

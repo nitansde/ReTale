@@ -72,6 +72,8 @@ function buildNodes(): StoryTimelineBranchNode[] {
       type: 'branch_node',
       id: storyBranchFixtureIds.whatIfNodeId,
       nodeType: 'what_if',
+      readableLabel: 'IF-01',
+      readableLineageLabel: 'IF-01',
       anchorChapterNo: 10,
       parentNodeId: null,
       title: 'IF-01 决裂线',
@@ -90,6 +92,8 @@ function buildNodes(): StoryTimelineBranchNode[] {
       type: 'branch_node',
       id: 'continue-node-1',
       nodeType: 'continue_block',
+      readableLabel: 'CONT-01',
+      readableLineageLabel: 'IF-01, CONT-01',
       anchorChapterNo: 10,
       parentNodeId: storyBranchFixtureIds.whatIfNodeId,
       title: 'CONT-01 续写块',
@@ -103,6 +107,7 @@ function buildNodes(): StoryTimelineBranchNode[] {
       futureJumpRunId: null,
       latestText: '第二版子续写正文',
       latestRevisionNo: 2,
+      userInstruction: '继续压低场景里的情绪。',
       createdAt: '2026-05-15T01:22:00.000Z',
       status: 'active',
     },
@@ -110,11 +115,13 @@ function buildNodes(): StoryTimelineBranchNode[] {
       type: 'branch_node',
       id: storyBranchFixtureIds.futureJumpNodeId,
       nodeType: 'future_jump',
+      readableLabel: 'JUMP-01',
+      readableLineageLabel: 'IF-01, JUMP-01',
       anchorChapterNo: 100,
       parentNodeId: storyBranchFixtureIds.whatIfNodeId,
       title: 'JUMP-01 第100章',
       subtitle: '跳到被绑走后的未来',
-      laneIndex: 1,
+      laneIndex: 0,
       colorToken: 'violet',
       sourceChapterNo: 10,
       targetChapterNo: 100,
@@ -133,6 +140,8 @@ function buildMixedNodes(): StoryTimelineBranchNode[] {
       type: 'branch_node',
       id: 'continue-node-2',
       nodeType: 'continue_block',
+      readableLabel: 'CONT-02',
+      readableLineageLabel: 'IF-01, JUMP-01, CONT-02',
       anchorChapterNo: 100,
       parentNodeId: storyBranchFixtureIds.futureJumpNodeId,
       title: 'CONT-02 未来续写块',
@@ -146,6 +155,7 @@ function buildMixedNodes(): StoryTimelineBranchNode[] {
       futureJumpRunId: null,
       latestText: '未来续写块正文',
       latestRevisionNo: 1,
+      userInstruction: '沿着未来节点继续推进。',
       createdAt: '2026-05-15T01:24:00.000Z',
       status: 'active',
     },
@@ -184,8 +194,7 @@ describe('StoryTimeline', () => {
         onDeleteChapter={() => undefined}
         onDeleteBranchChapter={() => undefined}
         deletingBranchNodeId={null}
-        onDeleteWhatIfSession={() => undefined}
-        onDeleteFutureJumpRun={() => undefined}
+        onDeleteBranchNode={() => undefined}
       />
     )
 
@@ -221,8 +230,7 @@ describe('StoryTimeline', () => {
         onDeleteChapter={() => undefined}
         onDeleteBranchChapter={() => undefined}
         deletingBranchNodeId={null}
-        onDeleteWhatIfSession={() => undefined}
-        onDeleteFutureJumpRun={() => undefined}
+        onDeleteBranchNode={() => undefined}
       />
     )
 
@@ -257,7 +265,7 @@ describe('StoryTimeline', () => {
     })
   })
 
-  it('keeps mixed continue and future-jump descendants in parent-first chronological order with ancestry indentation', () => {
+  it('keeps nested continue descendants flat after the first continue indent', () => {
     render(
       <StoryTimeline
         chapters={[
@@ -273,15 +281,99 @@ describe('StoryTimeline', () => {
         onDeleteChapter={() => undefined}
         onDeleteBranchChapter={() => undefined}
         deletingBranchNodeId={null}
-        onDeleteWhatIfSession={() => undefined}
-        onDeleteFutureJumpRun={() => undefined}
+        onDeleteBranchNode={() => undefined}
       />
     )
 
+    const firstContinueNode = screen.getByTestId('timeline-node-continue-node-1')
     const jumpNode = screen.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`)
     const futureContinueNode = screen.getByTestId('timeline-node-continue-node-2')
+    expect(screen.getByTestId(`timeline-node-${storyBranchFixtureIds.whatIfNodeId}`)).toHaveAttribute('data-visible-depth', '0')
+    expect(firstContinueNode).toHaveAttribute('data-visible-depth', '1')
+    expect(jumpNode).toHaveAttribute('data-visible-depth', '0')
+    expect(futureContinueNode).toHaveAttribute('data-visible-depth', '1')
     expect(jumpNode.compareDocumentPosition(futureContinueNode) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(futureContinueNode.parentElement).toHaveClass('lg:ml-10')
     expect(screen.getAllByText('Continue block')).toHaveLength(2)
+  })
+
+  it('emits delete callbacks for rewrite, continue, what-if, and future-jump nodes', () => {
+    const onDeleteBranchNode = vi.fn<(node: StoryTimelineBranchNode) => void>()
+    const branchNodes: StoryTimelineBranchNode[] = [
+      {
+        type: 'branch_node',
+        id: 'rewrite-node-1',
+        nodeType: 'rewrite',
+        readableLabel: 'RE-01',
+        readableLineageLabel: 'RE-01',
+        anchorChapterNo: 10,
+        parentNodeId: null,
+        title: 'RE-01 第一版改写',
+        subtitle: '首个保存的改写节点',
+        laneIndex: 0,
+        colorToken: 'fuchsia',
+        sourceChapterNo: 10,
+        targetChapterNo: null,
+        continueBlockId: 'rewrite-block-1',
+        whatIfSessionId: null,
+        futureJumpRunId: null,
+        createdAt: '2026-05-15T01:20:00.000Z',
+        status: 'active',
+      },
+      ...buildNodes(),
+    ]
+
+    render(
+      <StoryTimeline
+        chapters={[
+          { type: 'chapter', chapterNo: 10, chapterId: 'chapter-10', title: '第10章 结盟', wordCount: 1200 },
+          { type: 'chapter', chapterNo: 100, chapterId: 'chapter-100', title: '第100章 被绑走', wordCount: 1900 },
+        ]}
+        branchNodes={branchNodes}
+        edges={buildEdges()}
+        activeChapterId="chapter-10"
+        activeSelection={null}
+        branchChaptersByParentId={new Map([['chapter-10', [buildBranchChapter()]]])}
+        onSelectionChange={() => undefined}
+        onDeleteChapter={() => undefined}
+        onDeleteBranchChapter={() => undefined}
+        deletingBranchNodeId={null}
+        onDeleteBranchNode={onDeleteBranchNode}
+      />
+    )
+
+    fireEvent.click(screen.getByLabelText('删除 Rewrite 节点 RE-01'))
+    fireEvent.click(screen.getByLabelText('删除 Continue block 节点 IF-01, CONT-01'))
+    fireEvent.click(screen.getByLabelText('删除 What if 节点 IF-01'))
+    fireEvent.click(screen.getByLabelText('删除 Future jump 节点 IF-01, JUMP-01'))
+
+    expect(onDeleteBranchNode).toHaveBeenNthCalledWith(1, branchNodes[0])
+    expect(onDeleteBranchNode).toHaveBeenNthCalledWith(2, branchNodes[2])
+    expect(onDeleteBranchNode).toHaveBeenNthCalledWith(3, branchNodes[1])
+    expect(onDeleteBranchNode).toHaveBeenNthCalledWith(4, branchNodes[3])
+  })
+
+  it('renders readable lineage labels and instruction previews instead of raw branch titles', () => {
+    render(
+      <StoryTimeline
+        chapters={[
+          { type: 'chapter', chapterNo: 10, chapterId: 'chapter-10', title: '第10章 结盟', wordCount: 1200 },
+          { type: 'chapter', chapterNo: 100, chapterId: 'chapter-100', title: '第100章 被绑走', wordCount: 1900 },
+        ]}
+        branchNodes={buildNodes()}
+        edges={buildEdges()}
+        activeChapterId="chapter-10"
+        activeSelection={null}
+        branchChaptersByParentId={new Map([['chapter-10', [buildBranchChapter()]]])}
+        onSelectionChange={() => undefined}
+        onDeleteChapter={() => undefined}
+        onDeleteBranchChapter={() => undefined}
+        deletingBranchNodeId={null}
+        onDeleteBranchNode={() => undefined}
+      />
+    )
+
+    expect(screen.getByText('IF-01, CONT-01')).toBeInTheDocument()
+    expect(screen.getByText('指令预览 · 继续压低场景里的情绪。')).toBeInTheDocument()
+    expect(screen.queryByText('CONT-01 续写块')).not.toBeInTheDocument()
   })
 })

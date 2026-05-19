@@ -2,6 +2,7 @@
 
 import { forwardRef } from 'react'
 import { GitBranch, LoaderCircle, Sparkles, Trash2 } from 'lucide-react'
+import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import type { StoryTimelineBranchNode } from '@/lib/story-branch-types'
 import { cn } from '@/lib/utils'
 
@@ -21,11 +22,21 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
   onDelete?: () => void
   onHoverChange: (hovered: boolean) => void
 }>((props, ref) => {
-  const isWhatIfLike = props.node.nodeType === 'what_if' || props.node.nodeType === 'continue_block'
+  const isWhatIfLike = props.node.nodeType === 'rewrite' || props.node.nodeType === 'what_if' || props.node.nodeType === 'continue_block'
   const Icon = isWhatIfLike ? GitBranch : Sparkles
+  const branchKindLabel = props.node.nodeType === 'rewrite'
+    ? 'Rewrite'
+    : props.node.nodeType === 'continue_block'
+      ? 'Continue block'
+      : props.node.nodeType === 'what_if'
+        ? 'What if'
+        : 'Future jump'
+  const readableLineageLabel = props.node.readableLineageLabel?.trim() || props.node.readableLabel?.trim() || props.node.title
+  const instructionPreview = formatStoryBranchInstructionPreview(props.node.userInstruction ?? props.node.subtitle)
 
   return (
     <div
+      data-visible-depth={props.node.laneIndex}
       className={cn('flex items-start gap-2', resolveIndentClass(props.node.laneIndex))}
       onMouseEnter={() => props.onHoverChange(true)}
       onMouseLeave={() => props.onHoverChange(false)}
@@ -35,6 +46,7 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
         type="button"
         disabled={props.disabled || props.deleting}
         data-testid={`timeline-node-${props.node.id}`}
+        data-visible-depth={props.node.laneIndex}
         data-active={props.selected ? 'true' : 'false'}
         data-highlighted={props.highlighted ? 'true' : 'false'}
         data-node-type={props.node.nodeType}
@@ -59,15 +71,11 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
           </div>
           <div className="min-w-0 flex-1">
             <p className={cn('text-[11px] uppercase tracking-[0.16em]', isWhatIfLike ? 'text-fuchsia-100/70' : 'text-sky-100/75')}>
-              {props.node.nodeType === 'continue_block' ? 'Continue block' : isWhatIfLike ? 'What if' : 'Future jump'}
+              {branchKindLabel}
             </p>
-            <p className="mt-1 text-sm font-medium text-zinc-50">{props.node.title}</p>
-            {props.node.subtitle ? <p className="mt-2 text-xs leading-5 text-zinc-300">{props.node.subtitle}</p> : null}
-            <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-zinc-300/90">
-              <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">Anchor {props.node.anchorChapterNo}</span>
-              {props.node.sourceChapterNo ? <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">From {props.node.sourceChapterNo}</span> : null}
-              {props.node.targetChapterNo ? <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">To {props.node.targetChapterNo}</span> : null}
-            </div>
+            <p className="mt-1 text-sm font-medium text-zinc-50">{readableLineageLabel}</p>
+            {instructionPreview ? <p className="mt-2 text-xs leading-5 text-zinc-300">指令预览 · {instructionPreview}</p> : null}
+            {!instructionPreview && props.node.subtitle ? <p className="mt-2 text-xs leading-5 text-zinc-300">{props.node.subtitle}</p> : null}
           </div>
         </div>
       </button>
@@ -77,7 +85,7 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
           disabled={props.deleting}
           onClick={props.onDelete}
           className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-2 text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-          aria-label={`删除 ${isWhatIfLike ? props.node.nodeType === 'continue_block' ? 'Continue block' : 'What-if' : 'Future jump'} 节点 ${props.node.title}`}
+          aria-label={`删除 ${branchKindLabel} 节点 ${readableLineageLabel}`}
         >
           {props.deleting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
         </button>
