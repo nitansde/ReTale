@@ -4,6 +4,7 @@ import React from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FutureMapOverlay } from '@/components/what-if/FutureMapOverlay'
+import { FUTURE_MAP_MISSING_SUMMARY_FALLBACK } from '@/lib/story-branch-types'
 
 const futureMapPayload = {
   novelId: 'novel-001',
@@ -232,6 +233,48 @@ describe('FutureMapOverlay', () => {
       targetOutlineChapterId: 'outline_chapter_100_primary',
       parentTimelineNodeId: 'rewrite-node-001',
     })
+  })
+
+  it('direct-chapter mode still shows selectable chapter cards when summaries are blank', async () => {
+    const payloadWithBlankSummary = {
+      ...futureMapPayload,
+      events: futureMapPayload.events.map((event) => event.id === 'outline_event_100'
+        ? { ...event, summary: '' }
+        : event),
+    }
+
+    const fetchMock = vi.fn<typeof fetch>()
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(payloadWithBlankSummary), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <FutureMapOverlay
+        novelId="novel-001"
+        branchId="novel-001:main"
+        sourceContext={{
+          nodeId: 'rewrite-node-001',
+          nodeType: 'rewrite',
+          chapterId: 'chapter-25',
+          chapterNo: 25,
+          whatIfSessionId: null,
+        }}
+        title="RE-01 改写节点"
+        parentTimelineNodeId="rewrite-node-001"
+        onClose={() => undefined}
+        onCreated={() => undefined}
+      />
+    )
+
+    expect(await screen.findByTestId('future-map-track-phase-3')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('future-map-mode-direct-chapter'))
+
+    const confirmButton = screen.getByTestId('future-map-confirm')
+    expect(confirmButton).toBeDisabled()
+    expect(screen.getByText(FUTURE_MAP_MISSING_SUMMARY_FALLBACK)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('future-map-direct-chapter-100'))
+    expect(confirmButton).not.toBeDisabled()
+    expect(screen.getByTestId('future-map-resolved-chapter')).toHaveTextContent('第 100 章')
   })
 
   it('shows an explicit create error when future jump generation fails', async () => {

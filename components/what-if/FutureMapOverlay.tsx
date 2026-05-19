@@ -3,12 +3,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, Check, GitBranch, LoaderCircle, Sparkles, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type {
-  FutureJumpMutationResponse,
-  FutureJumpSourceContext,
-  FutureMapEvent,
-  FutureMapResponse,
-  OutlineNodeChapterRecord,
+import {
+  FUTURE_MAP_MISSING_SUMMARY_FALLBACK,
+  type FutureJumpMutationResponse,
+  type FutureJumpSourceContext,
+  type FutureMapEvent,
+  type FutureMapResponse,
+  type OutlineNodeChapterRecord,
 } from '@/lib/story-branch-types'
 
 type FutureMapOverlayProps = {
@@ -50,6 +51,11 @@ function buildSourceMeta(sourceType: string) {
     tone: 'border-amber-300/20 bg-amber-500/12 text-amber-100',
     description: '由已有素材推导出的候选未来事件',
   }
+}
+
+function resolveEventSummary(summary: string | null | undefined) {
+  const normalized = summary?.trim()
+  return normalized || FUTURE_MAP_MISSING_SUMMARY_FALLBACK
 }
 
 async function loadFutureMap(input: Pick<FutureMapOverlayProps, 'novelId' | 'branchId' | 'sourceContext'>) {
@@ -131,7 +137,7 @@ function EventCard(props: {
         </div>
       </div>
 
-      <p className="mt-3 text-sm leading-6 text-zinc-300">{props.event.summary}</p>
+      <p className="mt-3 text-sm leading-6 text-zinc-300">{resolveEventSummary(props.event.summary)}</p>
 
       {props.event.originalOutcome ? (
         <div className="mt-3 rounded-[18px] border border-white/8 bg-white/[0.03] p-3 text-xs leading-6 text-zinc-400">
@@ -447,7 +453,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                                     ) : null}
                                   </div>
                                 </div>
-                                <p className="mt-3 text-sm leading-6 text-zinc-300">{option.event.summary}</p>
+                                 <p className="mt-3 text-sm leading-6 text-zinc-300">{resolveEventSummary(option.event.summary)}</p>
                                 {option.event.originalOutcome ? (
                                   <p className="mt-3 text-xs leading-6 text-zinc-500">原线结果：{option.event.originalOutcome}</p>
                                 ) : null}
@@ -478,7 +484,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                     {selectedEvent ? (
                       <div className="mt-2 space-y-2">
                         <p className="text-sm font-medium text-zinc-100">{mode === 'history_node' ? selectedEvent.title : `第 ${selectedChapter?.chapterNo ?? '—'} 章 · ${selectedChapter?.chapterTitle || selectedEvent.title}`}</p>
-                        <p className="text-sm leading-6 text-zinc-300">{selectedEvent.summary}</p>
+                         <p className="text-sm leading-6 text-zinc-300">{resolveEventSummary(selectedEvent.summary)}</p>
                       </div>
                     ) : (
                       <p className="mt-2 text-sm leading-6 text-zinc-400">先从中间区域选中一个{mode === 'history_node' ? '历史节点' : '目标章节'}，右侧才会解锁生成确认。</p>
