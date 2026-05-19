@@ -7,6 +7,12 @@ type StoryBranchLabelNode = {
   parentNodeId: string | null
 }
 
+type StoryBranchDisplayNode = {
+  readableLabel?: string | null
+  readableLineageLabel?: string | null
+  title?: string | null
+}
+
 const STORY_BRANCH_LABEL_PREFIXES = {
   rewrite: 'RE',
   continue_block: 'CONT',
@@ -38,6 +44,16 @@ export function buildStoryBranchReadableLineageLabel(
 export function prefixStoryBranchTitle(readableLineageLabel: string, suffix: string) {
   const trimmedSuffix = suffix.trim()
   return trimmedSuffix ? `${readableLineageLabel} ${trimmedSuffix}` : readableLineageLabel
+}
+
+export function resolveStoryBranchDisplayLabel(node: StoryBranchDisplayNode) {
+  const readableLabel = node.readableLabel?.trim()
+  if (readableLabel) return readableLabel
+
+  const readableLineageLabel = node.readableLineageLabel?.trim()
+  if (readableLineageLabel) return readableLineageLabel
+
+  return node.title?.trim() ?? ''
 }
 
 export function formatStoryBranchInstructionPreview(value: string | null | undefined, maxChars = 15) {
