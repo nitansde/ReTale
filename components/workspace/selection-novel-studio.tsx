@@ -167,7 +167,7 @@ type KnowledgeRebuildStatus = {
   updatedAt: string
   etaMinutes: number | null
   steps: Array<{
-    key: 'extract' | 'cleanup' | 'write' | 'index'
+    key: 'hanlp-bootstrap' | 'extract' | 'batch-sync' | 'cleanup' | 'write' | 'index'
     label: string
     status: 'pending' | 'running' | 'paused' | 'completed'
     progress: number
@@ -176,6 +176,20 @@ type KnowledgeRebuildStatus = {
   }>
   rawTextEmbeddingProgress?: number
   rawTextEmbeddingCacheHitRate?: number
+  hanlpCacheStatus?: 'queued' | 'running' | 'paused' | 'ready' | 'empty'
+  hanlpCacheHitRate?: number
+  hanlpBootstrapProgress?: number
+  hanlpBootstrapCompletedChapterCount?: number
+  hanlpBootstrapTotalChapterCount?: number
+  hanlpBootstrapCacheHitCount?: number
+  hanlpBootstrapCacheMissCount?: number
+  hanlpBootstrapInitializedCharacterEntities?: boolean
+  hanlpSettingsSnapshot?: {
+    hanlpScriptVersionHash: string
+    hanlpModelOrConfigHash: string
+    outputSchemaVersion: string
+    pipelineVersion: string
+  }
   stageTimingsMs?: Record<string, number>
   embeddingSettingsSnapshot?: {
     provider: string
@@ -345,7 +359,24 @@ const KNOWLEDGE_STEP_STATUS_LABELS: Record<KnowledgeRebuildStatus['steps'][numbe
   completed: '已完成',
 }
 
+const HANLP_CACHE_STATUS_LABELS: Record<NonNullable<KnowledgeRebuildStatus['hanlpCacheStatus']>, string> = {
+  queued: '排队中',
+  running: '扫描中',
+  paused: '已暂停',
+  ready: '缓存就绪',
+  empty: '暂无缓存',
+}
+
+const CHARACTER_CLASSIFICATION_DISPLAY_LABELS: Record<NonNullable<Character['classificationKey']>, string> = {
+  tier0: 'Tier 0 主角',
+  tier1: 'Tier 1 重要配角',
+  tier2: 'Tier 2 篇章配角',
+  candidate: 'Candidate',
+  ignored: 'Ignored',
+}
+
 const RAW_TEXT_PRECOMPUTE_STAGE_KEY = 'raw_text_precompute'
+const HANLP_BOOTSTRAP_STAGE_KEY = 'hanlp-bootstrap'
 
 function toProgressPercent(value: number | null | undefined) {
   return Math.max(0, Math.min(100, Math.round((value ?? 0) * 100)))
@@ -368,6 +399,45 @@ function formatEmbeddingProviderLabel(provider: string) {
   if (provider === 'openai-compatible') return 'OpenAI-compatible'
   if (provider === 'ollama') return 'Ollama'
   return provider
+}
+
+export function getCharacterClassificationBadgeLabel(character: Pick<Character, 'classificationKey' | 'classificationLabel' | 'importanceTier'>) {
+  if (character.classificationKey && character.classificationKey in CHARACTER_CLASSIFICATION_DISPLAY_LABELS) {
+    return CHARACTER_CLASSIFICATION_DISPLAY_LABELS[character.classificationKey]
+  }
+
+  if (character.importanceTier === 'candidate') return 'Candidate'
+  if (character.importanceTier === 'ignored') return 'Ignored'
+
+  return character.classificationLabel?.trim() || null
+}
+
+function formatKnowledgeEtaLabel(params: {
+  etaMinutes: number | null | undefined
+  isPaused: boolean
+  hasTelemetry: boolean
+}) {
+  if (params.isPaused) return '已暂停'
+  if (typeof params.etaMinutes === 'number' && Number.isFinite(params.etaMinutes) && params.etaMinutes > 0) {
+    return `约 ${params.etaMinutes} 分钟`
+  }
+  return params.hasTelemetry ? '计算中' : '等待进度'
+}
+
+export function resolveHanlpCacheDeleteState(params: {
+  knowledgeRebuildStatus: Pick<KnowledgeRebuildStatus, 'status'> | null
+  knowledgeActionLoading: 'pause' | 'abort' | 'delete' | 'delete-hanlp-cache' | null
+}) {
+  const blockedByActiveRebuild = params.knowledgeRebuildStatus?.status === 'queued'
+    || params.knowledgeRebuildStatus?.status === 'running'
+    || params.knowledgeRebuildStatus?.status === 'paused'
+
+  return {
+    disabled: blockedByActiveRebuild || Boolean(params.knowledgeActionLoading),
+    helperText: blockedByActiveRebuild
+      ? '当前 HanLP Bootstrap 仍在进行中或已暂停，需先终止或完成当前重建后才能删除缓存。'
+      : '只会删除当前小说主分支的 HanLP 缓存，不会影响正文或原文 Embedding 缓存。',
+  }
 }
 
 const ACTION_META: Record<WorkspaceActionMode, { label: string; title: string; description: string; icon: typeof Wand2 }> = {
@@ -779,6 +849,7 @@ export function SelectionNovelStudio() {
   const pauseStoryKnowledgeRebuild = useNovelStore((state) => state.pauseStoryKnowledgeRebuild)
   const abortStoryKnowledgeRebuild = useNovelStore((state) => state.abortStoryKnowledgeRebuild)
   const deleteStoryKnowledgeGraph = useNovelStore((state) => state.deleteStoryKnowledgeGraph)
+  const deleteStoryHanlpCache = useNovelStore((state) => state.deleteStoryHanlpCache)
   const refreshKnowledgeProjection = useNovelStore((state) => state.refreshKnowledgeProjection)
   const setPresetCompatSessionPhase = useNovelStore((state) => state.setPresetCompatSessionPhase)
   const clearPresetCompatSessionStateForSelection = useNovelStore((state) => state.clearPresetCompatSessionStateForSelection)
@@ -948,7 +1019,8 @@ export function SelectionNovelStudio() {
   const [knowledgeRebuilding, setKnowledgeRebuilding] = useState(false)
   const [presetCompatLibraryOpen, setPresetCompatLibraryOpen] = useState(false)
   const [knowledgeRebuildStatus, setKnowledgeRebuildStatus] = useState<KnowledgeRebuildStatus | null>(null)
-  const [knowledgeActionLoading, setKnowledgeActionLoading] = useState<'pause' | 'abort' | 'delete' | null>(null)
+  const [knowledgeActionLoading, setKnowledgeActionLoading] = useState<'pause' | 'abort' | 'delete' | 'delete-hanlp-cache' | null>(null)
+  const [confirmDeleteHanlpCache, setConfirmDeleteHanlpCache] = useState(false)
   const [ollamaModelsByScenario, setOllamaModelsByScenario] = useState<Record<AIScenarioKey, OllamaModelOption[]>>({
     rewrite: [],
     knowledgeExtraction: [],
@@ -1113,6 +1185,7 @@ export function SelectionNovelStudio() {
 
     const confirmResetTimer = window.setTimeout(() => {
       setConfirmDeleteKnowledge(false)
+      setConfirmDeleteHanlpCache(false)
     }, 0)
 
     let cancelled = false
@@ -1497,10 +1570,81 @@ export function SelectionNovelStudio() {
   const knowledgeRebuildSteps = useMemo(() => knowledgeRebuildStatus?.steps ?? [], [knowledgeRebuildStatus])
   const knowledgeRebuildPaused = knowledgeRebuildStatus?.status === 'paused'
   const knowledgeRebuildActive = knowledgeRebuildStatus?.status === 'running' || knowledgeRebuildStatus?.status === 'queued'
+  const knowledgeRebuildBusy = knowledgeRebuildActive || knowledgeRebuildPaused
   const knowledgeRebuildOverallPercent = useMemo(
     () => toProgressPercent(knowledgeRebuildStatus?.progress),
     [knowledgeRebuildStatus]
   )
+  const hanlpBootstrapStep = useMemo(
+    () => knowledgeRebuildSteps.find((step) => step.key === HANLP_BOOTSTRAP_STAGE_KEY) ?? null,
+    [knowledgeRebuildSteps]
+  )
+  const hanlpBootstrapCompletedChapterCount = knowledgeRebuildStatus?.hanlpBootstrapCompletedChapterCount ?? null
+  const hanlpBootstrapTotalChapterCount = knowledgeRebuildStatus?.hanlpBootstrapTotalChapterCount ?? null
+  const hanlpBootstrapProgress = knowledgeRebuildStatus?.hanlpBootstrapProgress ?? hanlpBootstrapStep?.progress ?? null
+  const hanlpBootstrapPercent = useMemo(
+    () => hanlpBootstrapProgress === null ? null : toProgressPercent(hanlpBootstrapProgress),
+    [hanlpBootstrapProgress]
+  )
+  const hanlpBootstrapHasProgressTelemetry = Boolean(
+    hanlpBootstrapPercent !== null
+    || hanlpBootstrapCompletedChapterCount !== null
+    || hanlpBootstrapTotalChapterCount !== null
+  )
+  const hanlpBootstrapCacheHitRatePercent = useMemo(() => {
+    if (knowledgeRebuildStatus?.hanlpCacheHitRate !== undefined) {
+      return toProgressPercent(knowledgeRebuildStatus.hanlpCacheHitRate)
+    }
+
+    const hitCount = knowledgeRebuildStatus?.hanlpBootstrapCacheHitCount ?? 0
+    const missCount = knowledgeRebuildStatus?.hanlpBootstrapCacheMissCount ?? 0
+    const total = hitCount + missCount
+    return total > 0 ? toProgressPercent(hitCount / total) : null
+  }, [knowledgeRebuildStatus])
+  const hanlpBootstrapTimingLabel = useMemo(() => {
+    const duration = knowledgeRebuildStatus?.stageTimingsMs?.[HANLP_BOOTSTRAP_STAGE_KEY]
+    return typeof duration === 'number' && Number.isFinite(duration) ? formatStageDuration(duration) : null
+  }, [knowledgeRebuildStatus])
+  const hanlpBootstrapPhaseLabel = useMemo(() => {
+    const detail = hanlpBootstrapStep?.detail?.trim()
+    if (detail) return detail
+
+    const currentStep = knowledgeRebuildStatus?.currentStep?.trim()
+    if (currentStep) return currentStep
+
+    if (knowledgeRebuildPaused) return '等待继续'
+    return hanlpBootstrapHasProgressTelemetry ? '计算中' : '等待进度'
+  }, [hanlpBootstrapHasProgressTelemetry, hanlpBootstrapStep, knowledgeRebuildPaused, knowledgeRebuildStatus])
+  const hanlpBootstrapEtaLabel = useMemo(() => formatKnowledgeEtaLabel({
+    etaMinutes: hanlpBootstrapStep?.etaMinutes ?? knowledgeRebuildEtaMinutes,
+    isPaused: knowledgeRebuildPaused,
+    hasTelemetry: hanlpBootstrapHasProgressTelemetry,
+  }), [hanlpBootstrapHasProgressTelemetry, hanlpBootstrapStep, knowledgeRebuildEtaMinutes, knowledgeRebuildPaused])
+  const hanlpBootstrapStatusLine = useMemo(() => {
+    const completed = hanlpBootstrapCompletedChapterCount
+    const total = hanlpBootstrapTotalChapterCount
+
+    if (typeof completed === 'number' && typeof total === 'number' && total > 0) {
+      return completed >= total
+        ? `已完成 ${completed} / ${total} 章，HanLP Bootstrap 已就绪。`
+        : `已完成 ${completed} / ${total} 章，继续更新 HanLP 引导结果。`
+    }
+
+    if (knowledgeRebuildPaused) return 'HanLP Bootstrap 已暂停，等待继续。'
+    if (knowledgeRebuildBusy) return hanlpBootstrapHasProgressTelemetry ? 'HanLP Bootstrap 正在持续回传章节遥测。' : 'HanLP Bootstrap 已启动，正在等待章节进度。'
+    return '当前还没有可展示的 HanLP Bootstrap 进度。'
+  }, [hanlpBootstrapCompletedChapterCount, hanlpBootstrapHasProgressTelemetry, hanlpBootstrapTotalChapterCount, knowledgeRebuildBusy, knowledgeRebuildPaused])
+  const hanlpCacheStatus = knowledgeRebuildStatus?.hanlpCacheStatus ?? 'empty'
+  const hanlpCacheStatusLabel = HANLP_CACHE_STATUS_LABELS[hanlpCacheStatus]
+  const hanlpSettingsLine = useMemo(() => {
+    const snapshot = knowledgeRebuildStatus?.hanlpSettingsSnapshot
+    if (!snapshot) return null
+    return `script ${snapshot.hanlpScriptVersionHash.slice(0, 8)} · config ${snapshot.hanlpModelOrConfigHash.slice(0, 8)} · schema ${snapshot.outputSchemaVersion} · pipeline ${snapshot.pipelineVersion}`
+  }, [knowledgeRebuildStatus])
+  const hanlpCacheDeleteState = useMemo(() => resolveHanlpCacheDeleteState({
+    knowledgeRebuildStatus,
+    knowledgeActionLoading,
+  }), [knowledgeActionLoading, knowledgeRebuildStatus])
   const rawTextEmbeddingProgress = knowledgeRebuildStatus?.rawTextEmbeddingProgress
   const rawTextEmbeddingPercent = useMemo(
     () => rawTextEmbeddingProgress === undefined ? null : toProgressPercent(rawTextEmbeddingProgress),
@@ -2798,6 +2942,29 @@ export function SelectionNovelStudio() {
     }
   }
 
+  const handleDeleteHanlpCache = async () => {
+    if (!currentNovelId || knowledgeActionLoading) return
+    setKnowledgeActionLoading('delete-hanlp-cache')
+    try {
+      const result = await deleteStoryHanlpCache(currentNovelId)
+      if (!result) return
+
+      setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      setConfirmDeleteHanlpCache(false)
+
+      if (result.actionError?.message) {
+        showKnowledgeToast(result.actionError.message, 2600)
+        return
+      }
+
+      showKnowledgeToast(result.jobOutcome === 'deleted' ? '已删除当前小说的 HanLP 缓存' : '当前小说没有可删除的 HanLP 缓存', 2200)
+    } catch (error) {
+      showKnowledgeToast(error instanceof Error ? error.message : '删除 HanLP 缓存失败', 2600)
+    } finally {
+      setKnowledgeActionLoading(null)
+    }
+  }
+
   const handleRewrite = async () => {
     const targetSelection = lockedSelectionText.trim() || selectionText.trim()
     if (!currentChapter || !targetSelection) return
@@ -3481,7 +3648,7 @@ export function SelectionNovelStudio() {
           onClick={() => {
             void handleRebuildKnowledge()
           }}
-          disabled={knowledgeRebuilding || knowledgeRebuildActive || knowledgeActionLoading === 'pause' || knowledgeActionLoading === 'abort' || knowledgeActionLoading === 'delete'}
+          disabled={knowledgeRebuilding || knowledgeRebuildActive || Boolean(knowledgeActionLoading)}
           className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
         >
           {knowledgeRebuilding ? '处理中…' : knowledgeRebuildPaused ? '继续知识视图重建' : '重建知识视图'}
@@ -3505,6 +3672,47 @@ export function SelectionNovelStudio() {
           <p className="mt-1 text-[11px] leading-5 text-zinc-500">
             预估剩余：{knowledgeRebuildPaused ? '已暂停' : knowledgeRebuildEtaMinutes ? `约 ${knowledgeRebuildEtaMinutes} 分钟` : '计算中'}
           </p>
+          <div className="mt-3 rounded-xl border border-violet-300/15 bg-violet-500/[0.08] px-3 py-3" data-testid="workspace-hanlp-bootstrap-card">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <p className="text-[11px] font-medium text-violet-100">HanLP Bootstrap</p>
+                <p className="mt-1 text-[10px] leading-4 text-violet-100/75">{hanlpBootstrapStatusLine}</p>
+              </div>
+              <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">
+                {typeof hanlpBootstrapCompletedChapterCount === 'number' && typeof hanlpBootstrapTotalChapterCount === 'number'
+                  ? `${hanlpBootstrapCompletedChapterCount} / ${hanlpBootstrapTotalChapterCount} 章`
+                  : hanlpCacheStatusLabel}
+              </span>
+            </div>
+            {hanlpBootstrapPercent !== null ? (
+              <>
+                <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-zinc-300">
+                  <span>章节进度</span>
+                  <span className="text-violet-100">{hanlpBootstrapPercent}%</span>
+                </div>
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full rounded-full bg-violet-300 transition-all"
+                    style={{ width: `${Math.max(hanlpBootstrapPercent > 0 ? 8 : 0, Math.min(100, hanlpBootstrapPercent))}%` }}
+                  />
+                </div>
+              </>
+            ) : null}
+            <div className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 text-[10px] leading-4 text-zinc-400 sm:grid-cols-2">
+              <span>
+                完成章节：{typeof hanlpBootstrapCompletedChapterCount === 'number' && typeof hanlpBootstrapTotalChapterCount === 'number'
+                  ? `${hanlpBootstrapCompletedChapterCount} / ${hanlpBootstrapTotalChapterCount}`
+                  : '等待进度'}
+              </span>
+              <span>缓存命中率：{hanlpBootstrapCacheHitRatePercent !== null ? `${hanlpBootstrapCacheHitRatePercent}%` : '等待进度'}</span>
+              <span>当前阶段：{hanlpBootstrapPhaseLabel}</span>
+              <span>预估剩余：{hanlpBootstrapEtaLabel}</span>
+              <span>阶段耗时：{hanlpBootstrapTimingLabel ?? '等待进度'}</span>
+            </div>
+            {hanlpSettingsLine ? (
+              <p className="mt-1 truncate text-[10px] leading-4 text-zinc-500">{hanlpSettingsLine}</p>
+            ) : null}
+          </div>
           <div className="mt-3 rounded-xl border border-violet-300/15 bg-violet-500/[0.08] px-3 py-3">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
@@ -3609,6 +3817,55 @@ export function SelectionNovelStudio() {
           </div>
         </div>
       ) : null}
+      <div className="mt-3 rounded-2xl border border-sky-400/15 bg-sky-500/[0.06] px-3 py-3 text-xs text-zinc-300" data-testid="workspace-hanlp-cache-card">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.18em] text-sky-200/70">HanLP cache</p>
+            <p className="mt-1 leading-5 text-zinc-300">当前状态：{hanlpCacheStatusLabel}</p>
+            <p className="mt-1 leading-5 text-zinc-400">{hanlpCacheDeleteState.helperText}</p>
+          </div>
+          <button
+            onClick={() => setConfirmDeleteHanlpCache((current) => !current)}
+            disabled={hanlpCacheDeleteState.disabled}
+            data-testid="workspace-delete-hanlp-cache"
+            aria-label="删除 HanLP 缓存"
+            className="rounded-full border border-sky-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-sky-100 transition hover:bg-sky-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            删除 HanLP 缓存
+          </button>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] leading-4 text-zinc-400">
+          <span>缓存状态：{hanlpCacheStatusLabel}</span>
+          <span>命中率：{hanlpBootstrapCacheHitRatePercent !== null ? `${hanlpBootstrapCacheHitRatePercent}%` : '等待进度'}</span>
+          <span>阶段耗时：{hanlpBootstrapTimingLabel ?? '等待进度'}</span>
+        </div>
+        {hanlpSettingsLine ? (
+          <p className="mt-1 truncate text-[10px] leading-4 text-zinc-500">{hanlpSettingsLine}</p>
+        ) : null}
+        {confirmDeleteHanlpCache ? (
+          <div className="mt-3 rounded-xl border border-sky-400/15 bg-black/20 p-3">
+            <p className="text-[11px] leading-5 text-sky-100">请再次确认：这会删除当前小说主分支的 HanLP Bootstrap 缓存与聚合结果，下次重建时会重新扫描章节。</p>
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={() => {
+                  void handleDeleteHanlpCache()
+                }}
+                disabled={hanlpCacheDeleteState.disabled}
+                className="flex-1 rounded-xl border border-sky-400/20 bg-sky-500/15 px-3 py-2 text-[11px] text-sky-100 transition hover:bg-sky-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {knowledgeActionLoading === 'delete-hanlp-cache' ? '删除中…' : '确认删除 HanLP 缓存'}
+              </button>
+              <button
+                onClick={() => setConfirmDeleteHanlpCache(false)}
+                disabled={knowledgeActionLoading === 'delete-hanlp-cache'}
+                className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
       <div className="mt-3 rounded-2xl border border-rose-400/15 bg-rose-500/[0.06] px-3 py-3 text-xs text-zinc-300">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -3900,6 +4157,8 @@ export function SelectionNovelStudio() {
                     const setF = (key: string, val: string) => setEditState((s) => ({ ...s, form: { ...s.form, [key]: val } }))
                     const profileSections = buildCharacterProfileSections(char.profile)
                     const showProfile = hasCharacterProfile(char.profile)
+                    const classificationBadgeLabel = getCharacterClassificationBadgeLabel(char)
+                    const aliasBadges = (char.aliases ?? []).map((alias) => alias.trim()).filter(Boolean)
                     return (
                       <div key={char.id} className="rounded-2xl border border-white/8 bg-black/20 p-3">
                         {isEditing ? (
@@ -3931,13 +4190,28 @@ export function SelectionNovelStudio() {
                                 </div>
                               ) : null}
                             </div>
+                            {(classificationBadgeLabel || aliasBadges.length > 0 || char.profile?.gender?.summary || char.profile?.capability?.summary || char.profile?.speakingStyle?.summary) ? (
+                              <div className="mb-2 flex flex-wrap gap-2">
+                                {classificationBadgeLabel ? (
+                                  <span
+                                    data-testid={`workspace-character-tier-${char.classificationKey ?? char.importanceTier ?? 'unknown'}`}
+                                    className="rounded-full border border-emerald-300/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-100"
+                                  >
+                                    {classificationBadgeLabel}
+                                  </span>
+                                ) : null}
+                                {aliasBadges.map((alias) => (
+                                  <span key={`${char.id}-${alias}`} className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">
+                                    别名 · {alias}
+                                  </span>
+                                ))}
+                                {char.profile?.gender?.summary ? <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{char.profile.gender.summary}</span> : null}
+                                {char.profile?.capability?.summary ? <span className="rounded-full border border-violet-300/20 bg-violet-500/10 px-2 py-0.5 text-[10px] text-violet-200">{char.profile.capability.summary}</span> : null}
+                                {char.profile?.speakingStyle?.summary ? <span className="rounded-full border border-sky-300/20 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-200">{char.profile.speakingStyle.summary}</span> : null}
+                              </div>
+                            ) : null}
                             {showProfile ? (
                               <div className="space-y-2">
-                                <div className="flex flex-wrap gap-2">
-                                  {char.profile?.gender?.summary ? <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{char.profile.gender.summary}</span> : null}
-                                  {char.profile?.capability?.summary ? <span className="rounded-full border border-violet-300/20 bg-violet-500/10 px-2 py-0.5 text-[10px] text-violet-200">{char.profile.capability.summary}</span> : null}
-                                  {char.profile?.speakingStyle?.summary ? <span className="rounded-full border border-sky-300/20 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-200">{char.profile.speakingStyle.summary}</span> : null}
-                                </div>
                                 <div className="space-y-2 text-xs leading-5 text-zinc-300">
                                   {profileSections.map((section) => (
                                     <div key={section.key} className="rounded-xl border border-white/8 bg-white/[0.03] px-2.5 py-2">
