@@ -146,6 +146,7 @@ describe('ProjectGrid chapter resolution', () => {
   it('opens the imported novel from refreshed store state even if the render snapshot was stale', async () => {
     const setCurrentNovelId = vi.fn()
     const setCurrentChapterId = vi.fn()
+    const saveToBackend = vi.fn(async () => undefined)
     const loadFromBackend = vi.fn(async () => {
       mockStoreState = {
         ...mockStoreState,
@@ -159,7 +160,7 @@ describe('ProjectGrid chapter resolution', () => {
       localChapters: [],
       getNovels: () => [],
       loadFromBackend,
-      saveToBackend: vi.fn(async () => undefined),
+      saveToBackend,
       setCurrentNovelId,
       setCurrentChapterId,
       deleteNovel: vi.fn(),
@@ -176,6 +177,7 @@ describe('ProjectGrid chapter resolution', () => {
 
     await waitFor(() => {
       expect(loadFromBackend).toHaveBeenCalledTimes(1)
+      expect(saveToBackend).toHaveBeenCalledTimes(1)
       expect(setCurrentNovelId).toHaveBeenCalledWith('novel-new')
       expect(setCurrentChapterId).toHaveBeenCalledWith('ch-new-1')
       expect(pushMock).toHaveBeenCalledWith('/workspace')
@@ -222,5 +224,45 @@ describe('ProjectGrid chapter resolution', () => {
     expect(setCurrentNovelId).not.toHaveBeenCalled()
     expect(setCurrentChapterId).not.toHaveBeenCalled()
     expect(pushMock).not.toHaveBeenCalled()
+  })
+
+  it('saves the selected novel and chapter before navigating from an existing library card', async () => {
+    const callOrder: string[] = []
+    const setCurrentNovelId = vi.fn((novelId: string) => {
+      callOrder.push(`novel:${novelId}`)
+    })
+    const setCurrentChapterId = vi.fn((chapterId: string) => {
+      callOrder.push(`chapter:${chapterId}`)
+    })
+    const saveToBackend = vi.fn(async () => {
+      callOrder.push('save')
+    })
+
+    pushMock.mockImplementation(() => {
+      callOrder.push('push')
+    })
+
+    mockStoreState = {
+      backendLoadError: '',
+      backendLoaded: true,
+      localChapters: [{ id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 }],
+      getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
+      loadFromBackend: vi.fn(async () => undefined),
+      saveToBackend,
+      setCurrentNovelId,
+      setCurrentChapterId,
+      deleteNovel: vi.fn(),
+    }
+
+    renderProjectGrid()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Open project' }))
+      await Promise.resolve()
+    })
+
+    expect(saveToBackend).toHaveBeenCalledTimes(1)
+    expect(pushMock).toHaveBeenCalledWith('/workspace')
+    expect(callOrder).toEqual(['novel:novel-a', 'chapter:ch-1', 'save', 'push'])
   })
 })

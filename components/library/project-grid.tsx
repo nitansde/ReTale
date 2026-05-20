@@ -49,7 +49,7 @@ export function ProjectGrid() {
     loadFromBackend().catch(() => undefined)
   }, [backendLoaded, loadFromBackend])
 
-  const openNovel = (novelId: string, chapterId?: string) => {
+  const openNovel = async (novelId: string, chapterId?: string) => {
     const chapter = resolveOpenNovelChapter(useNovelStore.getState().localChapters, novelId, chapterId)
 
     if (!chapter) {
@@ -59,6 +59,7 @@ export function ProjectGrid() {
 
     setCurrentNovelId(novelId)
     setCurrentChapterId(chapter.id)
+    await saveToBackend().catch(() => undefined)
     router.push('/workspace')
   }
 
@@ -113,7 +114,7 @@ export function ProjectGrid() {
 
       if (data.chapterCount <= 120) {
         setImportMessage(`上传完成，已导入 ${data.chapterCount} 章，正在进入工作区…`)
-        openNovel(data.novelId, data.chapterId)
+        await openNovel(data.novelId, data.chapterId)
         return
       }
 
@@ -197,7 +198,9 @@ export function ProjectGrid() {
           <ProjectCard
             key={novel.id}
             novel={novel}
-            onOpen={() => openNovel(novel.id)}
+            onOpen={() => {
+              void openNovel(novel.id)
+            }}
             onDelete={() => {
               void handleDeleteNovel(novel.id, novel.title)
             }}
