@@ -168,6 +168,66 @@ afterEach(() => {
 })
 
 describe('retrieval-index cache reuse helpers', () => {
+  it('includes tier labels and merged aliases in entity retrieval docs without duplicate character docs', async () => {
+    const tempDatabase = createTempDatabaseCopy('chatbook-retrieval-index-character-doc-tier-aliases')
+    cleanups.push(tempDatabase.cleanup)
+
+    const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+    globalForSqlite.sqlite = database
+    seedRetrievalFixture(database)
+
+    database.prepare(
+      `INSERT INTO KnowledgeEntity (
+        id, novelId, branchId, entityType, canonicalName, description, importanceTier, firstSeenChapter, lastSeenChapter, status
+      ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, ?)`
+    ).run('entity-hero', 'novel-001', 'novel-001:main', '林砚', '主角描述', 'protagonist', 1, 1, 'ready')
+    database.prepare('INSERT INTO EntityAlias (id, entityId, alias, sourceChapter) VALUES (?, ?, ?, ?)')
+      .run('alias-hero-1', 'entity-hero', '阿砚', 1)
+    database.prepare(
+      `INSERT INTO EntityAliasMapping (id, novelId, branchId, alias, entityId, sourceChapter)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run('alias-map-hero-1', 'novel-001', 'novel-001:main', '林公子', 'entity-hero', 1)
+    database.prepare(
+      `INSERT INTO KnowledgeFact (
+        id, novelId, branchId, factType, subjectEntityId, predicate, valueJson,
+        sourceChapter, validFromChapter, validUntilChapter, status
+      ) VALUES (?, ?, ?, 'character_profile', ?, 'role_card', ?, ?, ?, ?, ?)`
+    ).run(
+      'fact-hero-profile',
+      'novel-001',
+      'novel-001:main',
+      'entity-hero',
+      JSON.stringify({
+        profile: {
+          identity: { summary: '剑修主角' },
+          appearance: { summary: '眉目清峻' },
+        },
+        descriptionDelta: '剑修主角｜眉目清峻',
+      }),
+      1,
+      1,
+      999999999,
+      'ready',
+    )
+
+    vi.resetModules()
+    const { loadKnowledgeDerivedRetrievalDocs } = await import('@/lib/server/retrieval-index')
+    const docs = loadKnowledgeDerivedRetrievalDocs('novel-001', 'novel-001:main')
+    const entityDocs = docs.filter((row) => row.sourceType === 'entity_profile' && row.title === '林砚')
+
+    expect(entityDocs).toHaveLength(1)
+    expect(entityDocs[0]).toMatchObject({
+      relatedEntityNames: expect.stringContaining('林砚'),
+      relatedTerms: expect.stringContaining('tier0'),
+      text: expect.stringContaining('分级：Tier 0'),
+    })
+    expect(entityDocs[0]?.text).toContain('别名：')
+    expect(entityDocs[0]?.text).toContain('阿砚')
+    expect(entityDocs[0]?.text).toContain('林公子')
+    expect(entityDocs[0]?.relatedEntityNames).toContain('阿砚')
+    expect(entityDocs[0]?.relatedEntityNames).toContain('林公子')
+  })
+
   it('partitions raw-text and knowledge-derived retrieval docs', async () => {
     const tempDatabase = createTempDatabaseCopy('chatbook-retrieval-index-cache-reuse-partition')
     cleanups.push(tempDatabase.cleanup)

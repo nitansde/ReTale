@@ -145,6 +145,20 @@ const DEFAULT_BASE_URL = 'http://127.0.0.1:11434'
 const DEFAULT_TIMEOUT_MS = 600000
 const EXTRACTION_TOP_LEVEL_ARRAY_KEYS = ['relations', 'events', 'worldbuilding', 'open_threads'] as const
 const EXTRACTION_MAX_PROMPT_LINES = 60
+const GENERIC_ALIAS_VALUES = new Set([
+  '',
+  '他',
+  '她',
+  '它',
+  '他们',
+  '她们',
+  '它们',
+  '那人',
+  '这人',
+  '对方',
+  '男人',
+  '女人',
+])
 const GENERIC_RELATION_TYPE_VALUES = new Set([
   '',
   '关系',
@@ -267,6 +281,65 @@ export const EXTRACTION_SCHEMA = {
         required: ['name', 'aliases', 'status', 'description_delta', 'profile', 'evidence'],
       },
     },
+    known_character_updates: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          description_delta: { type: 'string' },
+          profile: { type: 'object' },
+          evidence: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                quote: { type: 'string' },
+                line_start: { type: 'integer' },
+                line_end: { type: 'integer' },
+              },
+              required: ['quote', 'line_start', 'line_end'],
+            },
+          },
+        },
+        required: ['name', 'description_delta', 'profile', 'evidence'],
+      },
+    },
+    unknown_character_observations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          surface_text: { type: 'string' },
+          observation: { type: 'string' },
+          profile: { type: 'object' },
+          evidence: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                quote: { type: 'string' },
+                line_start: { type: 'integer' },
+                line_end: { type: 'integer' },
+              },
+              required: ['quote', 'line_start', 'line_end'],
+            },
+          },
+        },
+        required: ['surface_text', 'observation', 'profile', 'evidence'],
+      },
+    },
+    alias_discoveries: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          alias: { type: 'string' },
+          target: { type: 'string' },
+        },
+        required: ['alias', 'target'],
+      },
+    },
     relations: {
       type: 'array',
       items: {
@@ -380,7 +453,7 @@ export const EXTRACTION_SCHEMA = {
       },
     },
   },
-  required: ['chapter_no', 'summary', 'characters', 'relations', 'events', 'worldbuilding', 'open_threads'],
+  required: ['chapter_no', 'summary', 'characters', 'known_character_updates', 'unknown_character_observations', 'alias_discoveries', 'relations', 'events', 'worldbuilding', 'open_threads'],
 } as const
 
 function parsePositiveInt(value: string | undefined, fallback: number) {
@@ -540,6 +613,11 @@ function buildProfileFromLooseRecord(record: Record<string, unknown>, evidence: 
       stringifyLooseValue(record.appearance_note),
       evidenceSnippet,
     ),
+    body: buildFacet(
+      stringifyLooseValue(record.body ?? record.figure ?? record.build ?? record.body_type),
+      stringifyLooseValue(record.body_note ?? record.figure_note),
+      evidenceSnippet,
+    ),
     clothing: buildFacet(
       stringifyLooseValue(record.clothing ?? record.outfit ?? record.dress),
       stringifyLooseValue(record.clothing_note),
@@ -585,6 +663,9 @@ function buildLooseEventName(text: string) {
 
 function hasPrimaryExtractionCollections(record: Record<string, unknown>) {
   return Array.isArray(record.characters)
+    || Array.isArray(record.known_character_updates)
+    || Array.isArray(record.unknown_character_observations)
+    || Array.isArray(record.alias_discoveries)
     || Array.isArray(record.entities)
     || Array.isArray(record.relations)
     || Array.isArray(record.events)
@@ -696,6 +777,9 @@ function normalizeNarrativeProfileExtraction(record: Record<string, unknown>, ch
     chapterNo,
     summary,
     characters,
+    knownCharacterUpdates: [],
+    unknownCharacterObservations: [],
+    aliasDiscoveries: [],
     relations: [],
     events,
     worldbuilding,
@@ -778,11 +862,63 @@ function normalizeLooseArrayExtraction(items: unknown[], chapterNo: number): Cha
     chapterNo,
     summary: summaryParts.join(' ').trim(),
     characters,
+    knownCharacterUpdates: [],
+    unknownCharacterObservations: [],
+    aliasDiscoveries: [],
     relations: [],
     events,
     worldbuilding,
     openThreads: [],
   }
+}
+
+function normalizeCharacterExtractionRecord(row: Record<string, unknown>) {
+  const name = typeof row.name === 'string' ? row.name.trim() : ''
+  if (!name) return null
+  const evidence = normalizeEvidence(row.evidence)
+  const profileRecord = row.profile && typeof row.profile === 'object' && !Array.isArray(row.profile)
+    ? row.profile as Record<string, unknown>
+    : {}
+  const profile = normalizeCharacterRoleCardProfile({
+    personality: normasecondSampleProfileFacet(profileRecord.personality ?? row.personality),
+    gender: normasecondSampleProfileFacet(profileRecord.gender ?? row.gender),
+    identity: normasecondSampleProfileFacet(profileRecord.identity ?? row.identity),
+    capability: normasecondSampleProfileFacet(profileRecord.capability ?? row.capability),
+    appearance: normasecondSampleProfileFacet(profileRecord.appearance ?? row.appearance),
+    body: normasecondSampleProfileFacet(profileRecord.body ?? row.body),
+    clothing: normasecondSampleProfileFacet(profileRecord.clothing ?? row.clothing),
+    speakingStyle: normasecondSampleProfileFacet(profileRecord.speakingStyle ?? row.speaking_style ?? row.speakingStyle),
+    likes: normasecondSampleProfileFacet(profileRecord.likes ?? row.likes),
+  })
+  const looseProfile = buildProfileFromLooseRecord(row, evidence)
+  const finalProfile = normalizeCharacterRoleCardProfile({ ...looseProfile, ...profile })
+  return {
+    name,
+    aliases: Array.isArray(row.aliases) ? row.aliases.map((alias) => String(alias).trim()).filter(Boolean) : [],
+    status: typeof row.status === 'string' ? row.status.trim() : '活跃',
+    descriptionDelta: typeof row.description_delta === 'string'
+      ? row.description_delta.trim()
+      : typeof row.descriptionDelta === 'string'
+        ? row.descriptionDelta.trim()
+        : typeof row.description === 'string'
+          ? row.description.trim()
+          : buildCharacterDescriptionDelta(finalProfile),
+    finalProfile,
+    evidence,
+  }
+}
+
+function isGenericAliasValue(value: string) {
+  return GENERIC_ALIAS_VALUES.has(value.trim())
+}
+
+function normalizeAliasDiscovery(raw: unknown) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const record = raw as Record<string, unknown>
+  const alias = typeof record.alias === 'string' ? record.alias.trim() : ''
+  const target = typeof record.target === 'string' ? record.target.trim() : ''
+  if (!alias || !target || alias === target || isGenericAliasValue(alias)) return null
+  return { alias, target }
 }
 
 export function normalizeKnowledgeExtraction(raw: unknown, chapterNo: number): ChapterKnowledgeExtraction {
@@ -794,6 +930,9 @@ export function normalizeKnowledgeExtraction(raw: unknown, chapterNo: number): C
     const structuredRoot = records
       .find((item) => item && (
         Array.isArray(item.characters)
+        || Array.isArray(item.known_character_updates)
+        || Array.isArray(item.unknown_character_observations)
+        || Array.isArray(item.alias_discoveries)
         || Array.isArray(item.entities)
         || Array.isArray(item.relations)
         || Array.isArray(item.events)
@@ -827,6 +966,21 @@ export function normalizeKnowledgeExtraction(raw: unknown, chapterNo: number): C
     : Array.isArray(record.entities)
       ? record.entities
       : []
+  const knownCharacterUpdatesRaw = Array.isArray(record.known_character_updates)
+    ? record.known_character_updates
+    : Array.isArray(record.knownCharacterUpdates)
+      ? record.knownCharacterUpdates
+      : []
+  const unknownCharacterObservationsRaw = Array.isArray(record.unknown_character_observations)
+    ? record.unknown_character_observations
+    : Array.isArray(record.unknownCharacterObservations)
+      ? record.unknownCharacterObservations
+      : []
+  const aliasDiscoveriesRaw = Array.isArray(record.alias_discoveries)
+    ? record.alias_discoveries
+    : Array.isArray(record.aliasDiscoveries)
+      ? record.aliasDiscoveries
+      : []
   return {
     chapterNo,
     summary: typeof record.summary === 'string'
@@ -842,9 +996,47 @@ export function normalizeKnowledgeExtraction(raw: unknown, chapterNo: number): C
       ? charactersRaw
           .map((item) => {
             if (!item || typeof item !== 'object') return null
+            const normalized = normalizeCharacterExtractionRecord(item as Record<string, unknown>)
+            if (!normalized) return null
+            return {
+              name: normalized.name,
+              aliases: normalized.aliases,
+              status: normalized.status,
+              descriptionDelta: normalized.descriptionDelta,
+              profile: normalized.finalProfile,
+              evidence: normalized.evidence,
+            }
+          })
+          .filter((item): item is ChapterKnowledgeExtraction['characters'][number] => Boolean(item))
+      : [],
+    knownCharacterUpdates: Array.isArray(knownCharacterUpdatesRaw)
+      ? knownCharacterUpdatesRaw
+          .map((item) => {
+            if (!item || typeof item !== 'object') return null
+            const normalized = normalizeCharacterExtractionRecord(item as Record<string, unknown>)
+            if (!normalized) return null
+            return {
+              name: normalized.name,
+              descriptionDelta: normalized.descriptionDelta,
+              profile: normalized.finalProfile,
+              evidence: normalized.evidence,
+            }
+          })
+          .filter((item): item is ChapterKnowledgeExtraction['knownCharacterUpdates'][number] => Boolean(item))
+      : [],
+    unknownCharacterObservations: Array.isArray(unknownCharacterObservationsRaw)
+      ? unknownCharacterObservationsRaw
+          .map((item) => {
+            if (!item || typeof item !== 'object') return null
             const row = item as Record<string, unknown>
-            const name = typeof row.name === 'string' ? row.name.trim() : ''
-            if (!name) return null
+            const surfaceText = typeof row.surface_text === 'string'
+              ? row.surface_text.trim()
+              : typeof row.surfaceText === 'string'
+                ? row.surfaceText.trim()
+                : typeof row.name === 'string'
+                  ? row.name.trim()
+                  : ''
+            if (!surfaceText) return null
             const evidence = normalizeEvidence(row.evidence)
             const profileRecord = row.profile && typeof row.profile === 'object' && !Array.isArray(row.profile)
               ? row.profile as Record<string, unknown>
@@ -855,28 +1047,34 @@ export function normalizeKnowledgeExtraction(raw: unknown, chapterNo: number): C
               identity: normasecondSampleProfileFacet(profileRecord.identity ?? row.identity),
               capability: normasecondSampleProfileFacet(profileRecord.capability ?? row.capability),
               appearance: normasecondSampleProfileFacet(profileRecord.appearance ?? row.appearance),
+              body: normasecondSampleProfileFacet(profileRecord.body ?? row.body),
               clothing: normasecondSampleProfileFacet(profileRecord.clothing ?? row.clothing),
               speakingStyle: normasecondSampleProfileFacet(profileRecord.speakingStyle ?? row.speaking_style ?? row.speakingStyle),
               likes: normasecondSampleProfileFacet(profileRecord.likes ?? row.likes),
             })
             const looseProfile = buildProfileFromLooseRecord(row, evidence)
             const finalProfile = normalizeCharacterRoleCardProfile({ ...looseProfile, ...profile })
+            const observation = typeof row.observation === 'string'
+              ? row.observation.trim()
+              : typeof row.description === 'string'
+                ? row.description.trim()
+                : typeof row.summary === 'string'
+                  ? row.summary.trim()
+                  : buildCharacterDescriptionDelta(finalProfile)
+            if (!observation && !Object.keys(finalProfile).length) return null
             return {
-              name,
-              aliases: Array.isArray(row.aliases) ? row.aliases.map((alias) => String(alias).trim()).filter(Boolean) : [],
-              status: typeof row.status === 'string' ? row.status.trim() : '活跃',
-              descriptionDelta: typeof row.description_delta === 'string'
-                ? row.description_delta.trim()
-                : typeof row.descriptionDelta === 'string'
-                  ? row.descriptionDelta.trim()
-                  : typeof row.description === 'string'
-                    ? row.description.trim()
-                  : buildCharacterDescriptionDelta(finalProfile),
+              surfaceText,
+              observation,
               profile: finalProfile,
               evidence,
             }
           })
-          .filter((item): item is ChapterKnowledgeExtraction['characters'][number] => Boolean(item))
+          .filter((item): item is ChapterKnowledgeExtraction['unknownCharacterObservations'][number] => Boolean(item))
+      : [],
+    aliasDiscoveries: Array.isArray(aliasDiscoveriesRaw)
+      ? aliasDiscoveriesRaw
+          .map((item) => normalizeAliasDiscovery(item))
+          .filter((item): item is ChapterKnowledgeExtraction['aliasDiscoveries'][number] => Boolean(item))
       : [],
     relations: Array.isArray(record.relations)
       ? record.relations
@@ -1303,8 +1501,8 @@ export function buildKnowledgeExtractionPrompt(
     : []
 
   if (mode === 'focused') {
-      return [
-        `任务：只基于第 ${chapterNo} 章内容，补充抽取人物关系、世界设定和未解决线索。`,
+    return [
+      `任务：只基于第 ${chapterNo} 章内容，补充抽取人物关系、世界设定和未解决线索。`,
       '只返回 1 个 JSON 对象。不要返回顶层数组。不要解释。不要输出 markdown。',
       '固定字段只能是：chapter_no、summary、characters、relations、events、worldbuilding、open_threads。',
       '本轮重点只抽取 relations、worldbuilding、open_threads。summary 可以简短；characters 和 events 若无必要一律返回空数组。',
@@ -1326,16 +1524,19 @@ export function buildKnowledgeExtractionPrompt(
   return [
     `任务：只基于第 ${chapterNo} 章内容抽取结构化知识。`,
     '只返回 1 个 JSON 对象。不要返回顶层数组。不要解释。不要输出 markdown。',
-    '固定字段只能是：chapter_no、summary、characters、relations、events、worldbuilding、open_threads。',
+    '固定字段只能是：chapter_no、summary、characters、known_character_updates、unknown_character_observations、alias_discoveries、relations、events、worldbuilding、open_threads。',
     '如果某一类无法确定，就返回空数组，不要编造。',
     ...storyStateRules,
     'characters.profile 必须是精简的人物角色卡。只保留文本中能直接支持的要点；不要写成长段；不确定就省略该字段。',
-    'characters.profile 可包含：personality、gender、identity、capability、appearance、clothing、speakingStyle、likes。每个字段都是 { summary, note?, evidence? }；summary 最多一句短语，note/evidence 仅在有必要时填写。',
-    '优先抽取身份背景、能力/战力、外形、衣着、说话风格与偏好，保持精确、克制、可用于后续人物扮演。',
+    'characters.profile、known_character_updates.profile、unknown_character_observations.profile 可包含：personality、gender、identity、capability、appearance、body、clothing、speakingStyle、likes。每个字段都是 { summary, note?, evidence? }；summary 最多一句短语，note/evidence 仅在有必要时填写。',
+    'known_character_updates 只写已知人物的增量变化；优先写身份背景、能力/战力、外形、体态、衣着、说话风格与偏好，尽量保留原文措辞。appearance、body、clothing 若本章没有新增变化，summary 明确写“没有变化”。',
+    'unknown_character_observations 只保留本章里可能在后续反复出现、且有明确称呼或名字的未知人物观察。surface_text 必须保留原始称呼；不要做人物规范化。observation 用一句短语描述本章可复用的识别信息，尽量保留原文措辞。',
+    'alias_discoveries 只在正文明确说明“某称呼就是某人”时填写，且每项只能是 { alias, target }。不要输出 alias_type、valid_from_chapter、revealed_chapter、spoiler 或任何额外字段。像“男人、女人、他、她、那人”这类泛称绝对不要写入别名。',
+    '优先抽取身份背景、能力/战力、外形、体态、衣着、说话风格与偏好，保持精确、克制、可用于后续人物扮演。',
     'evidence 字段固定使用 quote、line_start、line_end。不要使用 text、content 或其他字段名。',
     truncated ? `本次仅提供前 ${EXTRACTION_MAX_PROMPT_LINES} 行节选。不要猜测未提供的后续内容。` : '本次提供完整章节内容。',
     '最小示例：',
-    '{"chapter_no":1,"summary":"一句话总结","characters":[{"name":"林澄","aliases":[],"status":"活跃","description_delta":"没落家族出身的学徒｜擅长火系法术","profile":{"identity":{"summary":"没落家族出身的学徒"},"capability":{"summary":"擅长火系法术"},"speakingStyle":{"summary":"说话直接克制","evidence":"林澄压低声音，只说重点。"}},"evidence":[{"quote":"林澄压低声音，只说重点。","line_start":1,"line_end":1}]}],"relations":[],"events":[],"worldbuilding":[],"open_threads":[]}',
+    '{"chapter_no":1,"summary":"一句话总结","characters":[{"name":"林澄","aliases":[],"status":"活跃","description_delta":"没落家族出身的学徒｜擅长火系法术","profile":{"identity":{"summary":"没落家族出身的学徒"},"capability":{"summary":"擅长火系法术"},"speakingStyle":{"summary":"说话直接克制","evidence":"林澄压低声音，只说重点。"}},"evidence":[{"quote":"林澄压低声音，只说重点。","line_start":1,"line_end":1}]}],"known_character_updates":[{"name":"林澄","description_delta":"黑袍下摆被火燎破｜没有变化","profile":{"appearance":{"summary":"没有变化"},"body":{"summary":"没有变化"},"clothing":{"summary":"黑袍下摆被火燎破"}},"evidence":[{"quote":"林澄的黑袍下摆被火燎出一道口子。","line_start":2,"line_end":2}]}],"unknown_character_observations":[{"surface_text":"灰袍老人","observation":"灰袍老人拄杖现身，嗓音沙哑","profile":{"appearance":{"summary":"灰袍老人"},"speakingStyle":{"summary":"嗓音沙哑"}},"evidence":[{"quote":"那灰袍老人拄杖而来，嗓音沙哑。","line_start":5,"line_end":5}]}],"alias_discoveries":[{"alias":"老周","target":"周执事"}],"relations":[],"events":[],"worldbuilding":[],"open_threads":[]}',
     storyStateBlock,
     `章节标题：${chapterTitle}`,
     '章节正文（带行号）：',
@@ -1681,6 +1882,9 @@ export function hasUsableKnowledgeExtraction(
   }
 
   return extraction.characters.length > 0
+    || extraction.knownCharacterUpdates.length > 0
+    || extraction.unknownCharacterObservations.length > 0
+    || extraction.aliasDiscoveries.length > 0
     || hasSpecificRelation
     || extraction.events.length > 0
     || hasUsefulWorldbuilding

@@ -1,4 +1,5 @@
 import { loadEntityLinksByEntityIds, loadEntityStatesByEntityIds } from '@/lib/server/graph-store'
+import { getCharacterClassificationMetadata, type CharacterImportanceTier } from '@/lib/server/hanlp-contracts'
 import { estimateTokenCount } from '@/lib/server/knowledge-store'
 import type { GraphAwareRequest, GraphAwareResult, GraphEdge, GraphNode, GraphSubgraphRequest } from '@/lib/server/graph-types'
 import { queryAll } from '@/lib/server/sqlite'
@@ -7,6 +8,7 @@ type KnowledgeEntityRow = {
   id: string
   entityType: GraphNode['entityType']
   canonicalName: string
+  importanceTier: CharacterImportanceTier | null
   importance: number
   userConfirmed: number
   firstSeenChapter: number | null
@@ -31,10 +33,16 @@ function normalizeText(value: string) {
 }
 
 function toGraphNode(row: KnowledgeEntityRow, score = 0): GraphNode {
+  const classification = row.entityType === 'character'
+    ? getCharacterClassificationMetadata(row.importanceTier)
+    : null
   return {
     id: row.id,
     entityType: row.entityType,
     label: row.canonicalName,
+    importanceTier: row.importanceTier ?? undefined,
+    classificationKey: classification?.key,
+    classificationLabel: classification?.label,
     importance: row.importance,
     confidence: 1,
     userConfirmed: Boolean(row.userConfirmed),
@@ -42,6 +50,38 @@ function toGraphNode(row: KnowledgeEntityRow, score = 0): GraphNode {
     lastSeenChapter: row.lastSeenChapter ?? undefined,
     score,
   }
+}
+
+function loadAliasesByEntityId(entityIds: string[]) {
+  if (!entityIds.length) return new Map<string, string[]>()
+  const rows = queryAll<{ entityId: string; alias: string }>(
+    `
+      SELECT entityId, alias
+      FROM EntityAlias
+      WHERE entityId IN (${entityIds.map(() => '?').join(', ')})
+      UNION ALL
+      SELECT entityId, alias
+      FROM EntityAliasMapping
+      WHERE entityId IN (${entityIds.map(() => '?').join(', ')})
+    `,
+    ...entityIds,
+    ...entityIds,
+  )
+  const aliasesByEntityId = new Map<string, string[]>()
+  for (const row of rows) {
+    const current = aliasesByEntityId.get(row.entityId) ?? []
+    if (!current.includes(row.alias)) current.push(row.alias)
+    aliasesByEntityId.set(row.entityId, current)
+  }
+  return aliasesByEntityId
+}
+
+function attachAliasesToGraphNodes(nodes: GraphNode[]) {
+  const aliasesByEntityId = loadAliasesByEntityId(nodes.map((node) => node.id))
+  return nodes.map((node) => ({
+    ...node,
+    aliases: aliasesByEntityId.get(node.id) ?? [],
+  }))
 }
 
 function dedupeById<T extends { id: string }>(items: T[]) {
@@ -56,7 +96,7 @@ function dedupeById<T extends { id: string }>(items: T[]) {
 function loadChapterSeedEntities(params: { novelId: string; branchId: string; chapterNo: number }) {
   const fallback = queryAll<KnowledgeEntityRow>(
     `
-      SELECT e.id, e.entityType, e.canonicalName, e.importance, e.userConfirmed, e.firstSeenChapter, e.lastSeenChapter
+      SELECT e.id, e.entityType, e.canonicalName, e.importanceTier, e.importance, e.userConfirmed, e.firstSeenChapter, e.lastSeenChapter
       FROM EntityAppearance a
       JOIN KnowledgeEntity e ON e.id = a.entityId
       WHERE e.novelId = ? AND e.branchId = ? AND a.chapterNo = ?
@@ -68,7 +108,7 @@ function loadChapterSeedEntities(params: { novelId: string; branchId: string; ch
     params.chapterNo
   )
 
-  return dedupeById(fallback.map((row, index) => toGraphNode(row, 5 - index)))
+  return attachAliasesToGraphNodes(dedupeById(fallback.map((row, index) => toGraphNode(row, 5 - index))))
 }
 
 function scoreSeedEntity(params: {
@@ -115,7 +155,7 @@ async function resolveSeedEntities(request: GraphAwareRequest) {
   const text = normalizeText(`${request.selectedText}\n${request.nearbyText}`)
   const entities = queryAll<KnowledgeEntityRow>(
     `
-      SELECT id, entityType, canonicalName, importance, userConfirmed, firstSeenChapter, lastSeenChapter
+      SELECT id, entityType, canonicalName, importanceTier, importance, userConfirmed, firstSeenChapter, lastSeenChapter
       FROM KnowledgeEntity
       WHERE novelId = ? AND branchId = ? AND firstSeenChapter <= ?
       ORDER BY importance DESC, canonicalName ASC
@@ -171,9 +211,9 @@ async function resolveSeedEntities(request: GraphAwareRequest) {
   })
 
   if (matches.length) {
-    return dedupeById(matches)
-      .sort((left, right) => right.score - left.score || right.importance - left.importance)
-      .slice(0, 8)
+      return attachAliasesToGraphNodes(dedupeById(matches))
+        .sort((left, right) => right.score - left.score || right.importance - left.importance)
+        .slice(0, 8)
   }
 
   return loadChapterSeedEntities({
@@ -192,7 +232,9 @@ function buildGraphContextText(params: {
 }) {
   const stateLines = params.seedEntities.flatMap((entity) => {
     const summary = params.latestStateByEntityId.get(entity.id) ?? ''
-    return summary ? [`- ${entity.label}：截至第${params.chapterNo}章，${summary}`] : []
+    const aliasText = entity.aliases?.length ? `｜别名：${entity.aliases.join('、')}` : ''
+    const classificationText = entity.classificationLabel ? `（${entity.classificationLabel}）` : ''
+    return summary ? [`- ${entity.label}${classificationText}：截至第${params.chapterNo}章，${summary}${aliasText}`] : []
   })
 
   const relationLines = params.edges.slice(0, 10).map((edge) => {
@@ -300,7 +342,7 @@ async function buildGraphAwareResultFromSeeds(params: {
   const entityRows = allEntityIds.length
     ? queryAll<KnowledgeEntityRow>(
         `
-          SELECT id, entityType, canonicalName, importance, userConfirmed, firstSeenChapter, lastSeenChapter
+          SELECT id, entityType, canonicalName, importanceTier, importance, userConfirmed, firstSeenChapter, lastSeenChapter
           FROM KnowledgeEntity
           WHERE id IN (${allEntityIds.map(() => '?').join(', ')})
           ORDER BY importance DESC, canonicalName ASC
@@ -388,7 +430,7 @@ async function buildGraphAwareResultFromSeeds(params: {
     latestStateByEntityId.set(state.entityId, summarizeState(state.stateType, state.stateValue, state.description))
   }
 
-  const finalNodes = dedupeById([
+  const finalNodes = attachAliasesToGraphNodes(dedupeById([
     ...params.seedEntities,
     ...Array.from(nodesById.values()).map((node) => ({
       ...node,
@@ -399,7 +441,7 @@ async function buildGraphAwareResultFromSeeds(params: {
             return Math.max(best, edge.score)
           }, node.score),
     })),
-  ])
+  ]))
     .sort((left, right) => right.score - left.score || right.importance - left.importance)
     .slice(0, 25)
 
@@ -473,7 +515,7 @@ export async function buildGraphSubgraph(request: GraphSubgraphRequest): Promise
 
   const seedRows = queryAll<KnowledgeEntityRow>(
     `
-      SELECT id, entityType, canonicalName, importance, userConfirmed, firstSeenChapter, lastSeenChapter
+      SELECT id, entityType, canonicalName, importanceTier, importance, userConfirmed, firstSeenChapter, lastSeenChapter
       FROM KnowledgeEntity
       WHERE novelId = ? AND branchId = ? AND firstSeenChapter <= ?
         AND id IN (${requestedEntityIds.map(() => '?').join(', ')})
@@ -491,7 +533,7 @@ export async function buildGraphSubgraph(request: GraphSubgraphRequest): Promise
     warnings.push(`以下实体在当前章节之前不可用，已跳过：${missingEntityIds.join(', ')}`)
   }
 
-  const seedEntities = seedRows.map((row, index) => toGraphNode(row, Math.max(20 - index, 1)))
+  const seedEntities = attachAliasesToGraphNodes(seedRows.map((row, index) => toGraphNode(row, Math.max(20 - index, 1))))
   return buildGraphAwareResultFromSeeds({
     novelId: request.novelId,
     branchId: request.branchId,

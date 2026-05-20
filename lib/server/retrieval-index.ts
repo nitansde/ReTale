@@ -29,6 +29,7 @@ import {
   normalizeCharacterRoleCardProfile,
   type CharacterRoleCardProfile,
 } from '@/lib/story-knowledge'
+import { getCharacterClassificationMetadata, type CharacterImportanceTier } from '@/lib/server/hanlp-contracts'
 
 export type RetrievalDocSourceType =
   | 'text_span'
@@ -1090,11 +1091,12 @@ function loadBranchEntityProfileDocs(novelId: string, branchId: string) {
     entityType: string
     canonicalName: string
     description: string | null
+    importanceTier: CharacterImportanceTier | null
     firstSeenChapter: number | null
     lastSeenChapter: number | null
   }>(
     `
-      SELECT id, entityType, canonicalName, description, firstSeenChapter, lastSeenChapter
+      SELECT id, entityType, canonicalName, description, importanceTier, firstSeenChapter, lastSeenChapter
       FROM KnowledgeEntity
       WHERE novelId = ? AND branchId = ?
       ORDER BY firstSeenChapter ASC, canonicalName ASC
@@ -1108,11 +1110,16 @@ function loadBranchEntityProfileDocs(novelId: string, branchId: string) {
   const entityIds = entities.map((entity) => entity.id)
   const aliases = queryAll<{ entityId: string; alias: string }>(
     `
-      SELECT entityId, alias
+      SELECT entityId, alias, sourceChapter
       FROM EntityAlias
+      WHERE entityId IN (${entityIds.map(() => '?').join(', ')})
+      UNION ALL
+      SELECT entityId, alias, sourceChapter
+      FROM EntityAliasMapping
       WHERE entityId IN (${entityIds.map(() => '?').join(', ')})
       ORDER BY sourceChapter ASC, alias ASC
     `,
+    ...entityIds,
     ...entityIds
   )
 
@@ -1165,11 +1172,16 @@ function loadBranchEntityProfileDocs(novelId: string, branchId: string) {
 
   return entities.flatMap((entity) => {
     const aliasList = uniqueStrings(aliasesByEntityId.get(entity.id) ?? [])
+    const classification = getCharacterClassificationMetadata(entity.importanceTier)
+    const classificationTerms = classification
+      ? [classification.key, classification.label, entity.importanceTier]
+      : [entity.importanceTier]
     const rows = profileRowsByEntityId.get(entity.id) ?? []
     if (!rows.length) {
       const text = [
         `实体：${entity.canonicalName}`,
         `类型：${entity.entityType}`,
+        classification ? `分级：${classification.label}` : null,
         aliasList.length ? `别名：${aliasList.join('、')}` : null,
       ].filter(Boolean).join('\n')
       const chapterNo = entity.firstSeenChapter ?? entity.lastSeenChapter ?? 0
@@ -1189,7 +1201,7 @@ function loadBranchEntityProfileDocs(novelId: string, branchId: string) {
         sourceLabel: '人物卡',
         relatedEntityNames: serializeTerms([entity.canonicalName, ...aliasList]),
         relatedEventNames: '',
-        relatedTerms: serializeTerms([entity.canonicalName, entity.entityType, ...aliasList]),
+        relatedTerms: serializeTerms([entity.canonicalName, entity.entityType, ...classificationTerms, ...aliasList]),
         text,
         status: 'ready',
         includeByDefault: 1,
@@ -1215,6 +1227,7 @@ function loadBranchEntityProfileDocs(novelId: string, branchId: string) {
         const text = [
           `实体：${entity.canonicalName}`,
           `类型：${entity.entityType}`,
+          classification ? `分级：${classification.label}` : null,
           compactDescription ? `描述：${compactDescription}` : null,
           aliasList.length ? `别名：${aliasList.join('、')}` : null,
           ...profileLines,
@@ -1239,6 +1252,7 @@ function loadBranchEntityProfileDocs(novelId: string, branchId: string) {
           relatedTerms: serializeTerms([
             entity.canonicalName,
             entity.entityType,
+            ...classificationTerms,
             ...aliasList,
             compactDescription,
             ...profileLines,

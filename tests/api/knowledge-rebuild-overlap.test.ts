@@ -89,25 +89,48 @@ async function createTestDatabase(prefix: string) {
   }
 }
 
-function seedKnowledgeRebuildFixture(database: DatabaseSync, novelKey = 'novel_overlap') {
+function createMockExtraction(chapterNo: number) {
+  return {
+    chapterNo,
+    summary: `summary-${chapterNo}`,
+    characters: [],
+    knownCharacterUpdates: [],
+    unknownCharacterObservations: [],
+    aliasDiscoveries: [],
+    relations: [],
+    events: [],
+    worldbuilding: [],
+    openThreads: [],
+  }
+}
+
+function seedKnowledgeRebuildFixture(database: DatabaseSync, novelKey = 'novel_overlap', chapterCount = 1) {
   const novelId = `${novelKey}_${Math.random().toString(36).slice(2, 8)}`
   const branchId = `${novelId}:main`
   database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(novelId, 'Fixture Novel', 'txt')
   database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run(branchId, novelId, 'main')
-  database.prepare(
+  const insertChapter = database.prepare(
     `INSERT INTO KnowledgeChapter (
       id, novelId, branchId, chapterNo, title, rawText, summary,
       revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run('chapter-1', novelId, branchId, 1, '第1章', '第一段原文内容。', null, 1, 1, 'Needs rebuild', 'chapter-hash-1', 'stale')
-  database.prepare('INSERT INTO ChapterLine (id, chapterId, lineNo, text, charStart, charEnd) VALUES (?, ?, ?, ?, ?, ?)')
-    .run('line-1', 'chapter-1', 1, '第一段原文内容。', 0, 8)
-  database.prepare(
+  )
+  const insertLine = database.prepare('INSERT INTO ChapterLine (id, chapterId, lineNo, text, charStart, charEnd) VALUES (?, ?, ?, ?, ?, ?)')
+  const insertSpan = database.prepare(
     `INSERT INTO TextSpan (
       id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
       charStart, charEnd, text, spanType, tokenEstimate
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run('span-1', novelId, branchId, 'chapter-1', 1, 1, 1, 0, 8, '第一段原文内容。', 'paragraph', 8)
+  )
+
+  for (let chapterNo = 1; chapterNo <= chapterCount; chapterNo += 1) {
+    const chapterId = `chapter-${chapterNo}`
+    const rawText = `第${chapterNo}章原文内容。`
+    insertChapter.run(chapterId, novelId, branchId, chapterNo, `第${chapterNo}章`, rawText, null, 1, 1, 'Needs rebuild', `chapter-hash-${chapterNo}`, 'stale')
+    insertLine.run(`line-${chapterNo}`, chapterId, 1, rawText, 0, rawText.length)
+    insertSpan.run(`span-${chapterNo}`, novelId, branchId, chapterId, chapterNo, 1, 1, 0, rawText.length, rawText, 'paragraph', rawText.length)
+  }
+
   return { novelId, branchId }
 }
 
@@ -122,8 +145,11 @@ async function waitForCondition(check: () => boolean, label: string) {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
   vi.resetModules()
   vi.unmock('@/lib/server/ai-settings')
+  vi.unmock('@/lib/server/hanlp-bootstrap')
+  vi.unmock('@/lib/server/hanlp-bootstrap-initializer')
   vi.unmock('@/lib/server/knowledge-extraction')
   vi.unmock('@/lib/server/ollama-local')
   vi.unmock('@/lib/server/retrieval-index')
@@ -233,21 +259,31 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => aiSettings,
     }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { chapterNo: number; rawText: string }) => ({
+        source: 'cache' as const,
+        cache: {} as never,
+        result: {} as never,
+        output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+        cacheKey: {} as never,
+        scriptPath: '/tmp/mock-hanlp.py',
+        normalizedChapterText: input.rawText,
+      })),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
     vi.doMock('@/lib/server/knowledge-extraction', () => ({
       extractChapterKnowledgeOffline: vi.fn(async () => {
         extractionStarted = true
         await extractionGate.promise
         extractionFinished = true
         return {
-          extraction: {
-            chapterNo: 1,
-            summary: 'summary',
-            characters: [],
-            relations: [],
-            events: [],
-            worldbuilding: [],
-            openThreads: [],
-          },
+          extraction: createMockExtraction(1),
           provider: 'ollama',
           model: aiSettings.knowledgeExtraction.ollama.model,
         }
@@ -296,6 +332,24 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => aiSettings,
     }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { chapterNo: number; rawText: string }) => ({
+        source: 'cache' as const,
+        cache: {} as never,
+        result: {} as never,
+        output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+        cacheKey: {} as never,
+        scriptPath: '/tmp/mock-hanlp.py',
+        normalizedChapterText: input.rawText,
+      })),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
     vi.doMock('@/lib/server/context-builder', async (importOriginal) => {
       const actual = await importOriginal<typeof import('@/lib/server/context-builder')>()
       return {
@@ -314,15 +368,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
         extractionFinished = true
         events.push('extract:finish')
         return {
-          extraction: {
-            chapterNo: 1,
-            summary: 'summary',
-            characters: [],
-            relations: [],
-            events: [],
-            worldbuilding: [],
-            openThreads: [],
-          },
+          extraction: createMockExtraction(1),
           provider: 'ollama',
           model: aiSettings.knowledgeExtraction.ollama.model,
         }
@@ -373,8 +419,8 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
 
     expect(events).toContain('precompute:start')
     expect(events).toContain('extract:start')
-    expect(events.indexOf('story-state:0')).toBeGreaterThan(events.indexOf('extract:finish'))
-    expect(events.indexOf('final-index:start')).toBeGreaterThan(events.indexOf('story-state:0'))
+    expect(events.lastIndexOf('story-state:0')).toBeGreaterThan(events.indexOf('extract:finish'))
+    expect(events.indexOf('final-index:start')).toBeGreaterThan(events.lastIndexOf('story-state:0'))
 
     const chapter = queryOne<{ knowledgeStatus: string; isDirty: number }>(
       'SELECT knowledgeStatus, isDirty FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? AND id = ?',
@@ -416,17 +462,27 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => aiSettings,
     }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { chapterNo: number; rawText: string }) => ({
+        source: 'cache' as const,
+        cache: {} as never,
+        result: {} as never,
+        output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+        cacheKey: {} as never,
+        scriptPath: '/tmp/mock-hanlp.py',
+        normalizedChapterText: input.rawText,
+      })),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
     vi.doMock('@/lib/server/knowledge-extraction', () => ({
       extractChapterKnowledgeOffline: vi.fn(async () => ({
-        extraction: {
-          chapterNo: 1,
-          summary: 'summary',
-          characters: [],
-          relations: [],
-          events: [],
-          worldbuilding: [],
-          openThreads: [],
-        },
+        extraction: createMockExtraction(1),
         provider: 'ollama',
         model: aiSettings.knowledgeExtraction.ollama.model,
       })),
@@ -468,4 +524,5 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     expect(payload?.stageTimingsMs?.raw_text_precompute).toEqual(expect.any(Number))
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', branchId)?.count).toBe(0)
   })
+
 })
