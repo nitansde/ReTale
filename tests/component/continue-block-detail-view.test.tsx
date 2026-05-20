@@ -213,4 +213,73 @@ describe('ContinueBlockDetailView', () => {
     expect(screen.getByTestId('continue-block-revision-history')).toHaveTextContent('第二版续写正文')
     expect(screen.getByTestId('continue-block-revision-history')).toHaveTextContent('第一版续写正文')
   })
+
+  it('renders fallback reader body immediately before persisted detail finishes loading', async () => {
+    let resolveFetch: ((value: Response) => void) | null = null
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(() => new Promise<Response>((resolve) => {
+      resolveFetch = resolve
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <ContinueBlockDetailView
+        novelId="novel-001"
+        branchId="novel-001:main"
+        continueBlockId="continue-block-001"
+        latestRevisionNo={2}
+        anchorChapterNo={10}
+        fallbackDetail={{
+          latestText: '时间线回退正文',
+          latestRevisionNo: 2,
+          title: 'RE-01 誓言后的回声',
+          subtitle: '把誓言后的情绪变化压进同一场景。',
+          userInstruction: '把誓言后的情绪变化压进同一场景。',
+          inputTokens: 120,
+          outputTokens: 240,
+        }}
+      />
+    )
+
+    expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('时间线回退正文')
+    expect(screen.getByText('正在读取续写块详情…')).toBeInTheDocument()
+
+    resolveFetch?.({
+      ok: true,
+      json: async () => continueBlockDetail,
+    } as Response)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('第二版续写正文')
+    })
+  })
+
+  it('keeps fallback reader body visible when persisted detail load fails', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: 'Continue block load failed' }),
+    } as Response)
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <ContinueBlockDetailView
+        novelId="novel-001"
+        branchId="novel-001:main"
+        continueBlockId="continue-block-001"
+        latestRevisionNo={2}
+        anchorChapterNo={10}
+        fallbackDetail={{
+          latestText: '时间线回退正文',
+          latestRevisionNo: 2,
+          title: 'RE-01 誓言后的回声',
+          subtitle: '把誓言后的情绪变化压进同一场景。',
+          userInstruction: '把誓言后的情绪变化压进同一场景。',
+          inputTokens: 120,
+          outputTokens: 240,
+        }}
+      />
+    )
+
+    expect(await screen.findByTestId('workspace-continue-block-reader-body')).toHaveTextContent('时间线回退正文')
+    expect(await screen.findByText('Continue block load failed')).toBeInTheDocument()
+  })
 })

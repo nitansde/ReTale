@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Clock3, LoaderCircle } from 'lucide-react'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
-import type { ContinueBlockDetail } from '@/lib/story-branch-types'
+import type { ContinueBlockDetail, ContinueBlockRecord } from '@/lib/story-branch-types'
 import { cn, splitPlainTextParagraphs } from '@/lib/utils'
 
 async function loadContinueBlockDetail(input: {
@@ -58,6 +58,7 @@ export function ContinueBlockDetailView(props: {
   anchorChapterNo: number
   nodeTitle?: string | null
   nodeSubtitle?: string | null
+  fallbackDetail?: Pick<ContinueBlockRecord, 'latestText' | 'latestRevisionNo' | 'title' | 'subtitle' | 'userInstruction' | 'inputTokens' | 'outputTokens'> | null
   readableLineageLabel?: string | null
   onMetricsChange?: (metrics: { currentText: string; inputTokens: number | null; outputTokens: number | null }) => void
 }) {
@@ -98,22 +99,25 @@ export function ContinueBlockDetailView(props: {
     }
   }, [props.branchId, props.continueBlockId, props.latestRevisionNo, props.novelId])
 
+  const effectiveDetail = detail ?? props.fallbackDetail ?? null
+
   useEffect(() => {
-    if (!detail) return
+    if (!effectiveDetail) return
     onMetricsChange?.({
-      currentText: detail.latestText,
-      inputTokens: detail.inputTokens ?? null,
-      outputTokens: detail.outputTokens ?? null,
+      currentText: effectiveDetail.latestText,
+      inputTokens: effectiveDetail.inputTokens ?? null,
+      outputTokens: effectiveDetail.outputTokens ?? null,
     })
-  }, [detail, onMetricsChange])
+  }, [effectiveDetail, onMetricsChange])
 
   const readableLabel = props.readableLineageLabel?.trim() || ''
-  const instructionPreview = formatStoryBranchInstructionPreview(detail?.userInstruction ?? props.nodeSubtitle)
+  const instructionPreview = formatStoryBranchInstructionPreview(effectiveDetail?.userInstruction ?? props.nodeSubtitle)
   const revisionEntries = useMemo(
     () => [...(detail?.revisions ?? [])].sort((left, right) => right.revisionNo - left.revisionNo),
     [detail?.revisions]
   )
   const historyEntries = revisionEntries.slice(1)
+  const effectiveReaderText = effectiveDetail?.latestText.trim() || ''
 
   return (
     <div className="space-y-4 px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-continue-block-view">
@@ -121,12 +125,12 @@ export function ContinueBlockDetailView(props: {
         <div className="flex flex-col gap-5 px-5 py-5 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-3xl">
             <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">已保存续写块</p>
-            <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{readableLabel || detail?.title || props.nodeTitle || '续写块'}</h3>
+            <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{readableLabel || effectiveDetail?.title || props.nodeTitle || '续写块'}</h3>
             {instructionPreview ? <p className="mt-2 text-sm text-fuchsia-100">指令预览 · {instructionPreview}</p> : null}
-            <p className="mt-3 text-sm leading-7 text-zinc-300">{detail?.subtitle?.trim() || props.nodeSubtitle?.trim() || '这里展示已保存的续写块最新版本，并在下方保留重生前的历史版本。'}</p>
+            <p className="mt-3 text-sm leading-7 text-zinc-300">{effectiveDetail?.subtitle?.trim() || props.nodeSubtitle?.trim() || '这里展示已保存的续写块最新版本，并在下方保留重生前的历史版本。'}</p>
             <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-zinc-300">
               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">reader mode</span>
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">revision {detail?.latestRevisionNo ?? 1}</span>
+              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">revision {effectiveDetail?.latestRevisionNo ?? 1}</span>
               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{readableLabel || `第 ${props.anchorChapterNo} 章`}</span>
             </div>
           </div>
@@ -151,7 +155,7 @@ export function ContinueBlockDetailView(props: {
         </section>
       ) : null}
 
-      {!loading && detail ? (
+      {effectiveDetail ? (
         <>
           <section className="rounded-[28px] border border-white/8 bg-[#0b0d12] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:p-6">
             <div className="mb-3 flex items-center justify-between gap-3">
@@ -159,7 +163,7 @@ export function ContinueBlockDetailView(props: {
               {instructionPreview ? <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">指令预览 {instructionPreview}</span> : null}
             </div>
             <div className="rounded-[24px] border border-white/8 bg-black/20 p-5">
-              {renderReaderBodyParagraphs(detail.latestText.trim() || '当前续写块还没有可展示的已保存正文。', 'text-zinc-200', 'workspace-continue-block-reader-body')}
+              {renderReaderBodyParagraphs(effectiveReaderText || '当前续写块还没有可展示的已保存正文。', 'text-zinc-200', 'workspace-continue-block-reader-body')}
             </div>
           </section>
 

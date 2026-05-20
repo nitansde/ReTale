@@ -211,6 +211,8 @@ describe('FutureJumpView', () => {
     expect(screen.getByTestId('future-jump-revision-history')).toHaveTextContent('第二版未来正文')
     expect(screen.getByTestId('future-jump-revision-history')).toHaveTextContent('初始桥接摘要')
     expect(screen.getByTestId('future-jump-revision-history')).toHaveTextContent('初始未来正文')
+    expect(screen.getByTestId('future-jump-revision-history')).not.toHaveTextContent('最新镜像桥接摘要')
+    expect(screen.getByTestId('future-jump-revision-history')).not.toHaveTextContent('最新镜像未来正文')
 
     const revisionLabels = screen.getAllByText(/第 \d+ 版/).map((item) => item.textContent)
     expect(revisionLabels[0]).toContain('第 2 版')
@@ -223,10 +225,12 @@ describe('FutureJumpView', () => {
     await waitFor(() => {
       expect(screen.getByTestId('future-jump-bridge')).toHaveTextContent('第三版镜像桥接摘要')
       expect(screen.getByTestId('future-jump-text')).toHaveTextContent('第三版镜像未来正文')
-      expect(screen.getByTestId('future-jump-revision-history')).toHaveTextContent('第三版镜像桥接摘要')
-      expect(screen.getByTestId('future-jump-revision-history')).toHaveTextContent('第三版镜像未来正文')
       expect(screen.getByTestId('future-jump-revision-history')).toHaveTextContent('第二版桥接摘要')
+      expect(screen.getByTestId('future-jump-revision-history')).toHaveTextContent('第二版未来正文')
       expect(screen.getByTestId('future-jump-revision-history')).toHaveTextContent('初始桥接摘要')
+      expect(screen.getByTestId('future-jump-revision-history')).toHaveTextContent('初始未来正文')
+      expect(screen.getByTestId('future-jump-revision-history')).not.toHaveTextContent('第三版镜像桥接摘要')
+      expect(screen.getByTestId('future-jump-revision-history')).not.toHaveTextContent('第三版镜像未来正文')
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue this Future' }))

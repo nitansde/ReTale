@@ -32,6 +32,8 @@ export function BridgeSummaryPanel(props: {
   readableLineageLabel?: string | null
 }) {
   const instructionPreview = formatStoryBranchInstructionPreview(props.detail.userDirection)
+  const historyEntries = props.revisions
+    .sort((left, right) => right.revisionNo - left.revisionNo)
 
   return (
     <section className="rounded-[24px] border border-sky-400/20 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_42%),#0b0d12] p-5 sm:p-6">
@@ -112,23 +114,28 @@ export function BridgeSummaryPanel(props: {
         </div>
       </div>
 
-      <div className="mt-4 rounded-[22px] border border-white/8 bg-black/20 p-4" data-testid="future-jump-revision-history">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Revision history</p>
-            <p className="mt-1 text-sm text-zinc-300">当前主面板继续锁定最新镜像；这里保留每一版桥接摘要和未来正文，方便回看历史版本。</p>
+      {historyEntries.length ? (
+        <div className="mt-4 rounded-[22px] border border-white/8 bg-black/20 p-4" data-testid="future-jump-revision-history">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Revision history</p>
+              <p className="mt-1 text-sm text-zinc-300">当前主面板继续锁定最新镜像；历史区保留修订标签，更早版本继续展示桥接摘要和未来正文。</p>
+            </div>
+            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{historyEntries.length} 条历史</span>
           </div>
-          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{props.revisions.length} 版</span>
-        </div>
 
-        <ul className="mt-4 space-y-3">
-          {props.revisions.map((item, index) => (
+          <ul className="mt-4 space-y-3">
+            {historyEntries.map((item) => {
+              const isCurrentMirror = item.revisionNo === props.detail.latestRevisionNo
+                && item.bridgeSummary.trim() === props.detail.bridgeSummary.trim()
+                && item.generatedTargetText.trim() === props.detail.generatedTargetText.trim()
+              return (
             <li key={`${item.revisionNo}-${item.createdAt}`} className="rounded-[18px] border border-white/8 bg-white/[0.03] p-3" data-testid={`future-jump-history-item-${item.revisionNo}`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-medium text-zinc-100">第 {item.revisionNo} 版 · {item.revisionKind}</p>
                   <p className="mt-2 text-xs leading-6 text-zinc-300">{item.userFeedback?.trim() || '初始生成版，没有额外反馈。'}</p>
-                  {index === 0 ? <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-sky-100">当前版本</p> : null}
+                  {isCurrentMirror ? <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-sky-100">当前版本已在主面板展示</p> : null}
                 </div>
                 <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-400">
                   <Clock3 className="h-3.5 w-3.5" />
@@ -136,7 +143,7 @@ export function BridgeSummaryPanel(props: {
                 </div>
               </div>
 
-              <div className="mt-3 grid gap-3 xl:grid-cols-2">
+              {!isCurrentMirror ? <div className="mt-3 grid gap-3 xl:grid-cols-2">
                 <div className="rounded-[16px] border border-sky-300/18 bg-sky-500/10 p-3">
                   <p className="text-[11px] uppercase tracking-[0.16em] text-sky-100/75">Bridge</p>
                   <p className="mt-2 whitespace-pre-wrap text-xs leading-6 text-sky-50">{item.bridgeSummary}</p>
@@ -145,11 +152,13 @@ export function BridgeSummaryPanel(props: {
                   <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Future text</p>
                   <p className="mt-2 whitespace-pre-wrap text-xs leading-6 text-zinc-200">{item.generatedTargetText}</p>
                 </div>
-              </div>
+              </div> : null}
             </li>
-          ))}
-        </ul>
-      </div>
+              )
+            })}
+          </ul>
+        </div>
+      ) : null}
     </section>
   )
 }
