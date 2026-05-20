@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "postinstall": "node scripts/setup-hanlp-runtime.mjs --postinstall",
     "dev": "node scripts/next-dev.mjs",
     "build": "next build",
     "start": "next start",
@@ -12,7 +13,8 @@
     "test:api": "node scripts/run-vitest-suite.mjs api",
     "test:ui": "node scripts/run-playwright-suite.mjs",
     "test:all": "npm run test:unit && npm run test:api && npm run test:ui -- future-jump",
-    "verify:workspace-import": "node scripts/verify-workspace-import.mjs"
+    "verify:workspace-import": "node scripts/verify-workspace-import.mjs",
+    "setup:hanlp": "node scripts/setup-hanlp-runtime.mjs --smoke"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.27.2",
