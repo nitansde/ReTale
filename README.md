@@ -8,6 +8,7 @@ A self-hosted single-user AI novel rewrite workspace built with Next.js.
 - TipTap editor
 - Zustand client store
 - SQLite with direct SQL persistence
+- Local HanLP Python bootstrap for knowledge graph rebuilds
 - OpenAI-compatible `/chat/completions` integration
 
 ## What it does
@@ -20,6 +21,7 @@ This app now behaves like a local-first rewrite product with a real backend laye
 - Rewrite control surface with modes, tones, presets, prompt editing, and constraints
 - Reference panels for outlines, characters, worldbuilding, and trajectory logs
 - Workspace persistence stored in SQLite through direct SQL server modules
+- HanLP-assisted knowledge graph rebuilds with tiered characters, alias synchronization, candidate promotion, and persistent cache state
 - JSON export / import for workspace state
 - In-app OpenAI-compatible API settings modal
 - Real rewrite requests through `/api/rewrite` when configured
@@ -40,6 +42,9 @@ DATABASE_URL="file:./dev.db"
 OPENAI_COMPATIBLE_BASE_URL="https://api.openai.com/v1"
 OPENAI_COMPATIBLE_API_KEY=""
 OPENAI_COMPATIBLE_MODEL="gpt-4.1-mini"
+HANLP_PYTHON_BIN=""
+HANLP_BOOTSTRAP_SCRIPT_PATH=""
+HANLP_BOOTSTRAP_TIMEOUT_MS="600000"
 LLM_DEBUG_LOG="0"
 LLM_DEBUG_LOG_DIR=".sisyphus/llm-debug"
 ```
@@ -47,6 +52,12 @@ LLM_DEBUG_LOG_DIR=".sisyphus/llm-debug"
 You can also update the AI settings from the app UI.
 
 Set `LLM_DEBUG_LOG="1"` during local development to write raw server-side LLM prompt/response JSON files into feature-specific folders under `LLM_DEBUG_LOG_DIR`.
+
+### Knowledge graph runtime
+
+Knowledge graph rebuilds use the server-side `hanlp_bootstrap.py` script before LLM extraction. Configure `HANLP_PYTHON_BIN` when HanLP is installed in a dedicated Python environment, and keep that environment outside the project root so Next/Turbopack does not trace Python virtualenv symlinks during builds. `HANLP_BOOTSTRAP_SCRIPT_PATH` can point at an alternate bootstrap script; when unset, the app uses the repository script. `HANLP_BOOTSTRAP_TIMEOUT_MS` controls the per-chapter HanLP subprocess timeout and defaults to `600000`.
+
+The rebuild API returns quickly with a queued/running job status. The server continues the rebuild in the background and the workspace polls job state instead of blocking the whole site while HanLP is running.
 
 ## First-time setup
 
@@ -78,3 +89,4 @@ npm run start
 - If AI config is missing or the upstream request fails, rewrite generation falls back to local simulated candidates.
 - Import currently assumes valid exported JSON.
 - Preset compatibility scope, provider mappings, preserved-only behavior, provenance notes, and MVP limitations live in `docs/preset-compatibility.md`.
+- Knowledge graph design, rebuild ordering, and runtime technology notes live in `docs/knowledge-graph-design.md`.
