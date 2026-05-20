@@ -46,6 +46,7 @@ export type KnowledgeRebuildStatus = {
   jobId: string
   novelId: string
   status: string
+  errorMessage?: string | null
   progress: number
   currentStep: string | null
   createdAt: string
@@ -385,10 +386,10 @@ function getKnowledgeRebuildStatus(novelIds?: string[]): KnowledgeRebuildStatus 
 
   const status = queryAll<KnowledgeRebuildStatusRow>(
     `
-      SELECT id as jobId, novelId, status, progress, currentStep, createdAt, updatedAt
+      SELECT id as jobId, novelId, status, errorMessage, progress, currentStep, createdAt, updatedAt
            , payloadJson
       FROM KnowledgeJob
-      WHERE novelId = ? AND branchId = ? AND jobType = 'extract_chapter_knowledge' AND status IN ('queued', 'running', 'paused')
+      WHERE novelId = ? AND branchId = ? AND jobType = 'extract_chapter_knowledge'
       ORDER BY updatedAt DESC, createdAt DESC
       LIMIT 1
     `,
@@ -397,6 +398,10 @@ function getKnowledgeRebuildStatus(novelIds?: string[]): KnowledgeRebuildStatus 
   )[0] ?? null
 
   if (!status) {
+    return null
+  }
+
+  if (status.status !== 'queued' && status.status !== 'running' && status.status !== 'paused' && status.status !== 'failed') {
     return null
   }
 

@@ -330,6 +330,163 @@ describe('/api/knowledge-view', () => {
     })
   })
 
+  it('returns the latest failed rebuild status with errorMessage for the selected novel main branch', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-failed-status')
+    const novelId = `novel_knowledge_view_failed_${Math.random().toString(36).slice(2, 8)}`
+    const otherNovelId = `novel_knowledge_view_failed_other_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId, altBranchId } = seedNovel(database, novelId)
+    const { mainBranchId: otherMainBranchId } = seedNovel(database, otherNovelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-failed-main', chapterNo: 1 })
+    seedKnowledgeChapter(database, { novelId, branchId: altBranchId, chapterId: 'chapter-failed-alt', chapterNo: 1 })
+    seedKnowledgeChapter(database, { novelId: otherNovelId, branchId: otherMainBranchId, chapterId: 'chapter-failed-other', chapterNo: 1 })
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, errorMessage, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-5 minutes'), datetime('now', '-5 minutes'))`
+    ).run(
+      'job_failed_hidden_alt_branch',
+      novelId,
+      altBranchId,
+      'extract_chapter_knowledge',
+      'failed',
+      'alt branch failure should stay hidden',
+      'extract',
+      0.4,
+      JSON.stringify({
+        steps: [{
+          key: 'extract',
+          label: '抽取章节知识',
+          status: 'running',
+          progress: 0.4,
+          etaMinutes: null,
+          detail: null,
+        }],
+      })
+    )
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, errorMessage, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-4 minutes'), datetime('now', '-4 minutes'))`
+    ).run(
+      'job_failed_hidden_other_novel',
+      otherNovelId,
+      otherMainBranchId,
+      'extract_chapter_knowledge',
+      'failed',
+      'other novel failure should stay hidden',
+      'extract',
+      0.2,
+      JSON.stringify({ steps: [] })
+    )
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, errorMessage, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-3 minutes'), datetime('now', '-3 minutes'))`
+    ).run(
+      'job_succeeded_older_main',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'succeeded',
+      null,
+      'write',
+      1,
+      JSON.stringify({ steps: [] })
+    )
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, errorMessage, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-1 minutes'), datetime('now', '-1 minutes'))`
+    ).run(
+      'job_failed_visible_main',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'failed',
+      'HanLP bootstrap crashed on chapter 1',
+      'hanlp-bootstrap',
+      0.35,
+      JSON.stringify({
+        steps: [{
+          key: 'hanlp-bootstrap',
+          label: 'HanLP 引导扫描',
+          status: 'running',
+          progress: 0.35,
+          etaMinutes: null,
+          detail: '正在处理第 1 章',
+        }],
+      })
+    )
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      ok: boolean
+      knowledgeRebuildStatus: Record<string, unknown> | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.knowledgeRebuildStatus).toMatchObject({
+      jobId: 'job_failed_visible_main',
+      novelId,
+      status: 'failed',
+      errorMessage: 'HanLP bootstrap crashed on chapter 1',
+      currentStep: 'hanlp-bootstrap',
+      progress: 0.35,
+    })
+  })
+
+  it('hides an older failed rebuild when a newer main-branch rebuild succeeded', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-hide-old-failed-after-success')
+    const novelId = `novel_knowledge_view_hide_failed_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-hide-old-failed', chapterNo: 1 })
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, errorMessage, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-4 minutes'), datetime('now', '-4 minutes'))`
+    ).run(
+      'job_failed_older_main',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'failed',
+      'older failed rebuild should remain hidden after a newer success',
+      'extract',
+      0.5,
+      JSON.stringify({ steps: [] })
+    )
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, errorMessage, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-1 minutes'), datetime('now', '-1 minutes'))`
+    ).run(
+      'job_succeeded_newer_main',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'succeeded',
+      null,
+      '完成',
+      1,
+      JSON.stringify({ steps: [] })
+    )
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      ok: boolean
+      knowledgeRebuildStatus: Record<string, unknown> | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.knowledgeRebuildStatus).toBeNull()
+  })
+
   it('deletes only the target main-branch HanLP cache rows and preserves raw embedding cache', async () => {
     const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-delete-hanlp-cache')
     const novelId = `novel_delete_hanlp_${Math.random().toString(36).slice(2, 8)}`

@@ -77,6 +77,7 @@ type KnowledgeRebuildStatus = {
   jobId: string
   novelId: string
   status: string
+  errorMessage?: string | null
   progress: number
   currentStep: string | null
   createdAt: string
