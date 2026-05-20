@@ -5,6 +5,7 @@ import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
+const originalHanlpBootstrapParallelism = process.env.HANLP_BOOTSTRAP_PARALLELISM
 
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -167,6 +168,7 @@ afterEach(() => {
   }
 
   process.env.DATABASE_URL = originalDatabaseUrl
+  process.env.HANLP_BOOTSTRAP_PARALLELISM = originalHanlpBootstrapParallelism
 
   while (cleanups.length) {
     cleanups.pop()?.()
@@ -175,6 +177,7 @@ afterEach(() => {
 
 describe('knowledge rebuild HanLP orchestration', () => {
   it('runs HanLP before extraction, records cache telemetry, and writes chapters in stable order', async () => {
+    process.env.HANLP_BOOTSTRAP_PARALLELISM = '3'
     const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-phase-order')
     const { novelId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_phase_order', 3)
     const aiSettings = createMockAISettings(3)

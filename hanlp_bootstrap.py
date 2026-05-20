@@ -8,6 +8,11 @@ from collections import defaultdict
 
 
 MODEL_ENV = "HANLP_MODEL"
+MAX_CHARS_ENV = "HANLP_BOOTSTRAP_MAX_CHARS"
+DEFAULT_MAX_CHARS = 800
+
+
+sys.setrecursionlimit(max(sys.getrecursionlimit(), 10000))
 
 
 def _fail(message):
@@ -61,6 +66,47 @@ def _find_mentions(text, surface):
         {"text": surface, "startOffset": match.start(), "endOffset": match.end()}
         for match in re.finditer(re.escape(surface), text)
     ]
+
+
+def _chunk_text(text, max_chars):
+    if len(text) <= max_chars:
+        return [(0, text)]
+
+    chunks = []
+    start = 0
+    punctuation = "。！？!?；;\n"
+    while start < len(text):
+        end = min(len(text), start + max_chars)
+        if end < len(text):
+            floor = start + max_chars // 2
+            split_at = -1
+            for index in range(end - 1, floor - 1, -1):
+                if text[index] in punctuation:
+                    split_at = index + 1
+                    break
+            if split_at > start:
+                end = split_at
+
+        chunk = text[start:end]
+        if chunk.strip():
+            chunks.append((start, chunk))
+        start = end
+
+    return chunks
+
+
+def _shift_items(items, offset):
+    if offset <= 0:
+        return items
+
+    shifted = []
+    for surface, entity_type, mention in items:
+        shifted.append((surface, entity_type, {
+            **mention,
+            "startOffset": mention["startOffset"] + offset,
+            "endOffset": mention["endOffset"] + offset,
+        }))
+    return shifted
 
 
 def _to_dict(doc):
@@ -151,13 +197,21 @@ def main():
         return _fail("chapterText must not be empty")
 
     try:
+        max_chars = int(os.environ.get(MAX_CHARS_ENV) or DEFAULT_MAX_CHARS)
+    except ValueError:
+        max_chars = DEFAULT_MAX_CHARS
+    max_chars = max(200, max_chars)
+
+    try:
         model = _load_model()
-        with contextlib.redirect_stdout(sys.stderr):
-            doc = model(text)
+        items = []
+        for offset, chunk in _chunk_text(text, max_chars):
+            with contextlib.redirect_stdout(sys.stderr):
+                doc = model(chunk)
+            items.extend(_shift_items(_extract_ner_items(doc, chunk), offset))
     except Exception as exc:
         return _fail(f"HanLP bootstrap failed: {exc}")
 
-    items = _extract_ner_items(doc, text)
     output = {
         "people": _build_group(items, "person", chapter_no, len(text)),
         "locations": _build_group(items, "location", chapter_no, len(text)),

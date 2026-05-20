@@ -618,6 +618,11 @@ function getKnowledgeExtractionParallelism(settings: KnowledgeExtractionScenario
   return Math.max(1, configuredParallelism)
 }
 
+function getHanlpBootstrapParallelism() {
+  const configured = Number(process.env.HANLP_BOOTSTRAP_PARALLELISM?.trim() || '1')
+  return Number.isInteger(configured) && configured > 0 ? configured : 1
+}
+
 function getIndexProgressValue(progress?: KnowledgeRebuildIndexProgress) {
   if (!progress) return 0
 
@@ -4391,7 +4396,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             continue
           }
 
-          const hanlpParallelism = Math.max(1, getKnowledgeExtractionParallelism(getKnowledgeExtractionSettingsSnapshot(currentJobState.payload)))
+          const hanlpParallelism = getHanlpBootstrapParallelism()
           const hanlpBatch = remainingChapters.slice(0, Math.min(hanlpParallelism, remainingChapters.length))
           updateKnowledgeJob(job.id, {
             currentStep: `运行 HanLP 引导（剩余 ${remainingChapters.length} 章，本批 ${hanlpBatch.length} 章）`,
