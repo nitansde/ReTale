@@ -13,6 +13,7 @@ export type CharacterRoleCardProfile = {
   identity?: CharacterRoleCardFacet
   capability?: CharacterRoleCardFacet
   appearance?: CharacterRoleCardFacet
+  body?: CharacterRoleCardFacet
   clothing?: CharacterRoleCardFacet
   speakingStyle?: CharacterRoleCardFacet
   likes?: CharacterRoleCardFacet
@@ -24,6 +25,7 @@ export const CHARACTER_ROLE_CARD_KEYS = [
   'identity',
   'capability',
   'appearance',
+  'body',
   'clothing',
   'speakingStyle',
   'likes',
@@ -37,9 +39,29 @@ const CHARACTER_ROLE_CARD_LABELS: Record<CharacterRoleCardKey, string> = {
   identity: '身份',
   capability: '能力',
   appearance: '外形',
+  body: '体态',
   clothing: '衣着',
   speakingStyle: '说话风格',
   likes: '偏好',
+}
+
+export type KnownCharacterUpdate = {
+  name: string
+  descriptionDelta: string
+  profile: CharacterRoleCardProfile
+  evidence: KnowledgeEvidence[]
+}
+
+export type UnknownCharacterObservation = {
+  surfaceText: string
+  observation: string
+  profile: CharacterRoleCardProfile
+  evidence: KnowledgeEvidence[]
+}
+
+export type AliasDiscovery = {
+  alias: string
+  target: string
 }
 
 export type KnowledgeEvidence = {
@@ -95,10 +117,19 @@ export type ChapterKnowledgeExtraction = {
   chapterNo: number
   summary: string
   characters: ExtractedChapterCharacter[]
+  knownCharacterUpdates: KnownCharacterUpdate[]
+  unknownCharacterObservations: UnknownCharacterObservation[]
+  aliasDiscoveries: AliasDiscovery[]
   relations: ExtractedChapterRelation[]
   events: ExtractedChapterEvent[]
   worldbuilding: ExtractedWorldbuilding[]
   openThreads: ExtractedOpenThread[]
+}
+
+const NO_CHANGE_PROFILE_KEYS = new Set<CharacterRoleCardKey>(['appearance', 'body', 'clothing'])
+
+function isNoChangeText(value?: string) {
+  return value?.trim() === '没有变化'
 }
 
 function normalizeRoleCardFacetValue(raw: unknown): CharacterRoleCardFacet | undefined {
@@ -151,6 +182,12 @@ export function mergeCharacterRoleCardProfiles(
   for (const key of CHARACTER_ROLE_CARD_KEYS) {
     const left = base?.[key]
     const right = incoming?.[key]
+    if (NO_CHANGE_PROFILE_KEYS.has(key) && isNoChangeText(right?.summary)) {
+      if (left?.summary) {
+        next[key] = { ...left }
+      }
+      continue
+    }
     const summary = chooseLeanText(left?.summary, right?.summary)
     const note = chooseLeanText(left?.note, right?.note)
     const evidence = chooseLeanText(left?.evidence, right?.evidence)

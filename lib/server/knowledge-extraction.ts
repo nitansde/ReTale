@@ -29,6 +29,9 @@ function buildFallbackExtraction(rawText: string, chapterNo: number): ChapterKno
     chapterNo,
     summary,
     characters: [],
+    knownCharacterUpdates: [],
+    unknownCharacterObservations: [],
+    aliasDiscoveries: [],
     relations: [],
     events: summaryEvent ? [summaryEvent] : [],
     worldbuilding: [],
@@ -201,121 +204,6 @@ async function runProviderExtraction(params: {
   })
 }
 
-function normalizeRelationKey(relation: ChapterKnowledgeExtraction['relations'][number]) {
-  return [relation.source, relation.target, relation.type]
-    .map((part) => part.trim().toLocaleLowerCase('en-US'))
-    .join('::')
-}
-
-function normalizeWorldbuildingKey(entry: ChapterKnowledgeExtraction['worldbuilding'][number]) {
-  return [entry.term, entry.category]
-    .map((part) => part.trim().toLocaleLowerCase('en-US'))
-    .join('::')
-}
-
-function normalizeOpenThreadKey(thread: ChapterKnowledgeExtraction['openThreads'][number]) {
-  return thread.name.trim().toLocaleLowerCase('en-US')
-}
-
-function chooseConciseText(existing: string, incoming: string) {
-  const left = existing.trim()
-  const right = incoming.trim()
-  if (!left) return right
-  if (!right) return left
-  if (left === right) return left
-  if (left.includes(right)) return right
-  if (right.includes(left)) return left
-  return left.length <= right.length ? left : right
-}
-
-function mergeEvidence(
-  left: ChapterKnowledgeExtraction['relations'][number]['evidence'],
-  right: ChapterKnowledgeExtraction['relations'][number]['evidence']
-) {
-  const merged = [...left, ...right]
-  const seen = new Set<string>()
-
-  return merged.filter((item) => {
-    const key = `${item.quote}::${item.lineStart}::${item.lineEnd}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
-function mergeFocusedKnowledge(
-  base: ChapterKnowledgeExtraction,
-  supplement: ChapterKnowledgeExtraction
-): ChapterKnowledgeExtraction {
-  const relationMap = new Map(
-    base.relations.map((relation) => [normalizeRelationKey(relation), relation] as const)
-  )
-
-  for (const relation of supplement.relations) {
-    const key = normalizeRelationKey(relation)
-    const existing = relationMap.get(key)
-    if (!existing) {
-      relationMap.set(key, relation)
-      continue
-    }
-
-    relationMap.set(key, {
-      ...existing,
-      polarity: existing.polarity === 'neutral' ? relation.polarity : existing.polarity,
-      strength: Math.max(existing.strength, relation.strength),
-      change: chooseConciseText(existing.change, relation.change),
-      validFromChapter: Math.min(existing.validFromChapter, relation.validFromChapter),
-      evidence: mergeEvidence(existing.evidence, relation.evidence),
-    })
-  }
-
-  const worldbuildingMap = new Map(
-    base.worldbuilding.map((entry) => [normalizeWorldbuildingKey(entry), entry] as const)
-  )
-
-  for (const entry of supplement.worldbuilding) {
-    const key = normalizeWorldbuildingKey(entry)
-    const existing = worldbuildingMap.get(key)
-    if (!existing) {
-      worldbuildingMap.set(key, entry)
-      continue
-    }
-
-    worldbuildingMap.set(key, {
-      ...existing,
-      definition: chooseConciseText(existing.definition, entry.definition),
-      evidence: mergeEvidence(existing.evidence, entry.evidence),
-    })
-  }
-
-  const openThreadMap = new Map(
-    base.openThreads.map((thread) => [normalizeOpenThreadKey(thread), thread] as const)
-  )
-
-  for (const thread of supplement.openThreads) {
-    const key = normalizeOpenThreadKey(thread)
-    const existing = openThreadMap.get(key)
-    if (!existing) {
-      openThreadMap.set(key, thread)
-      continue
-    }
-
-    openThreadMap.set(key, {
-      ...existing,
-      description: chooseConciseText(existing.description, thread.description),
-      evidence: mergeEvidence(existing.evidence, thread.evidence),
-    })
-  }
-
-  return {
-    ...base,
-    summary: base.summary || supplement.summary,
-    relations: [...relationMap.values()],
-    worldbuilding: [...worldbuildingMap.values()],
-    openThreads: [...openThreadMap.values()],
-  }
-}
-
 export async function extractChapterKnowledgeOffline(params: {
   chapter: Chapter
   chapterNo: number
@@ -344,25 +232,8 @@ export async function extractChapterKnowledgeOffline(params: {
   })
 
   if (primary.enabled && primary.extraction) {
-    const successfulExtraction = primary.extraction
-    if (!successfulExtraction) {
-      throw new Error('Knowledge extraction unexpectedly succeeded without extraction payload')
-    }
-
-    const focused = await runProviderExtraction({
-      chapterTitle: params.chapter.title,
-      chapterNo: params.chapterNo,
-      rawText,
-      storyStateText: params.storyStateText,
-      mode: 'focused',
-      settings: params.settings,
-      assertCanContinue: params.assertCanContinue,
-    })
-
     return {
-      extraction: ensureTimelineCoverage(focused.enabled && focused.extraction
-        ? mergeFocusedKnowledge(successfulExtraction, focused.extraction)
-        : successfulExtraction, rawText),
+      extraction: ensureTimelineCoverage(primary.extraction, rawText),
       provider,
       model: primary.model,
     }
