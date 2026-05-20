@@ -47,6 +47,10 @@ export type GraphNode = {
   label: string
   description?: string
   status?: string
+  aliases?: string[]
+  importanceTier?: 'protagonist' | 'important' | 'arc' | 'candidate' | 'ignored'
+  classificationKey?: 'tier0' | 'tier1' | 'tier2' | 'candidate' | 'ignored'
+  classificationLabel?: string
   importance: number
   confidence: number
   userConfirmed: boolean

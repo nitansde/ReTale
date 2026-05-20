@@ -4,6 +4,8 @@ export const PROTECTED_RESET_APP_SETTING_KEYS = [
   'OLLAMA_TIMEOUT_MS',
 ] as const
 
+const CHARACTER_IMPORTANCE_TIER_SQL = "'protagonist', 'important', 'arc', 'candidate', 'ignored'"
+
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS WorkspaceState (
   id TEXT PRIMARY KEY DEFAULT 'singleton',
@@ -79,6 +81,126 @@ CREATE TABLE IF NOT EXISTS chapter_extraction_candidates (
   UNIQUE(branch_id, chapter_id, chapter_source_hash)
 );
 
+CREATE TABLE IF NOT EXISTS hanlp_bootstrap_cache (
+  id TEXT PRIMARY KEY,
+  novel_id TEXT NOT NULL,
+  branch_id TEXT NOT NULL,
+  chapter_id TEXT,
+  chapter_no INTEGER,
+  chapter_text_hash TEXT NOT NULL,
+  hanlp_script_version_hash TEXT NOT NULL,
+  hanlp_model_or_config_hash TEXT NOT NULL,
+  output_schema_version TEXT NOT NULL DEFAULT 'v1',
+  cache_key TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  pipeline_version TEXT NOT NULL DEFAULT 'v1',
+  source_chapter_id TEXT,
+  source_chapter_no INTEGER,
+  request_json TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ready',
+  last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (chapter_id) REFERENCES KnowledgeChapter(id) ON DELETE SET NULL,
+  FOREIGN KEY (source_chapter_id) REFERENCES KnowledgeChapter(id) ON DELETE SET NULL,
+  UNIQUE (branch_id, input_hash, pipeline_version)
+);
+
+CREATE TABLE IF NOT EXISTS hanlp_bootstrap_results (
+  id TEXT PRIMARY KEY,
+  novel_id TEXT NOT NULL,
+  branch_id TEXT NOT NULL,
+  knowledge_job_id TEXT,
+  chapter_id TEXT,
+  chapter_no INTEGER,
+  chapter_source_hash TEXT NOT NULL,
+  result_kind TEXT NOT NULL DEFAULT 'bootstrap',
+  provider TEXT,
+  model TEXT,
+  result_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ready',
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (knowledge_job_id) REFERENCES KnowledgeJob(id) ON DELETE SET NULL,
+  FOREIGN KEY (chapter_id) REFERENCES KnowledgeChapter(id) ON DELETE SET NULL,
+  UNIQUE (branch_id, chapter_id, chapter_source_hash, result_kind)
+);
+
+CREATE TABLE IF NOT EXISTS hanlp_bootstrap_entities (
+  id TEXT PRIMARY KEY,
+  novel_id TEXT NOT NULL,
+  branch_id TEXT NOT NULL,
+  chapter_id TEXT,
+  chapter_no INTEGER,
+  entity_text TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  total_count INTEGER NOT NULL DEFAULT 1,
+  chapter_count INTEGER NOT NULL DEFAULT 1,
+  coverage_ratio REAL NOT NULL DEFAULT 0,
+  score REAL NOT NULL DEFAULT 0,
+  source_cache_id TEXT,
+  source_result_id TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (chapter_id) REFERENCES KnowledgeChapter(id) ON DELETE SET NULL,
+  FOREIGN KEY (source_cache_id) REFERENCES hanlp_bootstrap_cache(id) ON DELETE SET NULL,
+  FOREIGN KEY (source_result_id) REFERENCES hanlp_bootstrap_results(id) ON DELETE SET NULL,
+  UNIQUE (branch_id, chapter_id, entity_text, entity_type, source_result_id)
+);
+
+CREATE TABLE IF NOT EXISTS character_candidates (
+  id TEXT PRIMARY KEY,
+  novel_id TEXT NOT NULL,
+  branch_id TEXT NOT NULL,
+  surface_text TEXT NOT NULL,
+  first_seen_chapter INTEGER NOT NULL,
+  last_seen_chapter INTEGER NOT NULL,
+  chapter_count INTEGER NOT NULL DEFAULT 1,
+  mention_count INTEGER NOT NULL DEFAULT 1,
+  observations_json TEXT,
+  status TEXT NOT NULL DEFAULT 'collecting',
+  promoted_entity_id TEXT,
+  promotion_summary_status TEXT NOT NULL DEFAULT 'not_requested',
+  promotion_summary_generated_at TEXT,
+  merged_entity_id TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  display_name TEXT NOT NULL,
+  normalized_name TEXT NOT NULL,
+  FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (promoted_entity_id) REFERENCES KnowledgeEntity(id) ON DELETE SET NULL,
+  FOREIGN KEY (merged_entity_id) REFERENCES KnowledgeEntity(id) ON DELETE SET NULL,
+  UNIQUE (novel_id, branch_id, surface_text),
+  UNIQUE (branch_id, normalized_name)
+);
+
+CREATE TABLE IF NOT EXISTS character_candidate_chapters (
+  id TEXT PRIMARY KEY,
+  novel_id TEXT NOT NULL,
+  branch_id TEXT NOT NULL,
+  candidate_id TEXT NOT NULL,
+  chapter_no INTEGER NOT NULL,
+  mention_count INTEGER NOT NULL DEFAULT 1,
+  best_observation TEXT,
+  best_evidence TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  chapter_id TEXT,
+  FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (candidate_id) REFERENCES character_candidates(id) ON DELETE CASCADE,
+  FOREIGN KEY (chapter_id) REFERENCES KnowledgeChapter(id) ON DELETE SET NULL,
+  UNIQUE (novel_id, branch_id, candidate_id, chapter_no)
+);
+
 CREATE TABLE IF NOT EXISTS ChapterLine (
   id TEXT PRIMARY KEY,
   chapterId TEXT NOT NULL,
@@ -118,6 +240,7 @@ CREATE TABLE IF NOT EXISTS KnowledgeEntity (
   description TEXT,
   firstSeenChapter INTEGER,
   lastSeenChapter INTEGER,
+  importanceTier TEXT CHECK (importanceTier IS NULL OR (entityType = 'character' AND importanceTier IN (${CHARACTER_IMPORTANCE_TIER_SQL}))),
   status TEXT,
   importance INTEGER NOT NULL DEFAULT 3,
   userConfirmed INTEGER NOT NULL DEFAULT 0,
@@ -140,6 +263,44 @@ CREATE TABLE IF NOT EXISTS EntityAlias (
   FOREIGN KEY (entityId) REFERENCES KnowledgeEntity(id) ON DELETE CASCADE,
   FOREIGN KEY (evidenceSpanId) REFERENCES TextSpan(id) ON DELETE SET NULL,
   UNIQUE (entityId, alias)
+);
+
+CREATE TABLE IF NOT EXISTS EntityAliasMapping (
+  id TEXT PRIMARY KEY,
+  novelId TEXT NOT NULL,
+  branchId TEXT NOT NULL,
+  alias TEXT NOT NULL,
+  entityId TEXT NOT NULL,
+  sourceAliasId TEXT,
+  sourceChapter INTEGER,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novelId) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (entityId) REFERENCES KnowledgeEntity(id) ON DELETE CASCADE,
+  FOREIGN KEY (sourceAliasId) REFERENCES EntityAlias(id) ON DELETE SET NULL,
+  UNIQUE (branchId, alias)
+);
+
+CREATE TABLE IF NOT EXISTS EntityAliasConflictLog (
+  id TEXT PRIMARY KEY,
+  novelId TEXT NOT NULL,
+  branchId TEXT NOT NULL,
+  alias TEXT NOT NULL,
+  existingEntityId TEXT,
+  attemptedEntityId TEXT,
+  existingCanonicalName TEXT,
+  attemptedCanonicalName TEXT,
+  sourceAliasId TEXT,
+  sourceChapter INTEGER,
+  conflictReason TEXT NOT NULL DEFAULT 'branch_alias_already_claimed',
+  detailsJson TEXT,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novelId) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (existingEntityId) REFERENCES KnowledgeEntity(id) ON DELETE SET NULL,
+  FOREIGN KEY (attemptedEntityId) REFERENCES KnowledgeEntity(id) ON DELETE SET NULL,
+  FOREIGN KEY (sourceAliasId) REFERENCES EntityAlias(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS EntityMention (
@@ -595,9 +756,17 @@ CREATE TABLE IF NOT EXISTS future_jump_revisions (
 CREATE INDEX IF NOT EXISTS idx_knowledge_chapter_branch_no ON KnowledgeChapter(branchId, chapterNo);
 CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_order ON chapter_extraction_candidates(branch_id, chapter_no, status);
 CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_chapter ON chapter_extraction_candidates(branch_id, chapter_id, chapter_source_hash);
+CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_last_seen ON hanlp_bootstrap_cache(branch_id, last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_lookup ON hanlp_bootstrap_results(branch_id, chapter_id, chapter_source_hash, result_kind);
+CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_job ON hanlp_bootstrap_results(knowledge_job_id, status);
+CREATE INDEX IF NOT EXISTS idx_character_candidate_chapters_candidate_count ON character_candidate_chapters(candidate_id, chapter_no);
+CREATE INDEX IF NOT EXISTS idx_character_candidate_chapters_branch_chapter ON character_candidate_chapters(branch_id, chapter_no, candidate_id);
 CREATE INDEX IF NOT EXISTS idx_text_span_branch_chapter ON TextSpan(branchId, chapterNo);
 CREATE INDEX IF NOT EXISTS idx_text_span_chapter_type ON TextSpan(chapterId, spanType);
 CREATE INDEX IF NOT EXISTS idx_knowledge_entity_branch_name ON KnowledgeEntity(branchId, entityType, canonicalName);
+CREATE INDEX IF NOT EXISTS idx_entity_alias_mapping_branch_alias ON EntityAliasMapping(branchId, alias);
+CREATE INDEX IF NOT EXISTS idx_entity_alias_mapping_branch_entity ON EntityAliasMapping(branchId, entityId);
+CREATE INDEX IF NOT EXISTS idx_entity_alias_conflict_branch_alias ON EntityAliasConflictLog(branchId, alias, createdAt);
 CREATE INDEX IF NOT EXISTS idx_entity_mention_branch_chapter ON EntityMention(branchId, chapterNo);
 CREATE INDEX IF NOT EXISTS idx_entity_mention_entity_chapter ON EntityMention(branchId, entityId, chapterNo);
 CREATE INDEX IF NOT EXISTS idx_entity_link_source_valid_until ON EntityLink(branchId, sourceEntityId, validFromChapter, validUntilChapter);

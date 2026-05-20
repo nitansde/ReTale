@@ -369,6 +369,100 @@ function runBootMigrations(database: DatabaseSync) {
     }
   }
 
+  addColumnIfMissing(database, 'hanlp_bootstrap_cache', 'chapter_id', 'chapter_id TEXT')
+  addColumnIfMissing(database, 'hanlp_bootstrap_cache', 'chapter_no', 'chapter_no INTEGER')
+  addColumnIfMissing(database, 'hanlp_bootstrap_cache', 'chapter_text_hash', 'chapter_text_hash TEXT')
+  addColumnIfMissing(database, 'hanlp_bootstrap_cache', 'hanlp_script_version_hash', 'hanlp_script_version_hash TEXT')
+  addColumnIfMissing(database, 'hanlp_bootstrap_cache', 'hanlp_model_or_config_hash', 'hanlp_model_or_config_hash TEXT')
+  addColumnIfMissing(database, 'hanlp_bootstrap_cache', 'output_schema_version', "output_schema_version TEXT DEFAULT 'v1'")
+  addColumnIfMissing(database, 'character_candidates', 'surface_text', 'surface_text TEXT')
+  addColumnIfMissing(database, 'character_candidates', 'chapter_count', 'chapter_count INTEGER DEFAULT 1')
+  addColumnIfMissing(database, 'character_candidates', 'observations_json', 'observations_json TEXT')
+  addColumnIfMissing(database, 'character_candidates', 'status', "status TEXT DEFAULT 'collecting'")
+  addColumnIfMissing(database, 'character_candidates', 'promotion_summary_status', "promotion_summary_status TEXT DEFAULT 'not_requested'")
+  addColumnIfMissing(database, 'character_candidates', 'promotion_summary_generated_at', 'promotion_summary_generated_at TEXT')
+  addColumnIfMissing(database, 'character_candidates', 'merged_entity_id', 'merged_entity_id TEXT')
+  addColumnIfMissing(database, 'character_candidate_chapters', 'best_observation', 'best_observation TEXT')
+  addColumnIfMissing(database, 'character_candidate_chapters', 'best_evidence', 'best_evidence TEXT')
+  addColumnIfMissing(database, 'character_candidate_chapters', 'chapter_id', 'chapter_id TEXT')
+  database.exec(`
+    UPDATE character_candidates
+    SET surface_text = COALESCE(NULLIF(surface_text, ''), display_name, normalized_name)
+    WHERE surface_text IS NULL OR surface_text = ''
+  `)
+  database.exec(`
+    UPDATE character_candidates
+    SET first_seen_chapter = COALESCE(first_seen_chapter, 1),
+        last_seen_chapter = COALESCE(last_seen_chapter, COALESCE(first_seen_chapter, 1)),
+        chapter_count = COALESCE(chapter_count, 1),
+        mention_count = CASE WHEN mention_count IS NULL OR mention_count < 1 THEN 1 ELSE mention_count END,
+        status = COALESCE(status, 'collecting'),
+        promotion_summary_status = COALESCE(promotion_summary_status, 'not_requested')
+  `)
+  database.exec(`
+    UPDATE character_candidate_chapters
+    SET mention_count = CASE WHEN mention_count IS NULL OR mention_count < 1 THEN 1 ELSE mention_count END
+  `)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS hanlp_bootstrap_entities (
+      id TEXT PRIMARY KEY,
+      novel_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      chapter_id TEXT,
+      chapter_no INTEGER,
+      entity_text TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      total_count INTEGER NOT NULL DEFAULT 1,
+      chapter_count INTEGER NOT NULL DEFAULT 1,
+      coverage_ratio REAL NOT NULL DEFAULT 0,
+      score REAL NOT NULL DEFAULT 0,
+      source_cache_id TEXT,
+      source_result_id TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+      FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+      FOREIGN KEY (chapter_id) REFERENCES KnowledgeChapter(id) ON DELETE SET NULL,
+      FOREIGN KEY (source_cache_id) REFERENCES hanlp_bootstrap_cache(id) ON DELETE SET NULL,
+      FOREIGN KEY (source_result_id) REFERENCES hanlp_bootstrap_results(id) ON DELETE SET NULL,
+      UNIQUE (branch_id, chapter_id, entity_text, entity_type, source_result_id)
+    )
+  `)
+  addColumnIfMissing(database, 'KnowledgeEntity', 'importanceTier', 'importanceTier TEXT')
+  database.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_knowledge_entity_character_tier_insert
+    BEFORE INSERT ON KnowledgeEntity
+    FOR EACH ROW
+    WHEN NEW.importanceTier IS NOT NULL AND (NEW.entityType <> 'character' OR NEW.importanceTier NOT IN ('protagonist', 'important', 'arc', 'candidate', 'ignored'))
+    BEGIN
+      SELECT RAISE(ABORT, 'importanceTier requires a character entity and allowed tier value');
+    END
+  `)
+  database.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_knowledge_entity_character_tier_update
+    BEFORE UPDATE OF entityType, importanceTier ON KnowledgeEntity
+    FOR EACH ROW
+    WHEN NEW.importanceTier IS NOT NULL AND (NEW.entityType <> 'character' OR NEW.importanceTier NOT IN ('protagonist', 'important', 'arc', 'candidate', 'ignored'))
+    BEGIN
+      SELECT RAISE(ABORT, 'importanceTier requires a character entity and allowed tier value');
+    END
+  `)
+  database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_lookup ON hanlp_bootstrap_cache(branch_id, chapter_no, chapter_text_hash, hanlp_script_version_hash, hanlp_model_or_config_hash, output_schema_version)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_last_seen ON hanlp_bootstrap_cache(branch_id, last_seen_at)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_lookup ON hanlp_bootstrap_results(branch_id, chapter_id, chapter_source_hash, result_kind)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_job ON hanlp_bootstrap_results(knowledge_job_id, status)')
+  database.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_character_candidates_surface_text ON character_candidates(novel_id, branch_id, surface_text)')
+  database.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_character_candidate_chapters_chapter_no ON character_candidate_chapters(novel_id, branch_id, candidate_id, chapter_no)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_entities_branch_type ON hanlp_bootstrap_entities(branch_id, entity_type, score)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_entities_result_lookup ON hanlp_bootstrap_entities(source_result_id, branch_id, chapter_no)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_character_candidates_branch_status ON character_candidates(branch_id, status, last_seen_chapter)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_character_candidates_promotion_lookup ON character_candidates(branch_id, promoted_entity_id, promotion_summary_status, merged_entity_id, status, last_seen_chapter)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_character_candidate_chapters_candidate_count ON character_candidate_chapters(candidate_id, chapter_no)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_character_candidate_chapters_branch_chapter ON character_candidate_chapters(branch_id, chapter_no, candidate_id)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_knowledge_entity_branch_tier ON KnowledgeEntity(branchId, importanceTier) WHERE importanceTier IS NOT NULL')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_entity_alias_mapping_branch_alias ON EntityAliasMapping(branchId, alias)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_entity_alias_mapping_branch_entity ON EntityAliasMapping(branchId, entityId)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_entity_alias_conflict_branch_alias ON EntityAliasConflictLog(branchId, alias, createdAt)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_entity_link_source_valid_until ON EntityLink(branchId, sourceEntityId, validFromChapter, validUntilChapter)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_entity_link_target_valid_until ON EntityLink(branchId, targetEntityId, validFromChapter, validUntilChapter)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_entity_link_chapter ON EntityLink(branchId, sourceChapter)')

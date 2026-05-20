@@ -62,6 +62,10 @@ export type Character = {
   trait: string
   note: string
   profile?: CharacterRoleCardProfile
+  aliases?: string[]
+  importanceTier?: 'protagonist' | 'important' | 'arc' | 'candidate' | 'ignored' | null
+  classificationKey?: 'tier0' | 'tier1' | 'tier2' | 'candidate' | 'ignored' | null
+  classificationLabel?: string | null
 }
 
 export type CharacterRoleCardFacet = {
@@ -76,6 +80,7 @@ export type CharacterRoleCardProfile = {
   identity?: CharacterRoleCardFacet
   capability?: CharacterRoleCardFacet
   appearance?: CharacterRoleCardFacet
+  body?: CharacterRoleCardFacet
   clothing?: CharacterRoleCardFacet
   speakingStyle?: CharacterRoleCardFacet
   likes?: CharacterRoleCardFacet
