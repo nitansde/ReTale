@@ -161,6 +161,7 @@ type KnowledgeRebuildStatus = {
   jobId: string
   novelId: string
   status: string
+  errorMessage?: string | null
   progress: number
   currentStep: string | null
   createdAt: string
@@ -222,6 +223,10 @@ export function resolveCurrentNodeMetrics(params: {
         ? override.outputTokens
         : params.selectedNode?.outputTokens ?? null,
   }
+}
+
+export function shouldLoadWorkspaceFromBackendOnMount(backendLoaded: boolean) {
+  return !backendLoaded
 }
 
 function buildContinueBlockLineageRequestContext(context: PendingContinueBlockRewriteLaunch | null): BranchContextPreviewOptions {
@@ -415,13 +420,20 @@ export function getCharacterClassificationBadgeLabel(character: Pick<Character, 
 function formatKnowledgeEtaLabel(params: {
   etaMinutes: number | null | undefined
   isPaused: boolean
+  isFailed: boolean
   hasTelemetry: boolean
 }) {
+  if (params.isFailed) return '已失败'
   if (params.isPaused) return '已暂停'
   if (typeof params.etaMinutes === 'number' && Number.isFinite(params.etaMinutes) && params.etaMinutes > 0) {
     return `约 ${params.etaMinutes} 分钟`
   }
   return params.hasTelemetry ? '计算中' : '等待进度'
+}
+
+export function resolveKnowledgeRebuildFailureMessage(status: Pick<KnowledgeRebuildStatus, 'status' | 'errorMessage'> | null) {
+  if (status?.status !== 'failed') return null
+  return status.errorMessage?.trim() || '知识视图重建失败，请重新发起重建。'
 }
 
 export function resolveHanlpCacheDeleteState(params: {
@@ -1148,8 +1160,9 @@ export function SelectionNovelStudio() {
   }
 
   useEffect(() => {
+    if (!shouldLoadWorkspaceFromBackendOnMount(backendLoaded)) return
     loadFromBackend().catch(() => undefined)
-  }, [loadFromBackend])
+  }, [backendLoaded, loadFromBackend])
 
   useEffect(() => {
     if (backendLoaded && localChapters.length === 0) {
@@ -1208,11 +1221,23 @@ export function SelectionNovelStudio() {
 
         const nextStatus = data.knowledgeRebuildStatus ?? null
         const hadActiveJob = Boolean(lastActiveKnowledgeJobIdRef.current)
+        const failureMessage = resolveKnowledgeRebuildFailureMessage(nextStatus)
 
         setKnowledgeRebuildStatus(nextStatus)
 
-        if (nextStatus?.jobId) {
+        if (
+          nextStatus?.jobId
+          && (nextStatus.status === 'queued' || nextStatus.status === 'running' || nextStatus.status === 'paused')
+        ) {
           lastActiveKnowledgeJobIdRef.current = nextStatus.jobId
+          return
+        }
+
+        if (nextStatus?.status === 'failed') {
+          lastActiveKnowledgeJobIdRef.current = null
+          if (hadActiveJob && !cancelled) {
+            showKnowledgeToast(failureMessage ?? '知识视图重建失败，请重新发起重建。', 2600)
+          }
           return
         }
 
@@ -1568,9 +1593,14 @@ export function SelectionNovelStudio() {
     return knowledgeRebuildStatus?.etaMinutes ?? null
   }, [knowledgeRebuildStatus])
   const knowledgeRebuildSteps = useMemo(() => knowledgeRebuildStatus?.steps ?? [], [knowledgeRebuildStatus])
+  const knowledgeRebuildFailed = knowledgeRebuildStatus?.status === 'failed'
   const knowledgeRebuildPaused = knowledgeRebuildStatus?.status === 'paused'
   const knowledgeRebuildActive = knowledgeRebuildStatus?.status === 'running' || knowledgeRebuildStatus?.status === 'queued'
   const knowledgeRebuildBusy = knowledgeRebuildActive || knowledgeRebuildPaused
+  const knowledgeRebuildFailureMessage = useMemo(
+    () => resolveKnowledgeRebuildFailureMessage(knowledgeRebuildStatus),
+    [knowledgeRebuildStatus]
+  )
   const knowledgeRebuildOverallPercent = useMemo(
     () => toProgressPercent(knowledgeRebuildStatus?.progress),
     [knowledgeRebuildStatus]
@@ -1610,16 +1640,18 @@ export function SelectionNovelStudio() {
     if (detail) return detail
 
     const currentStep = knowledgeRebuildStatus?.currentStep?.trim()
+    if (knowledgeRebuildFailed) return '已失败'
     if (currentStep) return currentStep
 
     if (knowledgeRebuildPaused) return '等待继续'
     return hanlpBootstrapHasProgressTelemetry ? '计算中' : '等待进度'
-  }, [hanlpBootstrapHasProgressTelemetry, hanlpBootstrapStep, knowledgeRebuildPaused, knowledgeRebuildStatus])
+  }, [hanlpBootstrapHasProgressTelemetry, hanlpBootstrapStep, knowledgeRebuildFailed, knowledgeRebuildPaused, knowledgeRebuildStatus])
   const hanlpBootstrapEtaLabel = useMemo(() => formatKnowledgeEtaLabel({
     etaMinutes: hanlpBootstrapStep?.etaMinutes ?? knowledgeRebuildEtaMinutes,
     isPaused: knowledgeRebuildPaused,
+    isFailed: knowledgeRebuildFailed,
     hasTelemetry: hanlpBootstrapHasProgressTelemetry,
-  }), [hanlpBootstrapHasProgressTelemetry, hanlpBootstrapStep, knowledgeRebuildEtaMinutes, knowledgeRebuildPaused])
+  }), [hanlpBootstrapHasProgressTelemetry, hanlpBootstrapStep, knowledgeRebuildEtaMinutes, knowledgeRebuildFailed, knowledgeRebuildPaused])
   const hanlpBootstrapStatusLine = useMemo(() => {
     const completed = hanlpBootstrapCompletedChapterCount
     const total = hanlpBootstrapTotalChapterCount
@@ -1630,10 +1662,11 @@ export function SelectionNovelStudio() {
         : `已完成 ${completed} / ${total} 章，继续更新 HanLP 引导结果。`
     }
 
+    if (knowledgeRebuildFailed) return 'HanLP Bootstrap 已随本次知识重建失败而停止。'
     if (knowledgeRebuildPaused) return 'HanLP Bootstrap 已暂停，等待继续。'
     if (knowledgeRebuildBusy) return hanlpBootstrapHasProgressTelemetry ? 'HanLP Bootstrap 正在持续回传章节遥测。' : 'HanLP Bootstrap 已启动，正在等待章节进度。'
     return '当前还没有可展示的 HanLP Bootstrap 进度。'
-  }, [hanlpBootstrapCompletedChapterCount, hanlpBootstrapHasProgressTelemetry, hanlpBootstrapTotalChapterCount, knowledgeRebuildBusy, knowledgeRebuildPaused])
+  }, [hanlpBootstrapCompletedChapterCount, hanlpBootstrapHasProgressTelemetry, hanlpBootstrapTotalChapterCount, knowledgeRebuildBusy, knowledgeRebuildFailed, knowledgeRebuildPaused])
   const hanlpCacheStatus = knowledgeRebuildStatus?.hanlpCacheStatus ?? 'empty'
   const hanlpCacheStatusLabel = HANLP_CACHE_STATUS_LABELS[hanlpCacheStatus]
   const hanlpSettingsLine = useMemo(() => {
@@ -1666,6 +1699,10 @@ export function SelectionNovelStudio() {
     return `${formatEmbeddingProviderLabel(snapshot.provider)} · ${snapshot.model} · batch ${snapshot.embeddingBatchSize}`
   }, [knowledgeRebuildStatus])
   const rawTextEmbeddingStatusLine = useMemo(() => {
+    if (knowledgeRebuildFailed) {
+      return rawTextEmbeddingPercent !== null ? '原文预计算在任务失败前已回传部分进度。' : '原文预计算随本次知识重建一并失败。'
+    }
+
     if (knowledgeRebuildPaused) {
       return rawTextEmbeddingPercent !== null ? '原文预计算已暂停，等待继续。' : '原文预计算已暂停，尚未收到进度遥测。'
     }
@@ -1682,7 +1719,7 @@ export function SelectionNovelStudio() {
     }
 
     return '原文向量预计算尚未开始。'
-  }, [knowledgeRebuildActive, knowledgeRebuildPaused, rawTextEmbeddingPercent])
+  }, [knowledgeRebuildActive, knowledgeRebuildFailed, knowledgeRebuildPaused, rawTextEmbeddingPercent])
 
   const editor = useEditor({
     extensions: [StarterKit],
@@ -2863,7 +2900,12 @@ export function SelectionNovelStudio() {
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
 
-      if (result.knowledgeRebuildStatus?.jobId) {
+      if (
+        result.knowledgeRebuildStatus?.jobId
+        && (result.knowledgeRebuildStatus.status === 'queued'
+          || result.knowledgeRebuildStatus.status === 'running'
+          || result.knowledgeRebuildStatus.status === 'paused')
+      ) {
         lastActiveKnowledgeJobIdRef.current = result.knowledgeRebuildStatus.jobId
       } else {
         lastActiveKnowledgeJobIdRef.current = null
@@ -2877,6 +2919,8 @@ export function SelectionNovelStudio() {
         showKnowledgeToast('知识重建已终止')
       } else if (result.jobOutcome === 'completed') {
         showKnowledgeToast('知识视图已更新')
+      } else if (result.knowledgeRebuildStatus?.status === 'failed') {
+        showKnowledgeToast(resolveKnowledgeRebuildFailureMessage(result.knowledgeRebuildStatus) ?? '知识视图重建失败，请重新发起重建。', 2600)
       }
     } catch {
       showKnowledgeToast('知识视图重建失败', 2200)
@@ -2893,7 +2937,12 @@ export function SelectionNovelStudio() {
       if (!result) return
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
-      if (result.knowledgeRebuildStatus?.jobId) {
+      if (
+        result.knowledgeRebuildStatus?.jobId
+        && (result.knowledgeRebuildStatus.status === 'queued'
+          || result.knowledgeRebuildStatus.status === 'running'
+          || result.knowledgeRebuildStatus.status === 'paused')
+      ) {
         lastActiveKnowledgeJobIdRef.current = result.knowledgeRebuildStatus.jobId
       }
 
@@ -3651,26 +3700,35 @@ export function SelectionNovelStudio() {
           disabled={knowledgeRebuilding || knowledgeRebuildActive || Boolean(knowledgeActionLoading)}
           className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {knowledgeRebuilding ? '处理中…' : knowledgeRebuildPaused ? '继续知识视图重建' : '重建知识视图'}
+          {knowledgeRebuilding ? '处理中…' : knowledgeRebuildPaused ? '继续知识视图重建' : knowledgeRebuildFailed ? '重新重建知识视图' : '重建知识视图'}
         </button>
       </div>
       {knowledgeRebuildStatus ? (
-        <div className="mt-3 rounded-2xl border border-violet-300/15 bg-black/20 px-3 py-3 text-xs text-zinc-300">
+        <div className={cn(
+          'mt-3 rounded-2xl px-3 py-3 text-xs',
+          knowledgeRebuildFailed
+            ? 'border border-rose-300/20 bg-rose-500/[0.08] text-rose-50'
+            : 'border border-violet-300/15 bg-black/20 text-zinc-300'
+        )}>
           <div className="mb-2 flex items-center justify-between gap-3">
-            <span>{knowledgeRebuildPaused ? '本地知识图谱已暂停' : '本地知识图谱重建中'}</span>
-            <span>{knowledgeRebuildOverallPercent}%</span>
+            <span>{knowledgeRebuildFailed ? '本地知识图谱重建失败' : knowledgeRebuildPaused ? '本地知识图谱已暂停' : '本地知识图谱重建中'}</span>
+            <span>{knowledgeRebuildFailed ? '失败' : `${knowledgeRebuildOverallPercent}%`}</span>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-white/10">
             <div
-              className="h-full rounded-full bg-violet-400 transition-all"
+              className={cn('h-full rounded-full transition-all', knowledgeRebuildFailed ? 'bg-rose-300' : 'bg-violet-400')}
               style={{ width: `${Math.max(6, Math.min(100, knowledgeRebuildOverallPercent))}%` }}
             />
           </div>
-          <p className="mt-2 text-[11px] leading-5 text-zinc-400">
-            {knowledgeRebuildStatus.currentStep || (knowledgeRebuildPaused ? '等待继续重建…' : '正在准备知识重建…')}
+          <p className={cn('mt-2 text-[11px] leading-5', knowledgeRebuildFailed ? 'text-rose-100/90' : 'text-zinc-400')}>
+            {knowledgeRebuildFailed
+              ? knowledgeRebuildFailureMessage
+              : knowledgeRebuildStatus.currentStep || (knowledgeRebuildPaused ? '等待继续重建…' : '正在准备知识重建…')}
           </p>
-          <p className="mt-1 text-[11px] leading-5 text-zinc-500">
-            预估剩余：{knowledgeRebuildPaused ? '已暂停' : knowledgeRebuildEtaMinutes ? `约 ${knowledgeRebuildEtaMinutes} 分钟` : '计算中'}
+          <p className={cn('mt-1 text-[11px] leading-5', knowledgeRebuildFailed ? 'text-rose-100/70' : 'text-zinc-500')}>
+            {knowledgeRebuildFailed
+              ? '本次重建未完成，可重新发起知识重建。'
+              : `预估剩余：${knowledgeRebuildPaused ? '已暂停' : knowledgeRebuildEtaMinutes ? `约 ${knowledgeRebuildEtaMinutes} 分钟` : '计算中'}`}
           </p>
           <div className="mt-3 rounded-xl border border-violet-300/15 bg-violet-500/[0.08] px-3 py-3" data-testid="workspace-hanlp-bootstrap-card">
             <div className="flex flex-wrap items-start justify-between gap-2">
@@ -3783,16 +3841,21 @@ export function SelectionNovelStudio() {
               })}
             </div>
           ) : null}
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            {knowledgeRebuildPaused ? (
+          <div className={cn('mt-3 grid gap-2', knowledgeRebuildFailed ? 'grid-cols-1' : 'grid-cols-2')}>
+            {knowledgeRebuildPaused || knowledgeRebuildFailed ? (
               <button
                 onClick={() => {
                   void handleRebuildKnowledge()
                 }}
                 disabled={Boolean(knowledgeActionLoading) || knowledgeRebuilding}
-                className="rounded-xl border border-violet-400/30 bg-violet-500/15 px-3 py-2 text-[11px] font-medium text-violet-100 transition hover:bg-violet-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                className={cn(
+                  'rounded-xl px-3 py-2 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
+                  knowledgeRebuildFailed
+                    ? 'border border-rose-300/30 bg-rose-500/15 text-rose-50 hover:bg-rose-500/25'
+                    : 'border border-violet-400/30 bg-violet-500/15 text-violet-100 hover:bg-violet-500/25'
+                )}
               >
-                {knowledgeRebuilding ? '继续中…' : '继续重建'}
+                {knowledgeRebuilding ? (knowledgeRebuildFailed ? '重新发起中…' : '继续中…') : knowledgeRebuildFailed ? '重新重建' : '继续重建'}
               </button>
             ) : (
               <button
@@ -3805,15 +3868,17 @@ export function SelectionNovelStudio() {
                 {knowledgeActionLoading === 'pause' ? '暂停中…' : '暂停重建'}
               </button>
             )}
-            <button
-              onClick={() => {
-                void handleAbortKnowledge()
-              }}
-              disabled={Boolean(knowledgeActionLoading)}
-              className="rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {knowledgeActionLoading === 'abort' ? '终止中…' : '终止当前任务'}
-            </button>
+            {knowledgeRebuildFailed ? null : (
+              <button
+                onClick={() => {
+                  void handleAbortKnowledge()
+                }}
+                disabled={Boolean(knowledgeActionLoading)}
+                className="rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {knowledgeActionLoading === 'abort' ? '终止中…' : '终止当前任务'}
+              </button>
+            )}
           </div>
         </div>
       ) : null}
@@ -4058,6 +4123,15 @@ export function SelectionNovelStudio() {
                     anchorChapterNo={activeWorkspaceSelection.anchorChapterNo}
                     nodeTitle={selectedContinueBlockNode.title}
                     nodeSubtitle={selectedContinueBlockNode.subtitle ?? null}
+                    fallbackDetail={{
+                      latestText: selectedContinueBlockNode.latestText?.trim() || '',
+                      latestRevisionNo: selectedContinueBlockNode.latestRevisionNo ?? 1,
+                      title: selectedContinueBlockNode.title,
+                      subtitle: selectedContinueBlockNode.subtitle ?? null,
+                      userInstruction: selectedContinueBlockNode.userInstruction?.trim() || '',
+                      inputTokens: selectedContinueBlockNode.inputTokens ?? null,
+                      outputTokens: selectedContinueBlockNode.outputTokens ?? null,
+                    }}
                     readableLineageLabel={selectedTimelineDisplayLabel || null}
                     onMetricsChange={handleContinueBlockMetricsChange}
                   />

@@ -5,7 +5,11 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/graph-review-panel'
 import { WorkspaceCenterPane } from '@/components/workspace/WorkspaceCenterPane'
-import { resolveContinueBlockSelectionAfterSave, resolveCurrentNodeMetrics } from '@/components/workspace/selection-novel-studio'
+import {
+  resolveContinueBlockSelectionAfterSave,
+  resolveCurrentNodeMetrics,
+  shouldLoadWorkspaceFromBackendOnMount,
+} from '@/components/workspace/selection-novel-studio'
 import {
   readWorkspaceSelectionFromSearchParams,
   resolveSelectionAfterDeletedBranchNode,
@@ -130,6 +134,11 @@ function renderPane(selection: TimelineSelection) {
 }
 
 describe('workspace selection shell', () => {
+  it('only restores from the backend on mount when the workspace store is not already loaded', () => {
+    expect(shouldLoadWorkspaceFromBackendOnMount(false)).toBe(true)
+    expect(shouldLoadWorkspaceFromBackendOnMount(true)).toBe(false)
+  })
+
   it('keeps branch selections when the authored node still exists and falls back to chapter when it does not', () => {
     expect(resolveWorkspaceSelection({
       currentSelection: {
