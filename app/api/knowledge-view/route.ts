@@ -1,16 +1,35 @@
-import { NextResponse } from 'next/server'
+import { after, NextResponse } from 'next/server'
 import {
   abortAuthoritativeKnowledgeRebuild,
   buildKnowledgeProjection,
   deleteAuthoritativeKnowledgeGraph,
+  deleteAuthoritativeHanlpCache,
   type KnowledgeViewActionPayload,
   type KnowledgeViewPayload,
   pauseAuthoritativeKnowledgeRebuild,
   rebuildAuthoritativeKnowledgeView,
+  runAuthoritativeKnowledgeViewRebuild,
 } from '@/lib/server/knowledge-view'
+
+export const maxDuration = 3600
 
 function buildSuccessResponse(projection: KnowledgeViewPayload | KnowledgeViewActionPayload) {
   return NextResponse.json({ ok: true, ...projection })
+}
+
+function scheduleAfterResponse(callback: () => Promise<void>) {
+  try {
+    after(callback)
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('outside a request scope')) {
+      return
+    }
+
+    console.warn('Falling back to timer-based knowledge rebuild scheduling', error)
+    setTimeout(() => {
+      void callback()
+    }, 0)
+  }
 }
 
 export async function GET(request: Request) {
@@ -44,9 +63,26 @@ export async function POST(request: Request) {
       ? await pauseAuthoritativeKnowledgeRebuild(novelId)
       : action === 'abort'
         ? await abortAuthoritativeKnowledgeRebuild(novelId)
+        : action === 'delete-hanlp-cache'
+          ? await deleteAuthoritativeHanlpCache(novelId)
         : action === 'delete-knowledge'
           ? await deleteAuthoritativeKnowledgeGraph(novelId)
           : await rebuildAuthoritativeKnowledgeView(novelId)
+
+    if (
+      action === 'rebuild'
+      && (projection.jobOutcome === 'queued' || projection.jobOutcome === 'running')
+      && projection.knowledgeRebuildStatus?.jobId
+    ) {
+      const jobId = projection.knowledgeRebuildStatus.jobId
+      scheduleAfterResponse(async () => {
+        try {
+          await runAuthoritativeKnowledgeViewRebuild(novelId, jobId)
+        } catch (error) {
+          console.error('Knowledge rebuild background worker failed', error)
+        }
+      })
+    }
 
     return buildSuccessResponse(projection)
   } catch (error) {

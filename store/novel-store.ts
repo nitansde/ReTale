@@ -83,16 +83,43 @@ type KnowledgeRebuildStatus = {
   updatedAt: string
   etaMinutes: number | null
   steps: Array<{
-    key: 'extract' | 'cleanup' | 'write' | 'index'
+    key: 'hanlp-bootstrap' | 'extract' | 'batch-sync' | 'cleanup' | 'write' | 'index'
     label: string
     status: 'pending' | 'running' | 'paused' | 'completed'
     progress: number
     etaMinutes: number | null
     detail: string | null
   }>
+  rawTextEmbeddingProgress?: number
+  rawTextEmbeddingCacheHitRate?: number
+  hanlpCacheStatus?: 'queued' | 'running' | 'paused' | 'ready' | 'empty'
+  hanlpCacheHitRate?: number
+  hanlpBootstrapProgress?: number
+  hanlpBootstrapCompletedChapterCount?: number
+  hanlpBootstrapTotalChapterCount?: number
+  hanlpBootstrapCacheHitCount?: number
+  hanlpBootstrapCacheMissCount?: number
+  hanlpBootstrapInitializedCharacterEntities?: boolean
+  hanlpSettingsSnapshot?: {
+    hanlpScriptVersionHash: string
+    hanlpModelOrConfigHash: string
+    outputSchemaVersion: string
+    pipelineVersion: string
+  }
+  stageTimingsMs?: Record<string, number>
+  embeddingSettingsSnapshot?: {
+    provider: string
+    model: string
+    embeddingBatchSize: number
+  }
 }
 
-type KnowledgeActionOutcome = 'completed' | 'paused' | 'aborted' | 'deleted' | 'idle'
+type KnowledgeActionOutcome = 'completed' | 'queued' | 'running' | 'paused' | 'aborted' | 'blocked' | 'deleted' | 'idle'
+
+type KnowledgeActionError = {
+  code: 'active-rebuild'
+  message: string
+}
 
 type PresetCompatImportResult = {
   importedIds: string[]
@@ -102,6 +129,7 @@ type PresetCompatImportResult = {
 type KnowledgeProjectionResult = KnowledgeProjectionPayload & {
   knowledgeRebuildStatus: KnowledgeRebuildStatus | null
   jobOutcome: KnowledgeActionOutcome | null
+  actionError: KnowledgeActionError | null
 }
 
 function normalizeKnowledgeProjection(data: Partial<KnowledgeProjectionPayload>): KnowledgeProjectionPayload {
@@ -119,6 +147,7 @@ function normalizeKnowledgeProjectionResult(data: Partial<KnowledgeProjectionRes
     ...normalizeKnowledgeProjection(data),
     knowledgeRebuildStatus: data.knowledgeRebuildStatus ?? null,
     jobOutcome: data.jobOutcome ?? null,
+    actionError: data.actionError ?? null,
   }
 }
 
@@ -126,7 +155,7 @@ async function fetchKnowledgeProjection(options?: {
   novelId?: string
   asOfChapter?: number
   method?: 'GET' | 'POST'
-  action?: 'rebuild' | 'pause' | 'abort' | 'delete-knowledge'
+  action?: 'rebuild' | 'pause' | 'abort' | 'delete-knowledge' | 'delete-hanlp-cache'
 }): Promise<KnowledgeProjectionResult> {
   const novelId = options?.novelId
   const asOfChapter = options?.asOfChapter
@@ -417,6 +446,7 @@ type NovelStore = PersistedNovelState & {
   pauseStoryKnowledgeRebuild: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   abortStoryKnowledgeRebuild: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   deleteStoryKnowledgeGraph: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
+  deleteStoryHanlpCache: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   refreshKnowledgeProjection: (novelId?: string, asOfChapter?: number) => Promise<void>
 
   setAISettings: (settings: AISettings) => void
@@ -802,6 +832,18 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     if (!targetNovelId) return null
 
     const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-knowledge' })
+    const projection = normalizeKnowledgeProjection(result)
+    set((current) => ({
+      ...mergeKnowledgeProjection(current, projection, targetNovelId),
+    }))
+    return result
+  },
+  deleteStoryHanlpCache: async (novelId) => {
+    const state = get()
+    const targetNovelId = novelId ?? state.currentNovelId
+    if (!targetNovelId) return null
+
+    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-hanlp-cache' })
     const projection = normalizeKnowledgeProjection(result)
     set((current) => ({
       ...mergeKnowledgeProjection(current, projection, targetNovelId),

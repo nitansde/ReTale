@@ -1,0 +1,513 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
+
+const cleanups: Array<() => void> = []
+const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const originalDatabaseUrl = process.env.DATABASE_URL
+const WORKSPACE_IMPORT_SMOKE_PATH = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
+
+async function createTestDatabase(prefix: string) {
+  const tempDatabase = createTempDatabaseCopy(prefix)
+  cleanups.push(tempDatabase.cleanup)
+
+  process.env.DATABASE_URL = tempDatabase.dbPath
+  vi.resetModules()
+
+  const sqliteModule = await import('@/lib/server/sqlite')
+  globalForSqlite.sqlite = sqliteModule.sqlite
+
+  return {
+    database: sqliteModule.sqlite,
+    queryOne: sqliteModule.queryOne,
+  }
+}
+
+async function loadKnowledgeViewRoute() {
+  return import('@/app/api/knowledge-view/route')
+}
+
+function createJsonRequest(url: string, body: unknown) {
+  return new Request(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+function seedNovel(database: DatabaseSync, novelId: string) {
+  const mainBranchId = `${novelId}:main`
+  const altBranchId = `${novelId}:alt`
+  database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(novelId, `Novel ${novelId}`, 'workspace')
+  database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run(mainBranchId, novelId, 'main')
+  database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run(altBranchId, novelId, 'alt')
+  return { mainBranchId, altBranchId }
+}
+
+function seedKnowledgeChapter(database: DatabaseSync, params: {
+  novelId: string
+  branchId: string
+  chapterId: string
+  chapterNo: number
+}) {
+  database.prepare(
+    `INSERT INTO KnowledgeChapter (
+      id, novelId, branchId, chapterNo, title, rawText, revision, isDirty, sourceHash, knowledgeStatus
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    params.chapterId,
+    params.novelId,
+    params.branchId,
+    params.chapterNo,
+    `第${params.chapterNo}章`,
+    `第${params.chapterNo}章原文内容。`,
+    1,
+    0,
+    `source-hash-${params.chapterId}`,
+    'queued',
+  )
+}
+
+function insertHanlpCacheFixture(database: DatabaseSync, params: {
+  idPrefix: string
+  novelId: string
+  branchId: string
+  chapterId: string
+  chapterNo: number
+}) {
+  const cacheId = `${params.idPrefix}-cache`
+  const resultId = `${params.idPrefix}-result`
+  const entityId = `${params.idPrefix}-entity`
+
+  database.prepare(
+    `INSERT INTO hanlp_bootstrap_cache (
+      id, novel_id, branch_id, chapter_id, chapter_no, chapter_text_hash,
+      hanlp_script_version_hash, hanlp_model_or_config_hash, output_schema_version,
+      cache_key, input_hash, pipeline_version, source_chapter_id, source_chapter_no,
+      request_json, result_json, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    cacheId,
+    params.novelId,
+    params.branchId,
+    params.chapterId,
+    params.chapterNo,
+    `chapter-text-hash-${params.idPrefix}`,
+    `script-hash-${params.idPrefix}`,
+    `model-hash-${params.idPrefix}`,
+    'v1',
+    `cache-key-${params.idPrefix}`,
+    `input-hash-${params.idPrefix}`,
+    'hanlp-bootstrap:v1',
+    params.chapterId,
+    params.chapterNo,
+    JSON.stringify({ chapterNo: params.chapterNo }),
+    JSON.stringify({ people: [] }),
+    'ready',
+  )
+
+  database.prepare(
+    `INSERT INTO hanlp_bootstrap_results (
+      id, novel_id, branch_id, chapter_id, chapter_no, chapter_source_hash,
+      result_kind, provider, model, result_json, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    resultId,
+    params.novelId,
+    params.branchId,
+    params.chapterId,
+    params.chapterNo,
+    `chapter-source-hash-${params.idPrefix}`,
+    'bootstrap',
+    'local',
+    'hanlp',
+    JSON.stringify({ people: [] }),
+    'ready',
+  )
+
+  database.prepare(
+    `INSERT INTO hanlp_bootstrap_entities (
+      id, novel_id, branch_id, chapter_id, chapter_no, entity_text, entity_type,
+      total_count, chapter_count, coverage_ratio, score, source_cache_id, source_result_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    entityId,
+    params.novelId,
+    params.branchId,
+    params.chapterId,
+    params.chapterNo,
+    `角色-${params.idPrefix}`,
+    'person',
+    1,
+    1,
+    1,
+    0.9,
+    cacheId,
+    resultId,
+  )
+}
+
+afterEach(() => {
+  vi.resetModules()
+
+  if (globalForSqlite.sqlite) {
+    try {
+      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+    } catch {
+    }
+    delete globalForSqlite.sqlite
+  }
+
+  process.env.DATABASE_URL = originalDatabaseUrl
+
+  while (cleanups.length) {
+    cleanups.pop()?.()
+  }
+})
+
+describe('/api/knowledge-view', () => {
+  it('projects formal character classifications and aliases while excluding candidates from formal characters', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-character-classification')
+    const novelId = `novel_knowledge_view_classification_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+    const protagonistEntityId = `${novelId}-entity-protagonist`
+    const importantEntityId = `${novelId}-entity-important`
+    const arcEntityId = `${novelId}-entity-arc`
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-classification-1', chapterNo: 1 })
+
+    database.prepare(
+      `INSERT INTO KnowledgeEntity (
+        id, novelId, branchId, entityType, canonicalName, importanceTier, importance, firstSeenChapter, lastSeenChapter, status
+      ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, ?)`
+    ).run(protagonistEntityId, novelId, mainBranchId, '林砚', 'protagonist', 5, 1, 1, 'ready')
+    database.prepare(
+      `INSERT INTO KnowledgeEntity (
+        id, novelId, branchId, entityType, canonicalName, importanceTier, importance, firstSeenChapter, lastSeenChapter, status
+      ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, ?)`
+    ).run(importantEntityId, novelId, mainBranchId, '苏九', 'important', 4, 1, 1, 'ready')
+    database.prepare(
+      `INSERT INTO KnowledgeEntity (
+        id, novelId, branchId, entityType, canonicalName, importanceTier, importance, firstSeenChapter, lastSeenChapter, status
+      ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, ?)`
+    ).run(arcEntityId, novelId, mainBranchId, '灰袍老人', 'arc', 3, 1, 1, 'candidate_promoted')
+
+    database.prepare('INSERT INTO EntityAlias (id, entityId, alias, sourceChapter) VALUES (?, ?, ?, ?)')
+      .run(`${novelId}-alias-1`, importantEntityId, '阿九', 1)
+    database.prepare(
+       `INSERT INTO EntityAliasMapping (id, novelId, branchId, alias, entityId, sourceChapter)
+        VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(`${novelId}-alias-map-1`, novelId, mainBranchId, '九姑娘', importantEntityId, 1)
+
+    database.prepare(
+      `INSERT INTO character_candidates (
+        id, novel_id, branch_id, surface_text, first_seen_chapter, last_seen_chapter,
+        chapter_count, mention_count, observations_json, status, promoted_entity_id, merged_entity_id,
+        display_name, normalized_name
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(`${novelId}-candidate-1`, novelId, mainBranchId, '路人甲', 1, 1, 3, 3, '[]', 'collecting', null, null, '路人甲', '路人甲')
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      ok: boolean
+      localCharacters: Array<Record<string, unknown>>
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.localCharacters).toHaveLength(3)
+    expect(payload.localCharacters).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: '林砚',
+        importanceTier: 'protagonist',
+        classificationKey: 'tier0',
+        classificationLabel: 'Tier 0',
+      }),
+      expect.objectContaining({
+        name: '苏九',
+        importanceTier: 'important',
+        classificationKey: 'tier1',
+        classificationLabel: 'Tier 1',
+        aliases: expect.arrayContaining(['阿九', '九姑娘']),
+      }),
+      expect.objectContaining({
+        name: '灰袍老人',
+        importanceTier: 'arc',
+        classificationKey: 'tier2',
+        classificationLabel: 'Tier 2',
+      }),
+    ]))
+    expect(payload.localCharacters.some((character) => character.name === '路人甲')).toBe(false)
+  })
+
+  it('surfaces HanLP telemetry on the knowledge rebuild status payload', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-hanlp-telemetry')
+    const novelId = `novel_knowledge_view_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-telemetry-1', chapterNo: 1 })
+    insertHanlpCacheFixture(database, {
+      idPrefix: 'telemetry-main',
+      novelId,
+      branchId: mainBranchId,
+      chapterId: 'chapter-telemetry-1',
+      chapterNo: 1,
+    })
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      'job_knowledge_view_hanlp',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'running',
+      'hanlp-bootstrap',
+      0.18,
+      JSON.stringify({
+        steps: [
+          {
+            key: 'hanlp-bootstrap',
+            label: 'HanLP 引导扫描',
+            status: 'running',
+            progress: 0.5,
+            etaMinutes: 3,
+            detail: null,
+          },
+        ],
+        rawTextEmbeddingProgress: 0.25,
+        rawTextEmbeddingCacheHitRate: 0.5,
+        hanlpBootstrap: {
+          completedChapterIds: ['chapter-1', 'chapter-2'],
+          totalChapterCount: 4,
+          completedChapterCount: 2,
+          cacheHitCount: 1,
+          cacheMissCount: 1,
+          initializedCharacterEntities: true,
+        },
+        stageTimingsMs: {
+          'hanlp-bootstrap': 120,
+        },
+      })
+    )
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      ok: boolean
+      knowledgeRebuildStatus: Record<string, unknown> | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.knowledgeRebuildStatus).toMatchObject({
+      jobId: 'job_knowledge_view_hanlp',
+      novelId,
+      status: 'running',
+      rawTextEmbeddingProgress: 0.25,
+      rawTextEmbeddingCacheHitRate: 0.5,
+      hanlpCacheStatus: 'running',
+      hanlpCacheHitRate: 0.5,
+      hanlpBootstrapProgress: 0.5,
+      hanlpBootstrapCompletedChapterCount: 2,
+      hanlpBootstrapTotalChapterCount: 4,
+      hanlpBootstrapCacheHitCount: 1,
+      hanlpBootstrapCacheMissCount: 1,
+      hanlpBootstrapInitializedCharacterEntities: true,
+      hanlpSettingsSnapshot: {
+        hanlpScriptVersionHash: 'script-hash-telemetry-main',
+        hanlpModelOrConfigHash: 'model-hash-telemetry-main',
+        outputSchemaVersion: 'v1',
+        pipelineVersion: 'hanlp-bootstrap:v1',
+      },
+      stageTimingsMs: {
+        'hanlp-bootstrap': 120,
+      },
+    })
+  })
+
+  it('deletes only the target main-branch HanLP cache rows and preserves raw embedding cache', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-delete-hanlp-cache')
+    const novelId = `novel_delete_hanlp_${Math.random().toString(36).slice(2, 8)}`
+    const otherNovelId = `novel_delete_other_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId, altBranchId } = seedNovel(database, novelId)
+    const { mainBranchId: otherMainBranchId } = seedNovel(database, otherNovelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-main', chapterNo: 1 })
+    seedKnowledgeChapter(database, { novelId, branchId: altBranchId, chapterId: 'chapter-alt', chapterNo: 2 })
+    seedKnowledgeChapter(database, { novelId: otherNovelId, branchId: otherMainBranchId, chapterId: 'chapter-other', chapterNo: 1 })
+
+    insertHanlpCacheFixture(database, {
+      idPrefix: 'target-main',
+      novelId,
+      branchId: mainBranchId,
+      chapterId: 'chapter-main',
+      chapterNo: 1,
+    })
+    insertHanlpCacheFixture(database, {
+      idPrefix: 'target-alt',
+      novelId,
+      branchId: altBranchId,
+      chapterId: 'chapter-alt',
+      chapterNo: 2,
+    })
+    insertHanlpCacheFixture(database, {
+      idPrefix: 'other-main',
+      novelId: otherNovelId,
+      branchId: otherMainBranchId,
+      chapterId: 'chapter-other',
+      chapterNo: 1,
+    })
+
+    database.prepare(
+      `INSERT INTO RawTextEmbeddingCache (
+        branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension
+      ) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(mainBranchId, 'ollama', 'embed-model', 'raw-cache-target', '[0.1,0.2]', 2)
+
+    const { POST } = await loadKnowledgeViewRoute()
+    const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', {
+      novelId,
+      action: 'delete-hanlp-cache',
+    }))
+    const payload = await response.json() as {
+      ok: boolean
+      jobOutcome: string
+      actionError: unknown
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({
+      ok: true,
+      jobOutcome: 'deleted',
+      actionError: null,
+    })
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_cache WHERE branch_id = ?', mainBranchId)?.count).toBe(0)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_results WHERE branch_id = ?', mainBranchId)?.count).toBe(0)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_entities WHERE branch_id = ?', mainBranchId)?.count).toBe(0)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_cache WHERE branch_id = ?', altBranchId)?.count).toBe(1)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_cache WHERE branch_id = ?', otherMainBranchId)?.count).toBe(1)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', mainBranchId)?.count).toBe(1)
+  })
+
+  it('blocks HanLP cache deletion with a clear payload when a rebuild is active', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-delete-hanlp-cache-blocked')
+    const novelId = `novel_block_hanlp_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-blocked', chapterNo: 1 })
+
+    insertHanlpCacheFixture(database, {
+      idPrefix: 'blocked-main',
+      novelId,
+      branchId: mainBranchId,
+      chapterId: 'chapter-blocked',
+      chapterNo: 1,
+    })
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      'job_block_hanlp_delete',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'paused',
+      '已暂停',
+      0.4,
+      JSON.stringify({
+        steps: [
+          {
+            key: 'extract',
+            label: '抽取章节知识',
+            status: 'paused',
+            progress: 0.4,
+            etaMinutes: null,
+            detail: null,
+          },
+        ],
+      })
+    )
+
+    const { POST } = await loadKnowledgeViewRoute()
+    const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', {
+      novelId,
+      action: 'delete-hanlp-cache',
+    }))
+    const payload = await response.json() as {
+      ok: boolean
+      jobOutcome: string
+      actionError: { code: string; message: string } | null
+      knowledgeRebuildStatus: { status?: string; jobId?: string } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({
+      ok: true,
+      jobOutcome: 'blocked',
+      actionError: {
+        code: 'active-rebuild',
+      },
+      knowledgeRebuildStatus: {
+        jobId: 'job_block_hanlp_delete',
+        status: 'paused',
+      },
+    })
+    expect(payload.actionError?.message).toContain('Cannot delete HanLP cache while a knowledge rebuild is paused')
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_cache WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_results WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_entities WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
+  })
+
+  it('queues a fresh imported novel rebuild without blocking the POST response', async () => {
+    const { queryOne } = await createTestDatabase('chatbook-knowledge-view-fresh-import-rebuild')
+    const { syncWorkspacePayloadToKnowledgeStore } = await import('@/lib/server/knowledge-rebuild')
+    const { importNovelIntoWorkspace } = await import('@/lib/server/import-txt')
+    const { createEmptyWorkspaceState } = await import('@/lib/workspace-state')
+    const fixtureText = fs.readFileSync(WORKSPACE_IMPORT_SMOKE_PATH, 'utf8')
+    const importedState = importNovelIntoWorkspace(createEmptyWorkspaceState(), {
+      title: 'workspace-import-smoke.txt',
+      text: fixtureText,
+      summary: 'workspace import smoke',
+    })
+
+    await syncWorkspacePayloadToKnowledgeStore(importedState)
+
+    const novelId = importedState.currentNovelId
+    expect(novelId).toBeTruthy()
+    expect(queryOne<{ id: string }>('SELECT id FROM StoryBranch WHERE id = ?', `${novelId}:main`)).toMatchObject({
+      id: `${novelId}:main`,
+    })
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeChapter WHERE novelId = ?', novelId)).toMatchObject({
+      count: 3,
+    })
+
+    const { POST } = await loadKnowledgeViewRoute()
+    const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', {
+      novelId,
+      action: 'rebuild',
+    }))
+    const payload = await response.json() as {
+      ok: boolean
+      jobOutcome: string
+      actionError: unknown
+      knowledgeRebuildStatus: { jobId?: string; novelId?: string; status?: string } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({
+      ok: true,
+      jobOutcome: 'queued',
+      actionError: null,
+      knowledgeRebuildStatus: {
+        novelId,
+        status: 'queued',
+      },
+    })
+    expect(payload.knowledgeRebuildStatus?.jobId).toEqual(expect.any(String))
+  })
+})
