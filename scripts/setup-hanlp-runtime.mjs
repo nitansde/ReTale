@@ -111,6 +111,7 @@ function ensureLocalEnv(pythonPath) {
   contents = setEnvLine(contents, 'HANLP_PYTHON_BIN', pythonPath)
   contents = setEnvLine(contents, 'HANLP_BOOTSTRAP_SCRIPT_PATH', scriptPath)
   contents = setEnvLine(contents, 'HANLP_BOOTSTRAP_PARALLELISM', process.env.HANLP_BOOTSTRAP_PARALLELISM?.trim() || '1')
+  contents = setEnvLine(contents, 'HANLP_BOOTSTRAP_BATCH_SIZE', process.env.HANLP_BOOTSTRAP_BATCH_SIZE?.trim() || '256')
   fs.writeFileSync(envPath, contents)
   log(`updated ${path.relative(ROOT, envPath)}`)
 }
