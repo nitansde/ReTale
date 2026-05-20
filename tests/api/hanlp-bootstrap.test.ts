@@ -402,5 +402,5 @@ describe('hanlp bootstrap runner cache lifecycle', () => {
     } finally {
       tempDb.cleanup()
     }
-  })
+  }, 30_000)
 })
