@@ -45,6 +45,7 @@ OPENAI_COMPATIBLE_MODEL="gpt-4.1-mini"
 HANLP_PYTHON_BIN=""
 HANLP_BOOTSTRAP_SCRIPT_PATH=""
 HANLP_BOOTSTRAP_PARALLELISM="1"
+HANLP_BOOTSTRAP_BATCH_SIZE="256"
 HANLP_BOOTSTRAP_TIMEOUT_MS="600000"
 LLM_DEBUG_LOG="0"
 LLM_DEBUG_LOG_DIR=".sisyphus/llm-debug"
@@ -56,7 +57,7 @@ Set `LLM_DEBUG_LOG="1"` during local development to write raw server-side LLM pr
 
 ### Knowledge graph runtime
 
-Knowledge graph rebuilds use the server-side `hanlp_bootstrap.py` script before LLM extraction. `npm install` runs `scripts/setup-hanlp-runtime.mjs`, which creates a pinned HanLP virtualenv outside the project root, writes `HANLP_PYTHON_BIN` and `HANLP_BOOTSTRAP_SCRIPT_PATH` to `.env.local`, and avoids Next/Turbopack tracing Python virtualenv symlinks during builds. Run `npm run setup:hanlp` to recreate and smoke-test that runtime. Set `CHATBOOK_SKIP_HANLP_SETUP=1` only when intentionally skipping local knowledge-graph rebuild support. `HANLP_BOOTSTRAP_SCRIPT_PATH` can point at an alternate bootstrap script; when unset, the app uses the repository script. `HANLP_BOOTSTRAP_PARALLELISM` defaults to `1` so rebuilds do not spawn multiple heavyweight HanLP model processes; raise it only after validating local memory. `HANLP_BOOTSTRAP_TIMEOUT_MS` controls the per-chapter HanLP subprocess timeout and defaults to `600000`.
+Knowledge graph rebuilds use the server-side `hanlp_bootstrap.py` script before LLM extraction. `npm install` runs `scripts/setup-hanlp-runtime.mjs`, which creates a pinned HanLP virtualenv outside the project root, writes `HANLP_PYTHON_BIN` and `HANLP_BOOTSTRAP_SCRIPT_PATH` to `.env.local`, and avoids Next/Turbopack tracing Python virtualenv symlinks during builds. Run `npm run setup:hanlp` to recreate and smoke-test that runtime. Set `CHATBOOK_SKIP_HANLP_SETUP=1` only when intentionally skipping local knowledge-graph rebuild support. `HANLP_BOOTSTRAP_SCRIPT_PATH` can point at an alternate bootstrap script; when unset, the app uses the repository script. `HANLP_BOOTSTRAP_PARALLELISM` defaults to `1` so rebuilds do not spawn multiple heavyweight HanLP model processes; raise it only after validating local memory. `HANLP_BOOTSTRAP_BATCH_SIZE` defaults to `256` and controls how many sentence/line segments the bootstrap script sends to HanLP per model call. `HANLP_BOOTSTRAP_TIMEOUT_MS` controls the per-chapter HanLP subprocess timeout and defaults to `600000`.
 
 The rebuild API returns quickly with a queued/running job status. The server continues the rebuild in the background and the workspace polls job state instead of blocking the whole site while HanLP is running.
 

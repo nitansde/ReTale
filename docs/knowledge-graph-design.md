@@ -428,6 +428,7 @@ HanLP 只在 server 端运行。配置项：
 ```bash
 HANLP_PYTHON_BIN="/absolute/path/to/python"
 HANLP_BOOTSTRAP_SCRIPT_PATH="/optional/absolute/path/to/hanlp_bootstrap.py"
+HANLP_BOOTSTRAP_BATCH_SIZE="256"
 HANLP_BOOTSTRAP_TIMEOUT_MS="600000"
 ```
 
@@ -436,6 +437,7 @@ HANLP_BOOTSTRAP_TIMEOUT_MS="600000"
 - Python virtualenv 放在仓库外，避免 Next/Turbopack trace virtualenv symlink。
 - `HANLP_PYTHON_BIN` 指向能 import HanLP 的 Python。
 - `HANLP_BOOTSTRAP_SCRIPT_PATH` 为空时使用项目根目录 `hanlp_bootstrap.py`。
+- `HANLP_BOOTSTRAP_BATCH_SIZE` 控制每次传给 HanLP 的句子/行片段数量，默认 `256`。
 - `HANLP_BOOTSTRAP_TIMEOUT_MS` 是每章 subprocess timeout，不是整本书 timeout。
 
 ## 9. Failure Semantics
