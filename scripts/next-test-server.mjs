@@ -1,3 +1,3 @@
 import { runNextServer } from './next-server-runtime.mjs'
 
-runNextServer('prod', 'scripts/next-dev.mjs')
+runNextServer('test', 'scripts/next-test-server.mjs')
