@@ -69,6 +69,9 @@ type RetrievalDocSeedRow = {
 
 type RetrievalDocRow = RetrievalDocSeedRow & {
   vector: number[]
+  embeddingProvider: AIProvider
+  embeddingModel: string
+  embeddingDimension: number
 }
 
 type RetrievalDocEmbeddingPlanRow = {
@@ -828,18 +831,138 @@ async function hasUsableVectorColumn(table: Awaited<ReturnType<typeof openBranch
   }
 }
 
-async function createOrReplaceBranchTable(
-  branchId: string,
-  rows: RetrievalDocEmbeddingPlanRow[],
-  novelId: string,
-  embeddingSettings: EmbeddingsScenarioSettings,
-  embeddingBatchSize: number,
-  onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
+type NormalizedKnowledgeRebuildChapterRange = {
+  startChapter: number
+  endChapter?: number
+}
+
+function normalizeKnowledgeRebuildChapterRange(chapterRange: KnowledgeRebuildChapterRange): NormalizedKnowledgeRebuildChapterRange {
+  const startChapter = typeof chapterRange.startChapter === 'number'
+    ? Math.max(1, Math.floor(chapterRange.startChapter))
+    : 1
+  const endChapter = typeof chapterRange.endChapter === 'number'
+    ? Math.max(startChapter, Math.floor(chapterRange.endChapter))
+    : undefined
+
+  return {
+    startChapter,
+    endChapter,
+  }
+}
+
+function buildScopedRetrievalOverlapPredicate(chapterRange: KnowledgeRebuildChapterRange) {
+  const { startChapter, endChapter } = normalizeKnowledgeRebuildChapterRange(chapterRange)
+
+  return endChapter === undefined
+    ? `((sourceType = 'text_span' AND chapterNo >= ${startChapter}) OR (sourceType != 'text_span' AND validUntilChapter > ${startChapter}))`
+    : `((sourceType = 'text_span' AND chapterNo >= ${startChapter} AND chapterNo <= ${endChapter}) OR (sourceType != 'text_span' AND validFromChapter <= ${endChapter} AND validUntilChapter > ${startChapter}))`
+}
+
+function docOverlapsChapterRange(row: Pick<RetrievalDocSeedRow, 'validFromChapter' | 'validUntilChapter'>, chapterRange: KnowledgeRebuildChapterRange) {
+  const { startChapter, endChapter } = normalizeKnowledgeRebuildChapterRange(chapterRange)
+
+  if (row.validUntilChapter <= startChapter) {
+    return false
+  }
+
+  if (endChapter === undefined) {
+    return true
+  }
+
+  return row.validFromChapter <= endChapter
+}
+
+type StoredEmbeddingCompatibilityMetadata = {
+  embeddingProvider: AIProvider
+  embeddingModel: string
+  embeddingDimension: number
+}
+
+async function readStoredEmbeddingCompatibilityMetadata(
+  table: Awaited<ReturnType<typeof openBranchTable>> extends infer T ? Exclude<T, null> : never,
 ) {
+  try {
+    const rows = await table.query().limit(1).toArray() as Array<{
+      vector?: unknown
+      embeddingProvider?: unknown
+      embeddingModel?: unknown
+      embeddingDimension?: unknown
+    }>
+    const firstRow = rows[0]
+    if (!firstRow) {
+      return null
+    }
+
+    const embeddingProvider = firstRow.embeddingProvider
+    const embeddingModel = firstRow.embeddingModel
+    const embeddingDimension = Number(firstRow.embeddingDimension)
+    if ((embeddingProvider !== 'ollama' && embeddingProvider !== 'openai-compatible')
+      || typeof embeddingModel !== 'string'
+      || !embeddingModel.trim()
+      || !Number.isFinite(embeddingDimension)
+      || embeddingDimension <= 0) {
+      return null
+    }
+
+    const vectorValues = toVectorValues(firstRow.vector)
+    if (!vectorValues?.length || vectorValues.length !== embeddingDimension) {
+      return null
+    }
+
+    return {
+      embeddingProvider,
+      embeddingModel,
+      embeddingDimension,
+    } satisfies StoredEmbeddingCompatibilityMetadata
+  } catch {
+    return null
+  }
+}
+
+async function canAppendRowsInPlace(
+  table: Awaited<ReturnType<typeof openBranchTable>> extends infer T ? Exclude<T, null> : never,
+  embeddingSettings: EmbeddingsScenarioSettings,
+) {
+  if (!(await hasUsableVectorColumn(table))) {
+    return false
+  }
+
+  const storedMetadata = await readStoredEmbeddingCompatibilityMetadata(table)
+  if (!storedMetadata) {
+    return false
+  }
+
+  return storedMetadata.embeddingProvider === embeddingSettings.provider
+    && storedMetadata.embeddingModel === getEmbeddingModel(embeddingSettings)
+}
+
+async function writeBranchTableRows(params: {
+  branchId: string
+  rows: RetrievalDocEmbeddingPlanRow[]
+  novelId: string
+  embeddingSettings: EmbeddingsScenarioSettings
+  embeddingBatchSize: number
+  initialTable?: lancedb.Table | null
+  writeMode: 'overwrite' | 'append'
+  onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
+}) {
+  const {
+    branchId,
+    rows,
+    novelId,
+    embeddingSettings,
+    embeddingBatchSize,
+    initialTable,
+    writeMode,
+    onProgress,
+  } = params
+
   const database = await getDatabase()
   const rawTextCacheScope = buildRawTextEmbeddingCacheScope(novelId, branchId, embeddingSettings)
   const liveRows = rows.filter((item) => item.row.sourceType !== 'text_span' || !item.cachedVector)
   const totalBatches = Math.ceil(rows.length / embeddingBatchSize)
+  const embeddingProvider = embeddingSettings.provider
+  const embeddingModel = getEmbeddingModel(embeddingSettings)
   const embeddingStartedAt = Date.now()
   let embeddingElapsedMs = 0
   let writeElapsedMs = 0
@@ -848,7 +971,8 @@ async function createOrReplaceBranchTable(
   let embeddedRowsCount = 0
   let writtenRowsCount = 0
   let expectedVectorDimension: number | null = null
-  let table: lancedb.Table | null = null
+  let table: lancedb.Table | null = initialTable ?? null
+  let hasWrittenFirstBatch = writeMode === 'append' && Boolean(initialTable)
   const writeBuffer: RetrievalDocRow[] = []
   const resolvedRows = Array<RetrievalDocRow | null>(rows.length).fill(null)
   const deferredRawTextRows: RetrievalDocEmbeddingPlanRow[] = []
@@ -868,6 +992,9 @@ async function createOrReplaceBranchTable(
     resolvedRows[plannedRow.rowIndex] = {
       ...plannedRow.row,
       vector,
+      embeddingProvider,
+      embeddingModel,
+      embeddingDimension: vector.length,
     }
   }
 
@@ -885,9 +1012,13 @@ async function createOrReplaceBranchTable(
       }
 
       const writeBatchStartedAt = Date.now()
-      if (!table) {
+      if (!hasWrittenFirstBatch) {
         table = await database.createTable(getBranchTableName(branchId), rowsBatch, { mode: 'overwrite' })
+        hasWrittenFirstBatch = true
       } else {
+        if (!table) {
+          throw new Error('Failed to open LanceDB retrieval table before append write')
+        }
         await table.add(rowsBatch)
       }
       writeElapsedMs += Date.now() - writeBatchStartedAt
@@ -1063,6 +1194,46 @@ async function createOrReplaceBranchTable(
   const vectorIndexError = await ensureVectorIndex(table)
   logLanceIndex(`create vector index done: elapsed=${formatElapsed(Date.now() - vectorIndexStartedAt)}${vectorIndexError ? `, warning=${vectorIndexError}` : ''}`)
   return table
+}
+
+async function createOrReplaceBranchTable(
+  branchId: string,
+  rows: RetrievalDocEmbeddingPlanRow[],
+  novelId: string,
+  embeddingSettings: EmbeddingsScenarioSettings,
+  embeddingBatchSize: number,
+  onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
+) {
+  return writeBranchTableRows({
+    branchId,
+    rows,
+    novelId,
+    embeddingSettings,
+    embeddingBatchSize,
+    writeMode: 'overwrite',
+    onProgress,
+  })
+}
+
+async function appendToBranchTable(
+  branchId: string,
+  table: lancedb.Table,
+  rows: RetrievalDocEmbeddingPlanRow[],
+  novelId: string,
+  embeddingSettings: EmbeddingsScenarioSettings,
+  embeddingBatchSize: number,
+  onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
+) {
+  return writeBranchTableRows({
+    branchId,
+    rows,
+    novelId,
+    embeddingSettings,
+    embeddingBatchSize,
+    initialTable: table,
+    writeMode: 'append',
+    onProgress,
+  })
 }
 
 function loadBranchTextSpans(novelId: string, branchId: string) {
@@ -1641,6 +1812,24 @@ export function loadKnowledgeDerivedRetrievalDocs(novelId: string, branchId: str
   )
 }
 
+function loadScopedKnowledgeDerivedRetrievalDocs(novelId: string, branchId: string, chapterRange: KnowledgeRebuildChapterRange) {
+  return loadKnowledgeDerivedRetrievalDocs(novelId, branchId)
+    .filter((row) => docOverlapsChapterRange(row, chapterRange))
+}
+
+function loadRetrievalDocsForRebuild(params: {
+  novelId: string
+  branchId: string
+  chapterRange?: KnowledgeRebuildChapterRange
+}) {
+  return params.chapterRange
+    ? mergeRetrievalDocGroups(
+        loadRawTextRetrievalDocs(params.novelId, params.branchId, params.chapterRange),
+        loadScopedKnowledgeDerivedRetrievalDocs(params.novelId, params.branchId, params.chapterRange),
+      )
+    : loadBranchRetrievalDocs(params.novelId, params.branchId)
+}
+
 export function loadBranchRetrievalDocs(novelId: string, branchId: string) {
   return mergeRetrievalDocGroups(
     loadRawTextRetrievalDocs(novelId, branchId),
@@ -1918,7 +2107,10 @@ export async function replaceChapterRetrievalIndex(spans: TextSpanInput[]) {
 export async function rebuildBranchRetrievalIndex(
   novelId: string,
   branchId: string,
-  options?: { onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void> }
+  options?: {
+    chapterRange?: KnowledgeRebuildChapterRange
+    onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
+  }
 ): Promise<RetrievalIndexBuildResult> {
   const totalStartedAt = Date.now()
   await options?.onProgress?.({
@@ -1930,7 +2122,11 @@ export async function rebuildBranchRetrievalIndex(
   })
   logLanceIndex('build retrieval docs started')
   const docBuildStartedAt = Date.now()
-  const rows = loadBranchRetrievalDocs(novelId, branchId)
+  const rows = loadRetrievalDocsForRebuild({
+    novelId,
+    branchId,
+    chapterRange: options?.chapterRange,
+  })
   logLanceIndex(`build retrieval docs done: docs=${rows.length}, elapsed=${formatElapsed(Date.now() - docBuildStartedAt)}`)
 
   const embeddingSettings = loadStoredAISettings().embeddings
@@ -1949,7 +2145,77 @@ export async function rebuildBranchRetrievalIndex(
     totalBatches,
     completedBatches: 0,
   })
-  await deleteBranchRetrievalIndex(branchId)
+
+  const chapterRange = options?.chapterRange
+  if (!chapterRange) {
+    await deleteBranchRetrievalIndex(branchId)
+    if (!rows.length) {
+      logLanceIndex(`rebuild done: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
+      return {
+        rowCount: 0,
+        embeddingBatchCount: 0,
+      }
+    }
+
+    await createOrReplaceBranchTable(branchId, plannedRows, novelId, embeddingSettings, embeddingBatchSize, options?.onProgress)
+    await options?.onProgress?.({
+      phase: 'completed',
+      totalRows: rows.length,
+      embeddedRows: rows.length,
+      totalBatches,
+      completedBatches: totalBatches,
+    })
+    logLanceIndex(`rebuild done: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
+    return {
+      rowCount: rows.length,
+      embeddingBatchCount: totalBatches,
+    }
+  }
+
+  const existingTable = await openBranchTable(branchId)
+  const canUpdateInPlace = existingTable && await canAppendRowsInPlace(existingTable, embeddingSettings)
+  if (!canUpdateInPlace) {
+    const fullRows = loadRetrievalDocsForRebuild({ novelId, branchId })
+    const fullPlannedRows = await buildRetrievalEmbeddingPlan({
+      novelId,
+      branchId,
+      rows: fullRows,
+      embeddingSettings,
+    })
+    const fullTotalBatches = Math.ceil(fullRows.length / embeddingBatchSize)
+    await options?.onProgress?.({
+      phase: fullRows.length ? 'embedding' : 'completed',
+      totalRows: fullRows.length,
+      embeddedRows: fullPlannedRows.filter((item) => item.row.sourceType === 'text_span' && item.cachedVector).length,
+      totalBatches: fullTotalBatches,
+      completedBatches: 0,
+    })
+
+    await deleteBranchRetrievalIndex(branchId)
+    if (!fullRows.length) {
+      logLanceIndex(`rebuild done: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
+      return {
+        rowCount: 0,
+        embeddingBatchCount: 0,
+      }
+    }
+
+    await createOrReplaceBranchTable(branchId, fullPlannedRows, novelId, embeddingSettings, embeddingBatchSize, options?.onProgress)
+    await options?.onProgress?.({
+      phase: 'completed',
+      totalRows: fullRows.length,
+      embeddedRows: fullRows.length,
+      totalBatches: fullTotalBatches,
+      completedBatches: fullTotalBatches,
+    })
+    logLanceIndex(`rebuild done: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
+    return {
+      rowCount: fullRows.length,
+      embeddingBatchCount: fullTotalBatches,
+    }
+  }
+
+  await existingTable.delete(buildScopedRetrievalOverlapPredicate(chapterRange))
   if (!rows.length) {
     logLanceIndex(`rebuild done: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
     return {
@@ -1957,7 +2223,8 @@ export async function rebuildBranchRetrievalIndex(
       embeddingBatchCount: 0,
     }
   }
-  await createOrReplaceBranchTable(branchId, plannedRows, novelId, embeddingSettings, embeddingBatchSize, options?.onProgress)
+
+  await appendToBranchTable(branchId, existingTable, plannedRows, novelId, embeddingSettings, embeddingBatchSize, options?.onProgress)
   await options?.onProgress?.({
     phase: 'completed',
     totalRows: rows.length,
@@ -1985,7 +2252,7 @@ export async function deleteBranchRetrievalIndexFromChapter(branchId: string, fr
   const table = await openBranchTable(branchId)
   if (!table) return
 
-  await table.delete(`chapterNo >= ${fromChapterNo}`)
+  await table.delete(buildScopedRetrievalOverlapPredicate({ startChapter: fromChapterNo }))
 }
 
 export async function searchLanceEvidence(params: {

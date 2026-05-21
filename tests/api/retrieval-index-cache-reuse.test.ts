@@ -53,9 +53,90 @@ function createMockAISettings() {
 
 function createMockLanceDb() {
   type StoredRow = Record<string, unknown>
+  const tokenizePredicate = (predicate: string) => {
+    const matches = predicate.match(/\(|\)|<=|>=|!=|=|<|>|\bAND\b|\bOR\b|'[^']*'|-?\d+|\w+/gu)
+    return matches ?? []
+  }
+
+  const rowMatchesClause = (row: StoredRow, field: string, operator: string, rawValue: string) => {
+    const rowValue = row[field]
+    if (rawValue.startsWith("'")) {
+      const expectedValue = rawValue.slice(1, -1)
+      if (operator === '=') return rowValue === expectedValue
+      if (operator === '!=') return rowValue !== expectedValue
+      return false
+    }
+
+    const numericRowValue = Number(rowValue)
+    const expectedValue = Number(rawValue)
+    if (!Number.isFinite(numericRowValue) || !Number.isFinite(expectedValue)) {
+      return false
+    }
+
+    if (operator === '<=') return numericRowValue <= expectedValue
+    if (operator === '>=') return numericRowValue >= expectedValue
+    if (operator === '<') return numericRowValue < expectedValue
+    if (operator === '>') return numericRowValue > expectedValue
+    if (operator === '!=') return numericRowValue !== expectedValue
+    return numericRowValue === expectedValue
+  }
+
+  const rowMatchesPredicate = (row: StoredRow, predicate: string) => {
+    const tokens = tokenizePredicate(predicate)
+    let index = 0
+
+    const parseExpression = (): boolean => {
+      let value = parseTerm()
+      while (tokens[index] === 'OR') {
+        index += 1
+        const nextValue = parseTerm()
+        value = value || nextValue
+      }
+      return value
+    }
+
+    const parseTerm = (): boolean => {
+      let value = parseFactor()
+      while (tokens[index] === 'AND') {
+        index += 1
+        const nextValue = parseFactor()
+        value = value && nextValue
+      }
+      return value
+    }
+
+    const parseFactor = (): boolean => {
+      if (tokens[index] === '(') {
+        index += 1
+        const value = parseExpression()
+        if (tokens[index] !== ')') {
+          throw new Error(`Unbalanced predicate: ${predicate}`)
+        }
+        index += 1
+        return value
+      }
+
+      const field = tokens[index]
+      const operator = tokens[index + 1]
+      const rawValue = tokens[index + 2]
+      if (!field || !operator || !rawValue) {
+        throw new Error(`Incomplete predicate clause: ${predicate}`)
+      }
+      index += 3
+      return rowMatchesClause(row, field, operator, rawValue)
+    }
+
+    const matched = parseExpression()
+    if (index !== tokens.length) {
+      throw new Error(`Unsupported trailing predicate tokens: ${predicate}`)
+    }
+    return matched
+  }
+
   type MockTable = {
     rows: StoredRow[]
     add: ReturnType<typeof vi.fn>
+    delete: ReturnType<typeof vi.fn>
     createIndex: ReturnType<typeof vi.fn>
     waitForIndex: ReturnType<typeof vi.fn>
     query: () => {
@@ -74,6 +155,9 @@ function createMockLanceDb() {
         for (const row of nextRows) {
           table.rows.push(row)
         }
+      }),
+      delete: vi.fn(async (predicate: string) => {
+        table.rows = table.rows.filter((row) => !rowMatchesPredicate(row, predicate))
       }),
       createIndex: vi.fn(async () => undefined),
       waitForIndex: vi.fn(async () => undefined),
@@ -147,6 +231,7 @@ async function createRetrievalIndexHarness(testName: string) {
   const retrievalCache = await import('@/lib/server/retrieval-embedding-cache')
 
   return {
+    aiSettings,
     database,
     embedTextsWithOllama,
     mockLanceDb,
@@ -673,5 +758,198 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(database.prepare(
       'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
     ).get('novel-001:main', staleHash)).toMatchObject({ count: 1 })
+  })
+
+  it('scoped rebuild preserves rows outside the requested chapter range', async () => {
+    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-preserve-outside-range')
+
+    database.prepare(
+      `INSERT INTO KnowledgeWorld (
+        id, novelId, branchId, term, category, definition, firstSeenChapter,
+        validFromChapter, validUntilChapter, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('world-outside-range', 'novel-001', 'novel-001:main', '旧地图', '设定', '只在第一章有效', 1, 1, 2, 'ready')
+    database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, summary,
+        revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('chapter-2', 'novel-001', 'novel-001:main', 2, '第2章', '第2章原文', '第2章旧摘要', 1, 0, null, 'hash-2', 'ready')
+    database.prepare(
+      `INSERT INTO TextSpan (
+        id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
+        charStart, charEnd, text, spanType, tokenEstimate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章旧原文内容。', 'paragraph', 8)
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+
+    database.prepare('UPDATE KnowledgeChapter SET summary = ? WHERE id = ?').run('第2章新摘要', 'chapter-2')
+    database.prepare('UPDATE TextSpan SET text = ? WHERE id = ?').run('第二章新原文内容。', 'span-4')
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+      chapterRange: { startChapter: 2, endChapter: 2 },
+    })
+
+    const table = Array.from(mockLanceDb.tables.values())[0]
+    expect(table).toBeTruthy()
+    expect(table?.delete).toHaveBeenCalledWith("((sourceType = 'text_span' AND chapterNo >= 2 AND chapterNo <= 2) OR (sourceType != 'text_span' AND validFromChapter <= 2 AND validUntilChapter > 2))")
+    const preservedChapterOneTextRow = table?.rows.find((row) => row.sourceType === 'text_span' && row.chapterNo === 1)
+    expect(preservedChapterOneTextRow).toMatchObject({
+      chapterNo: 1,
+      text: expect.stringContaining('第一段原文内容'),
+    })
+    expect(table?.rows.find((row) => row.id === 'worldbuilding:world-outside-range')).toMatchObject({
+      validFromChapter: 1,
+      validUntilChapter: 2,
+      text: expect.stringContaining('定义：只在第一章有效'),
+    })
+    expect(table?.rows.find((row) => row.id === 'span-4')).toMatchObject({
+      text: '第二章新原文内容。',
+    })
+    expect(table?.rows.find((row) => row.id === 'chapter-summary:chapter-2')).toMatchObject({
+      text: '第2章新摘要',
+    })
+  }, 10000)
+
+  it('scoped rebuild deletes and replaces validity-overlapping rows even when chapterNo is below the range start', async () => {
+    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-validity-overlap')
+
+    database.prepare(
+      `INSERT INTO KnowledgeWorld (
+        id, novelId, branchId, term, category, definition, firstSeenChapter,
+        validFromChapter, validUntilChapter, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('world-1', 'novel-001', 'novel-001:main', '青铜钥', '道具', '旧定义', 1, 1, 999999999, 'ready')
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+
+    database.prepare('UPDATE KnowledgeWorld SET definition = ? WHERE id = ?').run('新定义', 'world-1')
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+      chapterRange: { startChapter: 2, endChapter: 2 },
+    })
+
+    const table = Array.from(mockLanceDb.tables.values())[0]
+    const worldRows = table?.rows.filter((row) => row.id === 'worldbuilding:world-1') ?? []
+    expect(worldRows).toHaveLength(1)
+    expect(worldRows[0]).toMatchObject({
+      chapterNo: 1,
+      validFromChapter: 1,
+      validUntilChapter: 999999999,
+      text: expect.stringContaining('定义：新定义'),
+    })
+  }, 10000)
+
+  it('falls back to a full rebuild when scoped rebuild cannot open an existing branch table', async () => {
+    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-missing-table-fallback')
+
+    database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, summary,
+        revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('chapter-2', 'novel-001', 'novel-001:main', 2, '第2章', '第2章原文', '第2章摘要', 1, 0, null, 'hash-2', 'ready')
+    database.prepare(
+      `INSERT INTO TextSpan (
+        id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
+        charStart, charEnd, text, spanType, tokenEstimate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章原文内容。', 'paragraph', 8)
+
+    const fullDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    const scopedDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main', { startChapter: 2, endChapter: 2 })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+      chapterRange: { startChapter: 2, endChapter: 2 },
+    })).resolves.toMatchObject({
+      rowCount: fullDocs.length,
+    })
+
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    const createdRows = mockLanceDb.database.createTable.mock.calls[0]?.[1] as Array<{ id: string }> | undefined
+    expect(createdRows?.map((row) => row.id)).toEqual(fullDocs.map((row) => row.id))
+    expect(createdRows?.map((row) => row.id)).not.toEqual(scopedDocs.map((row) => row.id))
+    const table = Array.from(mockLanceDb.tables.values())[0]
+    expect(table?.delete).not.toHaveBeenCalled()
+  })
+
+  it('falls back to a full rebuild when scoped rebuild metadata does not match the current embedding model', async () => {
+    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-model-mismatch-fallback')
+
+    database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, summary,
+        revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('chapter-2', 'novel-001', 'novel-001:main', 2, '第2章', '第2章原文', '第2章摘要', 1, 0, null, 'hash-2', 'ready')
+    database.prepare(
+      `INSERT INTO TextSpan (
+        id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
+        charStart, charEnd, text, spanType, tokenEstimate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章原文内容。', 'paragraph', 8)
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+
+    aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v2'
+    const fullDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    const scopedDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main', { startChapter: 2, endChapter: 2 })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+      chapterRange: { startChapter: 2, endChapter: 2 },
+    })).resolves.toMatchObject({
+      rowCount: fullDocs.length,
+    })
+
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(2)
+    const firstTable = mockLanceDb.database.createTable.mock.results[0]?.value
+    await expect(firstTable).resolves.toBeTruthy()
+    const initialTable = await firstTable
+    expect(initialTable.delete).not.toHaveBeenCalled()
+
+    const secondCreatedRows = mockLanceDb.database.createTable.mock.calls[1]?.[1] as Array<{ id: string; embeddingProvider: string; embeddingModel: string; embeddingDimension: number }> | undefined
+    expect(secondCreatedRows?.map((row) => row.id)).toEqual(fullDocs.map((row) => row.id))
+    expect(secondCreatedRows?.map((row) => row.id)).not.toEqual(scopedDocs.map((row) => row.id))
+    expect(secondCreatedRows?.every((row) => row.embeddingProvider === 'ollama' && row.embeddingModel === 'unit-test-embedding-model-v2' && row.embeddingDimension === 3)).toBe(true)
+    const currentTable = Array.from(mockLanceDb.tables.values())[0]
+    expect(currentTable?.delete).not.toHaveBeenCalled()
+  })
+
+  it('deleteBranchRetrievalIndexFromChapter preserves raw text before the cutoff while deleting long-lived derived rows', async () => {
+    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-delete-from-chapter-safe-scope')
+
+    database.prepare(
+      `INSERT INTO KnowledgeWorld (
+        id, novelId, branchId, term, category, definition, firstSeenChapter,
+        validFromChapter, validUntilChapter, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('world-1', 'novel-001', 'novel-001:main', '青铜钥', '道具', '旧定义', 1, 1, 999999999, 'ready')
+    database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, summary,
+        revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('chapter-2', 'novel-001', 'novel-001:main', 2, '第2章', '第2章原文', '第2章摘要', 1, 0, null, 'hash-2', 'ready')
+    database.prepare(
+      `INSERT INTO TextSpan (
+        id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
+        charStart, charEnd, text, spanType, tokenEstimate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章原文内容。', 'paragraph', 8)
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    await retrievalIndex.deleteBranchRetrievalIndexFromChapter('novel-001:main', 2)
+
+    const table = Array.from(mockLanceDb.tables.values())[0]
+    expect(table?.delete).toHaveBeenCalledWith("((sourceType = 'text_span' AND chapterNo >= 2) OR (sourceType != 'text_span' AND validUntilChapter > 2))")
+    const preservedChapterOneTextRow = table?.rows.find((row) => row.sourceType === 'text_span' && row.chapterNo === 1)
+    expect(preservedChapterOneTextRow).toMatchObject({
+      chapterNo: 1,
+      text: expect.stringContaining('第一段原文内容'),
+    })
+    expect(table?.rows.find((row) => row.id === 'worldbuilding:world-1')).toBeUndefined()
+    expect(table?.rows.find((row) => row.id === 'span-4')).toBeUndefined()
   })
 })

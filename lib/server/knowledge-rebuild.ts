@@ -2624,9 +2624,11 @@ async function persistResolvedChapterKnowledge(params: {
 async function rebuildDerivedIndexes(params: {
   novelId: string
   branchId: string
+  chapterRange?: KnowledgeRebuildChapterRange
   onProgress?: (progress: KnowledgeRebuildIndexProgress) => void | Promise<void>
 }) {
   await rebuildBranchRetrievalIndex(params.novelId, params.branchId, {
+    chapterRange: params.chapterRange,
     onProgress: params.onProgress,
   })
 }
@@ -5240,6 +5242,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
     await rebuildDerivedIndexes({
       novelId: params.novelId,
       branchId,
+      chapterRange: rawTextEmbeddingState?.payload.chapterRange ?? defaultChapterRange,
       onProgress: async (indexProgress) => {
         assertKnowledgeRebuildContinues(job.id)
         setKnowledgeRebuildJobIndexProgress(job.id, indexProgress)
