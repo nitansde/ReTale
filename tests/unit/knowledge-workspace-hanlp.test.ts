@@ -1,9 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildCharacterProfileSections,
+  characterCardNeedsExpansion,
+  groupWorldEntriesForWorkspaceRail,
+  getCharacterFacetContent,
   getCharacterClassificationBadgeLabel,
+  resolveCacheDeleteState,
+  hasCharacterProfile,
+  normalizeKnowledgeRebuildChapterRangeInput,
   resolveHanlpCacheDeleteState,
   resolveKnowledgeRebuildFailureMessage,
+  sortCharactersForWorkspaceRail,
 } from '@/components/workspace/selection-novel-studio'
+import { resolveWorkspaceRefTab } from '@/components/workspace/use-workspace-pane-state'
+import type { Character, WorldEntry } from '@/lib/types'
 
 describe('knowledge workspace HanLP helpers', () => {
   it('maps projected character tiers to visible workspace labels', () => {
@@ -11,6 +21,180 @@ describe('knowledge workspace HanLP helpers', () => {
     expect(getCharacterClassificationBadgeLabel({ classificationKey: 'tier1', classificationLabel: 'Tier 1', importanceTier: 'important' })).toBe('Tier 1 重要配角')
     expect(getCharacterClassificationBadgeLabel({ classificationKey: 'tier2', classificationLabel: 'Tier 2', importanceTier: 'arc' })).toBe('Tier 2 篇章配角')
     expect(getCharacterClassificationBadgeLabel({ classificationKey: 'candidate', classificationLabel: null, importanceTier: 'candidate' })).toBe('Candidate')
+  })
+
+  it('sorts workspace rail characters by importance tier first and then by name', () => {
+    const characters: Character[] = [
+      {
+        id: 'unknown-b',
+        novelId: 'novel-1',
+        name: '赵乙',
+        role: '未知',
+        goal: '',
+        trait: '',
+        note: '',
+        aliases: [],
+        importanceTier: null,
+      },
+      {
+        id: 'candidate-a',
+        novelId: 'novel-1',
+        name: '白川',
+        role: '候选',
+        goal: '',
+        trait: '',
+        note: '',
+        aliases: [],
+        importanceTier: 'candidate',
+      },
+      {
+        id: 'tier1-b',
+        novelId: 'novel-1',
+        name: '苏九',
+        role: '重要配角',
+        goal: '',
+        trait: '',
+        note: '',
+        aliases: [],
+        importanceTier: 'important',
+      },
+      {
+        id: 'ignored-a',
+        novelId: 'novel-1',
+        name: '阿木',
+        role: '忽略',
+        goal: '',
+        trait: '',
+        note: '',
+        aliases: [],
+        importanceTier: 'ignored',
+      },
+      {
+        id: 'tier0-a',
+        novelId: 'novel-1',
+        name: '林砚',
+        role: '主角',
+        goal: '',
+        trait: '',
+        note: '',
+        aliases: [],
+        importanceTier: 'protagonist',
+      },
+      {
+        id: 'tier1-a',
+        novelId: 'novel-1',
+        name: '白棠',
+        role: '重要配角',
+        goal: '',
+        trait: '',
+        note: '',
+        aliases: [],
+        importanceTier: 'important',
+      },
+      {
+        id: 'tier2-a',
+        novelId: 'novel-1',
+        name: '灰袍老人',
+        role: '篇章配角',
+        goal: '',
+        trait: '',
+        note: '',
+        aliases: [],
+        importanceTier: 'arc',
+      },
+    ]
+
+    expect(sortCharactersForWorkspaceRail(characters).map((character) => character.name)).toEqual([
+      '林砚',
+      '白棠',
+      '苏九',
+      '灰袍老人',
+      '白川',
+      '阿木',
+      '赵乙',
+    ])
+  })
+
+  it('groups world entries into organizations, locations, and remaining worldbuilding types', () => {
+    const entries: WorldEntry[] = [
+      { id: 'org-1', novelId: 'novel-1', title: '夜巡司', type: 'organization', content: '城中密探组织' },
+      { id: 'loc-1', novelId: 'novel-1', title: '白塔街', type: 'location', content: '主城要道' },
+      { id: 'scene-1', novelId: 'novel-1', title: '祭坛幻境', type: 'scene', content: '只在关键章开启' },
+      { id: 'rule-1', novelId: 'novel-1', title: '血契法则', type: 'rule', content: '代价不能逆转' },
+    ]
+
+    expect(groupWorldEntriesForWorkspaceRail(entries)).toEqual({
+      organizations: [entries[0]],
+      locations: [entries[1]],
+      worldbuilding: [entries[2], entries[3]],
+    })
+  })
+
+  it('falls back removed or unknown workspace knowledge tabs to characters', () => {
+    expect(resolveWorkspaceRefTab('characters')).toBe('characters')
+    expect(resolveWorkspaceRefTab('organizations')).toBe('organizations')
+    expect(resolveWorkspaceRefTab('relations')).toBe('characters')
+    expect(resolveWorkspaceRefTab('world')).toBe('characters')
+    expect(resolveWorkspaceRefTab('unknown-tab')).toBe('characters')
+    expect(resolveWorkspaceRefTab(null)).toBe('characters')
+  })
+
+  it('prefers canonical facet content and includes the body profile field in rendered sections', () => {
+    expect(getCharacterFacetContent({ content: '  以瘦劲见长  ', summary: '旧摘要' })).toBe('以瘦劲见长')
+    expect(getCharacterFacetContent({ summary: '  旧摘要仍可回退  ' })).toBe('旧摘要仍可回退')
+
+    const profile = {
+      identity: { content: '旧案里的落魄书生' },
+      capability: { summary: '擅长拆局' },
+      body: { content: '肩背挺拔，步伐极稳', evidence: '第三章提到“肩线绷直如弦”。' },
+    }
+
+    expect(hasCharacterProfile(profile)).toBe(true)
+
+    expect(buildCharacterProfileSections(profile)).toEqual([
+      {
+        key: 'identity',
+        label: '身份 / 背景',
+        summary: '旧案里的落魄书生',
+        note: '',
+        evidence: '',
+      },
+      {
+        key: 'capability',
+        label: '能力 / 战力',
+        summary: '擅长拆局',
+        note: '',
+        evidence: '',
+      },
+      {
+        key: 'body',
+        label: '体态',
+        summary: '肩背挺拔，步伐极稳',
+        note: '',
+        evidence: '第三章提到“肩线绷直如弦”。',
+      },
+    ])
+  })
+
+  it('marks long character cards as expandable without requiring every profile to expand', () => {
+    expect(characterCardNeedsExpansion({
+      profileSections: buildCharacterProfileSections({
+        identity: { content: '冷面捕快' },
+        capability: { content: '刀法精准' },
+        personality: { content: '寡言审慎' },
+      }),
+      note: '',
+    })).toBe(false)
+
+    expect(characterCardNeedsExpansion({
+      profileSections: buildCharacterProfileSections({
+        identity: { content: '冷面捕快' },
+        capability: { content: '刀法精准' },
+        personality: { content: '寡言审慎' },
+        speakingStyle: { content: '每句话都像缓慢落刀一样压住场面' },
+      }),
+      note: '他把每一次亮相都压得极低，却总能在关键处突然发力，把整场对话带向他预设的方向。',
+    })).toBe(true)
   })
 
   it('blocks HanLP cache deletion while a rebuild is queued, running, or paused', () => {
@@ -44,6 +228,61 @@ describe('knowledge workspace HanLP helpers', () => {
       knowledgeRebuildStatus: { status: 'failed' },
       knowledgeActionLoading: null,
     }).disabled).toBe(false)
+  })
+
+  it('uses the same active-rebuild guard for all manual cache deletion controls', () => {
+    expect(resolveCacheDeleteState({
+      knowledgeRebuildStatus: { status: 'running' },
+      knowledgeActionLoading: null,
+      idleHelperText: 'idle helper',
+    })).toMatchObject({
+      disabled: true,
+      helperText: expect.stringContaining('需先终止或完成当前重建后才能删除缓存'),
+    })
+
+    expect(resolveCacheDeleteState({
+      knowledgeRebuildStatus: null,
+      knowledgeActionLoading: 'delete-embedding-cache',
+      idleHelperText: 'idle helper',
+    })).toMatchObject({
+      disabled: true,
+      helperText: 'idle helper',
+    })
+
+    expect(resolveCacheDeleteState({
+      knowledgeRebuildStatus: null,
+      knowledgeActionLoading: null,
+      idleHelperText: 'idle helper',
+    })).toMatchObject({
+      disabled: false,
+      helperText: 'idle helper',
+    })
+  })
+
+  it('normalizes knowledge rebuild chapter range controls', () => {
+    expect(normalizeKnowledgeRebuildChapterRangeInput({
+      mode: 'all',
+      firstChapterCount: '3',
+      startChapter: '2',
+      endChapter: '4',
+      maxChapterCount: 10,
+    })).toBeUndefined()
+
+    expect(normalizeKnowledgeRebuildChapterRangeInput({
+      mode: 'first',
+      firstChapterCount: '20',
+      startChapter: '',
+      endChapter: '',
+      maxChapterCount: 11,
+    })).toEqual({ startChapter: 1, endChapter: 11 })
+
+    expect(normalizeKnowledgeRebuildChapterRangeInput({
+      mode: 'custom',
+      firstChapterCount: '',
+      startChapter: '8',
+      endChapter: '3',
+      maxChapterCount: 11,
+    })).toEqual({ startChapter: 3, endChapter: 8 })
   })
 
   it('returns a clear fallback message for failed rebuild status', () => {

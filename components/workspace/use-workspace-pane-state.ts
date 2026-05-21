@@ -1,17 +1,32 @@
 "use client"
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 export type WorkspaceCenterPaneView = 'body' | 'graph'
-export type WorkspaceRefTab = 'characters' | 'relations' | 'outline' | 'world' | 'timeline'
+export type WorkspaceRefTab = 'characters' | 'organizations' | 'locations' | 'worldbuilding' | 'outline' | 'timeline'
+
+const VALID_WORKSPACE_REF_TABS: WorkspaceRefTab[] = [
+  'characters',
+  'organizations',
+  'locations',
+  'worldbuilding',
+  'outline',
+  'timeline',
+]
+
+export function resolveWorkspaceRefTab(value: string | null | undefined): WorkspaceRefTab {
+  return VALID_WORKSPACE_REF_TABS.includes(value as WorkspaceRefTab) ? value as WorkspaceRefTab : 'characters'
+}
 
 export function useWorkspacePaneState() {
   const [leftPanelOpen, setLeftPanelOpen] = useState(false)
   const [chapterListState, setChapterListState] = useState<Record<string, number>>({})
   const [centerPaneView, setCenterPaneView] = useState<WorkspaceCenterPaneView>('body')
-  const [refTab, setRefTab] = useState<WorkspaceRefTab>('characters')
+  const [rawRefTab, setRawRefTab] = useState<string>('characters')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [confirmDeleteKnowledge, setConfirmDeleteKnowledge] = useState(false)
+
+  const refTab = useMemo(() => resolveWorkspaceRefTab(rawRefTab), [rawRefTab])
 
   return {
     leftPanelOpen,
@@ -21,7 +36,7 @@ export function useWorkspacePaneState() {
     centerPaneView,
     setCenterPaneView,
     refTab,
-    setRefTab,
+    setRefTab: (tab: WorkspaceRefTab | string) => setRawRefTab(resolveWorkspaceRefTab(tab)),
     settingsOpen,
     setSettingsOpen,
     confirmDeleteKnowledge,

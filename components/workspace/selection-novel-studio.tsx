@@ -8,11 +8,12 @@ import StarterKit from '@tiptap/starter-kit'
 import {
   ArrowLeft,
   BookOpen,
+  Building2,
   Check,
   ChevronDown,
   Globe,
-  GitBranch,
   LoaderCircle,
+  MapPin,
   MessageCircleMore,
   Pencil,
   Plus,
@@ -42,7 +43,7 @@ import {
   type WorkspaceFloatingPosition,
   type WorkspaceRoleplayTurn,
 } from '@/components/workspace/use-workspace-chapter-selection'
-import { useWorkspacePaneState } from '@/components/workspace/use-workspace-pane-state'
+import { type WorkspaceRefTab, useWorkspacePaneState } from '@/components/workspace/use-workspace-pane-state'
 import {
   readWorkspaceSelectionFromSearchParams,
   resolveSelectionAfterDeletedBranchNode,
@@ -80,7 +81,18 @@ import type {
   WhatIfCreateResponse,
   WhatIfSessionDetail,
 } from '@/lib/story-branch-types'
-import type { AIProvider, AISettings, AIScenarioKey, Chapter, Character, CharacterRelation, OutlineType, WorldEntryType } from '@/lib/types'
+import type {
+  AIProvider,
+  AISettings,
+  AIScenarioKey,
+  Chapter,
+  Character,
+  CharacterRoleCardFacet,
+  KnowledgeRebuildChapterRange,
+  OutlineType,
+  WorldEntry,
+  WorldEntryType,
+} from '@/lib/types'
 
 const TOOLBAR_EDGE_PADDING = 12
 const TOOLBAR_OFFSET_Y = 56
@@ -175,6 +187,7 @@ type KnowledgeRebuildStatus = {
     etaMinutes: number | null
     detail: string | null
   }>
+  chapterRange?: KnowledgeRebuildChapterRange
   rawTextEmbeddingProgress?: number
   rawTextEmbeddingCacheHitRate?: number
   hanlpCacheStatus?: 'queued' | 'running' | 'paused' | 'ready' | 'empty'
@@ -344,19 +357,6 @@ const WORLD_TYPE_LABELS: Record<WorldEntryType, string> = {
   history: '历史',
 }
 
-const RELATION_STRENGTH_LABELS: Record<CharacterRelation['strength'], string> = {
-  weak: '弱',
-  medium: '中',
-  strong: '强',
-}
-
-const RELATION_STATUS_LABELS: Record<CharacterRelation['status'], string> = {
-  active: '进行中',
-  strained: '紧张',
-  hidden: '隐藏',
-  resolved: '已解决',
-}
-
 const KNOWLEDGE_STEP_STATUS_LABELS: Record<KnowledgeRebuildStatus['steps'][number]['status'], string> = {
   pending: '待处理',
   running: '进行中',
@@ -383,6 +383,8 @@ const CHARACTER_CLASSIFICATION_DISPLAY_LABELS: Record<NonNullable<Character['cla
 const RAW_TEXT_PRECOMPUTE_STAGE_KEY = 'raw_text_precompute'
 const HANLP_BOOTSTRAP_STAGE_KEY = 'hanlp-bootstrap'
 
+type KnowledgeRebuildRangeMode = 'all' | 'first' | 'custom'
+
 function toProgressPercent(value: number | null | undefined) {
   return Math.max(0, Math.min(100, Math.round((value ?? 0) * 100)))
 }
@@ -406,6 +408,43 @@ function formatEmbeddingProviderLabel(provider: string) {
   return provider
 }
 
+function parsePositiveChapterInput(value: string) {
+  const parsed = Number.parseInt(value.trim(), 10)
+  return Number.isFinite(parsed) ? Math.max(1, Math.floor(parsed)) : null
+}
+
+export function normalizeKnowledgeRebuildChapterRangeInput(params: {
+  mode: KnowledgeRebuildRangeMode
+  firstChapterCount: string
+  startChapter: string
+  endChapter: string
+  maxChapterCount: number
+}): KnowledgeRebuildChapterRange | undefined {
+  const maxChapterCount = Math.max(0, Math.floor(params.maxChapterCount))
+  if (params.mode === 'all' || maxChapterCount <= 0) return undefined
+
+  if (params.mode === 'first') {
+    const requestedEnd = parsePositiveChapterInput(params.firstChapterCount) ?? maxChapterCount
+    return { startChapter: 1, endChapter: Math.min(maxChapterCount, requestedEnd) }
+  }
+
+  const requestedStart = parsePositiveChapterInput(params.startChapter) ?? 1
+  const requestedEnd = parsePositiveChapterInput(params.endChapter) ?? maxChapterCount
+  const startChapter = Math.min(maxChapterCount, requestedStart)
+  const endChapter = Math.min(maxChapterCount, requestedEnd)
+  return startChapter <= endChapter
+    ? { startChapter, endChapter }
+    : { startChapter: endChapter, endChapter: startChapter }
+}
+
+function formatKnowledgeRebuildChapterRangeLabel(range: KnowledgeRebuildChapterRange | null | undefined) {
+  if (!range?.startChapter && !range?.endChapter) return '全部章节'
+  if ((range.startChapter ?? 1) <= 1 && range.endChapter) return `前 ${range.endChapter} 章`
+  if (range.startChapter && range.endChapter) return `第 ${range.startChapter}-${range.endChapter} 章`
+  if (range.startChapter) return `第 ${range.startChapter} 章起`
+  return `前 ${range.endChapter} 章`
+}
+
 export function getCharacterClassificationBadgeLabel(character: Pick<Character, 'classificationKey' | 'classificationLabel' | 'importanceTier'>) {
   if (character.classificationKey && character.classificationKey in CHARACTER_CLASSIFICATION_DISPLAY_LABELS) {
     return CHARACTER_CLASSIFICATION_DISPLAY_LABELS[character.classificationKey]
@@ -415,6 +454,60 @@ export function getCharacterClassificationBadgeLabel(character: Pick<Character, 
   if (character.importanceTier === 'ignored') return 'Ignored'
 
   return character.classificationLabel?.trim() || null
+}
+
+type WorkspaceWorldEntryGroups = {
+  organizations: WorldEntry[]
+  locations: WorldEntry[]
+  worldbuilding: WorldEntry[]
+}
+
+function getWorkspaceCharacterImportanceRank(importanceTier: Character['importanceTier']) {
+  switch (importanceTier) {
+    case 'protagonist':
+      return 0
+    case 'important':
+      return 1
+    case 'arc':
+      return 2
+    case 'candidate':
+      return 3
+    case 'ignored':
+      return 4
+    default:
+      return 5
+  }
+}
+
+export function sortCharactersForWorkspaceRail(characters: Character[]) {
+  return characters.slice().sort((left, right) => {
+    const leftRank = getWorkspaceCharacterImportanceRank(left.importanceTier)
+    const rightRank = getWorkspaceCharacterImportanceRank(right.importanceTier)
+    if (leftRank !== rightRank) return leftRank - rightRank
+
+    const nameOrder = left.name.localeCompare(right.name, 'zh-Hans-CN')
+    if (nameOrder !== 0) return nameOrder
+
+    return left.id.localeCompare(right.id)
+  })
+}
+
+export function groupWorldEntriesForWorkspaceRail(entries: WorldEntry[]): WorkspaceWorldEntryGroups {
+  return entries.reduce<WorkspaceWorldEntryGroups>((groups, entry) => {
+    if (entry.type === 'organization') {
+      groups.organizations.push(entry)
+    } else if (entry.type === 'location') {
+      groups.locations.push(entry)
+    } else {
+      groups.worldbuilding.push(entry)
+    }
+
+    return groups
+  }, {
+    organizations: [],
+    locations: [],
+    worldbuilding: [],
+  })
 }
 
 function formatKnowledgeEtaLabel(params: {
@@ -436,9 +529,19 @@ export function resolveKnowledgeRebuildFailureMessage(status: Pick<KnowledgeRebu
   return status.errorMessage?.trim() || '知识视图重建失败，请重新发起重建。'
 }
 
-export function resolveHanlpCacheDeleteState(params: {
+type KnowledgeActionLoading =
+  | 'pause'
+  | 'abort'
+  | 'delete'
+  | 'delete-hanlp-cache'
+  | 'delete-extraction-cache'
+  | 'delete-embedding-cache'
+  | null
+
+export function resolveCacheDeleteState(params: {
   knowledgeRebuildStatus: Pick<KnowledgeRebuildStatus, 'status'> | null
-  knowledgeActionLoading: 'pause' | 'abort' | 'delete' | 'delete-hanlp-cache' | null
+  knowledgeActionLoading: KnowledgeActionLoading
+  idleHelperText: string
 }) {
   const blockedByActiveRebuild = params.knowledgeRebuildStatus?.status === 'queued'
     || params.knowledgeRebuildStatus?.status === 'running'
@@ -447,9 +550,19 @@ export function resolveHanlpCacheDeleteState(params: {
   return {
     disabled: blockedByActiveRebuild || Boolean(params.knowledgeActionLoading),
     helperText: blockedByActiveRebuild
-      ? '当前 HanLP Bootstrap 仍在进行中或已暂停，需先终止或完成当前重建后才能删除缓存。'
-      : '只会删除当前小说主分支的 HanLP 缓存，不会影响正文或原文 Embedding 缓存。',
+      ? '当前知识重建任务仍在进行中或已暂停，需先终止或完成当前重建后才能删除缓存。'
+      : params.idleHelperText,
   }
+}
+
+export function resolveHanlpCacheDeleteState(params: {
+  knowledgeRebuildStatus: Pick<KnowledgeRebuildStatus, 'status'> | null
+  knowledgeActionLoading: KnowledgeActionLoading
+}) {
+  return resolveCacheDeleteState({
+    ...params,
+    idleHelperText: '只会删除当前小说主分支的 HanLP 缓存，不会影响正文或原文 Embedding 缓存。',
+  })
 }
 
 const ACTION_META: Record<WorkspaceActionMode, { label: string; title: string; description: string; icon: typeof Wand2 }> = {
@@ -490,6 +603,7 @@ const CHARACTER_PROFILE_LABELS = {
   identity: '身份 / 背景',
   capability: '能力 / 战力',
   appearance: '外形',
+  body: '体态',
   clothing: '衣着',
   speakingStyle: '说话风格',
   likes: '偏好',
@@ -501,27 +615,147 @@ const CHARACTER_PROFILE_ORDER = [
   'personality',
   'gender',
   'appearance',
+  'body',
   'clothing',
   'speakingStyle',
   'likes',
 ] as const
 
-function hasCharacterProfile(profile: Character['profile']) {
-  return CHARACTER_PROFILE_ORDER.some((key) => Boolean(profile?.[key]?.summary?.trim()))
+export function getCharacterFacetContent(facet?: CharacterRoleCardFacet | null) {
+  return facet?.content?.trim() || facet?.summary?.trim() || ''
 }
 
-function buildCharacterProfileSections(profile: Character['profile']) {
+export function hasCharacterProfile(profile: Character['profile']) {
+  return CHARACTER_PROFILE_ORDER.some((key) => Boolean(getCharacterFacetContent(profile?.[key])))
+}
+
+export function buildCharacterProfileSections(profile: Character['profile']) {
   return CHARACTER_PROFILE_ORDER.flatMap((key) => {
     const facet = profile?.[key]
-    if (!facet?.summary?.trim()) return []
+    const content = getCharacterFacetContent(facet)
+    if (!content) return []
     return [{
       key,
       label: CHARACTER_PROFILE_LABELS[key],
-      summary: facet.summary.trim(),
-      note: facet.note?.trim() || '',
-      evidence: facet.evidence?.trim() || '',
+      summary: content,
+      note: facet?.note?.trim() || '',
+      evidence: facet?.evidence?.trim() || '',
     }]
   })
+}
+
+export function characterCardNeedsExpansion(params: {
+  profileSections: ReturnType<typeof buildCharacterProfileSections>
+  note: string
+}) {
+  const { profileSections, note } = params
+  if (profileSections.length > 3) return true
+  if (note.length > 120) return true
+  return profileSections.some((section) => section.note.length > 72 || section.evidence.length > 96 || section.summary.length > 140)
+}
+
+export function WorkspaceCharacterReferenceCard({
+  char,
+  knowledgePanelReadOnly,
+  onEdit,
+  onDelete,
+}: {
+  char: Character
+  knowledgePanelReadOnly: boolean
+  onEdit: () => void
+  onDelete: () => void
+}) {
+  const [isExpanded, setIsExpanded] = useState(false)
+  const profileSections = buildCharacterProfileSections(char.profile)
+  const showProfile = hasCharacterProfile(char.profile)
+  const classificationBadgeLabel = getCharacterClassificationBadgeLabel(char)
+  const aliasBadges = (char.aliases ?? []).map((alias) => alias.trim()).filter(Boolean)
+  const identitySummary = getCharacterFacetContent(char.profile?.identity)
+  const genderSummary = getCharacterFacetContent(char.profile?.gender)
+  const capabilitySummary = getCharacterFacetContent(char.profile?.capability)
+  const speakingStyleSummary = getCharacterFacetContent(char.profile?.speakingStyle)
+  const supplementalNote = char.note.trim()
+  const noteMatchesIdentity = supplementalNote && supplementalNote === identitySummary
+  const cardCanExpand = characterCardNeedsExpansion({
+    profileSections,
+    note: noteMatchesIdentity ? '' : supplementalNote,
+  })
+  const collapsedPrioritySections = profileSections.filter((section) => ['identity', 'capability', 'personality'].includes(section.key))
+  const visibleProfileSections = !cardCanExpand || isExpanded
+    ? profileSections
+    : (collapsedPrioritySections.length > 0 ? collapsedPrioritySections : profileSections).slice(0, 3)
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div>
+          <p className="text-sm font-medium text-zinc-100">{char.name}</p>
+          <p className="text-xs text-violet-300">{showProfile ? (identitySummary || char.role) : char.role}</p>
+        </div>
+        {!knowledgePanelReadOnly ? (
+          <div className="flex gap-1">
+            <button onClick={onEdit} className="rounded-lg border border-white/10 p-1.5 text-zinc-400 hover:text-zinc-200"><Pencil className="h-3 w-3" /></button>
+            <button onClick={onDelete} className="rounded-lg border border-white/10 p-1.5 text-rose-400 hover:text-rose-300"><Trash2 className="h-3 w-3" /></button>
+          </div>
+        ) : null}
+      </div>
+      {(classificationBadgeLabel || aliasBadges.length > 0 || genderSummary || capabilitySummary || speakingStyleSummary) ? (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {classificationBadgeLabel ? (
+            <span
+              data-testid={`workspace-character-tier-${char.classificationKey ?? char.importanceTier ?? 'unknown'}`}
+              className="rounded-full border border-emerald-300/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-100"
+            >
+              {classificationBadgeLabel}
+            </span>
+          ) : null}
+          {aliasBadges.map((alias) => (
+            <span key={`${char.id}-${alias}`} className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">
+              别名 · {alias}
+            </span>
+          ))}
+          {genderSummary ? <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{genderSummary}</span> : null}
+          {capabilitySummary ? <span className="rounded-full border border-violet-300/20 bg-violet-500/10 px-2 py-0.5 text-[10px] text-violet-200">{capabilitySummary}</span> : null}
+          {speakingStyleSummary ? <span className="rounded-full border border-sky-300/20 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-200">{speakingStyleSummary}</span> : null}
+        </div>
+      ) : null}
+      {showProfile ? (
+        <div className="space-y-2">
+          <div id={`workspace-character-profile-${char.id}`} className="space-y-2 text-xs leading-5 text-zinc-300">
+            {visibleProfileSections.map((section) => (
+              <div key={section.key} className="rounded-xl border border-white/8 bg-white/[0.03] px-2.5 py-2">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">{section.label}</p>
+                <p className="mt-1 text-zinc-200">{section.summary}</p>
+                {section.note ? <p className={cn('mt-1 text-zinc-400', !isExpanded && cardCanExpand && 'line-clamp-2')}>注：{section.note}</p> : null}
+                {section.evidence ? <p className={cn('mt-1 text-zinc-500', !isExpanded && cardCanExpand && 'line-clamp-2')}>证：{section.evidence}</p> : null}
+              </div>
+            ))}
+          </div>
+          {supplementalNote && !noteMatchesIdentity ? (
+            <p className={cn('text-xs leading-5 text-zinc-500', !isExpanded && cardCanExpand && 'line-clamp-2')}>补充：{supplementalNote}</p>
+          ) : null}
+          {cardCanExpand ? (
+            <button
+              type="button"
+              aria-expanded={isExpanded}
+              aria-controls={`workspace-character-profile-${char.id}`}
+              onClick={() => setIsExpanded((current) => !current)}
+              className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] text-zinc-400 transition hover:border-white/20 hover:text-zinc-200"
+            >
+              <ChevronDown className={cn('h-3 w-3 transition-transform', isExpanded && 'rotate-180')} />
+              {isExpanded ? '收起详情' : '展开详情'}
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <div className="space-y-1 text-xs leading-5 text-zinc-400">
+          <p><span className="text-zinc-500">目标</span> {char.goal}</p>
+          <p><span className="text-zinc-500">性格</span> {char.trait}</p>
+          {char.note && <p className="line-clamp-2"><span className="text-zinc-500">备注</span> {char.note}</p>}
+        </div>
+      )}
+    </>
+  )
 }
 
 const CHAPTER_PAGE_SIZE = 80
@@ -862,13 +1096,14 @@ export function SelectionNovelStudio() {
   const abortStoryKnowledgeRebuild = useNovelStore((state) => state.abortStoryKnowledgeRebuild)
   const deleteStoryKnowledgeGraph = useNovelStore((state) => state.deleteStoryKnowledgeGraph)
   const deleteStoryHanlpCache = useNovelStore((state) => state.deleteStoryHanlpCache)
+  const deleteStoryExtractionCache = useNovelStore((state) => state.deleteStoryExtractionCache)
+  const deleteStoryEmbeddingCache = useNovelStore((state) => state.deleteStoryEmbeddingCache)
   const refreshKnowledgeProjection = useNovelStore((state) => state.refreshKnowledgeProjection)
   const setPresetCompatSessionPhase = useNovelStore((state) => state.setPresetCompatSessionPhase)
   const clearPresetCompatSessionStateForSelection = useNovelStore((state) => state.clearPresetCompatSessionStateForSelection)
   const resetPresetCompatSessionStateForSelection = useNovelStore((state) => state.resetPresetCompatSessionStateForSelection)
   const presetCompatSessionState = useNovelStore((state) => state.presetCompatSessionState)
   const localCharacters = useNovelStore((state) => state.localCharacters)
-  const localCharacterRelations = useNovelStore((state) => state.localCharacterRelations)
   const localWorldEntries = useNovelStore((state) => state.localWorldEntries)
   const localTimelineEvents = useNovelStore((state) => state.localTimelineEvents)
   const localOutlines = useNovelStore((state) => state.localOutlines)
@@ -1031,8 +1266,14 @@ export function SelectionNovelStudio() {
   const [knowledgeRebuilding, setKnowledgeRebuilding] = useState(false)
   const [presetCompatLibraryOpen, setPresetCompatLibraryOpen] = useState(false)
   const [knowledgeRebuildStatus, setKnowledgeRebuildStatus] = useState<KnowledgeRebuildStatus | null>(null)
-  const [knowledgeActionLoading, setKnowledgeActionLoading] = useState<'pause' | 'abort' | 'delete' | 'delete-hanlp-cache' | null>(null)
+  const [knowledgeActionLoading, setKnowledgeActionLoading] = useState<KnowledgeActionLoading>(null)
   const [confirmDeleteHanlpCache, setConfirmDeleteHanlpCache] = useState(false)
+  const [confirmDeleteExtractionCache, setConfirmDeleteExtractionCache] = useState(false)
+  const [confirmDeleteEmbeddingCache, setConfirmDeleteEmbeddingCache] = useState(false)
+  const [knowledgeRebuildRangeMode, setKnowledgeRebuildRangeMode] = useState<KnowledgeRebuildRangeMode>('all')
+  const [knowledgeRebuildFirstChapterCount, setKnowledgeRebuildFirstChapterCount] = useState('5')
+  const [knowledgeRebuildStartChapter, setKnowledgeRebuildStartChapter] = useState('1')
+  const [knowledgeRebuildEndChapter, setKnowledgeRebuildEndChapter] = useState('5')
   const [ollamaModelsByScenario, setOllamaModelsByScenario] = useState<Record<AIScenarioKey, OllamaModelOption[]>>({
     rewrite: [],
     knowledgeExtraction: [],
@@ -1187,6 +1428,10 @@ export function SelectionNovelStudio() {
 
   useEffect(() => {
     if (!currentNovelId) {
+      setConfirmDeleteKnowledge(false)
+      setConfirmDeleteHanlpCache(false)
+      setConfirmDeleteExtractionCache(false)
+      setConfirmDeleteEmbeddingCache(false)
       const resetTimer = window.setTimeout(() => {
         setKnowledgeRebuildStatus(null)
       }, 0)
@@ -1199,6 +1444,8 @@ export function SelectionNovelStudio() {
     const confirmResetTimer = window.setTimeout(() => {
       setConfirmDeleteKnowledge(false)
       setConfirmDeleteHanlpCache(false)
+      setConfirmDeleteExtractionCache(false)
+      setConfirmDeleteEmbeddingCache(false)
     }, 0)
 
     let cancelled = false
@@ -1395,6 +1642,20 @@ export function SelectionNovelStudio() {
   const mainlineChapters = useMemo(
     () => sortedChapters.filter((chapter) => !chapter.parentChapterId),
     [sortedChapters]
+  )
+  const selectedKnowledgeRebuildChapterRange = useMemo(
+    () => normalizeKnowledgeRebuildChapterRangeInput({
+      mode: knowledgeRebuildRangeMode,
+      firstChapterCount: knowledgeRebuildFirstChapterCount,
+      startChapter: knowledgeRebuildStartChapter,
+      endChapter: knowledgeRebuildEndChapter,
+      maxChapterCount: mainlineChapters.length,
+    }),
+    [knowledgeRebuildEndChapter, knowledgeRebuildFirstChapterCount, knowledgeRebuildRangeMode, knowledgeRebuildStartChapter, mainlineChapters.length]
+  )
+  const selectedKnowledgeRebuildChapterRangeLabel = useMemo(
+    () => formatKnowledgeRebuildChapterRangeLabel(selectedKnowledgeRebuildChapterRange),
+    [selectedKnowledgeRebuildChapterRange]
   )
   const branchChaptersByParentId = useMemo(() => {
     const grouped = new Map<string, Chapter[]>()
@@ -1678,6 +1939,16 @@ export function SelectionNovelStudio() {
     knowledgeRebuildStatus,
     knowledgeActionLoading,
   }), [knowledgeActionLoading, knowledgeRebuildStatus])
+  const extractionCacheDeleteState = useMemo(() => resolveCacheDeleteState({
+    knowledgeRebuildStatus,
+    knowledgeActionLoading,
+    idleHelperText: '只会删除当前小说主分支的 LLM 抽取缓存，不会影响 HanLP 缓存或原文 Embedding 缓存。',
+  }), [knowledgeActionLoading, knowledgeRebuildStatus])
+  const embeddingCacheDeleteState = useMemo(() => resolveCacheDeleteState({
+    knowledgeRebuildStatus,
+    knowledgeActionLoading,
+    idleHelperText: '只会删除当前小说主分支的原文 Embedding 缓存，不会影响 HanLP 缓存或 LLM 抽取缓存。',
+  }), [knowledgeActionLoading, knowledgeRebuildStatus])
   const rawTextEmbeddingProgress = knowledgeRebuildStatus?.rawTextEmbeddingProgress
   const rawTextEmbeddingPercent = useMemo(
     () => rawTextEmbeddingProgress === undefined ? null : toProgressPercent(rawTextEmbeddingProgress),
@@ -1826,13 +2097,120 @@ export function SelectionNovelStudio() {
   }, [editor])
 
   const currentNovelCharacters = localCharacters.filter((item) => item.novelId === currentNovelId)
-  const currentNovelCharacterRelations = localCharacterRelations.filter((item) => item.novelId === currentNovelId)
   const currentNovelWorldEntries = localWorldEntries.filter((item) => item.novelId === currentNovelId)
   const currentNovelOutlines = localOutlines.filter((item) => item.novelId === currentNovelId)
   const currentNovelTimelineEvents = localTimelineEvents
     .filter((item) => item.novelId === currentNovelId)
     .slice()
     .sort((a, b) => a.order - b.order)
+  const currentNovelCharactersSorted = useMemo(
+    () => sortCharactersForWorkspaceRail(currentNovelCharacters),
+    [currentNovelCharacters]
+  )
+  const currentNovelWorldEntryGroups = useMemo(
+    () => groupWorldEntriesForWorkspaceRail(currentNovelWorldEntries),
+    [currentNovelWorldEntries]
+  )
+  const workspaceKnowledgeTabs: Array<{ tab: WorkspaceRefTab; label: string; icon: typeof Users }> = [
+    { tab: 'characters', label: '人物', icon: Users },
+    { tab: 'organizations', label: '组织', icon: Building2 },
+    { tab: 'locations', label: '地点', icon: MapPin },
+    { tab: 'worldbuilding', label: '世界设定', icon: Globe },
+    { tab: 'outline', label: '大纲', icon: ScrollText },
+    { tab: 'timeline', label: '时间线', icon: ScrollText },
+  ]
+
+  const renderWorldEntriesPanel = (
+    tab: WorkspaceRefTab,
+    entries: WorldEntry[],
+    emptyMessage: string,
+    addLabel: string,
+    defaultType: WorldEntryType,
+  ) => {
+    if (refTab !== tab) return null
+
+    return (
+      <>
+        {entries.length === 0 && (
+          <p className="text-xs text-zinc-500 text-center py-4">{emptyMessage}</p>
+        )}
+        {entries.map((entry) => {
+          const isEditing = editState.type === 'world' && editState.id === entry.id
+          const ef = editState.form
+          const setF = (key: string, val: string) => setEditState((s) => ({ ...s, form: { ...s.form, [key]: val } }))
+          return (
+            <div key={entry.id} className="rounded-2xl border border-white/8 bg-black/20 p-3">
+              {isEditing ? (
+                <>
+                  <input value={ef.title ?? ''} onChange={(e) => setF('title', e.target.value)} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder="标题" />
+                  <select value={ef.type ?? entry.type} onChange={(e) => setF('type', e.target.value)} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none">
+                    <option value="location">地点</option>
+                    <option value="scene">场景</option>
+                    <option value="organization">组织</option>
+                    <option value="rule">规则</option>
+                    <option value="item">物件</option>
+                    <option value="history">历史</option>
+                  </select>
+                  <textarea value={ef.content ?? ''} onChange={(e) => setF('content', e.target.value)} className="w-full min-h-[60px] rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder="描述" />
+                  <div className="flex gap-2 mt-2">
+                    <button onClick={() => {
+                      useNovelStore.getState().updateWorldEntry(entry.id, { title: ef.title ?? '', type: (ef.type ?? entry.type) as WorldEntryType, content: ef.content ?? '' })
+                      setEditState({ type: null, id: null, form: {} })
+                    }} className="flex-1 rounded-xl bg-emerald-500/20 text-emerald-200 px-3 py-1.5 text-xs">保存</button>
+                    <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-white/10 text-zinc-400 px-3 py-1.5 text-xs">取消</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-zinc-100">{entry.title}</p>
+                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-500">
+                        {WORLD_TYPE_LABELS[entry.type]}
+                      </span>
+                    </div>
+                    {!knowledgePanelReadOnly ? (
+                      <div className="flex gap-1">
+                        <button onClick={() => setEditState({ type: 'world', id: entry.id, form: { title: entry.title, type: entry.type, content: entry.content } })} className="rounded-lg border border-white/10 p-1.5 text-zinc-400 hover:text-zinc-200"><Pencil className="h-3 w-3" /></button>
+                        <button onClick={() => { useNovelStore.getState().deleteWorldEntry(entry.id) }} className="rounded-lg border border-white/10 p-1.5 text-rose-400 hover:text-rose-300"><Trash2 className="h-3 w-3" /></button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <p className="text-xs leading-6 text-zinc-400 line-clamp-3">{entry.content}</p>
+                </>
+              )}
+            </div>
+          )
+        })}
+        {!knowledgePanelReadOnly ? (
+          <button onClick={() => setEditState({ type: 'world', id: '__new__', form: { title: '', type: defaultType, content: '' } })} className="w-full rounded-2xl border border-dashed border-white/10 px-3 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04]">
+            <Plus className="h-3.5 w-3.5 inline mr-1" /> {addLabel}
+          </button>
+        ) : null}
+        {!knowledgePanelReadOnly && editState.type === 'world' && editState.id === '__new__' && (
+          <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
+            <input value={editState.form.title ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, title: e.target.value } }))} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder="标题" />
+            <select value={editState.form.type ?? defaultType} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, type: e.target.value } }))} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none">
+              <option value="location">地点</option>
+              <option value="scene">场景</option>
+              <option value="organization">组织</option>
+              <option value="rule">规则</option>
+              <option value="item">物件</option>
+              <option value="history">历史</option>
+            </select>
+            <textarea value={editState.form.content ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, content: e.target.value } }))} className="w-full min-h-[60px] rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder="描述" />
+            <div className="flex gap-2 mt-2">
+              <button onClick={() => {
+                useNovelStore.getState().addWorldEntry(currentNovelId, { title: editState.form.title ?? '', type: (editState.form.type ?? defaultType) as WorldEntryType, content: editState.form.content ?? '' })
+                setEditState({ type: null, id: null, form: {} })
+              }} className="flex-1 rounded-xl bg-emerald-500/20 text-emerald-200 px-3 py-1.5 text-xs">创建</button>
+              <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-white/10 text-zinc-400 px-3 py-1.5 text-xs">取消</button>
+            </div>
+          </div>
+        )}
+      </>
+    )
+  }
 
   useEffect(() => {
     const handler = () => {
@@ -2895,7 +3273,7 @@ export function SelectionNovelStudio() {
     if (!currentNovelId || knowledgeRebuilding || knowledgeActionLoading) return
     setKnowledgeRebuilding(true)
     try {
-      const result = await rebuildStoryKnowledge(currentNovelId)
+      const result = await rebuildStoryKnowledge(currentNovelId, { chapterRange: selectedKnowledgeRebuildChapterRange })
       if (!result) return
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
@@ -2918,7 +3296,7 @@ export function SelectionNovelStudio() {
         setKnowledgeRebuildStatus(null)
         showKnowledgeToast('知识重建已终止')
       } else if (result.jobOutcome === 'completed') {
-        showKnowledgeToast('知识视图已更新')
+        showKnowledgeToast(`知识视图已更新：${selectedKnowledgeRebuildChapterRangeLabel}`)
       } else if (result.knowledgeRebuildStatus?.status === 'failed') {
         showKnowledgeToast(resolveKnowledgeRebuildFailureMessage(result.knowledgeRebuildStatus) ?? '知识视图重建失败，请重新发起重建。', 2600)
       }
@@ -3009,6 +3387,52 @@ export function SelectionNovelStudio() {
       showKnowledgeToast(result.jobOutcome === 'deleted' ? '已删除当前小说的 HanLP 缓存' : '当前小说没有可删除的 HanLP 缓存', 2200)
     } catch (error) {
       showKnowledgeToast(error instanceof Error ? error.message : '删除 HanLP 缓存失败', 2600)
+    } finally {
+      setKnowledgeActionLoading(null)
+    }
+  }
+
+  const handleDeleteExtractionCache = async () => {
+    if (!currentNovelId || knowledgeActionLoading) return
+    setKnowledgeActionLoading('delete-extraction-cache')
+    try {
+      const result = await deleteStoryExtractionCache(currentNovelId)
+      if (!result) return
+
+      setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      setConfirmDeleteExtractionCache(false)
+
+      if (result.actionError?.message) {
+        showKnowledgeToast(result.actionError.message, 2600)
+        return
+      }
+
+      showKnowledgeToast(result.jobOutcome === 'deleted' ? '已删除当前小说的 LLM 抽取缓存' : '当前小说没有可删除的 LLM 抽取缓存', 2200)
+    } catch (error) {
+      showKnowledgeToast(error instanceof Error ? error.message : '删除 LLM 抽取缓存失败', 2600)
+    } finally {
+      setKnowledgeActionLoading(null)
+    }
+  }
+
+  const handleDeleteEmbeddingCache = async () => {
+    if (!currentNovelId || knowledgeActionLoading) return
+    setKnowledgeActionLoading('delete-embedding-cache')
+    try {
+      const result = await deleteStoryEmbeddingCache(currentNovelId)
+      if (!result) return
+
+      setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      setConfirmDeleteEmbeddingCache(false)
+
+      if (result.actionError?.message) {
+        showKnowledgeToast(result.actionError.message, 2600)
+        return
+      }
+
+      showKnowledgeToast(result.jobOutcome === 'deleted' ? '已删除当前小说的原文 Embedding 缓存' : '当前小说没有可删除的原文 Embedding 缓存', 2200)
+    } catch (error) {
+      showKnowledgeToast(error instanceof Error ? error.message : '删除原文 Embedding 缓存失败', 2600)
     } finally {
       setKnowledgeActionLoading(null)
     }
@@ -3703,6 +4127,72 @@ export function SelectionNovelStudio() {
           {knowledgeRebuilding ? '处理中…' : knowledgeRebuildPaused ? '继续知识视图重建' : knowledgeRebuildFailed ? '重新重建知识视图' : '重建知识视图'}
         </button>
       </div>
+      <div className="mt-3 rounded-2xl border border-violet-300/15 bg-black/20 p-3">
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-300">
+          <span className="text-zinc-500">章节范围</span>
+          <button
+            type="button"
+            onClick={() => setKnowledgeRebuildRangeMode('all')}
+            disabled={knowledgeRebuildActive || knowledgeRebuilding || Boolean(knowledgeActionLoading)}
+            className={cn('rounded-full border px-3 py-1 transition disabled:cursor-not-allowed disabled:opacity-50', knowledgeRebuildRangeMode === 'all' ? 'border-violet-300/40 bg-violet-400/15 text-violet-50' : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:bg-white/[0.06]')}
+          >
+            全部
+          </button>
+          <button
+            type="button"
+            onClick={() => setKnowledgeRebuildRangeMode('first')}
+            disabled={knowledgeRebuildActive || knowledgeRebuilding || Boolean(knowledgeActionLoading)}
+            className={cn('rounded-full border px-3 py-1 transition disabled:cursor-not-allowed disabled:opacity-50', knowledgeRebuildRangeMode === 'first' ? 'border-violet-300/40 bg-violet-400/15 text-violet-50' : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:bg-white/[0.06]')}
+          >
+            前 N 章
+          </button>
+          <button
+            type="button"
+            onClick={() => setKnowledgeRebuildRangeMode('custom')}
+            disabled={knowledgeRebuildActive || knowledgeRebuilding || Boolean(knowledgeActionLoading)}
+            className={cn('rounded-full border px-3 py-1 transition disabled:cursor-not-allowed disabled:opacity-50', knowledgeRebuildRangeMode === 'custom' ? 'border-violet-300/40 bg-violet-400/15 text-violet-50' : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:bg-white/[0.06]')}
+          >
+            指定范围
+          </button>
+        </div>
+        {knowledgeRebuildRangeMode === 'first' ? (
+          <label className="mt-3 flex items-center gap-2 text-[11px] text-zinc-400">
+            处理前
+            <input
+              value={knowledgeRebuildFirstChapterCount}
+              onChange={(event) => setKnowledgeRebuildFirstChapterCount(event.target.value)}
+              disabled={knowledgeRebuildActive || knowledgeRebuilding || Boolean(knowledgeActionLoading)}
+              inputMode="numeric"
+              className="w-20 rounded-xl border border-white/10 bg-black/25 px-2 py-1.5 text-zinc-100 outline-none transition focus:border-violet-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            章
+          </label>
+        ) : null}
+        {knowledgeRebuildRangeMode === 'custom' ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-zinc-400">
+            <span>从第</span>
+            <input
+              value={knowledgeRebuildStartChapter}
+              onChange={(event) => setKnowledgeRebuildStartChapter(event.target.value)}
+              disabled={knowledgeRebuildActive || knowledgeRebuilding || Boolean(knowledgeActionLoading)}
+              inputMode="numeric"
+              className="w-20 rounded-xl border border-white/10 bg-black/25 px-2 py-1.5 text-zinc-100 outline-none transition focus:border-violet-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            <span>章到第</span>
+            <input
+              value={knowledgeRebuildEndChapter}
+              onChange={(event) => setKnowledgeRebuildEndChapter(event.target.value)}
+              disabled={knowledgeRebuildActive || knowledgeRebuilding || Boolean(knowledgeActionLoading)}
+              inputMode="numeric"
+              className="w-20 rounded-xl border border-white/10 bg-black/25 px-2 py-1.5 text-zinc-100 outline-none transition focus:border-violet-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            <span>章</span>
+          </div>
+        ) : null}
+        <p className="mt-2 text-[10px] leading-4 text-zinc-500">
+          本次将处理：{selectedKnowledgeRebuildChapterRangeLabel}。范围外知识会保留。
+        </p>
+      </div>
       {knowledgeRebuildStatus ? (
         <div className={cn(
           'mt-3 rounded-2xl px-3 py-3 text-xs',
@@ -3730,6 +4220,9 @@ export function SelectionNovelStudio() {
               ? '本次重建未完成，可重新发起知识重建。'
               : `预估剩余：${knowledgeRebuildPaused ? '已暂停' : knowledgeRebuildEtaMinutes ? `约 ${knowledgeRebuildEtaMinutes} 分钟` : '计算中'}`}
           </p>
+          {knowledgeRebuildStatus.chapterRange ? (
+            <p className="mt-1 text-[11px] leading-5 text-violet-100/75">任务范围：{formatKnowledgeRebuildChapterRangeLabel(knowledgeRebuildStatus.chapterRange)}</p>
+          ) : null}
           <div className="mt-3 rounded-xl border border-violet-300/15 bg-violet-500/[0.08] px-3 py-3" data-testid="workspace-hanlp-bootstrap-card">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
@@ -3923,6 +4416,99 @@ export function SelectionNovelStudio() {
               <button
                 onClick={() => setConfirmDeleteHanlpCache(false)}
                 disabled={knowledgeActionLoading === 'delete-hanlp-cache'}
+                className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <div className="mt-3 rounded-2xl border border-emerald-400/15 bg-emerald-500/[0.06] px-3 py-3 text-xs text-zinc-300">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.18em] text-emerald-200/70">LLM extraction cache</p>
+            <p className="mt-1 leading-5 text-zinc-300">用于章节抽取阶段的中间缓存。</p>
+            <p className="mt-1 leading-5 text-zinc-400">{extractionCacheDeleteState.helperText}</p>
+          </div>
+          <button
+            onClick={() => setConfirmDeleteExtractionCache((current) => !current)}
+            disabled={extractionCacheDeleteState.disabled}
+            data-testid="workspace-delete-extraction-cache"
+            aria-label="删除 LLM 抽取缓存"
+            className="rounded-full border border-emerald-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-emerald-100 transition hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            删除 LLM 抽取缓存
+          </button>
+        </div>
+        <div className="mt-2 text-[10px] leading-4 text-zinc-400">
+          删除后，下次知识重建会重新请求当前小说主分支的抽取结果。
+        </div>
+        {confirmDeleteExtractionCache ? (
+          <div className="mt-3 rounded-xl border border-emerald-400/15 bg-black/20 p-3">
+            <p className="text-[11px] leading-5 text-emerald-100">请再次确认：这会删除当前小说主分支的 LLM 抽取缓存，下次重建时会重新发起章节抽取。</p>
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={() => {
+                  void handleDeleteExtractionCache()
+                }}
+                disabled={extractionCacheDeleteState.disabled}
+                className="flex-1 rounded-xl border border-emerald-400/20 bg-emerald-500/15 px-3 py-2 text-[11px] text-emerald-100 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {knowledgeActionLoading === 'delete-extraction-cache' ? '删除中…' : '确认删除 LLM 抽取缓存'}
+              </button>
+              <button
+                onClick={() => setConfirmDeleteExtractionCache(false)}
+                disabled={knowledgeActionLoading === 'delete-extraction-cache'}
+                className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <div className="mt-3 rounded-2xl border border-amber-400/15 bg-amber-500/[0.06] px-3 py-3 text-xs text-zinc-300">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.18em] text-amber-200/70">Raw embedding cache</p>
+            <p className="mt-1 leading-5 text-zinc-300">当前状态：{rawTextEmbeddingPercent !== null ? `${rawTextEmbeddingPercent}%` : '等待进度'}</p>
+            <p className="mt-1 leading-5 text-zinc-400">{embeddingCacheDeleteState.helperText}</p>
+          </div>
+          <button
+            onClick={() => setConfirmDeleteEmbeddingCache((current) => !current)}
+            disabled={embeddingCacheDeleteState.disabled}
+            data-testid="workspace-delete-embedding-cache"
+            aria-label="删除原文 Embedding 缓存"
+            className="rounded-full border border-amber-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-amber-100 transition hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            删除原文 Embedding 缓存
+          </button>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] leading-4 text-zinc-400">
+          <span>预热进度：{rawTextEmbeddingPercent !== null ? `${rawTextEmbeddingPercent}%` : '等待进度'}</span>
+          <span>命中率：{rawTextEmbeddingCacheHitRatePercent !== null ? `${rawTextEmbeddingCacheHitRatePercent}%` : '暂未返回'}</span>
+          <span>阶段耗时：{rawTextEmbeddingTimingLabel ?? '等待进度'}</span>
+        </div>
+        {rawTextEmbeddingSettingsLine ? (
+          <p className="mt-1 truncate text-[10px] leading-4 text-zinc-500">{rawTextEmbeddingSettingsLine}</p>
+        ) : null}
+        {confirmDeleteEmbeddingCache ? (
+          <div className="mt-3 rounded-xl border border-amber-400/15 bg-black/20 p-3">
+            <p className="text-[11px] leading-5 text-amber-100">请再次确认：这会删除当前小说主分支的原文 Embedding 缓存，下次重建时会重新预热向量结果。</p>
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={() => {
+                  void handleDeleteEmbeddingCache()
+                }}
+                disabled={embeddingCacheDeleteState.disabled}
+                className="flex-1 rounded-xl border border-amber-400/20 bg-amber-500/15 px-3 py-2 text-[11px] text-amber-100 transition hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {knowledgeActionLoading === 'delete-embedding-cache' ? '删除中…' : '确认删除原文 Embedding 缓存'}
+              </button>
+              <button
+                onClick={() => setConfirmDeleteEmbeddingCache(false)}
+                disabled={knowledgeActionLoading === 'delete-embedding-cache'}
                 className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 取消
@@ -4182,27 +4768,14 @@ export function SelectionNovelStudio() {
 
             <div className="mb-3 grid grid-cols-2 gap-2 text-[11px] text-zinc-500">
               <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">人物 {currentNovelCharacters.length}</div>
-              <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">关系 {currentNovelCharacterRelations.length}</div>
-              <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">设定 {currentNovelWorldEntries.length}</div>
+              <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">组织 {currentNovelWorldEntryGroups.organizations.length}</div>
+              <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">地点 {currentNovelWorldEntryGroups.locations.length}</div>
+              <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">世界设定 {currentNovelWorldEntryGroups.worldbuilding.length}</div>
               <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">时间线 {currentNovelTimelineEvents.length}</div>
             </div>
 
             <div className="grid grid-cols-3 gap-1 rounded-2xl bg-black/30 p-1 mb-4">
-              {([
-                'characters',
-                'relations',
-                'outline',
-                'world',
-                'timeline',
-              ] as const).map((tab) => {
-                const tabMeta = {
-                  characters: { label: '人物', icon: Users },
-                  relations: { label: '关系', icon: GitBranch },
-                  outline: { label: '大纲', icon: ScrollText },
-                  world: { label: '设定', icon: Globe },
-                  timeline: { label: '时间线', icon: ScrollText },
-                }[tab]
-                const TabIcon = tabMeta.icon
+              {workspaceKnowledgeTabs.map(({ tab, label, icon: TabIcon }) => {
                 return (
                   <button
                     key={tab}
@@ -4213,7 +4786,7 @@ export function SelectionNovelStudio() {
                     )}
                   >
                     <TabIcon className="h-3.5 w-3.5" />
-                    {tabMeta.label}
+                    {label}
                   </button>
                 )
               })}
@@ -4225,16 +4798,12 @@ export function SelectionNovelStudio() {
                   {currentNovelCharacters.length === 0 && (
                     <p className="text-xs text-zinc-500 text-center py-4">暂无人物投影，重建知识视图后会显示。</p>
                   )}
-                  {currentNovelCharacters.map((char) => {
-                    const isEditing = editState.type === 'char' && editState.id === char.id
-                    const ef = editState.form
-                    const setF = (key: string, val: string) => setEditState((s) => ({ ...s, form: { ...s.form, [key]: val } }))
-                    const profileSections = buildCharacterProfileSections(char.profile)
-                    const showProfile = hasCharacterProfile(char.profile)
-                    const classificationBadgeLabel = getCharacterClassificationBadgeLabel(char)
-                    const aliasBadges = (char.aliases ?? []).map((alias) => alias.trim()).filter(Boolean)
-                    return (
-                      <div key={char.id} className="rounded-2xl border border-white/8 bg-black/20 p-3">
+                  {currentNovelCharactersSorted.map((char) => {
+                     const isEditing = editState.type === 'char' && editState.id === char.id
+                     const ef = editState.form
+                     const setF = (key: string, val: string) => setEditState((s) => ({ ...s, form: { ...s.form, [key]: val } }))
+                     return (
+                       <div key={char.id} className="rounded-2xl border border-white/8 bg-black/20 p-3">
                         {isEditing ? (
                           <>
                             <input value={ef.name ?? ''} onChange={(e) => setF('name', e.target.value)} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder="姓名" />
@@ -4251,63 +4820,12 @@ export function SelectionNovelStudio() {
                             </div>
                           </>
                         ) : (
-                          <>
-                            <div className="flex items-center justify-between gap-2 mb-2">
-                              <div>
-                                <p className="text-sm font-medium text-zinc-100">{char.name}</p>
-                                <p className="text-xs text-violet-300">{showProfile ? (char.profile?.identity?.summary || char.role) : char.role}</p>
-                              </div>
-                              {!knowledgePanelReadOnly ? (
-                                <div className="flex gap-1">
-                                  <button onClick={() => setEditState({ type: 'char', id: char.id, form: { name: char.name, role: char.role, goal: char.goal, trait: char.trait, note: char.note } })} className="rounded-lg border border-white/10 p-1.5 text-zinc-400 hover:text-zinc-200"><Pencil className="h-3 w-3" /></button>
-                                  <button onClick={() => { useNovelStore.getState().deleteCharacter(char.id) }} className="rounded-lg border border-white/10 p-1.5 text-rose-400 hover:text-rose-300"><Trash2 className="h-3 w-3" /></button>
-                                </div>
-                              ) : null}
-                            </div>
-                            {(classificationBadgeLabel || aliasBadges.length > 0 || char.profile?.gender?.summary || char.profile?.capability?.summary || char.profile?.speakingStyle?.summary) ? (
-                              <div className="mb-2 flex flex-wrap gap-2">
-                                {classificationBadgeLabel ? (
-                                  <span
-                                    data-testid={`workspace-character-tier-${char.classificationKey ?? char.importanceTier ?? 'unknown'}`}
-                                    className="rounded-full border border-emerald-300/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-100"
-                                  >
-                                    {classificationBadgeLabel}
-                                  </span>
-                                ) : null}
-                                {aliasBadges.map((alias) => (
-                                  <span key={`${char.id}-${alias}`} className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">
-                                    别名 · {alias}
-                                  </span>
-                                ))}
-                                {char.profile?.gender?.summary ? <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{char.profile.gender.summary}</span> : null}
-                                {char.profile?.capability?.summary ? <span className="rounded-full border border-violet-300/20 bg-violet-500/10 px-2 py-0.5 text-[10px] text-violet-200">{char.profile.capability.summary}</span> : null}
-                                {char.profile?.speakingStyle?.summary ? <span className="rounded-full border border-sky-300/20 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-200">{char.profile.speakingStyle.summary}</span> : null}
-                              </div>
-                            ) : null}
-                            {showProfile ? (
-                              <div className="space-y-2">
-                                <div className="space-y-2 text-xs leading-5 text-zinc-300">
-                                  {profileSections.map((section) => (
-                                    <div key={section.key} className="rounded-xl border border-white/8 bg-white/[0.03] px-2.5 py-2">
-                                      <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">{section.label}</p>
-                                      <p className="mt-1 text-zinc-200">{section.summary}</p>
-                                      {section.note ? <p className="mt-1 text-zinc-400">注：{section.note}</p> : null}
-                                      {section.evidence ? <p className="mt-1 line-clamp-2 text-zinc-500">证：{section.evidence}</p> : null}
-                                    </div>
-                                  ))}
-                                </div>
-                                {char.note && char.note !== char.profile?.identity?.summary ? (
-                                  <p className="text-xs leading-5 text-zinc-500">补充：{char.note}</p>
-                                ) : null}
-                              </div>
-                            ) : (
-                              <div className="space-y-1 text-xs leading-5 text-zinc-400">
-                                <p><span className="text-zinc-500">目标</span> {char.goal}</p>
-                                <p><span className="text-zinc-500">性格</span> {char.trait}</p>
-                                {char.note && <p className="line-clamp-2"><span className="text-zinc-500">备注</span> {char.note}</p>}
-                              </div>
-                            )}
-                          </>
+                          <WorkspaceCharacterReferenceCard
+                            char={char}
+                            knowledgePanelReadOnly={knowledgePanelReadOnly}
+                            onEdit={() => setEditState({ type: 'char', id: char.id, form: { name: char.name, role: char.role, goal: char.goal, trait: char.trait, note: char.note } })}
+                            onDelete={() => { useNovelStore.getState().deleteCharacter(char.id) }}
+                          />
                         )}
                       </div>
                     )
@@ -4333,112 +4851,6 @@ export function SelectionNovelStudio() {
                       </div>
                     </div>
                   )}
-                </>
-              )}
-
-              {refTab === 'relations' && (
-                <>
-                  {currentNovelCharacterRelations.length === 0 && (
-                    <p className="text-xs text-zinc-500 text-center py-4">暂无人物关系投影，重建知识视图后会显示。</p>
-                  )}
-                  {currentNovelCharacterRelations.map((relation) => {
-                    const fromCharacter = currentNovelCharacters.find((item) => item.id === relation.fromCharacterId)
-                    const toCharacter = currentNovelCharacters.find((item) => item.id === relation.toCharacterId)
-                    const isEditing = editState.type === 'relation' && editState.id === relation.id
-                    const ef = editState.form
-                    const setF = (key: string, val: string) => setEditState((s) => ({ ...s, form: { ...s.form, [key]: val } }))
-                    return (
-                      <div key={relation.id} className="rounded-2xl border border-white/8 bg-black/20 p-3">
-                        {isEditing ? (
-                          <>
-                            <div className="grid grid-cols-2 gap-2 mb-2">
-                              <select value={ef.fromCharacterId ?? relation.fromCharacterId} onChange={(e) => setF('fromCharacterId', e.target.value)} className="w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none">
-                                {currentNovelCharacters.map((char) => <option key={char.id} value={char.id}>{char.name}</option>)}
-                              </select>
-                              <select value={ef.toCharacterId ?? relation.toCharacterId} onChange={(e) => setF('toCharacterId', e.target.value)} className="w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none">
-                                {currentNovelCharacters.map((char) => <option key={char.id} value={char.id}>{char.name}</option>)}
-                              </select>
-                            </div>
-                            <input value={ef.label ?? relation.label} onChange={(e) => setF('label', e.target.value)} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder="关系标签" />
-                            <div className="grid grid-cols-2 gap-2 mb-2">
-                              <select value={ef.strength ?? relation.strength} onChange={(e) => setF('strength', e.target.value)} className="w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none">
-                                <option value="weak">弱</option>
-                                <option value="medium">中</option>
-                                <option value="strong">强</option>
-                              </select>
-                              <select value={ef.status ?? relation.status} onChange={(e) => setF('status', e.target.value)} className="w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none">
-                                <option value="active">进行中</option>
-                                <option value="strained">紧张</option>
-                                <option value="hidden">隐藏</option>
-                                <option value="resolved">已解决</option>
-                              </select>
-                            </div>
-                            <textarea value={ef.note ?? relation.note} onChange={(e) => setF('note', e.target.value)} className="w-full min-h-[60px] rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder="关系备注" />
-                            <div className="flex gap-2 mt-2">
-                              <button onClick={() => {
-                                useNovelStore.getState().updateCharacterRelation(relation.id, {
-                                  fromCharacterId: ef.fromCharacterId ?? relation.fromCharacterId,
-                                  toCharacterId: ef.toCharacterId ?? relation.toCharacterId,
-                                  label: ef.label ?? relation.label,
-                                  strength: (ef.strength ?? relation.strength) as 'weak' | 'medium' | 'strong',
-                                  status: (ef.status ?? relation.status) as 'active' | 'strained' | 'hidden' | 'resolved',
-                                  note: ef.note ?? relation.note,
-                                })
-                                setEditState({ type: null, id: null, form: {} })
-                              }} className="flex-1 rounded-xl bg-emerald-500/20 text-emerald-200 px-3 py-1.5 text-xs">保存</button>
-                              <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-white/10 text-zinc-400 px-3 py-1.5 text-xs">取消</button>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-medium text-zinc-100">{fromCharacter?.name ?? '未知'} → {toCharacter?.name ?? '未知'}</p>
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                  <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{relation.label}</span>
-                                  <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">强度 {RELATION_STRENGTH_LABELS[relation.strength]}</span>
-                                  <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{RELATION_STATUS_LABELS[relation.status]}</span>
-                                </div>
-                              </div>
-                              {!knowledgePanelReadOnly ? (
-                                <div className="flex gap-1">
-                                  <button onClick={() => setEditState({ type: 'relation', id: relation.id, form: { fromCharacterId: relation.fromCharacterId, toCharacterId: relation.toCharacterId, label: relation.label, strength: relation.strength, status: relation.status, note: relation.note } })} className="rounded-lg border border-white/10 p-1.5 text-zinc-400 hover:text-zinc-200"><Pencil className="h-3 w-3" /></button>
-                                  <button onClick={() => useNovelStore.getState().deleteCharacterRelation(relation.id)} className="rounded-lg border border-white/10 p-1.5 text-rose-400 hover:text-rose-300"><Trash2 className="h-3 w-3" /></button>
-                                </div>
-                              ) : null}
-                            </div>
-                            {relation.note ? <p className="mt-3 text-xs leading-6 text-zinc-400">{relation.note}</p> : null}
-                            {relation.chapterIds.length > 0 && (
-                              <div className="mt-2 flex flex-wrap gap-1">
-                                {relation.chapterIds.map((chId) => (
-                                  <span key={chId} className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-zinc-500">{localChapters.find((ch) => ch.id === chId)?.title ?? chId}</span>
-                                ))}
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    )
-                  })}
-                  {!knowledgePanelReadOnly && currentNovelCharacters.length >= 2 ? (
-                    <button
-                      onClick={() => {
-                        const [first, second] = currentNovelCharacters
-                        useNovelStore.getState().addCharacterRelation(currentNovelId, {
-                          fromCharacterId: first.id,
-                          toCharacterId: second.id,
-                          label: '新关系',
-                          strength: 'medium',
-                          status: 'active',
-                          note: '',
-                          chapterIds: currentChapter ? [currentChapter.id] : [],
-                        })
-                      }}
-                      className="w-full rounded-2xl border border-dashed border-white/10 px-3 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04]"
-                    >
-                      <Plus className="h-3.5 w-3.5 inline mr-1" /> 添加关系
-                    </button>
-                  ) : null}
                 </>
               )}
 
@@ -4529,87 +4941,11 @@ export function SelectionNovelStudio() {
                 </>
               )}
 
-              {refTab === 'world' && (
-                <>
-                  {currentNovelWorldEntries.length === 0 && (
-                    <p className="text-xs text-zinc-500 text-center py-4">暂无设定投影，重建知识视图后会显示。</p>
-                  )}
-                  {currentNovelWorldEntries.map((entry) => {
-                    const isEditing = editState.type === 'world' && editState.id === entry.id
-                    const ef = editState.form
-                    const setF = (key: string, val: string) => setEditState((s) => ({ ...s, form: { ...s.form, [key]: val } }))
-                    return (
-                      <div key={entry.id} className="rounded-2xl border border-white/8 bg-black/20 p-3">
-                        {isEditing ? (
-                          <>
-                            <input value={ef.title ?? ''} onChange={(e) => setF('title', e.target.value)} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder="标题" />
-                            <select value={ef.type ?? 'location'} onChange={(e) => setF('type', e.target.value)} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none">
-                              <option value="location">地点</option>
-                              <option value="scene">场景</option>
-                              <option value="organization">组织</option>
-                              <option value="rule">规则</option>
-                              <option value="item">物件</option>
-                              <option value="history">历史</option>
-                            </select>
-                            <textarea value={ef.content ?? ''} onChange={(e) => setF('content', e.target.value)} className="w-full min-h-[60px] rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder="描述" />
-                            <div className="flex gap-2 mt-2">
-                              <button onClick={() => {
-                                useNovelStore.getState().updateWorldEntry(entry.id, { title: ef.title ?? '', type: (ef.type ?? 'location') as WorldEntryType, content: ef.content ?? '' })
-                                setEditState({ type: null, id: null, form: {} })
-                              }} className="flex-1 rounded-xl bg-emerald-500/20 text-emerald-200 px-3 py-1.5 text-xs">保存</button>
-                              <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-white/10 text-zinc-400 px-3 py-1.5 text-xs">取消</button>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="flex items-center justify-between gap-2 mb-2">
-                              <div className="flex items-center gap-2">
-                                <p className="text-sm font-medium text-zinc-100">{entry.title}</p>
-                                <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-500">
-                                  {WORLD_TYPE_LABELS[entry.type]}
-                                </span>
-                              </div>
-                              {!knowledgePanelReadOnly ? (
-                                <div className="flex gap-1">
-                                  <button onClick={() => setEditState({ type: 'world', id: entry.id, form: { title: entry.title, type: entry.type, content: entry.content } })} className="rounded-lg border border-white/10 p-1.5 text-zinc-400 hover:text-zinc-200"><Pencil className="h-3 w-3" /></button>
-                                  <button onClick={() => { useNovelStore.getState().deleteWorldEntry(entry.id) }} className="rounded-lg border border-white/10 p-1.5 text-rose-400 hover:text-rose-300"><Trash2 className="h-3 w-3" /></button>
-                                </div>
-                              ) : null}
-                            </div>
-                            <p className="text-xs leading-6 text-zinc-400 line-clamp-3">{entry.content}</p>
-                          </>
-                        )}
-                      </div>
-                    )
-                  })}
-                  {!knowledgePanelReadOnly ? (
-                    <button onClick={() => setEditState({ type: 'world', id: '__new__', form: { title: '', type: 'location', content: '' } })} className="w-full rounded-2xl border border-dashed border-white/10 px-3 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04]">
-                      <Plus className="h-3.5 w-3.5 inline mr-1" /> 添加设定条目
-                    </button>
-                  ) : null}
-                  {!knowledgePanelReadOnly && editState.type === 'world' && editState.id === '__new__' && (
-                    <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
-                      <input value={editState.form.title ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, title: e.target.value } }))} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder="标题" />
-                      <select value={editState.form.type ?? 'location'} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, type: e.target.value } }))} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none">
-                        <option value="location">地点</option>
-                        <option value="scene">场景</option>
-                        <option value="organization">组织</option>
-                        <option value="rule">规则</option>
-                        <option value="item">物件</option>
-                        <option value="history">历史</option>
-                      </select>
-                      <textarea value={editState.form.content ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, content: e.target.value } }))} className="w-full min-h-[60px] rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder="描述" />
-                      <div className="flex gap-2 mt-2">
-                        <button onClick={() => {
-                          useNovelStore.getState().addWorldEntry(currentNovelId, { title: editState.form.title ?? '', type: (editState.form.type ?? 'location') as WorldEntryType, content: editState.form.content ?? '' })
-                          setEditState({ type: null, id: null, form: {} })
-                        }} className="flex-1 rounded-xl bg-emerald-500/20 text-emerald-200 px-3 py-1.5 text-xs">创建</button>
-                        <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-white/10 text-zinc-400 px-3 py-1.5 text-xs">取消</button>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
+              {renderWorldEntriesPanel('organizations', currentNovelWorldEntryGroups.organizations, '暂无组织投影，重建知识视图后会显示。', '添加组织条目', 'organization')}
+
+              {renderWorldEntriesPanel('locations', currentNovelWorldEntryGroups.locations, '暂无地点投影，重建知识视图后会显示。', '添加地点条目', 'location')}
+
+              {renderWorldEntriesPanel('worldbuilding', currentNovelWorldEntryGroups.worldbuilding, '暂无世界设定投影，重建知识视图后会显示。', '添加世界设定条目', 'scene')}
 
               {refTab === 'timeline' && (
                 <>
