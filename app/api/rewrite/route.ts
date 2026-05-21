@@ -15,7 +15,7 @@ import {
 import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
 import { generateRewriteWithOllama, streamRewriteWithOllama } from '@/lib/server/ollama-local'
 import type { PresetCompatPromptRuleRuntimeContext, PresetCompatRuntimeContextBlock } from '@/lib/preset-compat/types'
-import type { GenerationContextBlock } from '@/lib/server/context-builder'
+import type { GenerationContextBlock, RoleplayContextMessage } from '@/lib/server/context-builder'
 import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
 
 const INVALID_OPERATION_TYPE_ERROR = `Invalid operationType. Expected one of: ${PRODUCT_SURFACE_IDS.join(', ')}`
@@ -155,6 +155,18 @@ function buildUserPrompt(params: {
   selectedText: string
   assembledContext: string
 }) {
+  const roleplayContract = params.operationType === 'roleplay'
+    ? [
+        '',
+        '# 角色扮演回复契约',
+        '- 你正在继续一段角色扮演对话。',
+        '- 只回复当前这一轮的聊天内容。',
+        '- 保持与上方角色扮演历史连续。',
+        '- 不要把回复写成小说正文、章节改写、剧情大纲或说明。',
+        '- 不要自动应用、改写或续写 chapter 正文。',
+      ].join('\n')
+    : ''
+
   return [
     '# 任务',
     `操作类型：${params.operationType}`,
@@ -170,7 +182,27 @@ function buildUserPrompt(params: {
     params.selectedText,
     '',
     params.assembledContext,
+    roleplayContract,
   ].join('\n')
+}
+
+function normalizeRoleplayMessages(value: unknown) {
+  if (!Array.isArray(value)) return [] as RoleplayContextMessage[]
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return []
+    }
+
+    const record = item as Record<string, unknown>
+    const role = record.role
+    const content = typeof record.content === 'string' ? record.content.trim() : ''
+    if ((role !== 'user' && role !== 'assistant') || !content) {
+      return []
+    }
+
+    return [{ role, content } satisfies RoleplayContextMessage]
+  })
 }
 
 function getExplicitStreamOverride(body: Record<string, unknown>) {
@@ -237,6 +269,9 @@ export async function POST(request: Request) {
   const disabledBlockIds = Array.isArray(body.disabledBlockIds) ? body.disabledBlockIds.map((item: unknown) => String(item)) : []
   const excludedGraphEdgeIds = normalizeStringArray(body.excludedGraphEdgeIds)
   const excludedEvidenceIds = normalizeStringArray(body.excludedEvidenceIds)
+  const roleplayMessages = operationType === 'roleplay'
+    ? normalizeRoleplayMessages(body.roleplayMessages)
+    : []
   const context = body.novelId && body.chapterId
     ? await buildGenerationContext({
         novelId: String(body.novelId),
@@ -245,6 +280,7 @@ export async function POST(request: Request) {
         selectedText,
         operationType: runtimeSurfaceId,
         userInstruction,
+        roleplayMessages,
         excludedGraphEdgeIds,
         excludedEvidenceIds,
         whatIfSessionId: body.whatIfSessionId ? String(body.whatIfSessionId) : undefined,

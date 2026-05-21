@@ -32,6 +32,7 @@ export async function POST(request: Request) {
       selectedText: String(body.selectedText ?? ''),
       operationType,
       userInstruction: String(body.userInstruction ?? ''),
+      roleplayMessages: Array.isArray(body.roleplayMessages) ? body.roleplayMessages : undefined,
       whatIfSessionId: body.whatIfSessionId ? String(body.whatIfSessionId) : undefined,
       futureJumpRunId: body.futureJumpRunId ? String(body.futureJumpRunId) : undefined,
       branchContextNodeId: body.branchContextNodeId ? String(body.branchContextNodeId) : undefined,

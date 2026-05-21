@@ -52,6 +52,7 @@ export async function POST(request: Request) {
       selectedText: String(body.selectedText ?? ''),
       operationType: effectiveOperationType,
       userInstruction: String(body.userInstruction ?? ''),
+      roleplayMessages: Array.isArray(body.roleplayMessages) ? body.roleplayMessages : undefined,
       excludedGraphEdgeIds: normalizeStringArray(body.excludedGraphEdgeIds),
       excludedEvidenceIds: normalizeStringArray(body.excludedEvidenceIds),
       whatIfSessionId: body.whatIfSessionId ? String(body.whatIfSessionId) : undefined,
