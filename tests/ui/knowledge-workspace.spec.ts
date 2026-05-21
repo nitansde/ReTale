@@ -99,7 +99,17 @@ test('knowledge workspace shows HanLP progress, cache state, and character tiers
               etaMinutes: null,
               detail: null,
             },
+            {
+              key: 'raw-embedding',
+              label: '原文 Embedding 预计算',
+              status: 'pending',
+              progress: 0.35,
+              etaMinutes: null,
+              detail: '原文向量缓存 35%',
+            },
           ],
+          rawTextEmbeddingProgress: 0.35,
+          rawTextEmbeddingCacheHitRate: 0.2,
           hanlpCacheStatus: 'running',
           hanlpCacheHitRate: 0.75,
           hanlpBootstrapProgress: 0.5,
@@ -116,6 +126,12 @@ test('knowledge workspace shows HanLP progress, cache state, and character tiers
           },
           stageTimingsMs: {
             'hanlp-bootstrap': 48000,
+            raw_text_precompute: 12000,
+          },
+          embeddingSettingsSnapshot: {
+            provider: 'ollama',
+            model: 'qwen3-embedding:4b',
+            embeddingBatchSize: 32,
           },
         },
       }),
@@ -141,9 +157,16 @@ test('knowledge workspace shows HanLP progress, cache state, and character tiers
   await expect(page.getByTestId('workspace-hanlp-bootstrap-card')).toContainText('当前阶段：扫描第 2 / 4 章')
   await expect(page.getByTestId('workspace-hanlp-bootstrap-card')).toContainText('预估剩余：计算中')
   await expect(page.getByTestId('workspace-hanlp-bootstrap-card')).toContainText('阶段耗时：48 秒')
+  await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('原文 Embedding 预计算')
+  await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('与抽取并行')
+  await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('缓存预热进度')
+  await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('35%')
+  await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('缓存命中率：20%')
+  await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('阶段耗时：12 秒')
+  await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('Ollama · qwen3-embedding:4b · batch 32')
   await expect(page.getByTestId('workspace-hanlp-cache-card')).toContainText('HanLP cache')
   await expect(page.getByRole('button', { name: '删除 HanLP 缓存' })).toBeDisabled()
-  await expect(page.getByTestId('workspace-hanlp-cache-card')).toContainText('当前 HanLP Bootstrap 仍在进行中或已暂停，需先终止或完成当前重建后才能删除缓存。')
+  await expect(page.getByTestId('workspace-hanlp-cache-card')).toContainText('当前知识重建任务仍在进行中或已暂停，需先终止或完成当前重建后才能删除缓存。')
 
   await page.screenshot({
     path: path.join(evidenceDirectory, 'task-10-hanlp-progress-ui.png'),

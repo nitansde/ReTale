@@ -85,7 +85,7 @@ type KnowledgeRebuildStatus = {
   updatedAt: string
   etaMinutes: number | null
   steps: Array<{
-    key: 'hanlp-bootstrap' | 'extract' | 'batch-sync' | 'cleanup' | 'write' | 'index'
+    key: 'hanlp-bootstrap' | 'extract' | 'batch-sync' | 'cleanup' | 'write' | 'raw-embedding' | 'index'
     label: string
     status: 'pending' | 'running' | 'paused' | 'completed'
     progress: number

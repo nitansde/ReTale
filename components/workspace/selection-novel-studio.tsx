@@ -180,7 +180,7 @@ type KnowledgeRebuildStatus = {
   updatedAt: string
   etaMinutes: number | null
   steps: Array<{
-    key: 'hanlp-bootstrap' | 'extract' | 'batch-sync' | 'cleanup' | 'write' | 'index'
+    key: 'hanlp-bootstrap' | 'extract' | 'batch-sync' | 'cleanup' | 'write' | 'raw-embedding' | 'index'
     label: string
     status: 'pending' | 'running' | 'paused' | 'completed'
     progress: number
@@ -388,6 +388,8 @@ const CHARACTER_CLASSIFICATION_DISPLAY_LABELS: Record<NonNullable<Character['cla
 const RAW_TEXT_PRECOMPUTE_STAGE_KEY = 'raw_text_precompute'
 const HANLP_BOOTSTRAP_STAGE_KEY = 'hanlp-bootstrap'
 
+type KnowledgeStepDisplayStatus = KnowledgeRebuildStatus['steps'][number]['status']
+
 type KnowledgeRebuildRangeMode = 'all' | 'first' | 'custom'
 
 function toProgressPercent(value: number | null | undefined) {
@@ -527,6 +529,18 @@ function formatKnowledgeEtaLabel(params: {
     return `约 ${params.etaMinutes} 分钟`
   }
   return params.hasTelemetry ? '计算中' : '等待进度'
+}
+
+function resolveKnowledgeStepDisplayStatus(params: {
+  step: KnowledgeRebuildStatus['steps'][number]
+  isCurrentRunningStep: boolean
+}) {
+  const stepProgress = toProgressPercent(params.step.progress)
+  const isSaturated = stepProgress >= 100
+
+  if (params.step.status === 'completed') return 'completed' satisfies KnowledgeStepDisplayStatus
+  if (!params.isCurrentRunningStep && isSaturated) return 'completed' satisfies KnowledgeStepDisplayStatus
+  return params.step.status
 }
 
 export function resolveKnowledgeRebuildFailureMessage(status: Pick<KnowledgeRebuildStatus, 'status' | 'errorMessage'> | null) {
@@ -1878,6 +1892,10 @@ export function SelectionNovelStudio() {
     () => knowledgeRebuildSteps.find((step) => step.key === HANLP_BOOTSTRAP_STAGE_KEY) ?? null,
     [knowledgeRebuildSteps]
   )
+  const rawEmbeddingStep = useMemo(
+    () => knowledgeRebuildSteps.find((step) => step.key === 'raw-embedding') ?? null,
+    [knowledgeRebuildSteps]
+  )
   const hanlpBootstrapCompletedChapterCount = knowledgeRebuildStatus?.hanlpBootstrapCompletedChapterCount ?? null
   const hanlpBootstrapTotalChapterCount = knowledgeRebuildStatus?.hanlpBootstrapTotalChapterCount ?? null
   const hanlpBootstrapProgress = knowledgeRebuildStatus?.hanlpBootstrapProgress ?? hanlpBootstrapStep?.progress ?? null
@@ -1963,6 +1981,15 @@ export function SelectionNovelStudio() {
     () => rawTextEmbeddingProgress === undefined ? null : toProgressPercent(rawTextEmbeddingProgress),
     [rawTextEmbeddingProgress]
   )
+  const rawEmbeddingCurrentStep = useMemo(() => {
+    const currentStep = knowledgeRebuildStatus?.currentStep?.trim().toLowerCase() ?? ''
+    return currentStep.includes('raw') && currentStep.includes('embedding')
+  }, [knowledgeRebuildStatus])
+  const rawEmbeddingWaitingFinalization = Boolean(rawEmbeddingStep && rawEmbeddingStep.status === 'running')
+  const rawEmbeddingRunningInParallel = knowledgeRebuildActive
+    && !rawEmbeddingWaitingFinalization
+    && ((rawTextEmbeddingPercent !== null && rawTextEmbeddingPercent < 100) || rawEmbeddingCurrentStep)
+  const rawEmbeddingCompleted = rawTextEmbeddingPercent !== null && rawTextEmbeddingPercent >= 100
   const rawTextEmbeddingCacheHitRatePercent = useMemo(
     () => knowledgeRebuildStatus?.rawTextEmbeddingCacheHitRate === undefined
       ? null
@@ -1978,6 +2005,14 @@ export function SelectionNovelStudio() {
     if (!snapshot) return null
     return `${formatEmbeddingProviderLabel(snapshot.provider)} · ${snapshot.model} · batch ${snapshot.embeddingBatchSize}`
   }, [knowledgeRebuildStatus])
+  const rawTextEmbeddingPhaseBadge = useMemo(() => {
+    if (knowledgeRebuildFailed) return '已失败'
+    if (knowledgeRebuildPaused) return '已暂停'
+    if (rawEmbeddingWaitingFinalization) return '等待收尾'
+    if (rawEmbeddingRunningInParallel) return '与抽取并行'
+    if (rawEmbeddingCompleted) return '已完成'
+    return '未开始'
+  }, [knowledgeRebuildFailed, knowledgeRebuildPaused, rawEmbeddingCompleted, rawEmbeddingRunningInParallel, rawEmbeddingWaitingFinalization])
   const rawTextEmbeddingStatusLine = useMemo(() => {
     if (knowledgeRebuildFailed) {
       return rawTextEmbeddingPercent !== null ? '原文预计算在任务失败前已回传部分进度。' : '原文预计算随本次知识重建一并失败。'
@@ -1987,19 +2022,32 @@ export function SelectionNovelStudio() {
       return rawTextEmbeddingPercent !== null ? '原文预计算已暂停，等待继续。' : '原文预计算已暂停，尚未收到进度遥测。'
     }
 
-    if (knowledgeRebuildActive) {
+    if (rawEmbeddingWaitingFinalization) {
+      return rawEmbeddingCompleted
+        ? '原文向量已预热完成，正在等待进入索引阶段。'
+        : '章节知识已经写入完成，当前正在等待原文向量预热收尾后再进入索引。'
+    }
+
+    if (rawEmbeddingRunningInParallel) {
       if (rawTextEmbeddingPercent !== null) {
         return '与章节抽取并行进行，优先预热原文向量缓存。'
       }
       return '会与章节抽取并行启动；当前还在等待进度遥测。'
     }
 
-    if (rawTextEmbeddingPercent !== null && rawTextEmbeddingPercent >= 100) {
+    if (rawEmbeddingCompleted) {
       return '原文向量预计算已完成。'
     }
 
     return '原文向量预计算尚未开始。'
-  }, [knowledgeRebuildActive, knowledgeRebuildFailed, knowledgeRebuildPaused, rawTextEmbeddingPercent])
+  }, [knowledgeRebuildFailed, knowledgeRebuildPaused, rawEmbeddingCompleted, rawEmbeddingRunningInParallel, rawEmbeddingWaitingFinalization, rawTextEmbeddingPercent])
+  const currentKnowledgeRunningStepKey = useMemo(() => {
+    const runningSteps = knowledgeRebuildSteps.filter((step) => step.status === 'running')
+    if (runningSteps.length === 0) return null
+
+    const unsaturatedStep = runningSteps.find((step) => toProgressPercent(step.progress) < 100)
+    return (unsaturatedStep ?? rawEmbeddingStep ?? runningSteps[0]).key
+  }, [knowledgeRebuildSteps, rawEmbeddingStep])
 
   const editor = useEditor({
     extensions: [StarterKit],
@@ -4292,17 +4340,15 @@ export function SelectionNovelStudio() {
               <p className="mt-1 truncate text-[10px] leading-4 text-zinc-500">{hanlpSettingsLine}</p>
             ) : null}
           </div>
-          <div className="mt-3 rounded-xl border border-violet-300/15 bg-violet-500/[0.08] px-3 py-3">
+          <div className="mt-3 rounded-xl border border-violet-300/15 bg-violet-500/[0.08] px-3 py-3" data-testid="workspace-raw-embedding-card">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
                 <p className="text-[11px] font-medium text-violet-100">原文 Embedding 预计算</p>
                 <p className="mt-1 text-[10px] leading-4 text-violet-100/75">{rawTextEmbeddingStatusLine}</p>
               </div>
-              {knowledgeRebuildActive ? (
-                <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">
-                  与抽取并行
-                </span>
-              ) : null}
+              <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">
+                {rawTextEmbeddingPhaseBadge}
+              </span>
             </div>
             {rawTextEmbeddingPercent !== null ? (
               <>
@@ -4332,30 +4378,34 @@ export function SelectionNovelStudio() {
             <div className="mt-3 space-y-2">
               {knowledgeRebuildSteps.map((step) => {
                 const stepProgress = toProgressPercent(step.progress)
-                const isActive = step.status === 'running' || step.status === 'paused'
+                const displayStatus = resolveKnowledgeStepDisplayStatus({
+                  step,
+                  isCurrentRunningStep: currentKnowledgeRunningStepKey === step.key,
+                })
+                const isActive = displayStatus === 'running' || displayStatus === 'paused'
 
                 return (
                   <div key={step.key} className="rounded-xl border border-white/8 bg-white/[0.03] px-2.5 py-2">
                     <div className="flex items-center justify-between gap-2 text-[11px]">
                       <span className="text-zinc-200">{step.label}</span>
-                      <span className="text-zinc-500">{KNOWLEDGE_STEP_STATUS_LABELS[step.status]}</span>
+                      <span className="text-zinc-500">{KNOWLEDGE_STEP_STATUS_LABELS[displayStatus]}</span>
                     </div>
                     <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
                       <div
                         className={cn(
                           'h-full rounded-full transition-all',
-                          step.status === 'completed'
+                          displayStatus === 'completed'
                             ? 'bg-emerald-400'
                             : isActive
                               ? 'bg-violet-400'
                               : 'bg-white/20'
                         )}
-                        style={{ width: `${step.status === 'pending' ? 0 : Math.max(step.status === 'running' || step.status === 'paused' ? 8 : 0, stepProgress)}%` }}
+                        style={{ width: `${displayStatus === 'pending' ? 0 : Math.max(isActive ? 8 : 0, stepProgress)}%` }}
                       />
                     </div>
                     <div className="mt-1 flex items-center justify-between gap-2 text-[10px] leading-4 text-zinc-500">
                       <span className="truncate">{step.detail ?? `${stepProgress}%`}</span>
-                      <span>{step.status === 'running' && step.etaMinutes ? `约 ${step.etaMinutes} 分钟` : step.status === 'paused' ? '已暂停' : `${stepProgress}%`}</span>
+                      <span>{displayStatus === 'running' && step.etaMinutes ? `约 ${step.etaMinutes} 分钟` : displayStatus === 'paused' ? '已暂停' : `${stepProgress}%`}</span>
                     </div>
                   </div>
                 )
