@@ -72,12 +72,13 @@ API 批量构建知识库
 3. API 立即返回 queued/running 状态，不阻塞整个网站。
 4. 后台 worker 按章节运行 HanLP bootstrap，并记录 cache hit/miss、ETA、阶段耗时。
 5. 系统用 HanLP 聚合信号初始化正式人物层级和候选上下文。
-6. 每章执行一次知识抽取，输出已知人物更新、未知人物观察、别名发现、关系、事件、设定和伏笔。
-7. 批次结果先统一做 alias-first deterministic sync，再写候选池和 promotion。
-8. 系统重建 SQLite projection 和 LanceDB retrieval index。
-9. 用户在知识面板看到人物分类、别名、HanLP cache 状态、重建进度和缓存删除控制。
-10. 用户选中第 N 章文字触发扩写时，Context Builder 合并图谱上下文、LanceDB 证据和当前章节上下文。
-11. 生成路径调用 API 模型流式生成最终正文。
+6. 系统按抽取并发配置形成章节 batch，先抽取当前 batch，再同步和写入当前 batch，然后才进入下一个 batch。
+7. 每章执行一次知识抽取，输出已知人物更新、未知人物观察、别名发现、关系、事件、设定和伏笔；命中候选缓存时不重复调用 LLM。
+8. 当前批次结果先统一做 alias-first deterministic sync，再按章节顺序写候选池、promotion 和正式图谱。
+9. 系统重建 SQLite projection 和 LanceDB retrieval index。
+10. 用户在知识面板看到人物分类、别名、HanLP cache 状态、重建进度和缓存删除控制。
+11. 用户选中第 N 章文字触发扩写时，Context Builder 合并图谱上下文、LanceDB 证据和当前章节上下文。
+12. 生成路径调用 API 模型流式生成最终正文。
 ```
 
 核心 UX 约束：
@@ -160,7 +161,33 @@ pipeline_version
 
 只要任一字段变化，就不能复用旧 cache。这样可以避免脚本升级、模型配置变化或章节文本变化导致的 stale NLP 信号。
 
-### 3.5 候选人物池
+### 3.5 LLM extraction 和 batch processing cache
+
+LLM 章节抽取结果写入 `chapter_extraction_candidates`。这是抽取缓存和后续 batch 处理缓存的唯一权威位置。
+
+每行 candidate 的核心字段：
+
+- `chapter_source_hash`: 由章节 source hash、抽取 provider/model/settings 和 candidate schema version 共同决定。
+- `extraction_json`: 单章 LLM 输出的原始结构化结果。
+- `processing_result_json`: 当前 batch 处理后的 resolved 结果缓存。
+- `status`: `extracting`、`extracted`、`resolving`、`persisted`、`failed` 或 `stale`。
+- `provider` / `model` / `error_message`: 抽取来源和失败信息。
+
+`extraction_json` cache 命中条件：同一 `branch_id`、`chapter_id`、`chapter_source_hash`，且状态是 `extracted` 或 `persisted`。命中时不再调用 LLM。重新抽取章节时必须把 `processing_result_json` 写成 `NULL`，避免旧 batch 处理结果覆盖新抽取。
+
+`processing_result_json` 的 schema version 是 `knowledge-extraction-processing:v1`，结构包括：
+
+```text
+schemaVersion
+batch.chapterIds
+batch.chapterNos
+batch.aliasDiscoveries
+resolved
+```
+
+读取 processing cache 时必须同时匹配 schema version、当前 batch 的章节 ID 顺序、章节号顺序，以及已应用的 batch alias discoveries。任一字段不同都不能复用。这样可以保证同一章节在不同 batch 划分、不同 alias 同步结果或不同处理 schema 下不会拿到 stale resolved payload。
+
+### 3.6 候选人物池
 
 未知人物不直接进入正式图谱。它们先进入：
 
@@ -179,16 +206,18 @@ promotion_summary_status -> 保证晋升摘要只生成一次
 
 ## 4. Rebuild Pipeline
 
-知识图谱重建由 `KnowledgeJob` 驱动。当前阶段顺序：
+知识图谱重建由 `KnowledgeJob` 驱动。当前主要阶段顺序：
 
 ```text
 hanlp-bootstrap
-extract
+extract current batch
 batch-sync
-cleanup
-write
+write current batch
+repeat extract/batch-sync/write until no pending chapters
 index
 ```
+
+历史上暴露过的 `cleanup` step 仍可作为进度/兼容状态存在；当前实现会在第一次抽取前完成范围内旧派生知识清理，然后进入 batch-by-batch 循环。
 
 ### 4.1 API start 和 background worker
 
@@ -269,28 +298,57 @@ open_threads
 - 泛称如“他、她、那人、男人、女人”不得进入 alias。
 - `appearance`、`body`、`clothing` 是高优先级字段；没有变化时用“没有变化”，但不能覆盖已有有效描述。
 
+抽取阶段按 batch 工作：
+
+1. 从 rebuild range 的 `pendingChapterIds` 中按章节号取最多 `knowledgeExtraction.parallelism` 个章节。
+2. 每个章节先计算 `chapter_source_hash` 并查找 `chapter_extraction_candidates`。
+3. 命中 `extracted` / `persisted` candidate 时直接复用 `extraction_json`。
+4. 未命中时构造抽取上下文并调用 LLM。上下文包含 `buildKnowledgeExtractionStoryState(asOfChapter = chapterNo - 1)` 和当前章 HanLP prompt context。
+5. 新抽取结果写入 `extraction_json`，并把 `processing_result_json` 清空。
+6. 当前 batch 抽取完成后写入 job payload 的 `extractedChapters` 和 `currentBatchChapters`，立即进入 `batch-sync`，不继续抽取后续 batch。
+
+这种顺序保证 batch N 写入 SQLite 后，batch N+1 的 prompt 能读到 batch N 已落库的章节摘要、人物、别名、关系、事件、设定和候选晋升结果。
+
 ### 4.5 Batch sync phase
 
-抽取可以并行，但写入必须 deterministic。批次同步顺序固定：
+抽取可以并行，但 batch 同步和写入必须 deterministic。当前 batch 同步顺序固定：
 
 ```text
-collect outputs
+collect current batch outputs
   -> sort by chapter_no ASC
   -> alias_discoveries by output order
-  -> write branch-global alias mappings
-  -> canonicalize all names
-  -> merge alias hits
-  -> write unknown observations to candidates
-  -> update candidate distinct chapter_count
-  -> promote candidates with chapter_count >= 10
-  -> one promotion summary per newly promoted candidate
+  -> normalize and filter invalid aliases
+  -> write orderedAliasDiscoveries to KnowledgeJob payload
+  -> resolve alias target against branch-global character entities
+  -> claim branch-global alias mappings or write EntityAliasConflictLog
+  -> enter write phase for the same batch
 ```
 
 不允许用 Promise 完成顺序决定 alias owner。任何涉及 authoritative DB write 的步骤都必须按稳定章节顺序执行。
 
+同一个 batch 内，后面章节发现的 alias 会先被同步，再按章节号写入前面的章节。因此当前 batch 中较早章节的 known update、unknown observation 和 relation 解析，也能使用同批后面章节发现的别名映射。
+
 ### 4.6 Write, cleanup, index phases
 
-Write 阶段将章节 candidate extraction 写入正式图谱表。Cleanup 阶段清理旧 stale 状态。Index 阶段重建 retrieval index。
+Write 阶段将当前 batch 的章节 candidate extraction 按章节号写入正式图谱表。写入每章时会构造稳定的 batch processing context：
+
+```text
+currentBatchChapters.chapterIds
+currentBatchChapters.chapterNos
+orderedAliasDiscoveries
+```
+
+如果 candidate 的 `processing_result_json` 与该 context 完全匹配，就直接复用 `resolved`。否则从 `extraction_json` 解析得到 resolved result，并把 `{ schemaVersion, batch, resolved }` 写回 `processing_result_json`。
+
+每章正式写入包括：
+
+- `KnowledgeChapter.summary`、`isDirty = 0`、`knowledgeStatus = ready`。
+- `KnowledgeEntity`、`EntityAlias`、`EntityAliasMapping`、`EntityAppearance`、`EntityMention`。
+- `EntityState`、`KnowledgeFact`、`KnowledgeRelation`、`EntityLink`。
+- `KnowledgeEvent`、`EventParticipant`、`KnowledgeWorld`、open thread facts。
+- `character_candidates`、`character_candidate_chapters` 和满足阈值后的 promotion。
+
+当前 batch 的 write queue 清空后，如果还有 pending chapters，就清空 `currentBatchChapters`、`orderedAliasDiscoveries` 和已应用计数，回到 `extract` 处理下一个 batch。Index 阶段在所有 batch 完成后重建 retrieval index。
 
 设计约束：
 
