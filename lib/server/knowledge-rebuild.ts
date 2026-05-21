@@ -287,12 +287,16 @@ function getFormalCharacterImportanceTierRank(tier: CharacterImportanceTier | nu
   }
 }
 
+function isFormalCharacterImportanceTier(tier: CharacterImportanceTier | null | undefined): tier is FormalCharacterImportanceTier {
+  return tier === 'protagonist' || tier === 'important' || tier === 'arc'
+}
+
 function chooseStrongerFormalCharacterTier(
   existing: CharacterImportanceTier | null | undefined,
   incoming: FormalCharacterImportanceTier,
 ) {
-  return getFormalCharacterImportanceTierRank(existing) >= getFormalCharacterImportanceTierRank(incoming)
-    ? (existing ?? incoming)
+  return isFormalCharacterImportanceTier(existing) && getFormalCharacterImportanceTierRank(existing) >= getFormalCharacterImportanceTierRank(incoming)
+    ? existing
     : incoming
 }
 
@@ -2913,27 +2917,30 @@ function resolveCharacterEntityByName(params: {
     userConfirmed: number
   }>(
     `
-      SELECT e.id AS id, e.canonicalName AS canonicalName, 'alias_mapping' AS matchSource, e.userConfirmed AS userConfirmed
-      FROM EntityAliasMapping m
-      JOIN KnowledgeEntity e ON e.id = m.entityId
-      WHERE m.branchId = ?
-        AND e.entityType = 'character'
-        AND m.alias = ?
-      UNION ALL
-      SELECT e.id AS id, e.canonicalName AS canonicalName, 'canonical' AS matchSource, e.userConfirmed AS userConfirmed
-      FROM KnowledgeEntity e
-      WHERE e.branchId = ?
-        AND e.entityType = 'character'
-        AND e.canonicalName = ?
-        AND e.firstSeenChapter <= ?
-      UNION ALL
-      SELECT e.id AS id, e.canonicalName AS canonicalName, 'alias' AS matchSource, e.userConfirmed AS userConfirmed
-      FROM EntityAlias a
-      JOIN KnowledgeEntity e ON e.id = a.entityId
-      WHERE e.branchId = ?
-        AND e.entityType = 'character'
-        AND a.alias = ?
-        AND a.sourceChapter <= ?
+        SELECT e.id AS id, e.canonicalName AS canonicalName, 'alias_mapping' AS matchSource, e.userConfirmed AS userConfirmed
+        FROM EntityAliasMapping m
+        JOIN KnowledgeEntity e ON e.id = m.entityId
+        WHERE m.branchId = ?
+          AND e.entityType = 'character'
+          AND e.importanceTier IN ('protagonist', 'important', 'arc')
+          AND m.alias = ?
+        UNION ALL
+        SELECT e.id AS id, e.canonicalName AS canonicalName, 'canonical' AS matchSource, e.userConfirmed AS userConfirmed
+        FROM KnowledgeEntity e
+        WHERE e.branchId = ?
+          AND e.entityType = 'character'
+          AND e.importanceTier IN ('protagonist', 'important', 'arc')
+          AND e.canonicalName = ?
+          AND e.firstSeenChapter <= ?
+        UNION ALL
+        SELECT e.id AS id, e.canonicalName AS canonicalName, 'alias' AS matchSource, e.userConfirmed AS userConfirmed
+        FROM EntityAlias a
+        JOIN KnowledgeEntity e ON e.id = a.entityId
+        WHERE e.branchId = ?
+          AND e.entityType = 'character'
+          AND e.importanceTier IN ('protagonist', 'important', 'arc')
+          AND a.alias = ?
+          AND a.sourceChapter <= ?
     `,
     params.branchId,
     normalizedName,
@@ -3069,12 +3076,14 @@ function ensureCharacterEntityForCanonicalName(params: {
       'SELECT description, firstSeenChapter, lastSeenChapter, importanceTier, userConfirmed FROM KnowledgeEntity WHERE id = ? LIMIT 1',
       resolution.entityId,
     )
-    const nextImportanceTier = existing?.userConfirmed && existing.importanceTier
-      ? existing.importanceTier
-      : (existing?.importanceTier ?? chooseKnownFormalCharacterTierByName({
+    const existingFormalTier = isFormalCharacterImportanceTier(existing?.importanceTier) ? existing.importanceTier : null
+    const nextImportanceTier = existing?.userConfirmed && existingFormalTier
+      ? existingFormalTier
+      : (existingFormalTier ?? chooseKnownFormalCharacterTierByName({
           branchId: params.branchId,
           name: normalizedName,
         }))
+    if (!nextImportanceTier) return null
     execute(
       `
         UPDATE KnowledgeEntity
@@ -3100,6 +3109,9 @@ function ensureCharacterEntityForCanonicalName(params: {
     branchId: params.branchId,
     name: normalizedName,
   })
+  if (!inheritedImportanceTier) {
+    return null
+  }
   const entityId = uid('entity')
   execute(
     `
@@ -3942,7 +3954,19 @@ function applyKnownCharacterUpdate(params: {
         chapterNo: params.chapterNo,
       }))
 
-  if (!entityId) return
+  if (!entityId) {
+    insertEntityMention({
+      novelId: params.novelId,
+      branchId: params.branchId,
+      chapterId: params.chapterId,
+      chapterNo: params.chapterNo,
+      entityId: null,
+      mentionText: normalizedName,
+      resolutionKind: 'unresolved',
+      evidence: primaryEvidence,
+    })
+    return
+  }
 
   const canonicalName = resolution.kind === 'resolved'
     ? resolution.canonicalName
@@ -4080,7 +4104,19 @@ async function persistChapterExtraction(params: {
       status: item.status,
       chapterNo: params.chapterNo,
     })
-    if (!entityId) continue
+    if (!entityId) {
+      insertEntityMention({
+        novelId: params.novelId,
+        branchId: params.branchId,
+        chapterId: params.chapterId,
+        chapterNo: params.chapterNo,
+        entityId: null,
+        mentionText: normalizedItemName,
+        resolutionKind: 'unresolved',
+        evidence: primaryEvidence,
+      })
+      continue
+    }
 
     insertEntityMention({
       novelId: params.novelId,

@@ -124,6 +124,20 @@ function mockKnowledgeRebuildDependencies(params: {
   aiSettings: ReturnType<typeof createMockAISettings>
   summarySpy: ReturnType<typeof vi.fn>
   unknownObservationsByChapter: Record<number, Array<ReturnType<typeof createUnknownObservation>>>
+  charactersByChapter?: Record<number, Array<{
+    name: string
+    aliases: string[]
+    status: string
+    descriptionDelta: string
+    profile: Record<string, never>
+    evidence: Array<{ quote: string; lineStart: number; lineEnd: number }>
+  }>>
+  knownUpdatesByChapter?: Record<number, Array<{
+    name: string
+    descriptionDelta: string
+    profile: Record<string, never>
+    evidence: Array<{ quote: string; lineStart: number; lineEnd: number }>
+  }>>
 }) {
   vi.doMock('@/lib/server/ai-settings', () => ({ loadStoredAISettings: () => params.aiSettings }))
   vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
@@ -173,8 +187,8 @@ function mockKnowledgeRebuildDependencies(params: {
       extraction: {
         chapterNo: chapterParams.chapterNo,
         summary: `summary-${chapterParams.chapterNo}`,
-        characters: [],
-        knownCharacterUpdates: [],
+        characters: params.charactersByChapter?.[chapterParams.chapterNo] ?? [],
+        knownCharacterUpdates: params.knownUpdatesByChapter?.[chapterParams.chapterNo] ?? [],
         unknownCharacterObservations: params.unknownObservationsByChapter[chapterParams.chapterNo] ?? [],
         aliasDiscoveries: [],
         relations: [],
@@ -216,6 +230,62 @@ afterEach(() => {
 })
 
 describe('knowledge rebuild candidate promotion', () => {
+  it('refuses to create formal entities for unranked extracted characters and known updates', async () => {
+    const { database, queryOne, queryAll } = await createTestDatabase('chatbook-candidate-formal-tier-gate')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_candidate_formal_tier_gate', 1)
+    const aiSettings = createMockAISettings()
+    const summarySpy = vi.fn(async () => ({
+      summary: 'should not run',
+      descriptionDelta: 'should not run',
+      status: '活跃',
+      profile: {},
+    }))
+
+    mockKnowledgeRebuildDependencies({
+      aiSettings,
+      summarySpy,
+      unknownObservationsByChapter: {},
+      charactersByChapter: {
+        1: [{
+          name: '临时护卫',
+          aliases: [],
+          status: '活跃',
+          descriptionDelta: '临时护卫只在本章出现。',
+          profile: {},
+          evidence: [{ quote: '临时护卫只在本章出现。', lineStart: 1, lineEnd: 1 }],
+        }],
+      },
+      knownUpdatesByChapter: {
+        1: [{
+          name: '路过掌柜',
+          descriptionDelta: '路过掌柜递来茶水。',
+          profile: {},
+          evidence: [{ quote: '路过掌柜递来茶水。', lineStart: 1, lineEnd: 1 }],
+        }],
+      },
+    })
+
+    const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
+
+    await expect(rebuildKnowledgeForNovel({ novelId })).resolves.toMatchObject({ outcome: 'completed' })
+
+    expect(queryOne<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM KnowledgeEntity WHERE branchId = ?',
+      branchId,
+    )?.count).toBe(0)
+    expect(queryAll<{ mentionText: string; resolutionKind: string }>(
+      `SELECT mentionText, resolutionKind
+       FROM EntityMention
+       WHERE branchId = ?
+       ORDER BY mentionText ASC`,
+      branchId,
+    )).toEqual([
+      { mentionText: '临时护卫', resolutionKind: 'unresolved' },
+      { mentionText: '路过掌柜', resolutionKind: 'unresolved' },
+    ])
+    expect(summarySpy).not.toHaveBeenCalled()
+  })
+
   it('does not promote when a candidate appears in only 9 distinct chapters', async () => {
     const { database, queryOne } = await createTestDatabase('chatbook-candidate-promotion-nine-chapters')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_candidate_nine_chapters', 9)
@@ -418,7 +488,7 @@ describe('knowledge rebuild candidate promotion', () => {
     )
     const promotedEntity = queryOne<{ canonicalName: string; importanceTier: string | null; status: string | null }>(
       'SELECT canonicalName, importanceTier, status FROM KnowledgeEntity WHERE id = ? LIMIT 1',
-      candidate?.promotedEntityId,
+      candidate?.promotedEntityId ?? null,
     )
     const state = queryOne<{ status: string; stateValue: string; description: string | null }>(
       `
@@ -427,7 +497,7 @@ describe('knowledge rebuild candidate promotion', () => {
         WHERE entityId = ? AND status = 'candidate_promoted_summary'
         LIMIT 1
       `,
-      candidate?.promotedEntityId,
+      candidate?.promotedEntityId ?? null,
     )
     const facts = queryAll<{ factType: string; predicate: string; status: string }>(
       `
@@ -436,7 +506,7 @@ describe('knowledge rebuild candidate promotion', () => {
         WHERE subjectEntityId = ? AND status = 'candidate_promoted_summary'
         ORDER BY factType ASC, predicate ASC
       `,
-      candidate?.promotedEntityId,
+      candidate?.promotedEntityId ?? null,
     )
 
     expect(candidate).toMatchObject({
@@ -541,7 +611,7 @@ describe('knowledge rebuild candidate promotion', () => {
         WHERE branchId = ? AND subjectEntityId = ? AND status = 'candidate_promoted_summary'
       `,
       branchId,
-      firstRunCandidate?.promotedEntityId,
+      firstRunCandidate?.promotedEntityId ?? null,
     )
 
     expect(firstRunCandidate).toMatchObject({
@@ -580,7 +650,7 @@ describe('knowledge rebuild candidate promotion', () => {
         ORDER BY factType ASC, predicate ASC
       `,
       branchId,
-      rerunCandidate?.promotedEntityId,
+      rerunCandidate?.promotedEntityId ?? null,
     )
 
     expect(rerunCandidate).toMatchObject({
