@@ -305,6 +305,12 @@ export type PresetCompatSessionWorkspaceSelection =
       sourceChapterNo: number
       targetChapterNo: number
     }
+  | {
+      kind: 'roleplay_session'
+      nodeId: string
+      roleplaySessionId: string
+      anchorChapterNo: number
+    }
 
 export type PresetCompatSessionEntry = {
   surfaceId: PresetCompatSurfaceId

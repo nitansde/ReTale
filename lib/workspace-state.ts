@@ -101,6 +101,15 @@ export function createPresetCompatSessionSelectionKey(selection: PresetCompatSes
     ].join(':')
   }
 
+  if (selection.kind === 'roleplay_session') {
+    return [
+      'roleplay_session',
+      encodePresetCompatSessionKeyPart(selection.nodeId),
+      encodePresetCompatSessionKeyPart(selection.roleplaySessionId),
+      selection.anchorChapterNo,
+    ].join(':')
+  }
+
   return [
     'future_jump',
     encodePresetCompatSessionKeyPart(selection.nodeId),

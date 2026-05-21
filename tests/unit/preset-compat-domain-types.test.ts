@@ -19,8 +19,9 @@ describe('preset compat domain types', () => {
       { kind: 'what_if', nodeId: 'if-node-1', sessionId: 'what-if-1', anchorChapterNo: 10 },
       { kind: 'continue_block', nodeId: 'continue-node-1', continueBlockId: 'continue-block-1', anchorChapterNo: 10 },
       { kind: 'future_jump', nodeId: 'jump-node-1', runId: 'jump-run-1', sourceChapterNo: 10, targetChapterNo: 100 },
+      { kind: 'roleplay_session', nodeId: 'rp-node-1', roleplaySessionId: 'rp-session-1', anchorChapterNo: 10 },
     ]
-    const nodeTypes: StoryTimelineNodeType[] = ['rewrite', 'what_if', 'continue_block', 'future_jump']
+    const nodeTypes: StoryTimelineNodeType[] = ['rewrite', 'what_if', 'continue_block', 'future_jump', 'roleplay_session']
 
     expect(PRODUCT_SURFACE_IDS).toEqual(['rewrite', 'future_jump', 'roleplay'])
     expect(PRODUCT_ACTION_IDS).toEqual(['save', 'continue', 'regenerate'])
@@ -30,8 +31,9 @@ describe('preset compat domain types', () => {
       'what_if',
       'continue_block',
       'future_jump',
+      'roleplay_session',
     ])
-    expect(nodeTypes).toEqual(['rewrite', 'what_if', 'continue_block', 'future_jump'])
+    expect(nodeTypes).toEqual(['rewrite', 'what_if', 'continue_block', 'future_jump', 'roleplay_session'])
   })
 
   it('locks the preset and library record shape required by the compatibility subsystem', () => {

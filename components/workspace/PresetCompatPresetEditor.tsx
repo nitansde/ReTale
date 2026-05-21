@@ -107,6 +107,7 @@ function formatSurfaceSelectionLabel(selection: PresetCompatSessionWorkspaceSele
   if (selection.kind === 'rewrite') return `改写节点 ${selection.continueBlockId}`
   if (selection.kind === 'continue_block') return `续写块 ${selection.continueBlockId}`
   if (selection.kind === 'what_if') return `What-if ${selection.sessionId}`
+  if (selection.kind === 'roleplay_session') return `Roleplay ${selection.roleplaySessionId}`
   return `Future Jump ${selection.runId}`
 }
 
