@@ -5,6 +5,10 @@
   "scripts": {
     "postinstall": "node scripts/setup-hanlp-runtime.mjs --postinstall",
     "dev": "node scripts/next-dev.mjs",
+    "dev:prod": "node scripts/next-dev.mjs",
+    "dev:test": "node scripts/next-test-server.mjs",
+    "server:prod": "node scripts/next-dev.mjs",
+    "server:test": "node scripts/next-test-server.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
