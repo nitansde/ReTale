@@ -71,7 +71,9 @@ function createMockLanceDb() {
     const table: MockTable = {
       rows: [...initialRows],
       add: vi.fn(async (nextRows: StoredRow[]) => {
-        table.rows.push(...nextRows)
+        for (const row of nextRows) {
+          table.rows.push(row)
+        }
       }),
       createIndex: vi.fn(async () => undefined),
       waitForIndex: vi.fn(async () => undefined),
@@ -226,6 +228,43 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(entityDocs[0]?.text).toContain('林公子')
     expect(entityDocs[0]?.relatedEntityNames).toContain('阿砚')
     expect(entityDocs[0]?.relatedEntityNames).toContain('林公子')
+  })
+
+  it('merges large retrieval doc groups without spreading into the call stack', async () => {
+    vi.resetModules()
+    const retrievalIndex = await import('@/lib/server/retrieval-index')
+    type RetrievalDoc = ReturnType<typeof retrievalIndex.loadBranchRetrievalDocs>[number]
+    const makeDoc = (index: number): RetrievalDoc => ({
+      id: `doc-${index}`,
+      branchId: 'novel-001:main',
+      sourceType: 'text_span',
+      sourceId: `span-${index}`,
+      chapterId: `chapter-${Math.floor(index / 1000) + 1}`,
+      chapterNo: Math.floor(index / 1000) + 1,
+      validFromChapter: Math.floor(index / 1000) + 1,
+      validUntilChapter: 999999999,
+      lineStart: index + 1,
+      lineEnd: index + 1,
+      spanType: 'scene',
+      title: 'scene',
+      sourceLabel: '原文证据',
+      relatedEntityNames: '',
+      relatedEventNames: '',
+      relatedTerms: 'scene',
+      text: `正文片段 ${index}`,
+      status: 'ready',
+      includeByDefault: 1,
+      tokenEstimate: 4,
+      contentHash: `hash-${index}`,
+    })
+    const rawDocs = Array.from({ length: 150000 }, (_, index) => makeDoc(index))
+    const derivedDocs = [makeDoc(150000)]
+
+    const mergedDocs = retrievalIndex.mergeRetrievalDocGroups(rawDocs, derivedDocs)
+
+    expect(mergedDocs).toHaveLength(150001)
+    expect(mergedDocs[0]?.id).toBe('doc-0')
+    expect(mergedDocs.at(-1)?.id).toBe('doc-150000')
   })
 
   it('partitions raw-text and knowledge-derived retrieval docs', async () => {

@@ -276,6 +276,22 @@ function serializeTerms(values: Array<string | null | undefined>) {
   return uniqueStrings(values).join('\n')
 }
 
+export function mergeRetrievalDocGroups(...groups: RetrievalDocSeedRow[][]) {
+  const rows: RetrievalDocSeedRow[] = []
+  for (const group of groups) {
+    for (const row of group) {
+      rows.push(row)
+    }
+  }
+  return rows
+}
+
+function appendRetrievalDocRows(target: RetrievalDocRow[], source: RetrievalDocRow[]) {
+  for (const row of source) {
+    target.push(row)
+  }
+}
+
 function buildContentHash(parts: Array<string | number | null | undefined>) {
   return hashValue(parts.map((part) => (part === null || part === undefined ? '' : String(part))).join('::'))
 }
@@ -993,7 +1009,7 @@ async function createOrReplaceBranchTable(
     throw new Error(`Failed to resolve all retrieval rows for LanceDB rebuild: expected ${rows.length} but received ${finalRows.length}`)
   }
 
-  writeBuffer.push(...finalRows)
+  appendRetrievalDocRows(writeBuffer, finalRows)
 
   await flushWriteBuffer(true)
   logLanceIndex(`embedding done: elapsed=${formatElapsed(embeddingElapsedMs)}`)
@@ -1603,21 +1619,21 @@ export function loadRawTextRetrievalDocs(novelId: string, branchId: string) {
 }
 
 export function loadKnowledgeDerivedRetrievalDocs(novelId: string, branchId: string) {
-  return [
-    ...loadBranchChapterSummaryDocs(novelId, branchId),
-    ...loadBranchEntityProfileDocs(novelId, branchId),
-    ...loadBranchEventSummaryDocs(novelId, branchId),
-    ...loadBranchWorldbuildingDocs(novelId, branchId),
-    ...loadBranchRelationshipDocs(novelId, branchId),
-    ...loadBranchOpenThreadDocs(novelId, branchId),
-  ]
+  return mergeRetrievalDocGroups(
+    loadBranchChapterSummaryDocs(novelId, branchId),
+    loadBranchEntityProfileDocs(novelId, branchId),
+    loadBranchEventSummaryDocs(novelId, branchId),
+    loadBranchWorldbuildingDocs(novelId, branchId),
+    loadBranchRelationshipDocs(novelId, branchId),
+    loadBranchOpenThreadDocs(novelId, branchId),
+  )
 }
 
 export function loadBranchRetrievalDocs(novelId: string, branchId: string) {
-  return [
-    ...loadRawTextRetrievalDocs(novelId, branchId),
-    ...loadKnowledgeDerivedRetrievalDocs(novelId, branchId),
-  ]
+  return mergeRetrievalDocGroups(
+    loadRawTextRetrievalDocs(novelId, branchId),
+    loadKnowledgeDerivedRetrievalDocs(novelId, branchId),
+  )
 }
 
 async function openBranchSearchTable(branchId: string) {
