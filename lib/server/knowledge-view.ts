@@ -1,4 +1,4 @@
-import type { Character, CharacterRelation, OutlineItem, TimelineEvent, WorldEntry, WorldEntryType } from '@/lib/types'
+import type { Character, CharacterRelation, KnowledgeRebuildChapterRange, OutlineItem, TimelineEvent, WorldEntry, WorldEntryType } from '@/lib/types'
 import {
   buildCharacterDescriptionDelta,
   buildCharacterRoleCardLines,
@@ -53,6 +53,7 @@ export type KnowledgeRebuildStatus = {
   updatedAt: string
   etaMinutes: number | null
   steps: KnowledgeRebuildPayloadStep[]
+  chapterRange?: KnowledgeRebuildChapterRange
   rawTextEmbeddingProgress?: number
   rawTextEmbeddingCacheHitRate?: number
   hanlpCacheStatus?: 'queued' | 'running' | 'paused' | 'ready' | 'empty'
@@ -145,7 +146,7 @@ type KnowledgeRebuildTelemetryStatusFields = Pick<
   | 'hanlpSettingsSnapshot'
   | 'stageTimingsMs'
   | 'embeddingSettingsSnapshot'
->
+> & Pick<KnowledgeRebuildStatus, 'chapterRange'>
 
 function parseKnowledgeRebuildTelemetryStatusFields(payloadJson: string | null): KnowledgeRebuildTelemetryStatusFields {
   if (!payloadJson) return {}
@@ -157,9 +158,26 @@ function parseKnowledgeRebuildTelemetryStatusFields(payloadJson: string | null):
       hanlpBootstrap?: unknown
       stageTimingsMs?: unknown
       embeddingSettingsSnapshot?: unknown
+      chapterRange?: unknown
     }
 
     const telemetry: KnowledgeRebuildTelemetryStatusFields = {}
+
+    if (payload.chapterRange && typeof payload.chapterRange === 'object') {
+      const range = payload.chapterRange as Record<string, unknown>
+      const startChapter = typeof range.startChapter === 'number' && Number.isFinite(range.startChapter)
+        ? Math.max(1, Math.floor(range.startChapter))
+        : undefined
+      const endChapter = typeof range.endChapter === 'number' && Number.isFinite(range.endChapter)
+        ? Math.max(1, Math.floor(range.endChapter))
+        : undefined
+      if (startChapter !== undefined || endChapter !== undefined) {
+        telemetry.chapterRange = {
+          ...(startChapter !== undefined ? { startChapter } : {}),
+          ...(endChapter !== undefined ? { endChapter } : {}),
+        }
+      }
+    }
 
     if (typeof payload.rawTextEmbeddingProgress === 'number' && Number.isFinite(payload.rawTextEmbeddingProgress)) {
       telemetry.rawTextEmbeddingProgress = payload.rawTextEmbeddingProgress
@@ -298,8 +316,8 @@ function createIdleActionPayload(): KnowledgeViewActionPayload {
   }
 }
 
-function buildActiveRebuildBlockedMessage(status: KnowledgeRebuildStatus) {
-  return `Cannot delete HanLP cache while a knowledge rebuild is ${status.status} for this novel branch.`
+function buildActiveRebuildBlockedMessage(status: KnowledgeRebuildStatus, cacheLabel: string) {
+  return `Cannot delete ${cacheLabel} while a knowledge rebuild is ${status.status} for this novel branch.`
 }
 
 function getActiveKnowledgeRebuildRow(novelId: string, branchId: string) {
@@ -316,8 +334,12 @@ function getActiveKnowledgeRebuildRow(novelId: string, branchId: string) {
   ) ?? null
 }
 
-async function deleteHanlpCacheForNovel(novelId: string): Promise<KnowledgeViewActionPayload> {
-  const trimmedNovelId = novelId.trim()
+async function deleteBranchScopedCacheForNovel(params: {
+  novelId: string
+  cacheLabel: string
+  deleteRows: (novelId: string, branchId: string) => void
+}): Promise<KnowledgeViewActionPayload> {
+  const trimmedNovelId = params.novelId.trim()
   if (!trimmedNovelId) {
     return createIdleActionPayload()
   }
@@ -340,20 +362,50 @@ async function deleteHanlpCacheForNovel(novelId: string): Promise<KnowledgeViewA
           updatedAt: '',
           etaMinutes: null,
           steps: [],
-        }),
+        }, params.cacheLabel),
       },
     }
   }
 
-  execute('DELETE FROM hanlp_bootstrap_entities WHERE novel_id = ? AND branch_id = ?', trimmedNovelId, branchId)
-  execute('DELETE FROM hanlp_bootstrap_results WHERE novel_id = ? AND branch_id = ?', trimmedNovelId, branchId)
-  execute('DELETE FROM hanlp_bootstrap_cache WHERE novel_id = ? AND branch_id = ?', trimmedNovelId, branchId)
+  params.deleteRows(trimmedNovelId, branchId)
 
   return {
     ...(await buildKnowledgeProjection([trimmedNovelId])),
     jobOutcome: 'deleted',
     actionError: null,
   }
+}
+
+async function deleteHanlpCacheForNovel(novelId: string): Promise<KnowledgeViewActionPayload> {
+  return deleteBranchScopedCacheForNovel({
+    novelId,
+    cacheLabel: 'HanLP cache',
+    deleteRows: (trimmedNovelId, branchId) => {
+      execute('DELETE FROM hanlp_bootstrap_entities WHERE novel_id = ? AND branch_id = ?', trimmedNovelId, branchId)
+      execute('DELETE FROM hanlp_bootstrap_results WHERE novel_id = ? AND branch_id = ?', trimmedNovelId, branchId)
+      execute('DELETE FROM hanlp_bootstrap_cache WHERE novel_id = ? AND branch_id = ?', trimmedNovelId, branchId)
+    },
+  })
+}
+
+async function deleteExtractionCacheForNovel(novelId: string): Promise<KnowledgeViewActionPayload> {
+  return deleteBranchScopedCacheForNovel({
+    novelId,
+    cacheLabel: 'LLM extraction cache',
+    deleteRows: (trimmedNovelId, branchId) => {
+      execute('DELETE FROM chapter_extraction_candidates WHERE novel_id = ? AND branch_id = ?', trimmedNovelId, branchId)
+    },
+  })
+}
+
+async function deleteEmbeddingCacheForNovel(novelId: string): Promise<KnowledgeViewActionPayload> {
+  return deleteBranchScopedCacheForNovel({
+    novelId,
+    cacheLabel: 'raw embedding cache',
+    deleteRows: (_trimmedNovelId, branchId) => {
+      execute('DELETE FROM RawTextEmbeddingCache WHERE branchId = ?', branchId)
+    },
+  })
 }
 
 function parseSqliteUtcTimestamp(value: string) {
@@ -582,9 +634,9 @@ function projectCharacterCompatibilityFields(
   state: CharacterStatePreview | undefined,
   importance: number,
 ) {
-  const role = profile?.identity?.summary?.trim() || (importance >= 4 ? '主要人物' : '角色')
-  const goal = profile?.capability?.summary?.trim() || profile?.likes?.summary?.trim() || '待补充'
-  const trait = profile?.personality?.summary?.trim() || (state?.stateValue ? `状态：${state.stateValue}` : '待补充')
+  const role = profile?.identity?.content?.trim() || profile?.identity?.summary?.trim() || (importance >= 4 ? '主要人物' : '角色')
+  const goal = profile?.capability?.content?.trim() || profile?.capability?.summary?.trim() || profile?.likes?.content?.trim() || profile?.likes?.summary?.trim() || '待补充'
+  const trait = profile?.personality?.content?.trim() || profile?.personality?.summary?.trim() || (state?.stateValue ? `状态：${state.stateValue}` : '待补充')
   const safeProfile = profile
   const note = safeProfile && hasCharacterRoleCardProfile(safeProfile)
     ? buildCharacterRoleCardLines(safeProfile, { includeEvidence: false, includeNotes: true }).slice(3).join('｜')
@@ -806,7 +858,7 @@ export async function buildKnowledgeProjection(novelIds?: string[], asOfChapter?
   }
 }
 
-export async function rebuildAuthoritativeKnowledgeView(novelId: string): Promise<KnowledgeViewActionPayload> {
+export async function rebuildAuthoritativeKnowledgeView(novelId: string, chapterRange?: KnowledgeRebuildChapterRange): Promise<KnowledgeViewActionPayload> {
   if (!novelId.trim()) {
     return createIdleActionPayload()
   }
@@ -814,6 +866,7 @@ export async function rebuildAuthoritativeKnowledgeView(novelId: string): Promis
   const rebuildResult = await startKnowledgeRebuildForNovel({
     novelId,
     branchId: getMainBranchId(novelId),
+    chapterRange,
   })
 
   return {
@@ -888,4 +941,12 @@ export async function deleteAuthoritativeKnowledgeGraph(novelId: string): Promis
 
 export async function deleteAuthoritativeHanlpCache(novelId: string): Promise<KnowledgeViewActionPayload> {
   return deleteHanlpCacheForNovel(novelId)
+}
+
+export async function deleteAuthoritativeExtractionCache(novelId: string): Promise<KnowledgeViewActionPayload> {
+  return deleteExtractionCacheForNovel(novelId)
+}
+
+export async function deleteAuthoritativeEmbeddingCache(novelId: string): Promise<KnowledgeViewActionPayload> {
+  return deleteEmbeddingCacheForNovel(novelId)
 }

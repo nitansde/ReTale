@@ -2,6 +2,8 @@ import { after, NextResponse } from 'next/server'
 import {
   abortAuthoritativeKnowledgeRebuild,
   buildKnowledgeProjection,
+  deleteAuthoritativeEmbeddingCache,
+  deleteAuthoritativeExtractionCache,
   deleteAuthoritativeKnowledgeGraph,
   deleteAuthoritativeHanlpCache,
   type KnowledgeViewActionPayload,
@@ -10,6 +12,7 @@ import {
   rebuildAuthoritativeKnowledgeView,
   runAuthoritativeKnowledgeViewRebuild,
 } from '@/lib/server/knowledge-view'
+import type { KnowledgeRebuildChapterRange } from '@/lib/types'
 
 export const maxDuration = 3600
 
@@ -29,6 +32,25 @@ function scheduleAfterResponse(callback: () => Promise<void>) {
     setTimeout(() => {
       void callback()
     }, 0)
+  }
+}
+
+function normalizePostChapterRange(value: unknown): KnowledgeRebuildChapterRange | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const candidate = value as KnowledgeRebuildChapterRange
+  const startChapter = typeof candidate.startChapter === 'number' && Number.isFinite(candidate.startChapter)
+    ? Math.max(1, Math.floor(candidate.startChapter))
+    : undefined
+  const endChapter = typeof candidate.endChapter === 'number' && Number.isFinite(candidate.endChapter)
+    ? Math.max(1, Math.floor(candidate.endChapter))
+    : undefined
+  if (startChapter === undefined && endChapter === undefined) return undefined
+  if (startChapter !== undefined && endChapter !== undefined && startChapter > endChapter) {
+    return { startChapter: endChapter, endChapter: startChapter }
+  }
+  return {
+    ...(startChapter !== undefined ? { startChapter } : {}),
+    ...(endChapter !== undefined ? { endChapter } : {}),
   }
 }
 
@@ -55,6 +77,7 @@ export async function POST(request: Request) {
     const body = await request.json()
     const novelId = String(body.novelId ?? '').trim()
     const action = String(body.action ?? 'rebuild').trim()
+    const chapterRange = normalizePostChapterRange(body.chapterRange)
     if (!novelId) {
       return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
     }
@@ -65,9 +88,13 @@ export async function POST(request: Request) {
         ? await abortAuthoritativeKnowledgeRebuild(novelId)
         : action === 'delete-hanlp-cache'
           ? await deleteAuthoritativeHanlpCache(novelId)
+        : action === 'delete-extraction-cache'
+          ? await deleteAuthoritativeExtractionCache(novelId)
+        : action === 'delete-embedding-cache'
+          ? await deleteAuthoritativeEmbeddingCache(novelId)
         : action === 'delete-knowledge'
           ? await deleteAuthoritativeKnowledgeGraph(novelId)
-          : await rebuildAuthoritativeKnowledgeView(novelId)
+          : await rebuildAuthoritativeKnowledgeView(novelId, chapterRange)
 
     if (
       action === 'rebuild'

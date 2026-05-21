@@ -149,6 +149,33 @@ function insertHanlpCacheFixture(database: DatabaseSync, params: {
   )
 }
 
+function insertExtractionCacheFixture(database: DatabaseSync, params: {
+  idPrefix: string
+  novelId: string
+  branchId: string
+  chapterId: string
+  chapterNo: number
+}) {
+  database.prepare(
+    `INSERT INTO chapter_extraction_candidates (
+      id, novel_id, branch_id, chapter_id, chapter_no, chapter_revision,
+      chapter_source_hash, extraction_json, status, provider, model
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    `${params.idPrefix}-candidate`,
+    params.novelId,
+    params.branchId,
+    params.chapterId,
+    params.chapterNo,
+    1,
+    `candidate-source-hash-${params.idPrefix}`,
+    JSON.stringify({ chapterNo: params.chapterNo, summary: `summary-${params.idPrefix}` }),
+    'extracted',
+    'openai-compatible',
+    'knowledge-model',
+  )
+}
+
 afterEach(() => {
   vi.resetModules()
 
@@ -618,6 +645,146 @@ describe('/api/knowledge-view', () => {
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_cache WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_results WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_entities WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
+  })
+
+  it('deletes only the target main-branch LLM extraction cache rows', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-delete-extraction-cache')
+    const novelId = `novel_delete_extraction_${Math.random().toString(36).slice(2, 8)}`
+    const otherNovelId = `novel_delete_extraction_other_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId, altBranchId } = seedNovel(database, novelId)
+    const { mainBranchId: otherMainBranchId } = seedNovel(database, otherNovelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-main', chapterNo: 1 })
+    seedKnowledgeChapter(database, { novelId, branchId: altBranchId, chapterId: 'chapter-alt', chapterNo: 2 })
+    seedKnowledgeChapter(database, { novelId: otherNovelId, branchId: otherMainBranchId, chapterId: 'chapter-other', chapterNo: 1 })
+    insertExtractionCacheFixture(database, { idPrefix: 'target-main', novelId, branchId: mainBranchId, chapterId: 'chapter-main', chapterNo: 1 })
+    insertExtractionCacheFixture(database, { idPrefix: 'target-alt', novelId, branchId: altBranchId, chapterId: 'chapter-alt', chapterNo: 2 })
+    insertExtractionCacheFixture(database, { idPrefix: 'other-main', novelId: otherNovelId, branchId: otherMainBranchId, chapterId: 'chapter-other', chapterNo: 1 })
+    insertHanlpCacheFixture(database, { idPrefix: 'target-main', novelId, branchId: mainBranchId, chapterId: 'chapter-main', chapterNo: 1 })
+
+    const { POST } = await loadKnowledgeViewRoute()
+    const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', {
+      novelId,
+      action: 'delete-extraction-cache',
+    }))
+    const payload = await response.json() as { ok: boolean; jobOutcome: string; actionError: unknown }
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({ ok: true, jobOutcome: 'deleted', actionError: null })
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ?', mainBranchId)?.count).toBe(0)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ?', altBranchId)?.count).toBe(1)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ?', otherMainBranchId)?.count).toBe(1)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_cache WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
+  })
+
+  it('deletes only the target main-branch raw embedding cache rows', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-delete-embedding-cache')
+    const novelId = `novel_delete_embedding_${Math.random().toString(36).slice(2, 8)}`
+    const otherNovelId = `novel_delete_embedding_other_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId, altBranchId } = seedNovel(database, novelId)
+    const { mainBranchId: otherMainBranchId } = seedNovel(database, otherNovelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-main', chapterNo: 1 })
+    database.prepare(
+      `INSERT INTO RawTextEmbeddingCache (
+        branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension
+      ) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`
+    ).run(
+      mainBranchId, 'ollama', 'embed-model', 'raw-cache-target', '[0.1,0.2]', 2,
+      altBranchId, 'ollama', 'embed-model', 'raw-cache-alt', '[0.2,0.3]', 2,
+      otherMainBranchId, 'ollama', 'embed-model', 'raw-cache-other', '[0.3,0.4]', 2,
+    )
+    insertExtractionCacheFixture(database, { idPrefix: 'target-main', novelId, branchId: mainBranchId, chapterId: 'chapter-main', chapterNo: 1 })
+
+    const { POST } = await loadKnowledgeViewRoute()
+    const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', {
+      novelId,
+      action: 'delete-embedding-cache',
+    }))
+    const payload = await response.json() as { ok: boolean; jobOutcome: string; actionError: unknown }
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({ ok: true, jobOutcome: 'deleted', actionError: null })
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', mainBranchId)?.count).toBe(0)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', altBranchId)?.count).toBe(1)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', otherMainBranchId)?.count).toBe(1)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
+  })
+
+  it('blocks LLM extraction and raw embedding cache deletion when a rebuild is active', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-delete-cache-blocked')
+    const novelId = `novel_block_cache_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-blocked', chapterNo: 1 })
+    insertExtractionCacheFixture(database, { idPrefix: 'blocked-main', novelId, branchId: mainBranchId, chapterId: 'chapter-blocked', chapterNo: 1 })
+    database.prepare(
+      `INSERT INTO RawTextEmbeddingCache (
+        branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension
+      ) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(mainBranchId, 'ollama', 'embed-model', 'raw-cache-blocked', '[0.1,0.2]', 2)
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('job_block_manual_cache_delete', novelId, mainBranchId, 'extract_chapter_knowledge', 'running', '重建中', 0.3, JSON.stringify({ steps: [] }))
+
+    const { POST } = await loadKnowledgeViewRoute()
+    for (const action of ['delete-extraction-cache', 'delete-embedding-cache']) {
+      const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', { novelId, action }))
+      const payload = await response.json() as {
+        ok: boolean
+        jobOutcome: string
+        actionError: { code: string; message: string } | null
+      }
+
+      expect(response.status).toBe(200)
+      expect(payload.jobOutcome).toBe('blocked')
+      expect(payload.actionError?.code).toBe('active-rebuild')
+      expect(payload.actionError?.message).toContain('Cannot delete')
+    }
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', mainBranchId)?.count).toBe(1)
+  })
+
+  it('queues rebuild jobs with a bounded chapter range payload', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-range-rebuild')
+    const novelId = `novel_range_rebuild_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    for (let chapterNo = 1; chapterNo <= 4; chapterNo += 1) {
+      seedKnowledgeChapter(database, {
+        novelId,
+        branchId: mainBranchId,
+        chapterId: `chapter-range-${chapterNo}`,
+        chapterNo,
+      })
+    }
+
+    const { POST } = await loadKnowledgeViewRoute()
+    const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', {
+      novelId,
+      action: 'rebuild',
+      chapterRange: { startChapter: 2, endChapter: 3 },
+    }))
+    const payload = await response.json() as {
+      ok: boolean
+      jobOutcome: string
+      knowledgeRebuildStatus: { chapterRange?: { startChapter?: number; endChapter?: number } } | null
+    }
+
+    const jobPayload = JSON.parse(queryOne<{ payloadJson: string | null }>(
+      'SELECT payloadJson FROM KnowledgeJob WHERE novelId = ? AND jobType = ? ORDER BY createdAt DESC LIMIT 1',
+      novelId,
+      'extract_chapter_knowledge',
+    )?.payloadJson ?? '{}') as { chapterRange?: { startChapter?: number; endChapter?: number }; rebuildStartChapter?: number }
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({ ok: true, jobOutcome: 'queued' })
+    expect(payload.knowledgeRebuildStatus?.chapterRange).toEqual({ startChapter: 2, endChapter: 3 })
+    expect(jobPayload).toMatchObject({
+      chapterRange: { startChapter: 2, endChapter: 3 },
+      rebuildStartChapter: 2,
+    })
   })
 
   it('queues a fresh imported novel rebuild without blocking the POST response', async () => {
