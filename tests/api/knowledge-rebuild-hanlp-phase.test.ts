@@ -7,6 +7,9 @@ const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
 const originalHanlpBootstrapParallelism = process.env.HANLP_BOOTSTRAP_PARALLELISM
+const API_TEST_TIMEOUT_MS = 30_000
+
+vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
 
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void

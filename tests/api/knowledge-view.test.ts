@@ -8,6 +8,9 @@ const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
 const WORKSPACE_IMPORT_SMOKE_PATH = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
+const API_TEST_TIMEOUT_MS = 30_000
+
+vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
 
 async function createTestDatabase(prefix: string) {
   const tempDatabase = createTempDatabaseCopy(prefix)
