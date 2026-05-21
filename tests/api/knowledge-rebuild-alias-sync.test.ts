@@ -545,10 +545,10 @@ describe('knowledge rebuild alias sync', () => {
             name: 'B',
             descriptionDelta: '剑势更稳',
             profile: {
-              capability: { summary: '剑势更稳' },
-              appearance: { summary: '没有变化' },
-              body: { summary: '没有变化' },
-              clothing: { summary: '没有变化' },
+              capability: { content: '剑势更稳' },
+              appearance: { content: '没有变化' },
+              body: { content: '没有变化' },
+              clothing: { content: '没有变化' },
             },
             evidence: [{ quote: 'B 剑势更稳。', lineStart: 1, lineEnd: 1 }],
           }],
@@ -619,10 +619,10 @@ describe('knowledge rebuild alias sync', () => {
     })
     expect(entity).toMatchObject({ canonicalName: 'A', description: '旧描述' })
     expect(projectedCharacter?.profile).toMatchObject({
-      capability: { summary: '剑势更稳' },
-      appearance: { summary: '旧外形' },
-      body: { summary: '旧体态' },
-      clothing: { summary: '旧衣着' },
+      capability: { content: '剑势更稳' },
+      appearance: { content: '旧外形' },
+      body: { content: '旧体态' },
+      clothing: { content: '旧衣着' },
     })
   })
 })

@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
+import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
@@ -107,6 +108,23 @@ function createMockExtraction(chapterNo: number) {
       evidence: [{ quote: `第${chapterNo}章原文内容。`, lineStart: 1, lineEnd: 1 }],
     }],
   }
+}
+
+function buildTestExtractionCandidateSourceHash(params: {
+  chapterSourceHash: string
+  settings: ReturnType<typeof createMockAISettings>['knowledgeExtraction']
+}) {
+  return createHash('sha256').update(JSON.stringify({
+    chapterSourceHash: params.chapterSourceHash,
+    settings: {
+      provider: params.settings.provider,
+      model: params.settings.openAICompatible.model,
+      baseUrl: params.settings.openAICompatible.baseUrl,
+      parallelism: params.settings.openAICompatible.parallelism,
+      configured: params.settings.openAICompatible.configured,
+    },
+    schemaVersion: 'knowledge-extraction-candidate:v2',
+  })).digest('hex')
 }
 
 function seedKnowledgeRebuildFixture(database: DatabaseSync, novelKey = 'novel_hanlp', chapterCount = 3) {
@@ -330,6 +348,152 @@ describe('knowledge rebuild HanLP orchestration', () => {
     ])
   })
 
+  it('runs HanLP for every chapter while limiting extraction, progress, and cleanup to the requested chapter range', async () => {
+    process.env.HANLP_BOOTSTRAP_PARALLELISM = '4'
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-range')
+    const { novelId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_range', 5)
+    const aiSettings = createMockAISettings(4)
+    const hanlpCalls: number[] = []
+    const extractionCalls: number[] = []
+    const cachedChapterTwoHash = buildTestExtractionCandidateSourceHash({
+      chapterSourceHash: 'chapter-hash-2',
+      settings: aiSettings.knowledgeExtraction,
+    })
+
+    database.prepare("UPDATE KnowledgeChapter SET summary = ?, knowledgeStatus = 'ready', isDirty = 0 WHERE id = ?")
+      .run('keep chapter 4 summary', 'chapter-4')
+    database.prepare(
+      `INSERT INTO KnowledgeEntity (
+        id, novelId, branchId, entityType, canonicalName, firstSeenChapter, lastSeenChapter, status, userConfirmed
+      ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, 0)`
+    ).run('entity-range-preserved', novelId, `${novelId}:main`, '跨章角色', 2, 4, 'ready')
+    database.prepare('INSERT INTO EntityAppearance (id, entityId, chapterId, chapterNo, lineStart, lineEnd) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('appearance-range-stale', 'entity-range-preserved', 'chapter-2', 2, 1, 1)
+    database.prepare('INSERT INTO EntityAppearance (id, entityId, chapterId, chapterNo, lineStart, lineEnd) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('appearance-range-keep', 'entity-range-preserved', 'chapter-4', 4, 1, 1)
+    database.prepare('INSERT INTO EntityAlias (id, entityId, alias, sourceChapter) VALUES (?, ?, ?, ?)')
+      .run('alias-range-stale', 'entity-range-preserved', '旧称', 2)
+    database.prepare('INSERT INTO EntityAlias (id, entityId, alias, sourceChapter) VALUES (?, ?, ?, ?)')
+      .run('alias-range-keep', 'entity-range-preserved', '后文称呼', 4)
+    database.prepare('INSERT INTO EntityAliasMapping (id, novelId, branchId, alias, entityId, sourceAliasId, sourceChapter) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('mapping-range-stale', novelId, `${novelId}:main`, '旧称', 'entity-range-preserved', 'alias-range-stale', 2)
+    database.prepare('INSERT INTO EntityAliasMapping (id, novelId, branchId, alias, entityId, sourceAliasId, sourceChapter) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('mapping-range-keep', novelId, `${novelId}:main`, '后文称呼', 'entity-range-preserved', 'alias-range-keep', 4)
+    database.prepare(
+      `INSERT INTO chapter_extraction_candidates (
+        id, novel_id, branch_id, chapter_id, chapter_no, chapter_revision,
+        chapter_source_hash, extraction_json, status, provider, model
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      'cached-candidate-chapter-2',
+      novelId,
+      `${novelId}:main`,
+      'chapter-2',
+      2,
+      1,
+      cachedChapterTwoHash,
+      JSON.stringify(createMockExtraction(2)),
+      'extracted',
+      'openai-compatible',
+      aiSettings.knowledgeExtraction.openAICompatible.model,
+    )
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { chapterNo: number; rawText: string }) => {
+        hanlpCalls.push(input.chapterNo)
+        return {
+          source: 'cache' as const,
+          cache: {} as never,
+          result: {} as never,
+          output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+          cacheKey: {} as never,
+          scriptPath: '/tmp/mock-hanlp.py',
+          normalizedChapterText: input.rawText,
+        }
+      }),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
+    vi.doMock('@/lib/server/knowledge-extraction', () => ({
+      extractChapterKnowledgeOffline: vi.fn(async (params: { chapterNo: number }) => {
+        extractionCalls.push(params.chapterNo)
+        return {
+          extraction: createMockExtraction(params.chapterNo),
+          provider: 'openai-compatible' as const,
+          model: aiSettings.knowledgeExtraction.openAICompatible.model,
+        }
+      }),
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        precomputeRawTextEmbeddingCache: vi.fn(async () => ({
+          totalDocs: 0,
+          completedDocs: 0,
+          cacheHits: 0,
+          cacheMisses: 0,
+          failedDocs: 0,
+          totalBatches: 0,
+          completedBatches: 0,
+          degraded: false,
+          cancelled: false,
+          durationMs: 0,
+        })),
+        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
+      }
+    })
+
+    const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
+    await expect(rebuildKnowledgeForNovel({ novelId, chapterRange: { startChapter: 2, endChapter: 3 } })).resolves.toMatchObject({ outcome: 'completed' })
+
+    const jobPayload = JSON.parse(queryOne<{ payloadJson: string | null }>(
+      'SELECT payloadJson FROM KnowledgeJob WHERE novelId = ? ORDER BY createdAt DESC LIMIT 1',
+      novelId,
+    )?.payloadJson ?? '{}') as {
+      chapterRange?: { startChapter?: number; endChapter?: number }
+      totalChapterCount?: number
+      hanlpBootstrap?: { totalChapterCount?: number; completedChapterCount?: number }
+    }
+    const chapterFour = queryOne<{ summary: string | null; knowledgeStatus: string }>('SELECT summary, knowledgeStatus FROM KnowledgeChapter WHERE id = ?', 'chapter-4')
+    const preservedEntity = queryOne<{ id: string; lastSeenChapter: number | null }>('SELECT id, lastSeenChapter FROM KnowledgeEntity WHERE id = ?', 'entity-range-preserved')
+    const staleAppearance = queryOne<{ id: string }>('SELECT id FROM EntityAppearance WHERE id = ?', 'appearance-range-stale')
+    const keptAppearance = queryOne<{ id: string }>('SELECT id FROM EntityAppearance WHERE id = ?', 'appearance-range-keep')
+    const staleAlias = queryOne<{ id: string }>('SELECT id FROM EntityAlias WHERE id = ?', 'alias-range-stale')
+    const keptAlias = queryOne<{ id: string }>('SELECT id FROM EntityAlias WHERE id = ?', 'alias-range-keep')
+    const staleMapping = queryOne<{ id: string }>('SELECT id FROM EntityAliasMapping WHERE id = ?', 'mapping-range-stale')
+    const keptMapping = queryOne<{ id: string }>('SELECT id FROM EntityAliasMapping WHERE id = ?', 'mapping-range-keep')
+    const cachedCandidate = queryOne<{ status: string }>('SELECT status FROM chapter_extraction_candidates WHERE id = ?', 'cached-candidate-chapter-2')
+
+    expect(hanlpCalls).toEqual([1, 2, 3, 4, 5])
+    expect(extractionCalls).toEqual([3])
+    expect(jobPayload).toMatchObject({
+      chapterRange: { startChapter: 2, endChapter: 3 },
+      totalChapterCount: 2,
+      hanlpBootstrap: {
+        totalChapterCount: 5,
+        completedChapterCount: 5,
+      },
+    })
+    expect(chapterFour).toEqual({ summary: 'keep chapter 4 summary', knowledgeStatus: 'ready' })
+    expect(preservedEntity).toEqual({ id: 'entity-range-preserved', lastSeenChapter: 4 })
+    expect(staleAppearance).toBeNull()
+    expect(keptAppearance).toEqual({ id: 'appearance-range-keep' })
+    expect(staleAlias).toBeNull()
+    expect(keptAlias).toEqual({ id: 'alias-range-keep' })
+    expect(staleMapping).toBeNull()
+    expect(keptMapping).toEqual({ id: 'mapping-range-keep' })
+    expect(cachedCandidate?.status).toBe('persisted')
+  })
+
   it('can pause during HanLP before any extraction starts', async () => {
     const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-pause')
     const { novelId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_pause', 1)
@@ -482,6 +646,131 @@ describe('knowledge rebuild HanLP orchestration', () => {
     await expect(rebuildPromise).resolves.toMatchObject({ outcome: 'aborted' })
     expect(extractionCalls).toBe(0)
     expect(queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE novelId = ?', novelId)?.status).toBe('aborted')
+  })
+
+  it('recreates bootstrapped formal characters with their HanLP tier and projected classification after cleanup', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-tier-preservation')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_tier_preservation', 1)
+    const aiSettings = createMockAISettings(1)
+
+    database.prepare(
+      `INSERT INTO KnowledgeEntity (
+        id, novelId, branchId, entityType, canonicalName, description,
+        firstSeenChapter, lastSeenChapter, importanceTier, status, userConfirmed
+      ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, ?, 0)`
+    ).run('entity-linyan-bootstrap', novelId, branchId, '林砚', '旧引导描述', 1, 1, 'protagonist', 'hanlp_bootstrap')
+    database.prepare(
+      `INSERT INTO hanlp_bootstrap_entities (
+        id, novel_id, branch_id, chapter_id, chapter_no, entity_text, entity_type,
+        total_count, chapter_count, coverage_ratio, score, source_cache_id, source_result_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`
+    ).run('hanlp-person-linyan', novelId, branchId, 'chapter-1', 1, '林砚', 'person', 12, 1, 1, 0.99)
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { rawText: string }) => ({
+        source: 'cache' as const,
+        cache: {} as never,
+        result: {} as never,
+        output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+        cacheKey: {} as never,
+        scriptPath: '/tmp/mock-hanlp.py',
+        normalizedChapterText: input.rawText,
+      })),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
+    vi.doMock('@/lib/server/knowledge-extraction', () => ({
+      extractChapterKnowledgeOffline: vi.fn(async () => ({
+        extraction: {
+          chapterNo: 1,
+          summary: 'summary-1',
+          characters: [{
+            name: '林砚',
+            aliases: [],
+            descriptionDelta: '剑意更稳',
+            profile: {},
+            status: '活跃',
+            evidence: [{ quote: '林砚剑意更稳。', lineStart: 1, lineEnd: 1 }],
+          }],
+          knownCharacterUpdates: [],
+          unknownCharacterObservations: [],
+          aliasDiscoveries: [],
+          relations: [],
+          events: [],
+          worldbuilding: [],
+          openThreads: [{
+            name: 'thread-1',
+            description: 'proof',
+            evidence: [{ quote: '第1章原文内容。', lineStart: 1, lineEnd: 1 }],
+          }],
+        },
+        provider: 'openai-compatible' as const,
+        model: aiSettings.knowledgeExtraction.openAICompatible.model,
+      })),
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        precomputeRawTextEmbeddingCache: vi.fn(async () => ({
+          totalDocs: 0,
+          completedDocs: 0,
+          cacheHits: 0,
+          cacheMisses: 0,
+          failedDocs: 0,
+          totalBatches: 0,
+          completedBatches: 0,
+          degraded: false,
+          cancelled: false,
+          durationMs: 0,
+        })),
+        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
+      }
+    })
+
+    const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
+    await expect(rebuildKnowledgeForNovel({ novelId })).resolves.toMatchObject({ outcome: 'completed' })
+
+    const rebuiltEntity = queryOne<{
+      id: string
+      canonicalName: string
+      importanceTier: string | null
+      status: string | null
+    }>(
+      `SELECT id, canonicalName, importanceTier, status
+       FROM KnowledgeEntity
+       WHERE branchId = ? AND canonicalName = ?
+       ORDER BY createdAt DESC
+       LIMIT 1`,
+      branchId,
+      '林砚',
+    )
+    const oldEntity = queryOne<{ id: string }>('SELECT id FROM KnowledgeEntity WHERE id = ?', 'entity-linyan-bootstrap')
+
+    const { buildKnowledgeProjection } = await import('@/lib/server/knowledge-view')
+    const projection = await buildKnowledgeProjection([novelId], 1)
+    const projectedCharacter = projection.localCharacters.find((character) => character.id === rebuiltEntity?.id)
+
+    expect(oldEntity).toBeNull()
+    expect(rebuiltEntity).toMatchObject({
+      canonicalName: '林砚',
+      importanceTier: 'protagonist',
+      status: '活跃',
+    })
+    expect(projectedCharacter).toMatchObject({
+      name: '林砚',
+      importanceTier: 'protagonist',
+      classificationKey: 'tier0',
+      classificationLabel: 'Tier 0',
+    })
   })
 
   it('passes combined story-state and HanLP chapter context into extraction calls', async () => {

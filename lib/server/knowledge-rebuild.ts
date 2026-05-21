@@ -1,6 +1,7 @@
-import type { AIProvider, Chapter, KnowledgeExtractionScenarioSettings, PersistedNovelState } from '@/lib/types'
+import type { AIProvider, Chapter, KnowledgeExtractionScenarioSettings, KnowledgeRebuildChapterRange, PersistedNovelState } from '@/lib/types'
 import {
   CHARACTER_ROLE_CARD_KEYS,
+  buildCharacterRoleCardLines,
   buildCharacterDescriptionDelta,
   hasCharacterRoleCardProfile,
   mergeCharacterRoleCardProfiles,
@@ -33,6 +34,7 @@ import type { CharacterImportanceTier } from '@/lib/server/hanlp-contracts'
 import { runHanlpBootstrapForChapter } from '@/lib/server/hanlp-bootstrap'
 import { initializeHanlpBootstrapCharacterEntities } from '@/lib/server/hanlp-bootstrap-initializer'
 import { generateCandidatePromotionSummary } from '@/lib/server/candidate-promotion-summary'
+import { classifyHanlpBootstrapCharacters } from '@/lib/server/character-tier'
 
 type PersistImportedNovelParams = {
   novelId: string
@@ -110,6 +112,8 @@ type CharacterCandidatePromotion = {
   entityId: string
 }
 
+type FormalCharacterImportanceTier = Extract<CharacterImportanceTier, 'protagonist' | 'important' | 'arc'>
+
 type KnowledgeRebuildBatchAliasDiscovery = {
   chapterId: string
   chapterNo: number
@@ -157,6 +161,7 @@ type KnowledgeRebuildHanlpBootstrapState = {
 type KnowledgeRebuildJobPayload = {
   branchId: string
   rebuildStartChapter?: number
+  chapterRange?: KnowledgeRebuildChapterRange
   phase?: KnowledgeRebuildStepKey
   inlineCleanupCompleted?: boolean
   currentChapterId?: string | null
@@ -268,11 +273,123 @@ function getFormalCharacterImportanceTierRank(tier: CharacterImportanceTier | nu
 
 function chooseStrongerFormalCharacterTier(
   existing: CharacterImportanceTier | null | undefined,
-  incoming: Extract<CharacterImportanceTier, 'protagonist' | 'important' | 'arc'>,
+  incoming: FormalCharacterImportanceTier,
 ) {
   return getFormalCharacterImportanceTierRank(existing) >= getFormalCharacterImportanceTierRank(incoming)
     ? (existing ?? incoming)
     : incoming
+}
+
+function chooseKnownFormalCharacterTierByName(params: {
+  branchId: string
+  name: string
+}) {
+  const normalizedName = normalizeCharacterMentionName(params.name)
+  if (!normalizedName || isBlockedCharacterMention(normalizedName)) {
+    return null
+  }
+
+  const directMatches = queryAll<{
+    entityId: string
+    importanceTier: FormalCharacterImportanceTier
+    userConfirmed: number
+  }>(
+    `
+      SELECT entityId, importanceTier, userConfirmed
+      FROM (
+        SELECT e.id AS entityId, e.importanceTier AS importanceTier, e.userConfirmed AS userConfirmed
+        FROM KnowledgeEntity e
+        WHERE e.branchId = ?
+          AND e.entityType = 'character'
+          AND e.importanceTier IN ('protagonist', 'important', 'arc')
+          AND e.canonicalName = ?
+        UNION ALL
+        SELECT e.id AS entityId, e.importanceTier AS importanceTier, e.userConfirmed AS userConfirmed
+        FROM EntityAliasMapping m
+        JOIN KnowledgeEntity e ON e.id = m.entityId
+        WHERE m.branchId = ?
+          AND e.entityType = 'character'
+          AND e.importanceTier IN ('protagonist', 'important', 'arc')
+          AND m.alias = ?
+        UNION ALL
+        SELECT e.id AS entityId, e.importanceTier AS importanceTier, e.userConfirmed AS userConfirmed
+        FROM EntityAlias a
+        JOIN KnowledgeEntity e ON e.id = a.entityId
+        WHERE e.branchId = ?
+          AND e.entityType = 'character'
+          AND e.importanceTier IN ('protagonist', 'important', 'arc')
+          AND a.alias = ?
+      )
+    `,
+    params.branchId,
+    normalizedName,
+    params.branchId,
+    normalizedName,
+    params.branchId,
+    normalizedName,
+  )
+
+  const bestDirectMatch = directMatches.reduce<{
+    importanceTier: FormalCharacterImportanceTier
+    userConfirmed: number
+  } | null>((best, match) => {
+    if (!best) {
+      return { importanceTier: match.importanceTier, userConfirmed: match.userConfirmed }
+    }
+
+    if (match.userConfirmed !== best.userConfirmed) {
+      return match.userConfirmed > best.userConfirmed
+        ? { importanceTier: match.importanceTier, userConfirmed: match.userConfirmed }
+        : best
+    }
+
+    return getFormalCharacterImportanceTierRank(match.importanceTier) > getFormalCharacterImportanceTierRank(best.importanceTier)
+      ? { importanceTier: match.importanceTier, userConfirmed: match.userConfirmed }
+      : best
+  }, null)
+
+  if (bestDirectMatch?.importanceTier) {
+    return bestDirectMatch.importanceTier
+  }
+
+  const totalChapters = queryOne<{ count: number }>(
+    'SELECT COUNT(*) AS count FROM KnowledgeChapter WHERE branchId = ?',
+    params.branchId,
+  )?.count ?? 0
+  const bootstrapPeople = queryAll<{
+    name: string
+    totalCount: number
+    chapterCount: number
+    score: number
+    firstSeenChapter: number | null
+    lastSeenChapter: number | null
+  }>(
+    `
+      SELECT
+        entity_text AS name,
+        SUM(total_count) AS totalCount,
+        COUNT(DISTINCT chapter_no) AS chapterCount,
+        MAX(score) AS score,
+        MIN(chapter_no) AS firstSeenChapter,
+        MAX(chapter_no) AS lastSeenChapter
+      FROM hanlp_bootstrap_entities
+      WHERE branch_id = ?
+        AND entity_type = 'person'
+      GROUP BY entity_text
+    `,
+    params.branchId,
+  )
+
+  const bootstrapDecision = classifyHanlpBootstrapCharacters({
+    people: bootstrapPeople,
+    totalChapters,
+  }).find((decision) => decision.normalizedName === normalizedName)
+
+  if (bootstrapDecision?.tier === 'protagonist' || bootstrapDecision?.tier === 'important' || bootstrapDecision?.tier === 'arc') {
+    return bootstrapDecision.tier
+  }
+
+  return null
 }
 
 function chooseBootstrapSafeEntityStatus(params: {
@@ -373,6 +490,48 @@ function clampProgress(value: number) {
   return Math.max(0, Math.min(1, value))
 }
 
+function normalizePositiveChapterNo(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  return Math.max(1, Math.floor(value))
+}
+
+function normalizeKnowledgeRebuildChapterRange(value: unknown): KnowledgeRebuildChapterRange | undefined {
+  if (!value || typeof value !== 'object') return undefined
+
+  const candidate = value as KnowledgeRebuildChapterRange
+  const startChapter = normalizePositiveChapterNo(candidate.startChapter)
+  const endChapter = normalizePositiveChapterNo(candidate.endChapter)
+
+  if (startChapter === undefined && endChapter === undefined) return undefined
+  if (startChapter !== undefined && endChapter !== undefined && startChapter > endChapter) {
+    return { startChapter: endChapter, endChapter: startChapter }
+  }
+
+  return {
+    ...(startChapter !== undefined ? { startChapter } : {}),
+    ...(endChapter !== undefined ? { endChapter } : {}),
+  }
+}
+
+function resolveKnowledgeRebuildChapterRange(params: {
+  payload: Pick<KnowledgeRebuildJobPayload, 'chapterRange' | 'rebuildStartChapter'>
+  defaultStartChapter: number
+}): Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'> {
+  const normalizedPayloadRange = normalizeKnowledgeRebuildChapterRange(params.payload.chapterRange)
+  const startChapter = normalizedPayloadRange?.startChapter
+    ?? normalizePositiveChapterNo(params.payload.rebuildStartChapter)
+    ?? params.defaultStartChapter
+
+  return {
+    startChapter,
+    ...(normalizedPayloadRange?.endChapter !== undefined ? { endChapter: normalizedPayloadRange.endChapter } : {}),
+  }
+}
+
+function chapterIsInRebuildRange(chapterNo: number, range: Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'>) {
+  return chapterNo >= range.startChapter && (range.endChapter === undefined || chapterNo <= range.endChapter)
+}
+
 function normalizeKnowledgeRebuildJobPayload(payload: unknown) {
   if (!payload || typeof payload !== 'object' || typeof (payload as { branchId?: unknown }).branchId !== 'string') {
     return null
@@ -385,6 +544,7 @@ function normalizeKnowledgeRebuildJobPayload(payload: unknown) {
    const normalizedPhase: KnowledgeRebuildJobPayload['phase'] = rawPhase === 'hanlp-bootstrap' || rawPhase === 'extract' || rawPhase === 'batch-sync' || rawPhase === 'cleanup' || rawPhase === 'write' || rawPhase === 'index'
       ? rawPhase
       : undefined
+  const normalizedChapterRange = normalizeKnowledgeRebuildChapterRange(candidate.chapterRange)
 
   const embeddingSettingsSnapshot = candidate.embeddingSettingsSnapshot
   const normalizedSnapshot =
@@ -444,6 +604,8 @@ function normalizeKnowledgeRebuildJobPayload(payload: unknown) {
   return {
     ...candidate,
     phase: normalizedPhase,
+    chapterRange: normalizedChapterRange,
+    rebuildStartChapter: normalizedChapterRange?.startChapter ?? normalizePositiveChapterNo(candidate.rebuildStartChapter),
     rawTextEmbeddingProgress: typeof candidate.rawTextEmbeddingProgress === 'number'
       ? clampProgress(candidate.rawTextEmbeddingProgress)
       : undefined,
@@ -809,8 +971,8 @@ function getRebuildStartChapter(chapters: KnowledgeChapterRow[]) {
   return firstDirtyChapter?.chapterNo ?? chapters[0]?.chapterNo ?? 1
 }
 
-function getRebuildChapters(chapters: KnowledgeChapterRow[], rebuildStartChapter: number) {
-  return chapters.filter((chapter) => chapter.chapterNo >= rebuildStartChapter)
+function getRebuildChapters(chapters: KnowledgeChapterRow[], chapterRange: Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'>) {
+  return chapters.filter((chapter) => chapterIsInRebuildRange(chapter.chapterNo, chapterRange))
 }
 
 function setWriteQueueInKnowledgeJob(jobId: string, chapters: Array<{ chapterId: string; chapterNo: number }>) {
@@ -1376,22 +1538,35 @@ async function clearKnowledgeGraphData(novelId: string, branchId: string) {
   })
 }
 
-async function clearExtractionCandidatesFromChapter(branchId: string, fromChapterNo: number) {
+function appendChapterRangeSql(columnName: string, range: Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'>) {
+  return range.endChapter === undefined
+    ? { sql: `${columnName} >= ?`, params: [range.startChapter] as SqlParam[] }
+    : { sql: `${columnName} BETWEEN ? AND ?`, params: [range.startChapter, range.endChapter] as SqlParam[] }
+}
+
+async function clearExtractionCandidatesInChapterRange(branchId: string, chapterRange: Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'>) {
+  const range = appendChapterRangeSql('chapter_no', chapterRange)
   execute(
-    'DELETE FROM chapter_extraction_candidates WHERE branch_id = ? AND chapter_no >= ?',
+    `DELETE FROM chapter_extraction_candidates WHERE branch_id = ? AND ${range.sql}`,
     branchId,
-    fromChapterNo
+    ...range.params
   )
 }
 
-async function clearDerivedKnowledgeFromChapter(novelId: string, branchId: string, fromChapterNo: number) {
+async function clearDerivedKnowledgeInChapterRange(novelId: string, branchId: string, chapterRange: Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'>) {
   await withTransaction(async () => {
+    const candidateChapterRange = appendChapterRangeSql('chapter_no', chapterRange)
+    const mentionRange = appendChapterRangeSql('chapterNo', chapterRange)
+    const sourceChapterRange = appendChapterRangeSql('sourceChapter', chapterRange)
+    const eventChapterRange = appendChapterRangeSql('chapterNo', chapterRange)
+    const worldRange = appendChapterRangeSql('validFromChapter', chapterRange)
+    const firstSeenRange = appendChapterRangeSql('firstSeenChapter', chapterRange)
     execute(
       `
         DELETE FROM character_candidate_chapters
         WHERE novel_id = ?
           AND branch_id = ?
-          AND chapter_no >= ?
+          AND ${candidateChapterRange.sql}
           AND candidate_id IN (
             SELECT id
             FROM character_candidates
@@ -1400,119 +1575,134 @@ async function clearDerivedKnowledgeFromChapter(novelId: string, branchId: strin
       `,
       novelId,
       branchId,
-      fromChapterNo,
+      ...candidateChapterRange.params,
       novelId,
       branchId,
     )
     refreshCharacterCandidatesAfterChapterCleanup({ novelId, branchId })
     execute(
-      'DELETE FROM EntityMention WHERE novelId = ? AND branchId = ? AND chapterNo >= ?',
+      `DELETE FROM EntityMention WHERE novelId = ? AND branchId = ? AND ${mentionRange.sql}`,
       novelId,
       branchId,
-      fromChapterNo
+      ...mentionRange.params
     )
     execute(
       `
         DELETE FROM FactEvidence
-        WHERE chapterNo >= ?
+        WHERE factId IN (SELECT id FROM KnowledgeFact WHERE novelId = ? AND branchId = ?)
+          AND (${appendChapterRangeSql('chapterNo', chapterRange).sql}
            OR factId IN (
-             SELECT id FROM KnowledgeFact
-             WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'
-           )
+              SELECT id FROM KnowledgeFact
+              WHERE novelId = ? AND branchId = ? AND ${sourceChapterRange.sql} AND status != 'user_confirmed'
+            ))
       `,
-      fromChapterNo,
       novelId,
       branchId,
-      fromChapterNo
+      ...appendChapterRangeSql('chapterNo', chapterRange).params,
+      novelId,
+      branchId,
+      ...sourceChapterRange.params
     )
     execute(
-      "DELETE FROM KnowledgeFact WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'",
+      `DELETE FROM KnowledgeFact WHERE novelId = ? AND branchId = ? AND ${sourceChapterRange.sql} AND status != 'user_confirmed'`,
       novelId,
       branchId,
-      fromChapterNo
+      ...sourceChapterRange.params
     )
     execute(
-      "DELETE FROM KnowledgeRelation WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'",
+      `DELETE FROM KnowledgeRelation WHERE novelId = ? AND branchId = ? AND ${sourceChapterRange.sql} AND status != 'user_confirmed'`,
       novelId,
       branchId,
-      fromChapterNo
+      ...sourceChapterRange.params
     )
     execute(
-      "DELETE FROM EntityLink WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'",
+      `DELETE FROM EntityLink WHERE novelId = ? AND branchId = ? AND ${sourceChapterRange.sql} AND status != 'user_confirmed'`,
       novelId,
       branchId,
-      fromChapterNo
+      ...sourceChapterRange.params
     )
     execute(
-      "DELETE FROM EntityState WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'",
+      `DELETE FROM EntityState WHERE novelId = ? AND branchId = ? AND ${sourceChapterRange.sql} AND status != 'user_confirmed'`,
       novelId,
       branchId,
-      fromChapterNo
+      ...sourceChapterRange.params
     )
     execute(
-      'DELETE FROM EventParticipant WHERE eventId IN (SELECT id FROM KnowledgeEvent WHERE novelId = ? AND branchId = ? AND chapterNo >= ? AND status != \'user_confirmed\')',
+      `DELETE FROM EventParticipant WHERE eventId IN (SELECT id FROM KnowledgeEvent WHERE novelId = ? AND branchId = ? AND ${eventChapterRange.sql} AND status != 'user_confirmed')`,
       novelId,
       branchId,
-      fromChapterNo
+      ...eventChapterRange.params
     )
     execute(
-      "DELETE FROM KnowledgeEvent WHERE novelId = ? AND branchId = ? AND chapterNo >= ? AND status != 'user_confirmed'",
+      `DELETE FROM KnowledgeEvent WHERE novelId = ? AND branchId = ? AND ${eventChapterRange.sql} AND status != 'user_confirmed'`,
       novelId,
       branchId,
-      fromChapterNo
+      ...eventChapterRange.params
     )
     execute(
-      "DELETE FROM EventLink WHERE novelId = ? AND branchId = ? AND sourceChapter >= ? AND status != 'user_confirmed'",
+      `DELETE FROM EventLink WHERE novelId = ? AND branchId = ? AND ${sourceChapterRange.sql} AND status != 'user_confirmed'`,
       novelId,
       branchId,
-      fromChapterNo
+      ...sourceChapterRange.params
     )
     execute(
-      "DELETE FROM KnowledgeWorld WHERE novelId = ? AND branchId = ? AND validFromChapter >= ? AND status != 'user_confirmed'",
+      `DELETE FROM KnowledgeWorld WHERE novelId = ? AND branchId = ? AND ${worldRange.sql} AND status != 'user_confirmed'`,
       novelId,
       branchId,
-      fromChapterNo
+      ...worldRange.params
     )
     execute(
-      'DELETE FROM EntityAppearance WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND id NOT IN (SELECT promoted_entity_id FROM character_candidates WHERE novel_id = ? AND branch_id = ? AND promoted_entity_id IS NOT NULL)) AND chapterNo >= ?',
+      `DELETE FROM EntityAppearance WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND id NOT IN (SELECT promoted_entity_id FROM character_candidates WHERE novel_id = ? AND branch_id = ? AND promoted_entity_id IS NOT NULL)) AND ${mentionRange.sql}`,
       novelId,
       branchId,
       novelId,
       branchId,
-      fromChapterNo
+      ...mentionRange.params
     )
     execute(
-      'DELETE FROM EntityAlias WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND id NOT IN (SELECT promoted_entity_id FROM character_candidates WHERE novel_id = ? AND branch_id = ? AND promoted_entity_id IS NOT NULL)) AND sourceChapter >= ?',
+      `DELETE FROM EntityAliasMapping WHERE novelId = ? AND branchId = ? AND ${sourceChapterRange.sql} AND entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND userConfirmed = 0 AND id NOT IN (SELECT promoted_entity_id FROM character_candidates WHERE novel_id = ? AND branch_id = ? AND promoted_entity_id IS NOT NULL))`,
+      novelId,
+      branchId,
+      ...sourceChapterRange.params,
       novelId,
       branchId,
       novelId,
       branchId,
-      fromChapterNo
     )
     execute(
-      'DELETE FROM EntityAlias WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND firstSeenChapter >= ? AND userConfirmed = 0 AND id NOT IN (SELECT promoted_entity_id FROM character_candidates WHERE novel_id = ? AND branch_id = ? AND promoted_entity_id IS NOT NULL))',
+      `DELETE FROM EntityAlias WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND id NOT IN (SELECT promoted_entity_id FROM character_candidates WHERE novel_id = ? AND branch_id = ? AND promoted_entity_id IS NOT NULL)) AND ${sourceChapterRange.sql}`,
       novelId,
       branchId,
-      fromChapterNo,
-      novelId,
-      branchId
-    )
-    execute(
-      'DELETE FROM EntityAppearance WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND firstSeenChapter >= ? AND userConfirmed = 0 AND id NOT IN (SELECT promoted_entity_id FROM character_candidates WHERE novel_id = ? AND branch_id = ? AND promoted_entity_id IS NOT NULL))',
       novelId,
       branchId,
-      fromChapterNo,
-      novelId,
-      branchId
+      ...sourceChapterRange.params
     )
-    execute(
-      'DELETE FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND firstSeenChapter >= ? AND userConfirmed = 0 AND id NOT IN (SELECT promoted_entity_id FROM character_candidates WHERE novel_id = ? AND branch_id = ? AND promoted_entity_id IS NOT NULL)',
-      novelId,
-      branchId,
-      fromChapterNo,
-      novelId,
-      branchId
-    )
+    if (chapterRange.endChapter === undefined) {
+      execute(
+        `DELETE FROM EntityAlias WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND ${firstSeenRange.sql} AND userConfirmed = 0 AND id NOT IN (SELECT promoted_entity_id FROM character_candidates WHERE novel_id = ? AND branch_id = ? AND promoted_entity_id IS NOT NULL))`,
+        novelId,
+        branchId,
+        ...firstSeenRange.params,
+        novelId,
+        branchId
+      )
+      execute(
+        `DELETE FROM EntityAppearance WHERE entityId IN (SELECT id FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND ${firstSeenRange.sql} AND userConfirmed = 0 AND id NOT IN (SELECT promoted_entity_id FROM character_candidates WHERE novel_id = ? AND branch_id = ? AND promoted_entity_id IS NOT NULL))`,
+        novelId,
+        branchId,
+        ...firstSeenRange.params,
+        novelId,
+        branchId
+      )
+      execute(
+        `DELETE FROM KnowledgeEntity WHERE novelId = ? AND branchId = ? AND ${firstSeenRange.sql} AND userConfirmed = 0 AND id NOT IN (SELECT promoted_entity_id FROM character_candidates WHERE novel_id = ? AND branch_id = ? AND promoted_entity_id IS NOT NULL)`,
+        novelId,
+        branchId,
+        ...firstSeenRange.params,
+        novelId,
+        branchId
+      )
+    }
     execute(
       `
         UPDATE KnowledgeEntity
@@ -1539,15 +1729,14 @@ async function clearDerivedKnowledgeFromChapter(novelId: string, branchId: strin
     execute(
       `
         UPDATE KnowledgeChapter
-        SET summary = CASE WHEN chapterNo >= ? THEN NULL ELSE summary END,
-            knowledgeStatus = CASE WHEN chapterNo >= ? THEN 'stale' ELSE knowledgeStatus END,
+        SET summary = NULL,
+            knowledgeStatus = 'stale',
             updatedAt = CURRENT_TIMESTAMP
-        WHERE novelId = ? AND branchId = ?
+        WHERE novelId = ? AND branchId = ? AND ${appendChapterRangeSql('chapterNo', chapterRange).sql}
       `,
-      fromChapterNo,
-      fromChapterNo,
       novelId,
-      branchId
+      branchId,
+      ...appendChapterRangeSql('chapterNo', chapterRange).params
     )
   })
 }
@@ -1625,8 +1814,8 @@ export function buildChapterExtractionCandidateSourceHash(params: {
   }))
 }
 
-function loadOrderedRebuildQueue(chapters: KnowledgeChapterRow[], rebuildStartChapter: number) {
-  return getRebuildChapters(chapters, rebuildStartChapter)
+function loadOrderedRebuildQueue(chapters: KnowledgeChapterRow[], chapterRange: Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'>) {
+  return getRebuildChapters(chapters, chapterRange)
     .map((chapter) => ({
       chapterId: chapter.id,
       chapterNo: chapter.chapterNo,
@@ -1811,6 +2000,7 @@ async function extractChapterCandidates(params: {
     currentChapterText: params.chapter.rawText,
   })
   const hanlpPromptContextText = buildHanlpCurrentChapterPromptContextText({
+    novelId: params.novelId,
     branchId: params.branchId,
     chapterId: params.chapter.id,
     chapterNo: params.chapter.chapterNo,
@@ -1868,6 +2058,7 @@ async function extractChapterCandidates(params: {
 }
 
 function buildHanlpCurrentChapterPromptContextText(params: {
+  novelId: string
   branchId: string
   chapterId: string
   chapterNo: number
@@ -1955,9 +2146,21 @@ function buildHanlpCurrentChapterPromptContextText(params: {
       aliases.push(normalizedName)
     }
 
-    const line = aliases.length
+    const nameText = aliases.length
       ? `${entity.canonicalName}（别名：${aliases.join('、')}）`
       : entity.canonicalName
+    const profile = (entity.importanceTier === 'protagonist' || entity.importanceTier === 'important')
+      ? loadMergedCharacterProfileAtChapter({
+          novelId: params.novelId,
+          branchId: params.branchId,
+          entityId: resolution.entityId,
+          chapterNo: Math.max(0, params.chapterNo - 1),
+        })
+      : {}
+    const profileLines = buildCharacterRoleCardLines(profile, { includeEvidence: false, includeNotes: true })
+    const line = profileLines.length
+      ? `${nameText}｜角色卡：${profileLines.join('｜')}`
+      : nameText
 
     switch (entity.importanceTier) {
       case 'protagonist':
@@ -1980,6 +2183,7 @@ function buildHanlpCurrentChapterPromptContextText(params: {
 
   const lines = [
     'HanLP 当前章节实体提示（仅作称呼判别与本章背景补充，不能替代原文证据）：',
+    '主角和重要配角若附带角色卡，只能用于判断本章 delta；本章新增/变化仍必须由章节正文证据支持。',
   ]
 
   for (const label of ['Tier 0 主角', 'Tier 1 重要配角', 'Tier 2 篇章配角']) {
@@ -2694,16 +2898,29 @@ function ensureCharacterEntityForCanonicalName(params: {
   }
 
   if (resolution.kind === 'resolved') {
-    const existing = queryOne<{ description: string | null; firstSeenChapter: number | null; lastSeenChapter: number | null }>(
-      'SELECT description, firstSeenChapter, lastSeenChapter FROM KnowledgeEntity WHERE id = ? LIMIT 1',
+    const existing = queryOne<{
+      description: string | null
+      firstSeenChapter: number | null
+      lastSeenChapter: number | null
+      importanceTier: CharacterImportanceTier | null
+      userConfirmed: number
+    }>(
+      'SELECT description, firstSeenChapter, lastSeenChapter, importanceTier, userConfirmed FROM KnowledgeEntity WHERE id = ? LIMIT 1',
       resolution.entityId,
     )
+    const nextImportanceTier = existing?.userConfirmed && existing.importanceTier
+      ? existing.importanceTier
+      : (existing?.importanceTier ?? chooseKnownFormalCharacterTierByName({
+          branchId: params.branchId,
+          name: normalizedName,
+        }))
     execute(
       `
         UPDATE KnowledgeEntity
         SET description = ?,
             firstSeenChapter = ?,
             lastSeenChapter = ?,
+            importanceTier = ?,
             status = COALESCE(?, status),
             updatedAt = CURRENT_TIMESTAMP
         WHERE id = ?
@@ -2711,19 +2928,24 @@ function ensureCharacterEntityForCanonicalName(params: {
       chooseConciseKnowledgeText(existing?.description, params.description ?? null) || null,
       Math.min(existing?.firstSeenChapter ?? params.chapterNo, params.chapterNo),
       Math.max(existing?.lastSeenChapter ?? params.chapterNo, params.chapterNo),
+      nextImportanceTier,
       params.status ?? null,
       resolution.entityId,
     )
     return resolution.entityId
   }
 
+  const inheritedImportanceTier = chooseKnownFormalCharacterTierByName({
+    branchId: params.branchId,
+    name: normalizedName,
+  })
   const entityId = uid('entity')
   execute(
     `
       INSERT INTO KnowledgeEntity (
-        id, novelId, branchId, entityType, canonicalName, description, firstSeenChapter, lastSeenChapter, status
+        id, novelId, branchId, entityType, canonicalName, description, firstSeenChapter, lastSeenChapter, importanceTier, status
       )
-      VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, ?)
     `,
     entityId,
     params.novelId,
@@ -2732,6 +2954,7 @@ function ensureCharacterEntityForCanonicalName(params: {
     params.description?.trim() || null,
     params.chapterNo,
     params.chapterNo,
+    inheritedImportanceTier,
     params.status?.trim() || null,
   )
   return entityId
@@ -3416,8 +3639,8 @@ function insertFactEvidenceRows(params: {
 
 function hasCurrentProfileDetails(profile: CharacterRoleCardProfile | null | undefined) {
   return CHARACTER_ROLE_CARD_KEYS.some((key) => {
-    const summary = profile?.[key]?.summary?.trim()
-    return Boolean(summary && summary !== '没有变化')
+    const content = profile?.[key]?.content?.trim() || profile?.[key]?.summary?.trim()
+    return Boolean(content && content !== '没有变化')
   })
 }
 
@@ -4211,10 +4434,12 @@ type RebuildKnowledgeForNovelParams = {
   novelId: string
   branchId?: string
   jobId?: string
+  chapterRange?: KnowledgeRebuildChapterRange
 }
 
-export async function startKnowledgeRebuildForNovel(params: { novelId: string; branchId?: string }) {
+export async function startKnowledgeRebuildForNovel(params: { novelId: string; branchId?: string; chapterRange?: KnowledgeRebuildChapterRange }) {
   const branchId = params.branchId ?? getMainBranchId(params.novelId)
+  const chapterRange = normalizeKnowledgeRebuildChapterRange(params.chapterRange)
   const activeJob = queryOne<{ id: string; status: string }>(
     "SELECT id, status FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = 'extract_chapter_knowledge' AND status IN ('queued', 'running', 'paused') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1",
     params.novelId,
@@ -4238,7 +4463,7 @@ export async function startKnowledgeRebuildForNovel(params: { novelId: string; b
     branchId,
     jobType: 'extract_chapter_knowledge',
     currentStep: '准备重建',
-    payload: { branchId },
+    payload: { branchId, chapterRange, rebuildStartChapter: chapterRange?.startChapter },
   })
 
   if (!job?.id) {
@@ -4299,7 +4524,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
         branchId,
         jobType: 'extract_chapter_knowledge',
         currentStep: '准备重建',
-        payload: { branchId },
+        payload: { branchId, chapterRange: normalizeKnowledgeRebuildChapterRange(params.chapterRange), rebuildStartChapter: normalizeKnowledgeRebuildChapterRange(params.chapterRange)?.startChapter },
       })
 
   if (!job?.id) {
@@ -4313,15 +4538,25 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
       branchId
     )
     const defaultRebuildStartChapter = getRebuildStartChapter(chapters)
-    const defaultRebuildChapters = getRebuildChapters(chapters, defaultRebuildStartChapter)
+    const requestedChapterRange = normalizeKnowledgeRebuildChapterRange(params.chapterRange)
     let jobState = getKnowledgeRebuildJobState(job.id)
+    const defaultChapterRange = resolveKnowledgeRebuildChapterRange({
+      payload: {
+        rebuildStartChapter: jobState?.payload.rebuildStartChapter ?? defaultRebuildStartChapter,
+        chapterRange: jobState?.payload.chapterRange ?? requestedChapterRange,
+      },
+      defaultStartChapter: defaultRebuildStartChapter,
+    })
+    const defaultRebuildChapters = getRebuildChapters(chapters, defaultChapterRange)
+    const hanlpBootstrapChapters = chapters.slice().sort((left, right) => left.chapterNo - right.chapterNo)
     if (!isKnowledgeRebuildJobStateInitialized(jobState)) {
       const chapterWeightsById = Object.fromEntries(defaultRebuildChapters.map((chapter) => [chapter.id, getChapterProgressWeight(chapter.rawText)]))
       const totalChapterWeight = defaultRebuildChapters.reduce((sum, chapter) => sum + (chapterWeightsById[chapter.id] ?? 0), 0)
 
         initializeKnowledgeRebuildJobState(job.id, {
           branchId,
-          rebuildStartChapter: defaultRebuildStartChapter,
+          rebuildStartChapter: defaultChapterRange.startChapter,
+          chapterRange: defaultChapterRange,
           phase: 'hanlp-bootstrap',
           inlineCleanupCompleted: false,
           pendingChapterIds: defaultRebuildChapters.map((chapter) => chapter.id),
@@ -4333,7 +4568,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
           extractionSettings: loadStoredAISettings().knowledgeExtraction,
           embeddingSettingsSnapshot: buildEmbeddingSettingsSnapshot(),
           indexProgress: undefined,
-           hanlpBootstrap: createEmptyHanlpBootstrapState(defaultRebuildChapters.length),
+           hanlpBootstrap: createEmptyHanlpBootstrapState(hanlpBootstrapChapters.length),
            orderedAliasDiscoveries: [],
            appliedAliasDiscoveryCount: 0,
            stageStartedAtByKey: {
@@ -4358,7 +4593,10 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
       }
 
         const currentJobState = jobState
-        const rebuildStartChapter = currentJobState.payload.rebuildStartChapter ?? defaultRebuildStartChapter
+        const rebuildChapterRange = resolveKnowledgeRebuildChapterRange({
+          payload: currentJobState.payload,
+          defaultStartChapter: defaultRebuildStartChapter,
+        })
 
         if (currentJobState.phase === 'hanlp-bootstrap') {
           const currentChapters = queryAll<KnowledgeChapterRow>(
@@ -4366,9 +4604,9 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             params.novelId,
             branchId
           )
-          const hanlpState = currentJobState.payload.hanlpBootstrap ?? createEmptyHanlpBootstrapState(currentJobState.payload.totalChapterCount ?? 0)
+          const hanlpState = currentJobState.payload.hanlpBootstrap ?? createEmptyHanlpBootstrapState(currentChapters.length)
           const remainingChapters = currentChapters
-            .filter((chapter) => chapter.chapterNo >= rebuildStartChapter && !hanlpState.completedChapterIds.includes(chapter.id))
+            .filter((chapter) => !hanlpState.completedChapterIds.includes(chapter.id))
             .sort((left, right) => left.chapterNo - right.chapterNo)
 
           if (!remainingChapters.length) {
@@ -4445,8 +4683,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
               progress: 0.02,
             })
             assertKnowledgeRebuildContinues(job.id)
-            await clearExtractionCandidatesFromChapter(branchId, rebuildStartChapter)
-            await clearDerivedKnowledgeFromChapter(params.novelId, branchId, rebuildStartChapter)
+            await clearDerivedKnowledgeInChapterRange(params.novelId, branchId, rebuildChapterRange)
             markInlineKnowledgeCleanupCompleted(job.id)
             continue
           }
@@ -4457,7 +4694,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             branchId
           )
           const remainingChapters = currentChapters
-            .filter((chapter) => chapter.chapterNo >= rebuildStartChapter && currentJobState.pendingChapterIds.includes(chapter.id))
+            .filter((chapter) => chapterIsInRebuildRange(chapter.chapterNo, rebuildChapterRange) && currentJobState.pendingChapterIds.includes(chapter.id))
             .sort((left, right) => left.chapterNo - right.chapterNo)
 
           ensureRawTextEmbeddingPrecomputeStarted({
@@ -4534,7 +4771,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             params.novelId,
             branchId
           )
-          const orderedChapters = loadOrderedRebuildQueue(currentChapters, rebuildStartChapter)
+          const orderedChapters = loadOrderedRebuildQueue(currentChapters, rebuildChapterRange)
           const extractionSettings = getKnowledgeExtractionSettingsSnapshot(currentJobState.payload)
           const orderedAliasDiscoveries = buildBatchAliasDiscoveryPlan({
             branchId,
