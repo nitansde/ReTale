@@ -31,7 +31,7 @@ const manifest = writeRoleplaySafeQaManifest({
   mode: 'roleplay-safe-playwright',
   sourceDatabase: null,
   nextDistDir: SAFE_QA_NEXT_DIST_DIR,
-  webServerCommand: `npm run dev -- --hostname ${SAFE_QA_HOST} --port ${SAFE_QA_PORT}`,
+  webServerCommand: 'node scripts/next-test-server.mjs',
 })
 
 console.log(`[roleplay-safe-qa] Starting isolated browser QA at ${SAFE_QA_BASE_URL}`)
@@ -39,13 +39,15 @@ console.log(`[roleplay-safe-qa] Using dedicated test DB ${manifest.databasePath}
 console.log(`[roleplay-safe-qa] Verifying UI at ${SAFE_QA_LIBRARY_URL}`)
 console.log(`[roleplay-safe-qa] Using isolated Next dist dir ${SAFE_QA_NEXT_DIST_DIR}`)
 
-const child = spawn('npm', ['run', 'dev', '--', '--hostname', SAFE_QA_HOST, '--port', String(SAFE_QA_PORT)], {
+const child = spawn('node', ['scripts/next-test-server.mjs'], {
   cwd: ROOT,
   stdio: 'inherit',
   env: {
     ...process.env,
-    CHATBOOK_NEXT_DIST_DIR: SAFE_QA_NEXT_DIST_DIR,
-    DATABASE_URL: `file:${tempDbPath}`,
+    CHATBOOK_INTERNAL_ALLOW_TEST_OVERRIDES: '1',
+    CHATBOOK_SERVER_DIST_DIR: SAFE_QA_NEXT_DIST_DIR,
+    CHATBOOK_SERVER_DATABASE_PATH: tempDbPath,
+    CHATBOOK_SERVER_DATABASE_URL: `file:${tempDbPath}`,
   },
 })
 
