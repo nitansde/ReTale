@@ -684,6 +684,8 @@ export async function buildKnowledgeProjection(novelIds?: string[], asOfChapter?
           SELECT id, novelId, canonicalName, description, status, importanceTier, importance
           FROM KnowledgeEntity
           WHERE branchId IN (${placeholders}) AND entityType = 'character'
+            AND importanceTier IN ('protagonist', 'important', 'arc')
+            AND (status IS NULL OR status NOT IN ('rejected', 'outdated', 'potentially_stale'))
             ${applyAsOfChapter ? 'AND (firstSeenChapter IS NULL OR firstSeenChapter <= ?)' : ''}
           ORDER BY importance DESC, canonicalName ASC
         `,
@@ -708,7 +710,12 @@ export async function buildKnowledgeProjection(novelIds?: string[], asOfChapter?
                    se.novelId as sourceNovelId
             FROM KnowledgeRelation r
             JOIN KnowledgeEntity se ON se.id = r.sourceEntityId
+            JOIN KnowledgeEntity te ON te.id = r.targetEntityId
             WHERE r.branchId IN (${placeholders}) AND r.status NOT IN ('rejected', 'outdated', 'potentially_stale')
+              AND se.entityType = 'character' AND se.importanceTier IN ('protagonist', 'important', 'arc')
+              AND te.entityType = 'character' AND te.importanceTier IN ('protagonist', 'important', 'arc')
+              AND (se.status IS NULL OR se.status NOT IN ('rejected', 'outdated', 'potentially_stale'))
+              AND (te.status IS NULL OR te.status NOT IN ('rejected', 'outdated', 'potentially_stale'))
               ${applyAsOfChapter ? `AND r.validFromChapter <= ? AND r.validUntilChapter > ?` : ''}
             ORDER BY r.sourceChapter ASC, r.strength DESC
           `,

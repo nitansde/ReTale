@@ -202,6 +202,7 @@ describe('/api/knowledge-view', () => {
     const protagonistEntityId = `${novelId}-entity-protagonist`
     const importantEntityId = `${novelId}-entity-important`
     const arcEntityId = `${novelId}-entity-arc`
+    const rejectedArcEntityId = `${novelId}-entity-rejected-arc`
 
     seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-classification-1', chapterNo: 1 })
 
@@ -220,6 +221,11 @@ describe('/api/knowledge-view', () => {
         id, novelId, branchId, entityType, canonicalName, importanceTier, importance, firstSeenChapter, lastSeenChapter, status
       ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, ?)`
     ).run(arcEntityId, novelId, mainBranchId, '灰袍老人', 'arc', 3, 1, 1, 'candidate_promoted')
+    database.prepare(
+      `INSERT INTO KnowledgeEntity (
+        id, novelId, branchId, entityType, canonicalName, importanceTier, importance, firstSeenChapter, lastSeenChapter, status
+      ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, ?)`
+    ).run(rejectedArcEntityId, novelId, mainBranchId, '被拒绝的临时角色', 'arc', 1, 1, 1, 'rejected')
 
     database.prepare('INSERT INTO EntityAlias (id, entityId, alias, sourceChapter) VALUES (?, ?, ?, ?)')
       .run(`${novelId}-alias-1`, importantEntityId, '阿九', 1)
@@ -268,6 +274,7 @@ describe('/api/knowledge-view', () => {
       }),
     ]))
     expect(payload.localCharacters.some((character) => character.name === '路人甲')).toBe(false)
+    expect(payload.localCharacters.some((character) => character.name === '被拒绝的临时角色')).toBe(false)
   })
 
   it('surfaces HanLP telemetry on the knowledge rebuild status payload', async () => {
