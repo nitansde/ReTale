@@ -34,7 +34,7 @@ function resolveDatabasePath(databaseUrl: string) {
       return rawPath
     }
 
-    throw new Error(`Unsupported relative SQLite DATABASE_URL: ${databaseUrl}`)
+    return path.join(process.cwd(), rawPath.replace(/^\.\//, ''))
   }
 
   if (path.isAbsolute(databaseUrl)) {
@@ -490,10 +490,13 @@ function runBootMigrations(database: DatabaseSync) {
   addColumnIfMissing(database, 'story_timeline_nodes', 'continue_block_id', 'continue_block_id TEXT')
   addColumnIfMissing(database, 'story_timeline_nodes', 'readable_label', 'readable_label TEXT')
   addColumnIfMissing(database, 'story_timeline_nodes', 'readable_lineage_label', 'readable_lineage_label TEXT')
+  addColumnIfMissing(database, 'story_timeline_nodes', 'roleplay_session_id', 'roleplay_session_id TEXT')
   database.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_story_timeline_nodes_continue_block ON story_timeline_nodes(continue_block_id) WHERE continue_block_id IS NOT NULL')
   database.exec('CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_continue_block ON story_timeline_nodes(continue_block_id)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_session ON story_timeline_nodes(what_if_session_id)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_run ON story_timeline_nodes(future_jump_run_id)')
+  database.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_story_timeline_nodes_roleplay_session ON story_timeline_nodes(roleplay_session_id) WHERE roleplay_session_id IS NOT NULL')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_roleplay_session ON story_timeline_nodes(roleplay_session_id)')
   database.exec('CREATE TABLE IF NOT EXISTS continue_blocks (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_timeline_node_id TEXT, source_chapter_no INTEGER NOT NULL, title TEXT NOT NULL, subtitle TEXT, user_instruction TEXT NOT NULL, selected_text TEXT NOT NULL, original_text TEXT NOT NULL, latest_text TEXT NOT NULL, latest_revision_no INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT \"active\", created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE, FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE, FOREIGN KEY (parent_timeline_node_id) REFERENCES story_timeline_nodes(id) ON DELETE SET NULL)')
   database.exec('CREATE TABLE IF NOT EXISTS continue_block_revisions (id TEXT PRIMARY KEY, continue_block_id TEXT NOT NULL, revision_no INTEGER NOT NULL, revision_kind TEXT NOT NULL, user_instruction TEXT NOT NULL, selected_text TEXT NOT NULL, original_text TEXT NOT NULL, generated_text TEXT NOT NULL, title TEXT NOT NULL, subtitle TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (continue_block_id) REFERENCES continue_blocks(id) ON DELETE CASCADE, UNIQUE (continue_block_id, revision_no))')
   addColumnIfMissing(database, 'continue_blocks', 'latest_input_tokens', 'latest_input_tokens INTEGER')
@@ -507,6 +510,14 @@ function runBootMigrations(database: DatabaseSync) {
   database.exec('CREATE INDEX IF NOT EXISTS idx_continue_block_revisions_block ON continue_block_revisions(continue_block_id)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_what_if_sessions_branch_source ON what_if_sessions(base_branch_id, source_chapter_no)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_what_if_deltas_session ON what_if_deltas(session_id)')
+  database.exec('CREATE TABLE IF NOT EXISTS roleplay_sessions (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL, branch_id TEXT NOT NULL, title TEXT NOT NULL, subtitle TEXT, source_chapter_id TEXT, source_chapter_no INTEGER NOT NULL, source_chapter_title TEXT, source_timeline_node_id TEXT, source_timeline_node_type TEXT, source_selected_text TEXT NOT NULL, source_text_snapshot TEXT NOT NULL, source_selected_line_start INTEGER, source_selected_line_end INTEGER, status TEXT NOT NULL DEFAULT "active", created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE, FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE, FOREIGN KEY (source_chapter_id) REFERENCES KnowledgeChapter(id) ON DELETE SET NULL, FOREIGN KEY (source_timeline_node_id) REFERENCES story_timeline_nodes(id) ON DELETE SET NULL)')
+  database.exec('CREATE TABLE IF NOT EXISTS roleplay_messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, message_index INTEGER NOT NULL, turn_index INTEGER NOT NULL, variant_index INTEGER NOT NULL DEFAULT 1, role TEXT NOT NULL, content TEXT NOT NULL, parent_message_id TEXT, forked_from_message_id TEXT, variant_group_id TEXT, status TEXT NOT NULL DEFAULT "active", created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (session_id) REFERENCES roleplay_sessions(id) ON DELETE CASCADE, FOREIGN KEY (parent_message_id) REFERENCES roleplay_messages(id) ON DELETE SET NULL, FOREIGN KEY (forked_from_message_id) REFERENCES roleplay_messages(id) ON DELETE SET NULL, UNIQUE (session_id, message_index), UNIQUE (session_id, turn_index, variant_index))')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_roleplay_sessions_branch_source ON roleplay_sessions(branch_id, source_chapter_no)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_roleplay_sessions_source_node ON roleplay_sessions(source_timeline_node_id)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_roleplay_messages_session_order ON roleplay_messages(session_id, message_index)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_roleplay_messages_parent ON roleplay_messages(parent_message_id)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_roleplay_messages_fork ON roleplay_messages(forked_from_message_id)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_roleplay_messages_variant_group ON roleplay_messages(session_id, variant_group_id)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_outline_nodes_branch_track_sort ON outline_nodes(novel_id, branch_id, track_key, sort_order)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_outline_nodes_branch_chapter ON outline_nodes(novel_id, branch_id, chapter_no)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_outline_nodes_source_type ON outline_nodes(branch_id, source_type)')
