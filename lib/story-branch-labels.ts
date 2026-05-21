@@ -18,6 +18,7 @@ const STORY_BRANCH_LABEL_PREFIXES = {
   continue_block: 'CONT',
   what_if: 'IF',
   future_jump: 'JUMP',
+  roleplay_session: 'RP',
 } as const satisfies Record<StoryTimelineNodeType, string>
 
 export function formatStoryBranchReadableLabel(nodeType: StoryTimelineNodeType, labelIndex: number) {
@@ -62,4 +63,34 @@ export function formatStoryBranchInstructionPreview(value: string | null | undef
 
   const characters = Array.from(normalized)
   return characters.length > maxChars ? `${characters.slice(0, maxChars).join('')}…` : characters.join('')
+}
+
+export function summarizeStoryBranchText(value: string | null | undefined, maxChars = 24) {
+  const normalized = value?.replace(/\s+/g, ' ').trim() ?? ''
+  if (!normalized) return ''
+
+  const characters = Array.from(normalized)
+  return characters.length > maxChars ? `${characters.slice(0, maxChars).join('')}…` : characters.join('')
+}
+
+export function resolveRoleplaySessionTimelinePresentation(input: {
+  anchorChapterNo: number
+  title?: string | null
+  subtitle?: string | null
+  firstUserMessage?: string | null
+  sourceSelectedText?: string | null
+  sourceTextSnapshot?: string | null
+}) {
+  const explicitTitle = input.title?.trim() ?? ''
+  const explicitSubtitle = input.subtitle?.trim() ?? ''
+  const firstUserSummary = summarizeStoryBranchText(input.firstUserMessage, 22)
+  const selectedTextSummary = summarizeStoryBranchText(input.sourceSelectedText, 22)
+  const sourceSnapshotSummary = summarizeStoryBranchText(input.sourceTextSnapshot, 22)
+  const title = explicitTitle || firstUserSummary || selectedTextSummary || sourceSnapshotSummary || `RP · 第 ${input.anchorChapterNo} 章`
+  const subtitleSource = explicitSubtitle
+    || summarizeStoryBranchText(explicitTitle ? input.firstUserMessage : input.sourceSelectedText, 40)
+    || summarizeStoryBranchText(explicitTitle ? input.sourceSelectedText : input.sourceTextSnapshot, 40)
+  const subtitle = subtitleSource && subtitleSource !== title ? subtitleSource : null
+
+  return { title, subtitle }
 }

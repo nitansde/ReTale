@@ -1,5 +1,9 @@
 import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
-import { buildStoryBranchReadableLineageLabel, formatStoryBranchReadableLabel } from '@/lib/story-branch-labels'
+import {
+  buildStoryBranchReadableLineageLabel,
+  formatStoryBranchReadableLabel,
+  resolveRoleplaySessionTimelinePresentation,
+} from '@/lib/story-branch-labels'
 import { orderStoryTimelineBranchNodes } from '@/lib/story-branch-types'
 import { countChineseFriendlyWords } from '@/lib/utils'
 import type {
@@ -35,6 +39,7 @@ type StoryTimelineNodeRow = {
   continue_block_id: string | null
   what_if_session_id: string | null
   future_jump_run_id: string | null
+  roleplay_session_id: string | null
   continue_block_latest_text: string | null
   continue_block_latest_input_tokens: number | null
   continue_block_latest_output_tokens: number | null
@@ -96,6 +101,23 @@ type KnowledgeChapterRow = {
   rawText: string | null
 }
 
+type RoleplayTimelineSessionRow = {
+  id: string
+  novel_id: string
+  branch_id: string
+  title: string
+  subtitle: string | null
+  source_chapter_no: number
+  source_timeline_node_id: string | null
+  source_selected_text: string
+  source_text_snapshot: string
+  status: string
+  created_at: string
+  updated_at: string
+  first_user_message: string | null
+  latest_message: string | null
+}
+
 function toStoryTimelineNodeRecord(row: StoryTimelineNodeRow): StoryTimelineNodeRecord {
   return {
     id: row.id,
@@ -113,6 +135,7 @@ function toStoryTimelineNodeRecord(row: StoryTimelineNodeRow): StoryTimelineNode
     continueBlockId: row.continue_block_id,
     whatIfSessionId: row.what_if_session_id,
     futureJumpRunId: row.future_jump_run_id,
+    roleplaySessionId: row.roleplay_session_id,
     currentText: row.continue_block_latest_text ?? row.what_if_generated_text ?? row.future_jump_generated_target_text,
     latestText: row.continue_block_latest_text,
     inputTokens: row.continue_block_latest_input_tokens ?? row.what_if_input_tokens ?? row.future_jump_latest_input_tokens,
@@ -138,6 +161,140 @@ function withReadableBranchMetadata<T extends StoryTimelineNodeRecord>(nodes: T[
     readableLabel: node.readableLabel ?? formatStoryBranchReadableLabel(node.nodeType, node.labelIndex),
     readableLineageLabel: node.readableLineageLabel ?? buildStoryBranchReadableLineageLabel(node, nodesById),
   }))
+}
+
+function loadRoleplayTimelineSessions(novelId: string, branchId: string, db: Db) {
+  return db.queryAll<RoleplayTimelineSessionRow>(
+    `SELECT
+       roleplay_sessions.id,
+       roleplay_sessions.novel_id,
+       roleplay_sessions.branch_id,
+       roleplay_sessions.title,
+       roleplay_sessions.subtitle,
+       roleplay_sessions.source_chapter_no,
+       roleplay_sessions.source_timeline_node_id,
+       roleplay_sessions.source_selected_text,
+       roleplay_sessions.source_text_snapshot,
+       roleplay_sessions.status,
+       roleplay_sessions.created_at,
+       roleplay_sessions.updated_at,
+       (
+         SELECT roleplay_messages.content
+         FROM roleplay_messages
+         WHERE roleplay_messages.session_id = roleplay_sessions.id AND roleplay_messages.role = 'user'
+         ORDER BY roleplay_messages.message_index ASC, roleplay_messages.id ASC
+         LIMIT 1
+       ) AS first_user_message,
+       (
+         SELECT roleplay_messages.content
+         FROM roleplay_messages
+         WHERE roleplay_messages.session_id = roleplay_sessions.id
+         ORDER BY roleplay_messages.message_index DESC, roleplay_messages.id DESC
+         LIMIT 1
+       ) AS latest_message
+     FROM roleplay_sessions
+     WHERE roleplay_sessions.novel_id = ? AND roleplay_sessions.branch_id = ?
+     ORDER BY roleplay_sessions.created_at ASC, roleplay_sessions.id ASC`,
+    novelId,
+    branchId
+  )
+}
+
+function buildRoleplayTimelineNodeRecord(session: RoleplayTimelineSessionRow, labelIndex: number): StoryTimelineNodeRecord {
+  const presentation = resolveRoleplaySessionTimelinePresentation({
+    anchorChapterNo: session.source_chapter_no,
+    title: session.title,
+    subtitle: session.subtitle,
+    firstUserMessage: session.first_user_message,
+    sourceSelectedText: session.source_selected_text,
+    sourceTextSnapshot: session.source_text_snapshot,
+  })
+
+  return {
+    id: `roleplay-session:${session.id}`,
+    novelId: session.novel_id,
+    branchId: session.branch_id,
+    nodeType: 'roleplay_session',
+    labelIndex,
+    anchorChapterNo: session.source_chapter_no,
+    title: presentation.title,
+    subtitle: presentation.subtitle,
+    parentNodeId: session.source_timeline_node_id,
+    sourceChapterNo: session.source_chapter_no,
+    targetChapterNo: null,
+    chapterId: null,
+    continueBlockId: null,
+    whatIfSessionId: null,
+    futureJumpRunId: null,
+    roleplaySessionId: session.id,
+    currentText: session.latest_message ?? session.first_user_message ?? session.source_text_snapshot,
+    latestText: null,
+    latestRevisionNo: null,
+    userInstruction: null,
+    selectedText: session.source_selected_text,
+    originalText: session.source_text_snapshot,
+    inputTokens: null,
+    outputTokens: null,
+    laneIndex: 0,
+    colorToken: 'emerald',
+    status: session.status,
+    createdAt: session.created_at,
+    updatedAt: session.updated_at,
+  }
+}
+
+function mergeRoleplayTimelineNodes(
+  nodes: StoryTimelineNodeRecord[],
+  roleplaySessions: RoleplayTimelineSessionRow[]
+): StoryTimelineNodeRecord[] {
+  if (!roleplaySessions.length) return nodes
+
+  const roleplaySessionById = new Map(roleplaySessions.map((session) => [session.id, session]))
+  const mergedNodes = nodes.map((node) => {
+    if (node.nodeType !== 'roleplay_session' || !node.roleplaySessionId) return node
+
+    const session = roleplaySessionById.get(node.roleplaySessionId)
+    if (!session) return node
+
+    const presentation = resolveRoleplaySessionTimelinePresentation({
+      anchorChapterNo: node.anchorChapterNo,
+      title: node.title,
+      subtitle: node.subtitle,
+      firstUserMessage: session.first_user_message,
+      sourceSelectedText: session.source_selected_text,
+      sourceTextSnapshot: session.source_text_snapshot,
+    })
+
+    return {
+      ...node,
+      parentNodeId: node.parentNodeId ?? session.source_timeline_node_id,
+      sourceChapterNo: node.sourceChapterNo ?? session.source_chapter_no,
+      title: presentation.title,
+      subtitle: presentation.subtitle,
+      currentText: node.currentText ?? session.latest_message ?? session.first_user_message ?? session.source_text_snapshot,
+      selectedText: node.selectedText ?? session.source_selected_text,
+      originalText: node.originalText ?? session.source_text_snapshot,
+      status: node.status || session.status,
+    }
+  })
+
+  const existingRoleplaySessionIds = new Set(
+    mergedNodes
+      .filter((node) => node.nodeType === 'roleplay_session' && node.roleplaySessionId)
+      .map((node) => node.roleplaySessionId as string)
+  )
+
+  let nextLabelIndex = mergedNodes
+    .filter((node) => node.nodeType === 'roleplay_session')
+    .reduce((maxIndex, node) => Math.max(maxIndex, node.labelIndex), 0)
+
+  for (const session of roleplaySessions) {
+    if (existingRoleplaySessionIds.has(session.id)) continue
+    nextLabelIndex += 1
+    mergedNodes.push(buildRoleplayTimelineNodeRecord(session, nextLabelIndex))
+  }
+
+  return mergedNodes
 }
 
 function loadStoryTimelineNodeLineageScope(nodeId: string, db: Db, scoped = new Map<string, StoryTimelineNodeRecord>()) {
@@ -253,8 +410,8 @@ export function createStoryTimelineNode(input: Omit<StoryTimelineNodeRecord, 'cr
     `INSERT INTO story_timeline_nodes (
       id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
       parent_node_id, source_chapter_no, target_chapter_no, chapter_id, continue_block_id,
-      what_if_session_id, future_jump_run_id, readable_label, readable_lineage_label, lane_index, color_token, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      what_if_session_id, future_jump_run_id, roleplay_session_id, readable_label, readable_lineage_label, lane_index, color_token, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.id,
     input.novelId,
     input.branchId,
@@ -270,6 +427,7 @@ export function createStoryTimelineNode(input: Omit<StoryTimelineNodeRecord, 'cr
     input.continueBlockId,
     input.whatIfSessionId,
     input.futureJumpRunId,
+    input.roleplaySessionId ?? null,
     input.readableLabel ?? null,
     input.readableLineageLabel ?? null,
     input.laneIndex,
@@ -306,6 +464,50 @@ export function findStoryTimelineNodeByWhatIfSessionId(whatIfSessionId: string, 
     whatIfSessionId
   )
   return row ? withReadableBranchMetadataForNode(row.id, db) : null
+}
+
+export function findStoryTimelineNodeByRoleplaySessionId(roleplaySessionId: string, db: Db = defaultDb) {
+  const row = db.queryOne<StoryTimelineNodeRow>(
+    `${STORY_TIMELINE_NODE_SELECT} WHERE story_timeline_nodes.roleplay_session_id = ? LIMIT 1`,
+    roleplaySessionId
+  )
+  if (row) return withReadableBranchMetadataForNode(row.id, db)
+
+  const session = db.queryOne<RoleplayTimelineSessionRow>(
+    `SELECT
+       roleplay_sessions.id,
+       roleplay_sessions.novel_id,
+       roleplay_sessions.branch_id,
+       roleplay_sessions.title,
+       roleplay_sessions.subtitle,
+       roleplay_sessions.source_chapter_no,
+       roleplay_sessions.source_timeline_node_id,
+       roleplay_sessions.source_selected_text,
+       roleplay_sessions.source_text_snapshot,
+       roleplay_sessions.status,
+       roleplay_sessions.created_at,
+       roleplay_sessions.updated_at,
+       (
+         SELECT roleplay_messages.content
+         FROM roleplay_messages
+         WHERE roleplay_messages.session_id = roleplay_sessions.id AND roleplay_messages.role = 'user'
+         ORDER BY roleplay_messages.message_index ASC, roleplay_messages.id ASC
+         LIMIT 1
+       ) AS first_user_message,
+       (
+         SELECT roleplay_messages.content
+         FROM roleplay_messages
+         WHERE roleplay_messages.session_id = roleplay_sessions.id
+         ORDER BY roleplay_messages.message_index DESC, roleplay_messages.id DESC
+         LIMIT 1
+       ) AS latest_message
+     FROM roleplay_sessions
+     WHERE roleplay_sessions.id = ?
+     LIMIT 1`,
+    roleplaySessionId
+  )
+
+  return session ? withReadableBranchMetadata([buildRoleplayTimelineNodeRecord(session, 1)])[0] ?? null : null
 }
 
 export function listStoryTimelineNodesByFutureJumpRunIds(futureJumpRunIds: string[], db: Db = defaultDb) {
@@ -478,6 +680,7 @@ function toStoryTimelineBranchNode(node: StoryTimelineNodeRecord): StoryTimeline
     continueBlockId: node.continueBlockId,
     whatIfSessionId: node.whatIfSessionId,
     futureJumpRunId: node.futureJumpRunId,
+    roleplaySessionId: node.roleplaySessionId ?? null,
     currentText: node.currentText ?? null,
     latestText: node.latestText ?? null,
     inputTokens: node.inputTokens ?? null,
@@ -518,7 +721,9 @@ function buildTimelineEdges(nodes: StoryTimelineNodeRecord[]): StoryTimelineEdge
 
 export function loadStoryTimeline(novelId: string, branchId: string, db: Db = defaultDb): StoryTimelineResponse {
   const chapters = loadTimelineChapters(novelId, branchId, db)
-  const nodes = orderStoryTimelineNodes(listStoryTimelineNodes(novelId, branchId, db))
+  const authoredNodes = listStoryTimelineNodes(novelId, branchId, db)
+  const roleplaySessions = loadRoleplayTimelineSessions(novelId, branchId, db)
+  const nodes = orderStoryTimelineNodes(mergeRoleplayTimelineNodes(authoredNodes, roleplaySessions))
 
   return {
     novelId,

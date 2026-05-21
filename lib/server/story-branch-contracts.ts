@@ -35,7 +35,45 @@ export const timelineSelectionSchema = z.discriminatedUnion('kind', [
     sourceChapterNo: positiveInt,
     targetChapterNo: positiveInt,
   }),
+  z.object({
+    kind: z.literal('roleplay_session'),
+    nodeId: z.string().min(1),
+    roleplaySessionId: z.string().min(1),
+    anchorChapterNo: positiveInt,
+  }),
 ])
+
+export const roleplaySessionCreateSchema = z.object({
+  id: z.string().min(1),
+  novelId: z.string().min(1),
+  branchId: z.string().min(1),
+  title: z.string().min(1),
+  subtitle: z.string().nullable().optional(),
+  sourceChapterId: z.string().nullable(),
+  sourceChapterNo: positiveInt,
+  sourceChapterTitle: z.string().nullable().optional(),
+  sourceTimelineNodeId: z.string().nullable().optional(),
+  sourceTimelineNodeType: z.enum(['chapter', 'rewrite', 'continue_block', 'what_if', 'future_jump', 'roleplay_session']).nullable().optional(),
+  sourceSelectedText: z.string(),
+  sourceTextSnapshot: z.string(),
+  sourceSelectedLineStart: optionalNullableInt,
+  sourceSelectedLineEnd: optionalNullableInt,
+  status: z.string().min(1).default('active'),
+})
+
+export const roleplayMessageCreateSchema = z.object({
+  id: z.string().min(1),
+  sessionId: z.string().min(1),
+  messageIndex: positiveInt,
+  turnIndex: positiveInt,
+  variantIndex: positiveInt.default(1),
+  role: z.enum(['user', 'assistant']),
+  content: z.string().min(1),
+  parentMessageId: z.string().nullable().optional(),
+  forkedFromMessageId: z.string().nullable().optional(),
+  variantGroupId: z.string().nullable().optional(),
+  status: z.string().min(1).default('active'),
+})
 
 export const whatIfDeltaSchema = z.object({
   id: z.string().min(1),
@@ -132,7 +170,7 @@ export const storyTimelineNodeCreateSchema = z.object({
   id: z.string().min(1),
   novelId: z.string().min(1),
   branchId: z.string().min(1),
-  nodeType: z.enum(['rewrite', 'what_if', 'continue_block', 'future_jump']),
+  nodeType: z.enum(['rewrite', 'what_if', 'continue_block', 'future_jump', 'roleplay_session']),
   labelIndex: z.number().int().nonnegative(),
   anchorChapterNo: positiveInt,
   title: z.string().min(1),
@@ -144,6 +182,7 @@ export const storyTimelineNodeCreateSchema = z.object({
   continueBlockId: z.string().nullable(),
   whatIfSessionId: z.string().nullable(),
   futureJumpRunId: z.string().nullable(),
+  roleplaySessionId: z.string().nullable().optional(),
   laneIndex: z.number().int().nonnegative().default(0),
   colorToken: z.string().nullable(),
   status: z.string().min(1),
@@ -196,7 +235,7 @@ export const futureJumpRunCreateSchema = z.object({
   parentTimelineNodeId: z.string().nullable(),
   sourceContext: z.object({
     nodeId: z.string().min(1).nullable(),
-    nodeType: z.enum(['chapter', 'rewrite', 'continue_block', 'what_if', 'future_jump']),
+    nodeType: z.enum(['chapter', 'rewrite', 'continue_block', 'what_if', 'future_jump', 'roleplay_session']),
     chapterId: z.string().min(1).nullable(),
     chapterNo: positiveInt,
     whatIfSessionId: z.string().min(1).nullable(),
@@ -232,7 +271,7 @@ export const futureJumpRunDetailSchema = futureJumpRunCreateSchema.extend({
 export const futureJumpCreateRequestSchema = z.object({
   sourceContext: z.object({
     nodeId: z.string().min(1).nullable(),
-    nodeType: z.enum(['chapter', 'rewrite', 'continue_block', 'what_if', 'future_jump']),
+    nodeType: z.enum(['chapter', 'rewrite', 'continue_block', 'what_if', 'future_jump', 'roleplay_session']),
     chapterId: z.string().min(1).nullable(),
     chapterNo: positiveInt,
     whatIfSessionId: z.string().min(1).nullable(),

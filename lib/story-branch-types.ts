@@ -1,3 +1,5 @@
+import type { RoleplayMessageRecord, RoleplaySessionDetail, RoleplaySessionRecord } from '@/lib/roleplay-types'
+
 export type TimelineSelection =
   | {
       kind: 'chapter'
@@ -29,13 +31,19 @@ export type TimelineSelection =
       sourceChapterNo: number
       targetChapterNo: number
     }
+  | {
+      kind: 'roleplay_session'
+      nodeId: string
+      roleplaySessionId: string
+      anchorChapterNo: number
+    }
 
 export type VersionTokenUsage = {
   inputTokens: number | null
   outputTokens: number | null
 }
 
-export type StoryTimelineNodeType = 'rewrite' | 'what_if' | 'continue_block' | 'future_jump'
+export type StoryTimelineNodeType = 'rewrite' | 'what_if' | 'continue_block' | 'future_jump' | 'roleplay_session'
 
 export type ChapterTimelineItem = {
   type: 'chapter'
@@ -61,6 +69,7 @@ export type StoryTimelineNodeRecord = {
   continueBlockId: string | null
   whatIfSessionId: string | null
   futureJumpRunId: string | null
+  roleplaySessionId?: string | null
   currentText?: string | null
   latestText?: string | null
   latestRevisionNo?: number | null
@@ -95,6 +104,7 @@ export type StoryTimelineBranchNode = {
   continueBlockId: string | null
   whatIfSessionId: string | null
   futureJumpRunId: string | null
+  roleplaySessionId?: string | null
   currentText?: string | null
   latestText?: string | null
   latestRevisionNo?: number | null
@@ -267,6 +277,8 @@ export type FutureJumpSourceContext = {
   chapterNo: number
   whatIfSessionId: string | null
 }
+
+export type { RoleplayMessageRecord, RoleplaySessionDetail, RoleplaySessionRecord }
 
 export type WhatIfSessionRecord = {
   id: string
