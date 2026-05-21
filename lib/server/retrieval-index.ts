@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import * as lancedb from '@lancedb/lancedb'
-import type { AIProvider, EmbeddingsScenarioSettings } from '@/lib/types'
+import type { AIProvider, EmbeddingsScenarioSettings, KnowledgeRebuildChapterRange } from '@/lib/types'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 import { estimateTokenCount, type TextSpanInput } from '@/lib/server/knowledge-store'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
@@ -329,6 +329,13 @@ function getTextSpanTokenEstimate(span: TextSpanInput) {
   return span.tokenEstimate ?? estimateTokenCount(span.text)
 }
 
+function textSpanIsInChapterRange(span: TextSpanInput, chapterRange?: KnowledgeRebuildChapterRange) {
+  if (!chapterRange) return true
+  const startChapter = typeof chapterRange.startChapter === 'number' ? Math.max(1, Math.floor(chapterRange.startChapter)) : 1
+  const endChapter = typeof chapterRange.endChapter === 'number' ? Math.max(1, Math.floor(chapterRange.endChapter)) : null
+  return span.chapterNo >= startChapter && (endChapter === null || span.chapterNo <= endChapter)
+}
+
 function shouldPackTextSpan(span: TextSpanInput) {
   if (!PACKABLE_TEXT_SPAN_TYPES.has(span.spanType)) {
     return false
@@ -372,8 +379,8 @@ function buildPackedTextSpan(spans: TextSpanInput[]) {
   } satisfies TextSpanInput
 }
 
-function loadPackedBranchTextSpans(novelId: string, branchId: string) {
-  const spans = loadBranchTextSpans(novelId, branchId)
+function loadPackedBranchTextSpans(novelId: string, branchId: string, chapterRange?: KnowledgeRebuildChapterRange) {
+  const spans = loadBranchTextSpans(novelId, branchId).filter((span) => textSpanIsInChapterRange(span, chapterRange))
   const packed: TextSpanInput[] = []
   const packableGroups = new Map<string, TextSpanInput[]>()
 
@@ -485,6 +492,7 @@ export async function precomputeRawTextEmbeddingCache(params: {
   novelId: string
   branchId: string
   settingsSnapshot: RawTextEmbeddingPrecomputeSettingsSnapshot
+  chapterRange?: KnowledgeRebuildChapterRange
   maxConcurrentBatches?: number
   shouldContinue?: () => boolean | Promise<boolean>
   onProgress?: (progress: RawTextEmbeddingPrecomputeProgress) => void | Promise<void>
@@ -497,7 +505,7 @@ export async function precomputeRawTextEmbeddingCache(params: {
     provider: params.settingsSnapshot.provider,
     model: params.settingsSnapshot.model,
   }
-  const rawTextDocs = loadRawTextRetrievalDocs(params.novelId, params.branchId)
+  const rawTextDocs = loadRawTextRetrievalDocs(params.novelId, params.branchId, params.chapterRange)
   const docsWithInputs = rawTextDocs.map((row) => ({
     row,
     ...buildRawTextRetrievalEmbeddingInput(row),
@@ -532,6 +540,10 @@ export async function precomputeRawTextEmbeddingCache(params: {
 
   const finalizeReachableCacheSet = async () => {
     if (cancelled) {
+      return
+    }
+
+    if (params.chapterRange) {
       return
     }
 
@@ -1614,8 +1626,8 @@ function loadBranchOpenThreadDocs(novelId: string, branchId: string) {
   })
 }
 
-export function loadRawTextRetrievalDocs(novelId: string, branchId: string) {
-  return loadPackedBranchTextSpans(novelId, branchId).map(toRetrievalDocRow)
+export function loadRawTextRetrievalDocs(novelId: string, branchId: string, chapterRange?: KnowledgeRebuildChapterRange) {
+  return loadPackedBranchTextSpans(novelId, branchId, chapterRange).map(toRetrievalDocRow)
 }
 
 export function loadKnowledgeDerivedRetrievalDocs(novelId: string, branchId: string) {

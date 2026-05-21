@@ -296,6 +296,39 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(mergedDocs).toEqual([...rawTextDocs, ...knowledgeDerivedDocs])
   })
 
+  it('can scope raw-text retrieval docs to a rebuild chapter range', async () => {
+    const tempDatabase = createTempDatabaseCopy('chatbook-retrieval-index-cache-reuse-range-docs')
+    cleanups.push(tempDatabase.cleanup)
+
+    const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+    globalForSqlite.sqlite = database
+    seedRetrievalFixture(database)
+
+    database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, summary,
+        revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('chapter-2', 'novel-001', 'novel-001:main', 2, '第2章', '第2章原文', '第2章摘要', 1, 0, null, 'hash-2', 'ready')
+    database.prepare(
+      `INSERT INTO TextSpan (
+        id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
+        charStart, charEnd, text, spanType, tokenEstimate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章原文内容。', 'paragraph', 8)
+
+    vi.resetModules()
+    const { loadRawTextRetrievalDocs } = await import('@/lib/server/retrieval-index')
+
+    const allDocs = loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+    const rangedDocs = loadRawTextRetrievalDocs('novel-001', 'novel-001:main', { startChapter: 2, endChapter: 2 })
+
+    expect(allDocs.some((row) => row.chapterNo === 1)).toBe(true)
+    expect(allDocs.some((row) => row.chapterNo === 2)).toBe(true)
+    expect(rangedDocs.length).toBeGreaterThan(0)
+    expect(rangedDocs.every((row) => row.chapterNo === 2)).toBe(true)
+  })
+
   it('reuses embeddingInputHash when packed text is unchanged', async () => {
     const tempDatabase = createTempDatabaseCopy('chatbook-retrieval-index-cache-reuse-hash')
     cleanups.push(tempDatabase.cleanup)
@@ -593,5 +626,52 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(database.prepare(
       'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
     ).get('novel-001:main', staleHash)).toMatchObject({ count: 0 })
+  })
+
+  it('does not garbage collect out-of-range raw-text cache rows during ranged precompute', async () => {
+    const { database, retrievalCache, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-precompute-range-gc')
+
+    const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+    const retainedDoc = rawTextDocs.find((row) => row.id.startsWith('packed-span:'))
+    expect(retainedDoc).toBeTruthy()
+
+    const retainedInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(retainedDoc!).text
+    const staleInput = `${retainedInput}\n[range-outside-cache-entry]`
+    const retainedHash = retrievalCache.buildEmbeddingInputHash(retainedInput)
+    const staleHash = retrievalCache.buildEmbeddingInputHash(staleInput)
+
+    await retrievalCache.upsertRawTextEmbeddingCacheEntries({
+      scope: {
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        provider: 'ollama',
+        model: 'unit-test-embedding-model',
+      },
+      entries: [
+        { embeddingInput: retainedInput, vector: [9, 9, 9] },
+        { embeddingInput: staleInput, vector: [7, 7, 7] },
+      ],
+    })
+
+    await expect(retrievalIndex.precomputeRawTextEmbeddingCache({
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      settingsSnapshot: {
+        provider: 'ollama',
+        model: 'unit-test-embedding-model',
+        embeddingBatchSize: 16,
+      },
+      chapterRange: { startChapter: 1, endChapter: 1 },
+    })).resolves.toMatchObject({
+      totalDocs: rawTextDocs.length,
+      completedDocs: rawTextDocs.length,
+    })
+
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
+    ).get('novel-001:main', retainedHash)).toMatchObject({ count: 1 })
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
+    ).get('novel-001:main', staleHash)).toMatchObject({ count: 1 })
   })
 })
