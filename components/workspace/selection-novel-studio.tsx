@@ -32,6 +32,7 @@ import { FutureMapOverlay } from '@/components/what-if/FutureMapOverlay'
 import { WhatIfSessionView } from '@/components/what-if/WhatIfSessionView'
 import { ContinueBlockDetailView } from '@/components/workspace/ContinueBlockDetailView'
 import { PresetCompatLibraryModal } from '@/components/workspace/PresetCompatLibraryModal'
+import { RoleplaySessionView } from '@/components/workspace/RoleplaySessionView'
 import { WorkspaceCenterPane } from '@/components/workspace/WorkspaceCenterPane'
 import { WorkspaceChapterNav } from '@/components/workspace/WorkspaceChapterNav'
 import { WorkspaceReferencePanel } from '@/components/workspace/WorkspaceReferencePanel'
@@ -41,7 +42,6 @@ import {
   useWorkspaceChapterSelection,
   type WorkspaceActionMode,
   type WorkspaceFloatingPosition,
-  type WorkspaceRoleplayTurn,
 } from '@/components/workspace/use-workspace-chapter-selection'
 import { type WorkspaceRefTab, useWorkspacePaneState } from '@/components/workspace/use-workspace-pane-state'
 import {
@@ -825,23 +825,6 @@ function extractSelection(root: HTMLElement | null) {
   }
 }
 
-function replaceFirstSelection(chapterText: string, selectionText: string, replacement: string) {
-  const index = chapterText.indexOf(selectionText)
-  if (index < 0) return replacement
-  return `${chapterText.slice(0, index)}${replacement}${chapterText.slice(index + selectionText.length)}`
-}
-
-function buildRoleplayReply(input: string, selectionText: string, chapterTitle: string) {
-  const trimmed = input.trim()
-  if (!trimmed) return ''
-  return [
-    `【${chapterTitle} · 剧情推进】`,
-    `你刚才的行动/台词：${trimmed}`,
-    `围绕选中片段“${selectionText.slice(0, 80)}${selectionText.length > 80 ? '…' : ''}”，故事继续向前推进。`,
-    '角色的回应会更贴近当前场景气氛，并把新的互动自然接到章节里。',
-  ].join('\n')
-}
-
 async function callGenerationContextApi(payload: Record<string, unknown>): Promise<GenerationContextResponse> {
   const response = await fetch('/api/rag/build-generation-context', {
     method: 'POST',
@@ -947,6 +930,27 @@ async function callCreateWhatIfSessionApi(payload: Record<string, unknown>): Pro
   }
 
   return data
+}
+
+async function callCreateRoleplaySessionApi(payload: Record<string, unknown>): Promise<{
+  sessionId: string
+  timelineNodeId: string
+}> {
+  const response = await fetch('/api/roleplay/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  const data = await response.json() as { sessionId?: string; timelineNodeId?: string; error?: string }
+  if (!response.ok || !data.sessionId || !data.timelineNodeId) {
+    throw new Error(data.error || '创建角色扮演会话失败')
+  }
+
+  return {
+    sessionId: data.sessionId,
+    timelineNodeId: data.timelineNodeId,
+  }
 }
 
 async function callCreateContinueBlockApi(payload: Record<string, unknown>): Promise<{
@@ -1247,13 +1251,11 @@ export function SelectionNovelStudio() {
   const [workspaceSelection, setWorkspaceSelection] = useState<TimelineSelection | null>(null)
   const [storyTimelineData, setStoryTimelineData] = useState<StoryTimelineResponse | null>(null)
   const [storyTimelineError, setStoryTimelineError] = useState('')
-  const [roleplayInput, setRoleplayInput] = useState('')
-  const [roleplayDraft, setRoleplayDraft] = useState('')
-  const [roleplayTurns, setRoleplayTurns] = useState<WorkspaceRoleplayTurn[]>([])
   const [copied, setCopied] = useState<'rewrite' | 'roleplay' | null>(null)
   const [toast, setToast] = useState('')
   const [saveContinueBlockPending, setSaveContinueBlockPending] = useState(false)
   const [saveContinueBlockError, setSaveContinueBlockError] = useState('')
+  const [roleplaySessionStarting, setRoleplaySessionStarting] = useState(false)
   const [deletingBranchNodeId, setDeletingBranchNodeId] = useState<string | null>(null)
   const [pendingWhatIfRewriteLaunch, setPendingWhatIfRewriteLaunch] = useState<PendingWhatIfRewriteLaunch | null>(null)
   const [pendingFutureJumpRewriteLaunch, setPendingFutureJumpRewriteLaunch] = useState<PendingFutureJumpRewriteLaunch | null>(null)
@@ -1619,8 +1621,6 @@ export function SelectionNovelStudio() {
           ['rewrite', 'future_jump', 'roleplay']
         )
       },
-      setRoleplayTurns,
-      setRoleplayDraft,
       setSelectionText,
       setLockedSelectionText,
       setGenerationContext,
@@ -1696,6 +1696,7 @@ export function SelectionNovelStudio() {
       clearPresetCompatSessionStateForSelection(workspaceSelection ?? toChapterTimelineSelection(currentChapter))
     }
 
+    setLeftPanelOpen(false)
     setWorkspaceSelection(selection)
     setActiveMode(null)
     setToolbarPos(null)
@@ -1707,8 +1708,6 @@ export function SelectionNovelStudio() {
         return
       }
     }
-
-    setLeftPanelOpen(false)
   }, [clearPresetCompatSessionStateForSelection, currentChapter, selectChapter, setActiveMode, setLeftPanelOpen, setToolbarPos, sortedChapters, workspaceSelection])
 
   useEffect(() => {
@@ -2413,8 +2412,8 @@ export function SelectionNovelStudio() {
 
   const getInstructionForMode = useCallback((mode: WorkspaceActionMode) => {
     if (mode === 'rewrite') return rewritePrompt
-    return roleplayInput.trim() || '围绕当前选区继续推进剧情。'
-  }, [roleplayInput, rewritePrompt])
+    return '围绕当前选区继续推进剧情。'
+  }, [rewritePrompt])
 
   const buildPresetCompatRuntimeContext = (surfaceId: PresetCompatSurfaceId) => {
     if (!currentChapter) return {}
@@ -2728,10 +2727,72 @@ export function SelectionNovelStudio() {
     }
   }
 
-  const openActionMode = (mode: WorkspaceActionMode) => {
+  const openActionMode = async (mode: WorkspaceActionMode) => {
     const nextSelection = selectionText.trim()
     if (!nextSelection) return
     if (!currentChapter) return
+
+    if (mode === 'roleplay') {
+      if (!currentNovelId) return
+      const currentBranchId = storyTimelineData?.branchId ?? `${currentNovelId}:main`
+      setRoleplaySessionStarting(true)
+      setSaveContinueBlockError('')
+
+      try {
+        const selectionPreview = nextSelection.length > 48 ? `${nextSelection.slice(0, 48)}…` : nextSelection
+        const result = await callCreateRoleplaySessionApi({
+          novelId: currentNovelId,
+          branchId: currentBranchId,
+          title: `RP · ${currentChapter.title}`,
+          subtitle: `围绕片段「${selectionPreview}」展开角色扮演`,
+          sourceChapterId: currentChapter.id,
+          sourceChapterNo: currentChapter.order,
+          sourceChapterTitle: currentChapter.title,
+          sourceTimelineNodeId: null,
+          sourceTimelineNodeType: 'chapter',
+          sourceSelectedText: nextSelection,
+          sourceTextSnapshot: chapterText,
+          sourceSelectedLineStart: null,
+          sourceSelectedLineEnd: null,
+        })
+
+        const refreshed = await loadStoryTimeline()
+        const matchingNode = refreshed?.branchNodes.find(
+          (node) => node.id === result.timelineNodeId || node.roleplaySessionId === result.sessionId
+        )
+
+        setWorkspaceSelection(
+          matchingNode?.roleplaySessionId
+            ? {
+                kind: 'roleplay_session',
+                nodeId: matchingNode.id,
+                roleplaySessionId: matchingNode.roleplaySessionId,
+                anchorChapterNo: matchingNode.anchorChapterNo,
+              }
+            : {
+                kind: 'roleplay_session',
+                nodeId: result.timelineNodeId,
+                roleplaySessionId: result.sessionId,
+                anchorChapterNo: currentChapter.order,
+              }
+        )
+        setCenterPaneView('body')
+        setLeftPanelOpen(false)
+        setToolbarPos(null)
+        setSelectionText('')
+        setLockedSelectionText('')
+        window.scrollTo({ top: 0, behavior: 'auto' })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '创建角色扮演会话失败'
+        setSaveContinueBlockError(message)
+        setToast(message)
+        window.setTimeout(() => setToast(''), 2400)
+      } finally {
+        setRoleplaySessionStarting(false)
+      }
+
+      return
+    }
 
     setPresetCompatSessionPhase(
       workspaceSelection ?? toChapterTimelineSelection(currentChapter),
@@ -2870,12 +2931,6 @@ export function SelectionNovelStudio() {
     setToast('已应用到正文')
     window.setTimeout(() => setToast(''), 1800)
     closePanel()
-  }
-
-  const insertRoleplayIntoChapter = () => {
-    const text = roleplayDraft.trim()
-    if (!text) return
-    applyFullChapter(text)
   }
 
   const saveSettings = async () => {
@@ -3631,76 +3686,6 @@ export function SelectionNovelStudio() {
     }
   }
 
-  const handleRoleplayTurn = async () => {
-    const targetSelection = lockedSelectionText.trim() || selectionText.trim()
-    if (!currentChapter || !targetSelection || !roleplayInput.trim()) return
-    const userTurn: WorkspaceRoleplayTurn = { id: uid('rp-user'), role: 'user', content: roleplayInput.trim() }
-    const baseline = roleplayDraft.trim() || chapterText
-    setPresetCompatSessionPhase(
-      workspaceSelection ?? toChapterTimelineSelection(currentChapter),
-      'roleplay',
-      'continue'
-    )
-    setRoleplayTurns((current) => [...current, userTurn])
-    setRoleplayInput('')
-
-    try {
-      const fallbackReply = buildRoleplayReply(userTurn.content, targetSelection, currentChapter.title)
-      await savePresetCompatLibrary()
-      await loadContextPreview('roleplay', userTurn.content)
-      let streamed = ''
-      await streamRewriteApi(
-        {
-          novelId: currentNovelId,
-          chapterId: currentChapter.id,
-          selectedText: targetSelection,
-          sourceText: baseline,
-          operationType: 'roleplay',
-          userInstruction: userTurn.content,
-          disabledBlockIds: disabledContextBlockIds,
-          excludedGraphEdgeIds,
-          excludedEvidenceIds,
-          presetCompatRuntimeContext: {
-            ...buildPresetCompatRuntimeContext('roleplay'),
-            sessionPhase: 'continue',
-            hasImpersonationContext: true,
-          },
-          scope: 'chapter',
-          mode: 'dialogue',
-          tone: 'dramatic',
-        },
-        {
-          onChunk: (chunk) => {
-            streamed += chunk
-            setRoleplayDraft(streamed)
-          },
-          onError: (message) => {
-            throw new Error(message)
-          },
-        }
-      )
-      const generatedText = streamed.trim()
-      const nextDraft = generatedText || replaceFirstSelection(baseline, targetSelection, `${targetSelection}\n\n${fallbackReply}`)
-      setRoleplayDraft(nextDraft)
-      setRoleplayTurns((current) => [
-        ...current,
-        {
-          id: uid('rp-assistant'),
-          role: 'assistant',
-          content: generatedText ? '已根据这轮角色扮演推进出新的章节草稿。你可以继续对话，或直接应用到正文。' : fallbackReply,
-        },
-      ])
-    } catch {
-      const fallbackReply = buildRoleplayReply(userTurn.content, targetSelection, currentChapter.title)
-      const nextDraft = replaceFirstSelection(baseline, targetSelection, `${targetSelection}\n\n${fallbackReply}`)
-      setRoleplayDraft(nextDraft)
-      setRoleplayTurns((current) => [
-        ...current,
-        { id: uid('rp-assistant'), role: 'assistant', content: fallbackReply },
-      ])
-    }
-  }
-
   if (!backendLoaded) {
     return (
       <WorkspaceStatusState
@@ -3790,6 +3775,7 @@ export function SelectionNovelStudio() {
     ? `当前选区：${(lockedSelectionText || selectionText).slice(0, 24)}${(lockedSelectionText || selectionText).length > 24 ? '…' : ''}`
     : '当前选区：未选择'
   const chapterGraphSummary = `当前浏览：${graphSourceMeta?.mode === 'inherited-parent' ? `分支图谱（继承主线第 ${graphSourceMeta.chapterNo} 章）` : '章节图谱'}`
+  const mobileRoleplayFocus = activeWorkspaceSelection.kind === 'roleplay_session'
   const openChapterWorkspace = (chapter: Chapter) => {
     setWorkspaceSelection(toChapterTimelineSelection(chapter))
     setCenterPaneView('body')
@@ -3981,15 +3967,16 @@ export function SelectionNovelStudio() {
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => {
                 if (!selectionText.trim()) return
-                openActionMode(mode)
+                void openActionMode(mode)
               }}
               className={cn(
                 'flex items-center gap-3 rounded-2xl border px-4 py-3 text-left transition',
                 activeMode === mode
                   ? 'border-violet-300/30 bg-white/[0.08]'
                   : 'border-white/8 bg-black/20 hover:bg-white/[0.06]',
-                !selectionText.trim() && 'cursor-not-allowed opacity-50'
+                (!selectionText.trim() || (mode === 'roleplay' && roleplaySessionStarting)) && 'cursor-not-allowed opacity-50'
               )}
+              disabled={!selectionText.trim() || (mode === 'roleplay' && roleplaySessionStarting)}
             >
               <div className="rounded-xl bg-white/10 p-2 text-violet-200"><Icon className="h-4 w-4" /></div>
               <div>
@@ -4077,7 +4064,7 @@ export function SelectionNovelStudio() {
         </button>
       </div>
     </div>
-  ) : (
+  ) : activeWorkspaceSelection.kind === 'future_jump' ? (
     <div className="mb-4 rounded-[24px] border border-sky-400/20 bg-sky-500/10 p-4" data-testid="workspace-future-jump-actions">
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -4111,7 +4098,31 @@ export function SelectionNovelStudio() {
         </button>
       </div>
     </div>
-  )
+  ) : activeWorkspaceSelection.kind === 'roleplay_session' ? (
+    <div className="mb-4 rounded-[24px] border border-emerald-400/20 bg-emerald-500/10 p-4" data-testid="workspace-roleplay-session-actions">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.22em] text-emerald-200/70">Roleplay actions</p>
+          <h3 className="mt-1 text-sm font-medium text-zinc-100">{selectedTimelineDisplayLabel || selectedTimelineNode?.title || 'Roleplay session'}</h3>
+          {selectedTimelineInstructionPreview ? <p className="mt-2 text-xs leading-6 text-emerald-100">首条消息预览 · {selectedTimelineInstructionPreview}</p> : null}
+          <p className="mt-2 text-xs leading-6 text-zinc-300">中心面板会直接读取持久化的角色扮演会话与消息历史；这里保留回到锚点章节的快捷入口。</p>
+        </div>
+         <span className="rounded-full border border-emerald-300/20 bg-black/20 px-3 py-1 text-[11px] text-emerald-100">{selectedTimelineDisplayLabel || 'Roleplay session'}</span>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            const anchorChapter = resolveSourceChapter({ chapterId: null, chapterNo: activeWorkspaceSelection.anchorChapterNo })
+            if (anchorChapter) openChapterWorkspace(anchorChapter)
+          }}
+          className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]"
+        >
+          返回锚点章节
+        </button>
+      </div>
+    </div>
+  ) : null
 
   const knowledgeControls = (
     <div className="mb-4 rounded-[24px] border border-violet-400/20 bg-violet-500/10 p-4">
@@ -4619,7 +4630,8 @@ export function SelectionNovelStudio() {
         </header>
 
         <div className="grid flex-1 gap-4 lg:grid-cols-[264px_minmax(0,1.28fr)_376px] 2xl:grid-cols-[280px_minmax(0,1.32fr)_392px]">
-          <WorkspaceChapterNav
+          <div className={cn(mobileRoleplayFocus && 'order-2 lg:order-none')}>
+            <WorkspaceChapterNav
             leftPanelOpen={leftPanelOpen}
             onClose={() => setLeftPanelOpen(false)}
             onCreateChapter={() => {
@@ -4643,8 +4655,10 @@ export function SelectionNovelStudio() {
             deletingBranchNodeId={deletingBranchNodeId}
                     onDeleteBranchNode={handleDeleteBranchNode}
                   />
+          </div>
 
-          <WorkspaceCenterPane
+          <div className={cn('min-w-0', mobileRoleplayFocus && 'order-1')}>
+            <WorkspaceCenterPane
             selection={activeWorkspaceSelection}
             chapterTitle={currentChapter.title}
             centerPaneView={centerPaneView}
@@ -4757,9 +4771,24 @@ export function SelectionNovelStudio() {
                 />
               ) : null
             }
+            roleplayView={
+              activeWorkspaceSelection.kind === 'roleplay_session' ? (
+                <RoleplaySessionView
+                  novelId={currentNovelId ?? ''}
+                  branchId={storyTimelineBranchId}
+                  sessionId={activeWorkspaceSelection.roleplaySessionId}
+                  anchorChapterNo={activeWorkspaceSelection.anchorChapterNo}
+                  nodeTitle={selectedTimelineNode?.title ?? null}
+                  nodeSubtitle={selectedTimelineNode?.subtitle ?? null}
+                  readableLineageLabel={selectedTimelineDisplayLabel || null}
+                />
+              ) : null
+            }
           />
+          </div>
 
-          <WorkspaceReferencePanel
+          <div className={cn('min-w-0', mobileRoleplayFocus && 'order-3')}>
+            <WorkspaceReferencePanel
             selection={activeWorkspaceSelection}
             selectionActions={selectionActions}
             knowledgeControls={knowledgeControls}
@@ -5030,6 +5059,7 @@ export function SelectionNovelStudio() {
               </>
             )}
           />
+          </div>
         </div>
       </div>
 
@@ -5048,11 +5078,13 @@ export function SelectionNovelStudio() {
                   key={mode}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => {
-                    openActionMode(mode)
+                    void openActionMode(mode)
                   }}
+                  disabled={mode === 'roleplay' && roleplaySessionStarting}
                   className={cn(
                     'inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs transition',
-                    activeMode === mode ? 'bg-violet-500 text-white' : 'text-zinc-300 hover:bg-white/[0.08]'
+                    activeMode === mode ? 'bg-violet-500 text-white' : 'text-zinc-300 hover:bg-white/[0.08]',
+                    mode === 'roleplay' && roleplaySessionStarting && 'cursor-not-allowed opacity-60'
                   )}
                 >
                   <Icon className="h-3.5 w-3.5" />
@@ -5415,46 +5447,6 @@ export function SelectionNovelStudio() {
               </div>
             ) : null}
 
-            {activeMode === 'roleplay' ? (
-              <div className="space-y-4">
-                <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
-                  <p className="mb-2 text-xs uppercase tracking-[0.16em] text-zinc-500">角色扮演输入</p>
-                  <textarea value={roleplayInput} onChange={(event) => setRoleplayInput(event.target.value)} placeholder="输入角色的台词、动作，或者你想推动的剧情。" className="h-28 w-full rounded-[20px] border border-white/10 bg-[#0f1218] px-4 py-3 text-sm text-zinc-100 outline-none" />
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button onClick={handleRoleplayTurn} className="inline-flex items-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-emerald-400">
-                      <MessageCircleMore className="h-4 w-4" /> 推进一轮剧情
-                    </button>
-                    <button onClick={insertRoleplayIntoChapter} disabled={!roleplayDraft.trim()} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
-                      应用到正文
-                    </button>
-                    <button onClick={() => copyText('roleplay', roleplayDraft)} disabled={!roleplayDraft.trim()} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
-                      {copied === 'roleplay' ? <span className="inline-flex items-center gap-2"><Check className="h-4 w-4" /> 已复制</span> : '复制草稿'}
-                    </button>
-                  </div>
-                </div>
-
-                {roleplayTurns.length ? (
-                  <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
-                    <p className="mb-3 text-xs uppercase tracking-[0.16em] text-zinc-500">对话记录</p>
-                    <div className="space-y-3">
-                      {roleplayTurns.map((turn) => (
-                        <div key={turn.id} className={cn('rounded-2xl px-4 py-3 text-sm leading-7', turn.role === 'user' ? 'bg-white/[0.06] text-zinc-200' : 'bg-emerald-500/10 text-emerald-100')}>
-                          <p className="mb-1 text-[11px] uppercase tracking-[0.16em] text-zinc-500">{turn.role === 'user' ? '你' : '系统'}</p>
-                          <p className="whitespace-pre-wrap">{turn.content}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">推进后的章节草稿</p>
-                  </div>
-                  <p className="min-h-52 whitespace-pre-wrap text-sm leading-7 text-zinc-300">{roleplayDraft || '新的章节草稿会在这里显示。'}</p>
-                </div>
-              </div>
-            ) : null}
           </div>
         </div>
       ) : null}
