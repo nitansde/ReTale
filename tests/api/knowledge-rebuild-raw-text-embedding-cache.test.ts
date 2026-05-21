@@ -121,6 +121,37 @@ afterEach(() => {
 })
 
 describe('raw-text embedding cache repository', () => {
+  it('handles huge raw-text cache hash lists without overflowing the call stack', async () => {
+    const {
+      database,
+      deleteRawTextEmbeddingCacheEntries,
+      garbageCollectRawTextEmbeddingCacheEntries,
+      lookupRawTextEmbeddingCacheEntries,
+    } = await createTestDatabase('chatbook-raw-text-embedding-cache-large-hash-list')
+    seedBranch(database, 'novel_large_cache', 'main')
+    const scope = {
+      novelId: 'novel_large_cache',
+      branchId: 'main',
+      provider: 'ollama',
+      model: 'qwen3-embedding:4b',
+    }
+    const hashes = Array.from({ length: 150000 }, (_, index) => `hash-${index}`)
+
+    await expect(lookupRawTextEmbeddingCacheEntries({
+      scope,
+      embeddingInputHashes: hashes,
+      touchOnHit: true,
+    })).resolves.toEqual([])
+    await expect(deleteRawTextEmbeddingCacheEntries({
+      scope,
+      embeddingInputHashes: hashes,
+    })).resolves.toBe(0)
+    await expect(garbageCollectRawTextEmbeddingCacheEntries({
+      scope,
+      reachableEmbeddingInputHashes: hashes,
+    })).resolves.toBe(0)
+  })
+
   it('cache repository round-trip succeeds', async () => {
     const {
       database,
@@ -267,7 +298,12 @@ describe('raw-text embedding cache repository', () => {
     )).toMatchObject({ count: 1 })
 
     expect(queryAll<{ embeddingInputHash: string }>(
-      'SELECT embeddingInputHash FROM RawTextEmbeddingCache ORDER BY branchId, provider, model, embeddingInputHash',
+      `SELECT embeddingInputHash
+       FROM RawTextEmbeddingCache
+       WHERE branchId IN (?, ?)
+       ORDER BY branchId, provider, model, embeddingInputHash`,
+      'novel_cache:draft',
+      'novel_cache:main',
     )).toEqual([
       { embeddingInputHash: thirdHash },
       { embeddingInputHash: firstHash },
