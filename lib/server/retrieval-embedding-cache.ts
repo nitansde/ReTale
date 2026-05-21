@@ -46,6 +46,10 @@ type RawTextEmbeddingCacheRow = {
   updatedAt: string
 }
 
+type NormalizedRawTextEmbeddingCacheScope = ReturnType<typeof normalizeScope>
+
+const SQLITE_HASH_BATCH_SIZE = 500
+
 function requireTrimmedValue(value: string, label: string) {
   const normalized = value.trim()
   if (!normalized) {
@@ -119,6 +123,38 @@ function buildPlaceholders(count: number) {
   return Array.from({ length: count }, () => '?').join(', ')
 }
 
+function chunkValues<T>(values: T[], size = SQLITE_HASH_BATCH_SIZE) {
+  const chunks: T[][] = []
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size))
+  }
+  return chunks
+}
+
+function appendRows<T>(target: T[], source: T[]) {
+  for (const row of source) {
+    target.push(row)
+  }
+}
+
+function deleteRawTextEmbeddingCacheHashBatch(scope: NormalizedRawTextEmbeddingCacheScope, hashes: string[]) {
+  const result = execute(
+    `
+      DELETE FROM RawTextEmbeddingCache
+      WHERE branchId = ?
+        AND provider = ?
+        AND model = ?
+        AND embeddingInputHash IN (${buildPlaceholders(hashes.length)})
+    `,
+    scope.branchId,
+    scope.provider,
+    scope.model,
+    ...hashes,
+  )
+
+  return Number(result.changes ?? 0)
+}
+
 export function buildCanonicalRetrievalEmbeddingInput(parts: RetrievalEmbeddingInputParts) {
   return [
     parts.sourceLabel ?? '',
@@ -145,20 +181,23 @@ export async function lookupRawTextEmbeddingCacheEntries(params: {
   }
 
   const scope = normalizeScope(params.scope)
-  const rows = queryAll<RawTextEmbeddingCacheRow>(
-    `
-      SELECT branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension, lastSeenAt, createdAt, updatedAt
-      FROM RawTextEmbeddingCache
-      WHERE branchId = ?
-        AND provider = ?
-        AND model = ?
-        AND embeddingInputHash IN (${buildPlaceholders(hashes.length)})
-    `,
-    scope.branchId,
-    scope.provider,
-    scope.model,
-    ...hashes,
-  )
+  const rows: RawTextEmbeddingCacheRow[] = []
+  for (const hashBatch of chunkValues(hashes)) {
+    appendRows(rows, queryAll<RawTextEmbeddingCacheRow>(
+      `
+        SELECT branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension, lastSeenAt, createdAt, updatedAt
+        FROM RawTextEmbeddingCache
+        WHERE branchId = ?
+          AND provider = ?
+          AND model = ?
+          AND embeddingInputHash IN (${buildPlaceholders(hashBatch.length)})
+      `,
+      scope.branchId,
+      scope.provider,
+      scope.model,
+      ...hashBatch,
+    ))
+  }
 
   const invalidHashes: string[] = []
   const validEntries = new Map<string, RawTextEmbeddingCacheEntry>()
@@ -182,43 +221,33 @@ export async function lookupRawTextEmbeddingCacheEntries(params: {
   }
 
   if (invalidHashes.length) {
-    const invalidPlaceholders = buildPlaceholders(invalidHashes.length)
     await withTransaction(() => {
-      execute(
-        `
-          DELETE FROM RawTextEmbeddingCache
-          WHERE branchId = ?
-            AND provider = ?
-            AND model = ?
-            AND embeddingInputHash IN (${invalidPlaceholders})
-        `,
-        scope.branchId,
-        scope.provider,
-        scope.model,
-        ...invalidHashes,
-      )
+      for (const hashBatch of chunkValues(invalidHashes)) {
+        deleteRawTextEmbeddingCacheHashBatch(scope, hashBatch)
+      }
     })
   }
 
   const matchedHashes = hashes.filter((hash) => validEntries.has(hash))
   if (params.touchOnHit && matchedHashes.length) {
-    const touchPlaceholders = buildPlaceholders(matchedHashes.length)
     await withTransaction(() => {
-      execute(
-        `
-          UPDATE RawTextEmbeddingCache
-          SET lastSeenAt = CURRENT_TIMESTAMP,
-              updatedAt = CURRENT_TIMESTAMP
-          WHERE branchId = ?
-            AND provider = ?
-            AND model = ?
-            AND embeddingInputHash IN (${touchPlaceholders})
-        `,
-        scope.branchId,
-        scope.provider,
-        scope.model,
-        ...matchedHashes,
-      )
+      for (const hashBatch of chunkValues(matchedHashes)) {
+        execute(
+          `
+            UPDATE RawTextEmbeddingCache
+            SET lastSeenAt = CURRENT_TIMESTAMP,
+                updatedAt = CURRENT_TIMESTAMP
+            WHERE branchId = ?
+              AND provider = ?
+              AND model = ?
+              AND embeddingInputHash IN (${buildPlaceholders(hashBatch.length)})
+          `,
+          scope.branchId,
+          scope.provider,
+          scope.model,
+          ...hashBatch,
+        )
+      }
     })
   }
 
@@ -289,21 +318,14 @@ export async function deleteRawTextEmbeddingCacheEntries(params: {
   }
 
   const scope = normalizeScope(params.scope)
-  const result = execute(
-    `
-      DELETE FROM RawTextEmbeddingCache
-      WHERE branchId = ?
-        AND provider = ?
-        AND model = ?
-        AND embeddingInputHash IN (${buildPlaceholders(hashes.length)})
-    `,
-    scope.branchId,
-    scope.provider,
-    scope.model,
-    ...hashes,
-  )
+  let deletedCount = 0
+  await withTransaction(() => {
+    for (const hashBatch of chunkValues(hashes)) {
+      deletedCount += deleteRawTextEmbeddingCacheHashBatch(scope, hashBatch)
+    }
+  })
 
-  return Number(result.changes ?? 0)
+  return deletedCount
 }
 
 export async function garbageCollectRawTextEmbeddingCacheEntries(params: {
@@ -328,19 +350,28 @@ export async function garbageCollectRawTextEmbeddingCacheEntries(params: {
     return Number(result.changes ?? 0)
   }
 
-  const result = execute(
+  const reachableHashes = new Set(hashes)
+  const cachedRows = queryAll<{ embeddingInputHash: string }>(
     `
-      DELETE FROM RawTextEmbeddingCache
+      SELECT embeddingInputHash
+      FROM RawTextEmbeddingCache
       WHERE branchId = ?
         AND provider = ?
         AND model = ?
-        AND embeddingInputHash NOT IN (${buildPlaceholders(hashes.length)})
     `,
     scope.branchId,
     scope.provider,
     scope.model,
-    ...hashes,
   )
+  const staleHashes = cachedRows
+    .map((row) => row.embeddingInputHash)
+    .filter((hash) => !reachableHashes.has(hash))
+  let deletedCount = 0
+  await withTransaction(() => {
+    for (const hashBatch of chunkValues(staleHashes)) {
+      deletedCount += deleteRawTextEmbeddingCacheHashBatch(scope, hashBatch)
+    }
+  })
 
-  return Number(result.changes ?? 0)
+  return deletedCount
 }
