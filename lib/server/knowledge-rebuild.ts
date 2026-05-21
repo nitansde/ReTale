@@ -136,7 +136,7 @@ type KnowledgeRebuildBatchAliasDiscovery = {
   target: string
 }
 
-type KnowledgeRebuildStepKey = 'hanlp-bootstrap' | 'extract' | 'batch-sync' | 'cleanup' | 'write' | 'index'
+type KnowledgeRebuildStepKey = 'hanlp-bootstrap' | 'extract' | 'batch-sync' | 'cleanup' | 'write' | 'raw-embedding' | 'index'
 
 type KnowledgeRebuildStepStatus = 'pending' | 'running' | 'paused' | 'completed'
 
@@ -160,6 +160,7 @@ type KnowledgeRebuildEmbeddingSettingsSnapshot = {
 type KnowledgeRebuildTelemetryUpdate = {
   rawTextEmbeddingProgress?: number
   rawTextEmbeddingCacheHitRate?: number
+  rawTextEmbeddingPrecomputeCompleted?: boolean
   stageTimingsMs?: Record<string, number>
 }
 
@@ -189,6 +190,7 @@ type KnowledgeRebuildJobPayload = {
   extractionSettings?: KnowledgeExtractionScenarioSettings
   rawTextEmbeddingProgress?: number
   rawTextEmbeddingCacheHitRate?: number
+  rawTextEmbeddingPrecomputeCompleted?: boolean
   stageTimingsMs?: Record<string, number>
   embeddingSettingsSnapshot?: KnowledgeRebuildEmbeddingSettingsSnapshot
   indexProgress?: KnowledgeRebuildIndexProgress
@@ -215,7 +217,7 @@ type RawTextEmbeddingPrecomputeRun = {
 
 export type KnowledgeRebuildStartOutcome = 'queued' | 'running'
 
-const KNOWLEDGE_REBUILD_STEP_ORDER: KnowledgeRebuildStepKey[] = ['hanlp-bootstrap', 'extract', 'batch-sync', 'cleanup', 'write', 'index']
+const KNOWLEDGE_REBUILD_STEP_ORDER: KnowledgeRebuildStepKey[] = ['hanlp-bootstrap', 'extract', 'batch-sync', 'cleanup', 'write', 'raw-embedding', 'index']
 
 const RAW_TEXT_PRECOMPUTE_STAGE_KEY = 'raw_text_precompute'
 const CHAPTER_EXTRACTION_CANDIDATE_SCHEMA_VERSION = 'knowledge-extraction-candidate:v2'
@@ -231,6 +233,7 @@ const KNOWLEDGE_REBUILD_STEP_LABELS: Record<KnowledgeRebuildStepKey, string> = {
   'batch-sync': '整理批次结果',
   cleanup: '清理旧知识',
   write: '写入结构化知识',
+  'raw-embedding': '原文 Embedding 预计算',
   index: '构建 Lance 检索索引',
 }
 
@@ -561,7 +564,7 @@ function normalizeKnowledgeRebuildJobPayload(payload: unknown) {
     stageStartedAtByKey?: Partial<Record<KnowledgeRebuildStepKey, string>>
   }
   const rawPhase = (payload as { phase?: unknown }).phase
-   const normalizedPhase: KnowledgeRebuildJobPayload['phase'] = rawPhase === 'hanlp-bootstrap' || rawPhase === 'extract' || rawPhase === 'batch-sync' || rawPhase === 'cleanup' || rawPhase === 'write' || rawPhase === 'index'
+  const normalizedPhase: KnowledgeRebuildJobPayload['phase'] = rawPhase === 'hanlp-bootstrap' || rawPhase === 'extract' || rawPhase === 'batch-sync' || rawPhase === 'cleanup' || rawPhase === 'write' || rawPhase === 'raw-embedding' || rawPhase === 'index'
       ? rawPhase
       : undefined
   const normalizedChapterRange = normalizeKnowledgeRebuildChapterRange(candidate.chapterRange)
@@ -642,6 +645,9 @@ function normalizeKnowledgeRebuildJobPayload(payload: unknown) {
       : undefined,
     rawTextEmbeddingCacheHitRate: typeof candidate.rawTextEmbeddingCacheHitRate === 'number'
       ? clampProgress(candidate.rawTextEmbeddingCacheHitRate)
+      : undefined,
+    rawTextEmbeddingPrecomputeCompleted: typeof candidate.rawTextEmbeddingPrecomputeCompleted === 'boolean'
+      ? candidate.rawTextEmbeddingPrecomputeCompleted
       : undefined,
     stageTimingsMs: {
       ...((candidate.stageTimingsMs && typeof candidate.stageTimingsMs === 'object') ? candidate.stageTimingsMs : {}),
@@ -724,6 +730,23 @@ function buildHanlpBootstrapStepDetail(payload: KnowledgeRebuildJobPayload, runt
   return `已完成 ${hanlp.completedChapterCount}/${Math.max(0, hanlp.totalChapterCount)} 章，缓存命中 ${hanlp.cacheHitCount}，缓存未命中 ${hanlp.cacheMissCount}，耗时 ${durationText}${etaText}`
 }
 
+function buildRawTextEmbeddingStepDetail(payload: KnowledgeRebuildJobPayload, runtime: { currentStep: string | null }, isCurrent: boolean) {
+  const progress = typeof payload.rawTextEmbeddingProgress === 'number'
+    ? toProgressPercentValue(payload.rawTextEmbeddingProgress)
+    : null
+
+  if (isCurrent) {
+    return runtime.currentStep ?? (progress !== null ? `原文向量缓存 ${progress}%` : '等待原文 Embedding 预计算完成')
+  }
+
+  if (progress === null) return null
+  return progress >= 100 ? '原文向量预计算已完成' : `原文向量缓存 ${progress}%`
+}
+
+function toProgressPercentValue(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value * 100)))
+}
+
 function buildEmbeddingSettingsSnapshot(): KnowledgeRebuildEmbeddingSettingsSnapshot {
   const { embeddings } = loadStoredAISettings()
   return {
@@ -747,6 +770,7 @@ function buildRawTextEmbeddingTelemetryUpdate(result: RawTextEmbeddingPrecompute
   return {
     rawTextEmbeddingProgress: hasDocs ? result.completedDocs / result.totalDocs : 1,
     rawTextEmbeddingCacheHitRate: hasDocs ? result.cacheHits / result.totalDocs : 1,
+    rawTextEmbeddingPrecomputeCompleted: !result.cancelled,
     stageTimingsMs: {
       [RAW_TEXT_PRECOMPUTE_STAGE_KEY]: result.durationMs,
     },
@@ -757,6 +781,7 @@ function ensureRawTextEmbeddingPrecomputeStarted(params: {
   jobId: string
   novelId: string
   branchId: string
+  chapterRange?: KnowledgeRebuildChapterRange
   embeddingSettingsSnapshot: KnowledgeRebuildEmbeddingSettingsSnapshot
 }) {
   const activeRun = rawTextEmbeddingPrecomputeRuns.get(params.jobId)
@@ -769,6 +794,7 @@ function ensureRawTextEmbeddingPrecomputeStarted(params: {
     novelId: params.novelId,
     branchId: params.branchId,
     settingsSnapshot: params.embeddingSettingsSnapshot,
+    chapterRange: params.chapterRange,
     maxConcurrentBatches: 2,
     shouldContinue: () => isKnowledgeJobActivelyRunning(params.jobId),
     onProgress: async (progress) => {
@@ -894,6 +920,9 @@ function buildKnowledgeRebuildSteps(payload: KnowledgeRebuildJobPayload, runtime
     : phase === 'write'
       ? clampProgress(runtime.progress)
       : 0
+  const rawTextEmbeddingProgress = typeof payload.rawTextEmbeddingProgress === 'number'
+    ? clampProgress(payload.rawTextEmbeddingProgress)
+    : 0
   const indexStartedAt = stageStartedAtByKey.index
   const activeIndexProgress = getIndexProgressValue(indexProgress)
   const activeIndexEtaMinutes = runtime.status === 'paused'
@@ -924,6 +953,9 @@ function buildKnowledgeRebuildSteps(payload: KnowledgeRebuildJobPayload, runtime
     } else if (key === 'write') {
       progress = status === 'completed' ? 1 : writeProgress
       etaMinutes = status === 'running' ? estimateStageEtaMinutes(progress, stageStartedAtByKey.write) : null
+    } else if (key === 'raw-embedding') {
+      progress = status === 'completed' ? 1 : rawTextEmbeddingProgress
+      etaMinutes = status === 'running' ? estimateStageEtaMinutes(progress, stageStartedAtByKey['raw-embedding']) : null
     } else if (key === 'index') {
       progress = status === 'completed' ? 1 : (phase === 'index' ? activeIndexProgress : 0)
       etaMinutes = status === 'running' ? activeIndexEtaMinutes : null
@@ -937,6 +969,8 @@ function buildKnowledgeRebuildSteps(payload: KnowledgeRebuildJobPayload, runtime
       etaMinutes,
       detail: key === 'hanlp-bootstrap'
         ? buildHanlpBootstrapStepDetail(payload, runtime.status)
+        : key === 'raw-embedding'
+          ? buildRawTextEmbeddingStepDetail(payload, runtime, isCurrent)
         : (isCurrent ? runtime.currentStep : null),
     }
   })
@@ -1131,6 +1165,7 @@ export function mergeKnowledgeRebuildTelemetryPayloadForTesting(
     ...payload,
     rawTextEmbeddingProgress: telemetry.rawTextEmbeddingProgress ?? payload.rawTextEmbeddingProgress,
     rawTextEmbeddingCacheHitRate: telemetry.rawTextEmbeddingCacheHitRate ?? payload.rawTextEmbeddingCacheHitRate,
+    rawTextEmbeddingPrecomputeCompleted: telemetry.rawTextEmbeddingPrecomputeCompleted ?? payload.rawTextEmbeddingPrecomputeCompleted,
     stageTimingsMs: {
       ...(payload.stageTimingsMs ?? {}),
       ...(telemetry.stageTimingsMs ?? {}),
@@ -4899,6 +4934,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             jobId: job.id,
             novelId: params.novelId,
             branchId,
+            chapterRange: rebuildChapterRange,
             embeddingSettingsSnapshot: getOrCreateEmbeddingSettingsSnapshot(currentJobState.payload),
           })
 
@@ -5038,6 +5074,10 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
           continue
         }
 
+        if (currentJobState.phase === 'raw-embedding') {
+          break
+        }
+
         if (currentJobState.phase === 'write') {
           const currentChapters = queryAll<KnowledgeChapterRow>(
             'SELECT id, novelId, branchId, chapterNo, title, rawText, summary, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? ORDER BY chapterNo ASC',
@@ -5169,6 +5209,24 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
     }
 
     assertKnowledgeRebuildContinues(job.id)
+    const rawTextEmbeddingState = setKnowledgeRebuildJobPhase(job.id, 'raw-embedding') ?? getKnowledgeRebuildJobState(job.id)
+    const rawTextEmbeddingProgress = typeof rawTextEmbeddingState?.payload.rawTextEmbeddingProgress === 'number'
+      ? clampProgress(rawTextEmbeddingState.payload.rawTextEmbeddingProgress)
+      : 0
+    updateKnowledgeJob(job.id, {
+      currentStep: rawTextEmbeddingProgress >= 1 ? '确认原文 Embedding 预计算完成' : '等待原文 Embedding 预计算完成',
+      progress: 0.94 + rawTextEmbeddingProgress * 0.02,
+    })
+    const rawTextEmbeddingPrecomputeFinished = rawTextEmbeddingState?.payload.rawTextEmbeddingPrecomputeCompleted === true
+    if (!rawTextEmbeddingPrecomputeFinished) {
+      ensureRawTextEmbeddingPrecomputeStarted({
+        jobId: job.id,
+        novelId: params.novelId,
+        branchId,
+        chapterRange: rawTextEmbeddingState?.payload.chapterRange ?? defaultChapterRange,
+        embeddingSettingsSnapshot: getOrCreateEmbeddingSettingsSnapshot(rawTextEmbeddingState?.payload ?? { branchId }),
+      })
+    }
     await waitForRawTextEmbeddingPrecompute(job.id)
     assertKnowledgeRebuildContinues(job.id)
     setKnowledgeRebuildJobPhase(job.id, 'index')

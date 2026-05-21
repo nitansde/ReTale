@@ -328,6 +328,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     let extractionStarted = false
     let extractionFinished = false
     let precomputeStarted = false
+    let precomputeParams: { chapterRange?: { startChapter?: number; endChapter?: number } } | null = null
 
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => aiSettings,
@@ -378,7 +379,8 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
       const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
       return {
         ...actual,
-        precomputeRawTextEmbeddingCache: vi.fn(async () => {
+        precomputeRawTextEmbeddingCache: vi.fn(async (params: { chapterRange?: { startChapter?: number; endChapter?: number } }) => {
+          precomputeParams = params
           precomputeStarted = true
           events.push('precompute:start')
           await precomputeGate.promise
@@ -403,15 +405,24 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     })
 
     const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
-    const rebuildPromise = rebuildKnowledgeForNovel({ novelId })
+    const rebuildPromise = rebuildKnowledgeForNovel({ novelId, chapterRange: { startChapter: 1, endChapter: 1 } })
 
     await waitForCondition(() => extractionStarted && precomputeStarted, 'extract/precompute overlap')
     expect(extractionFinished).toBe(false)
+    expect(precomputeParams?.chapterRange).toEqual({ startChapter: 1, endChapter: 1 })
 
     extractionGate.resolve()
     await waitForCondition(() => extractionFinished, 'extraction completion before final index')
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(events).not.toContain('final-index:start')
+    const waitingJob = queryOne<{ currentStep: string | null; payloadJson: string | null }>(
+      'SELECT currentStep, payloadJson FROM KnowledgeJob WHERE novelId = ? AND branchId = ? ORDER BY createdAt DESC LIMIT 1',
+      novelId,
+      branchId,
+    )
+    const waitingPayload = waitingJob?.payloadJson ? JSON.parse(waitingJob.payloadJson) as { phase?: string } : null
+    expect(waitingPayload?.phase).toBe('raw-embedding')
+    expect(waitingJob?.currentStep).toBe('等待原文 Embedding 预计算完成')
 
     precomputeGate.resolve()
 
@@ -446,6 +457,92 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     expect(payload?.rawTextEmbeddingCacheHitRate).toBe(0)
     expect(payload?.stageTimingsMs?.raw_text_precompute).toEqual(expect.any(Number))
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', branchId)?.count).toBe(0)
+  })
+
+  it('restarts ranged raw-text precompute when resuming raw-embedding without an in-memory run', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-rebuild-raw-embedding-resume')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_raw_embedding_resume')
+    const aiSettings = createMockAISettings()
+    const events: string[] = []
+    const precomputeCalls: Array<{ chapterRange?: { startChapter?: number; endChapter?: number } }> = []
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      'job_raw_embedding_resume',
+      novelId,
+      branchId,
+      'extract_chapter_knowledge',
+      'queued',
+      '等待原文 Embedding 预计算完成',
+      0.95,
+      JSON.stringify({
+        branchId,
+        phase: 'raw-embedding',
+        chapterRange: { startChapter: 1, endChapter: 1 },
+        rebuildStartChapter: 1,
+        pendingChapterIds: [],
+        chapterWeightsById: {},
+        totalChapterWeight: 0,
+        processedChapterWeight: 0,
+        extractedChapters: [],
+        currentBatchChapters: [],
+        totalChapterCount: 1,
+        rawTextEmbeddingProgress: 0.25,
+        rawTextEmbeddingPrecomputeCompleted: false,
+        stageTimingsMs: {
+          raw_text_precompute: 25,
+        },
+        embeddingSettingsSnapshot: {
+          provider: 'ollama',
+          model: 'snapshot-embedding-model',
+          embeddingBatchSize: 1,
+        },
+      })
+    )
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        precomputeRawTextEmbeddingCache: vi.fn(async (params: { chapterRange?: { startChapter?: number; endChapter?: number } }) => {
+          precomputeCalls.push(params)
+          events.push('precompute:start')
+          return {
+            totalDocs: 1,
+            completedDocs: 1,
+            cacheHits: 1,
+            cacheMisses: 0,
+            failedDocs: 0,
+            totalBatches: 1,
+            completedBatches: 1,
+            degraded: false,
+            cancelled: false,
+            durationMs: 1,
+          }
+        }),
+        rebuildBranchRetrievalIndex: vi.fn(async () => {
+          events.push('final-index:start')
+          return { rowCount: 1, embeddingBatchCount: 0 }
+        }),
+      }
+    })
+
+    const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
+    await expect(rebuildKnowledgeForNovel({
+      novelId,
+      jobId: 'job_raw_embedding_resume',
+      chapterRange: { startChapter: 1, endChapter: 1 },
+    })).resolves.toMatchObject({ outcome: 'completed' })
+
+    expect(precomputeCalls).toHaveLength(1)
+    expect(precomputeCalls[0]?.chapterRange).toEqual({ startChapter: 1, endChapter: 1 })
+    expect(events.indexOf('precompute:start')).toBeGreaterThanOrEqual(0)
+    expect(events.indexOf('final-index:start')).toBeGreaterThan(events.indexOf('precompute:start'))
   })
 
   it('degrades gracefully after raw-text precompute retries are exhausted', async () => {

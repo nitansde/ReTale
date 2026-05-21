@@ -356,6 +356,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
       'batch-sync',
       'cleanup',
       'write',
+      'raw-embedding',
       'index',
     ])
   })
@@ -367,6 +368,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
     const aiSettings = createMockAISettings(4)
     const hanlpCalls: number[] = []
     const extractionCalls: number[] = []
+    const rebuildBranchRetrievalIndex = vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 }))
     const cachedChapterTwoHash = buildTestExtractionCandidateSourceHash({
       chapterSourceHash: 'chapter-hash-2',
       settings: aiSettings.knowledgeExtraction,
@@ -460,7 +462,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
           cancelled: false,
           durationMs: 0,
         })),
-        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
+        rebuildBranchRetrievalIndex,
       }
     })
 
@@ -494,6 +496,10 @@ describe('knowledge rebuild HanLP orchestration', () => {
 
     expect(hanlpCalls).toEqual([1, 2, 3, 4, 5])
     expect(extractionCalls).toEqual([3])
+    expect(rebuildBranchRetrievalIndex).toHaveBeenCalledWith(novelId, `${novelId}:main`, expect.objectContaining({
+      onProgress: expect.any(Function),
+    }))
+    expect(rebuildBranchRetrievalIndex.mock.calls[0]?.[2]).not.toHaveProperty('chapterRange')
     expect(jobPayload).toMatchObject({
       chapterRange: { startChapter: 2, endChapter: 3 },
       totalChapterCount: 2,
