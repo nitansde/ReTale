@@ -176,6 +176,7 @@ afterEach(() => {
   vi.unmock('@/lib/server/knowledge-extraction')
   vi.unmock('@/lib/server/context-builder')
   vi.unmock('@/lib/server/retrieval-index')
+  vi.doUnmock('@/lib/server/context-builder')
 
   if (globalForSqlite.sqlite) {
     try {
@@ -194,11 +195,11 @@ afterEach(() => {
 })
 
 describe('knowledge rebuild HanLP orchestration', () => {
-  it('runs HanLP before extraction, records cache telemetry, and writes chapters in stable order', async () => {
+  it('runs HanLP first, then writes each extraction batch before starting the next batch', async () => {
     process.env.HANLP_BOOTSTRAP_PARALLELISM = '3'
     const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-phase-order')
     const { novelId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_phase_order', 3)
-    const aiSettings = createMockAISettings(3)
+    const aiSettings = createMockAISettings(2)
     const events: string[] = []
     let hanlpRunnerCalls = 0
     let extractionCalls = 0
@@ -263,8 +264,16 @@ describe('knowledge rebuild HanLP orchestration', () => {
       const actual = await importOriginal<typeof import('@/lib/server/context-builder')>()
       return {
         ...actual,
-        buildKnowledgeExtractionStoryState: vi.fn((params: { asOfChapter: number }) => {
-          events.push(`write:${params.asOfChapter + 1}`)
+        buildKnowledgeExtractionStoryState: vi.fn((params: { novelId: string; branchId: string; asOfChapter: number }) => {
+          const readyCount = queryOne<{ count: number }>(
+            `SELECT COUNT(*) AS count
+             FROM KnowledgeChapter
+             WHERE novelId = ? AND branchId = ? AND chapterNo <= ? AND knowledgeStatus = 'ready' AND isDirty = 0`,
+            params.novelId,
+            params.branchId,
+            params.asOfChapter,
+          )?.count ?? 0
+          events.push(`story:${params.asOfChapter + 1}:ready:${readyCount}`)
           return '# 已排序故事状态\n- 无前情。'
         }),
       }
@@ -299,19 +308,22 @@ describe('knowledge rebuild HanLP orchestration', () => {
     hanlpGates.get(2)?.resolve()
     hanlpGates.get(1)?.resolve()
 
-    await waitForCondition(() => events.includes('hanlp:init') && events.filter((event) => event.startsWith('extract:start:')).length === 3, 'extraction start after HanLP')
+    await waitForCondition(() => events.includes('hanlp:init') && events.filter((event) => event.startsWith('extract:start:')).length === 2, 'first extraction batch start after HanLP')
     expect(events.indexOf('hanlp:init')).toBeGreaterThan(events.indexOf('hanlp:end:3:runner'))
     expect(events.findIndex((event) => event.startsWith('extract:start:'))).toBeGreaterThan(events.indexOf('hanlp:init'))
 
-    extractionGates.get(3)?.resolve()
     extractionGates.get(2)?.resolve()
     extractionGates.get(1)?.resolve()
+
+    await waitForCondition(() => events.includes('extract:start:3'), 'second extraction batch start')
+    expect(events.indexOf('story:3:ready:2')).toBeGreaterThan(events.indexOf('extract:end:2'))
+    expect(events.indexOf('story:3:ready:2')).toBeLessThan(events.indexOf('extract:start:3'))
+    extractionGates.get(3)?.resolve()
 
     await expect(rebuildPromise).resolves.toMatchObject({ outcome: 'completed' })
 
     expect(hanlpRunnerCalls).toBe(2)
     expect(extractionCalls).toBe(3)
-    expect(events.filter((event) => event.startsWith('write:')).slice(-3)).toEqual(['write:1', 'write:2', 'write:3'])
 
     const jobRow = queryOne<{ payloadJson: string | null; status: string }>(
       'SELECT payloadJson, status FROM KnowledgeJob WHERE novelId = ? ORDER BY createdAt DESC LIMIT 1',
@@ -471,7 +483,14 @@ describe('knowledge rebuild HanLP orchestration', () => {
     const keptAlias = queryOne<{ id: string }>('SELECT id FROM EntityAlias WHERE id = ?', 'alias-range-keep')
     const staleMapping = queryOne<{ id: string }>('SELECT id FROM EntityAliasMapping WHERE id = ?', 'mapping-range-stale')
     const keptMapping = queryOne<{ id: string }>('SELECT id FROM EntityAliasMapping WHERE id = ?', 'mapping-range-keep')
-    const cachedCandidate = queryOne<{ status: string }>('SELECT status FROM chapter_extraction_candidates WHERE id = ?', 'cached-candidate-chapter-2')
+    const cachedCandidate = queryOne<{ status: string; processingResultJson: string | null }>(
+      'SELECT status, processing_result_json AS processingResultJson FROM chapter_extraction_candidates WHERE id = ?',
+      'cached-candidate-chapter-2',
+    )
+    const freshCandidate = queryOne<{ processingResultJson: string | null }>(
+      'SELECT processing_result_json AS processingResultJson FROM chapter_extraction_candidates WHERE chapter_id = ?',
+      'chapter-3',
+    )
 
     expect(hanlpCalls).toEqual([1, 2, 3, 4, 5])
     expect(extractionCalls).toEqual([3])
@@ -492,6 +511,215 @@ describe('knowledge rebuild HanLP orchestration', () => {
     expect(staleMapping).toBeNull()
     expect(keptMapping).toEqual({ id: 'mapping-range-keep' })
     expect(cachedCandidate?.status).toBe('persisted')
+    const cachedProcessingResult = JSON.parse(cachedCandidate?.processingResultJson ?? '{}') as {
+      schemaVersion?: string
+      batch?: { chapterNos?: number[] }
+    }
+    const freshProcessingResult = JSON.parse(freshCandidate?.processingResultJson ?? '{}') as {
+      schemaVersion?: string
+      batch?: { chapterNos?: number[] }
+    }
+    expect(cachedProcessingResult).toMatchObject({
+      schemaVersion: 'knowledge-extraction-processing:v1',
+      batch: { chapterNos: [2, 3] },
+    })
+    expect(freshProcessingResult).toMatchObject({
+      schemaVersion: 'knowledge-extraction-processing:v1',
+      batch: { chapterNos: [2, 3] },
+    })
+  })
+
+  it('rebuilds the first 50 chapters from existing extraction cache without stack overflow', async () => {
+    process.env.HANLP_BOOTSTRAP_PARALLELISM = '25'
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-first-50-cache')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_first_50_cache', 50)
+    const aiSettings = createMockAISettings(10)
+
+    const insertCandidate = database.prepare(
+      `INSERT INTO chapter_extraction_candidates (
+        id, novel_id, branch_id, chapter_id, chapter_no, chapter_revision,
+        chapter_source_hash, extraction_json, status, provider, model
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    for (let chapterNo = 1; chapterNo <= 50; chapterNo += 1) {
+      insertCandidate.run(
+        `cached-candidate-${chapterNo}`,
+        novelId,
+        branchId,
+        `chapter-${chapterNo}`,
+        chapterNo,
+        1,
+        buildTestExtractionCandidateSourceHash({
+          chapterSourceHash: `chapter-hash-${chapterNo}`,
+          settings: aiSettings.knowledgeExtraction,
+        }),
+        JSON.stringify(createMockExtraction(chapterNo)),
+        'extracted',
+        'openai-compatible',
+        aiSettings.knowledgeExtraction.openAICompatible.model,
+      )
+    }
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { rawText: string }) => ({
+        source: 'cache' as const,
+        cache: {} as never,
+        result: {} as never,
+        output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+        cacheKey: {} as never,
+        scriptPath: '/tmp/mock-hanlp.py',
+        normalizedChapterText: input.rawText,
+      })),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
+    vi.doMock('@/lib/server/knowledge-extraction', () => ({
+      extractChapterKnowledgeOffline: vi.fn(async () => {
+        throw new Error('Extraction should not run when all first-50 candidates are cached')
+      }),
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        precomputeRawTextEmbeddingCache: vi.fn(async () => ({
+          totalDocs: 0,
+          completedDocs: 0,
+          cacheHits: 0,
+          cacheMisses: 0,
+          failedDocs: 0,
+          totalBatches: 0,
+          completedBatches: 0,
+          degraded: false,
+          cancelled: false,
+          durationMs: 0,
+        })),
+        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
+      }
+    })
+
+    const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
+    await expect(rebuildKnowledgeForNovel({ novelId, chapterRange: { startChapter: 1, endChapter: 50 } })).resolves.toMatchObject({ outcome: 'completed' })
+
+    expect(queryOne<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ? AND processing_result_json IS NOT NULL',
+      branchId,
+    )?.count).toBe(50)
+    const firstBatchCache = JSON.parse(queryOne<{ processingResultJson: string | null }>(
+      'SELECT processing_result_json AS processingResultJson FROM chapter_extraction_candidates WHERE chapter_id = ?',
+      'chapter-1',
+    )?.processingResultJson ?? '{}') as { batch?: { chapterNos?: number[] } }
+    const lastBatchCache = JSON.parse(queryOne<{ processingResultJson: string | null }>(
+      'SELECT processing_result_json AS processingResultJson FROM chapter_extraction_candidates WHERE chapter_id = ?',
+      'chapter-50',
+    )?.processingResultJson ?? '{}') as { batch?: { chapterNos?: number[] } }
+
+    expect(firstBatchCache.batch?.chapterNos).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    expect(lastBatchCache.batch?.chapterNos).toEqual([41, 42, 43, 44, 45, 46, 47, 48, 49, 50])
+  })
+
+  it('clears stale batch processing cache when a candidate is re-extracted', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-processing-cache-invalidation')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_processing_cache_invalidation', 1)
+    const aiSettings = createMockAISettings(1)
+    const chapterSourceHash = buildTestExtractionCandidateSourceHash({
+      chapterSourceHash: 'chapter-hash-1',
+      settings: aiSettings.knowledgeExtraction,
+    })
+
+    database.prepare(
+      `INSERT INTO chapter_extraction_candidates (
+        id, novel_id, branch_id, chapter_id, chapter_no, chapter_revision,
+        chapter_source_hash, extraction_json, processing_result_json, status, provider, model
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      'stale-processing-candidate',
+      novelId,
+      branchId,
+      'chapter-1',
+      1,
+      1,
+      chapterSourceHash,
+      JSON.stringify({ ...createMockExtraction(1), summary: 'old extraction summary' }),
+      JSON.stringify({
+        schemaVersion: 'knowledge-extraction-processing:v1',
+        batch: { chapterIds: ['chapter-1'], chapterNos: [1], aliasDiscoveries: [] },
+        resolved: { extraction: { ...createMockExtraction(1), summary: 'stale processing summary' } },
+      }),
+      'failed',
+      'openai-compatible',
+      aiSettings.knowledgeExtraction.openAICompatible.model,
+    )
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { rawText: string }) => ({
+        source: 'cache' as const,
+        cache: {} as never,
+        result: {} as never,
+        output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+        cacheKey: {} as never,
+        scriptPath: '/tmp/mock-hanlp.py',
+        normalizedChapterText: input.rawText,
+      })),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
+    vi.doMock('@/lib/server/knowledge-extraction', () => ({
+      extractChapterKnowledgeOffline: vi.fn(async () => ({
+        extraction: { ...createMockExtraction(1), summary: 'fresh extraction summary' },
+        provider: 'openai-compatible' as const,
+        model: aiSettings.knowledgeExtraction.openAICompatible.model,
+      })),
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        precomputeRawTextEmbeddingCache: vi.fn(async () => ({
+          totalDocs: 0,
+          completedDocs: 0,
+          cacheHits: 0,
+          cacheMisses: 0,
+          failedDocs: 0,
+          totalBatches: 0,
+          completedBatches: 0,
+          degraded: false,
+          cancelled: false,
+          durationMs: 0,
+        })),
+        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
+      }
+    })
+
+    const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
+    await expect(rebuildKnowledgeForNovel({ novelId })).resolves.toMatchObject({ outcome: 'completed' })
+
+    expect(queryOne<{ summary: string | null }>(
+      'SELECT summary FROM KnowledgeChapter WHERE id = ?',
+      'chapter-1',
+    )?.summary).toBe('fresh extraction summary')
+
+    const processingResult = JSON.parse(queryOne<{ processingResultJson: string | null }>(
+      'SELECT processing_result_json AS processingResultJson FROM chapter_extraction_candidates WHERE id = ?',
+      'stale-processing-candidate',
+    )?.processingResultJson ?? '{}') as { resolved?: { extraction?: { summary?: string } } }
+    expect(processingResult.resolved?.extraction?.summary).toBe('fresh extraction summary')
   })
 
   it('can pause during HanLP before any extraction starts', async () => {

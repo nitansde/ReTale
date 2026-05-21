@@ -82,6 +82,7 @@ type ChapterExtractionCandidateRow = {
   chapterRevision: number | null
   chapterSourceHash: string
   extractionJson: string
+  processingResultJson: string | null
   status: ChapterExtractionCandidateStatus
   provider: string | null
   model: string | null
@@ -95,6 +96,7 @@ type ChapterExtractionCandidate = {
   chapterRevision: number | null
   chapterSourceHash: string
   extractionJson: string
+  processingResultJson: string | null
   status: ChapterExtractionCandidateStatus
   provider: string | null
   model: string | null
@@ -103,6 +105,18 @@ type ChapterExtractionCandidate = {
 
 type ResolvedChapterKnowledge = {
   extraction: ChapterKnowledgeExtraction
+}
+
+type ChapterExtractionBatchProcessingContext = {
+  chapterIds: string[]
+  chapterNos: number[]
+  aliasDiscoveries: KnowledgeRebuildBatchAliasDiscovery[]
+}
+
+type ChapterExtractionProcessingCache = {
+  schemaVersion: typeof CHAPTER_EXTRACTION_PROCESSING_SCHEMA_VERSION
+  batch: ChapterExtractionBatchProcessingContext
+  resolved: ResolvedChapterKnowledge
 }
 
 type CandidatePromotionSummaryStatus = 'not_requested' | 'pending' | 'completed'
@@ -170,6 +184,7 @@ type KnowledgeRebuildJobPayload = {
   totalChapterWeight?: number
   processedChapterWeight?: number
   extractedChapters?: KnowledgeRebuildPayloadChapter[]
+  currentBatchChapters?: KnowledgeRebuildPayloadChapter[]
   totalChapterCount?: number
   extractionSettings?: KnowledgeExtractionScenarioSettings
   rawTextEmbeddingProgress?: number
@@ -204,6 +219,7 @@ const KNOWLEDGE_REBUILD_STEP_ORDER: KnowledgeRebuildStepKey[] = ['hanlp-bootstra
 
 const RAW_TEXT_PRECOMPUTE_STAGE_KEY = 'raw_text_precompute'
 const CHAPTER_EXTRACTION_CANDIDATE_SCHEMA_VERSION = 'knowledge-extraction-candidate:v2'
+const CHAPTER_EXTRACTION_PROCESSING_SCHEMA_VERSION = 'knowledge-extraction-processing:v1'
 const CANDIDATE_PROMOTION_CHAPTER_THRESHOLD = 10
 const CANDIDATE_PROMOTION_SUMMARY_STATUS = 'candidate_promoted_summary'
 const rawTextEmbeddingPrecomputeRuns = new Map<string, RawTextEmbeddingPrecomputeRun>()
@@ -600,6 +616,17 @@ function normalizeKnowledgeRebuildJobPayload(payload: unknown) {
         } satisfies KnowledgeRebuildBatchAliasDiscovery]
       })
     : undefined
+  const currentBatchChapters = Array.isArray(candidate.currentBatchChapters)
+    ? candidate.currentBatchChapters.flatMap((item) => {
+        if (!item || typeof item !== 'object') return []
+        const row = item as Partial<KnowledgeRebuildPayloadChapter>
+        if (typeof row.chapterId !== 'string' || typeof row.chapterNo !== 'number') return []
+        return [{
+          chapterId: row.chapterId,
+          chapterNo: Math.max(1, Math.floor(row.chapterNo)),
+        } satisfies KnowledgeRebuildPayloadChapter]
+      }).sort((left, right) => left.chapterNo - right.chapterNo)
+    : undefined
 
   return {
     ...candidate,
@@ -619,6 +646,7 @@ function normalizeKnowledgeRebuildJobPayload(payload: unknown) {
     stageStartedAtByKey: { ...(candidate.stageStartedAtByKey ?? {}) },
     hanlpBootstrap: normalizedHanlpBootstrap,
     orderedAliasDiscoveries,
+    currentBatchChapters,
     appliedAliasDiscoveryCount: typeof candidate.appliedAliasDiscoveryCount === 'number'
       ? Math.max(0, Math.floor(candidate.appliedAliasDiscoveryCount))
       : undefined,
@@ -993,6 +1021,7 @@ function setWriteQueueInKnowledgeJob(jobId: string, chapters: Array<{ chapterId:
       totalChapterWeight: state.totalChapterWeight,
       processedChapterWeight: state.processedChapterWeight,
       extractedChapters,
+      currentBatchChapters: extractedChapters,
     },
   })
 
@@ -1000,6 +1029,36 @@ function setWriteQueueInKnowledgeJob(jobId: string, chapters: Array<{ chapterId:
     ...state,
     extractedChapters,
   }
+}
+
+function resetCurrentBatchAndReturnToExtract(jobId: string, state: KnowledgeRebuildJobState) {
+  updateKnowledgeJob(jobId, {
+    payload: {
+      ...state.payload,
+      phase: 'extract',
+      pendingChapterIds: state.pendingChapterIds,
+      chapterWeightsById: state.chapterWeightsById,
+      totalChapterWeight: state.totalChapterWeight,
+      processedChapterWeight: state.processedChapterWeight,
+      extractedChapters: [],
+      currentBatchChapters: [],
+      orderedAliasDiscoveries: [],
+      appliedAliasDiscoveryCount: 0,
+      stageStartedAtByKey: {
+        ...(state.payload.stageStartedAtByKey ?? {}),
+        extract: (state.payload.stageStartedAtByKey ?? {}).extract ?? new Date().toISOString(),
+      },
+    },
+  })
+}
+
+function getCurrentBatchChaptersForProcessing(state: KnowledgeRebuildJobState, writeQueue: KnowledgeRebuildPayloadChapter[]) {
+  const currentBatchChapters = state.payload.currentBatchChapters?.length
+    ? state.payload.currentBatchChapters
+    : writeQueue
+  return currentBatchChapters
+    .slice()
+    .sort((left, right) => left.chapterNo - right.chapterNo)
 }
 
 function getKnowledgeRebuildJobState(jobId: string): KnowledgeRebuildJobState | null {
@@ -1050,6 +1109,7 @@ function initializeKnowledgeRebuildJobState(jobId: string, payload: KnowledgeReb
       currentChapterId: payload.currentChapterId ?? null,
       processedChapterWeight: Math.max(0, payload.processedChapterWeight ?? 0),
       extractedChapters: payload.extractedChapters ?? [],
+      currentBatchChapters: payload.currentBatchChapters ?? [],
       embeddingSettingsSnapshot: getOrCreateEmbeddingSettingsSnapshot(payload),
       stageStartedAtByKey: {
         ...(payload.stageStartedAtByKey ?? {}),
@@ -1106,6 +1166,7 @@ export function updateKnowledgeRebuildJobTelemetry(jobId: string, telemetry: Kno
       totalChapterWeight,
       processedChapterWeight,
       extractedChapters,
+      currentBatchChapters: basePayload.currentBatchChapters ?? [],
       totalChapterCount: basePayload.totalChapterCount ?? (pendingChapterIds.length + extractedChapters.length),
     },
   })
@@ -1140,6 +1201,7 @@ function setKnowledgeRebuildJobIndexProgress(jobId: string, indexProgress: Knowl
       totalChapterWeight: state.totalChapterWeight,
       processedChapterWeight: state.processedChapterWeight,
       extractedChapters: state.extractedChapters,
+      currentBatchChapters: state.payload.currentBatchChapters ?? [],
       extractionSettings: state.payload.extractionSettings,
       rawTextEmbeddingProgress: state.payload.rawTextEmbeddingProgress,
       rawTextEmbeddingCacheHitRate: state.payload.rawTextEmbeddingCacheHitRate,
@@ -1204,6 +1266,7 @@ function removePendingChaptersFromKnowledgeJob(jobId: string, chapterIds: string
       totalChapterWeight: nextState.totalChapterWeight,
       processedChapterWeight: nextState.processedChapterWeight,
       extractedChapters: nextState.extractedChapters,
+      currentBatchChapters: state.payload.currentBatchChapters ?? [],
     },
   })
 
@@ -1243,6 +1306,7 @@ function completePendingChapterInKnowledgeJob(jobId: string, chapterId: string) 
       totalChapterWeight: nextState.totalChapterWeight,
       processedChapterWeight: nextState.processedChapterWeight,
       extractedChapters: state.extractedChapters,
+      currentBatchChapters: state.payload.currentBatchChapters ?? [],
     },
   })
 
@@ -1271,6 +1335,7 @@ function setKnowledgeRebuildJobPhase(jobId: string, phase: NonNullable<Knowledge
       totalChapterWeight: state.totalChapterWeight,
       processedChapterWeight: state.processedChapterWeight,
       extractedChapters: state.extractedChapters,
+      currentBatchChapters: state.payload.currentBatchChapters ?? [],
       totalChapterCount: state.payload.totalChapterCount ?? (state.pendingChapterIds.length + state.extractedChapters.length),
       stageStartedAtByKey: {
         ...(state.payload.stageStartedAtByKey ?? {}),
@@ -1296,6 +1361,7 @@ function markInlineKnowledgeCleanupCompleted(jobId: string) {
       totalChapterWeight: state.totalChapterWeight,
       processedChapterWeight: state.processedChapterWeight,
       extractedChapters: state.extractedChapters,
+      currentBatchChapters: state.payload.currentBatchChapters ?? [],
       stageStartedAtByKey: {
         ...(state.payload.stageStartedAtByKey ?? {}),
         cleanup: (state.payload.stageStartedAtByKey ?? {}).cleanup ?? new Date().toISOString(),
@@ -1325,6 +1391,7 @@ function removeExtractedChapterFromKnowledgeJob(jobId: string, chapterId: string
       totalChapterWeight: state.totalChapterWeight,
       processedChapterWeight: state.processedChapterWeight,
       extractedChapters,
+      currentBatchChapters: extractedChapters.length ? state.payload.currentBatchChapters ?? [] : [],
     },
   })
 
@@ -1751,6 +1818,7 @@ function readChapterExtractionCandidate(row: ChapterExtractionCandidateRow | nul
     chapterRevision: row.chapterRevision,
     chapterSourceHash: row.chapterSourceHash,
     extractionJson: row.extractionJson,
+    processingResultJson: row.processingResultJson,
     status: row.status,
     provider: row.provider,
     model: row.model,
@@ -1770,6 +1838,7 @@ function loadChapterExtractionCandidate(params: { branchId: string; chapterId: s
                chapter_revision AS chapterRevision,
                chapter_source_hash AS chapterSourceHash,
                extraction_json AS extractionJson,
+               processing_result_json AS processingResultJson,
                status,
                provider,
                model,
@@ -1821,6 +1890,65 @@ function loadOrderedRebuildQueue(chapters: KnowledgeChapterRow[], chapterRange: 
       chapterNo: chapter.chapterNo,
     }))
     .sort((left, right) => left.chapterNo - right.chapterNo)
+}
+
+function buildChapterExtractionBatchProcessingContext(params: {
+  chapters: Array<{ chapterId: string; chapterNo: number }>
+  aliasDiscoveries: KnowledgeRebuildBatchAliasDiscovery[]
+}): ChapterExtractionBatchProcessingContext {
+  const orderedChapters = params.chapters.slice().sort((left, right) => left.chapterNo - right.chapterNo)
+  const orderedAliasDiscoveries = params.aliasDiscoveries.slice().sort((left, right) => {
+    if (left.chapterNo !== right.chapterNo) return left.chapterNo - right.chapterNo
+    return left.outputOrder - right.outputOrder
+  })
+
+  return {
+    chapterIds: orderedChapters.map((chapter) => chapter.chapterId),
+    chapterNos: orderedChapters.map((chapter) => chapter.chapterNo),
+    aliasDiscoveries: orderedAliasDiscoveries,
+  }
+}
+
+function sameStringList(left: string[], right: string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function sameNumberList(left: number[], right: number[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function batchProcessingContextMatches(left: ChapterExtractionBatchProcessingContext, right: ChapterExtractionBatchProcessingContext) {
+  return sameStringList(left.chapterIds, right.chapterIds)
+    && sameNumberList(left.chapterNos, right.chapterNos)
+    && JSON.stringify(left.aliasDiscoveries) === JSON.stringify(right.aliasDiscoveries)
+}
+
+function readChapterExtractionProcessingCache(value: string | null | undefined, context: ChapterExtractionBatchProcessingContext | undefined) {
+  if (!value || !context) return null
+
+  try {
+    const parsed = JSON.parse(value) as Partial<ChapterExtractionProcessingCache> | null
+    if (!parsed || parsed.schemaVersion !== CHAPTER_EXTRACTION_PROCESSING_SCHEMA_VERSION || !parsed.batch || !parsed.resolved) {
+      return null
+    }
+    if (!batchProcessingContextMatches(parsed.batch, context)) {
+      return null
+    }
+    return parsed.resolved
+  } catch {
+    return null
+  }
+}
+
+function serializeChapterExtractionProcessingCache(params: {
+  batchContext: ChapterExtractionBatchProcessingContext
+  resolved: ResolvedChapterKnowledge
+}) {
+  return JSON.stringify({
+    schemaVersion: CHAPTER_EXTRACTION_PROCESSING_SCHEMA_VERSION,
+    batch: params.batchContext,
+    resolved: params.resolved,
+  } satisfies ChapterExtractionProcessingCache)
 }
 
 function updateHanlpBootstrapState(jobId: string, updater: (state: KnowledgeRebuildHanlpBootstrapState) => KnowledgeRebuildHanlpBootstrapState) {
@@ -1881,6 +2009,7 @@ function upsertChapterExtractionCandidate(params: {
   chapterRevision?: number | null
   chapterSourceHash: string
   extractionJson: string
+  processingResultJson?: string | null
   status: ChapterExtractionCandidateStatus
   provider?: string | null
   model?: string | null
@@ -1904,16 +2033,21 @@ function upsertChapterExtractionCandidate(params: {
         chapter_revision,
         chapter_source_hash,
         extraction_json,
+        processing_result_json,
         status,
         provider,
         model,
         error_message
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(branch_id, chapter_id, chapter_source_hash) DO UPDATE SET
         chapter_no = excluded.chapter_no,
         chapter_revision = excluded.chapter_revision,
         extraction_json = excluded.extraction_json,
+        processing_result_json = CASE
+          WHEN ? THEN chapter_extraction_candidates.processing_result_json
+          ELSE excluded.processing_result_json
+        END,
         status = excluded.status,
         provider = excluded.provider,
         model = excluded.model,
@@ -1928,10 +2062,12 @@ function upsertChapterExtractionCandidate(params: {
     params.chapterRevision ?? null,
     params.chapterSourceHash,
     params.extractionJson,
+    params.processingResultJson ?? null,
     params.status,
     params.provider ?? null,
     params.model ?? null,
     params.errorMessage ?? null,
+    params.processingResultJson === undefined ? 1 : 0,
   )
 }
 
@@ -1958,17 +2094,36 @@ function updateExistingChapterExtractionCandidate(params: {
   candidateId: string
   status: ChapterExtractionCandidateStatus
   errorMessage?: string | null
+  processingResultJson?: string | null
 }) {
+  if (params.processingResultJson === undefined) {
+    execute(
+      `
+        UPDATE chapter_extraction_candidates
+        SET status = ?,
+            error_message = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `,
+      params.status,
+      params.errorMessage ?? null,
+      params.candidateId
+    )
+    return
+  }
+
   execute(
     `
       UPDATE chapter_extraction_candidates
       SET status = ?,
           error_message = ?,
+          processing_result_json = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `,
     params.status,
     params.errorMessage ?? null,
+    params.processingResultJson,
     params.candidateId
   )
 }
@@ -2044,6 +2199,7 @@ async function extractChapterCandidates(params: {
     chapterRevision: params.chapter.revision,
     chapterSourceHash: candidateSourceHash,
     extractionJson: JSON.stringify(extractionResult.extraction),
+    processingResultJson: null,
     status: 'extracted',
     provider: extractionResult.provider,
     model: extractionResult.model,
@@ -2263,6 +2419,7 @@ function setBatchAliasSyncPlanInKnowledgeJob(params: {
       totalChapterWeight: state.totalChapterWeight,
       processedChapterWeight: state.processedChapterWeight,
       extractedChapters,
+      currentBatchChapters: extractedChapters,
       orderedAliasDiscoveries: params.orderedAliasDiscoveries,
       appliedAliasDiscoveryCount: Math.min(
         Math.max(0, state.payload.appliedAliasDiscoveryCount ?? 0),
@@ -2376,8 +2533,12 @@ function applyOrderedBatchAliasDiscoveries(params: {
 function resolveChapterCandidate(params: {
   candidate: ChapterExtractionCandidate
   storyState: string
+  batchContext?: ChapterExtractionBatchProcessingContext
 }): ResolvedChapterKnowledge {
   void params.storyState
+
+  const cached = readChapterExtractionProcessingCache(params.candidate.processingResultJson, params.batchContext)
+  if (cached) return cached
 
   const parsed = JSON.parse(params.candidate.extractionJson) as unknown
   if (!parsed || typeof parsed !== 'object') {
@@ -4565,6 +4726,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
           totalChapterCount: defaultRebuildChapters.length,
           processedChapterWeight: 0,
           extractedChapters: [],
+          currentBatchChapters: [],
           extractionSettings: loadStoredAISettings().knowledgeExtraction,
           embeddingSettingsSnapshot: buildEmbeddingSettingsSnapshot(),
           indexProgress: undefined,
@@ -4705,6 +4867,14 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
           })
 
           if (!remainingChapters.length) {
+            if (currentJobState.extractedChapters.length) {
+              setKnowledgeRebuildJobPhase(job.id, 'batch-sync')
+              continue
+            }
+            break
+          }
+
+          if (currentJobState.extractedChapters.length) {
             setKnowledgeRebuildJobPhase(job.id, 'batch-sync')
             continue
           }
@@ -4717,6 +4887,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             progress: getKnowledgeExtractionProgress(currentJobState),
           })
 
+          const extractedBatchChapters: KnowledgeRebuildPayloadChapter[] = []
           await Promise.all(
             extractionBatch.map(async (chapter) => {
               assertKnowledgeRebuildContinues(job.id)
@@ -4734,6 +4905,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
                   settings: extractionSettings,
                   assertCanContinue: () => assertKnowledgeRebuildContinues(job.id),
                 })
+                extractedBatchChapters.push({ chapterId: chapter.id, chapterNo: chapter.chapterNo })
               } catch (error) {
                 if (isKnowledgeRebuildControlError(error)) {
                   throw error
@@ -4750,6 +4922,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
                       settings: extractionSettings,
                     }),
                     extractionJson: '{}',
+                    processingResultJson: null,
                     status: 'failed',
                     errorMessage: error instanceof Error ? error.message : `Chapter ${chapter.chapterNo} candidate extraction failed`,
                 })
@@ -4762,6 +4935,14 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
               }
             })
           )
+
+          if (extractedBatchChapters.length) {
+            setWriteQueueInKnowledgeJob(
+              job.id,
+              extractedBatchChapters.sort((left, right) => left.chapterNo - right.chapterNo),
+            )
+            setKnowledgeRebuildJobPhase(job.id, 'batch-sync')
+          }
           continue
         }
 
@@ -4771,11 +4952,24 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             params.novelId,
             branchId
           )
-          const orderedChapters = loadOrderedRebuildQueue(currentChapters, rebuildChapterRange)
+          const currentBatchChapters = currentJobState.extractedChapters
+            .filter((chapter) => chapterStillExists(chapter.chapterId))
+            .sort((left, right) => left.chapterNo - right.chapterNo)
+          if (currentBatchChapters.length !== currentJobState.extractedChapters.length) {
+            setWriteQueueInKnowledgeJob(job.id, currentBatchChapters)
+            continue
+          }
+          if (!currentBatchChapters.length) {
+            if (currentJobState.pendingChapterIds.length) {
+              resetCurrentBatchAndReturnToExtract(job.id, currentJobState)
+              continue
+            }
+            break
+          }
           const extractionSettings = getKnowledgeExtractionSettingsSnapshot(currentJobState.payload)
           const orderedAliasDiscoveries = buildBatchAliasDiscoveryPlan({
             branchId,
-            chapters: orderedChapters.map((chapter) => ({
+            chapters: currentBatchChapters.map((chapter) => ({
               chapterId: chapter.chapterId,
               chapterNo: chapter.chapterNo,
               chapterSourceHash: buildChapterExtractionCandidateSourceHash({
@@ -4791,7 +4985,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
           })
           setBatchAliasSyncPlanInKnowledgeJob({
             jobId: job.id,
-            chapters: orderedChapters,
+            chapters: currentBatchChapters,
             orderedAliasDiscoveries,
           })
           applyOrderedBatchAliasDiscoveries({
@@ -4820,15 +5014,21 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             .sort((left, right) => left.chapterNo - right.chapterNo)
 
           if (writeQueue.length !== currentJobState.extractedChapters.length) {
-          for (const chapter of currentJobState.extractedChapters) {
-            if (!chapterStillExists(chapter.chapterId)) {
-              removeExtractedChapterFromKnowledgeJob(job.id, chapter.chapterId)
+            for (const chapter of currentJobState.extractedChapters) {
+              if (!chapterStillExists(chapter.chapterId)) {
+                removeExtractedChapterFromKnowledgeJob(job.id, chapter.chapterId)
+              }
             }
+            continue
           }
-          continue
-        }
 
-          if (!writeQueue.length) break
+          if (!writeQueue.length) {
+            if (currentJobState.pendingChapterIds.length) {
+              resetCurrentBatchAndReturnToExtract(job.id, currentJobState)
+              continue
+            }
+            break
+          }
 
           const queuedChapter = writeQueue[0]
           const chapter = chapterById.get(queuedChapter.chapterId)
@@ -4877,6 +5077,10 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
           }
 
           try {
+            const batchContext = buildChapterExtractionBatchProcessingContext({
+              chapters: getCurrentBatchChaptersForProcessing(currentJobState, writeQueue),
+              aliasDiscoveries: currentJobState.payload.orderedAliasDiscoveries ?? [],
+            })
             updateExistingChapterExtractionCandidate({
               candidateId: candidate.id,
               status: 'resolving',
@@ -4886,6 +5090,16 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             const resolved = resolveChapterCandidate({
               candidate,
               storyState,
+              batchContext,
+            })
+            updateExistingChapterExtractionCandidate({
+              candidateId: candidate.id,
+              status: 'resolving',
+              errorMessage: null,
+              processingResultJson: serializeChapterExtractionProcessingCache({
+                batchContext,
+                resolved,
+              }),
             })
             await persistResolvedChapterKnowledge({
               novelId: params.novelId,
@@ -4962,6 +5176,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
           totalChapterCount: 0,
           processedChapterWeight: 0,
           extractedChapters: [],
+          currentBatchChapters: [],
           extractionSettings: loadStoredAISettings().knowledgeExtraction,
           embeddingSettingsSnapshot: getOrCreateEmbeddingSettingsSnapshot({ branchId }),
           indexProgress: undefined,

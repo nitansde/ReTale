@@ -270,7 +270,7 @@ describe('knowledge rebuild alias sync', () => {
   it('applies later same-batch aliases before ordered writes so earlier unknown observations do not create candidates', async () => {
     const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-alias-hit-no-candidate')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_alias_hit_no_candidate', 7)
-    const aiSettings = createMockAISettings(1)
+    const aiSettings = createMockAISettings(7)
 
     database.prepare(
       `INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, firstSeenChapter, lastSeenChapter, status, userConfirmed)
