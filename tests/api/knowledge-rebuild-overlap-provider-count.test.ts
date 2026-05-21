@@ -93,9 +93,13 @@ describe('knowledge rebuild overlap provider count proof', () => {
       chapter: {
         id: 'chapter-proof',
         novelId: 'novel-proof',
+        volumeId: 'volume-proof',
         title: '第1章',
         content: '<p>第一段原文内容。</p>',
         order: 1,
+        status: 'draft',
+        wordCount: 7,
+        updatedAt: '2026-05-21T00:00:00.000Z',
       },
       chapterNo: 1,
       settings: createKnowledgeExtractionSettings(),

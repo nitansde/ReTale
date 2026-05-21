@@ -243,7 +243,7 @@ describe('ContinueBlockDetailView', () => {
     expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('时间线回退正文')
     expect(screen.getByText('正在读取续写块详情…')).toBeInTheDocument()
 
-    resolveFetch?.({
+    ;(resolveFetch as ((value: Response) => void) | null)?.({
       ok: true,
       json: async () => continueBlockDetail,
     } as Response)
