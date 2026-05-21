@@ -42,6 +42,11 @@ export type Chapter = {
   trajectory?: string[]
 }
 
+export type KnowledgeRebuildChapterRange = {
+  startChapter?: number
+  endChapter?: number
+}
+
 export type OutlineType = 'main' | 'side' | 'foreshadow' | 'conflict' | 'climax'
 
 export type OutlineItem = {
@@ -69,7 +74,8 @@ export type Character = {
 }
 
 export type CharacterRoleCardFacet = {
-  summary: string
+  content?: string
+  summary?: string
   note?: string
   evidence?: string
 }
