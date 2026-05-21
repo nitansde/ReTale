@@ -15,15 +15,15 @@ export type WorkspaceActionMode = ProductSurfaceId
 
 export const WORKSPACE_CHAPTER_ACTION_ENTRY_MODES = ['rewrite', 'roleplay'] as const satisfies readonly WorkspaceActionMode[]
 
-export type WorkspaceFloatingPosition = {
-  top: number
-  left: number
-}
-
 export type WorkspaceRoleplayTurn = {
   id: string
   role: 'user' | 'assistant'
   content: string
+}
+
+export type WorkspaceFloatingPosition = {
+  top: number
+  left: number
 }
 
 export type PendingSourceJump = {
@@ -37,8 +37,6 @@ export type PendingSourceJump = {
 type ChapterResetControls = {
   defaultGraphReviewControls: GraphReviewControls
   resetPresetCompatSessionStateForChapter: (chapter: Chapter) => void
-  setRoleplayTurns: Dispatch<SetStateAction<WorkspaceRoleplayTurn[]>>
-  setRoleplayDraft: Dispatch<SetStateAction<string>>
   setSelectionText: Dispatch<SetStateAction<string>>
   setLockedSelectionText: Dispatch<SetStateAction<string>>
   setGenerationContext: Dispatch<SetStateAction<GenerationContextBuildData | null>>
@@ -81,6 +79,8 @@ export function useWorkspaceChapterSelection(options: UseWorkspaceChapterSelecti
     resetControls,
   } = options
 
+  void htmlToPlainText
+
   const sortedChapters = useMemo(
     () => localChapters.filter((chapter) => chapter.novelId === currentNovelId).slice().sort((a, b) => a.order - b.order),
     [currentNovelId, localChapters]
@@ -113,10 +113,7 @@ export function useWorkspaceChapterSelection(options: UseWorkspaceChapterSelecti
   }, [currentChapter, effectiveGraphSourceChapter])
 
   const resetContextForChapter = useCallback((chapter: Chapter) => {
-    const nextText = htmlToPlainText(chapter.content)
     resetControls.resetPresetCompatSessionStateForChapter(chapter)
-    resetControls.setRoleplayTurns([])
-    resetControls.setRoleplayDraft(nextText)
     resetControls.setSelectionText('')
     resetControls.setLockedSelectionText('')
     resetControls.setGenerationContext(null)
@@ -132,7 +129,7 @@ export function useWorkspaceChapterSelection(options: UseWorkspaceChapterSelecti
     resetControls.setGraphMutationError('')
     resetControls.setToolbarPos(null)
     resetControls.setActiveMode(null)
-  }, [htmlToPlainText, resetControls])
+  }, [resetControls])
 
   const selectChapter = useCallback((chapter: Chapter) => {
     setCurrentChapterId(chapter.id)

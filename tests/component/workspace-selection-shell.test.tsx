@@ -125,6 +125,7 @@ function renderPane(selection: TimelineSelection) {
       continueBlockView={<div data-testid="continue-block-slot">continue-block seam</div>}
       whatIfView={<div data-testid="what-if-slot">what-if seam</div>}
       futureJumpView={<div data-testid="future-jump-slot">future-jump seam</div>}
+      roleplayView={<div data-testid="roleplay-slot">roleplay seam</div>}
       branchReadableLabel={selection.kind === 'chapter' ? null : branchNodes.find((node) => node.id === selection.nodeId)?.readableLabel ?? null}
       branchInstructionText={selection.kind === 'chapter' ? null : branchNodes.find((node) => node.id === selection.nodeId)?.subtitle ?? null}
     />

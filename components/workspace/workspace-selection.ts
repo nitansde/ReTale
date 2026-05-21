@@ -33,6 +33,10 @@ function matchesBranchSelectionNode(selection: Exclude<TimelineSelection, { kind
     return node.nodeType === 'continue_block' && node.continueBlockId === selection.continueBlockId
   }
 
+  if (selection.kind === 'roleplay_session') {
+    return node.nodeType === 'roleplay_session' && node.roleplaySessionId === selection.roleplaySessionId
+  }
+
   return node.nodeType === 'future_jump' && node.futureJumpRunId === selection.runId
 }
 
@@ -65,6 +69,17 @@ export function toBranchTimelineSelection(node: StoryTimelineBranchNode): Timeli
           kind: 'what_if',
           nodeId: node.id,
           sessionId: node.whatIfSessionId,
+          anchorChapterNo: node.anchorChapterNo,
+        }
+      : null
+  }
+
+  if (node.nodeType === 'roleplay_session') {
+    return node.roleplaySessionId
+      ? {
+          kind: 'roleplay_session',
+          nodeId: node.id,
+          roleplaySessionId: node.roleplaySessionId,
           anchorChapterNo: node.anchorChapterNo,
         }
       : null
@@ -234,6 +249,20 @@ export function readWorkspaceSelectionFromSearchParams(searchParams: URLSearchPa
     }
   }
 
+  if (selectionKind === 'roleplay_session') {
+    const nodeId = searchParams.get('selectionNodeId')
+    const roleplaySessionId = searchParams.get('selectionSessionId')
+    const anchorChapterNo = parseSelectionNumber(searchParams.get('selectionAnchorChapterNo'))
+    if (!nodeId || !roleplaySessionId || anchorChapterNo === null) return null
+
+    return {
+      kind: 'roleplay_session',
+      nodeId,
+      roleplaySessionId,
+      anchorChapterNo,
+    }
+  }
+
   return null
 }
 
@@ -272,6 +301,14 @@ export function writeWorkspaceSelectionToSearchParams(searchParams: URLSearchPar
     nextSearchParams.set('selectionKind', 'continue_block')
     nextSearchParams.set('selectionNodeId', selection.nodeId)
     nextSearchParams.set('selectionContinueBlockId', selection.continueBlockId)
+    nextSearchParams.set('selectionAnchorChapterNo', String(selection.anchorChapterNo))
+    return nextSearchParams
+  }
+
+  if (selection.kind === 'roleplay_session') {
+    nextSearchParams.set('selectionKind', 'roleplay_session')
+    nextSearchParams.set('selectionNodeId', selection.nodeId)
+    nextSearchParams.set('selectionSessionId', selection.roleplaySessionId)
     nextSearchParams.set('selectionAnchorChapterNo', String(selection.anchorChapterNo))
     return nextSearchParams
   }
