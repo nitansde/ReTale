@@ -164,13 +164,13 @@ describe('knowledge rebuild alias sync', () => {
     ])
 
     database.prepare(
-      `INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, firstSeenChapter, lastSeenChapter, status, userConfirmed)
-       VALUES (?, ?, ?, 'character', ?, ?, ?, ?, 1)`
-    ).run('entity-liqing', novelId, branchId, '李青', 1, 1, 'user_confirmed')
+      `INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, firstSeenChapter, lastSeenChapter, importanceTier, status, userConfirmed)
+       VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, 1)`
+    ).run('entity-liqing', novelId, branchId, '李青', 1, 1, 'important', 'user_confirmed')
     database.prepare(
-      `INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, firstSeenChapter, lastSeenChapter, status, userConfirmed)
-       VALUES (?, ?, ?, 'character', ?, ?, ?, ?, 1)`
-    ).run('entity-zhaoqi', novelId, branchId, '赵七', 1, 1, 'user_confirmed')
+      `INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, firstSeenChapter, lastSeenChapter, importanceTier, status, userConfirmed)
+       VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, 1)`
+    ).run('entity-zhaoqi', novelId, branchId, '赵七', 1, 1, 'important', 'user_confirmed')
 
     vi.doMock('@/lib/server/ai-settings', () => ({ loadStoredAISettings: () => aiSettings }))
     vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
@@ -273,9 +273,9 @@ describe('knowledge rebuild alias sync', () => {
     const aiSettings = createMockAISettings(7)
 
     database.prepare(
-      `INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, firstSeenChapter, lastSeenChapter, status, userConfirmed)
-       VALUES (?, ?, ?, 'character', ?, ?, ?, ?, 1)`
-    ).run('entity-a', novelId, branchId, 'A', 1, 1, 'user_confirmed')
+      `INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, firstSeenChapter, lastSeenChapter, importanceTier, status, userConfirmed)
+       VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, 1)`
+    ).run('entity-a', novelId, branchId, 'A', 1, 1, 'important', 'user_confirmed')
 
     vi.doMock('@/lib/server/ai-settings', () => ({ loadStoredAISettings: () => aiSettings }))
     vi.doMock('@/lib/server/hanlp-bootstrap', () => ({

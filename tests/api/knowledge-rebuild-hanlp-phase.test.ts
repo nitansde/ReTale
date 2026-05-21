@@ -376,9 +376,9 @@ describe('knowledge rebuild HanLP orchestration', () => {
       .run('keep chapter 4 summary', 'chapter-4')
     database.prepare(
       `INSERT INTO KnowledgeEntity (
-        id, novelId, branchId, entityType, canonicalName, firstSeenChapter, lastSeenChapter, status, userConfirmed
-      ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, 0)`
-    ).run('entity-range-preserved', novelId, `${novelId}:main`, '跨章角色', 2, 4, 'ready')
+        id, novelId, branchId, entityType, canonicalName, firstSeenChapter, lastSeenChapter, importanceTier, status, userConfirmed
+      ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, 0)`
+    ).run('entity-range-preserved', novelId, `${novelId}:main`, '跨章角色', 2, 4, 'arc', 'ready')
     database.prepare('INSERT INTO EntityAppearance (id, entityId, chapterId, chapterNo, lineStart, lineEnd) VALUES (?, ?, ?, ?, ?, ?)')
       .run('appearance-range-stale', 'entity-range-preserved', 'chapter-2', 2, 1, 1)
     database.prepare('INSERT INTO EntityAppearance (id, entityId, chapterId, chapterNo, lineStart, lineEnd) VALUES (?, ?, ?, ?, ?, ?)')

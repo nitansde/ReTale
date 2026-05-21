@@ -108,7 +108,7 @@ function seedNovel(db: ReturnType<typeof createTestDb>['db']) {
     null,
     'user_confirmed',
   )
-  db.execute(`INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, description, firstSeenChapter, lastSeenChapter, status, importance, userConfirmed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, 'character-antagonist', 'novel-002', 'novel-002:main', 'character', '反派', '主导伏击者', 20, 120, 'user_confirmed', 5, 1)
+  db.execute(`INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, description, firstSeenChapter, lastSeenChapter, importanceTier, status, importance, userConfirmed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, 'character-antagonist', 'novel-002', 'novel-002:main', 'character', '反派', '主导伏击者', 20, 120, 'important', 'user_confirmed', 5, 1)
   db.execute(`INSERT INTO EventParticipant (id, eventId, entityId, role) VALUES (?, ?, ?, ?)`, 'event-participant-1', 'knowledge-event-20', 'character-antagonist', 'planner')
 
   db.execute(
