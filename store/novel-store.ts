@@ -35,6 +35,7 @@ import type {
   Character,
   CharacterRelation,
   HelperTab,
+  KnowledgeRebuildChapterRange,
   OutlineItem,
   OutlineType,
   PersistedNovelState,
@@ -91,6 +92,7 @@ type KnowledgeRebuildStatus = {
     etaMinutes: number | null
     detail: string | null
   }>
+  chapterRange?: KnowledgeRebuildChapterRange
   rawTextEmbeddingProgress?: number
   rawTextEmbeddingCacheHitRate?: number
   hanlpCacheStatus?: 'queued' | 'running' | 'paused' | 'ready' | 'empty'
@@ -156,18 +158,20 @@ async function fetchKnowledgeProjection(options?: {
   novelId?: string
   asOfChapter?: number
   method?: 'GET' | 'POST'
-  action?: 'rebuild' | 'pause' | 'abort' | 'delete-knowledge' | 'delete-hanlp-cache'
+  action?: 'rebuild' | 'pause' | 'abort' | 'delete-knowledge' | 'delete-hanlp-cache' | 'delete-extraction-cache' | 'delete-embedding-cache'
+  chapterRange?: KnowledgeRebuildChapterRange
 }): Promise<KnowledgeProjectionResult> {
   const novelId = options?.novelId
   const asOfChapter = options?.asOfChapter
   const method = options?.method ?? 'GET'
   const action = options?.action ?? 'rebuild'
+  const chapterRange = options?.chapterRange
 
   if (method === 'POST') {
     const response = await fetch('/api/knowledge-view', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ novelId, action }),
+      body: JSON.stringify({ novelId, action, ...(chapterRange ? { chapterRange } : {}) }),
     })
     const data = (await response.json()) as Partial<KnowledgeProjectionResult> & { ok?: boolean; error?: string }
     if (!response.ok || !data.ok) {
@@ -443,11 +447,13 @@ type NovelStore = PersistedNovelState & {
   deleteTimelineEvent: (id: string) => void
   deleteChapter: (chapterId: string) => void
   deleteNovel: (novelId: string) => void
-  rebuildStoryKnowledge: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
+  rebuildStoryKnowledge: (novelId?: string, options?: { chapterRange?: KnowledgeRebuildChapterRange }) => Promise<KnowledgeProjectionResult | null>
   pauseStoryKnowledgeRebuild: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   abortStoryKnowledgeRebuild: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   deleteStoryKnowledgeGraph: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   deleteStoryHanlpCache: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
+  deleteStoryExtractionCache: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
+  deleteStoryEmbeddingCache: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   refreshKnowledgeProjection: (novelId?: string, asOfChapter?: number) => Promise<void>
 
   setAISettings: (settings: AISettings) => void
@@ -455,6 +461,15 @@ type NovelStore = PersistedNovelState & {
 }
 
 const initialState: PersistedNovelState = createEmptyWorkspaceState()
+const WORKSPACE_RESTORE_TIMEOUT_MS = 15_000
+
+function getWorkspaceRestoreErrorMessage(error: unknown) {
+  if (error instanceof Error && error.name === 'AbortError') {
+    return 'Workspace restore timed out'
+  }
+
+  return error instanceof Error ? error.message : 'Failed to restore workspace'
+}
 
 function serializeState(state: NovelStore): PersistedNovelState {
   return {
@@ -775,13 +790,13 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     set((state) => buildStateAfterChapterDeletion(state, chapterId)),
   deleteNovel: (novelId) =>
     set((state) => buildStateAfterNovelDeletion(state, novelId)),
-  rebuildStoryKnowledge: async (novelId) => {
+  rebuildStoryKnowledge: async (novelId, options) => {
     const state = get()
     const targetNovelId = novelId ?? state.currentNovelId
     const chaptersForNovel = state.localChapters.filter((chapter) => chapter.novelId === targetNovelId && !chapter.parentChapterId)
     if (!targetNovelId || !chaptersForNovel.length) return null
 
-    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST' })
+    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', chapterRange: options?.chapterRange })
     const projection = normalizeKnowledgeProjection(result)
 
     set((current) => ({
@@ -845,6 +860,30 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     if (!targetNovelId) return null
 
     const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-hanlp-cache' })
+    const projection = normalizeKnowledgeProjection(result)
+    set((current) => ({
+      ...mergeKnowledgeProjection(current, projection, targetNovelId),
+    }))
+    return result
+  },
+  deleteStoryExtractionCache: async (novelId) => {
+    const state = get()
+    const targetNovelId = novelId ?? state.currentNovelId
+    if (!targetNovelId) return null
+
+    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-extraction-cache' })
+    const projection = normalizeKnowledgeProjection(result)
+    set((current) => ({
+      ...mergeKnowledgeProjection(current, projection, targetNovelId),
+    }))
+    return result
+  },
+  deleteStoryEmbeddingCache: async (novelId) => {
+    const state = get()
+    const targetNovelId = novelId ?? state.currentNovelId
+    if (!targetNovelId) return null
+
+    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-embedding-cache' })
     const projection = normalizeKnowledgeProjection(result)
     set((current) => ({
       ...mergeKnowledgeProjection(current, projection, targetNovelId),
@@ -1076,9 +1115,16 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       presetCompatLibraryError: '',
     })
     let restoredWorkspace = initialState
+    const workspaceRestoreController = new AbortController()
+    const workspaceRestoreTimeoutId = globalThis.setTimeout(() => {
+      workspaceRestoreController.abort()
+    }, WORKSPACE_RESTORE_TIMEOUT_MS)
 
     try {
-      const workspaceResponse = await fetch('/api/workspace', { cache: 'no-store' })
+      const workspaceResponse = await fetch('/api/workspace', {
+        cache: 'no-store',
+        signal: workspaceRestoreController.signal,
+      })
       if (!workspaceResponse.ok) {
         const error = await workspaceResponse.json().catch(() => null) as { error?: string } | null
         throw new Error(error?.error || 'Failed to restore workspace')
@@ -1097,7 +1143,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         backendLoadError: '',
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to restore workspace'
+      const message = getWorkspaceRestoreErrorMessage(error)
       console.error('Workspace restore failed:', error)
       set({
         backendLoaded: true,
@@ -1106,6 +1152,8 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         presetCompatLibraryLoading: false,
       })
       return
+    } finally {
+      globalThis.clearTimeout(workspaceRestoreTimeoutId)
     }
 
     const [aiResult, presetCompatResult, projectionResult] = await Promise.allSettled([

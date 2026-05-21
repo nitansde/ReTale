@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import type {
   PresetCompatLibrary,
@@ -154,6 +154,10 @@ describe('preset compat store lifecycle', () => {
     resetStore()
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('hydrates the global library during backend load and keeps workspace export/import isolated', async () => {
     const workspacePayload = {
       currentNovelId: 'novel-1',
@@ -216,6 +220,35 @@ describe('preset compat store lifecycle', () => {
 
     state.importWorkspace({ currentNovelId: 'novel-2' })
     expect(useNovelStore.getState().presetCompatLibrary.revision).toBe(3)
+  })
+
+  it('fails open when the initial workspace restore request stalls', async () => {
+    vi.useFakeTimers()
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url !== '/api/workspace') {
+        throw new Error(`Unexpected fetch: ${url}`)
+      }
+
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const error = new Error('Aborted')
+          error.name = 'AbortError'
+          reject(error)
+        }, { once: true })
+      })
+    }))
+
+    const restore = useNovelStore.getState().loadFromBackend()
+    await vi.advanceTimersByTimeAsync(15_000)
+    await restore
+
+    const state = useNovelStore.getState()
+    expect(state.backendLoaded).toBe(true)
+    expect(state.isHydrated).toBe(true)
+    expect(state.presetCompatLibraryLoading).toBe(false)
+    expect(state.backendLoadError).toBe('Workspace restore timed out')
   })
 
   it('loads, saves, imports, binds, edits, and exports through the dedicated preset compat slice', async () => {
