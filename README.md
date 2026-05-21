@@ -68,7 +68,27 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:14500, or use `http://<tailscale-ip-or-hostname>:14500` from another Tailscale device on a trusted tailnet. The dev script intentionally defaults to `0.0.0.0:14500` for this workflow and still honors explicit CLI overrides such as `npm run dev -- --port 3000` for automated test harnesses; do not expose it on untrusted networks.
+Open http://localhost:14500, or use `http://<tailscale-ip-or-hostname>:14500` from another Tailscale device on a trusted tailnet. The default daily server command is `npm run dev` (same as `npm run dev:prod`) and it always binds `0.0.0.0:14500`, always forces `DATABASE_URL=file:./dev.db`, and always uses the default Next dist directory `.next` so it stays separate from the isolated test server.
+
+## Server modes
+
+Use these scripts when you need both servers available at the same time:
+
+```bash
+npm run dev:prod
+npm run dev:test
+```
+
+- `npm run dev` / `npm run dev:prod` / `npm run server:prod`
+  - URL: `http://0.0.0.0:14500`
+  - Database: root `dev.db` via `DATABASE_URL=file:./dev.db`
+  - Next dist dir: default `.next`
+- `npm run dev:test` / `npm run server:test`
+  - URL: `http://127.0.0.1:3000`
+  - Database: `.sisyphus/runtime/test-server/dev-test.db`
+  - Next dist dir: `.sisyphus/runtime/next-test-server`
+
+Both wrappers override inherited `DATABASE_URL` and `CHATBOOK_NEXT_DIST_DIR`, so a shell that was previously pointed at a test database cannot accidentally redirect the daily server, and vice versa. The public scripts are fixed-mode wrappers: `--hostname/-H` and `--port/-p` are rejected instead of changing the target server profile. If port `14500` or `3000` is already occupied, the wrapper exits with a clear error instead of killing unknown processes. Internal `.sisyphus` test DB/dist overrides remain reserved for the Playwright web-server helper.
 
 ## Production check
 
