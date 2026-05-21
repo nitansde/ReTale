@@ -18,6 +18,7 @@ export function WorkspaceCenterPane(props: {
   continueBlockView: ReactNode
   whatIfView: ReactNode
   futureJumpView: ReactNode
+  roleplayView: ReactNode
   branchReadableLabel?: string | null
   branchInstructionText?: string | null
 }) {
@@ -51,6 +52,11 @@ export function WorkspaceCenterPane(props: {
     title = branchReadableLabel || `JUMP · 第 ${props.selection.sourceChapterNo} → ${props.selection.targetChapterNo} 章`
     description = '这里展示已持久化的 Future Jump run 详情、最新修订内容，以及 continue / regenerate 两个节点级动作入口。'
     statusSummary = `源 / 目标章节：第 ${props.selection.sourceChapterNo} 章 → 第 ${props.selection.targetChapterNo} 章`
+  } else if (props.selection.kind === 'roleplay_session') {
+    eyebrow = 'Roleplay session workspace'
+    title = branchReadableLabel || `RP · 第 ${props.selection.anchorChapterNo} 章角色扮演`
+    description = '这里直接读取已持久化的角色扮演会话与消息历史；时间线点击会重新打开这个会话，而不是落回改写、续写或 Future Jump 详情页。'
+    statusSummary = `锚点章节：第 ${props.selection.anchorChapterNo} 章`
   }
 
   return (
@@ -109,7 +115,9 @@ export function WorkspaceCenterPane(props: {
             ? props.continueBlockView
           : props.selection.kind === 'future_jump'
             ? props.futureJumpView
-            : props.chapterBodyView}
+            : props.selection.kind === 'roleplay_session'
+              ? props.roleplayView
+             : props.chapterBodyView}
     </section>
   )
 }

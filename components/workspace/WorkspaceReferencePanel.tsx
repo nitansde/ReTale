@@ -17,7 +17,9 @@ export function WorkspaceReferencePanel(props: {
       ? 'continue-block'
     : props.selection.kind === 'what_if'
       ? 'what-if'
-      : 'future-jump'
+      : props.selection.kind === 'roleplay_session'
+        ? 'roleplay-session'
+        : 'future-jump'
 
   return (
     <aside className="rounded-[30px] border border-white/10 bg-[#11141d] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.35)] sm:p-5" data-testid="workspace-reference-panel">
