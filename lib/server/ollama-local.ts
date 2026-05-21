@@ -144,7 +144,6 @@ export type OllamaEmbeddingResult = {
 const DEFAULT_BASE_URL = 'http://127.0.0.1:11434'
 const DEFAULT_TIMEOUT_MS = 600000
 const EXTRACTION_TOP_LEVEL_ARRAY_KEYS = ['relations', 'events', 'worldbuilding', 'open_threads'] as const
-const EXTRACTION_MAX_PROMPT_LINES = 60
 const GENERIC_ALIAS_VALUES = new Set([
   '',
   '他',
@@ -186,7 +185,6 @@ export const EXTRACTION_SCHEMA = {
         properties: {
           name: { type: 'string' },
           aliases: { type: 'array', items: { type: 'string' } },
-          status: { type: 'string' },
           description_delta: { type: 'string' },
           profile: {
             type: 'object',
@@ -194,74 +192,83 @@ export const EXTRACTION_SCHEMA = {
               personality: {
                 type: 'object',
                 properties: {
-                  summary: { type: 'string' },
+                  content: { type: 'string' },
                   note: { type: 'string' },
                   evidence: { type: 'string' },
                 },
-                required: ['summary'],
+                required: ['content'],
               },
               gender: {
                 type: 'object',
                 properties: {
-                  summary: { type: 'string' },
+                  content: { type: 'string' },
                   note: { type: 'string' },
                   evidence: { type: 'string' },
                 },
-                required: ['summary'],
+                required: ['content'],
               },
               identity: {
                 type: 'object',
                 properties: {
-                  summary: { type: 'string' },
+                  content: { type: 'string' },
                   note: { type: 'string' },
                   evidence: { type: 'string' },
                 },
-                required: ['summary'],
+                required: ['content'],
               },
               capability: {
                 type: 'object',
                 properties: {
-                  summary: { type: 'string' },
+                  content: { type: 'string' },
                   note: { type: 'string' },
                   evidence: { type: 'string' },
                 },
-                required: ['summary'],
+                required: ['content'],
               },
               appearance: {
                 type: 'object',
                 properties: {
-                  summary: { type: 'string' },
+                  content: { type: 'string' },
                   note: { type: 'string' },
                   evidence: { type: 'string' },
                 },
-                required: ['summary'],
+                required: ['content'],
+              },
+              body: {
+                type: 'object',
+                properties: {
+                  content: { type: 'string' },
+                  note: { type: 'string' },
+                  evidence: { type: 'string' },
+                },
+                required: ['content'],
               },
               clothing: {
                 type: 'object',
                 properties: {
-                  summary: { type: 'string' },
+                  content: { type: 'string' },
                   note: { type: 'string' },
                   evidence: { type: 'string' },
                 },
-                required: ['summary'],
+                required: ['content'],
               },
               speakingStyle: {
                 type: 'object',
                 properties: {
-                  summary: { type: 'string' },
+                  content: { type: 'string' },
                   note: { type: 'string' },
                   evidence: { type: 'string' },
                 },
-                required: ['summary'],
+                required: ['content'],
               },
               likes: {
                 type: 'object',
                 properties: {
-                  summary: { type: 'string' },
+                  content: { type: 'string' },
                   note: { type: 'string' },
                   evidence: { type: 'string' },
                 },
-                required: ['summary'],
+                required: ['content'],
               },
             },
           },
@@ -278,7 +285,7 @@ export const EXTRACTION_SCHEMA = {
             },
           },
         },
-        required: ['name', 'aliases', 'status', 'description_delta', 'profile', 'evidence'],
+        required: ['name', 'aliases', 'description_delta', 'profile', 'evidence'],
       },
     },
     known_character_updates: {
@@ -560,13 +567,13 @@ function stringifyLooseValue(value: unknown): string {
   return ''
 }
 
-function buildFacet(summary: string, note?: string, evidence?: string): CharacterRoleCardFacet | undefined {
-  const normalizedSummary = summary.trim()
-  if (!normalizedSummary) return undefined
+function buildFacet(content: string, note?: string, evidence?: string): CharacterRoleCardFacet | undefined {
+  const normalizedContent = content.trim()
+  if (!normalizedContent) return undefined
   const normalizedNote = note?.trim() || ''
   const normalizedEvidence = evidence?.trim() || ''
   return {
-    summary: normalizedSummary,
+    content: normalizedContent,
     note: normalizedNote || undefined,
     evidence: normalizedEvidence || undefined,
   }
@@ -579,10 +586,14 @@ function buildEvidenceSnippet(evidence: KnowledgeEvidence[]) {
 function normasecondSampleProfileFacet(raw: unknown): CharacterRoleCardFacet | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const record = raw as Record<string, unknown>
-  const summary = typeof record.summary === 'string' ? record.summary.trim() : ''
+  const content = typeof record.content === 'string'
+    ? record.content.trim()
+    : typeof record.summary === 'string'
+      ? record.summary.trim()
+      : ''
   const note = typeof record.note === 'string' ? record.note.trim() : ''
   const evidence = typeof record.evidence === 'string' ? record.evidence.trim() : ''
-  return buildFacet(summary, note, evidence)
+  return buildFacet(content, note, evidence)
 }
 
 function buildProfileFromLooseRecord(record: Record<string, unknown>, evidence: KnowledgeEvidence[]): CharacterRoleCardProfile {
@@ -842,7 +853,7 @@ function normalizeLooseArrayExtraction(items: unknown[], chapterNo: number): Cha
       characters.push({
         name,
         aliases: [],
-        status: typeof row.status === 'string' ? row.status.trim() : '活跃',
+        status: typeof row.status === 'string' ? row.status.trim() : '登场',
         descriptionDelta: buildCharacterDescriptionDelta(profile, description),
         profile,
         evidence,
@@ -895,7 +906,7 @@ function normalizeCharacterExtractionRecord(row: Record<string, unknown>) {
   return {
     name,
     aliases: Array.isArray(row.aliases) ? row.aliases.map((alias) => String(alias).trim()).filter(Boolean) : [],
-    status: typeof row.status === 'string' ? row.status.trim() : '活跃',
+    status: typeof row.status === 'string' ? row.status.trim() : '登场',
     descriptionDelta: typeof row.description_delta === 'string'
       ? row.description_delta.trim()
       : typeof row.descriptionDelta === 'string'
@@ -1477,15 +1488,13 @@ export function buildKnowledgeExtractionPrompt(
   chapterTitle: string,
   chapterNo: number,
   rawText: string,
-   mode: KnowledgeExtractionPromptMode = 'full',
-   storyStateText?: string
+  mode: KnowledgeExtractionPromptMode = 'full',
+  storyStateText?: string
 ) {
   const sourceLines = rawText
     .replace(/\r\n?/g, '\n')
     .split('\n')
-  const truncated = sourceLines.length > EXTRACTION_MAX_PROMPT_LINES
-  const excerptLines = truncated ? sourceLines.slice(0, EXTRACTION_MAX_PROMPT_LINES) : sourceLines
-  const numberedLines = excerptLines
+  const numberedLines = sourceLines
     .map((line, index) => `${index + 1}: ${line}`)
     .join('\n')
   const normalizedStoryStateText = storyStateText?.trim() ?? ''
@@ -1510,8 +1519,8 @@ export function buildKnowledgeExtractionPrompt(
       ...storyStateRules,
       'relations.type 必须是具体语义，不要输出“关系”“联系”“有关联”“相关”等泛化词。优先使用“同盟”“敌对”“同行”“救助”“雇佣”“师徒”“亲属”“隶属”“交易”“合作”等具体类型。',
       'worldbuilding 只保留可复用的稳定设定、规则、地点、组织或物品。不要把“世界状态”“本章背景”或一次性剧情描写写成设定。definition 控制在一句话内。',
-      'evidence 字段固定使用 quote、line_start、line_end。不要使用 text、content 或其他字段名。',
-      truncated ? `本次仅提供前 ${EXTRACTION_MAX_PROMPT_LINES} 行节选。不要猜测未提供的后续内容。` : '本次提供完整章节内容。',
+      'evidence 数组项固定使用 quote、line_start、line_end。不要在 evidence 项里使用 text、content 或其他字段名。',
+      '本次提供完整章节内容。',
       '最小示例：',
       '{"chapter_no":1,"summary":"","characters":[],"relations":[{"source":"甲","target":"乙","type":"同伴","polarity":"positive","strength":3,"change":"合作开始","valid_from_chapter":1,"evidence":[{"quote":"甲与乙决定同行。","line_start":3,"line_end":3}]}],"events":[],"worldbuilding":[{"term":"黑塔","category":"organization","definition":"一座负责训练学徒的组织。","evidence":[{"quote":"黑塔每年招收学徒。","line_start":8,"line_end":8}]}],"open_threads":[{"name":"失踪的导师","description":"导师去向未明，后续仍需解释。","evidence":[{"quote":"导师至今没有回来。","line_start":12,"line_end":12}]}]}',
       storyStateBlock,
@@ -1525,18 +1534,23 @@ export function buildKnowledgeExtractionPrompt(
     `任务：只基于第 ${chapterNo} 章内容抽取结构化知识。`,
     '只返回 1 个 JSON 对象。不要返回顶层数组。不要解释。不要输出 markdown。',
     '固定字段只能是：chapter_no、summary、characters、known_character_updates、unknown_character_observations、alias_discoveries、relations、events、worldbuilding、open_threads。',
+    'characters 条目不要输出 status；系统会根据登场与后续事实自行维护状态。',
     '如果某一类无法确定，就返回空数组，不要编造。',
     ...storyStateRules,
-    'characters.profile 必须是精简的人物角色卡。只保留文本中能直接支持的要点；不要写成长段；不确定就省略该字段。',
-    'characters.profile、known_character_updates.profile、unknown_character_observations.profile 可包含：personality、gender、identity、capability、appearance、body、clothing、speakingStyle、likes。每个字段都是 { summary, note?, evidence? }；summary 最多一句短语，note/evidence 仅在有必要时填写。',
-    'known_character_updates 只写已知人物的增量变化；优先写身份背景、能力/战力、外形、体态、衣着、说话风格与偏好，尽量保留原文措辞。appearance、body、clothing 若本章没有新增变化，summary 明确写“没有变化”。',
+    'characters.profile 必须是精确的人物角色卡。只保留文本中能直接支持的要点；不确定就省略该字段。',
+    'characters.profile、known_character_updates.profile、unknown_character_observations.profile 可包含：personality、gender、identity、capability、appearance、body、clothing、speakingStyle、likes。每个字段都是 { content, note?, evidence? }；content 允许写长句，note/evidence 仅在有必要时填写。',
+    'appearance 指肩部以上外观，包括眼睛、五官、面部、头发、表情等；body 指肩部以下或整体身体，包括肤色、身体、腿、胸、脚、臀部、手等。',
+    '角色卡只保留相对稳定、后续可复用的特征；临时伤势、疲惫、疼痛、无法站起、脸色苍白、当场表情/神态等短暂状态不要写入 appearance/body/clothing。',
+    'appearance、body、clothing 的 content 需要尽量保留原文完整描写；本章没有找到对应描述时 content 留空，不要用概括短语补写。',
+    'known_character_updates 只写已知人物的增量变化；优先写身份背景、能力/战力、外形、体态、衣着、说话风格与偏好，尽量保留原文措辞。appearance、body、clothing 若本章明确没有新增变化，content 写“没有变化”。',
     'unknown_character_observations 只保留本章里可能在后续反复出现、且有明确称呼或名字的未知人物观察。surface_text 必须保留原始称呼；不要做人物规范化。observation 用一句短语描述本章可复用的识别信息，尽量保留原文措辞。',
     'alias_discoveries 只在正文明确说明“某称呼就是某人”时填写，且每项只能是 { alias, target }。不要输出 alias_type、valid_from_chapter、revealed_chapter、spoiler 或任何额外字段。像“男人、女人、他、她、那人”这类泛称绝对不要写入别名。',
+    'relations 每项必须包含 source、target、type、polarity、strength、change、valid_from_chapter、evidence；events 每项必须包含 name、summary、event_type、participants、consequences、importance、evidence；worldbuilding 每项必须包含 term、category、definition、evidence；open_threads 每项必须包含 name、description、evidence。',
     '优先抽取身份背景、能力/战力、外形、体态、衣着、说话风格与偏好，保持精确、克制、可用于后续人物扮演。',
-    'evidence 字段固定使用 quote、line_start、line_end。不要使用 text、content 或其他字段名。',
-    truncated ? `本次仅提供前 ${EXTRACTION_MAX_PROMPT_LINES} 行节选。不要猜测未提供的后续内容。` : '本次提供完整章节内容。',
+    'evidence 数组项固定使用 quote、line_start、line_end。不要在 evidence 项里使用 text、content 或其他字段名。',
+    '本次提供完整章节内容。',
     '最小示例：',
-    '{"chapter_no":1,"summary":"一句话总结","characters":[{"name":"林澄","aliases":[],"status":"活跃","description_delta":"没落家族出身的学徒｜擅长火系法术","profile":{"identity":{"summary":"没落家族出身的学徒"},"capability":{"summary":"擅长火系法术"},"speakingStyle":{"summary":"说话直接克制","evidence":"林澄压低声音，只说重点。"}},"evidence":[{"quote":"林澄压低声音，只说重点。","line_start":1,"line_end":1}]}],"known_character_updates":[{"name":"林澄","description_delta":"黑袍下摆被火燎破｜没有变化","profile":{"appearance":{"summary":"没有变化"},"body":{"summary":"没有变化"},"clothing":{"summary":"黑袍下摆被火燎破"}},"evidence":[{"quote":"林澄的黑袍下摆被火燎出一道口子。","line_start":2,"line_end":2}]}],"unknown_character_observations":[{"surface_text":"灰袍老人","observation":"灰袍老人拄杖现身，嗓音沙哑","profile":{"appearance":{"summary":"灰袍老人"},"speakingStyle":{"summary":"嗓音沙哑"}},"evidence":[{"quote":"那灰袍老人拄杖而来，嗓音沙哑。","line_start":5,"line_end":5}]}],"alias_discoveries":[{"alias":"老周","target":"周执事"}],"relations":[],"events":[],"worldbuilding":[],"open_threads":[]}',
+    '{"chapter_no":1,"summary":"一句话总结","characters":[{"name":"林澄","aliases":[],"description_delta":"没落家族出身的学徒｜擅长火系法术","profile":{"identity":{"content":"没落家族出身的学徒"},"capability":{"content":"擅长火系法术"},"speakingStyle":{"content":"说话直接克制","evidence":"林澄压低声音，只说重点。"}},"evidence":[{"quote":"林澄压低声音，只说重点。","line_start":1,"line_end":1}]}],"known_character_updates":[{"name":"林澄","description_delta":"黑袍下摆被火燎破｜没有变化","profile":{"appearance":{"content":"没有变化"},"body":{"content":"没有变化"},"clothing":{"content":"黑袍下摆被火燎破"}},"evidence":[{"quote":"林澄的黑袍下摆被火燎出一道口子。","line_start":2,"line_end":2}]}],"unknown_character_observations":[{"surface_text":"灰袍老人","observation":"灰袍老人拄杖现身，嗓音沙哑","profile":{"appearance":{"content":"灰袍老人"},"speakingStyle":{"content":"嗓音沙哑"}},"evidence":[{"quote":"那灰袍老人拄杖而来，嗓音沙哑。","line_start":5,"line_end":5}]}],"alias_discoveries":[{"alias":"老周","target":"周执事"}],"relations":[],"events":[],"worldbuilding":[],"open_threads":[]}',
     storyStateBlock,
     `章节标题：${chapterTitle}`,
     '章节正文（带行号）：',
