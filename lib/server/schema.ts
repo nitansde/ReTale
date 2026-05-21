@@ -4,7 +4,7 @@ export const PROTECTED_RESET_APP_SETTING_KEYS = [
   'OLLAMA_TIMEOUT_MS',
 ] as const
 
-const CHARACTER_IMPORTANCE_TIER_SQL = "'protagonist', 'important', 'arc', 'candidate', 'ignored'"
+const CHARACTER_IMPORTANCE_TIER_SQL = "'protagonist', 'important', 'arc'"
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS WorkspaceState (
@@ -241,7 +241,7 @@ CREATE TABLE IF NOT EXISTS KnowledgeEntity (
   description TEXT,
   firstSeenChapter INTEGER,
   lastSeenChapter INTEGER,
-  importanceTier TEXT CHECK (importanceTier IS NULL OR (entityType = 'character' AND importanceTier IN (${CHARACTER_IMPORTANCE_TIER_SQL}))),
+  importanceTier TEXT CHECK ((entityType = 'character' AND importanceTier IN (${CHARACTER_IMPORTANCE_TIER_SQL})) OR (entityType <> 'character' AND importanceTier IS NULL)),
   status TEXT,
   importance INTEGER NOT NULL DEFAULT 3,
   userConfirmed INTEGER NOT NULL DEFAULT 0,

@@ -430,22 +430,33 @@ function runBootMigrations(database: DatabaseSync) {
     )
   `)
   addColumnIfMissing(database, 'KnowledgeEntity', 'importanceTier', 'importanceTier TEXT')
+  database.exec('DROP TRIGGER IF EXISTS trg_knowledge_entity_character_tier_insert')
+  database.exec('DROP TRIGGER IF EXISTS trg_knowledge_entity_character_tier_update')
+  database.exec(`
+    UPDATE KnowledgeEntity
+    SET status = 'rejected', updatedAt = CURRENT_TIMESTAMP
+    WHERE entityType = 'character'
+      AND COALESCE(userConfirmed, 0) = 0
+      AND (importanceTier IS NULL OR importanceTier NOT IN ('protagonist', 'important', 'arc'))
+  `)
   database.exec(`
     CREATE TRIGGER IF NOT EXISTS trg_knowledge_entity_character_tier_insert
     BEFORE INSERT ON KnowledgeEntity
     FOR EACH ROW
-    WHEN NEW.importanceTier IS NOT NULL AND (NEW.entityType <> 'character' OR NEW.importanceTier NOT IN ('protagonist', 'important', 'arc', 'candidate', 'ignored'))
+    WHEN (NEW.entityType = 'character' AND (NEW.importanceTier IS NULL OR NEW.importanceTier NOT IN ('protagonist', 'important', 'arc')))
+      OR (NEW.entityType <> 'character' AND NEW.importanceTier IS NOT NULL)
     BEGIN
-      SELECT RAISE(ABORT, 'importanceTier requires a character entity and allowed tier value');
+      SELECT RAISE(ABORT, 'character entities require Tier 0, Tier 1, or Tier 2 importanceTier');
     END
   `)
   database.exec(`
     CREATE TRIGGER IF NOT EXISTS trg_knowledge_entity_character_tier_update
     BEFORE UPDATE OF entityType, importanceTier ON KnowledgeEntity
     FOR EACH ROW
-    WHEN NEW.importanceTier IS NOT NULL AND (NEW.entityType <> 'character' OR NEW.importanceTier NOT IN ('protagonist', 'important', 'arc', 'candidate', 'ignored'))
+    WHEN (NEW.entityType = 'character' AND (NEW.importanceTier IS NULL OR NEW.importanceTier NOT IN ('protagonist', 'important', 'arc')))
+      OR (NEW.entityType <> 'character' AND NEW.importanceTier IS NOT NULL)
     BEGIN
-      SELECT RAISE(ABORT, 'importanceTier requires a character entity and allowed tier value');
+      SELECT RAISE(ABORT, 'character entities require Tier 0, Tier 1, or Tier 2 importanceTier');
     END
   `)
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_lookup ON hanlp_bootstrap_cache(branch_id, chapter_no, chapter_text_hash, hanlp_script_version_hash, hanlp_model_or_config_hash, output_schema_version)')

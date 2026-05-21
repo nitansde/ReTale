@@ -218,7 +218,7 @@ describe('hanlp schema bootstrap', () => {
       INSERT INTO KnowledgeEntity (
         id, novelId, branchId, entityType, canonicalName, importanceTier
       ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run('entity-2', 'novel-2', 'novel-2:main', 'character', 'Pretender', 'candidate')
+    `).run('entity-2', 'novel-2', 'novel-2:main', 'character', 'Pretender', 'arc')
 
     database.prepare(`
       INSERT INTO EntityAliasMapping (
@@ -241,7 +241,7 @@ describe('hanlp schema bootstrap', () => {
     ;(database as DatabaseSync & { close?: () => void }).close?.()
   })
 
-  it('keeps non-character entities un-tiered', () => {
+  it('keeps non-character entities un-tiered and rejects non-formal character tiers', () => {
     const databasePath = makeTempDatabasePath('chatbook-hanlp-tier-guard')
     const database = initializeDatabase(new DatabaseSync(databasePath))
 
@@ -258,7 +258,25 @@ describe('hanlp schema bootstrap', () => {
       INSERT INTO KnowledgeEntity (
         id, novelId, branchId, entityType, canonicalName, importanceTier
       ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run('entity-invalid', 'novel-3', 'novel-3:main', 'location', 'Forbidden Tier', 'important')).toThrow(/importanceTier requires a character entity and allowed tier value/)
+    `).run('entity-candidate', 'novel-3', 'novel-3:main', 'character', 'Temporary Candidate', 'candidate')).toThrow(/character entities require Tier 0, Tier 1, or Tier 2 importanceTier/)
+
+    expect(() => database.prepare(`
+      INSERT INTO KnowledgeEntity (
+        id, novelId, branchId, entityType, canonicalName, importanceTier
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run('entity-ignored', 'novel-3', 'novel-3:main', 'character', 'Ignored Temporary', 'ignored')).toThrow(/character entities require Tier 0, Tier 1, or Tier 2 importanceTier/)
+
+    expect(() => database.prepare(`
+      INSERT INTO KnowledgeEntity (
+        id, novelId, branchId, entityType, canonicalName, importanceTier
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run('entity-unranked', 'novel-3', 'novel-3:main', 'character', 'Unranked Temporary', null)).toThrow(/character entities require Tier 0, Tier 1, or Tier 2 importanceTier/)
+
+    expect(() => database.prepare(`
+      INSERT INTO KnowledgeEntity (
+        id, novelId, branchId, entityType, canonicalName, importanceTier
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run('entity-invalid', 'novel-3', 'novel-3:main', 'location', 'Forbidden Tier', 'important')).toThrow(/character entities require Tier 0, Tier 1, or Tier 2 importanceTier/)
 
     const stored = database.prepare(
       'SELECT importanceTier FROM KnowledgeEntity WHERE id = ?'
