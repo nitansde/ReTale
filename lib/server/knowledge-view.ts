@@ -386,6 +386,7 @@ async function deleteHanlpCacheForNovel(novelId: string): Promise<KnowledgeViewA
       execute('DELETE FROM hanlp_bootstrap_entities WHERE novel_id = ? AND branch_id = ?', trimmedNovelId, branchId)
       execute('DELETE FROM hanlp_bootstrap_results WHERE novel_id = ? AND branch_id = ?', trimmedNovelId, branchId)
       execute('DELETE FROM hanlp_bootstrap_cache WHERE novel_id = ? AND branch_id = ?', trimmedNovelId, branchId)
+      execute('DELETE FROM hanlp_bootstrap_coverage WHERE novel_id = ?', trimmedNovelId)
     },
   })
 }

@@ -634,6 +634,10 @@ describe('/api/knowledge-view', () => {
       chapterId: 'chapter-other',
       chapterNo: 1,
     })
+    database.prepare('INSERT INTO hanlp_bootstrap_coverage (id, novel_id, valid_through_chapter_no) VALUES (?, ?, ?)')
+      .run('target-coverage', novelId, 1)
+    database.prepare('INSERT INTO hanlp_bootstrap_coverage (id, novel_id, valid_through_chapter_no) VALUES (?, ?, ?)')
+      .run('other-coverage', otherNovelId, 1)
 
     database.prepare(
       `INSERT INTO RawTextEmbeddingCache (
@@ -661,8 +665,10 @@ describe('/api/knowledge-view', () => {
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_cache WHERE branch_id = ?', mainBranchId)?.count).toBe(0)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_results WHERE branch_id = ?', mainBranchId)?.count).toBe(0)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_entities WHERE branch_id = ?', mainBranchId)?.count).toBe(0)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_coverage WHERE novel_id = ?', novelId)?.count).toBe(0)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_cache WHERE branch_id = ?', altBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_cache WHERE branch_id = ?', otherMainBranchId)?.count).toBe(1)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_coverage WHERE novel_id = ?', otherNovelId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', mainBranchId)?.count).toBe(1)
   })
 
@@ -680,6 +686,8 @@ describe('/api/knowledge-view', () => {
       chapterId: 'chapter-blocked',
       chapterNo: 1,
     })
+    database.prepare('INSERT INTO hanlp_bootstrap_coverage (id, novel_id, valid_through_chapter_no) VALUES (?, ?, ?)')
+      .run('blocked-coverage', novelId, 1)
     database.prepare(
       `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
@@ -733,6 +741,7 @@ describe('/api/knowledge-view', () => {
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_cache WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_results WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_entities WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_coverage WHERE novel_id = ?', novelId)?.count).toBe(1)
   })
 
   it('deletes only the target main-branch LLM extraction cache rows', async () => {
@@ -921,5 +930,5 @@ describe('/api/knowledge-view', () => {
       },
     })
     expect(payload.knowledgeRebuildStatus?.jobId).toEqual(expect.any(String))
-  }, 15000)
+  })
 })

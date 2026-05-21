@@ -60,6 +60,7 @@ describe('hanlp schema bootstrap', () => {
     const candidateChapterColumns = new Set(listTableColumns(database, 'character_candidate_chapters').map((column) => column.name))
     const cacheColumns = new Set(listTableColumns(database, 'hanlp_bootstrap_cache').map((column) => column.name))
     const entityColumns = new Set(listTableColumns(database, 'hanlp_bootstrap_entities').map((column) => column.name))
+    const coverageColumns = new Set(listTableColumns(database, 'hanlp_bootstrap_coverage').map((column) => column.name))
     const candidateTableSql = getCreateSql(database, 'table', 'character_candidates')
     const candidateChapterTableSql = getCreateSql(database, 'table', 'character_candidate_chapters')
 
@@ -67,6 +68,7 @@ describe('hanlp schema bootstrap', () => {
       'hanlp_bootstrap_cache',
       'hanlp_bootstrap_results',
       'hanlp_bootstrap_entities',
+      'hanlp_bootstrap_coverage',
       'character_candidates',
       'character_candidate_chapters',
       'EntityAliasMapping',
@@ -77,6 +79,7 @@ describe('hanlp schema bootstrap', () => {
       'idx_hanlp_bootstrap_cache_lookup',
       'idx_hanlp_bootstrap_results_lookup',
       'idx_hanlp_bootstrap_entities_branch_type',
+      'idx_hanlp_bootstrap_coverage_novel',
       'idx_character_candidates_promotion_lookup',
       'idx_character_candidate_chapters_candidate_count',
       'idx_entity_alias_mapping_branch_alias',
@@ -136,6 +139,13 @@ describe('hanlp schema bootstrap', () => {
       'score',
       'source_cache_id',
       'source_result_id',
+      'created_at',
+      'updated_at',
+    ]))
+    expect([...coverageColumns]).toEqual(expect.arrayContaining([
+      'id',
+      'novel_id',
+      'valid_through_chapter_no',
       'created_at',
       'updated_at',
     ]))

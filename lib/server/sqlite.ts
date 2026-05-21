@@ -429,6 +429,16 @@ function runBootMigrations(database: DatabaseSync) {
       UNIQUE (branch_id, chapter_id, entity_text, entity_type, source_result_id)
     )
   `)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS hanlp_bootstrap_coverage (
+      id TEXT PRIMARY KEY,
+      novel_id TEXT NOT NULL UNIQUE,
+      valid_through_chapter_no INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE
+    )
+  `)
   addColumnIfMissing(database, 'KnowledgeEntity', 'importanceTier', 'importanceTier TEXT')
   database.exec('DROP TRIGGER IF EXISTS trg_knowledge_entity_character_tier_insert')
   database.exec('DROP TRIGGER IF EXISTS trg_knowledge_entity_character_tier_update')
@@ -467,6 +477,7 @@ function runBootMigrations(database: DatabaseSync) {
   database.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_character_candidate_chapters_chapter_no ON character_candidate_chapters(novel_id, branch_id, candidate_id, chapter_no)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_entities_branch_type ON hanlp_bootstrap_entities(branch_id, entity_type, score)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_entities_result_lookup ON hanlp_bootstrap_entities(source_result_id, branch_id, chapter_no)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_coverage_novel ON hanlp_bootstrap_coverage(novel_id, valid_through_chapter_no)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_character_candidates_branch_status ON character_candidates(branch_id, status, last_seen_chapter)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_character_candidates_promotion_lookup ON character_candidates(branch_id, promoted_entity_id, promotion_summary_status, merged_entity_id, status, last_seen_chapter)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_character_candidate_chapters_candidate_count ON character_candidate_chapters(candidate_id, chapter_no)')

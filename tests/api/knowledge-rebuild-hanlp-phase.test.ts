@@ -535,6 +535,179 @@ describe('knowledge rebuild HanLP orchestration', () => {
     })
   })
 
+  it('skips per-chapter HanLP checks when the book coverage marker is complete', async () => {
+    process.env.HANLP_BOOTSTRAP_PARALLELISM = '4'
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-marker-full')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_marker_full', 3)
+    const aiSettings = createMockAISettings(3)
+    const hanlpCalls: number[] = []
+    const initializerCalls: string[] = []
+    const extractionCalls: number[] = []
+
+    database.prepare('INSERT INTO hanlp_bootstrap_coverage (id, novel_id, valid_through_chapter_no) VALUES (?, ?, ?)')
+      .run('marker-full', novelId, 3)
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { chapterNo: number }) => {
+        hanlpCalls.push(input.chapterNo)
+        throw new Error('HanLP should be skipped when coverage marker is complete')
+      }),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async (params: { branchId: string }) => {
+        initializerCalls.push(params.branchId)
+        return {
+          createdOrUpdatedEntityIds: [],
+          characterDecisions: [],
+          promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+        }
+      }),
+    }))
+    vi.doMock('@/lib/server/knowledge-extraction', () => ({
+      extractChapterKnowledgeOffline: vi.fn(async (params: { chapterNo: number }) => {
+        extractionCalls.push(params.chapterNo)
+        return {
+          extraction: createMockExtraction(params.chapterNo),
+          provider: 'openai-compatible' as const,
+          model: aiSettings.knowledgeExtraction.openAICompatible.model,
+        }
+      }),
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        precomputeRawTextEmbeddingCache: vi.fn(async () => ({
+          totalDocs: 0,
+          completedDocs: 0,
+          cacheHits: 0,
+          cacheMisses: 0,
+          failedDocs: 0,
+          totalBatches: 0,
+          completedBatches: 0,
+          degraded: false,
+          cancelled: false,
+          durationMs: 0,
+        })),
+        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
+      }
+    })
+
+    const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
+    await expect(rebuildKnowledgeForNovel({ novelId })).resolves.toMatchObject({ outcome: 'completed' })
+
+    const payload = JSON.parse(queryOne<{ payloadJson: string | null }>(
+      'SELECT payloadJson FROM KnowledgeJob WHERE novelId = ? ORDER BY createdAt DESC LIMIT 1',
+      novelId,
+    )?.payloadJson ?? '{}') as {
+      hanlpBootstrap?: {
+        totalChapterCount?: number
+        completedChapterCount?: number
+        cacheHitCount?: number
+        cacheMissCount?: number
+        initializedCharacterEntities?: boolean
+      }
+    }
+
+    expect(hanlpCalls).toEqual([])
+    expect(initializerCalls).toEqual([branchId])
+    expect(extractionCalls).toEqual([1, 2, 3])
+    expect(payload.hanlpBootstrap).toMatchObject({
+      totalChapterCount: 3,
+      completedChapterCount: 3,
+      cacheHitCount: 0,
+      cacheMissCount: 0,
+      initializedCharacterEntities: true,
+    })
+  })
+
+  it('resumes HanLP from the first chapter after partial book coverage', async () => {
+    process.env.HANLP_BOOTSTRAP_PARALLELISM = '4'
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-marker-partial')
+    const { novelId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_marker_partial', 5)
+    const aiSettings = createMockAISettings(5)
+    const hanlpCalls: number[] = []
+
+    database.prepare('INSERT INTO hanlp_bootstrap_coverage (id, novel_id, valid_through_chapter_no) VALUES (?, ?, ?)')
+      .run('marker-partial', novelId, 2)
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { chapterNo: number; rawText: string }) => {
+        hanlpCalls.push(input.chapterNo)
+        return {
+          source: 'runner' as const,
+          cache: {} as never,
+          result: {} as never,
+          output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+          cacheKey: {} as never,
+          scriptPath: '/tmp/mock-hanlp.py',
+          normalizedChapterText: input.rawText,
+        }
+      }),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
+    vi.doMock('@/lib/server/knowledge-extraction', () => ({
+      extractChapterKnowledgeOffline: vi.fn(async (params: { chapterNo: number }) => ({
+        extraction: createMockExtraction(params.chapterNo),
+        provider: 'openai-compatible' as const,
+        model: aiSettings.knowledgeExtraction.openAICompatible.model,
+      })),
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        precomputeRawTextEmbeddingCache: vi.fn(async () => ({
+          totalDocs: 0,
+          completedDocs: 0,
+          cacheHits: 0,
+          cacheMisses: 0,
+          failedDocs: 0,
+          totalBatches: 0,
+          completedBatches: 0,
+          degraded: false,
+          cancelled: false,
+          durationMs: 0,
+        })),
+        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
+      }
+    })
+
+    const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
+    await expect(rebuildKnowledgeForNovel({ novelId })).resolves.toMatchObject({ outcome: 'completed' })
+
+    const payload = JSON.parse(queryOne<{ payloadJson: string | null }>(
+      'SELECT payloadJson FROM KnowledgeJob WHERE novelId = ? ORDER BY createdAt DESC LIMIT 1',
+      novelId,
+    )?.payloadJson ?? '{}') as {
+      hanlpBootstrap?: { totalChapterCount?: number; completedChapterCount?: number; cacheMissCount?: number }
+    }
+    const marker = queryOne<{ validThroughChapterNo: number }>(
+      'SELECT valid_through_chapter_no AS validThroughChapterNo FROM hanlp_bootstrap_coverage WHERE novel_id = ?',
+      novelId,
+    )
+
+    expect(hanlpCalls).toEqual([3, 4, 5])
+    expect(payload.hanlpBootstrap).toMatchObject({
+      totalChapterCount: 5,
+      completedChapterCount: 5,
+      cacheMissCount: 3,
+    })
+    expect(marker?.validThroughChapterNo).toBe(5)
+  })
+
   it('rebuilds the first 50 chapters from existing extraction cache without stack overflow', async () => {
     process.env.HANLP_BOOTSTRAP_PARALLELISM = '25'
     const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-first-50-cache')

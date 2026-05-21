@@ -173,6 +173,10 @@ type KnowledgeRebuildHanlpBootstrapState = {
   initializedCharacterEntities: boolean
 }
 
+type HanlpBootstrapCoverageMarker = {
+  validThroughChapterNo: number
+}
+
 type KnowledgeRebuildJobPayload = {
   branchId: string
   rebuildStartChapter?: number
@@ -699,6 +703,32 @@ function createEmptyHanlpBootstrapState(totalChapterCount: number): KnowledgeReb
     cacheMissCount: 0,
     initializedCharacterEntities: false,
   }
+}
+
+function getHanlpBootstrapCoverageMarker(novelId: string): HanlpBootstrapCoverageMarker | null {
+  const row = queryOne<{ validThroughChapterNo: number }>(
+    'SELECT valid_through_chapter_no AS validThroughChapterNo FROM hanlp_bootstrap_coverage WHERE novel_id = ? LIMIT 1',
+    novelId
+  )
+  if (!row || typeof row.validThroughChapterNo !== 'number') return null
+
+  return { validThroughChapterNo: Math.max(0, Math.floor(row.validThroughChapterNo)) }
+}
+
+function upsertHanlpBootstrapCoverageMarker(novelId: string, validThroughChapterNo: number) {
+  const normalizedChapterNo = Math.max(0, Math.floor(validThroughChapterNo))
+  execute(
+    `
+      INSERT INTO hanlp_bootstrap_coverage (id, novel_id, valid_through_chapter_no)
+      VALUES (?, ?, ?)
+      ON CONFLICT(novel_id) DO UPDATE SET
+        valid_through_chapter_no = MAX(hanlp_bootstrap_coverage.valid_through_chapter_no, excluded.valid_through_chapter_no),
+        updated_at = CURRENT_TIMESTAMP
+    `,
+    `${novelId}:hanlp-bootstrap-coverage`,
+    novelId,
+    normalizedChapterNo
+  )
 }
 
 function formatDurationForKnowledgeStep(durationMs: number) {
@@ -2029,6 +2059,26 @@ function completeHanlpBootstrapChapterInKnowledgeJob(jobId: string, chapterId: s
       completedChapterCount: state.completedChapterCount + 1,
       cacheHitCount: state.cacheHitCount + (source === 'cache' ? 1 : 0),
       cacheMissCount: state.cacheMissCount + (source === 'runner' ? 1 : 0),
+    }
+  })
+}
+
+function applyHanlpBootstrapCoverageToKnowledgeJob(jobId: string, chapters: KnowledgeChapterRow[], validThroughChapterNo: number) {
+  const normalizedChapterNo = Math.max(0, Math.floor(validThroughChapterNo))
+  return updateHanlpBootstrapState(jobId, (state) => {
+    const currentChapterIds = new Set(chapters.map((chapter) => chapter.id))
+    const completedChapterIds = new Set(state.completedChapterIds.filter((chapterId) => currentChapterIds.has(chapterId)))
+    for (const chapter of chapters) {
+      if (chapter.chapterNo <= normalizedChapterNo) {
+        completedChapterIds.add(chapter.id)
+      }
+    }
+
+    return {
+      ...state,
+      completedChapterIds: [...completedChapterIds],
+      totalChapterCount: chapters.length,
+      completedChapterCount: completedChapterIds.size,
     }
   })
 }
@@ -4839,6 +4889,21 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             params.novelId,
             branchId
           )
+          const maxHanlpChapterNo = currentChapters[currentChapters.length - 1]?.chapterNo ?? 0
+          const coverageMarker = getHanlpBootstrapCoverageMarker(params.novelId)
+          if (coverageMarker?.validThroughChapterNo) {
+            const coveredChapterIds = currentChapters
+              .filter((chapter) => chapter.chapterNo <= coverageMarker.validThroughChapterNo)
+              .map((chapter) => chapter.id)
+            const currentHanlpState = currentJobState.payload.hanlpBootstrap ?? createEmptyHanlpBootstrapState(currentChapters.length)
+            const hasSyncedCoverage = currentHanlpState.totalChapterCount === currentChapters.length
+              && coveredChapterIds.every((chapterId) => currentHanlpState.completedChapterIds.includes(chapterId))
+            if (!hasSyncedCoverage) {
+              applyHanlpBootstrapCoverageToKnowledgeJob(job.id, currentChapters, coverageMarker.validThroughChapterNo)
+              continue
+            }
+          }
+
           const hanlpState = currentJobState.payload.hanlpBootstrap ?? createEmptyHanlpBootstrapState(currentChapters.length)
           const remainingChapters = currentChapters
             .filter((chapter) => !hanlpState.completedChapterIds.includes(chapter.id))
@@ -4860,6 +4925,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
               continue
             }
 
+            upsertHanlpBootstrapCoverageMarker(params.novelId, maxHanlpChapterNo)
             updateKnowledgeRebuildJobTelemetry(job.id, {
               stageTimingsMs: {
                 'hanlp-bootstrap': Math.max(0, Date.now() - parseStageStartedAt(currentJobState.payload.stageStartedAtByKey?.['hanlp-bootstrap'])),
@@ -4900,6 +4966,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
           for (const result of hanlpResults.sort((left, right) => left.chapter.chapterNo - right.chapter.chapterNo)) {
             if (result.skipped) continue
             completeHanlpBootstrapChapterInKnowledgeJob(job.id, result.chapter.id, result.source)
+            upsertHanlpBootstrapCoverageMarker(params.novelId, result.chapter.chapterNo)
             const nextState = getKnowledgeRebuildJobState(job.id)
             updateKnowledgeJob(job.id, {
               currentStep: `运行 HanLP 引导（已完成第 ${result.chapter.chapterNo} 章）`,

@@ -157,6 +157,15 @@ CREATE TABLE IF NOT EXISTS hanlp_bootstrap_entities (
   UNIQUE (branch_id, chapter_id, entity_text, entity_type, source_result_id)
 );
 
+CREATE TABLE IF NOT EXISTS hanlp_bootstrap_coverage (
+  id TEXT PRIMARY KEY,
+  novel_id TEXT NOT NULL UNIQUE,
+  valid_through_chapter_no INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS character_candidates (
   id TEXT PRIMARY KEY,
   novel_id TEXT NOT NULL,
