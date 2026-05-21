@@ -1,28 +1,44 @@
 import fs from 'node:fs'
-import path from 'node:path'
-import { execSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
+import {
+  ROOT,
+  SAFE_QA_BASE_URL,
+  SAFE_QA_EVIDENCE_ROOT,
+  SAFE_QA_HOST,
+  SAFE_QA_LIBRARY_URL,
+  SAFE_QA_MANIFEST_PATH,
+  SAFE_QA_PORT,
+  SAFE_QA_UI_EVIDENCE_DIR,
+  assertPort3000Available,
+  assertSafeQaUrls,
+  cleanupLegacySafeQaArtifacts,
+  createRoleplaySafeDatabasePath,
+  writeRoleplaySafeQaManifest,
+} from './roleplay-safe-qa.mjs'
 
-const ROOT = process.cwd()
-const EVIDENCE_ROOT = path.join(ROOT, '.sisyphus/evidence/task-1-test-harness/ui')
 const selector = process.argv[2] ?? ''
 
-function killPort3000IfNeeded() {
-  try {
-    const output = execSync('lsof -ti tcp:3000 -sTCP:LISTEN', { stdio: ['ignore', 'pipe', 'ignore'] })
-      .toString()
-      .trim()
-    if (!output) return
+assertSafeQaUrls()
+fs.mkdirSync(SAFE_QA_UI_EVIDENCE_DIR, { recursive: true })
+cleanupLegacySafeQaArtifacts()
+assertPort3000Available()
 
-    for (const pid of output.split(/\s+/).filter(Boolean)) {
-      execSync(`kill -9 ${pid}`, { stdio: 'ignore' })
-    }
-  } catch {
-    // No existing listener is fine.
-  }
-}
+const testDbPath = process.env.PLAYWRIGHT_TEST_DB_PATH ?? createRoleplaySafeDatabasePath()
+const manifest = writeRoleplaySafeQaManifest({
+  baseUrl: SAFE_QA_BASE_URL,
+  databasePath: testDbPath,
+  databaseUrl: `file:${testDbPath}`,
+  grep: selector || null,
+  mode: 'roleplay-safe-playwright',
+  playwrightConfig: 'playwright.config.mjs',
+  sourceDatabase: null,
+})
 
-fs.mkdirSync(EVIDENCE_ROOT, { recursive: true })
-killPort3000IfNeeded()
+console.log(`[roleplay-safe-qa] Running browser suite against ${SAFE_QA_HOST}:${SAFE_QA_PORT}`)
+console.log(`[roleplay-safe-qa] Base URL ${SAFE_QA_BASE_URL}`)
+console.log(`[roleplay-safe-qa] Health URL ${SAFE_QA_LIBRARY_URL}`)
+console.log(`[roleplay-safe-qa] Dedicated test DB ${manifest.databasePath}`)
+console.log(`[roleplay-safe-qa] Evidence manifest ${SAFE_QA_MANIFEST_PATH}`)
 
 const args = ['playwright', 'test', '--config', 'playwright.config.mjs']
 if (selector) {
@@ -34,7 +50,8 @@ const result = spawnSync('npx', args, {
   stdio: 'inherit',
   env: {
     ...process.env,
-    TASK_EVIDENCE_DIR: path.join(ROOT, '.sisyphus/evidence/task-1-test-harness'),
+    PLAYWRIGHT_TEST_DB_PATH: testDbPath,
+    TASK_EVIDENCE_DIR: SAFE_QA_EVIDENCE_ROOT,
   },
 })
 

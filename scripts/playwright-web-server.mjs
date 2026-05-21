@@ -1,43 +1,50 @@
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-import { execSync, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import {
+  ROOT,
+  SAFE_QA_BASE_URL,
+  SAFE_QA_HOST,
+  SAFE_QA_LIBRARY_URL,
+  SAFE_QA_NEXT_DIST_DIR,
+  SAFE_QA_PORT,
+  assertPort3000Available,
+  assertSafeQaUrls,
+  cleanupLegacySafeQaArtifacts,
+  prepareRoleplaySafeDatabaseFile,
+  writeRoleplaySafeQaManifest,
+} from './roleplay-safe-qa.mjs'
 
-const ROOT = process.cwd()
-const PORT = 3000
-const HOST = '127.0.0.1'
-const SOURCE_DB_PATH = path.join(ROOT, 'dev.db')
+assertSafeQaUrls()
+assertPort3000Available()
+cleanupLegacySafeQaArtifacts()
 
-function killPort3000IfNeeded() {
-  try {
-    const output = execSync(`lsof -ti tcp:${PORT} -sTCP:LISTEN`, { stdio: ['ignore', 'pipe', 'ignore'] })
-      .toString()
-      .trim()
-    if (!output) return
+const tempDbPath = process.env.PLAYWRIGHT_TEST_DB_PATH
 
-    for (const pid of output.split(/\s+/).filter(Boolean)) {
-      execSync(`kill -9 ${pid}`, { stdio: 'ignore' })
-    }
-  } catch {
-    // No existing listener is fine.
-  }
+if (!tempDbPath) {
+  throw new Error('[roleplay-safe-qa] Missing PLAYWRIGHT_TEST_DB_PATH for Playwright web server')
 }
 
-if (!fs.existsSync(SOURCE_DB_PATH)) {
-  throw new Error(`Missing source database: ${SOURCE_DB_PATH}`)
-}
+prepareRoleplaySafeDatabaseFile(tempDbPath)
 
-killPort3000IfNeeded()
+const manifest = writeRoleplaySafeQaManifest({
+  databaseUrl: `file:${tempDbPath}`,
+  databasePath: tempDbPath,
+  mode: 'roleplay-safe-playwright',
+  sourceDatabase: null,
+  nextDistDir: SAFE_QA_NEXT_DIST_DIR,
+  webServerCommand: `npm run dev -- --hostname ${SAFE_QA_HOST} --port ${SAFE_QA_PORT}`,
+})
 
-const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatbook-playwright-db-'))
-const tempDbPath = path.join(tempDir, 'playwright.db')
-fs.copyFileSync(SOURCE_DB_PATH, tempDbPath)
+console.log(`[roleplay-safe-qa] Starting isolated browser QA at ${SAFE_QA_BASE_URL}`)
+console.log(`[roleplay-safe-qa] Using dedicated test DB ${manifest.databasePath}`)
+console.log(`[roleplay-safe-qa] Verifying UI at ${SAFE_QA_LIBRARY_URL}`)
+console.log(`[roleplay-safe-qa] Using isolated Next dist dir ${SAFE_QA_NEXT_DIST_DIR}`)
 
-const child = spawn('npm', ['run', 'dev', '--', '--hostname', HOST, '--port', String(PORT)], {
+const child = spawn('npm', ['run', 'dev', '--', '--hostname', SAFE_QA_HOST, '--port', String(SAFE_QA_PORT)], {
   cwd: ROOT,
   stdio: 'inherit',
   env: {
     ...process.env,
+    CHATBOOK_NEXT_DIST_DIR: SAFE_QA_NEXT_DIST_DIR,
     DATABASE_URL: `file:${tempDbPath}`,
   },
 })

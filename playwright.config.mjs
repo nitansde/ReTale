@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from '@playwright/test'
+import { SAFE_QA_BASE_URL, SAFE_QA_LIBRARY_URL } from './scripts/roleplay-safe-qa.mjs'
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url))
 const evidenceDir = path.join(rootDir, '.sisyphus/evidence/task-1-test-harness/ui')
@@ -19,7 +20,7 @@ export default defineConfig({
     ['html', { outputFolder: path.join(evidenceDir, 'html-report'), open: 'never' }],
   ],
   use: {
-    baseURL: 'http://127.0.0.1:3000',
+    baseURL: SAFE_QA_BASE_URL,
     headless: true,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
@@ -27,7 +28,7 @@ export default defineConfig({
   },
   webServer: {
     command: 'node scripts/playwright-web-server.mjs',
-    url: 'http://127.0.0.1:3000/library',
+    url: SAFE_QA_LIBRARY_URL,
     timeout: 120_000,
     reuseExistingServer: false,
   },
