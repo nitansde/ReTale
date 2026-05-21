@@ -180,17 +180,10 @@ export function StoryTimeline(props: {
                       onSelect={() => {
                         if (selection) props.onSelectionChange(selection)
                       }}
-                      onDelete={
-                        node.nodeType === 'rewrite'
-                          || node.nodeType === 'continue_block'
-                          || node.nodeType === 'what_if'
-                          || node.nodeType === 'future_jump'
-                          ? () => props.onDeleteBranchNode(node)
-                          : undefined
-                      }
-                      onHoverChange={(hovered) => {
-                        setHoveredNodeId((current) => (hovered ? node.id : current === node.id ? null : current))
-                      }}
+                       onDelete={node.nodeType === 'roleplay_session' ? undefined : () => props.onDeleteBranchNode(node)}
+                       onHoverChange={(hovered) => {
+                         setHoveredNodeId((current) => (hovered ? node.id : current === node.id ? null : current))
+                       }}
                     />
                   )
                 })

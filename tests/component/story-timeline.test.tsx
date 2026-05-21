@@ -170,6 +170,33 @@ function buildMixedEdges(): StoryTimelineEdge[] {
   ]
 }
 
+function buildNodesWithRoleplay(): StoryTimelineBranchNode[] {
+  return [
+    {
+      type: 'branch_node',
+      id: 'roleplay-node-1',
+      nodeType: 'roleplay_session',
+      readableLabel: 'RP-01',
+      readableLineageLabel: 'RE-01, RP-01',
+      anchorChapterNo: 10,
+      parentNodeId: 'continue-node-1',
+      title: 'RP-01 夜谈',
+      subtitle: '你昨晚为什么没有按约定现身？',
+      laneIndex: 1,
+      colorToken: 'emerald',
+      sourceChapterNo: 10,
+      targetChapterNo: null,
+      continueBlockId: null,
+      whatIfSessionId: null,
+      futureJumpRunId: null,
+      roleplaySessionId: 'roleplay-session-001',
+      createdAt: '2026-05-15T01:22:30.000Z',
+      status: 'active',
+    },
+    ...buildNodes(),
+  ]
+}
+
 function buildEdges(): StoryTimelineEdge[] {
   return [
     { fromNodeId: storyBranchFixtureIds.whatIfNodeId, toNodeId: 'continue-node-1' },
@@ -376,5 +403,46 @@ describe('StoryTimeline', () => {
     expect(screen.getByText('指令预览 · 继续压低场景里的情绪。')).toBeInTheDocument()
     expect(screen.queryByText('IF-01, CONT-01')).not.toBeInTheDocument()
     expect(screen.queryByText('CONT-01 续写块')).not.toBeInTheDocument()
+  })
+
+  it('emits roleplay session selections without changing future-jump click behavior', () => {
+    const onSelectionChange = vi.fn<(selection: TimelineSelection) => void>()
+
+    render(
+      <StoryTimeline
+        chapters={[
+          { type: 'chapter', chapterNo: 10, chapterId: 'chapter-10', title: '第10章 结盟', wordCount: 1200 },
+          { type: 'chapter', chapterNo: 100, chapterId: 'chapter-100', title: '第100章 被绑走', wordCount: 1900 },
+        ]}
+        branchNodes={buildNodesWithRoleplay()}
+        edges={[...buildEdges(), { fromNodeId: 'continue-node-1', toNodeId: 'roleplay-node-1' }]}
+        activeChapterId="chapter-10"
+        activeSelection={null}
+        branchChaptersByParentId={new Map([['chapter-10', [buildBranchChapter()]]])}
+        onSelectionChange={onSelectionChange}
+        onDeleteChapter={() => undefined}
+        onDeleteBranchChapter={() => undefined}
+        deletingBranchNodeId={null}
+        onDeleteBranchNode={() => undefined}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId('timeline-node-roleplay-node-1'))
+    fireEvent.click(screen.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`))
+
+    expect(onSelectionChange).toHaveBeenNthCalledWith(1, {
+      kind: 'roleplay_session',
+      nodeId: 'roleplay-node-1',
+      roleplaySessionId: 'roleplay-session-001',
+      anchorChapterNo: 10,
+    })
+    expect(onSelectionChange).toHaveBeenNthCalledWith(2, {
+      kind: 'future_jump',
+      nodeId: storyBranchFixtureIds.futureJumpNodeId,
+      runId: 'jump-run-001',
+      sourceChapterNo: 10,
+      targetChapterNo: 100,
+    })
+    expect(screen.queryByLabelText('删除 Roleplay session 节点 RP-01')).not.toBeInTheDocument()
   })
 })

@@ -23,14 +23,17 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
   onHoverChange: (hovered: boolean) => void
 }>((props, ref) => {
   const isWhatIfLike = props.node.nodeType === 'rewrite' || props.node.nodeType === 'what_if' || props.node.nodeType === 'continue_block'
-  const Icon = isWhatIfLike ? GitBranch : Sparkles
+  const isRoleplay = props.node.nodeType === 'roleplay_session'
+  const Icon = isWhatIfLike || isRoleplay ? GitBranch : Sparkles
   const branchKindLabel = props.node.nodeType === 'rewrite'
     ? 'Rewrite'
     : props.node.nodeType === 'continue_block'
       ? 'Continue block'
       : props.node.nodeType === 'what_if'
         ? 'What if'
-        : 'Future jump'
+        : props.node.nodeType === 'roleplay_session'
+          ? 'Roleplay session'
+          : 'Future jump'
   const displayLabel = resolveStoryBranchDisplayLabel(props.node)
   const instructionPreview = formatStoryBranchInstructionPreview(props.node.userInstruction ?? props.node.subtitle)
 
@@ -51,26 +54,28 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
         data-highlighted={props.highlighted ? 'true' : 'false'}
         data-node-type={props.node.nodeType}
         onClick={props.onSelect}
-        className={cn(
-          'flex-1 rounded-[22px] border px-3 py-3 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition disabled:cursor-not-allowed disabled:opacity-60',
-          isWhatIfLike
-            ? 'border-violet-300/20 bg-[linear-gradient(135deg,rgba(109,40,217,0.22),rgba(17,20,29,0.94))] text-zinc-100 hover:border-violet-300/30 hover:bg-[linear-gradient(135deg,rgba(124,58,237,0.28),rgba(17,20,29,0.98))]'
+          className={cn(
+            'flex-1 rounded-[22px] border px-3 py-3 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition disabled:cursor-not-allowed disabled:opacity-60',
+            isWhatIfLike
+              ? 'border-violet-300/20 bg-[linear-gradient(135deg,rgba(109,40,217,0.22),rgba(17,20,29,0.94))] text-zinc-100 hover:border-violet-300/30 hover:bg-[linear-gradient(135deg,rgba(124,58,237,0.28),rgba(17,20,29,0.98))]'
+              : isRoleplay
+                ? 'border-emerald-300/20 bg-[linear-gradient(135deg,rgba(16,185,129,0.22),rgba(17,20,29,0.94))] text-zinc-100 hover:border-emerald-300/30 hover:bg-[linear-gradient(135deg,rgba(52,211,153,0.28),rgba(17,20,29,0.98))]'
             : 'border-sky-300/20 bg-[linear-gradient(135deg,rgba(59,130,246,0.20),rgba(76,29,149,0.90))] text-zinc-100 hover:border-sky-300/32 hover:bg-[linear-gradient(135deg,rgba(96,165,250,0.28),rgba(91,33,182,0.96))]',
-          props.highlighted && !props.selected && (isWhatIfLike ? 'border-fuchsia-300/28 bg-fuchsia-500/12' : 'border-sky-300/28 bg-sky-500/12'),
-          props.selected && (isWhatIfLike ? 'border-fuchsia-300/36 bg-fuchsia-500/16 text-fuchsia-50' : 'border-sky-300/40 bg-sky-500/16 text-sky-50')
+          props.highlighted && !props.selected && (isWhatIfLike ? 'border-fuchsia-300/28 bg-fuchsia-500/12' : isRoleplay ? 'border-emerald-300/28 bg-emerald-500/12' : 'border-sky-300/28 bg-sky-500/12'),
+          props.selected && (isWhatIfLike ? 'border-fuchsia-300/36 bg-fuchsia-500/16 text-fuchsia-50' : isRoleplay ? 'border-emerald-300/40 bg-emerald-500/16 text-emerald-50' : 'border-sky-300/40 bg-sky-500/16 text-sky-50')
         )}
       >
         <div className="flex items-start gap-3">
           <div
             className={cn(
               'mt-0.5 rounded-2xl border p-2',
-              isWhatIfLike ? 'border-fuchsia-300/18 bg-black/20 text-fuchsia-100' : 'border-sky-300/18 bg-black/20 text-sky-100'
+              isWhatIfLike ? 'border-fuchsia-300/18 bg-black/20 text-fuchsia-100' : isRoleplay ? 'border-emerald-300/18 bg-black/20 text-emerald-100' : 'border-sky-300/18 bg-black/20 text-sky-100'
             )}
           >
             <Icon className="h-4 w-4" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className={cn('text-[11px] uppercase tracking-[0.16em]', isWhatIfLike ? 'text-fuchsia-100/70' : 'text-sky-100/75')}>
+            <p className={cn('text-[11px] uppercase tracking-[0.16em]', isWhatIfLike ? 'text-fuchsia-100/70' : isRoleplay ? 'text-emerald-100/75' : 'text-sky-100/75')}>
               {branchKindLabel}
             </p>
             <p className="mt-1 text-sm font-medium text-zinc-50">{displayLabel}</p>
