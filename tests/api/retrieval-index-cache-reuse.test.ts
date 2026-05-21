@@ -859,13 +859,24 @@ describe('retrieval-index cache reuse helpers', () => {
 
     const fullDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
     const scopedDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main', { startChapter: 2, endChapter: 2 })
+    const progressEvents: Array<{ fallbackReason?: string; totalRows: number }> = []
 
     await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
       chapterRange: { startChapter: 2, endChapter: 2 },
+      onProgress: (progress) => {
+        progressEvents.push(progress)
+      },
     })).resolves.toMatchObject({
       rowCount: fullDocs.length,
     })
 
+    expect(progressEvents).toContainEqual(expect.objectContaining({
+      fallbackReason: 'missing_table',
+      totalRows: fullDocs.length,
+    }))
+    const fallbackProgressEvents = progressEvents.filter((progress) => progress.totalRows === fullDocs.length)
+    expect(fallbackProgressEvents.length).toBeGreaterThan(0)
+    expect(fallbackProgressEvents.every((progress) => progress.fallbackReason === 'missing_table')).toBe(true)
     expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
     expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
     const createdRows = mockLanceDb.database.createTable.mock.calls[0]?.[1] as Array<{ id: string }> | undefined
@@ -896,13 +907,24 @@ describe('retrieval-index cache reuse helpers', () => {
     aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v2'
     const fullDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
     const scopedDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main', { startChapter: 2, endChapter: 2 })
+    const progressEvents: Array<{ fallbackReason?: string; totalRows: number }> = []
 
     await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
       chapterRange: { startChapter: 2, endChapter: 2 },
+      onProgress: (progress) => {
+        progressEvents.push(progress)
+      },
     })).resolves.toMatchObject({
       rowCount: fullDocs.length,
     })
 
+    expect(progressEvents).toContainEqual(expect.objectContaining({
+      fallbackReason: 'embedding_model_mismatch',
+      totalRows: fullDocs.length,
+    }))
+    const fallbackProgressEvents = progressEvents.filter((progress) => progress.totalRows === fullDocs.length)
+    expect(fallbackProgressEvents.length).toBeGreaterThan(0)
+    expect(fallbackProgressEvents.every((progress) => progress.fallbackReason === 'embedding_model_mismatch')).toBe(true)
     expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(2)
     const firstTable = mockLanceDb.database.createTable.mock.results[0]?.value
     await expect(firstTable).resolves.toBeTruthy()
@@ -916,6 +938,57 @@ describe('retrieval-index cache reuse helpers', () => {
     const currentTable = Array.from(mockLanceDb.tables.values())[0]
     expect(currentTable?.delete).not.toHaveBeenCalled()
   })
+
+  it('falls back to a full rebuild when scoped rebuild sees legacy rows without embedding metadata', async () => {
+    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-legacy-metadata-fallback')
+
+    database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, summary,
+        revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('chapter-2', 'novel-001', 'novel-001:main', 2, '第2章', '第2章原文', '第2章摘要', 1, 0, null, 'hash-2', 'ready')
+    database.prepare(
+      `INSERT INTO TextSpan (
+        id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
+        charStart, charEnd, text, spanType, tokenEstimate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章原文内容。', 'paragraph', 8)
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    const initialTable = Array.from(mockLanceDb.tables.values())[0]
+    for (const row of initialTable?.rows ?? []) {
+      delete row.embeddingProvider
+      delete row.embeddingModel
+      delete row.embeddingDimension
+    }
+
+    const fullDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    const scopedDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main', { startChapter: 2, endChapter: 2 })
+    const progressEvents: Array<{ fallbackReason?: string; totalRows: number }> = []
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+      chapterRange: { startChapter: 2, endChapter: 2 },
+      onProgress: (progress) => {
+        progressEvents.push(progress)
+      },
+    })).resolves.toMatchObject({
+      rowCount: fullDocs.length,
+    })
+
+    expect(progressEvents).toContainEqual(expect.objectContaining({
+      fallbackReason: 'missing_embedding_metadata',
+      totalRows: fullDocs.length,
+    }))
+    const fallbackProgressEvents = progressEvents.filter((progress) => progress.totalRows === fullDocs.length)
+    expect(fallbackProgressEvents.length).toBeGreaterThan(0)
+    expect(fallbackProgressEvents.every((progress) => progress.fallbackReason === 'missing_embedding_metadata')).toBe(true)
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(2)
+    const secondCreatedRows = mockLanceDb.database.createTable.mock.calls[1]?.[1] as Array<{ id: string }> | undefined
+    expect(secondCreatedRows?.map((row) => row.id)).toEqual(fullDocs.map((row) => row.id))
+    expect(secondCreatedRows?.map((row) => row.id)).not.toEqual(scopedDocs.map((row) => row.id))
+    expect(initialTable?.delete).not.toHaveBeenCalled()
+  }, 10000)
 
   it('deleteBranchRetrievalIndexFromChapter preserves raw text before the cutoff while deleting long-lived derived rows', async () => {
     const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-delete-from-chapter-safe-scope')
@@ -951,5 +1024,5 @@ describe('retrieval-index cache reuse helpers', () => {
     })
     expect(table?.rows.find((row) => row.id === 'worldbuilding:world-1')).toBeUndefined()
     expect(table?.rows.find((row) => row.id === 'span-4')).toBeUndefined()
-  })
+  }, 10000)
 })

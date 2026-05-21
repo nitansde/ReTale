@@ -123,12 +123,20 @@ type SourceTruthRow = {
 
 export type RetrievalIndexBuildPhase = 'loading' | 'embedding' | 'creating_table' | 'building_text_index' | 'building_vector_index' | 'completed'
 
+export type RetrievalIndexBuildFallbackReason =
+  | 'missing_table'
+  | 'unusable_vector'
+  | 'missing_embedding_metadata'
+  | 'embedding_provider_mismatch'
+  | 'embedding_model_mismatch'
+
 export type RetrievalIndexBuildProgress = {
   phase: RetrievalIndexBuildPhase
   totalRows: number
   embeddedRows: number
   totalBatches: number
   completedBatches: number
+  fallbackReason?: RetrievalIndexBuildFallbackReason
 }
 
 export type RetrievalIndexBuildResult = {
@@ -639,6 +647,11 @@ function logLanceIndex(message: string) {
   console.log(`${LANCEDB_INDEX_LOG_PREFIX} ${message}`)
 }
 
+function formatChapterRangeForLog(chapterRange: KnowledgeRebuildChapterRange) {
+  const { startChapter, endChapter } = normalizeKnowledgeRebuildChapterRange(chapterRange)
+  return endChapter === undefined ? `${startChapter}+` : `${startChapter}-${endChapter}`
+}
+
 function getEmbeddingBatchSize(settings: EmbeddingsScenarioSettings) {
   return Math.max(1, Math.floor(settings.embeddingBatchSize || DEFAULT_EMBEDDING_BATCH_SIZE))
 }
@@ -919,21 +932,32 @@ async function readStoredEmbeddingCompatibilityMetadata(
   }
 }
 
-async function canAppendRowsInPlace(
+type ScopedAppendReadiness =
+  | { canAppend: true }
+  | { canAppend: false; reason: RetrievalIndexBuildFallbackReason }
+
+async function checkScopedAppendReadiness(
   table: Awaited<ReturnType<typeof openBranchTable>> extends infer T ? Exclude<T, null> : never,
   embeddingSettings: EmbeddingsScenarioSettings,
-) {
+): Promise<ScopedAppendReadiness> {
   if (!(await hasUsableVectorColumn(table))) {
-    return false
+    return { canAppend: false, reason: 'unusable_vector' }
   }
 
   const storedMetadata = await readStoredEmbeddingCompatibilityMetadata(table)
   if (!storedMetadata) {
-    return false
+    return { canAppend: false, reason: 'missing_embedding_metadata' }
   }
 
-  return storedMetadata.embeddingProvider === embeddingSettings.provider
-    && storedMetadata.embeddingModel === getEmbeddingModel(embeddingSettings)
+  if (storedMetadata.embeddingProvider !== embeddingSettings.provider) {
+    return { canAppend: false, reason: 'embedding_provider_mismatch' }
+  }
+
+  if (storedMetadata.embeddingModel !== getEmbeddingModel(embeddingSettings)) {
+    return { canAppend: false, reason: 'embedding_model_mismatch' }
+  }
+
+  return { canAppend: true }
 }
 
 async function writeBranchTableRows(params: {
@@ -2173,9 +2197,20 @@ export async function rebuildBranchRetrievalIndex(
   }
 
   const existingTable = await openBranchTable(branchId)
-  const canUpdateInPlace = existingTable && await canAppendRowsInPlace(existingTable, embeddingSettings)
-  if (!canUpdateInPlace) {
+  const appendReadiness: ScopedAppendReadiness = existingTable
+    ? await checkScopedAppendReadiness(existingTable, embeddingSettings)
+    : { canAppend: false, reason: 'missing_table' }
+  if (!appendReadiness.canAppend) {
     const fullRows = loadRetrievalDocsForRebuild({ novelId, branchId })
+    logLanceIndex(
+      `scoped rebuild fallback to full rebuild: reason=${appendReadiness.reason}, chapterRange=${formatChapterRangeForLog(chapterRange)}, scopedDocs=${rows.length}, fullDocs=${fullRows.length}`
+    )
+    const onFallbackProgress = options?.onProgress
+      ? (progress: RetrievalIndexBuildProgress) => options.onProgress?.({
+        ...progress,
+        fallbackReason: appendReadiness.reason,
+      })
+      : undefined
     const fullPlannedRows = await buildRetrievalEmbeddingPlan({
       novelId,
       branchId,
@@ -2183,7 +2218,7 @@ export async function rebuildBranchRetrievalIndex(
       embeddingSettings,
     })
     const fullTotalBatches = Math.ceil(fullRows.length / embeddingBatchSize)
-    await options?.onProgress?.({
+    await onFallbackProgress?.({
       phase: fullRows.length ? 'embedding' : 'completed',
       totalRows: fullRows.length,
       embeddedRows: fullPlannedRows.filter((item) => item.row.sourceType === 'text_span' && item.cachedVector).length,
@@ -2200,8 +2235,8 @@ export async function rebuildBranchRetrievalIndex(
       }
     }
 
-    await createOrReplaceBranchTable(branchId, fullPlannedRows, novelId, embeddingSettings, embeddingBatchSize, options?.onProgress)
-    await options?.onProgress?.({
+    await createOrReplaceBranchTable(branchId, fullPlannedRows, novelId, embeddingSettings, embeddingBatchSize, onFallbackProgress)
+    await onFallbackProgress?.({
       phase: 'completed',
       totalRows: fullRows.length,
       embeddedRows: fullRows.length,
