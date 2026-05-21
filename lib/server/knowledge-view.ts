@@ -78,8 +78,14 @@ export type KnowledgeRebuildStatus = {
   }
 }
 
+export type HanlpCacheSnapshot = {
+  status: NonNullable<KnowledgeRebuildStatus['hanlpCacheStatus']>
+  settingsSnapshot?: NonNullable<KnowledgeRebuildStatus['hanlpSettingsSnapshot']>
+}
+
 export type KnowledgeViewPayload = KnowledgeProjectionPayload & {
   knowledgeRebuildStatus: KnowledgeRebuildStatus | null
+  hanlpCacheSnapshot: HanlpCacheSnapshot | null
 }
 
 export type KnowledgeViewActionOutcome = KnowledgeRebuildJobOutcome | KnowledgeRebuildStartOutcome | 'blocked' | 'deleted' | 'idle'
@@ -261,11 +267,6 @@ type HanlpCacheSnapshotRow = {
   pipelineVersion: string
 }
 
-type HanlpCacheSnapshot = {
-  status: NonNullable<KnowledgeRebuildStatus['hanlpCacheStatus']>
-  settingsSnapshot?: NonNullable<KnowledgeRebuildStatus['hanlpSettingsSnapshot']>
-}
-
 function getHanlpCacheSnapshot(novelId: string, branchId: string, status?: KnowledgeRebuildStatus | null): HanlpCacheSnapshot {
   const cacheRow = queryOne<HanlpCacheSnapshotRow>(
     `
@@ -311,6 +312,7 @@ function createIdleActionPayload(): KnowledgeViewActionPayload {
   return {
     ...createEmptyProjection(),
     knowledgeRebuildStatus: null,
+    hanlpCacheSnapshot: null,
     jobOutcome: 'idle',
     actionError: null,
   }
@@ -475,6 +477,14 @@ function getKnowledgeRebuildStatus(novelIds?: string[]): KnowledgeRebuildStatus 
     hanlpCacheStatus: hanlpCacheSnapshot.status,
     hanlpSettingsSnapshot: telemetry.hanlpSettingsSnapshot ?? hanlpCacheSnapshot.settingsSnapshot,
   }
+}
+
+function getKnowledgeViewHanlpCacheSnapshot(novelIds?: string[], status?: KnowledgeRebuildStatus | null): HanlpCacheSnapshot | null {
+  if (!novelIds?.length || novelIds.length !== 1) {
+    return null
+  }
+
+  return getHanlpCacheSnapshot(novelIds[0], getMainBranchId(novelIds[0]), status)
 }
 
 function toWorldEntryType(category: string | null): WorldEntryType {
@@ -645,6 +655,8 @@ function projectCharacterCompatibilityFields(
 }
 
 export async function buildKnowledgeProjection(novelIds?: string[], asOfChapter?: number): Promise<KnowledgeViewPayload> {
+  const knowledgeRebuildStatus = getKnowledgeRebuildStatus(novelIds)
+  const hanlpCacheSnapshot = getKnowledgeViewHanlpCacheSnapshot(novelIds, knowledgeRebuildStatus)
   const novels = novelIds?.length
     ? queryAll<{ id: string }>(
         `SELECT id FROM NovelRecord WHERE id IN (${novelIds.map(() => '?').join(', ')})`,
@@ -655,7 +667,8 @@ export async function buildKnowledgeProjection(novelIds?: string[], asOfChapter?
   if (!novels.length) {
     return {
       ...createEmptyProjection(),
-      knowledgeRebuildStatus: getKnowledgeRebuildStatus(novelIds),
+      knowledgeRebuildStatus,
+      hanlpCacheSnapshot,
     }
   }
 
@@ -861,7 +874,8 @@ export async function buildKnowledgeProjection(novelIds?: string[], asOfChapter?
     localWorldEntries,
     localTimelineEvents,
     localOutlines,
-    knowledgeRebuildStatus: getKnowledgeRebuildStatus(novelIds),
+    knowledgeRebuildStatus,
+    hanlpCacheSnapshot,
   }
 }
 

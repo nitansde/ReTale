@@ -212,6 +212,11 @@ type KnowledgeRebuildStatus = {
   }
 }
 
+type HanlpCacheSnapshot = {
+  status: NonNullable<KnowledgeRebuildStatus['hanlpCacheStatus']>
+  settingsSnapshot?: NonNullable<KnowledgeRebuildStatus['hanlpSettingsSnapshot']>
+}
+
 export function resolveCurrentNodeMetrics(params: {
   selection: TimelineSelection
   chapterText: string
@@ -1268,6 +1273,7 @@ export function SelectionNovelStudio() {
   const [knowledgeRebuilding, setKnowledgeRebuilding] = useState(false)
   const [presetCompatLibraryOpen, setPresetCompatLibraryOpen] = useState(false)
   const [knowledgeRebuildStatus, setKnowledgeRebuildStatus] = useState<KnowledgeRebuildStatus | null>(null)
+  const [hanlpCacheSnapshot, setHanlpCacheSnapshot] = useState<HanlpCacheSnapshot | null>(null)
   const [knowledgeActionLoading, setKnowledgeActionLoading] = useState<KnowledgeActionLoading>(null)
   const [confirmDeleteHanlpCache, setConfirmDeleteHanlpCache] = useState(false)
   const [confirmDeleteExtractionCache, setConfirmDeleteExtractionCache] = useState(false)
@@ -1436,6 +1442,7 @@ export function SelectionNovelStudio() {
       setConfirmDeleteEmbeddingCache(false)
       const resetTimer = window.setTimeout(() => {
         setKnowledgeRebuildStatus(null)
+        setHanlpCacheSnapshot(null)
       }, 0)
       lastActiveKnowledgeJobIdRef.current = null
       return () => {
@@ -1464,11 +1471,13 @@ export function SelectionNovelStudio() {
         const data = (await response.json()) as {
           ok?: boolean
           knowledgeRebuildStatus?: KnowledgeRebuildStatus | null
+          hanlpCacheSnapshot?: HanlpCacheSnapshot | null
         }
 
         if (cancelled || !response.ok || !data.ok) return
 
         const nextStatus = data.knowledgeRebuildStatus ?? null
+        setHanlpCacheSnapshot(data.hanlpCacheSnapshot ?? null)
         const hadActiveJob = Boolean(lastActiveKnowledgeJobIdRef.current)
         const failureMessage = resolveKnowledgeRebuildFailureMessage(nextStatus)
 
@@ -1925,15 +1934,16 @@ export function SelectionNovelStudio() {
     if (knowledgeRebuildFailed) return 'HanLP Bootstrap 已随本次知识重建失败而停止。'
     if (knowledgeRebuildPaused) return 'HanLP Bootstrap 已暂停，等待继续。'
     if (knowledgeRebuildBusy) return hanlpBootstrapHasProgressTelemetry ? 'HanLP Bootstrap 正在持续回传章节遥测。' : 'HanLP Bootstrap 已启动，正在等待章节进度。'
+    if (hanlpCacheSnapshot?.status === 'ready') return 'HanLP Bootstrap 缓存已就绪，可直接复用已有扫描结果。'
     return '当前还没有可展示的 HanLP Bootstrap 进度。'
-  }, [hanlpBootstrapCompletedChapterCount, hanlpBootstrapHasProgressTelemetry, hanlpBootstrapTotalChapterCount, knowledgeRebuildBusy, knowledgeRebuildFailed, knowledgeRebuildPaused])
-  const hanlpCacheStatus = knowledgeRebuildStatus?.hanlpCacheStatus ?? 'empty'
+  }, [hanlpBootstrapCompletedChapterCount, hanlpBootstrapHasProgressTelemetry, hanlpBootstrapTotalChapterCount, hanlpCacheSnapshot, knowledgeRebuildBusy, knowledgeRebuildFailed, knowledgeRebuildPaused])
+  const hanlpCacheStatus = knowledgeRebuildStatus?.hanlpCacheStatus ?? hanlpCacheSnapshot?.status ?? 'empty'
   const hanlpCacheStatusLabel = HANLP_CACHE_STATUS_LABELS[hanlpCacheStatus]
   const hanlpSettingsLine = useMemo(() => {
-    const snapshot = knowledgeRebuildStatus?.hanlpSettingsSnapshot
+    const snapshot = knowledgeRebuildStatus?.hanlpSettingsSnapshot ?? hanlpCacheSnapshot?.settingsSnapshot
     if (!snapshot) return null
     return `script ${snapshot.hanlpScriptVersionHash.slice(0, 8)} · config ${snapshot.hanlpModelOrConfigHash.slice(0, 8)} · schema ${snapshot.outputSchemaVersion} · pipeline ${snapshot.pipelineVersion}`
-  }, [knowledgeRebuildStatus])
+  }, [hanlpCacheSnapshot, knowledgeRebuildStatus])
   const hanlpCacheDeleteState = useMemo(() => resolveHanlpCacheDeleteState({
     knowledgeRebuildStatus,
     knowledgeActionLoading,
@@ -3332,6 +3342,7 @@ export function SelectionNovelStudio() {
       if (!result) return
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
 
       if (
         result.knowledgeRebuildStatus?.jobId
@@ -3370,6 +3381,7 @@ export function SelectionNovelStudio() {
       if (!result) return
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
       if (
         result.knowledgeRebuildStatus?.jobId
         && (result.knowledgeRebuildStatus.status === 'queued'
@@ -3396,6 +3408,7 @@ export function SelectionNovelStudio() {
 
       lastActiveKnowledgeJobIdRef.current = null
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
       setKnowledgeRebuilding(false)
       showKnowledgeToast(result.jobOutcome === 'aborted' ? '知识重建已终止' : '当前没有可终止的知识重建任务')
     } catch {
@@ -3414,6 +3427,7 @@ export function SelectionNovelStudio() {
 
       lastActiveKnowledgeJobIdRef.current = null
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
       setKnowledgeRebuilding(false)
       setConfirmDeleteKnowledge(false)
       showKnowledgeToast(result.jobOutcome === 'deleted' ? '已清空当前小说的知识图谱数据' : '当前小说知识图谱未发生变化', 2000)
@@ -3432,6 +3446,7 @@ export function SelectionNovelStudio() {
       if (!result) return
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
       setConfirmDeleteHanlpCache(false)
 
       if (result.actionError?.message) {
@@ -3455,6 +3470,7 @@ export function SelectionNovelStudio() {
       if (!result) return
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
       setConfirmDeleteExtractionCache(false)
 
       if (result.actionError?.message) {
@@ -3478,6 +3494,7 @@ export function SelectionNovelStudio() {
       if (!result) return
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
       setConfirmDeleteEmbeddingCache(false)
 
       if (result.actionError?.message) {

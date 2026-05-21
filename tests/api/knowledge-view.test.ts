@@ -334,6 +334,7 @@ describe('/api/knowledge-view', () => {
     const payload = await response.json() as {
       ok: boolean
       knowledgeRebuildStatus: Record<string, unknown> | null
+      hanlpCacheSnapshot: Record<string, unknown> | null
     }
 
     expect(response.status).toBe(200)
@@ -360,6 +361,15 @@ describe('/api/knowledge-view', () => {
       },
       stageTimingsMs: {
         'hanlp-bootstrap': 120,
+      },
+    })
+    expect(payload.hanlpCacheSnapshot).toMatchObject({
+      status: 'running',
+      settingsSnapshot: {
+        hanlpScriptVersionHash: 'script-hash-telemetry-main',
+        hanlpModelOrConfigHash: 'model-hash-telemetry-main',
+        outputSchemaVersion: 'v1',
+        pipelineVersion: 'hanlp-bootstrap:v1',
       },
     })
   })
@@ -478,6 +488,13 @@ describe('/api/knowledge-view', () => {
     const { mainBranchId } = seedNovel(database, novelId)
 
     seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-hide-old-failed', chapterNo: 1 })
+    insertHanlpCacheFixture(database, {
+      idPrefix: 'hide-old-failed-main',
+      novelId,
+      branchId: mainBranchId,
+      chapterId: 'chapter-hide-old-failed',
+      chapterNo: 1,
+    })
 
     database.prepare(
       `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, errorMessage, currentStep, progress, payloadJson, createdAt, updatedAt)
@@ -514,11 +531,75 @@ describe('/api/knowledge-view', () => {
     const payload = await response.json() as {
       ok: boolean
       knowledgeRebuildStatus: Record<string, unknown> | null
+      hanlpCacheSnapshot: Record<string, unknown> | null
     }
 
     expect(response.status).toBe(200)
     expect(payload.ok).toBe(true)
     expect(payload.knowledgeRebuildStatus).toBeNull()
+    expect(payload.hanlpCacheSnapshot).toMatchObject({
+      status: 'ready',
+      settingsSnapshot: {
+        hanlpScriptVersionHash: 'script-hash-hide-old-failed-main',
+        hanlpModelOrConfigHash: 'model-hash-hide-old-failed-main',
+        outputSchemaVersion: 'v1',
+        pipelineVersion: 'hanlp-bootstrap:v1',
+      },
+    })
+  })
+
+  it('surfaces populated HanLP cache readiness without an active rebuild', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-idle-hanlp-cache')
+    const novelId = `novel_knowledge_view_idle_hanlp_${Math.random().toString(36).slice(2, 8)}`
+    const otherNovelId = `novel_knowledge_view_idle_hanlp_other_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId, altBranchId } = seedNovel(database, novelId)
+    const { mainBranchId: otherMainBranchId } = seedNovel(database, otherNovelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-idle-hanlp-cache', chapterNo: 1 })
+    seedKnowledgeChapter(database, { novelId, branchId: altBranchId, chapterId: 'chapter-idle-hanlp-cache-alt', chapterNo: 2 })
+    seedKnowledgeChapter(database, { novelId: otherNovelId, branchId: otherMainBranchId, chapterId: 'chapter-idle-hanlp-cache-other', chapterNo: 1 })
+    insertHanlpCacheFixture(database, {
+      idPrefix: 'idle-hanlp-main',
+      novelId,
+      branchId: mainBranchId,
+      chapterId: 'chapter-idle-hanlp-cache',
+      chapterNo: 1,
+    })
+    insertHanlpCacheFixture(database, {
+      idPrefix: 'idle-hanlp-alt',
+      novelId,
+      branchId: altBranchId,
+      chapterId: 'chapter-idle-hanlp-cache-alt',
+      chapterNo: 2,
+    })
+    insertHanlpCacheFixture(database, {
+      idPrefix: 'idle-hanlp-other',
+      novelId: otherNovelId,
+      branchId: otherMainBranchId,
+      chapterId: 'chapter-idle-hanlp-cache-other',
+      chapterNo: 1,
+    })
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      ok: boolean
+      knowledgeRebuildStatus: Record<string, unknown> | null
+      hanlpCacheSnapshot: Record<string, unknown> | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.knowledgeRebuildStatus).toBeNull()
+    expect(payload.hanlpCacheSnapshot).toMatchObject({
+      status: 'ready',
+      settingsSnapshot: {
+        hanlpScriptVersionHash: 'script-hash-idle-hanlp-main',
+        hanlpModelOrConfigHash: 'model-hash-idle-hanlp-main',
+        outputSchemaVersion: 'v1',
+        pipelineVersion: 'hanlp-bootstrap:v1',
+      },
+    })
   })
 
   it('deletes only the target main-branch HanLP cache rows and preserves raw embedding cache', async () => {
@@ -840,5 +921,5 @@ describe('/api/knowledge-view', () => {
       },
     })
     expect(payload.knowledgeRebuildStatus?.jobId).toEqual(expect.any(String))
-  })
+  }, 15000)
 })

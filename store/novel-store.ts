@@ -117,6 +117,11 @@ type KnowledgeRebuildStatus = {
   }
 }
 
+type HanlpCacheSnapshot = {
+  status: NonNullable<KnowledgeRebuildStatus['hanlpCacheStatus']>
+  settingsSnapshot?: NonNullable<KnowledgeRebuildStatus['hanlpSettingsSnapshot']>
+}
+
 type KnowledgeActionOutcome = 'completed' | 'queued' | 'running' | 'paused' | 'aborted' | 'blocked' | 'deleted' | 'idle'
 
 type KnowledgeActionError = {
@@ -131,6 +136,7 @@ type PresetCompatImportResult = {
 
 type KnowledgeProjectionResult = KnowledgeProjectionPayload & {
   knowledgeRebuildStatus: KnowledgeRebuildStatus | null
+  hanlpCacheSnapshot: HanlpCacheSnapshot | null
   jobOutcome: KnowledgeActionOutcome | null
   actionError: KnowledgeActionError | null
 }
@@ -149,6 +155,7 @@ function normalizeKnowledgeProjectionResult(data: Partial<KnowledgeProjectionRes
   return {
     ...normalizeKnowledgeProjection(data),
     knowledgeRebuildStatus: data.knowledgeRebuildStatus ?? null,
+    hanlpCacheSnapshot: data.hanlpCacheSnapshot ?? null,
     jobOutcome: data.jobOutcome ?? null,
     actionError: data.actionError ?? null,
   }
