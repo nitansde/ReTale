@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS chapter_extraction_candidates (
   chapter_revision INTEGER,
   chapter_source_hash TEXT NOT NULL,
   extraction_json TEXT NOT NULL,
+  processing_result_json TEXT,
   status TEXT NOT NULL DEFAULT 'extracted',
   provider TEXT,
   model TEXT,

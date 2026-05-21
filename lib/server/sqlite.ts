@@ -375,6 +375,7 @@ function runBootMigrations(database: DatabaseSync) {
   addColumnIfMissing(database, 'hanlp_bootstrap_cache', 'hanlp_script_version_hash', 'hanlp_script_version_hash TEXT')
   addColumnIfMissing(database, 'hanlp_bootstrap_cache', 'hanlp_model_or_config_hash', 'hanlp_model_or_config_hash TEXT')
   addColumnIfMissing(database, 'hanlp_bootstrap_cache', 'output_schema_version', "output_schema_version TEXT DEFAULT 'v1'")
+  addColumnIfMissing(database, 'chapter_extraction_candidates', 'processing_result_json', 'processing_result_json TEXT')
   addColumnIfMissing(database, 'character_candidates', 'surface_text', 'surface_text TEXT')
   addColumnIfMissing(database, 'character_candidates', 'chapter_count', 'chapter_count INTEGER DEFAULT 1')
   addColumnIfMissing(database, 'character_candidates', 'observations_json', 'observations_json TEXT')
