@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { deserializePresetCompatResponseMetadata } from '@/lib/preset-compat/runtime-integration'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import type { PresetCompatMacroDiagnostic } from '@/lib/preset-compat/macro-context'
-import type { PresetCompatLibrary, PresetCompatSurfaceId } from '@/lib/preset-compat/types'
+import type { PresetCompatLibrary } from '@/lib/preset-compat/types'
 import type { AISettings } from '@/lib/types'
 
 const REWRITE_ROUTE_RUNTIME_SURFACES = ['rewrite', 'roleplay'] as const
@@ -472,7 +472,7 @@ describe('preset compat rewrite route runtime', () => {
         {
           message: {
             content: JSON.stringify({
-              candidates: ['RAW OUTPUT', 'SECOND RAW OUTPUT', 'THIRD RAW OUTPUT'],
+              result: 'RAW OUTPUT',
             }),
           },
         },
@@ -486,6 +486,7 @@ describe('preset compat rewrite route runtime', () => {
     expect(response.status).toBe(200)
     const payload = await response.json() as {
       provider: string
+      result: { content: string }
       candidates: Array<{ content: string }>
       presetCompat: {
         runtimeSnapshot: { activePresetId: string; activeSurfaceId: string | null }
@@ -494,11 +495,8 @@ describe('preset compat rewrite route runtime', () => {
       }
     }
     expect(payload.provider).toBe('openai-compatible')
-    expect(payload.candidates.map((candidate) => candidate.content)).toEqual([
-      'CLEAN OUTPUT',
-      'SECOND CLEAN OUTPUT',
-      'THIRD CLEAN OUTPUT',
-    ])
+    expect(payload.result.content).toBe('CLEAN OUTPUT')
+    expect(payload.candidates.map((candidate) => candidate.content)).toEqual(['CLEAN OUTPUT'])
     expect(payload.presetCompat.fieldStatuses).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'openai_max_tokens', status: 'applied', reason: 'SUPPORTED_RUNTIME' }),
       expect.objectContaining({ field: 'seed', status: 'degraded', reason: 'PROVIDER_ONLY' }),
@@ -709,7 +707,7 @@ describe('preset compat rewrite route runtime', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(firstStreamBody, { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT', 'RAW OUTPUT 2', 'RAW OUTPUT 3'] }) } }],
+        choices: [{ message: { content: JSON.stringify({ result: 'RAW OUTPUT' }) } }],
       }), { status: 200 }))
       .mockResolvedValueOnce(new Response(secondStreamBody, { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
@@ -942,7 +940,7 @@ describe('preset compat rewrite route runtime', () => {
     }))
 
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT', 'RAW OUTPUT 2', 'RAW OUTPUT 3'] }) } }],
+      choices: [{ message: { content: JSON.stringify({ result: 'RAW OUTPUT' }) } }],
     }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -999,7 +997,7 @@ describe('preset compat rewrite route runtime', () => {
     }))
 
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT', 'RAW OUTPUT 2', 'RAW OUTPUT 3'] }) } }],
+      choices: [{ message: { content: JSON.stringify({ result: 'RAW OUTPUT' }) } }],
     }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 

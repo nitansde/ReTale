@@ -23,6 +23,51 @@ function resolveFixturePath(relativePath: string) {
 
 const fixturePath = resolveFixturePath(path.join('external', 'resets_example.json'))
 
+function buildRecoverableRewriteJob(params: {
+  jobId: string
+  content?: string | null
+  userInstruction?: string
+  status?: string
+  progress?: number
+  currentStep?: string | null
+  presetCompat?: unknown
+  metadata?: unknown
+}) {
+  const timestamp = '2026-05-15T01:23:45.000Z'
+  return {
+    jobId: params.jobId,
+    status: params.status ?? (params.content == null ? 'queued' : 'succeeded'),
+    progress: params.progress ?? (params.content == null ? 0.1 : 1),
+    currentStep: params.currentStep ?? (params.content == null ? '已创建可恢复魔改任务' : '已完成魔改任务'),
+    errorMessage: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    panel: {
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      chapterId: 'chapter-001',
+      selectedText: '这里是一段测试正文。',
+      sourceText: '这里是一段测试正文。',
+      sourceTextOverride: null,
+      userInstruction: params.userInstruction ?? '',
+      rewriteLaunchSource: null,
+      createdAt: timestamp,
+    },
+    result: params.content == null
+      ? null
+      : {
+          provider: 'openai-compatible',
+          title: '生成版本',
+          summary: '基于当前章节知识状态与证据装配生成。',
+          content: params.content,
+          inputTokens: 42,
+          outputTokens: 84,
+          metadata: params.metadata ?? {},
+          presetCompat: params.presetCompat ?? null,
+        },
+  }
+}
+
 function buildPreviewPromptRuntimeContext() {
   return {
     sessionPhase: 'new_chat' as const,
@@ -447,7 +492,6 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
 
 test('workspace rewrite flow saves a macro-bearing preset binding and sends Alice/Bob-expanded runtime payload', async ({ page }) => {
   const evidenceDirectory = ensureEvidenceDir('task-11')
-  const fixtureText = fs.readFileSync(fixturePath, 'utf8')
   let library = createDefaultPresetCompatLibrary()
   let presetImportCounter = 0
   let rewriteProviderPayload: ReturnType<typeof buildRewriteProviderPayload> | null = null
@@ -561,11 +605,44 @@ test('workspace rewrite flow saves a macro-bearing preset binding and sends Alic
     }
     await route.fulfill({ status: 200, body: JSON.stringify({ ok: true, library, importedIds: [preset.id], warnings }) })
   })
-  await page.route('**/api/rewrite', async (route) => {
-    const body = route.request().postDataJSON() as { userInstruction?: string; operationType?: string; stream?: boolean }
+  let rewriteJobContent = ''
+  await page.route('**/api/rewrite*', async (route) => {
+    if (route.request().method() === 'GET') {
+      const url = new URL(route.request().url())
+      const jobId = url.searchParams.get('jobId')
+      if (!jobId) {
+        await route.fulfill({ json: { ok: true, job: null } })
+        return
+      }
+
+      expect(jobId).toBe('rewrite-job-preset-compat-1')
+      await route.fulfill({
+        json: {
+          ok: true,
+          job: buildRecoverableRewriteJob({
+            jobId: 'rewrite-job-preset-compat-1',
+            content: rewriteJobContent,
+            presetCompat: {
+              warnings: rewriteProviderPayload?.warnings ?? [],
+              macroDiagnostics: rewriteProviderPayload?.macroDiagnostics ?? [],
+            },
+            metadata: {
+              warnings: rewriteProviderPayload?.warnings ?? [],
+            },
+          }),
+        },
+      })
+      return
+    }
+
+    const body = route.request().postDataJSON() as {
+      userInstruction?: string
+      operationType?: string
+      recoverableRewriteJob?: boolean
+    }
     expect(route.request().url()).toContain('/api/rewrite')
     expect(body.operationType).toBe('rewrite')
-    expect(body.stream).toBe(true)
+    expect(body.recoverableRewriteJob).toBe(true)
 
     const activePresetId = library.surfaceBindings.rewrite.presetId
     const activePreset = activePresetId ? library.presets[activePresetId] : null
@@ -574,8 +651,17 @@ test('workspace rewrite flow saves a macro-bearing preset binding and sends Alic
       : null
 
     rewriteProviderPayload = buildRewriteProviderPayload(library, macroRule?.content ?? body.userInstruction ?? '')
+    rewriteJobContent = rewriteProviderPayload.userPrompt
     writeEvidenceFile('task-11/rewrite-provider-payload.json', JSON.stringify(rewriteProviderPayload, null, 2))
-    await route.fulfill({ status: 200, body: rewriteProviderPayload.userPrompt })
+    await route.fulfill({
+      json: {
+        ok: true,
+        job: buildRecoverableRewriteJob({
+          jobId: 'rewrite-job-preset-compat-1',
+          userInstruction: body.userInstruction,
+        }),
+      },
+    })
   })
 
   await page.goto('/workspace', { waitUntil: 'networkidle' })
@@ -614,7 +700,7 @@ test('workspace rewrite flow saves a macro-bearing preset binding and sends Alic
   await page.getByRole('button', { name: '魔改 围绕选中片段与额外要求，产出一个完整章节重写版本。' }).click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
   const rewriteResponsePromise = page.waitForResponse((response) => response.url().includes('/api/rewrite') && response.request().method() === 'POST')
-  await page.getByRole('button', { name: '生成候选版本' }).click()
+  await page.getByRole('button', { name: '生成版本' }).click()
   await rewriteResponsePromise
   await expect(page.getByTestId('workspace-action-overlay')).toContainText('Alice')
   await expect(page.getByTestId('workspace-action-overlay')).toContainText('Bob')

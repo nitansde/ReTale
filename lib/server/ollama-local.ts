@@ -2394,7 +2394,7 @@ export async function generateRewriteWithOllama(
     prompt: input.prompt,
     sourceText: input.sourceText,
     outputSchema: {
-      candidates: ['candidate 1 text', 'candidate 2 text', 'candidate 3 text'],
+      result: 'rewritten text',
     },
   }
 
@@ -2407,14 +2407,9 @@ export async function generateRewriteWithOllama(
       format: {
         type: 'object',
         properties: {
-          candidates: {
-            type: 'array',
-            items: { type: 'string' },
-            minItems: 3,
-            maxItems: 3,
-          },
+          result: { type: 'string' },
         },
-        required: ['candidates'],
+        required: ['result'],
       },
       messages: [
         {
@@ -2422,8 +2417,8 @@ export async function generateRewriteWithOllama(
           content: input.systemPrompt?.trim() || [
             'You are a novel rewriting assistant.',
             'Return JSON only.',
-            'Produce exactly 3 rewrite candidates in Chinese.',
-            'Each candidate should be a coherent prose passage.',
+            'Produce one rewrite result in Chinese.',
+            'The result should be a coherent prose passage.',
           ].join(' '),
         },
         { role: 'user', content: input.userPrompt?.trim() || JSON.stringify(user) },
@@ -2437,10 +2432,12 @@ export async function generateRewriteWithOllama(
       return { enabled: true, error: 'No content returned from model' }
     }
 
-    const parsed = parseStructuredContent(raw) as { candidates?: unknown[] }
-    const candidates = Array.isArray(parsed.candidates)
-      ? parsed.candidates.map((item) => String(item)).filter(Boolean).slice(0, 3)
-      : []
+    const parsed = parseStructuredContent(raw) as { result?: unknown; candidates?: unknown[] }
+    const candidates = typeof parsed.result === 'string'
+      ? [parsed.result].filter(Boolean)
+      : Array.isArray(parsed.candidates)
+        ? parsed.candidates.map((item) => String(item)).filter(Boolean).slice(0, 1)
+        : []
     if (!candidates.length) {
       return { enabled: true, error: 'Model returned empty candidates' }
     }

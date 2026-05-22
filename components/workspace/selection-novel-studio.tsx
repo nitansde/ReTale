@@ -112,12 +112,43 @@ type RewriteApiCandidate = {
   outputTokens?: number | null
 }
 
+type RecoverableRewriteResult = RewriteApiCandidate & {
+  provider: string
+  metadata?: unknown
+  presetCompat?: unknown
+}
+
+type RecoverableRewriteJob = {
+  jobId: string
+  status: string
+  progress: number
+  currentStep: string | null
+  errorMessage: string | null
+  createdAt: string
+  updatedAt: string
+  panel: {
+    novelId: string
+    branchId: string
+    chapterId: string
+    selectedText: string
+    sourceText: string
+    sourceTextOverride: string | null
+    userInstruction: string
+    rewriteLaunchSource: string | null
+    createdAt: string
+  }
+  result: RecoverableRewriteResult | null
+}
+
 type RewriteFlowState = {
   loading: boolean
   error: string
   provider: string
   candidates: RewriteApiCandidate[]
   selectedIndex: number
+  jobId: string | null
+  jobStatus: string | null
+  jobCurrentStep: string | null
 }
 
 type PendingWhatIfRewriteLaunch = {
@@ -249,7 +280,8 @@ export function shouldLoadWorkspaceFromBackendOnMount(backendLoaded: boolean) {
 }
 
 function buildContinueBlockLineageRequestContext(context: PendingContinueBlockRewriteLaunch | null): BranchContextPreviewOptions {
-  const nodeId = context?.nodeId?.trim()
+  if (!context) return {}
+  const nodeId = context.nodeId.trim()
   if (!nodeId) return {}
 
   return {
@@ -857,10 +889,6 @@ function findSourceBlock(root: HTMLElement, searchText: string) {
   return null
 }
 
-function uid(prefix: string) {
-  return `${prefix}-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
-}
-
 function extractSelection(root: HTMLElement | null) {
   const selection = window.getSelection()
   if (!selection || selection.rangeCount === 0 || !root) return null
@@ -934,39 +962,60 @@ function getConnectedGraphEdgeIds(nodeId: string, edges: GraphEdge[]) {
   return edges.filter((edge) => edge.source === nodeId || edge.target === nodeId).map((edge) => edge.id)
 }
 
-async function streamRewriteApi(
-  payload: Record<string, unknown>,
-  handlers: {
-    onChunk: (chunk: string) => void
-    onError: (message: string) => void
+function toRewriteCandidateFromRecoverableResult(result: RecoverableRewriteResult): RewriteApiCandidate {
+  return {
+    title: result.title,
+    summary: result.summary,
+    content: result.content,
+    inputTokens: result.inputTokens ?? null,
+    outputTokens: result.outputTokens ?? null,
   }
-) {
+}
+
+async function callCreateRecoverableRewriteJobApi(payload: Record<string, unknown>) {
   const response = await fetch('/api/rewrite', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...payload, stream: true }),
+    body: JSON.stringify({ ...payload, recoverableRewriteJob: true }),
   })
 
-  if (!response.ok) {
-    const text = await response.text()
-    handlers.onError(text || 'Streaming request failed')
-    return
+  const data = await response.json() as { ok?: boolean; job?: RecoverableRewriteJob | null; error?: string }
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || '创建可恢复改写任务失败')
   }
 
-  if (!response.body) {
-    handlers.onError('Streaming response body is empty')
-    return
+  if (!data.job) {
+    throw new Error('可恢复改写任务未返回任务信息')
   }
 
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
+  return data.job
+}
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    const chunk = decoder.decode(value, { stream: true })
-    if (chunk) handlers.onChunk(chunk)
+async function callGetRecoverableRewriteJobApi(params: {
+  jobId?: string
+  novelId?: string
+  branchId?: string
+  chapterId?: string
+}) {
+  const searchParams = new URLSearchParams()
+  if (params.jobId) {
+    searchParams.set('jobId', params.jobId)
+  } else {
+    if (params.novelId) searchParams.set('novelId', params.novelId)
+    if (params.branchId) searchParams.set('branchId', params.branchId)
+    if (params.chapterId) searchParams.set('chapterId', params.chapterId)
   }
+
+  const response = await fetch(`/api/rewrite?${searchParams.toString()}`, {
+    cache: 'no-store',
+  })
+
+  const data = await response.json() as { ok?: boolean; job?: RecoverableRewriteJob | null; error?: string }
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || '读取可恢复改写任务失败')
+  }
+
+  return data.job ?? null
 }
 
 async function callCreateWhatIfSessionApi(payload: Record<string, unknown>): Promise<WhatIfCreateResponse> {
@@ -1225,6 +1274,9 @@ export function SelectionNovelStudio() {
     provider: '',
     candidates: [],
     selectedIndex: 0,
+    jobId: null,
+    jobStatus: null,
+    jobCurrentStep: null,
   })
   const [generationContext, setGenerationContext] = useState<GenerationContextBuildData | null>(null)
   const [graphContext, setGraphContext] = useState<GenerationContextBuildData['graphContext'] | null>(null)
@@ -2482,7 +2534,7 @@ export function SelectionNovelStudio() {
     await loadChapterGraph(currentChapter, nextControls, true)
   }
 
-  const selectedRewriteCandidate = rewriteFlow.candidates[rewriteFlow.selectedIndex]
+  const selectedRewriteCandidate = rewriteFlow.candidates[rewriteFlow.selectedIndex] ?? rewriteFlow.candidates[0]
   const activeGraphContext = graphContext ?? generationContext?.graphContext ?? null
   const activePromptBlockCount = generationContext
     ? getVisibleAdvancedContextPromptBlocks(generationContext.promptBlocks).length
@@ -2522,6 +2574,50 @@ export function SelectionNovelStudio() {
       hasImpersonationContext: surfaceId === 'roleplay',
     }
   }
+
+  const syncRewriteFlowFromRecoverableJob = useCallback((job: RecoverableRewriteJob, options?: {
+    restorePanelState?: boolean
+  }) => {
+    const nextCandidate = job.result ? toRewriteCandidateFromRecoverableResult(job.result) : null
+    const isPending = job.status === 'queued' || job.status === 'running'
+    const nextError = job.status === 'failed'
+      ? (job.errorMessage?.trim() || '改写任务失败')
+      : ''
+
+    if (options?.restorePanelState) {
+      const restoredSelection = job.panel.selectedText.trim()
+      if (restoredSelection) {
+        setSelectionText(restoredSelection)
+        setLockedSelectionText(restoredSelection)
+      }
+      setRewritePrompt(job.panel.userInstruction || DEFAULT_REWRITE_PROMPT)
+      setRewriteSourceTextOverride(job.panel.sourceTextOverride ?? '')
+      if (
+        job.panel.rewriteLaunchSource === 'chapter'
+        || job.panel.rewriteLaunchSource === 'what_if'
+        || job.panel.rewriteLaunchSource === 'future_jump'
+        || job.panel.rewriteLaunchSource === 'continue_block'
+      ) {
+        setRewriteLaunchSource(job.panel.rewriteLaunchSource)
+      }
+    }
+
+    setRewriteFlow({
+      loading: isPending,
+      error: nextError,
+      provider: job.result?.provider || 'recoverable-rewrite-job',
+      candidates: nextCandidate ? [nextCandidate] : [],
+      selectedIndex: 0,
+      jobId: job.jobId,
+      jobStatus: job.status,
+      jobCurrentStep: job.currentStep,
+    })
+    setRewriteState((current) => ({
+      loading: isPending,
+      error: nextError,
+      result: nextCandidate?.content || current.result,
+    }))
+  }, [])
 
   const loadContextPreview = useCallback(async (
     mode: WorkspaceActionMode,
@@ -2620,7 +2716,7 @@ export function SelectionNovelStudio() {
     const { detail, variant } = pendingWhatIfRewriteLaunch
     const instruction = variant === 'continue'
       ? `${detail.premise.trim() || '沿着当前 What-if 前提继续推进。'}\n\n继续沿着这个 What-if 分支扩展新的整章版本，不要回写主线正文。`
-      : detail.premise.trim() || '沿着当前 What-if 前提重新生成候选版本。'
+      : detail.premise.trim() || '沿着当前 What-if 前提重新生成版本。'
 
     setSelectionText(detail.selectedText)
     setLockedSelectionText(detail.selectedText)
@@ -2657,6 +2753,9 @@ export function SelectionNovelStudio() {
         },
       ],
       selectedIndex: 0,
+      jobId: null,
+      jobStatus: null,
+      jobCurrentStep: null,
     })
     setActiveMode('rewrite')
     setPendingWhatIfRewriteLaunch(null)
@@ -2704,6 +2803,9 @@ export function SelectionNovelStudio() {
         },
       ],
       selectedIndex: 0,
+      jobId: null,
+      jobStatus: null,
+      jobCurrentStep: null,
     })
     setActiveFutureJumpRewriteContext(pendingFutureJumpRewriteLaunch)
     setActiveContinueBlockRewriteContext(null)
@@ -2765,6 +2867,9 @@ export function SelectionNovelStudio() {
         },
       ],
       selectedIndex: 0,
+      jobId: null,
+      jobStatus: null,
+      jobCurrentStep: null,
     })
     setActiveFutureJumpRewriteContext(null)
     setActiveContinueBlockRewriteContext(pendingContinueBlockRewriteLaunch)
@@ -2919,6 +3024,9 @@ export function SelectionNovelStudio() {
         provider: '',
         candidates: [],
         selectedIndex: 0,
+        jobId: null,
+        jobStatus: null,
+        jobCurrentStep: null,
       })
     }
     setActiveMode(mode)
@@ -3599,70 +3707,117 @@ export function SelectionNovelStudio() {
 
   const handleRewrite = async () => {
     const targetSelection = lockedSelectionText.trim() || selectionText.trim()
-    if (!currentChapter || !targetSelection) return
+    if (!currentNovelId || !currentChapter || !targetSelection) return
     setRewriteState({ loading: true, result: '', error: '' })
-    setRewriteFlow((current) => ({ ...current, loading: true, error: '', provider: 'context-stream', candidates: [], selectedIndex: 0 }))
+    setRewriteFlow((current) => ({
+      ...current,
+      loading: true,
+      error: '',
+      provider: 'recoverable-rewrite-job',
+      candidates: [],
+      selectedIndex: 0,
+      jobId: null,
+      jobStatus: 'queued',
+      jobCurrentStep: '正在创建可恢复改写任务…',
+    }))
     try {
       await savePresetCompatLibrary()
       const continueBlockRequestContext = buildContinueBlockLineageRequestContext(activeContinueBlockRewriteContext)
       await loadContextPreview('rewrite', rewritePrompt, undefined, {
         ...continueBlockRequestContext,
       })
-      let streamed = ''
-      await streamRewriteApi(
-        {
-          novelId: currentNovelId,
-          chapterId: currentChapter.id,
-          selectedText: continueBlockRequestContext.omitSelectedText ? '' : targetSelection,
-          sourceText: rewriteSourceTextOverride.trim() || chapterText,
-          operationType: 'rewrite',
-          userInstruction: rewritePrompt,
-          disabledBlockIds: disabledContextBlockIds,
-          excludedGraphEdgeIds,
-          excludedEvidenceIds,
-          branchContextNodeId: continueBlockRequestContext.branchContextNodeId,
-          branchContextInclusion: continueBlockRequestContext.branchContextInclusion,
-          presetCompatRuntimeContext: buildPresetCompatRuntimeContext('rewrite'),
-          scope: 'chapter',
-          mode: 'heavy',
-          tone: 'dramatic',
-        },
-        {
-          onChunk: (chunk) => {
-            streamed += chunk
-            setRewriteState({ loading: true, result: streamed, error: '' })
-          },
-          onError: (message) => {
-            throw new Error(message)
-          },
-        }
-      )
-
-      const finalText = streamed.trim()
-      setRewriteState({ loading: false, result: finalText, error: finalText ? '' : 'No result returned.' })
-      setRewriteFlow({
-        loading: false,
-        error: finalText ? '' : 'No result returned.',
-        provider: 'context-stream',
-        candidates: finalText
-          ? [
-              {
-                title: '流式版本',
-                summary: '基于当前章节知识状态与证据装配生成。',
-                content: finalText,
-                inputTokens: null,
-                outputTokens: null,
-              },
-            ]
-          : [],
-        selectedIndex: 0,
+      const job = await callCreateRecoverableRewriteJobApi({
+        novelId: currentNovelId,
+        branchId: storyTimelineBranchId,
+        chapterId: currentChapter.id,
+        selectedText: continueBlockRequestContext.omitSelectedText ? '' : targetSelection,
+        sourceText: rewriteSourceTextOverride.trim() || chapterText,
+        operationType: 'rewrite',
+        userInstruction: rewritePrompt,
+        disabledBlockIds: disabledContextBlockIds,
+        excludedGraphEdgeIds,
+        excludedEvidenceIds,
+        branchContextNodeId: continueBlockRequestContext.branchContextNodeId,
+        branchContextInclusion: continueBlockRequestContext.branchContextInclusion,
+        presetCompatRuntimeContext: buildPresetCompatRuntimeContext('rewrite'),
+        scope: 'chapter',
+        mode: 'heavy',
+        tone: 'dramatic',
+        rewriteLaunchSource,
+        rewriteSourceTextOverride,
       })
+
+      syncRewriteFlowFromRecoverableJob(job, { restorePanelState: true })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Rewrite failed.'
       setRewriteState({ loading: false, result: '', error: message })
-      setRewriteFlow({ loading: false, error: message, provider: '', candidates: [], selectedIndex: 0 })
+      setRewriteFlow({
+        loading: false,
+        error: message,
+        provider: '',
+        candidates: [],
+        selectedIndex: 0,
+        jobId: null,
+        jobStatus: null,
+        jobCurrentStep: null,
+      })
     }
   }
+
+  useEffect(() => {
+    if (!currentNovelId || !currentChapter) return
+
+    let cancelled = false
+
+    const restoreLatestRecoverableRewriteJob = async () => {
+      try {
+        const job = await callGetRecoverableRewriteJobApi({
+          novelId: currentNovelId,
+          branchId: storyTimelineBranchId,
+          chapterId: currentChapter.id,
+        })
+        if (!job || cancelled) return
+        const hasRecoverableResult = Boolean(job.result?.content?.trim())
+        const shouldApply = job.status === 'queued'
+          || job.status === 'running'
+          || (job.status === 'succeeded' && hasRecoverableResult)
+        if (!shouldApply) return
+        setActiveMode('rewrite')
+        syncRewriteFlowFromRecoverableJob(job, { restorePanelState: true })
+      } catch {
+        // Keep the current local panel state when restore fails.
+      }
+    }
+
+    void restoreLatestRecoverableRewriteJob()
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentChapter, currentNovelId, storyTimelineBranchId, syncRewriteFlowFromRecoverableJob])
+
+  useEffect(() => {
+    if (activeMode !== 'rewrite' || !rewriteFlow.jobId) return
+    if (rewriteFlow.jobStatus !== 'queued' && rewriteFlow.jobStatus !== 'running') return
+
+    const pollJob = () => {
+      void (async () => {
+        try {
+          const job = await callGetRecoverableRewriteJobApi({ jobId: rewriteFlow.jobId ?? undefined })
+          if (!job) return
+          syncRewriteFlowFromRecoverableJob(job)
+        } catch {
+          // Keep polling state quiet unless the backend explicitly returns a failed job.
+        }
+      })()
+    }
+
+    const intervalId = window.setInterval(pollJob, 1500)
+
+    return () => {
+      window.clearInterval(intervalId)
+    }
+  }, [activeMode, rewriteFlow.jobId, rewriteFlow.jobStatus, syncRewriteFlowFromRecoverableJob])
 
   const handleSaveContinueBlock = async () => {
     const targetSelection = lockedSelectionText.trim() || selectionText.trim()
@@ -5356,7 +5511,7 @@ export function SelectionNovelStudio() {
                           ? '当前是从已持久化的 Future Jump 最新版本继续改写：生成时走 rewrite，保存时会落成当前 Future Jump 节点下的子续写块，不会默认开放主线正文替换。'
                           : rewriteLaunchSource === 'continue_block'
                             ? '当前是从已持久化的续写块 reader 重新打开改写：保存时会按续写 / 重生语义写回时间线。'
-                            : '先描述你想怎么改，再生成多个完整章节候选。'}
+                          : '先描述你想怎么改，再生成一个完整章节版本。'}
                       </p>
                     </div>
                     <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-zinc-300">{rewriteFlow.provider || providerLabel}</span>
@@ -5489,7 +5644,7 @@ export function SelectionNovelStudio() {
 
                 <div className="flex flex-wrap gap-2">
                   <button onClick={handleRewrite} disabled={rewriteFlow.loading} className="inline-flex items-center gap-2 rounded-2xl bg-violet-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60">
-                    {rewriteFlow.loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} 生成候选版本
+                    {rewriteFlow.loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} 生成版本
                   </button>
                   <button onClick={handleSaveContinueBlock} disabled={!selectedRewriteCandidate || saveContinueBlockPending} className="rounded-2xl border border-fuchsia-400/30 bg-fuchsia-500/10 px-4 py-3 text-sm text-fuchsia-100 transition hover:bg-fuchsia-500/20 disabled:opacity-40">
                     {saveContinueBlockPending ? <span className="inline-flex items-center gap-2"><LoaderCircle className="h-4 w-4 animate-spin" /> 保存中</span> : '保存为续写块'}
@@ -5501,9 +5656,9 @@ export function SelectionNovelStudio() {
                     {rewriteLaunchSource === 'future_jump' ? '默认不替换正文' : '替换正文'}
                   </button>
                   <button onClick={() => selectedRewriteCandidate && copyText('rewrite', selectedRewriteCandidate.content)} disabled={!selectedRewriteCandidate} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
-                    {copied === 'rewrite' ? <span className="inline-flex items-center gap-2"><Check className="h-4 w-4" /> 已复制</span> : '复制版本'}
+                    {copied === 'rewrite' ? <span className="inline-flex items-center gap-2"><Check className="h-4 w-4" /> 已复制</span> : '复制结果'}
                   </button>
-                  <button onClick={() => selectedRewriteCandidate && setRewritePrompt((current) => `${current}\n\n继续在候选版本的基础上增强张力和戏剧性，但保持逻辑自洽。`)} disabled={!selectedRewriteCandidate} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
+                  <button onClick={() => selectedRewriteCandidate && setRewritePrompt((current) => `${current}\n\n继续在当前版本的基础上增强张力和戏剧性，但保持逻辑自洽。`)} disabled={!selectedRewriteCandidate} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
                     继续魔改
                   </button>
                 </div>
@@ -5513,34 +5668,22 @@ export function SelectionNovelStudio() {
 
                 <div className="grid gap-3 lg:grid-cols-[0.9fr_1.4fr]">
                   <div className="space-y-3">
-                    <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">候选版本</p>
+                    <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">生成版本</p>
                     {rewriteFlow.loading ? (
-                      <div className="rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">正在生成候选版本…</div>
-                    ) : rewriteFlow.candidates.length ? (
-                      rewriteFlow.candidates.map((candidate, index) => (
-                        <button
-                          key={`${candidate.title}-${index}`}
-                          onClick={() => {
-                            setRewriteFlow((current) => ({ ...current, selectedIndex: index }))
-                            setRewriteState((current) => ({ ...current, result: candidate.content, error: '' }))
-                          }}
-                          className={cn(
-                            'w-full rounded-[24px] border px-4 py-4 text-left transition',
-                            rewriteFlow.selectedIndex === index
-                              ? 'border-violet-400/30 bg-violet-500/12'
-                              : 'border-white/8 bg-black/20 hover:bg-white/[0.06]'
-                          )}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <p className="text-sm font-medium text-zinc-100">{candidate.title}</p>
-                            <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">版本 {index + 1}</span>
-                          </div>
-                          <p className="mt-2 line-clamp-2 text-xs leading-5 text-zinc-400">{candidate.summary}</p>
-                          <p className="mt-3 line-clamp-4 text-xs leading-6 text-zinc-500">{candidate.content}</p>
-                        </button>
-                      ))
+                      <div className="rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">
+                        {rewriteFlow.jobCurrentStep?.trim() || '正在生成版本…'}
+                      </div>
+                    ) : selectedRewriteCandidate ? (
+                      <div className="w-full rounded-[24px] border border-violet-400/30 bg-violet-500/12 px-4 py-4 text-left">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-medium text-zinc-100">{selectedRewriteCandidate.title}</p>
+                          <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">已生成</span>
+                        </div>
+                        <p className="mt-2 line-clamp-2 text-xs leading-5 text-zinc-400">{selectedRewriteCandidate.summary}</p>
+                        <p className="mt-3 line-clamp-4 text-xs leading-6 text-zinc-500">{selectedRewriteCandidate.content}</p>
+                      </div>
                     ) : (
-                      <div className="rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">生成后会在这里出现多个候选版本。</div>
+                      <div className="rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">生成后会在这里显示最新版本。</div>
                     )}
                   </div>
 
@@ -5549,7 +5692,7 @@ export function SelectionNovelStudio() {
                       <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">预览结果</p>
                       {selectedRewriteCandidate ? <span className="text-xs text-zinc-500">{selectedRewriteCandidate.title}</span> : null}
                     </div>
-                    <p className="min-h-72 whitespace-pre-wrap text-sm leading-7 text-zinc-300">{selectedRewriteCandidate?.content || rewriteState.result || '选择文本并生成后，完整章节候选会显示在这里。'}</p>
+                    <p className="min-h-72 whitespace-pre-wrap text-sm leading-7 text-zinc-300">{selectedRewriteCandidate?.content || rewriteState.result || '选择文本并生成后，完整章节版本会显示在这里。'}</p>
                   </div>
                 </div>
               </div>

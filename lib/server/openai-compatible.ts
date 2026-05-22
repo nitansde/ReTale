@@ -548,7 +548,7 @@ export async function generateRewriteWithOpenAICompatible(
     prompt: input.prompt,
     sourceText: input.sourceText,
     outputSchema: {
-      candidates: ['candidate 1 text', 'candidate 2 text', 'candidate 3 text'],
+      result: 'rewritten text',
     },
   }
 
@@ -562,8 +562,8 @@ export async function generateRewriteWithOpenAICompatible(
       content: input.systemPrompt?.trim() || [
         'You are a novel rewriting assistant.',
         'Return JSON only.',
-        'Produce exactly 3 rewrite candidates in Chinese.',
-        'Each candidate should be a coherent prose passage.',
+        'Produce one rewrite result in Chinese.',
+        'The result should be a coherent prose passage.',
       ].join(' '),
     },
     { role: 'user', content: input.userPrompt?.trim() || JSON.stringify(user) },
@@ -643,9 +643,11 @@ export async function generateRewriteWithOpenAICompatible(
 
   try {
     const parsed = JSON.parse(raw)
-    const candidates = Array.isArray(parsed?.candidates)
-      ? parsed.candidates.map((item: unknown) => String(item)).filter(Boolean).slice(0, 3)
-      : []
+    const candidates = typeof parsed?.result === 'string'
+      ? [parsed.result].filter(Boolean)
+      : Array.isArray(parsed?.candidates)
+        ? parsed.candidates.map((item: unknown) => String(item)).filter(Boolean).slice(0, 1)
+        : []
     if (!candidates.length) {
       await writeLlmDebugLog({
         folder: 'rewrite',

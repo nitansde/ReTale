@@ -1,7 +1,6 @@
 import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
-import { DEFAULT_REWRITE_PROMPT } from '@/components/workspace/selection-novel-studio'
 import { ensureEvidenceDir, writeEvidenceFile } from '@/tests/helpers/evidence'
 import { storyBranchFixtureIds } from '@/tests/helpers/fixture-ids'
 import type { StoryTimelineResponse } from '@/lib/story-branch-types'
@@ -10,6 +9,52 @@ const fixturePath = process.cwd() + '/scripts/fixtures/workspace-import-smoke.tx
 const evidenceDirectory = ensureEvidenceDir('task-15-branch-ux-playwright-mode-ux-simplification')
 const readerTypographyEvidenceDirectory = ensureEvidenceDir('task-9-reader-typography')
 const rewritePromptPlaceholder = '例如：保留剧情走向，但把这段写得更压迫、更像命运在逼近。'
+
+function buildRecoverableRewriteJob(params: {
+  jobId: string
+  content?: string | null
+  chapterId?: string
+  selectedText?: string
+  sourceText?: string
+  userInstruction?: string
+  status?: string
+  progress?: number
+  currentStep?: string | null
+}) {
+  const timestamp = '2026-05-18T01:23:45.000Z'
+  return {
+    jobId: params.jobId,
+    status: params.status ?? (params.content == null ? 'queued' : 'succeeded'),
+    progress: params.progress ?? (params.content == null ? 0.1 : 1),
+    currentStep: params.currentStep ?? (params.content == null ? '已创建可恢复魔改任务' : '已完成魔改任务'),
+    errorMessage: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    panel: {
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      chapterId: params.chapterId ?? 'chapter-10',
+      selectedText: params.selectedText ?? '',
+      sourceText: params.sourceText ?? '',
+      sourceTextOverride: null,
+      userInstruction: params.userInstruction ?? '',
+      rewriteLaunchSource: null,
+      createdAt: timestamp,
+    },
+    result: params.content == null
+      ? null
+      : {
+          provider: 'openai-compatible',
+          title: '生成版本',
+          summary: '基于当前章节知识状态与证据装配生成。',
+          content: params.content,
+          inputTokens: 42,
+          outputTokens: 84,
+          metadata: {},
+          presetCompat: null,
+        },
+  }
+}
 
 function buildEmptyWorkspacePayload() {
   return {
@@ -584,7 +629,6 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
     '未来续写块正文：她被带走后，誓言开始在更远的地方回响。',
   ]
   let rewriteIndex = 0
-  let futureJumpPayload: Record<string, unknown> | null = null
 
   await page.route('**/api/workspace', async (route) => {
     if (route.request().method() === 'POST') {
@@ -636,10 +680,38 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   await page.route('**/api/rag/build-generation-context', async (route) => {
     await route.fulfill({ status: 200, body: JSON.stringify(buildGenerationContextPayload()), contentType: 'application/json' })
   })
-  await page.route('**/api/rewrite', async (route) => {
+  const rewriteJobs = new Map<string, string>()
+  await page.route('**/api/rewrite*', async (route) => {
+    if (route.request().method() === 'GET') {
+      const url = new URL(route.request().url())
+      const jobId = url.searchParams.get('jobId')
+      if (!jobId) {
+        await route.fulfill({ json: { ok: true, job: null } })
+        return
+      }
+
+      await route.fulfill({
+        json: {
+          ok: true,
+          job: buildRecoverableRewriteJob({
+            jobId: jobId ?? 'rewrite-job-missing',
+            content: rewriteJobs.get(jobId ?? '') ?? rewriteBodies.at(-1) ?? '',
+          }),
+        },
+      })
+      return
+    }
+
     const body = rewriteBodies[Math.min(rewriteIndex, rewriteBodies.length - 1)]
     rewriteIndex += 1
-    await route.fulfill({ status: 200, body, contentType: 'text/plain' })
+    const jobId = `rewrite-job-mode-ux-${rewriteIndex}`
+    rewriteJobs.set(jobId, body)
+    await route.fulfill({
+      json: {
+        ok: true,
+        job: buildRecoverableRewriteJob({ jobId }),
+      },
+    })
   })
   await page.route('**/api/continue-blocks', async (route) => {
     const payload = route.request().postDataJSON() as { parentTimelineNodeId?: string | null }
@@ -720,7 +792,6 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
     await route.fulfill({ status: 200, body: JSON.stringify(buildWhatIfSessionDetail()), contentType: 'application/json' })
   })
   await page.route('**/api/future-jump/runs', async (route) => {
-    futureJumpPayload = route.request().postDataJSON()
     timelineState = buildAfterFutureJumpTimeline()
     await route.fulfill({
       status: 200,
@@ -777,7 +848,7 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   await expect(page.getByTestId('workspace-context-panel')).toBeVisible()
   await expect(page.getByTestId('workspace-context-panel').getByRole('checkbox').first()).not.toBeChecked()
 
-  await page.getByRole('button', { name: '生成候选版本' }).click()
+  await page.getByRole('button', { name: '生成版本' }).click()
   await expect(page.getByText('已保存的续写块正文：她在门后听见誓言改变了方向。').first()).toBeVisible()
   await page.getByRole('button', { name: '保存为续写块' }).click()
 
@@ -808,7 +879,7 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
 
   await page.getByTestId('workspace-continue-block-regenerate-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
-  await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue(DEFAULT_REWRITE_PROMPT)
+  await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue('前一版要求：把誓言后的情绪变化压进同一场景。\n\n当前续写块：RE-01 改写节点\n\n重新生成当前续写块，并保留它的修订历史。')
   await expect(page.getByTestId('workspace-context-panel-toggle')).toHaveAttribute('aria-expanded', 'false')
   await page.getByTestId('workspace-context-panel-toggle').click()
   await expect(page.getByTestId('workspace-context-panel')).toBeVisible()
@@ -819,8 +890,8 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
 
   await page.getByTestId('workspace-continue-block-continue-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
-  await expect(page.getByRole('button', { name: /当前续写块版本/ })).toBeVisible()
-  await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue(DEFAULT_REWRITE_PROMPT)
+  await expect(page.getByTestId('workspace-action-overlay').getByText('当前续写块版本').first()).toBeVisible()
+  await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue('把誓言后的情绪变化压进同一场景。')
   await expect(page.getByTestId('workspace-context-panel-toggle')).toHaveAttribute('aria-expanded', 'false')
   await page.getByTestId('workspace-context-panel-toggle').click()
   await expect(page.getByTestId('workspace-context-panel')).toBeVisible()
@@ -828,7 +899,7 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   await expect(page.getByText(/^from\b/i)).toHaveCount(0)
   await page.getByTestId('workspace-context-panel-toggle').click()
   await expect(page.getByTestId('workspace-context-panel')).toHaveCount(0)
-  await page.getByRole('button', { name: '生成候选版本' }).click()
+  await page.getByRole('button', { name: '生成版本' }).click()
   await expect(page.getByText('子续写块正文：誓言之后，她选择独自离开。').first()).toBeVisible()
   await page.getByRole('button', { name: '保存为续写块' }).click()
   await expect(page).toHaveURL(/selectionNodeId=continue-node-2/)
@@ -849,8 +920,8 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   await expect(page).toHaveURL(/selectionKind=rewrite/)
   await page.getByTestId('workspace-continue-block-regenerate-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
-  await expect(page.getByRole('button', { name: /当前待重生版本/ })).toBeVisible()
-  await page.getByRole('button', { name: '生成候选版本' }).click()
+  await expect(page.getByTestId('workspace-action-overlay').getByText('当前待重生版本').first()).toBeVisible()
+  await page.getByRole('button', { name: '生成版本' }).click()
   await expect(page.getByText('重生后的续写块正文：保留修订历史的新版。').first()).toBeVisible()
   await page.getByRole('button', { name: '保存为续写块' }).click()
   await expect(page).toHaveURL(/selectionNodeId=rewrite-node-1/)
@@ -939,10 +1010,38 @@ test('continue-block rewrite does not collide with workspace autosave preset sav
   await page.route('**/api/rag/build-generation-context', async (route) => {
     await route.fulfill({ status: 200, body: JSON.stringify(buildGenerationContextPayload()), contentType: 'application/json' })
   })
-  await page.route('**/api/rewrite', async (route) => {
+  const rewriteJobs = new Map<string, string>()
+  await page.route('**/api/rewrite*', async (route) => {
+    if (route.request().method() === 'GET') {
+      const url = new URL(route.request().url())
+      const jobId = url.searchParams.get('jobId')
+      if (!jobId) {
+        await route.fulfill({ json: { ok: true, job: null } })
+        return
+      }
+
+      await route.fulfill({
+        json: {
+          ok: true,
+          job: buildRecoverableRewriteJob({
+            jobId: jobId ?? 'rewrite-job-missing',
+            content: rewriteJobs.get(jobId ?? '') ?? rewriteBodies.at(-1) ?? '',
+          }),
+        },
+      })
+      return
+    }
+
     const body = rewriteBodies[Math.min(rewriteIndex, rewriteBodies.length - 1)]
     rewriteIndex += 1
-    await route.fulfill({ status: 200, body, contentType: 'text/plain' })
+    const jobId = `rewrite-job-autosave-${rewriteIndex}`
+    rewriteJobs.set(jobId, body)
+    await route.fulfill({
+      json: {
+        ok: true,
+        job: buildRecoverableRewriteJob({ jobId }),
+      },
+    })
   })
   await page.route('**/api/continue-blocks', async (route) => {
     const payload = route.request().postDataJSON() as { parentTimelineNodeId?: string | null }
@@ -987,7 +1086,7 @@ test('continue-block rewrite does not collide with workspace autosave preset sav
 
   await selectWholeEditorParagraph(page)
   await page.getByTestId('workspace-chapter-rewrite-entry').click()
-  await page.getByRole('button', { name: '生成候选版本' }).click()
+  await page.getByRole('button', { name: '生成版本' }).click()
   await expect(page.getByText('已保存的续写块正文：她在门后听见誓言改变了方向。').first()).toBeVisible()
   await page.getByRole('button', { name: '保存为续写块' }).click()
 
@@ -996,8 +1095,8 @@ test('continue-block rewrite does not collide with workspace autosave preset sav
   await expect(page.getByTestId('workspace-continue-block-continue-entry')).toBeEnabled()
   await page.getByTestId('workspace-continue-block-continue-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
-  await expect(page.getByRole('button', { name: /当前续写块版本/ })).toBeVisible()
-  await page.getByRole('button', { name: '生成候选版本' }).click()
+  await expect(page.getByTestId('workspace-action-overlay').getByText('当前续写块版本').first()).toBeVisible()
+  await page.getByRole('button', { name: '生成版本' }).click()
   await expect(page.getByText('子续写块正文：誓言之后，她选择独自离开。').first()).toBeVisible()
   await expect(page.getByRole('button', { name: '保存为续写块' })).toBeEnabled()
   await page.getByRole('button', { name: '保存为续写块' }).click()

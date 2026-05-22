@@ -530,13 +530,11 @@ function buildFallbackCandidates(source: string, mode: RewriteMode, tone: Rewrit
   const batchId = uid('batch')
   const variants = [
     `${source} 空气里的湿冷像一把迟迟没有落下的刀。`,
-    `${source} 她没有再让自己停在原地，几乎在下一秒就被逼着向前。`,
-    `${source} 她决定偏离原本更安全的做法，而这个念头本身就像命运在推她一把。`,
   ]
   return variants.map((content, index) => ({
     id: uid(`cand${index + 1}`),
     batchId,
-    title: `候选 ${String.fromCharCode(65 + index)}`,
+    title: index === 0 ? '生成版本' : `版本 ${index + 1}`,
     summary: `${prompt || '默认提示词'} · ${mode} / ${tone}`,
     content,
     mode,
@@ -917,7 +915,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       return {
         currentTab: 'editor',
         trajectories: [
-          { id: uid('traj'), chapterId: chapter.id, type: 'apply', title: `应用 ${candidate.title}`, detail: `把当前${state.rewriteScope === 'chapter' ? '章节' : '片段'}替换为候选结果。`, createdAt: formatNowLabel() },
+          { id: uid('traj'), chapterId: chapter.id, type: 'apply', title: `应用 ${candidate.title}`, detail: `把当前${state.rewriteScope === 'chapter' ? '章节' : '片段'}替换为改写结果。`, createdAt: formatNowLabel() },
           ...state.trajectories,
         ],
         localChapters: state.localChapters.map((item) =>
@@ -937,7 +935,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       return {
         currentTab: 'editor',
         trajectories: [
-          { id: uid('traj'), chapterId: chapter.id, type: 'insert', title: `插入 ${candidate.title}`, detail: '将候选结果追加到当前章节末尾，保留原文。', createdAt: formatNowLabel() },
+          { id: uid('traj'), chapterId: chapter.id, type: 'insert', title: `插入 ${candidate.title}`, detail: '将改写结果追加到当前章节末尾，保留原文。', createdAt: formatNowLabel() },
           ...state.trajectories,
         ],
         localChapters: state.localChapters.map((item) =>
@@ -956,11 +954,11 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       const candidate = state.rewriteCandidates.find((item) => item.id === id)
       const chapter = state.localChapters.find((item) => item.id === state.currentChapterId)
       if (!candidate || !chapter) return state
-      const continued: RewriteCandidate = { ...candidate, id: uid('cand-cont'), title: `${candidate.title} · 继续推进`, summary: '沿着当前候选继续续写一段。', content: `${candidate.content}\n\n广播在下一秒响起，像一把看不见的尺，把所有人重新按回座位。林砚这才意识到，她刚刚做出的选择，已经让整节车厢开始注意她。`, createdAt: formatNowLabel(), selected: true }
+      const continued: RewriteCandidate = { ...candidate, id: uid('cand-cont'), title: `${candidate.title} · 继续推进`, summary: '沿着当前版本继续续写一段。', content: `${candidate.content}\n\n广播在下一秒响起，像一把看不见的尺，把所有人重新按回座位。林砚这才意识到，她刚刚做出的选择，已经让整节车厢开始注意她。`, createdAt: formatNowLabel(), selected: true }
       return {
         rewriteCandidates: [continued, ...state.rewriteCandidates.map((item) => ({ ...item, selected: item.id === continued.id }))],
         trajectories: [
-          { id: uid('traj'), chapterId: chapter.id, type: 'continue', title: `续写 ${candidate.title}`, detail: '基于当前候选向后推进一段。', createdAt: formatNowLabel() },
+          { id: uid('traj'), chapterId: chapter.id, type: 'continue', title: `续写 ${candidate.title}`, detail: '基于当前版本向后推进一段。', createdAt: formatNowLabel() },
           ...state.trajectories,
         ],
       }
@@ -1042,7 +1040,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         helperTab: 'trajectory',
         rewriteCandidates: nextCandidates.length ? nextCandidates : buildFallbackCandidates(source, current.rewriteMode, current.rewriteTone, mergedPrompt),
         rewriteHistory: [historyEntry, ...current.rewriteHistory],
-        trajectories: [{ id: uid('traj'), chapterId: chapter.id, type: 'rewrite', title: `生成 ${nextCandidates.length || 3} 个候选`, detail: `范围：${current.rewriteScope} · 模式：${current.rewriteMode} · 风格：${current.rewriteTone}`, createdAt: formatNowLabel() }, ...current.trajectories],
+        trajectories: [{ id: uid('traj'), chapterId: chapter.id, type: 'rewrite', title: '生成改写版本', detail: `范围：${current.rewriteScope} · 模式：${current.rewriteMode} · 风格：${current.rewriteTone}`, createdAt: formatNowLabel() }, ...current.trajectories],
       }))
     } catch {
       const nextCandidates = buildFallbackCandidates(source, state.rewriteMode, state.rewriteTone, mergedPrompt)

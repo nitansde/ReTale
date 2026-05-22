@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server'
+import { after, NextResponse } from 'next/server'
 import { buildGenerationContext } from '@/lib/server/context-builder'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
+import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
 import { applyPresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runtime'
 import {
   resolveCreativeRoutePresetCompatMetadata,
@@ -14,11 +15,56 @@ import {
 } from '@/lib/server/openai-compatible'
 import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
 import { generateRewriteWithOllama, streamRewriteWithOllama } from '@/lib/server/ollama-local'
+import { uid } from '@/lib/utils'
 import type { PresetCompatPromptRuleRuntimeContext, PresetCompatRuntimeContextBlock } from '@/lib/preset-compat/types'
 import type { GenerationContextBlock, RoleplayContextMessage } from '@/lib/server/context-builder'
 import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
 
+export const maxDuration = 3600
+
 const INVALID_OPERATION_TYPE_ERROR = `Invalid operationType. Expected one of: ${PRODUCT_SURFACE_IDS.join(', ')}`
+const RECOVERABLE_REWRITE_JOB_TYPE = 'rewrite_generation'
+
+type RewriteResultPayload = {
+  provider: string
+  title: string
+  summary: string
+  content: string
+  inputTokens: number | null
+  outputTokens: number | null
+  metadata: unknown
+  presetCompat: unknown
+}
+
+type RecoverableRewriteJobPayload = {
+  request: Record<string, unknown>
+  panel: {
+    novelId: string
+    branchId: string
+    chapterId: string
+    selectedText: string
+    sourceText: string
+    sourceTextOverride: string | null
+    userInstruction: string
+    rewriteLaunchSource: string | null
+    createdAt: string
+  }
+  result?: RewriteResultPayload
+  error?: string
+}
+
+type RecoverableRewriteJobRow = {
+  id: string
+  novelId: string
+  branchId: string | null
+  status: string
+  progress: number
+  currentStep: string | null
+  payloadJson: string | null
+  errorMessage: string | null
+  createdAt: string
+  updatedAt: string
+}
 
 function mapSurfaceContextBlocks(promptBlocks: readonly GenerationContextBlock[] | null): PresetCompatRuntimeContextBlock[] {
   if (!promptBlocks) {
@@ -111,10 +157,8 @@ function fallbackCandidates(sourceText: string, mode: string, tone: string, prom
   const base = sourceText.trim()
   return [
     `${base} 空气里的湿冷像一把迟迟没有落下的刀。`,
-    `${base} 她没有再让自己停在原地，几乎在下一秒就被逼着向前。`,
-    `${base} 她决定偏离更安全的做法，而这个念头本身就像命运在推她一把。`,
   ].map((text, index) => ({
-    title: `候选 ${String.fromCharCode(65 + index)}`,
+    title: index === 0 ? '生成版本' : `版本 ${index + 1}`,
     summary: `模式：${mode} · 风格：${tone} · ${prompt || '默认提示词'}`,
     content: text,
   }))
@@ -122,6 +166,195 @@ function fallbackCandidates(sourceText: string, mode: string, tone: string, prom
 
 function buildFallbackText(sourceText: string, mode: string, tone: string, prompt: string) {
   return fallbackCandidates(sourceText, mode, tone, prompt)[0]?.content ?? sourceText
+}
+
+function parseJsonRecord(value: string | null) {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+function normalizeTokenValue(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function normalizeRewriteResultPayload(value: unknown): RewriteResultPayload | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const content = typeof record.content === 'string' ? record.content.trim() : ''
+  if (!content) return null
+
+  return {
+    provider: typeof record.provider === 'string' ? record.provider : '',
+    title: typeof record.title === 'string' ? record.title : '生成版本',
+    summary: typeof record.summary === 'string' ? record.summary : '基于当前章节知识状态与证据装配生成。',
+    content,
+    inputTokens: normalizeTokenValue(record.inputTokens),
+    outputTokens: normalizeTokenValue(record.outputTokens),
+    metadata: record.metadata ?? null,
+    presetCompat: record.presetCompat ?? null,
+  }
+}
+
+function normalizeRecoverableRewriteJobPayload(payloadJson: string | null): RecoverableRewriteJobPayload | null {
+  const record = parseJsonRecord(payloadJson)
+  if (!record) return null
+
+  const request = record.request && typeof record.request === 'object' && !Array.isArray(record.request)
+    ? record.request as Record<string, unknown>
+    : null
+  const panelRecord = record.panel && typeof record.panel === 'object' && !Array.isArray(record.panel)
+    ? record.panel as Record<string, unknown>
+    : null
+  if (!request || !panelRecord) return null
+
+  return {
+    request,
+    panel: {
+      novelId: String(panelRecord.novelId ?? ''),
+      branchId: String(panelRecord.branchId ?? ''),
+      chapterId: String(panelRecord.chapterId ?? ''),
+      selectedText: String(panelRecord.selectedText ?? ''),
+      sourceText: String(panelRecord.sourceText ?? ''),
+      sourceTextOverride: typeof panelRecord.sourceTextOverride === 'string' ? panelRecord.sourceTextOverride : null,
+      userInstruction: String(panelRecord.userInstruction ?? ''),
+      rewriteLaunchSource: typeof panelRecord.rewriteLaunchSource === 'string' ? panelRecord.rewriteLaunchSource : null,
+      createdAt: String(panelRecord.createdAt ?? ''),
+    },
+    result: normalizeRewriteResultPayload(record.result) ?? undefined,
+    error: typeof record.error === 'string' ? record.error : undefined,
+  }
+}
+
+function readRecoverableRewriteJob(jobId: string) {
+  return queryOne<RecoverableRewriteJobRow>(
+    `SELECT id, novelId, branchId, status, progress, currentStep, payloadJson, errorMessage, createdAt, updatedAt
+     FROM KnowledgeJob
+     WHERE id = ? AND jobType = ?`,
+    jobId,
+    RECOVERABLE_REWRITE_JOB_TYPE,
+  )
+}
+
+function serializeRecoverableRewriteJob(row: RecoverableRewriteJobRow | null) {
+  if (!row) return null
+  const payload = normalizeRecoverableRewriteJobPayload(row.payloadJson)
+  if (!payload) return null
+
+  return {
+    jobId: row.id,
+    status: row.status,
+    progress: row.progress,
+    currentStep: row.currentStep,
+    errorMessage: row.errorMessage,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    panel: payload.panel,
+    result: payload.result ?? null,
+  }
+}
+
+function updateRecoverableRewriteJob(jobId: string, params: {
+  status: string
+  progress: number
+  currentStep: string | null
+  payload: RecoverableRewriteJobPayload
+  errorMessage?: string | null
+}) {
+  execute(
+    `UPDATE KnowledgeJob
+     SET status = ?, progress = ?, currentStep = ?, payloadJson = ?, errorMessage = ?, updatedAt = CURRENT_TIMESTAMP
+     WHERE id = ? AND jobType = ?`,
+    params.status,
+    params.progress,
+    params.currentStep,
+    JSON.stringify(params.payload),
+    params.errorMessage ?? null,
+    jobId,
+    RECOVERABLE_REWRITE_JOB_TYPE,
+  )
+}
+
+function findLatestRecoverableRewriteJob(params: { novelId: string; branchId?: string | null; chapterId?: string | null }) {
+  const rows = queryAll<RecoverableRewriteJobRow>(
+    `SELECT id, novelId, branchId, status, progress, currentStep, payloadJson, errorMessage, createdAt, updatedAt
+     FROM KnowledgeJob
+     WHERE novelId = ? AND jobType = ?
+     ORDER BY updatedAt DESC, createdAt DESC
+     LIMIT 20`,
+    params.novelId,
+    RECOVERABLE_REWRITE_JOB_TYPE,
+  )
+
+  return rows.find((row) => {
+    const payload = normalizeRecoverableRewriteJobPayload(row.payloadJson)
+    if (!payload) return false
+    if (params.branchId && payload.panel.branchId !== params.branchId) return false
+    if (params.chapterId && payload.panel.chapterId !== params.chapterId) return false
+    return true
+  }) ?? null
+}
+
+function buildRecoverableRewritePanel(body: Record<string, unknown>) {
+  const novelId = String(body.novelId ?? '').trim()
+  const chapterId = String(body.chapterId ?? '').trim()
+  const branchId = String(body.branchId ?? `${novelId}:main`).trim()
+  if (!novelId || !chapterId || !branchId) return null
+
+  return {
+    novelId,
+    branchId,
+    chapterId,
+    selectedText: String(body.selectedText ?? body.sourceText ?? ''),
+    sourceText: String(body.sourceText ?? ''),
+    sourceTextOverride: String(body.rewriteSourceTextOverride ?? '').trim() || null,
+    userInstruction: String(body.userInstruction ?? body.prompt ?? ''),
+    rewriteLaunchSource: String(body.rewriteLaunchSource ?? '').trim() || null,
+    createdAt: new Date().toISOString(),
+  } satisfies RecoverableRewriteJobPayload['panel']
+}
+
+function createResultPayload(params: {
+  provider: string
+  title?: string
+  summary?: string
+  content: string
+  inputTokens?: unknown
+  outputTokens?: unknown
+  metadata?: unknown
+  presetCompat?: unknown
+}) {
+  return {
+    provider: params.provider,
+    title: params.title ?? '生成版本',
+    summary: params.summary ?? '基于当前章节知识状态与证据装配生成。',
+    content: params.content,
+    inputTokens: normalizeTokenValue(params.inputTokens),
+    outputTokens: normalizeTokenValue(params.outputTokens),
+    metadata: params.metadata ?? null,
+    presetCompat: params.presetCompat ?? null,
+  } satisfies RewriteResultPayload
+}
+
+function scheduleRecoverableRewriteJob(jobId: string) {
+  try {
+    after(async () => {
+      await runRecoverableRewriteJob(jobId)
+    })
+  } catch (error) {
+    if (error instanceof Error && !error.message.includes('outside a request scope')) {
+      console.warn('Falling back to timer-based rewrite job scheduling', error)
+    }
+    setTimeout(() => {
+      void runRecoverableRewriteJob(jobId)
+    }, 0)
+  }
 }
 
 function parseOperationType(value: unknown): ProductSurfaceId | null {
@@ -268,8 +501,163 @@ async function writeRewriteOutputRuntimeDebugArtifact(params: {
   })
 }
 
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url)
+  const jobId = searchParams.get('jobId')?.trim()
+  const novelId = searchParams.get('novelId')?.trim()
+  const branchId = searchParams.get('branchId')?.trim()
+  const chapterId = searchParams.get('chapterId')?.trim()
+  const row = jobId
+    ? readRecoverableRewriteJob(jobId)
+    : novelId
+      ? findLatestRecoverableRewriteJob({ novelId, branchId, chapterId })
+      : null
+
+  return NextResponse.json({ ok: true, job: serializeRecoverableRewriteJob(row) }, {
+    headers: { 'Cache-Control': 'no-store' },
+  })
+}
+
+async function createRecoverableRewriteJob(body: Record<string, unknown>) {
+  const panel = buildRecoverableRewritePanel(body)
+  if (!panel) {
+    return NextResponse.json({ ok: false, error: 'novelId, branchId, and chapterId are required for recoverable rewrite jobs' }, { status: 400 })
+  }
+
+  const activeJob = findLatestRecoverableRewriteJob({ novelId: panel.novelId, branchId: panel.branchId, chapterId: panel.chapterId })
+  if (activeJob?.status === 'queued' || activeJob?.status === 'running') {
+    return NextResponse.json({ ok: true, job: serializeRecoverableRewriteJob(activeJob) }, {
+      headers: { 'Cache-Control': 'no-store' },
+    })
+  }
+
+  const requestPayload = { ...body }
+  delete requestPayload.recoverableRewriteJob
+  delete requestPayload.stream
+
+  const jobId = uid('rewrite-job')
+  const payload = { request: requestPayload, panel } satisfies RecoverableRewriteJobPayload
+  execute(
+    `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, progress, currentStep, payloadJson)
+     VALUES (?, ?, ?, ?, 'queued', 0.1, ?, ?)`,
+    jobId,
+    panel.novelId,
+    panel.branchId,
+    RECOVERABLE_REWRITE_JOB_TYPE,
+    '已创建可恢复魔改任务',
+    JSON.stringify(payload),
+  )
+
+  scheduleRecoverableRewriteJob(jobId)
+
+  return NextResponse.json({ ok: true, job: serializeRecoverableRewriteJob(readRecoverableRewriteJob(jobId)) }, {
+    headers: { 'Cache-Control': 'no-store' },
+  })
+}
+
+async function readRewriteResponseResult(response: Response): Promise<RewriteResultPayload> {
+  const contentType = response.headers.get('content-type') ?? ''
+  if (contentType.includes('application/json')) {
+    const payload = await response.json() as Record<string, unknown>
+    const directResult = normalizeRewriteResultPayload(payload.result)
+    if (directResult) return directResult
+
+    const firstCandidate = Array.isArray(payload.candidates) ? payload.candidates[0] : null
+    const candidateResult = normalizeRewriteResultPayload({
+      ...(firstCandidate && typeof firstCandidate === 'object' && !Array.isArray(firstCandidate) ? firstCandidate : {}),
+      provider: payload.provider,
+      metadata: payload.metadata,
+      presetCompat: payload.presetCompat,
+    })
+    if (candidateResult) return candidateResult
+    throw new Error('No result returned.')
+  }
+
+  const content = (await response.text()).trim()
+  if (!content) throw new Error('No result returned.')
+  const parsedContent = parseJsonRecord(content)
+  if (typeof parsedContent?.result === 'string' && parsedContent.result.trim()) {
+    return createResultPayload({ provider: 'context-stream', title: '生成版本', content: parsedContent.result.trim() })
+  }
+  return createResultPayload({ provider: 'context-stream', title: '生成版本', content })
+}
+
+async function runRecoverableRewriteJob(jobId: string) {
+  const row = readRecoverableRewriteJob(jobId)
+  if (!row || row.status !== 'queued') return
+
+  const payload = normalizeRecoverableRewriteJobPayload(row.payloadJson)
+  if (!payload) {
+    execute(
+      `UPDATE KnowledgeJob SET status = 'failed', progress = 0, currentStep = ?, errorMessage = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND jobType = ?`,
+      '魔改任务恢复数据损坏',
+      'Recoverable rewrite job payload is invalid',
+      jobId,
+      RECOVERABLE_REWRITE_JOB_TYPE,
+    )
+    return
+  }
+
+  const claim = execute(
+    `UPDATE KnowledgeJob
+     SET status = 'running', progress = 0.35, currentStep = ?, updatedAt = CURRENT_TIMESTAMP
+     WHERE id = ? AND jobType = ? AND status = 'queued'`,
+    '正在生成改写版本',
+    jobId,
+    RECOVERABLE_REWRITE_JOB_TYPE,
+  )
+  if (claim.changes !== 1) return
+
+  try {
+    const response = await handleRewritePost(new Request('http://localhost/api/rewrite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload.request),
+    }), { allowRecoverable: false })
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '')
+      throw new Error(errorText || `Rewrite job failed with status ${response.status}`)
+    }
+
+    const result = await readRewriteResponseResult(response)
+    updateRecoverableRewriteJob(jobId, {
+      status: 'succeeded',
+      progress: 1,
+      currentStep: '完成',
+      payload: { ...payload, result },
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Rewrite failed.'
+    updateRecoverableRewriteJob(jobId, {
+      status: 'failed',
+      progress: 0,
+      currentStep: '生成失败',
+      payload: { ...payload, error: message },
+      errorMessage: message,
+    })
+  }
+}
+
+export async function runRecoverableRewriteJobForTesting(jobId: string) {
+  await runRecoverableRewriteJob(jobId)
+}
+
 export async function POST(request: Request) {
+  return handleRewritePost(request, { allowRecoverable: true })
+}
+
+async function handleRewritePost(request: Request, options: { allowRecoverable: boolean }) {
   const body = await request.json()
+  if (
+    options.allowRecoverable
+    && body?.recoverableRewriteJob === true
+    && body
+    && typeof body === 'object'
+    && !Array.isArray(body)
+  ) {
+    return createRecoverableRewriteJob(body as Record<string, unknown>)
+  }
+
   const rewriteSettings = loadStoredAISettings().rewrite
   const rewriteProvider = rewriteSettings.provider
   const userInstruction = String(body.userInstruction ?? body.prompt ?? '')
@@ -475,16 +863,26 @@ export async function POST(request: Request) {
       })
     }
 
+    const firstResult = transformedCandidates[0]
+    if (!firstResult) {
+      return NextResponse.json({ ok: false, error: 'No result returned.' }, { status: 502 })
+    }
+    const rewriteResult = createResultPayload({
+      provider: runtime.resolvedRuntime.providerRuntime.provider,
+      title: '生成版本',
+      summary: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible' ? '来自 OpenAI-compatible API' : '来自 Ollama 本地模型',
+      content: firstResult.postRegexText,
+      inputTokens: result.usage?.inputTokens,
+      outputTokens: result.usage?.outputTokens,
+      metadata: runtime.metadata,
+      presetCompat: presetCompatMetadata,
+    })
+
     return NextResponse.json({
       provider: runtime.resolvedRuntime.providerRuntime.provider,
       metadata: runtime.metadata,
-      candidates: transformedCandidates.map(({ postRegexText }, index) => ({
-        title: `候选 ${String.fromCharCode(65 + index)}`,
-        summary: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible' ? '来自 OpenAI-compatible API' : '来自 Ollama 本地模型',
-        content: postRegexText,
-        inputTokens: result.usage?.inputTokens ?? null,
-        outputTokens: result.usage?.outputTokens ?? null,
-      })),
+      result: rewriteResult,
+      candidates: [rewriteResult],
       presetCompat: presetCompatMetadata,
     }, {
       headers: {
@@ -493,11 +891,22 @@ export async function POST(request: Request) {
     })
   }
 
+  const fallbackResult = fallbackCandidates(body.sourceText, body.mode, body.tone, body.prompt)[0]
+  const rewriteResult = createResultPayload({
+    provider: result.enabled ? 'fallback-after-error' : 'fallback-no-config',
+    title: fallbackResult?.title,
+    summary: fallbackResult?.summary,
+    content: fallbackResult?.content ?? String(body.sourceText ?? ''),
+    metadata: runtime.metadata,
+    presetCompat: presetCompatMetadata,
+  })
+
   return NextResponse.json({
     provider: result.enabled ? 'fallback-after-error' : 'fallback-no-config',
     metadata: runtime.metadata,
     error: result.error,
-    candidates: fallbackCandidates(body.sourceText, body.mode, body.tone, body.prompt),
+    result: rewriteResult,
+    candidates: [rewriteResult],
     presetCompat: presetCompatMetadata,
   }, {
     headers: {

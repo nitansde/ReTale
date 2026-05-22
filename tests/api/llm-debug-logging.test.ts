@@ -269,7 +269,7 @@ describe('llm debug logging', () => {
       loadStoredAISettings: () => createAiSettings(),
     }))
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      choices: [{ message: { content: JSON.stringify({ candidates: ['one', 'two', 'three'] }) } }],
+      choices: [{ message: { content: JSON.stringify({ result: 'one' }) } }],
     }), { status: 200 })))
 
     const { generateRewriteWithOpenAICompatible } = await import('@/lib/server/openai-compatible')
@@ -288,7 +288,7 @@ describe('llm debug logging', () => {
       model: 'rewrite-model',
     })
 
-    expect(result.content).toEqual(['one', 'two', 'three'])
+    expect(result.content).toEqual(['one'])
     await expect(fs.readdir(root)).resolves.toEqual([])
   })
 
@@ -299,7 +299,7 @@ describe('llm debug logging', () => {
       loadStoredAISettings: () => createAiSettings(),
     }))
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      choices: [{ message: { content: JSON.stringify({ candidates: ['raw one', 'raw two', 'raw three'] }) } }],
+      choices: [{ message: { content: JSON.stringify({ result: 'raw one' }) } }],
     }), { status: 200 })))
 
     const { generateRewriteWithOpenAICompatible } = await import('@/lib/server/openai-compatible')
@@ -336,7 +336,7 @@ describe('llm debug logging', () => {
       loadStoredPresetCompatLibrary: () => createDebugPresetLibrary(),
     }))
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      choices: [{ message: { content: JSON.stringify({ candidates: ['raw one', 'raw two', 'raw three'] }) } }],
+      choices: [{ message: { content: JSON.stringify({ result: 'raw one' }) } }],
     }), { status: 200 })))
 
     const { POST } = await import('@/app/api/rewrite/route')
@@ -375,7 +375,7 @@ describe('llm debug logging', () => {
       loadStoredPresetCompatLibrary: () => createDebugPresetLibrary('rewrite-output'),
     }))
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT one', 'RAW OUTPUT two', 'RAW OUTPUT three'] }) } }],
+      choices: [{ message: { content: JSON.stringify({ result: 'RAW OUTPUT one' }) } }],
     }), { status: 200 })))
 
     const { POST } = await import('@/app/api/rewrite/route')
@@ -397,11 +397,8 @@ describe('llm debug logging', () => {
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({
-      candidates: [
-        { content: 'CLEAN OUTPUT one' },
-        { content: 'CLEAN OUTPUT two' },
-        { content: 'CLEAN OUTPUT three' },
-      ],
+      result: { content: 'CLEAN OUTPUT one' },
+      candidates: [{ content: 'CLEAN OUTPUT one' }],
     })
 
     const logs = await readLogs('rewrite')
@@ -411,8 +408,6 @@ describe('llm debug logging', () => {
     expect(providerLog?.response.rawText).toContain('RAW OUTPUT one')
     expect(runtimeLog?.response.outputTransform?.candidates).toEqual([
       { preRegexText: 'RAW OUTPUT one', postRegexText: 'CLEAN OUTPUT one' },
-      { preRegexText: 'RAW OUTPUT two', postRegexText: 'CLEAN OUTPUT two' },
-      { preRegexText: 'RAW OUTPUT three', postRegexText: 'CLEAN OUTPUT three' },
     ])
   })
 
