@@ -66,6 +66,8 @@ type HanlpChapterEntityPromptRow = {
   score: number
 }
 
+type HanlpWorldCategory = Extract<HanlpChapterEntityPromptRow['entityType'], 'location' | 'organization' | 'setting'>
+
 type KnowledgeRebuildPayloadChapter = {
   chapterId: string
   chapterNo: number
@@ -2460,6 +2462,45 @@ function buildHanlpCurrentChapterPromptContextText(params: {
   return lines.length > 1 ? lines.join('\n') : ''
 }
 
+function loadHanlpWorldCategoryByTerm(params: {
+  branchId: string
+  chapterId: string
+}) {
+  const rows = queryAll<{
+    entityText: string
+    entityType: HanlpWorldCategory
+  }>(
+    `
+      SELECT entity_text AS entityText,
+             entity_type AS entityType
+      FROM hanlp_bootstrap_entities
+      WHERE branch_id = ?
+        AND chapter_id = ?
+        AND entity_type IN ('location', 'organization', 'setting')
+      GROUP BY entity_type, entity_text
+      ORDER BY entity_text ASC,
+               MAX(total_count) DESC,
+               MAX(score) DESC,
+               CASE entity_type
+                 WHEN 'location' THEN 0
+                 WHEN 'organization' THEN 1
+                 WHEN 'setting' THEN 2
+                 ELSE 3
+               END ASC
+    `,
+    params.branchId,
+    params.chapterId,
+  )
+
+  const categoryByTerm = new Map<string, HanlpWorldCategory>()
+  for (const row of rows) {
+    const term = row.entityText.trim()
+    if (!term || categoryByTerm.has(term)) continue
+    categoryByTerm.set(term, row.entityType)
+  }
+  return categoryByTerm
+}
+
 function buildBatchAliasDiscoveryPlan(params: {
   branchId: string
   chapters: Array<{ chapterId: string; chapterNo: number; chapterSourceHash: string }>
@@ -4162,6 +4203,10 @@ async function persistChapterExtraction(params: {
 }) {
   const entityIdByName = new Map<string, string>()
   const promotedCandidates = new Map<string, CharacterCandidatePromotion>()
+  const hanlpWorldCategoryByTerm = loadHanlpWorldCategoryByTerm({
+    branchId: params.branchId,
+    chapterId: params.chapterId,
+  })
 
   for (const item of params.extraction.characters) {
     const normalizedItemName = normalizeCharacterMentionName(item.name)
@@ -4617,11 +4662,12 @@ async function persistChapterExtraction(params: {
 
   for (const item of params.extraction.worldbuilding) {
     const evidence = item.evidence[0]
+    const category = hanlpWorldCategoryByTerm.get(item.term.trim()) ?? item.category
     const existing = queryOne<{ id: string }>(
       'SELECT id FROM KnowledgeWorld WHERE branchId = ? AND term = ? AND category IS ?',
       params.branchId,
       item.term,
-      item.category
+      category
     )
 
     if (existing) {
@@ -4657,7 +4703,7 @@ async function persistChapterExtraction(params: {
       params.novelId,
       params.branchId,
       item.term,
-      item.category,
+      category,
       item.definition,
       params.chapterNo,
       params.chapterNo,

@@ -490,10 +490,15 @@ function getKnowledgeViewHanlpCacheSnapshot(novelIds?: string[], status?: Knowle
 
 function toWorldEntryType(category: string | null): WorldEntryType {
   switch (category) {
+    case 'location':
     case 'geography':
       return 'location'
+    case 'organization':
     case 'politics':
       return 'organization'
+    case 'setting':
+    case 'scene':
+      return 'scene'
     case 'rule':
       return 'rule'
     case 'item':

@@ -280,6 +280,39 @@ describe('/api/knowledge-view', () => {
     expect(payload.localCharacters.some((character) => character.name === '被拒绝的临时角色')).toBe(false)
   })
 
+  it('projects literal HanLP world categories into workspace world entry types', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-hanlp-world-categories')
+    const novelId = `novel_knowledge_view_world_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-world-1', chapterNo: 1 })
+
+    const insertWorld = database.prepare(
+      `INSERT INTO KnowledgeWorld (
+        id, novelId, branchId, term, category, definition,
+        firstSeenChapter, validFromChapter, validUntilChapter, status, confidence
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    insertWorld.run('world-hanlp-location', novelId, mainBranchId, '北京', 'location', '主角抵达的地点。', 1, 1, 999999, 'ai_generated', 0.7)
+    insertWorld.run('world-hanlp-organization', novelId, mainBranchId, '黑塔', 'organization', '训练学徒的组织。', 1, 1, 999999, 'ai_generated', 0.7)
+    insertWorld.run('world-hanlp-setting', novelId, mainBranchId, '夜雨', 'setting', '本章出现的场景氛围。', 1, 1, 999999, 'ai_generated', 0.7)
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      ok: boolean
+      localWorldEntries: Array<{ title: string; type: string }>
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.localWorldEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: '北京', type: 'location' }),
+      expect.objectContaining({ title: '黑塔', type: 'organization' }),
+      expect.objectContaining({ title: '夜雨', type: 'scene' }),
+    ]))
+  })
+
   it('surfaces HanLP telemetry on the knowledge rebuild status payload', async () => {
     const { database } = await createTestDatabase('chatbook-knowledge-view-hanlp-telemetry')
     const novelId = `novel_knowledge_view_${Math.random().toString(36).slice(2, 8)}`

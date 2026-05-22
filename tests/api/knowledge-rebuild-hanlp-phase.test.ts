@@ -1184,11 +1184,35 @@ describe('knowledge rebuild HanLP orchestration', () => {
   })
 
   it('passes combined story-state and HanLP chapter context into extraction calls', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-prompt-context')
+    const { database, queryAll } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-prompt-context')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_prompt_context', 2)
     const aiSettings = createMockAISettings(1)
     const extractionSpy = vi.fn(async (params: { chapterNo: number }) => ({
-      extraction: createMockExtraction(params.chapterNo),
+      extraction: params.chapterNo === 2
+        ? {
+            ...createMockExtraction(params.chapterNo),
+            worldbuilding: [
+              {
+                term: '北京',
+                category: 'organization',
+                definition: '主角抵达的城池。',
+                evidence: [{ quote: '阿离和老周走进北京黑塔。', lineStart: 1, lineEnd: 1 }],
+              },
+              {
+                term: '黑塔',
+                category: 'location',
+                definition: '训练学徒的组织。',
+                evidence: [{ quote: '阿离和老周走进北京黑塔。', lineStart: 1, lineEnd: 1 }],
+              },
+              {
+                term: '夜雨',
+                category: 'location',
+                definition: '本章出现的场景氛围。',
+                evidence: [{ quote: '夜雨落在塔檐。', lineStart: 2, lineEnd: 2 }],
+              },
+            ],
+          }
+        : createMockExtraction(params.chapterNo),
       provider: 'openai-compatible' as const,
       model: aiSettings.knowledgeExtraction.openAICompatible.model,
     }))
@@ -1301,5 +1325,13 @@ describe('knowledge rebuild HanLP orchestration', () => {
     expect(chapterTwoCall?.storyStateText).toContain('HanLP 地点词：北京')
     expect(chapterTwoCall?.storyStateText).toContain('HanLP 组织词：黑塔')
     expect(chapterTwoCall?.storyStateText).toContain('HanLP 场景/设定词：夜雨')
+    expect(queryAll<{ term: string; category: string }>(
+      'SELECT term, category FROM KnowledgeWorld WHERE branchId = ? ORDER BY term ASC',
+      branchId,
+    )).toEqual([
+      { term: '北京', category: 'location' },
+      { term: '夜雨', category: 'setting' },
+      { term: '黑塔', category: 'organization' },
+    ])
   })
 })
