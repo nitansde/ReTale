@@ -564,6 +564,18 @@ CREATE TABLE IF NOT EXISTS RawTextEmbeddingCache (
   FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS ActiveRetrievalIndex (
+  branchId TEXT NOT NULL,
+  scopeKey TEXT NOT NULL DEFAULT 'full',
+  tableName TEXT NOT NULL UNIQUE,
+  scopeStartChapter INTEGER,
+  scopeEndChapter INTEGER,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (branchId, scopeKey),
+  FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS story_timeline_nodes (
   id TEXT PRIMARY KEY,
   novel_id TEXT NOT NULL,

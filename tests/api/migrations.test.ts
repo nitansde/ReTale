@@ -29,6 +29,12 @@ function listIndexNames(database: DatabaseSync) {
     .all() as Array<{ name: string }>
 }
 
+function listTableColumns(database: DatabaseSync, tableName: string) {
+  return database
+    .prepare(`PRAGMA table_info(${tableName})`)
+    .all() as Array<{ name: string; pk: number }>
+}
+
 afterEach(() => {
   while (createdDirectories.length) {
     const directory = createdDirectories.pop()
@@ -126,5 +132,50 @@ describe('authored branching schema migrations', () => {
     )
 
   ;(secondOpen as DatabaseSync & { close?: () => void }).close?.()
+  })
+
+  it('migrates legacy active retrieval pointers to scoped rows', () => {
+    const databasePath = makeTempDatabasePath('chatbook-active-retrieval-index-scope')
+    const legacyDatabase = new DatabaseSync(databasePath)
+    legacyDatabase.exec(`
+      CREATE TABLE ActiveRetrievalIndex (
+        branchId TEXT PRIMARY KEY,
+        tableName TEXT NOT NULL UNIQUE,
+        createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO ActiveRetrievalIndex (branchId, tableName, createdAt, updatedAt)
+      VALUES ('novel-001:main', 'retrieval_docs_legacy', '2026-01-01 00:00:00', '2026-01-02 00:00:00');
+    `)
+    ;(legacyDatabase as DatabaseSync & { close?: () => void }).close?.()
+
+    const migratedDatabase = initializeDatabase(new DatabaseSync(databasePath))
+    const columns = listTableColumns(migratedDatabase, 'ActiveRetrievalIndex')
+    const row = migratedDatabase
+      .prepare('SELECT branchId, scopeKey, tableName, scopeStartChapter, scopeEndChapter, createdAt, updatedAt FROM ActiveRetrievalIndex')
+      .get() as {
+        branchId: string
+        scopeKey: string
+        tableName: string
+        scopeStartChapter: number | null
+        scopeEndChapter: number | null
+        createdAt: string
+        updatedAt: string
+      }
+
+    expect(columns.find((column) => column.name === 'branchId')?.pk).toBe(1)
+    expect(columns.find((column) => column.name === 'scopeKey')?.pk).toBe(2)
+    expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining(['scopeStartChapter', 'scopeEndChapter']))
+    expect(row).toEqual({
+      branchId: 'novel-001:main',
+      scopeKey: 'full',
+      tableName: 'retrieval_docs_legacy',
+      scopeStartChapter: null,
+      scopeEndChapter: null,
+      createdAt: '2026-01-01 00:00:00',
+      updatedAt: '2026-01-02 00:00:00',
+    })
+
+    ;(migratedDatabase as DatabaseSync & { close?: () => void }).close?.()
   })
 })

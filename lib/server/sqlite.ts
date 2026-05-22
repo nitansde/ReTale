@@ -4,7 +4,7 @@ import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 import { SCHEMA_SQL } from '@/lib/server/schema'
 
 type SqlParam = string | number | bigint | Uint8Array | null
-type TableColumnInfo = { name: string; notnull: number }
+type TableColumnInfo = { name: string; notnull: number; pk: number }
 
 type CanonicalTableRebuild = {
   tableName: 'EntityLink' | 'EntityState' | 'KnowledgeFact' | 'KnowledgeRelation' | 'KnowledgeWorld'
@@ -99,6 +99,53 @@ function needsCanonicalIntervalRebuild(database: DatabaseSync, tableName: Canoni
   const validUntilColumn = columns.find((column) => column.name === 'validUntilChapter')
 
   return Boolean(validToColumn) || !validUntilColumn || validUntilColumn.notnull !== 1
+}
+
+function needsActiveRetrievalIndexRebuild(database: DatabaseSync) {
+  const columns = getTableColumns(database, 'ActiveRetrievalIndex')
+  if (!columns.length) return false
+
+  const columnNames = new Set(columns.map((column) => column.name))
+  const branchColumn = columns.find((column) => column.name === 'branchId')
+  const scopeColumn = columns.find((column) => column.name === 'scopeKey')
+
+  return !columnNames.has('scopeKey')
+    || !columnNames.has('scopeStartChapter')
+    || !columnNames.has('scopeEndChapter')
+    || branchColumn?.pk !== 1
+    || scopeColumn?.pk !== 2
+}
+
+function rebuildActiveRetrievalIndexToScopedSchema(database: DatabaseSync) {
+  const columns = getTableColumns(database, 'ActiveRetrievalIndex')
+  const columnNames = new Set(columns.map((column) => column.name))
+  const scopeKeyExpression = columnNames.has('scopeKey') ? "COALESCE(NULLIF(scopeKey, ''), 'full')" : "'full'"
+  const scopeStartExpression = columnNames.has('scopeStartChapter') ? 'scopeStartChapter' : 'NULL'
+  const scopeEndExpression = columnNames.has('scopeEndChapter') ? 'scopeEndChapter' : 'NULL'
+
+  database.exec('DROP TABLE IF EXISTS __ActiveRetrievalIndex_scoped')
+  database.exec(`
+    CREATE TABLE __ActiveRetrievalIndex_scoped (
+      branchId TEXT NOT NULL,
+      scopeKey TEXT NOT NULL DEFAULT 'full',
+      tableName TEXT NOT NULL UNIQUE,
+      scopeStartChapter INTEGER,
+      scopeEndChapter INTEGER,
+      createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (branchId, scopeKey),
+      FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE
+    )
+  `)
+  database.exec(`
+    INSERT INTO __ActiveRetrievalIndex_scoped (
+      branchId, scopeKey, tableName, scopeStartChapter, scopeEndChapter, createdAt, updatedAt
+    )
+    SELECT branchId, ${scopeKeyExpression}, tableName, ${scopeStartExpression}, ${scopeEndExpression}, createdAt, updatedAt
+    FROM ActiveRetrievalIndex
+  `)
+  database.exec('DROP TABLE ActiveRetrievalIndex')
+  database.exec('ALTER TABLE __ActiveRetrievalIndex_scoped RENAME TO ActiveRetrievalIndex')
 }
 
 const CANONICAL_INTERVAL_TABLE_REBUILDS: CanonicalTableRebuild[] = [
@@ -344,10 +391,11 @@ function rebuildTableToCanonicalSchema(database: DatabaseSync, config: Canonical
 
 function runBootMigrations(database: DatabaseSync) {
   const intervalTablesNeedingRebuild = CANONICAL_INTERVAL_TABLE_REBUILDS.filter((config) => needsCanonicalIntervalRebuild(database, config.tableName))
+  const shouldRebuildActiveRetrievalIndex = needsActiveRetrievalIndexRebuild(database)
   const hasSnapshotTable = tableExists(database, 'ChapterSnapshot')
   const hasGraphContextCacheTable = tableExists(database, 'GraphContextCache')
 
-  if (intervalTablesNeedingRebuild.length || hasSnapshotTable || hasGraphContextCacheTable) {
+  if (intervalTablesNeedingRebuild.length || shouldRebuildActiveRetrievalIndex || hasSnapshotTable || hasGraphContextCacheTable) {
     database.exec('PRAGMA foreign_keys = OFF')
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -359,6 +407,9 @@ function runBootMigrations(database: DatabaseSync) {
       }
       for (const config of intervalTablesNeedingRebuild) {
         rebuildTableToCanonicalSchema(database, config)
+      }
+      if (shouldRebuildActiveRetrievalIndex) {
+        rebuildActiveRetrievalIndexToScopedSchema(database)
       }
       database.exec('COMMIT')
     } catch (error) {
