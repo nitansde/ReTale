@@ -43,6 +43,19 @@ function createImportRequest() {
   })
 }
 
+function createGb18030ImportRequest() {
+  const gb18030Bytes = new Uint8Array([
+    177, 190, 202, 233, 211, 201, 161, 190, 202, 190, 192, 253, 215, 233, 161, 191, 213, 251, 192, 237, 10, 10, 181, 218, 49, 213, 194, 32, 179, 245, 211, 246, 10, 193, 214, 179, 206, 191, 170, 202, 188, 188, 199, 194, 188, 213, 226, 180, 206, 193, 183, 207, 176, 161, 163, 10,
+  ])
+  const formData = new FormData()
+  formData.set('file', new File([gb18030Bytes], 'gb18030-novel.txt', { type: 'text/plain' }))
+
+  return new Request('http://localhost/api/import-txt', {
+    method: 'POST',
+    body: formData,
+  })
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
   vi.resetModules()
@@ -115,5 +128,28 @@ describe('import-txt route', () => {
 
     expect(response.status).toBe(500)
     await expect(response.json()).resolves.toEqual({ ok: false, error: 'sync failed' })
+  })
+
+  it('selects GB18030 decoding when the UTF-8 candidate is mojibake', async () => {
+    const database = createTestDatabase('chatbook-import-txt-route-gb18030')
+    resetWorkspaceState(database)
+
+    vi.doMock('@/lib/server/knowledge-rebuild', () => ({
+      syncWorkspacePayloadToKnowledgeStore: vi.fn(async () => {}),
+    }))
+
+    const { POST } = await import('@/app/api/import-txt/route')
+    const response = await POST(createGb18030ImportRequest())
+
+    expect(response.status).toBe(200)
+    const saved = database.prepare('SELECT payload FROM WorkspaceState WHERE id = ?').get('singleton') as { payload: string }
+    const payload = JSON.parse(saved.payload) as {
+      localChapters: Array<{ title: string; content: string }>
+    }
+
+    expect(payload.localChapters[0]?.content).toContain('本书由【示例组】整理')
+    expect(payload.localChapters[1]?.title).toBe('第1章 初遇')
+    expect(payload.localChapters[1]?.content).toContain('林澄开始记录这次练习。')
+    expect(saved.payload).not.toContain('����')
   })
 })
