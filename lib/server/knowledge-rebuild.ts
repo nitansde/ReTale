@@ -25,7 +25,6 @@ import {
   precomputeRawTextEmbeddingCache,
   rebuildBranchRetrievalIndex,
   type RawTextEmbeddingPrecomputeResult,
-  type RetrievalIndexBuildFallbackReason,
   type RetrievalIndexBuildProgress,
 } from '@/lib/server/retrieval-index'
 import { execute, queryAll, queryOne, type SqlParam, withTransaction } from '@/lib/server/sqlite'
@@ -151,14 +150,6 @@ export type KnowledgeRebuildPayloadStep = {
 }
 
 type KnowledgeRebuildIndexProgress = RetrievalIndexBuildProgress
-
-const INDEX_FALLBACK_REASON_LABELS: Record<RetrievalIndexBuildFallbackReason, string> = {
-  missing_table: '未找到现有检索表',
-  unusable_vector: '现有向量列不可用',
-  missing_embedding_metadata: '缺少 Embedding 元数据',
-  embedding_provider_mismatch: 'Embedding 服务不一致',
-  embedding_model_mismatch: 'Embedding 模型不一致',
-}
 
 type KnowledgeRebuildEmbeddingSettingsSnapshot = {
   provider: AIProvider
@@ -914,10 +905,6 @@ function getIndexCurrentStep(progress?: KnowledgeRebuildIndexProgress) {
     case 'embedding': {
       const docsLabel = `${progress.embeddedRows}/${Math.max(progress.totalRows, 1)} 文档`
       const batchesLabel = `${progress.completedBatches}/${Math.max(progress.totalBatches, 1)} 批`
-      if (progress.fallbackReason) {
-        return `无法局部更新 Lance 索引（${INDEX_FALLBACK_REASON_LABELS[progress.fallbackReason]}），正在全量生成检索向量（${docsLabel}，${batchesLabel}）`
-      }
-
       return `生成检索向量（${docsLabel}，${batchesLabel}）`
     }
     case 'creating_table':

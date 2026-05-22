@@ -190,6 +190,41 @@ function createMockLanceDb() {
   }
 }
 
+function getLatestMockTable(mockLanceDb: ReturnType<typeof createMockLanceDb>) {
+  return Array.from(mockLanceDb.tables.values()).at(-1)
+}
+
+function getActiveMockTableName(database: DatabaseSync, scopeKey = 'full') {
+  const activeRow = database
+    .prepare('SELECT tableName FROM ActiveRetrievalIndex WHERE branchId = ? AND scopeKey = ?')
+    .get('novel-001:main', scopeKey) as { tableName: string } | undefined
+  expect(activeRow?.tableName).toBeTruthy()
+  return activeRow!.tableName
+}
+
+function getActiveMockTable(database: DatabaseSync, mockLanceDb: ReturnType<typeof createMockLanceDb>, scopeKey = 'full') {
+  return mockLanceDb.tables.get(getActiveMockTableName(database, scopeKey))
+}
+
+function getScopedMockTableName(database: DatabaseSync, startChapter: number, endChapter: number | 'open' = startChapter) {
+  return getActiveMockTableName(database, `chapter-range:${startChapter}:${endChapter}`)
+}
+
+function getScopedMockTable(database: DatabaseSync, mockLanceDb: ReturnType<typeof createMockLanceDb>, startChapter: number, endChapter: number | 'open' = startChapter) {
+  return mockLanceDb.tables.get(getScopedMockTableName(database, startChapter, endChapter))
+}
+
+function getActiveRetrievalIndexRows(database: DatabaseSync) {
+  return database
+    .prepare('SELECT scopeKey, tableName, scopeStartChapter, scopeEndChapter FROM ActiveRetrievalIndex WHERE branchId = ? ORDER BY scopeKey ASC')
+    .all('novel-001:main') as Array<{
+      scopeKey: string
+      tableName: string
+      scopeStartChapter: number | null
+      scopeEndChapter: number | null
+    }>
+}
+
 async function createRetrievalIndexHarness(testName: string) {
   const tempDatabase = createTempDatabaseCopy(testName)
   cleanups.push(tempDatabase.cleanup)
@@ -760,7 +795,7 @@ describe('retrieval-index cache reuse helpers', () => {
     ).get('novel-001:main', staleHash)).toMatchObject({ count: 1 })
   })
 
-  it('scoped rebuild preserves rows outside the requested chapter range', async () => {
+  it('scoped rebuild materializes rows for the requested chapter range', async () => {
     const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-preserve-outside-range')
 
     database.prepare(
@@ -783,36 +818,42 @@ describe('retrieval-index cache reuse helpers', () => {
     ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章旧原文内容。', 'paragraph', 8)
 
     await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    const originalTable = getActiveMockTable(database, mockLanceDb)
+    mockLanceDb.database.createTable.mockClear()
 
     database.prepare('UPDATE KnowledgeChapter SET summary = ? WHERE id = ?').run('第2章新摘要', 'chapter-2')
     database.prepare('UPDATE TextSpan SET text = ? WHERE id = ?').run('第二章新原文内容。', 'span-4')
 
-    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+    const scopedDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main', { startChapter: 2, endChapter: 2 })
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
       chapterRange: { startChapter: 2, endChapter: 2 },
+    })).resolves.toMatchObject({
+      rowCount: scopedDocs.length + 2,
     })
 
-    const table = Array.from(mockLanceDb.tables.values())[0]
+    expect(originalTable?.delete).not.toHaveBeenCalled()
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
+    expect(getActiveMockTable(database, mockLanceDb)).toBe(originalTable)
+    const table = getScopedMockTable(database, mockLanceDb, 2)
     expect(table).toBeTruthy()
-    expect(table?.delete).toHaveBeenCalledWith("((sourceType = 'text_span' AND chapterNo >= 2 AND chapterNo <= 2) OR (sourceType != 'text_span' AND validFromChapter <= 2 AND validUntilChapter > 2))")
-    const preservedChapterOneTextRow = table?.rows.find((row) => row.sourceType === 'text_span' && row.chapterNo === 1)
-    expect(preservedChapterOneTextRow).toMatchObject({
-      chapterNo: 1,
-      text: expect.stringContaining('第一段原文内容'),
-    })
-    expect(table?.rows.find((row) => row.id === 'worldbuilding:world-outside-range')).toMatchObject({
-      validFromChapter: 1,
-      validUntilChapter: 2,
-      text: expect.stringContaining('定义：只在第一章有效'),
-    })
+    expect(table?.rows.find((row) => row.sourceType === 'text_span' && row.chapterNo === 1)).toBeUndefined()
+    expect(table?.rows.find((row) => row.id === 'worldbuilding:world-outside-range')).toBeUndefined()
     expect(table?.rows.find((row) => row.id === 'span-4')).toMatchObject({
       text: '第二章新原文内容。',
+    })
+    expect(table?.rows.find((row) => row.id === 'chapter-summary:chapter-1')).toMatchObject({
+      text: '第1章摘要',
     })
     expect(table?.rows.find((row) => row.id === 'chapter-summary:chapter-2')).toMatchObject({
       text: '第2章新摘要',
     })
-  }, 10000)
+    expect(getActiveRetrievalIndexRows(database)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ scopeKey: 'full', scopeStartChapter: null, scopeEndChapter: null }),
+      expect.objectContaining({ scopeKey: 'chapter-range:2:2', scopeStartChapter: 2, scopeEndChapter: 2 }),
+    ]))
+  }, 120000)
 
-  it('scoped rebuild deletes and replaces validity-overlapping rows even when chapterNo is below the range start', async () => {
+  it('scoped rebuild materializes validity-overlapping rows even when chapterNo is below the range start', async () => {
     const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-validity-overlap')
 
     database.prepare(
@@ -830,7 +871,7 @@ describe('retrieval-index cache reuse helpers', () => {
       chapterRange: { startChapter: 2, endChapter: 2 },
     })
 
-    const table = Array.from(mockLanceDb.tables.values())[0]
+    const table = getScopedMockTable(database, mockLanceDb, 2)
     const worldRows = table?.rows.filter((row) => row.id === 'worldbuilding:world-1') ?? []
     expect(worldRows).toHaveLength(1)
     expect(worldRows[0]).toMatchObject({
@@ -839,10 +880,10 @@ describe('retrieval-index cache reuse helpers', () => {
       validUntilChapter: 999999999,
       text: expect.stringContaining('定义：新定义'),
     })
-  }, 10000)
+  }, 120000)
 
-  it('falls back to a full rebuild when scoped rebuild cannot open an existing branch table', async () => {
-    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-missing-table-fallback')
+  it('creates a scoped retrieval table when ranged rebuild has no existing branch table', async () => {
+    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-missing-table-materialize')
 
     database.prepare(
       `INSERT INTO KnowledgeChapter (
@@ -859,7 +900,7 @@ describe('retrieval-index cache reuse helpers', () => {
 
     const fullDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
     const scopedDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main', { startChapter: 2, endChapter: 2 })
-    const progressEvents: Array<{ fallbackReason?: string; totalRows: number }> = []
+    const progressEvents: Array<{ totalRows: number }> = []
 
     await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
       chapterRange: { startChapter: 2, endChapter: 2 },
@@ -867,27 +908,31 @@ describe('retrieval-index cache reuse helpers', () => {
         progressEvents.push(progress)
       },
     })).resolves.toMatchObject({
-      rowCount: fullDocs.length,
+      rowCount: scopedDocs.length + 2,
     })
 
     expect(progressEvents).toContainEqual(expect.objectContaining({
-      fallbackReason: 'missing_table',
-      totalRows: fullDocs.length,
+      totalRows: scopedDocs.length + 2,
     }))
-    const fallbackProgressEvents = progressEvents.filter((progress) => progress.totalRows === fullDocs.length)
-    expect(fallbackProgressEvents.length).toBeGreaterThan(0)
-    expect(fallbackProgressEvents.every((progress) => progress.fallbackReason === 'missing_table')).toBe(true)
+    expect(progressEvents.find((progress) => progress.totalRows === fullDocs.length)).toBeUndefined()
     expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
     expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
     const createdRows = mockLanceDb.database.createTable.mock.calls[0]?.[1] as Array<{ id: string }> | undefined
-    expect(createdRows?.map((row) => row.id)).toEqual(fullDocs.map((row) => row.id))
-    expect(createdRows?.map((row) => row.id)).not.toEqual(scopedDocs.map((row) => row.id))
-    const table = Array.from(mockLanceDb.tables.values())[0]
+    expect(createdRows?.map((row) => row.id)).toEqual([
+      ...scopedDocs.map((row) => row.id),
+      'chapter-summary:chapter-1',
+      'chapter-summary:chapter-2',
+    ])
+    const table = getScopedMockTable(database, mockLanceDb, 2)
     expect(table?.delete).not.toHaveBeenCalled()
-  })
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(false)
+    expect(getActiveRetrievalIndexRows(database)).toEqual([
+      expect.objectContaining({ scopeKey: 'chapter-range:2:2', scopeStartChapter: 2, scopeEndChapter: 2 }),
+    ])
+  }, 120000)
 
-  it('falls back to a full rebuild when scoped rebuild metadata does not match the current embedding model', async () => {
-    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-model-mismatch-fallback')
+  it('creates scoped retrieval table rows with the current embedding model without replacing the full table', async () => {
+    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-model-replacement')
 
     database.prepare(
       `INSERT INTO KnowledgeChapter (
@@ -903,11 +948,13 @@ describe('retrieval-index cache reuse helpers', () => {
     ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章原文内容。', 'paragraph', 8)
 
     await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    const fullTable = getActiveMockTable(database, mockLanceDb)
+    const fullTableName = getActiveMockTableName(database)
 
     aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v2'
     const fullDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
     const scopedDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main', { startChapter: 2, endChapter: 2 })
-    const progressEvents: Array<{ fallbackReason?: string; totalRows: number }> = []
+    const progressEvents: Array<{ totalRows: number }> = []
 
     await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
       chapterRange: { startChapter: 2, endChapter: 2 },
@@ -915,32 +962,32 @@ describe('retrieval-index cache reuse helpers', () => {
         progressEvents.push(progress)
       },
     })).resolves.toMatchObject({
-      rowCount: fullDocs.length,
+      rowCount: scopedDocs.length + 2,
     })
 
     expect(progressEvents).toContainEqual(expect.objectContaining({
-      fallbackReason: 'embedding_model_mismatch',
-      totalRows: fullDocs.length,
+      totalRows: scopedDocs.length + 2,
     }))
-    const fallbackProgressEvents = progressEvents.filter((progress) => progress.totalRows === fullDocs.length)
-    expect(fallbackProgressEvents.length).toBeGreaterThan(0)
-    expect(fallbackProgressEvents.every((progress) => progress.fallbackReason === 'embedding_model_mismatch')).toBe(true)
+    expect(progressEvents.find((progress) => progress.totalRows === fullDocs.length)).toBeUndefined()
     expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(2)
-    const firstTable = mockLanceDb.database.createTable.mock.results[0]?.value
-    await expect(firstTable).resolves.toBeTruthy()
-    const initialTable = await firstTable
-    expect(initialTable.delete).not.toHaveBeenCalled()
+    expect(mockLanceDb.database.dropTable).not.toHaveBeenCalledWith(fullTableName)
+    expect(Array.from(mockLanceDb.tables.values())).toContain(fullTable)
+    expect(getActiveMockTable(database, mockLanceDb)).toBe(fullTable)
+    expect(fullTable?.delete).not.toHaveBeenCalled()
 
     const secondCreatedRows = mockLanceDb.database.createTable.mock.calls[1]?.[1] as Array<{ id: string; embeddingProvider: string; embeddingModel: string; embeddingDimension: number }> | undefined
-    expect(secondCreatedRows?.map((row) => row.id)).toEqual(fullDocs.map((row) => row.id))
-    expect(secondCreatedRows?.map((row) => row.id)).not.toEqual(scopedDocs.map((row) => row.id))
+    expect(secondCreatedRows?.map((row) => row.id)).toEqual([
+      ...scopedDocs.map((row) => row.id),
+      'chapter-summary:chapter-1',
+      'chapter-summary:chapter-2',
+    ])
     expect(secondCreatedRows?.every((row) => row.embeddingProvider === 'ollama' && row.embeddingModel === 'unit-test-embedding-model-v2' && row.embeddingDimension === 3)).toBe(true)
-    const currentTable = Array.from(mockLanceDb.tables.values())[0]
+    const currentTable = getScopedMockTable(database, mockLanceDb, 2)
     expect(currentTable?.delete).not.toHaveBeenCalled()
-  })
+  }, 120000)
 
-  it('falls back to a full rebuild when scoped rebuild sees legacy rows without embedding metadata', async () => {
-    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-legacy-metadata-fallback')
+  it('ignores legacy Lance metadata while materializing scoped rows from source truth', async () => {
+    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-legacy-metadata-materialize')
 
     database.prepare(
       `INSERT INTO KnowledgeChapter (
@@ -956,8 +1003,9 @@ describe('retrieval-index cache reuse helpers', () => {
     ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章原文内容。', 'paragraph', 8)
 
     await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
-    const initialTable = Array.from(mockLanceDb.tables.values())[0]
-    for (const row of initialTable?.rows ?? []) {
+    const fullTable = getActiveMockTable(database, mockLanceDb)
+    const fullTableName = getActiveMockTableName(database)
+    for (const row of fullTable?.rows ?? []) {
       delete row.embeddingProvider
       delete row.embeddingModel
       delete row.embeddingDimension
@@ -965,7 +1013,7 @@ describe('retrieval-index cache reuse helpers', () => {
 
     const fullDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
     const scopedDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main', { startChapter: 2, endChapter: 2 })
-    const progressEvents: Array<{ fallbackReason?: string; totalRows: number }> = []
+    const progressEvents: Array<{ totalRows: number }> = []
 
     await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
       chapterRange: { startChapter: 2, endChapter: 2 },
@@ -973,24 +1021,310 @@ describe('retrieval-index cache reuse helpers', () => {
         progressEvents.push(progress)
       },
     })).resolves.toMatchObject({
-      rowCount: fullDocs.length,
+      rowCount: scopedDocs.length + 2,
     })
 
     expect(progressEvents).toContainEqual(expect.objectContaining({
-      fallbackReason: 'missing_embedding_metadata',
-      totalRows: fullDocs.length,
+      totalRows: scopedDocs.length + 2,
     }))
-    const fallbackProgressEvents = progressEvents.filter((progress) => progress.totalRows === fullDocs.length)
-    expect(fallbackProgressEvents.length).toBeGreaterThan(0)
-    expect(fallbackProgressEvents.every((progress) => progress.fallbackReason === 'missing_embedding_metadata')).toBe(true)
+    expect(progressEvents.find((progress) => progress.totalRows === fullDocs.length)).toBeUndefined()
     expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(2)
+    expect(mockLanceDb.database.dropTable).not.toHaveBeenCalledWith(fullTableName)
+    expect(Array.from(mockLanceDb.tables.values())).toContain(fullTable)
+    expect(getActiveMockTable(database, mockLanceDb)).toBe(fullTable)
     const secondCreatedRows = mockLanceDb.database.createTable.mock.calls[1]?.[1] as Array<{ id: string }> | undefined
-    expect(secondCreatedRows?.map((row) => row.id)).toEqual(fullDocs.map((row) => row.id))
-    expect(secondCreatedRows?.map((row) => row.id)).not.toEqual(scopedDocs.map((row) => row.id))
-    expect(initialTable?.delete).not.toHaveBeenCalled()
-  }, 10000)
+    expect(secondCreatedRows?.map((row) => row.id)).toEqual([
+      ...scopedDocs.map((row) => row.id),
+      'chapter-summary:chapter-1',
+      'chapter-summary:chapter-2',
+    ])
+    expect(fullTable?.delete).not.toHaveBeenCalled()
+  }, 120000)
 
-  it('deleteBranchRetrievalIndexFromChapter preserves raw text before the cutoff while deleting long-lived derived rows', async () => {
+  it('preserves the existing full retrieval table when a replacement rebuild fails during embedding', async () => {
+    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-full-rebuild-failure-preserves-table')
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+
+    const originalTable = getActiveMockTable(database, mockLanceDb)
+    expect(originalTable).toBeTruthy()
+
+    embedTextsWithOllama.mockClear()
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+    embedTextsWithOllama.mockImplementationOnce(async () => {
+      throw new Error('embedding failed before table replacement')
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).rejects.toThrow('embedding failed before table replacement')
+
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.createTable).not.toHaveBeenCalled()
+    expect(mockLanceDb.database.dropTable).not.toHaveBeenCalled()
+    expect(Array.from(mockLanceDb.tables.values())).toHaveLength(1)
+    expect(Array.from(mockLanceDb.tables.values())[0]).toBe(originalTable)
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+  }, 120000)
+
+  it('preserves the existing retrieval table when scoped materialization fails during embedding', async () => {
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-materialization-failure-preserves-table')
+
+    database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, summary,
+        revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('chapter-2', 'novel-001', 'novel-001:main', 2, '第2章', '第2章原文', '第2章摘要', 1, 0, null, 'hash-2', 'ready')
+    database.prepare(
+      `INSERT INTO TextSpan (
+        id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
+        charStart, charEnd, text, spanType, tokenEstimate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章原文内容。', 'paragraph', 8)
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+
+    const originalTable = getActiveMockTable(database, mockLanceDb)
+    expect(originalTable).toBeTruthy()
+
+    aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v2'
+    embedTextsWithOllama.mockClear()
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+    embedTextsWithOllama.mockImplementationOnce(async () => {
+      throw new Error('scoped embedding failed before table replacement')
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+      chapterRange: { startChapter: 2, endChapter: 2 },
+    })).rejects.toThrow('scoped embedding failed before table replacement')
+
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.createTable).not.toHaveBeenCalled()
+    expect(mockLanceDb.database.dropTable).not.toHaveBeenCalled()
+    expect(Array.from(mockLanceDb.tables.values())).toHaveLength(1)
+    expect(Array.from(mockLanceDb.tables.values())[0]).toBe(originalTable)
+    expect(originalTable?.delete).not.toHaveBeenCalled()
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+
+    const scopedDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main', { startChapter: 2, endChapter: 2 })
+    const progressEvents: Array<{ totalRows: number }> = []
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+      chapterRange: { startChapter: 2, endChapter: 2 },
+      onProgress: (progress) => {
+        progressEvents.push(progress)
+      },
+    })).resolves.toMatchObject({
+      rowCount: scopedDocs.length + 2,
+    })
+    expect(progressEvents).toContainEqual(expect.objectContaining({
+      totalRows: scopedDocs.length + 2,
+    }))
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+  }, 120000)
+
+  it('preserves the existing retrieval table when final table replacement fails', async () => {
+    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-final-replacement-failure-preserves-table')
+
+    database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, summary,
+        revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('chapter-2', 'novel-001', 'novel-001:main', 2, '第2章', '第2章原文', '第2章摘要', 1, 0, null, 'hash-2', 'ready')
+    database.prepare(
+      `INSERT INTO TextSpan (
+        id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
+        charStart, charEnd, text, spanType, tokenEstimate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章原文内容。', 'paragraph', 8)
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    const originalTable = getActiveMockTable(database, mockLanceDb)
+    expect(originalTable).toBeTruthy()
+
+    aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v2'
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+    mockLanceDb.database.createTable.mockImplementationOnce(async () => {
+      throw new Error('final table replacement failed')
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+      chapterRange: { startChapter: 2, endChapter: 2 },
+    })).rejects.toThrow('final table replacement failed')
+
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.dropTable).not.toHaveBeenCalled()
+    expect(Array.from(mockLanceDb.tables.values())).toHaveLength(1)
+    expect(Array.from(mockLanceDb.tables.values())[0]).toBe(originalTable)
+    expect(getActiveMockTable(database, mockLanceDb)).toBe(originalTable)
+    expect(originalTable?.delete).not.toHaveBeenCalled()
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+  }, 120000)
+
+  it('keeps the previous table active when a new versioned table write fails after creation', async () => {
+    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-partial-write-failure-preserves-active-table')
+
+    database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, summary,
+        revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('chapter-2', 'novel-001', 'novel-001:main', 2, '第2章', '第2章原文', '第2章摘要', 1, 0, null, 'hash-2', 'ready')
+    database.prepare(
+      `INSERT INTO TextSpan (
+        id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
+        charStart, charEnd, text, spanType, tokenEstimate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章原文内容。', 'paragraph', 8)
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    const originalTable = getActiveMockTable(database, mockLanceDb)
+    expect(originalTable).toBeTruthy()
+
+    aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v2'
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+    originalTable?.delete.mockClear()
+    originalTable?.add.mockClear()
+
+    mockLanceDb.database.createTable.mockImplementationOnce(async (name: string, rows: Array<Record<string, unknown>>) => {
+      const table = {
+        rows: [...rows],
+        add: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+        createIndex: vi.fn(async () => undefined),
+        waitForIndex: vi.fn(async () => undefined),
+        query: () => ({
+          limit: () => ({
+            toArray: async () => table.rows.slice(0, 1),
+          }),
+        }),
+      }
+      mockLanceDb.tables.set(name, table)
+      throw new Error('versioned Lance write failed after creating table')
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+      chapterRange: { startChapter: 2, endChapter: 2 },
+    })).rejects.toThrow('versioned Lance write failed after creating table')
+
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledTimes(1)
+    expect(Array.from(mockLanceDb.tables.values())).toHaveLength(1)
+    expect(getActiveMockTable(database, mockLanceDb)).toBe(originalTable)
+    expect(getLatestMockTable(mockLanceDb)).toBe(originalTable)
+    expect(originalTable?.delete).not.toHaveBeenCalled()
+    expect(originalTable?.add).not.toHaveBeenCalled()
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+  }, 120000)
+
+  it('keeps the previous table active when index creation fails', async () => {
+    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-index-failure-preserves-active-table')
+
+    database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, summary,
+        revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('chapter-2', 'novel-001', 'novel-001:main', 2, '第2章', '第2章原文', '第2章摘要', 1, 0, null, 'hash-2', 'ready')
+    database.prepare(
+      `INSERT INTO TextSpan (
+        id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
+        charStart, charEnd, text, spanType, tokenEstimate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章原文内容。', 'paragraph', 8)
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    const originalTable = getActiveMockTable(database, mockLanceDb)
+    const originalTableName = getActiveMockTableName(database)
+    expect(originalTable).toBeTruthy()
+
+    aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v2'
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+    originalTable?.delete.mockClear()
+    originalTable?.add.mockClear()
+
+    mockLanceDb.database.createTable.mockImplementationOnce(async (name: string, rows: Array<Record<string, unknown>>) => {
+      const table = {
+        rows: [...rows],
+        add: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+        createIndex: vi.fn(async () => {
+          throw new Error('Lance index failed')
+        }),
+        waitForIndex: vi.fn(async () => undefined),
+        query: () => ({
+          limit: () => ({
+            toArray: async () => table.rows.slice(0, 1),
+          }),
+        }),
+      }
+      mockLanceDb.tables.set(name, table)
+      return table
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+      chapterRange: { startChapter: 2, endChapter: 2 },
+    })).rejects.toThrow('Failed to create LanceDB FTS index: Lance index failed')
+
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledTimes(1)
+    expect(Array.from(mockLanceDb.tables.values())).toHaveLength(1)
+    expect(getActiveMockTableName(database)).toBe(originalTableName)
+    expect(getActiveMockTable(database, mockLanceDb)).toBe(originalTable)
+    expect(originalTable?.delete).not.toHaveBeenCalled()
+    expect(originalTable?.add).not.toHaveBeenCalled()
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+  }, 120000)
+
+
+  it('writes materialized rows in one final table replacement without append batches', async () => {
+    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-single-final-write')
+    aiSettings.embeddings.embeddingBatchSize = 2000
+
+    const insertWorld = database.prepare(
+      `INSERT INTO KnowledgeWorld (
+        id, novelId, branchId, term, category, definition, firstSeenChapter,
+        validFromChapter, validUntilChapter, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    for (let index = 0; index < 1005; index += 1) {
+      insertWorld.run(
+        `world-${index}`,
+        'novel-001',
+        'novel-001:main',
+        `术语${index}`,
+        '设定',
+        `定义${index}`,
+        1,
+        1,
+        999999999,
+        'ready',
+      )
+    }
+
+    const docs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    expect(docs.length).toBeGreaterThan(1000)
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: docs.length,
+    })
+
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
+    const table = getActiveMockTable(database, mockLanceDb)
+    expect(table?.rows).toHaveLength(docs.length)
+    expect(table?.add).not.toHaveBeenCalled()
+  }, 120000)
+
+  it('deleteBranchRetrievalIndexFromChapter drops the disposable Lance table', async () => {
     const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-delete-from-chapter-safe-scope')
 
     database.prepare(
@@ -1015,14 +1349,8 @@ describe('retrieval-index cache reuse helpers', () => {
     await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
     await retrievalIndex.deleteBranchRetrievalIndexFromChapter('novel-001:main', 2)
 
-    const table = Array.from(mockLanceDb.tables.values())[0]
-    expect(table?.delete).toHaveBeenCalledWith("((sourceType = 'text_span' AND chapterNo >= 2) OR (sourceType != 'text_span' AND validUntilChapter > 2))")
-    const preservedChapterOneTextRow = table?.rows.find((row) => row.sourceType === 'text_span' && row.chapterNo === 1)
-    expect(preservedChapterOneTextRow).toMatchObject({
-      chapterNo: 1,
-      text: expect.stringContaining('第一段原文内容'),
-    })
-    expect(table?.rows.find((row) => row.id === 'worldbuilding:world-1')).toBeUndefined()
-    expect(table?.rows.find((row) => row.id === 'span-4')).toBeUndefined()
-  }, 10000)
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledTimes(1)
+    expect(Array.from(mockLanceDb.tables.values())).toHaveLength(0)
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(false)
+  }, 120000)
 })

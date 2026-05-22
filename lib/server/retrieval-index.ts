@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import * as lancedb from '@lancedb/lancedb'
 import type { AIProvider, EmbeddingsScenarioSettings, KnowledgeRebuildChapterRange } from '@/lib/types'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
@@ -20,7 +20,7 @@ import {
   hasExplicitAuthoredContextSelection,
   type AuthoredRetrievalSeed,
 } from '@/lib/server/authored-context'
-import { queryAll } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
 import {
   buildCharacterDescriptionDelta,
   buildCharacterRoleCardLines,
@@ -121,14 +121,16 @@ type SourceTruthRow = {
   includeByDefault: number
 }
 
-export type RetrievalIndexBuildPhase = 'loading' | 'embedding' | 'creating_table' | 'building_text_index' | 'building_vector_index' | 'completed'
+type ActiveRetrievalIndexRow = {
+  scopeKey: string
+  tableName: string
+  scopeStartChapter: number | null
+  scopeEndChapter: number | null
+}
 
-export type RetrievalIndexBuildFallbackReason =
-  | 'missing_table'
-  | 'unusable_vector'
-  | 'missing_embedding_metadata'
-  | 'embedding_provider_mismatch'
-  | 'embedding_model_mismatch'
+type LanceDatabase = Awaited<ReturnType<typeof getDatabase>>
+
+export type RetrievalIndexBuildPhase = 'loading' | 'embedding' | 'creating_table' | 'building_text_index' | 'building_vector_index' | 'completed'
 
 export type RetrievalIndexBuildProgress = {
   phase: RetrievalIndexBuildPhase
@@ -136,7 +138,6 @@ export type RetrievalIndexBuildProgress = {
   embeddedRows: number
   totalBatches: number
   completedBatches: number
-  fallbackReason?: RetrievalIndexBuildFallbackReason
 }
 
 export type RetrievalIndexBuildResult = {
@@ -169,12 +170,13 @@ export type RawTextEmbeddingPrecomputeResult = RawTextEmbeddingPrecomputeProgres
 const LANCEDB_DIR = process.env.LANCEDB_DIR?.trim() || path.join(process.cwd(), '.lancedb')
 const TABLE_PREFIX = 'retrieval_docs_'
 const DEFAULT_EMBEDDING_BATCH_SIZE = 16
-const LANCEDB_WRITE_BATCH_SIZE = 1000
 const LANCEDB_INDEX_LOG_PREFIX = '[LanceDB Index]'
 const LANCE_INDEX_UNAVAILABLE_WARNING = 'Lance retrieval index is missing or stale for this branch; rebuild knowledge to refresh retrieval evidence.'
 const PACKABLE_TEXT_SPAN_TYPES = new Set(['paragraph', 'evidence', 'summary'])
 const MAX_PACKED_TEXT_SPAN_TOKENS = 320
 const MAX_PACKED_TEXT_SPAN_ITEMS = 8
+const FULL_RETRIEVAL_INDEX_SCOPE_KEY = 'full'
+const branchRetrievalIndexLocks = new Map<string, Promise<void>>()
 
 const SOURCE_TYPE_PRIORITY: Record<RetrievalDocSourceType, number> = {
   text_span: 1,
@@ -268,6 +270,119 @@ function getBranchTableName(branchId: string) {
   return `${TABLE_PREFIX}${hashValue(branchId).slice(0, 16)}`
 }
 
+function getVersionedBranchTableName(branchId: string) {
+  return `${getBranchTableName(branchId)}_${Date.now().toString(36)}_${randomUUID().replace(/-/g, '').slice(0, 12)}`
+}
+
+function getRetrievalIndexScope(chapterRange?: KnowledgeRebuildChapterRange) {
+  if (!chapterRange) {
+    return {
+      scopeKey: FULL_RETRIEVAL_INDEX_SCOPE_KEY,
+      scopeStartChapter: null,
+      scopeEndChapter: null,
+    }
+  }
+
+  const { startChapter, endChapter } = normalizeKnowledgeRebuildChapterRange(chapterRange)
+  return {
+    scopeKey: `chapter-range:${startChapter}:${endChapter ?? 'open'}`,
+    scopeStartChapter: startChapter,
+    scopeEndChapter: endChapter ?? null,
+  }
+}
+
+function getActiveBranchTableRows(branchId: string) {
+  return queryAll<ActiveRetrievalIndexRow>(
+    `
+      SELECT scopeKey, tableName, scopeStartChapter, scopeEndChapter
+      FROM ActiveRetrievalIndex
+      WHERE branchId = ?
+    `,
+    branchId,
+  )
+}
+
+function getActiveBranchTableName(branchId: string, scopeKey = FULL_RETRIEVAL_INDEX_SCOPE_KEY) {
+  return queryOne<ActiveRetrievalIndexRow>(
+    `
+      SELECT scopeKey, tableName, scopeStartChapter, scopeEndChapter
+      FROM ActiveRetrievalIndex
+      WHERE branchId = ? AND scopeKey = ?
+    `,
+    branchId,
+    scopeKey,
+  )?.tableName ?? null
+}
+
+function setActiveBranchTableName(branchId: string, tableName: string, scope: ReturnType<typeof getRetrievalIndexScope>) {
+  execute(
+    `
+      INSERT INTO ActiveRetrievalIndex (branchId, scopeKey, tableName, scopeStartChapter, scopeEndChapter, updatedAt)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(branchId, scopeKey) DO UPDATE SET
+        tableName = excluded.tableName,
+        scopeStartChapter = excluded.scopeStartChapter,
+        scopeEndChapter = excluded.scopeEndChapter,
+        updatedAt = CURRENT_TIMESTAMP
+    `,
+    branchId,
+    scope.scopeKey,
+    tableName,
+    scope.scopeStartChapter,
+    scope.scopeEndChapter,
+  )
+}
+
+function clearActiveBranchTableName(branchId: string, scopeKey?: string) {
+  if (scopeKey) {
+    execute('DELETE FROM ActiveRetrievalIndex WHERE branchId = ? AND scopeKey = ?', branchId, scopeKey)
+    return
+  }
+
+  execute('DELETE FROM ActiveRetrievalIndex WHERE branchId = ?', branchId)
+}
+
+function branchTableNameBelongsToBranch(branchId: string, tableName: string) {
+  const baseName = getBranchTableName(branchId)
+  return tableName === baseName || tableName.startsWith(`${baseName}_`)
+}
+
+async function withBranchRetrievalIndexLock<T>(branchId: string, callback: () => Promise<T>) {
+  const previousLock = branchRetrievalIndexLocks.get(branchId) ?? Promise.resolve()
+  let releaseLock: () => void = () => undefined
+  const currentLock = new Promise<void>((resolve) => {
+    releaseLock = resolve
+  })
+  const nextLock = previousLock.catch(() => undefined).then(() => currentLock)
+  branchRetrievalIndexLocks.set(branchId, nextLock)
+
+  await previousLock.catch(() => undefined)
+  try {
+    return await callback()
+  } finally {
+    releaseLock()
+    if (branchRetrievalIndexLocks.get(branchId) === nextLock) {
+      branchRetrievalIndexLocks.delete(branchId)
+    }
+  }
+}
+
+async function dropInactiveBranchTable(database: LanceDatabase, branchId: string, tableName: string) {
+  if (!branchTableNameBelongsToBranch(branchId, tableName) || getActiveBranchTableRows(branchId).some((row) => row.tableName === tableName)) {
+    return
+  }
+
+  try {
+    const tableNames = await database.tableNames()
+    if (tableNames.includes(tableName)) {
+      await database.dropTable(tableName)
+    }
+  } catch (error) {
+    const cleanupMessage = error instanceof Error ? error.message : 'unknown LanceDB cleanup error'
+    logLanceIndex(`failed to drop inactive retrieval table ${tableName}: ${cleanupMessage}`)
+  }
+}
+
 function uniqueStrings(values: Array<string | null | undefined>) {
   const seen = new Set<string>()
   const next: string[] = []
@@ -295,12 +410,6 @@ export function mergeRetrievalDocGroups(...groups: RetrievalDocSeedRow[][]) {
     }
   }
   return rows
-}
-
-function appendRetrievalDocRows(target: RetrievalDocRow[], source: RetrievalDocRow[]) {
-  for (const row of source) {
-    target.push(row)
-  }
 }
 
 function buildContentHash(parts: Array<string | number | null | undefined>) {
@@ -647,11 +756,6 @@ function logLanceIndex(message: string) {
   console.log(`${LANCEDB_INDEX_LOG_PREFIX} ${message}`)
 }
 
-function formatChapterRangeForLog(chapterRange: KnowledgeRebuildChapterRange) {
-  const { startChapter, endChapter } = normalizeKnowledgeRebuildChapterRange(chapterRange)
-  return endChapter === undefined ? `${startChapter}+` : `${startChapter}-${endChapter}`
-}
-
 function getEmbeddingBatchSize(settings: EmbeddingsScenarioSettings) {
   return Math.max(1, Math.floor(settings.embeddingBatchSize || DEFAULT_EMBEDDING_BATCH_SIZE))
 }
@@ -784,19 +888,32 @@ async function getDatabase() {
   return lancedb.connect(LANCEDB_DIR)
 }
 
+async function resolveBranchTableName(branchId: string, database: Awaited<ReturnType<typeof getDatabase>>) {
+  const tableNames = await database.tableNames()
+  const activeTableName = getActiveBranchTableName(branchId, FULL_RETRIEVAL_INDEX_SCOPE_KEY)
+  if (activeTableName) {
+    return branchTableNameBelongsToBranch(branchId, activeTableName) && tableNames.includes(activeTableName)
+      ? activeTableName
+      : null
+  }
+
+  const legacyTableName = getBranchTableName(branchId)
+  return tableNames.includes(legacyTableName) ? legacyTableName : null
+}
+
 async function hasBranchTable(branchId: string) {
   const database = await getDatabase()
-  const tableNames = await database.tableNames()
-  return tableNames.includes(getBranchTableName(branchId))
+  return Boolean(await resolveBranchTableName(branchId, database))
 }
 
 async function openBranchTable(branchId: string) {
-  if (!(await hasBranchTable(branchId))) {
+  const database = await getDatabase()
+  const tableName = await resolveBranchTableName(branchId, database)
+  if (!tableName) {
     return null
   }
 
-  const database = await getDatabase()
-  return database.openTable(getBranchTableName(branchId))
+  return database.openTable(tableName)
 }
 
 export async function hasBranchRetrievalIndex(branchId: string) {
@@ -863,14 +980,6 @@ function normalizeKnowledgeRebuildChapterRange(chapterRange: KnowledgeRebuildCha
   }
 }
 
-function buildScopedRetrievalOverlapPredicate(chapterRange: KnowledgeRebuildChapterRange) {
-  const { startChapter, endChapter } = normalizeKnowledgeRebuildChapterRange(chapterRange)
-
-  return endChapter === undefined
-    ? `((sourceType = 'text_span' AND chapterNo >= ${startChapter}) OR (sourceType != 'text_span' AND validUntilChapter > ${startChapter}))`
-    : `((sourceType = 'text_span' AND chapterNo >= ${startChapter} AND chapterNo <= ${endChapter}) OR (sourceType != 'text_span' AND validFromChapter <= ${endChapter} AND validUntilChapter > ${startChapter}))`
-}
-
 function docOverlapsChapterRange(row: Pick<RetrievalDocSeedRow, 'validFromChapter' | 'validUntilChapter'>, chapterRange: KnowledgeRebuildChapterRange) {
   const { startChapter, endChapter } = normalizeKnowledgeRebuildChapterRange(chapterRange)
 
@@ -885,99 +994,22 @@ function docOverlapsChapterRange(row: Pick<RetrievalDocSeedRow, 'validFromChapte
   return row.validFromChapter <= endChapter
 }
 
-type StoredEmbeddingCompatibilityMetadata = {
-  embeddingProvider: AIProvider
-  embeddingModel: string
-  embeddingDimension: number
-}
-
-async function readStoredEmbeddingCompatibilityMetadata(
-  table: Awaited<ReturnType<typeof openBranchTable>> extends infer T ? Exclude<T, null> : never,
-) {
-  try {
-    const rows = await table.query().limit(1).toArray() as Array<{
-      vector?: unknown
-      embeddingProvider?: unknown
-      embeddingModel?: unknown
-      embeddingDimension?: unknown
-    }>
-    const firstRow = rows[0]
-    if (!firstRow) {
-      return null
-    }
-
-    const embeddingProvider = firstRow.embeddingProvider
-    const embeddingModel = firstRow.embeddingModel
-    const embeddingDimension = Number(firstRow.embeddingDimension)
-    if ((embeddingProvider !== 'ollama' && embeddingProvider !== 'openai-compatible')
-      || typeof embeddingModel !== 'string'
-      || !embeddingModel.trim()
-      || !Number.isFinite(embeddingDimension)
-      || embeddingDimension <= 0) {
-      return null
-    }
-
-    const vectorValues = toVectorValues(firstRow.vector)
-    if (!vectorValues?.length || vectorValues.length !== embeddingDimension) {
-      return null
-    }
-
-    return {
-      embeddingProvider,
-      embeddingModel,
-      embeddingDimension,
-    } satisfies StoredEmbeddingCompatibilityMetadata
-  } catch {
-    return null
-  }
-}
-
-type ScopedAppendReadiness =
-  | { canAppend: true }
-  | { canAppend: false; reason: RetrievalIndexBuildFallbackReason }
-
-async function checkScopedAppendReadiness(
-  table: Awaited<ReturnType<typeof openBranchTable>> extends infer T ? Exclude<T, null> : never,
-  embeddingSettings: EmbeddingsScenarioSettings,
-): Promise<ScopedAppendReadiness> {
-  if (!(await hasUsableVectorColumn(table))) {
-    return { canAppend: false, reason: 'unusable_vector' }
-  }
-
-  const storedMetadata = await readStoredEmbeddingCompatibilityMetadata(table)
-  if (!storedMetadata) {
-    return { canAppend: false, reason: 'missing_embedding_metadata' }
-  }
-
-  if (storedMetadata.embeddingProvider !== embeddingSettings.provider) {
-    return { canAppend: false, reason: 'embedding_provider_mismatch' }
-  }
-
-  if (storedMetadata.embeddingModel !== getEmbeddingModel(embeddingSettings)) {
-    return { canAppend: false, reason: 'embedding_model_mismatch' }
-  }
-
-  return { canAppend: true }
-}
-
 async function writeBranchTableRows(params: {
   branchId: string
   rows: RetrievalDocEmbeddingPlanRow[]
   novelId: string
+  scope: ReturnType<typeof getRetrievalIndexScope>
   embeddingSettings: EmbeddingsScenarioSettings
   embeddingBatchSize: number
-  initialTable?: lancedb.Table | null
-  writeMode: 'overwrite' | 'append'
   onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
 }) {
   const {
     branchId,
     rows,
     novelId,
+    scope,
     embeddingSettings,
     embeddingBatchSize,
-    initialTable,
-    writeMode,
     onProgress,
   } = params
 
@@ -990,14 +1022,9 @@ async function writeBranchTableRows(params: {
   const embeddingStartedAt = Date.now()
   let embeddingElapsedMs = 0
   let writeElapsedMs = 0
-  let writeStartedAt: number | null = null
   let completedBatches = 0
   let embeddedRowsCount = 0
-  let writtenRowsCount = 0
   let expectedVectorDimension: number | null = null
-  let table: lancedb.Table | null = initialTable ?? null
-  let hasWrittenFirstBatch = writeMode === 'append' && Boolean(initialTable)
-  const writeBuffer: RetrievalDocRow[] = []
   const resolvedRows = Array<RetrievalDocRow | null>(rows.length).fill(null)
   const deferredRawTextRows: RetrievalDocEmbeddingPlanRow[] = []
 
@@ -1023,33 +1050,6 @@ async function writeBranchTableRows(params: {
   }
 
   logLanceIndex(`embedding started: docs=${rows.length}, batchSize=${embeddingBatchSize}`)
-
-  const flushWriteBuffer = async (force = false) => {
-    while (writeBuffer.length >= LANCEDB_WRITE_BATCH_SIZE || (force && writeBuffer.length > 0)) {
-      const nextBatchSize = force ? Math.min(writeBuffer.length, LANCEDB_WRITE_BATCH_SIZE) : LANCEDB_WRITE_BATCH_SIZE
-      const rowsBatch = writeBuffer.splice(0, nextBatchSize)
-      if (!rowsBatch.length) return
-
-      if (writeStartedAt === null) {
-        writeStartedAt = Date.now()
-        logLanceIndex(`LanceDB write started: rows=${rows.length}, writeBatchSize=${LANCEDB_WRITE_BATCH_SIZE}`)
-      }
-
-      const writeBatchStartedAt = Date.now()
-      if (!hasWrittenFirstBatch) {
-        table = await database.createTable(getBranchTableName(branchId), rowsBatch, { mode: 'overwrite' })
-        hasWrittenFirstBatch = true
-      } else {
-        if (!table) {
-          throw new Error('Failed to open LanceDB retrieval table before append write')
-        }
-        await table.add(rowsBatch)
-      }
-      writeElapsedMs += Date.now() - writeBatchStartedAt
-
-      writtenRowsCount += rowsBatch.length
-    }
-  }
 
   for (let index = 0; index < liveRows.length; index += embeddingBatchSize) {
     const batch = liveRows.slice(index, index + embeddingBatchSize)
@@ -1176,47 +1176,68 @@ async function writeBranchTableRows(params: {
     throw new Error(`Failed to resolve all retrieval rows for LanceDB rebuild: expected ${rows.length} but received ${finalRows.length}`)
   }
 
-  appendRetrievalDocRows(writeBuffer, finalRows)
-
-  await flushWriteBuffer(true)
+  const writeStartedAt = Date.now()
+  logLanceIndex(`LanceDB write started: rows=${finalRows.length}`)
+  const tableName = getVersionedBranchTableName(branchId)
+  const previousActiveTableName = getActiveBranchTableName(branchId, scope.scopeKey)
+  let table: Awaited<ReturnType<typeof database.createTable>>
+  try {
+    table = await database.createTable(tableName, finalRows)
+  } catch (error) {
+    await dropInactiveBranchTable(database, branchId, tableName)
+    throw error
+  }
+  writeElapsedMs = Date.now() - writeStartedAt
   logLanceIndex(`embedding done: elapsed=${formatElapsed(embeddingElapsedMs)}`)
   logLanceIndex(`LanceDB write done: elapsed=${formatElapsed(writeElapsedMs)}`)
 
-  if (!table) {
-    throw new Error('Failed to create LanceDB retrieval table during batched rebuild')
+  try {
+    await onProgress?.({
+      phase: 'creating_table',
+      totalRows: rows.length,
+      embeddedRows: finalRows.length,
+      totalBatches,
+      completedBatches: totalBatches,
+    })
+
+    const textIndexStartedAt = Date.now()
+    logLanceIndex('create FTS index started')
+    await onProgress?.({
+      phase: 'building_text_index',
+      totalRows: rows.length,
+      embeddedRows: finalRows.length,
+      totalBatches,
+      completedBatches: totalBatches,
+    })
+    const textIndexError = await ensureTextIndex(table)
+    logLanceIndex(`create FTS index done: elapsed=${formatElapsed(Date.now() - textIndexStartedAt)}${textIndexError ? `, error=${textIndexError}` : ''}`)
+    if (textIndexError) {
+      throw new Error(`Failed to create LanceDB FTS index: ${textIndexError}`)
+    }
+
+    const vectorIndexStartedAt = Date.now()
+    logLanceIndex('create vector index started')
+    await onProgress?.({
+      phase: 'building_vector_index',
+      totalRows: rows.length,
+      embeddedRows: finalRows.length,
+      totalBatches,
+      completedBatches: totalBatches,
+    })
+    const vectorIndexError = await ensureVectorIndex(table)
+    logLanceIndex(`create vector index done: elapsed=${formatElapsed(Date.now() - vectorIndexStartedAt)}${vectorIndexError ? `, error=${vectorIndexError}` : ''}`)
+    if (vectorIndexError) {
+      throw new Error(`Failed to create LanceDB vector index: ${vectorIndexError}`)
+    }
+
+    setActiveBranchTableName(branchId, tableName, scope)
+    if (previousActiveTableName && previousActiveTableName !== tableName) {
+      await dropInactiveBranchTable(database, branchId, previousActiveTableName)
+    }
+  } catch (error) {
+    await dropInactiveBranchTable(database, branchId, tableName)
+    throw error
   }
-
-  await onProgress?.({
-    phase: 'creating_table',
-    totalRows: rows.length,
-    embeddedRows: writtenRowsCount,
-    totalBatches,
-    completedBatches: totalBatches,
-  })
-
-  const textIndexStartedAt = Date.now()
-  logLanceIndex('create FTS index started')
-  await onProgress?.({
-    phase: 'building_text_index',
-    totalRows: rows.length,
-    embeddedRows: writtenRowsCount,
-    totalBatches,
-    completedBatches: totalBatches,
-  })
-  const textIndexError = await ensureTextIndex(table)
-  logLanceIndex(`create FTS index done: elapsed=${formatElapsed(Date.now() - textIndexStartedAt)}${textIndexError ? `, warning=${textIndexError}` : ''}`)
-
-  const vectorIndexStartedAt = Date.now()
-  logLanceIndex('create vector index started')
-  await onProgress?.({
-    phase: 'building_vector_index',
-    totalRows: rows.length,
-    embeddedRows: writtenRowsCount,
-    totalBatches,
-    completedBatches: totalBatches,
-  })
-  const vectorIndexError = await ensureVectorIndex(table)
-  logLanceIndex(`create vector index done: elapsed=${formatElapsed(Date.now() - vectorIndexStartedAt)}${vectorIndexError ? `, warning=${vectorIndexError}` : ''}`)
   return table
 }
 
@@ -1224,6 +1245,7 @@ async function createOrReplaceBranchTable(
   branchId: string,
   rows: RetrievalDocEmbeddingPlanRow[],
   novelId: string,
+  scope: ReturnType<typeof getRetrievalIndexScope>,
   embeddingSettings: EmbeddingsScenarioSettings,
   embeddingBatchSize: number,
   onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
@@ -1232,30 +1254,9 @@ async function createOrReplaceBranchTable(
     branchId,
     rows,
     novelId,
+    scope,
     embeddingSettings,
     embeddingBatchSize,
-    writeMode: 'overwrite',
-    onProgress,
-  })
-}
-
-async function appendToBranchTable(
-  branchId: string,
-  table: lancedb.Table,
-  rows: RetrievalDocEmbeddingPlanRow[],
-  novelId: string,
-  embeddingSettings: EmbeddingsScenarioSettings,
-  embeddingBatchSize: number,
-  onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
-) {
-  return writeBranchTableRows({
-    branchId,
-    rows,
-    novelId,
-    embeddingSettings,
-    embeddingBatchSize,
-    initialTable: table,
-    writeMode: 'append',
     onProgress,
   })
 }
@@ -2136,6 +2137,18 @@ export async function rebuildBranchRetrievalIndex(
     onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
   }
 ): Promise<RetrievalIndexBuildResult> {
+  return withBranchRetrievalIndexLock(branchId, () => rebuildBranchRetrievalIndexUnlocked(novelId, branchId, options))
+}
+
+async function rebuildBranchRetrievalIndexUnlocked(
+  novelId: string,
+  branchId: string,
+  options?: {
+    chapterRange?: KnowledgeRebuildChapterRange
+    onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
+  }
+): Promise<RetrievalIndexBuildResult> {
+  const scope = getRetrievalIndexScope(options?.chapterRange)
   const totalStartedAt = Date.now()
   await options?.onProgress?.({
     phase: 'loading',
@@ -2170,88 +2183,12 @@ export async function rebuildBranchRetrievalIndex(
     completedBatches: 0,
   })
 
-  const chapterRange = options?.chapterRange
-  if (!chapterRange) {
-    await deleteBranchRetrievalIndex(branchId)
-    if (!rows.length) {
-      logLanceIndex(`rebuild done: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
-      return {
-        rowCount: 0,
-        embeddingBatchCount: 0,
-      }
-    }
-
-    await createOrReplaceBranchTable(branchId, plannedRows, novelId, embeddingSettings, embeddingBatchSize, options?.onProgress)
-    await options?.onProgress?.({
-      phase: 'completed',
-      totalRows: rows.length,
-      embeddedRows: rows.length,
-      totalBatches,
-      completedBatches: totalBatches,
-    })
-    logLanceIndex(`rebuild done: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
-    return {
-      rowCount: rows.length,
-      embeddingBatchCount: totalBatches,
-    }
-  }
-
-  const existingTable = await openBranchTable(branchId)
-  const appendReadiness: ScopedAppendReadiness = existingTable
-    ? await checkScopedAppendReadiness(existingTable, embeddingSettings)
-    : { canAppend: false, reason: 'missing_table' }
-  if (!appendReadiness.canAppend) {
-    const fullRows = loadRetrievalDocsForRebuild({ novelId, branchId })
-    logLanceIndex(
-      `scoped rebuild fallback to full rebuild: reason=${appendReadiness.reason}, chapterRange=${formatChapterRangeForLog(chapterRange)}, scopedDocs=${rows.length}, fullDocs=${fullRows.length}`
-    )
-    const onFallbackProgress = options?.onProgress
-      ? (progress: RetrievalIndexBuildProgress) => options.onProgress?.({
-        ...progress,
-        fallbackReason: appendReadiness.reason,
-      })
-      : undefined
-    const fullPlannedRows = await buildRetrievalEmbeddingPlan({
-      novelId,
-      branchId,
-      rows: fullRows,
-      embeddingSettings,
-    })
-    const fullTotalBatches = Math.ceil(fullRows.length / embeddingBatchSize)
-    await onFallbackProgress?.({
-      phase: fullRows.length ? 'embedding' : 'completed',
-      totalRows: fullRows.length,
-      embeddedRows: fullPlannedRows.filter((item) => item.row.sourceType === 'text_span' && item.cachedVector).length,
-      totalBatches: fullTotalBatches,
-      completedBatches: 0,
-    })
-
-    await deleteBranchRetrievalIndex(branchId)
-    if (!fullRows.length) {
-      logLanceIndex(`rebuild done: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
-      return {
-        rowCount: 0,
-        embeddingBatchCount: 0,
-      }
-    }
-
-    await createOrReplaceBranchTable(branchId, fullPlannedRows, novelId, embeddingSettings, embeddingBatchSize, onFallbackProgress)
-    await onFallbackProgress?.({
-      phase: 'completed',
-      totalRows: fullRows.length,
-      embeddedRows: fullRows.length,
-      totalBatches: fullTotalBatches,
-      completedBatches: fullTotalBatches,
-    })
-    logLanceIndex(`rebuild done: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
-    return {
-      rowCount: fullRows.length,
-      embeddingBatchCount: fullTotalBatches,
-    }
-  }
-
-  await existingTable.delete(buildScopedRetrievalOverlapPredicate(chapterRange))
   if (!rows.length) {
+    if (scope.scopeKey === FULL_RETRIEVAL_INDEX_SCOPE_KEY) {
+      await deleteBranchRetrievalIndexUnlocked(branchId)
+    } else {
+      await deleteBranchRetrievalIndexScopeUnlocked(branchId, scope.scopeKey)
+    }
     logLanceIndex(`rebuild done: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
     return {
       rowCount: 0,
@@ -2259,7 +2196,7 @@ export async function rebuildBranchRetrievalIndex(
     }
   }
 
-  await appendToBranchTable(branchId, existingTable, plannedRows, novelId, embeddingSettings, embeddingBatchSize, options?.onProgress)
+  await createOrReplaceBranchTable(branchId, plannedRows, novelId, scope, embeddingSettings, embeddingBatchSize, options?.onProgress)
   await options?.onProgress?.({
     phase: 'completed',
     totalRows: rows.length,
@@ -2274,20 +2211,37 @@ export async function rebuildBranchRetrievalIndex(
   }
 }
 
-export async function deleteBranchRetrievalIndex(branchId: string) {
-  if (!(await hasBranchTable(branchId))) {
-    return
-  }
-
+async function deleteBranchRetrievalIndexScopeUnlocked(branchId: string, scopeKey: string) {
   const database = await getDatabase()
-  await database.dropTable(getBranchTableName(branchId))
+  const tableNames = await database.tableNames()
+  const activeTableName = getActiveBranchTableName(branchId, scopeKey)
+
+  try {
+    if (activeTableName && branchTableNameBelongsToBranch(branchId, activeTableName) && tableNames.includes(activeTableName)) {
+      await database.dropTable(activeTableName)
+    }
+  } finally {
+    clearActiveBranchTableName(branchId, scopeKey)
+  }
 }
 
-export async function deleteBranchRetrievalIndexFromChapter(branchId: string, fromChapterNo: number) {
-  const table = await openBranchTable(branchId)
-  if (!table) return
+async function deleteBranchRetrievalIndexUnlocked(branchId: string) {
+  const database = await getDatabase()
+  const tableNames = await database.tableNames()
+  const branchTableNames = tableNames.filter((tableName) => branchTableNameBelongsToBranch(branchId, tableName))
+  try {
+    await Promise.all(branchTableNames.map((tableName) => database.dropTable(tableName)))
+  } finally {
+    clearActiveBranchTableName(branchId)
+  }
+}
 
-  await table.delete(buildScopedRetrievalOverlapPredicate({ startChapter: fromChapterNo }))
+export async function deleteBranchRetrievalIndex(branchId: string) {
+  await withBranchRetrievalIndexLock(branchId, () => deleteBranchRetrievalIndexUnlocked(branchId))
+}
+
+export async function deleteBranchRetrievalIndexFromChapter(branchId: string, _fromChapterNo: number) {
+  await deleteBranchRetrievalIndex(branchId)
 }
 
 export async function searchLanceEvidence(params: {
