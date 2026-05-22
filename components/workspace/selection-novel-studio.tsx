@@ -159,6 +159,7 @@ type RewriteLaunchSource = 'chapter' | 'what_if' | 'future_jump' | 'continue_blo
 type BranchContextPreviewOptions = {
   branchContextNodeId?: string
   branchContextInclusion?: 'ancestors_only' | 'include_selected'
+  omitSelectedText?: boolean
 }
 
 type FutureMapLaunchState = {
@@ -254,6 +255,7 @@ function buildContinueBlockLineageRequestContext(context: PendingContinueBlockRe
   return {
     branchContextNodeId: nodeId,
     branchContextInclusion: 'include_selected',
+    omitSelectedText: context.variant === 'continue',
   }
 }
 
@@ -2531,6 +2533,7 @@ export function SelectionNovelStudio() {
       excludedEvidenceIds?: string[]
       branchContextNodeId?: string
       branchContextInclusion?: 'ancestors_only' | 'include_selected'
+      omitSelectedText?: boolean
     }
   ) => {
     if (!currentChapter) return null
@@ -2541,13 +2544,13 @@ export function SelectionNovelStudio() {
     }
     const targetSelection = ((selectionOverride ?? lockedSelectionText) || selectionText).trim()
     if (!targetSelection) return null
+    const selectedTextForContext = options?.omitSelectedText ? '' : targetSelection
 
     setContextPreviewLoading(true)
     setContextPreviewError('')
     try {
       const branchContext = mode === 'rewrite'
         ? {
-            ...buildContinueBlockLineageRequestContext(activeContinueBlockRewriteContext),
             branchContextNodeId: options?.branchContextNodeId ?? buildContinueBlockLineageRequestContext(activeContinueBlockRewriteContext).branchContextNodeId,
             branchContextInclusion: options?.branchContextInclusion ?? buildContinueBlockLineageRequestContext(activeContinueBlockRewriteContext).branchContextInclusion,
           }
@@ -2555,7 +2558,7 @@ export function SelectionNovelStudio() {
       const data = await callGenerationContextApi({
         novelId: currentNovelId,
         chapterId: sourceChapter.id,
-        selectedText: targetSelection,
+        selectedText: selectedTextForContext,
         operationType: toGenerationContextOperationType(mode),
         userInstruction: instructionOverride ?? getInstructionForMode(mode),
         excludedGraphEdgeIds: options?.excludedGraphEdgeIds ?? excludedGraphEdgeIds,
@@ -2715,20 +2718,20 @@ export function SelectionNovelStudio() {
   useEffect(() => {
     if (!pendingContinueBlockRewriteLaunch || !currentChapter || currentChapter.id !== pendingContinueBlockRewriteLaunch.targetChapterId) return
 
-    const instruction = pendingContinueBlockRewriteLaunch.variant === 'continue'
-      ? [
-          pendingContinueBlockRewriteLaunch.userInstruction.trim() ? `前一版要求：${pendingContinueBlockRewriteLaunch.userInstruction.trim()}` : '',
-          `当前续写块：${pendingContinueBlockRewriteLaunch.title}`,
-          '继续沿着这个续写块的最新版本扩展新的续写块，不要覆盖当前节点。',
-        ].filter(Boolean).join('\n\n')
+    const isContinue = pendingContinueBlockRewriteLaunch.variant === 'continue'
+    const targetText = isContinue
+      ? pendingContinueBlockRewriteLaunch.latestText.trim() || pendingContinueBlockRewriteLaunch.selectedText
+      : pendingContinueBlockRewriteLaunch.selectedText
+    const instruction = isContinue
+      ? pendingContinueBlockRewriteLaunch.userInstruction.trim()
       : [
           pendingContinueBlockRewriteLaunch.userInstruction.trim() ? `前一版要求：${pendingContinueBlockRewriteLaunch.userInstruction.trim()}` : '',
           `当前续写块：${pendingContinueBlockRewriteLaunch.title}`,
           '重新生成当前续写块，并保留它的修订历史。',
         ].filter(Boolean).join('\n\n')
 
-    setSelectionText(pendingContinueBlockRewriteLaunch.selectedText)
-    setLockedSelectionText(pendingContinueBlockRewriteLaunch.selectedText)
+    setSelectionText(targetText)
+    setLockedSelectionText(targetText)
     setToolbarPos(null)
     setGenerationContext(null)
     setGraphContext(null)
@@ -2742,7 +2745,7 @@ export function SelectionNovelStudio() {
     setExcludedEvidenceIds([])
     setGraphMutationPendingId(null)
     setGraphMutationError('')
-    setRewritePrompt(DEFAULT_REWRITE_PROMPT)
+    setRewritePrompt(instruction)
     setRewriteLaunchSource('continue_block')
     setRewriteSourceTextOverride(pendingContinueBlockRewriteLaunch.latestText)
     setRewriteState({ loading: false, result: pendingContinueBlockRewriteLaunch.latestText, error: '' })
@@ -2769,7 +2772,7 @@ export function SelectionNovelStudio() {
     setPendingContinueBlockRewriteLaunch(null)
 
     window.setTimeout(() => {
-      void loadContextPreview('rewrite', instruction, pendingContinueBlockRewriteLaunch.selectedText, {
+      void loadContextPreview('rewrite', instruction, targetText, {
         ...buildContinueBlockLineageRequestContext(pendingContinueBlockRewriteLaunch),
       })
     }, 0)
@@ -3601,22 +3604,24 @@ export function SelectionNovelStudio() {
     setRewriteFlow((current) => ({ ...current, loading: true, error: '', provider: 'context-stream', candidates: [], selectedIndex: 0 }))
     try {
       await savePresetCompatLibrary()
+      const continueBlockRequestContext = buildContinueBlockLineageRequestContext(activeContinueBlockRewriteContext)
       await loadContextPreview('rewrite', rewritePrompt, undefined, {
-        ...buildContinueBlockLineageRequestContext(activeContinueBlockRewriteContext),
+        ...continueBlockRequestContext,
       })
       let streamed = ''
       await streamRewriteApi(
         {
           novelId: currentNovelId,
           chapterId: currentChapter.id,
-          selectedText: targetSelection,
+          selectedText: continueBlockRequestContext.omitSelectedText ? '' : targetSelection,
           sourceText: rewriteSourceTextOverride.trim() || chapterText,
           operationType: 'rewrite',
           userInstruction: rewritePrompt,
           disabledBlockIds: disabledContextBlockIds,
           excludedGraphEdgeIds,
           excludedEvidenceIds,
-          ...buildContinueBlockLineageRequestContext(activeContinueBlockRewriteContext),
+          branchContextNodeId: continueBlockRequestContext.branchContextNodeId,
+          branchContextInclusion: continueBlockRequestContext.branchContextInclusion,
           presetCompatRuntimeContext: buildPresetCompatRuntimeContext('rewrite'),
           scope: 'chapter',
           mode: 'heavy',

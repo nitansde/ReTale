@@ -1772,6 +1772,7 @@ test('continue-block continue creates a child node while regenerate updates the 
   await page.getByTestId('workspace-continue-block-continue-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
   await expect(page.getByRole('button', { name: /当前续写块版本/ })).toBeVisible()
+  await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue('把誓言后的情绪变化压进同一场景。')
   await page.getByRole('button', { name: '生成候选版本' }).click()
   await page.getByRole('button', { name: '保存为续写块' }).click()
 
@@ -1780,10 +1781,12 @@ test('continue-block continue creates a child node while regenerate updates the 
     branchId: 'novel-001:main',
   })
   expect(generationContextPayloads[0]).toMatchObject({
+    selectedText: '',
     branchContextNodeId: 'continue-node-1',
     branchContextInclusion: 'include_selected',
   })
   expect(rewritePayloads[0]).toMatchObject({
+    selectedText: '',
     branchContextNodeId: 'continue-node-1',
     branchContextInclusion: 'include_selected',
   })
