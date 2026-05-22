@@ -1157,21 +1157,36 @@ export async function buildGenerationContext(request: GenerationContextRequest):
 
   warnings.push(...graphContext.warnings)
 
+  const selectedTextBlock = request.selectedText.trim()
+    ? [{
+        id: 'selected-text',
+        label: '选中文本',
+        enabled: true,
+        priority: 'highest' as const,
+        content: renderBlock('选中文本', [request.selectedText]),
+      }]
+    : []
+
+  const automaticTaskLines = !request.selectedText.trim() && request.branchContextNodeId
+    ? [
+        '任务要求：根据用户指导，续写下面给出的正文。',
+        '输出要求：只输出续写的新正文，不要改写、复述或解释下面已经给出的正文。',
+      ]
+    : []
+
   const blocks: GenerationContextBlock[] = [
     {
       id: 'user-instruction',
       label: '任务',
       enabled: true,
       priority: 'highest',
-      content: renderBlock('任务', [`操作类型：${effectiveOperationType}`, `用户要求：${request.userInstruction || '按当前模式生成。'}`]),
+      content: renderBlock('任务', [
+        `操作类型：${effectiveOperationType}`,
+        `用户要求：${request.userInstruction || '按当前模式生成。'}`,
+        ...automaticTaskLines,
+      ]),
     },
-    {
-      id: 'selected-text',
-      label: '选中文本',
-      enabled: true,
-      priority: 'highest',
-      content: renderBlock('选中文本', [request.selectedText || '（未提供选中文本）']),
-    },
+    ...selectedTextBlock,
     ...(roleplayContextBlock ? [roleplayContextBlock] : []),
     ...(branchLineageContextBlock ? [branchLineageContextBlock] : []),
     {

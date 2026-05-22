@@ -536,6 +536,46 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.messages[1]?.content).not.toContain('ALPHA')
   })
 
+  it('uses source text as the continuation body when selected text is omitted', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createCreativeLibrary(),
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              candidates: ['RAW OUTPUT'],
+            }),
+          },
+        },
+      ],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', {
+      stream: false,
+      selectedText: '',
+      sourceText: '上一个 block 的最新正文 ALPHA',
+      userInstruction: '把情绪压低。',
+    }))
+
+    expect(response.status).toBe(200)
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit
+    const requestBody = JSON.parse(String(requestInit.body)) as {
+      messages: Array<{ role: string; content: string }>
+    }
+    expect(requestBody.messages[1]?.content).toContain('用户要求：把情绪压低。')
+    expect(requestBody.messages[1]?.content).toContain('任务要求：根据用户指导，续写下面给出的正文。')
+    expect(requestBody.messages[1]?.content).toContain('# 待续写正文\n上一个 block 的最新正文 BETA')
+    expect(requestBody.messages[1]?.content).not.toContain('# 选中文本')
+  })
+
   it('routes generic future-jump rewrite requests through rewrite surface bindings', async () => {
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => createAiSettings('openai-compatible'),

@@ -152,6 +152,7 @@ function buildUserPrompt(params: {
   chapterNo?: number
   selectedLineStart?: number | null
   selectedLineEnd?: number | null
+  sourceText: string
   selectedText: string
   assembledContext: string
 }) {
@@ -167,10 +168,26 @@ function buildUserPrompt(params: {
       ].join('\n')
     : ''
 
+  const sourceText = params.sourceText.trim()
+  const selectedText = params.selectedText.trim()
+  const isContinuationBody = !selectedText && Boolean(sourceText)
+  const sourceBlock = selectedText
+    ? ['# 选中文本', selectedText, '']
+    : sourceText
+      ? ['# 待续写正文', sourceText, '']
+      : []
+  const automaticTaskLines = isContinuationBody
+    ? [
+        '任务要求：根据用户指导，续写下面给出的正文。',
+        '输出要求：只输出续写的新正文，不要改写、复述或解释下面已经给出的正文。',
+      ]
+    : []
+
   return [
     '# 任务',
     `操作类型：${params.operationType}`,
     `用户要求：${params.userInstruction || '按当前模式生成。'}`,
+    ...automaticTaskLines,
     '',
     '# 当前章节',
     params.chapterNo ? `当前章节：第 ${params.chapterNo} 章` : '当前章节：未知',
@@ -178,9 +195,7 @@ function buildUserPrompt(params: {
       ? `选中行：${params.selectedLineStart} - ${params.selectedLineEnd}`
       : '选中行：未知',
     '',
-    '# 选中文本',
-    params.selectedText,
-    '',
+    ...sourceBlock,
     params.assembledContext,
     roleplayContract,
   ].join('\n')
@@ -315,6 +330,7 @@ export async function POST(request: Request) {
       chapterNo: context?.chapterNo,
       selectedLineStart: context?.selectedLineStart,
       selectedLineEnd: context?.selectedLineEnd,
+      sourceText,
       selectedText,
       assembledContext,
     }),
