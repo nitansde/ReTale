@@ -154,6 +154,29 @@ afterEach(() => {
 })
 
 describe('knowledge rebuild alias sync', () => {
+  it('migrates EntityAlias timestamps used by alias resync updates', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-rebuild-alias-timestamps')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_alias_timestamp_migration', 1)
+    const columns = database.prepare('PRAGMA table_info(EntityAlias)').all() as Array<{ name: string }>
+    const columnNames = columns.map((column) => column.name)
+
+    expect(columnNames).toContain('createdAt')
+    expect(columnNames).toContain('updatedAt')
+
+    database.prepare(
+      `INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, firstSeenChapter, lastSeenChapter, importanceTier, status, userConfirmed)
+       VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, 1)`
+    ).run('entity-timestamp-a', novelId, branchId, 'A', 1, 1, 'important', 'user_confirmed')
+    database.prepare('INSERT INTO EntityAlias (id, entityId, alias, sourceChapter) VALUES (?, ?, ?, ?)')
+      .run('alias-timestamp-a', 'entity-timestamp-a', 'B', 1)
+    database.prepare('UPDATE EntityAlias SET sourceChapter = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(2, 'alias-timestamp-a')
+
+    const alias = database.prepare('SELECT sourceChapter, updatedAt FROM EntityAlias WHERE id = ?').get('alias-timestamp-a') as { sourceChapter: number; updatedAt: string | null }
+    expect(alias).toMatchObject({ sourceChapter: 2 })
+    expect(alias.updatedAt).toEqual(expect.any(String))
+  })
+
   it('keeps first alias ownership in chapter order and logs later conflicts', async () => {
     const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-alias-first-wins')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_alias_first_wins', 2)
