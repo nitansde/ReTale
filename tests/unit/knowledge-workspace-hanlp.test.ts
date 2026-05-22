@@ -5,8 +5,10 @@ import {
   groupWorldEntriesForWorkspaceRail,
   getCharacterFacetContent,
   getCharacterClassificationBadgeLabel,
+  filterWorkspaceVisibleCharacters,
   resolveCacheDeleteState,
   hasCharacterProfile,
+  isWorkspaceCharacterVisible,
   normalizeKnowledgeRebuildChapterRangeInput,
   resolveHanlpCacheDeleteState,
   resolveKnowledgeRebuildFailureMessage,
@@ -195,6 +197,139 @@ describe('knowledge workspace HanLP helpers', () => {
       }),
       note: '他把每一次亮相都压得极低，却总能在关键处突然发力，把整场对话带向他预设的方向。',
     })).toBe(true)
+  })
+
+  it('hides pure placeholder workspace characters even when they have classification badges', () => {
+    const placeholderCharacter: Character = {
+      id: 'placeholder-1',
+      novelId: 'novel-1',
+      name: '路人甲',
+      role: '主要人物',
+      goal: '待补充',
+      trait: '待补充',
+      note: '   ',
+      aliases: [],
+      importanceTier: 'important',
+      classificationKey: 'tier1',
+      classificationLabel: 'Tier 1',
+    }
+
+    expect(isWorkspaceCharacterVisible(placeholderCharacter)).toBe(false)
+    expect(filterWorkspaceVisibleCharacters([placeholderCharacter])).toEqual([])
+  })
+
+  it('keeps workspace characters visible when any real role, alias, profile, goal, trait, or note exists', () => {
+    const withRealNote: Character = {
+      id: 'note-1',
+      novelId: 'novel-1',
+      name: '沈砚',
+      role: '角色',
+      goal: '待补充',
+      trait: '待补充',
+      note: '他在第七章留下关键线索。',
+      aliases: [],
+      importanceTier: 'candidate',
+    }
+    const withAliasOnly: Character = {
+      id: 'alias-1',
+      novelId: 'novel-1',
+      name: '无名商贩',
+      role: '角色',
+      goal: '待补充',
+      trait: '待补充',
+      note: '',
+      aliases: ['黑市向导'],
+      importanceTier: 'ignored',
+    }
+    const withProfileOnly: Character = {
+      id: 'profile-1',
+      novelId: 'novel-1',
+      name: '谢临',
+      role: '角色',
+      goal: '待补充',
+      trait: '待补充',
+      note: '',
+      aliases: [],
+      profile: {
+        identity: { content: '失踪案里的前任仵作' },
+      },
+      importanceTier: 'important',
+    }
+    const withRealRoleOnly: Character = {
+      id: 'role-1',
+      novelId: 'novel-1',
+      name: '周既明',
+      role: '密探首领',
+      goal: '待补充',
+      trait: '待补充',
+      note: '',
+      aliases: [],
+      importanceTier: null,
+    }
+    const withRealGoalOnly: Character = {
+      id: 'goal-1',
+      novelId: 'novel-1',
+      name: '孟青',
+      role: '角色',
+      goal: '查清失踪案真相',
+      trait: '待补充',
+      note: '',
+      aliases: [],
+      importanceTier: null,
+    }
+    const withRealTraitOnly: Character = {
+      id: 'trait-1',
+      novelId: 'novel-1',
+      name: '温岚',
+      role: '主要人物',
+      goal: '待补充',
+      trait: '极度谨慎',
+      note: '',
+      aliases: [],
+      importanceTier: null,
+    }
+
+    expect(isWorkspaceCharacterVisible(withRealNote)).toBe(true)
+    expect(isWorkspaceCharacterVisible(withAliasOnly)).toBe(true)
+    expect(isWorkspaceCharacterVisible(withProfileOnly)).toBe(true)
+    expect(isWorkspaceCharacterVisible(withRealRoleOnly)).toBe(true)
+    expect(isWorkspaceCharacterVisible(withRealGoalOnly)).toBe(true)
+    expect(isWorkspaceCharacterVisible(withRealTraitOnly)).toBe(true)
+    expect(filterWorkspaceVisibleCharacters([
+      withRealNote,
+      withAliasOnly,
+      withProfileOnly,
+      withRealRoleOnly,
+      withRealGoalOnly,
+      withRealTraitOnly,
+    ])).toEqual([
+      withRealNote,
+      withAliasOnly,
+      withProfileOnly,
+      withRealRoleOnly,
+      withRealGoalOnly,
+      withRealTraitOnly,
+    ])
+  })
+
+  it('does not treat profile note-only facets as real role-card profile content', () => {
+    const profileNoteOnly: Character = {
+      id: 'profile-note-only',
+      novelId: 'novel-1',
+      name: '旁观者',
+      role: '角色',
+      goal: '待补充',
+      trait: '待补充',
+      note: '待补充',
+      aliases: [],
+      profile: {
+        identity: { note: '只有补充说明，没有正文画像。', evidence: '第六章提到过一次。' },
+      },
+      importanceTier: 'candidate',
+    }
+
+    expect(hasCharacterProfile(profileNoteOnly.profile)).toBe(false)
+    expect(isWorkspaceCharacterVisible(profileNoteOnly)).toBe(false)
   })
 
   it('blocks HanLP cache deletion while a rebuild is queued, running, or paused', () => {

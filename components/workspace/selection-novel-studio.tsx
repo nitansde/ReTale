@@ -640,12 +640,43 @@ const CHARACTER_PROFILE_ORDER = [
   'likes',
 ] as const
 
+const WORKSPACE_CHARACTER_PLACEHOLDER_ROLES = new Set(['角色', '主要人物'])
+const WORKSPACE_CHARACTER_PLACEHOLDER_TEXT = new Set(['待补充'])
+
 export function getCharacterFacetContent(facet?: CharacterRoleCardFacet | null) {
   return facet?.content?.trim() || facet?.summary?.trim() || ''
 }
 
 export function hasCharacterProfile(profile: Character['profile']) {
   return CHARACTER_PROFILE_ORDER.some((key) => Boolean(getCharacterFacetContent(profile?.[key])))
+}
+
+function isWorkspaceCharacterPlaceholderText(value: string) {
+  return WORKSPACE_CHARACTER_PLACEHOLDER_TEXT.has(value)
+}
+
+export function isWorkspaceCharacterVisible(character: Character) {
+  const aliases = (character.aliases ?? []).map((alias) => alias.trim()).filter(Boolean)
+  if (aliases.length > 0) return true
+  if (hasCharacterProfile(character.profile)) return true
+
+  const role = character.role.trim()
+  if (role && !WORKSPACE_CHARACTER_PLACEHOLDER_ROLES.has(role)) return true
+
+  const goal = character.goal.trim()
+  if (goal && !isWorkspaceCharacterPlaceholderText(goal)) return true
+
+  const trait = character.trait.trim()
+  if (trait && !isWorkspaceCharacterPlaceholderText(trait)) return true
+
+  const note = character.note.trim()
+  if (note && !isWorkspaceCharacterPlaceholderText(note)) return true
+
+  return false
+}
+
+export function filterWorkspaceVisibleCharacters(characters: Character[]) {
+  return characters.filter(isWorkspaceCharacterVisible)
 }
 
 export function buildCharacterProfileSections(profile: Character['profile']) {
@@ -2154,6 +2185,11 @@ export function SelectionNovelStudio() {
   }, [editor])
 
   const currentNovelCharacters = localCharacters.filter((item) => item.novelId === currentNovelId)
+  const currentNovelVisibleCharacters = useMemo(
+    () => filterWorkspaceVisibleCharacters(currentNovelCharacters),
+    [currentNovelCharacters]
+  )
+  const currentNovelVisibleCharacterCount = currentNovelVisibleCharacters.length
   const currentNovelWorldEntries = localWorldEntries.filter((item) => item.novelId === currentNovelId)
   const currentNovelOutlines = localOutlines.filter((item) => item.novelId === currentNovelId)
   const currentNovelTimelineEvents = localTimelineEvents
@@ -2161,8 +2197,8 @@ export function SelectionNovelStudio() {
     .slice()
     .sort((a, b) => a.order - b.order)
   const currentNovelCharactersSorted = useMemo(
-    () => sortCharactersForWorkspaceRail(currentNovelCharacters),
-    [currentNovelCharacters]
+    () => sortCharactersForWorkspaceRail(currentNovelVisibleCharacters),
+    [currentNovelVisibleCharacters]
   )
   const currentNovelWorldEntryGroups = useMemo(
     () => groupWorldEntriesForWorkspaceRail(currentNovelWorldEntries),
@@ -4863,7 +4899,7 @@ export function SelectionNovelStudio() {
               <>
 
             <div className="mb-3 grid grid-cols-2 gap-2 text-[11px] text-zinc-500">
-              <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">人物 {currentNovelCharacters.length}</div>
+              <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">人物 {currentNovelVisibleCharacterCount}</div>
               <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">组织 {currentNovelWorldEntryGroups.organizations.length}</div>
               <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">地点 {currentNovelWorldEntryGroups.locations.length}</div>
               <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">世界设定 {currentNovelWorldEntryGroups.worldbuilding.length}</div>
@@ -4891,7 +4927,7 @@ export function SelectionNovelStudio() {
             <div className="overflow-y-auto max-h-[calc(100vh-28rem)] space-y-2">
               {refTab === 'characters' && (
                 <>
-                  {currentNovelCharacters.length === 0 && (
+                  {currentNovelVisibleCharacterCount === 0 && (
                     <p className="text-xs text-zinc-500 text-center py-4">暂无人物投影，重建知识视图后会显示。</p>
                   )}
                   {currentNovelCharactersSorted.map((char) => {
