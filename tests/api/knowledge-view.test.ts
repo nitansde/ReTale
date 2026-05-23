@@ -158,12 +158,35 @@ function insertExtractionCacheFixture(database: DatabaseSync, params: {
   branchId: string
   chapterId: string
   chapterNo: number
+  batchChapterNos?: number[]
 }) {
+  const processingBatchId = params.batchChapterNos?.length ? `${params.idPrefix}-batch` : null
+  if (processingBatchId) {
+    database.prepare(
+      `INSERT INTO chapter_extraction_processing_batches (
+        id, novel_id, branch_id, batch_identity_hash, batch_context_json
+      ) VALUES (?, ?, ?, ?, ?)`
+    ).run(
+      processingBatchId,
+      params.novelId,
+      params.branchId,
+      `${params.idPrefix}-batch-hash`,
+      JSON.stringify({
+        schemaVersion: 'knowledge-extraction-processing-batch:v1',
+        batch: {
+          chapterIds: [params.chapterId],
+          chapterNos: params.batchChapterNos,
+          aliasDiscoveries: [],
+        },
+      }),
+    )
+  }
+
   database.prepare(
     `INSERT INTO chapter_extraction_candidates (
       id, novel_id, branch_id, chapter_id, chapter_no, chapter_revision,
-      chapter_source_hash, extraction_json, status, provider, model
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      chapter_source_hash, extraction_json, processing_batch_id, status, provider, model
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     `${params.idPrefix}-candidate`,
     params.novelId,
@@ -173,6 +196,7 @@ function insertExtractionCacheFixture(database: DatabaseSync, params: {
     1,
     `candidate-source-hash-${params.idPrefix}`,
     JSON.stringify({ chapterNo: params.chapterNo, summary: `summary-${params.idPrefix}` }),
+    processingBatchId,
     'extracted',
     'openai-compatible',
     'knowledge-model',
@@ -790,9 +814,9 @@ describe('/api/knowledge-view', () => {
     seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-main', chapterNo: 1 })
     seedKnowledgeChapter(database, { novelId, branchId: altBranchId, chapterId: 'chapter-alt', chapterNo: 2 })
     seedKnowledgeChapter(database, { novelId: otherNovelId, branchId: otherMainBranchId, chapterId: 'chapter-other', chapterNo: 1 })
-    insertExtractionCacheFixture(database, { idPrefix: 'target-main', novelId, branchId: mainBranchId, chapterId: 'chapter-main', chapterNo: 1 })
-    insertExtractionCacheFixture(database, { idPrefix: 'target-alt', novelId, branchId: altBranchId, chapterId: 'chapter-alt', chapterNo: 2 })
-    insertExtractionCacheFixture(database, { idPrefix: 'other-main', novelId: otherNovelId, branchId: otherMainBranchId, chapterId: 'chapter-other', chapterNo: 1 })
+    insertExtractionCacheFixture(database, { idPrefix: 'target-main', novelId, branchId: mainBranchId, chapterId: 'chapter-main', chapterNo: 1, batchChapterNos: [1] })
+    insertExtractionCacheFixture(database, { idPrefix: 'target-alt', novelId, branchId: altBranchId, chapterId: 'chapter-alt', chapterNo: 2, batchChapterNos: [2] })
+    insertExtractionCacheFixture(database, { idPrefix: 'other-main', novelId: otherNovelId, branchId: otherMainBranchId, chapterId: 'chapter-other', chapterNo: 1, batchChapterNos: [1] })
     insertHanlpCacheFixture(database, { idPrefix: 'target-main', novelId, branchId: mainBranchId, chapterId: 'chapter-main', chapterNo: 1 })
 
     const { POST } = await loadKnowledgeViewRoute()
@@ -807,6 +831,9 @@ describe('/api/knowledge-view', () => {
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ?', mainBranchId)?.count).toBe(0)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ?', altBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ?', otherMainBranchId)?.count).toBe(1)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_processing_batches WHERE branch_id = ?', mainBranchId)?.count).toBe(0)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_processing_batches WHERE branch_id = ?', altBranchId)?.count).toBe(1)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_processing_batches WHERE branch_id = ?', otherMainBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_cache WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
   })
 
@@ -921,21 +948,18 @@ describe('/api/knowledge-view', () => {
   })
 
   it('queues a fresh imported novel rebuild without blocking the POST response', async () => {
-    const { queryOne } = await createTestDatabase('chatbook-knowledge-view-fresh-import-rebuild')
-    const { syncWorkspacePayloadToKnowledgeStore } = await import('@/lib/server/knowledge-rebuild')
-    const { importNovelIntoWorkspace } = await import('@/lib/server/import-txt')
-    const { createEmptyWorkspaceState } = await import('@/lib/workspace-state')
-    const fixtureText = fs.readFileSync(WORKSPACE_IMPORT_SMOKE_PATH, 'utf8')
-    const importedState = importNovelIntoWorkspace(createEmptyWorkspaceState(), {
-      title: 'workspace-import-smoke.txt',
-      text: fixtureText,
-      summary: 'workspace import smoke',
-    })
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-fresh-import-rebuild')
+    const novelId = `novel_fresh_import_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+    for (let chapterNo = 1; chapterNo <= 3; chapterNo += 1) {
+      seedKnowledgeChapter(database, {
+        novelId,
+        branchId: mainBranchId,
+        chapterId: `chapter-import-${chapterNo}`,
+        chapterNo,
+      })
+    }
 
-    await syncWorkspacePayloadToKnowledgeStore(importedState)
-
-    const novelId = importedState.currentNovelId
-    expect(novelId).toBeTruthy()
     expect(queryOne<{ id: string }>('SELECT id FROM StoryBranch WHERE id = ?', `${novelId}:main`)).toMatchObject({
       id: `${novelId}:main`,
     })

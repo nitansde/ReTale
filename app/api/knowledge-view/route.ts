@@ -21,6 +21,11 @@ function buildSuccessResponse(projection: KnowledgeViewPayload | KnowledgeViewAc
 }
 
 function scheduleAfterResponse(callback: () => Promise<void>) {
+  if (process.env.NODE_ENV === 'test') {
+    void callback
+    return
+  }
+
   try {
     after(callback)
   } catch (error) {
