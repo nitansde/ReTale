@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -7,7 +8,6 @@ import { loadFutureMapSourceData } from '@/lib/server/outline-bootstrap'
 import { createOutlineNode, createOutlineNodeChapter } from '@/lib/server/outline-node-store'
 import { listOutlineNodes } from '@/lib/server/outline-node-store'
 import { initializeDatabase } from '@/lib/server/sqlite'
-import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const ROOT = process.cwd()
 const EVIDENCE_DIR = path.join(ROOT, '.sisyphus/evidence/task-4-outline-bootstrap')
@@ -21,14 +21,12 @@ afterEach(() => {
 })
 
 function createTestDb() {
-  const tempDatabase = createTempDatabaseCopy('chatbook-outline-bootstrap-derived')
-  cleanups.push(tempDatabase.cleanup)
-
-  const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'chatbook-outline-bootstrap-derived-'))
+  const database = initializeDatabase(new DatabaseSync(path.join(tempDirectory, 'test.db')))
   return {
     cleanup() {
-  ;(database as DatabaseSync & { close?: () => void }).close?.()
-      tempDatabase.cleanup()
+      ;(database as DatabaseSync & { close?: () => void }).close?.()
+      fs.rmSync(tempDirectory, { recursive: true, force: true })
     },
     db: {
       execute: (sql: string, ...params: Array<string | number | bigint | Uint8Array | null>) => {
@@ -188,6 +186,32 @@ describe('outline bootstrap derived fallback', () => {
         defaults: futureMap.defaults,
       }, null, 2),
     )
+  })
+
+  it('repairs corrupt workspace state when bootstrapping without an explicit workspace payload', async () => {
+    const database = createTestDb()
+    cleanups.push(database.cleanup)
+    seedNovel(database.db)
+    database.db.execute('DELETE FROM WorkspaceState WHERE id = ?', 'singleton')
+    database.db.execute('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)', 'singleton', '{not-json')
+
+    const futureMap = await loadFutureMapSourceData({
+      novelId: 'novel-002',
+      branchId: 'novel-002:main',
+      db: database.db,
+    })
+
+    const saved = database.db.queryOne<{ payload: string }>('SELECT payload FROM WorkspaceState WHERE id = ?', 'singleton')
+    const recovered = JSON.parse(saved?.payload ?? '{}') as PersistedNovelState
+    const backup = database.db.queryOne<{ payload: string; reason: string }>(
+      'SELECT payload, reason FROM WorkspaceStateBackup WHERE workspaceStateId = ? ORDER BY createdAt DESC, rowid DESC LIMIT 1',
+      'singleton'
+    )
+
+    expect(futureMap.events.length).toBeGreaterThan(0)
+    expect(recovered.localNovels.some((novel) => novel.id === 'novel-002')).toBe(true)
+    expect(recovered.localChapters.some((chapter) => chapter.id === 'chapter-20')).toBe(true)
+    expect(backup).toEqual({ payload: '{not-json', reason: 'recover-corrupt' })
   })
 
   it('additively backfills later candidates when partial outline rows already exist', async () => {

@@ -2,9 +2,9 @@ import type { Chapter, PersistedNovelState, TimelineEvent } from '@/lib/types'
 import { FUTURE_MAP_MISSING_SUMMARY_FALLBACK, type FutureMapResponse, type OutlineNodeChapterRecord, type OutlineNodeRecord } from '@/lib/story-branch-types'
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
 import { createOutlineNode, createOutlineNodeChapter, listOutlineNodeChapters, listOutlineNodes } from '@/lib/server/outline-node-store'
-import { findWorkspaceState } from '@/lib/server/persistence'
 import { getMainBranchId } from '@/lib/server/knowledge-store'
 import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
+import { loadWorkspacePayloadWithRecovery } from '@/lib/server/workspace-resilience'
 
 type Db = {
   execute: typeof execute
@@ -280,13 +280,12 @@ function choosePreferredNodes(nodes: OutlineNodeRecord[]) {
   return Array.from(preferredByKey.values()).sort((left, right) => left.sortOrder - right.sortOrder || (left.chapterNo ?? Number.MAX_SAFE_INTEGER) - (right.chapterNo ?? Number.MAX_SAFE_INTEGER) || left.id.localeCompare(right.id))
 }
 
-function loadWorkspaceStatePayload(workspaceState?: Partial<PersistedNovelState> | null) {
+function loadWorkspaceStatePayload(workspaceState: Partial<PersistedNovelState> | null | undefined, db: Db) {
   if (workspaceState) {
     return normalizeWorkspaceState(workspaceState)
   }
 
-  const saved = findWorkspaceState('singleton')
-  return saved ? normalizeWorkspaceState(JSON.parse(saved.payload) as Partial<PersistedNovelState>) : null
+  return loadWorkspacePayloadWithRecovery('singleton', db)
 }
 
 function loadKnowledgeChapters(novelId: string, branchId: string, db: Db) {
@@ -566,7 +565,7 @@ async function ensureCandidatePersisted(candidate: OutlineBootstrapCandidate, pa
 export async function bootstrapOutlineNodesForFutureMap(params: BootstrapParams): Promise<BootstrapResult> {
   const db = params.db ?? defaultDb
   const branchId = params.branchId ?? getMainBranchId(params.novelId)
-  const workspaceState = loadWorkspaceStatePayload(params.workspaceState)
+  const workspaceState = loadWorkspaceStatePayload(params.workspaceState, db)
   const chapterRows = loadKnowledgeChapters(params.novelId, branchId, db)
   const workspaceChapterRows = buildWorkspaceChapterRows(workspaceState, params.novelId)
   const chapterAnchorRows = mergeChapterRows(chapterRows, workspaceChapterRows)
