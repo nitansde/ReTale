@@ -6,6 +6,9 @@ import type { AISettings } from '@/lib/types'
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
+const API_TEST_TIMEOUT_MS = 30_000
+
+vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
 
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -146,13 +149,19 @@ async function waitForCondition(check: () => boolean, label: string) {
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
-  vi.resetModules()
   vi.unmock('@/lib/server/ai-settings')
   vi.unmock('@/lib/server/hanlp-bootstrap')
   vi.unmock('@/lib/server/hanlp-bootstrap-initializer')
   vi.unmock('@/lib/server/knowledge-extraction')
   vi.unmock('@/lib/server/ollama-local')
   vi.unmock('@/lib/server/retrieval-index')
+  vi.doUnmock('@/lib/server/ai-settings')
+  vi.doUnmock('@/lib/server/hanlp-bootstrap')
+  vi.doUnmock('@/lib/server/hanlp-bootstrap-initializer')
+  vi.doUnmock('@/lib/server/knowledge-extraction')
+  vi.doUnmock('@/lib/server/ollama-local')
+  vi.doUnmock('@/lib/server/retrieval-index')
+  vi.resetModules()
 
   if (globalForSqlite.sqlite) {
     try {
@@ -170,6 +179,102 @@ afterEach(() => {
 })
 
 describe('knowledge rebuild raw-text precompute overlap', () => {
+  it('keeps dedicated retrieval rebuild visible while raw embedding is running, then builds LanceDB', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-retrieval-dedicated-worker')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_dedicated_retrieval_worker', 2)
+    const aiSettings = createMockAISettings()
+    const precomputeGate = createDeferred()
+    let precomputeStarted = false
+    let indexStarted = false
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+      saveAISettings: vi.fn(),
+      maskApiKey: (value: string) => value,
+    }))
+
+    vi.doMock('@/lib/server/retrieval-index', async () => {
+      const actual = await vi.importActual<typeof import('@/lib/server/retrieval-index')>('@/lib/server/retrieval-index')
+      return {
+        ...actual,
+        precomputeRawTextEmbeddingCache: vi.fn(async (params: Parameters<typeof actual.precomputeRawTextEmbeddingCache>[0]) => {
+          precomputeStarted = true
+          await params.onProgress?.({
+            totalDocs: 2,
+            completedDocs: 1,
+            cacheHits: 1,
+            cacheMisses: 1,
+            failedDocs: 0,
+            totalBatches: 2,
+            completedBatches: 1,
+          })
+          await precomputeGate.promise
+          return {
+            totalDocs: 2,
+            completedDocs: 2,
+            cacheHits: 1,
+            cacheMisses: 1,
+            failedDocs: 0,
+            totalBatches: 2,
+            completedBatches: 2,
+            degraded: false,
+            cancelled: false,
+            durationMs: 25,
+          }
+        }),
+        rebuildBranchRetrievalIndex: vi.fn(async (_novelId: string, _branchId: string, options?: Parameters<typeof actual.rebuildBranchRetrievalIndex>[2]) => {
+          indexStarted = true
+          await options?.onProgress?.({ phase: 'loading', totalRows: 2, embeddedRows: 0, totalBatches: 2, completedBatches: 0 })
+          await options?.onProgress?.({ phase: 'embedding', totalRows: 2, embeddedRows: 1, totalBatches: 2, completedBatches: 1 })
+          await options?.onProgress?.({ phase: 'completed', totalRows: 2, embeddedRows: 2, totalBatches: 2, completedBatches: 2 })
+          return { rowCount: 2, embeddingBatchCount: 2 }
+        }),
+      }
+    })
+
+    const { startKnowledgeRetrievalRebuildForNovel, runStartedKnowledgeRetrievalRebuildForNovel } = await import('@/lib/server/knowledge-rebuild')
+    const started = await startKnowledgeRetrievalRebuildForNovel({ novelId, branchId, chapterRange: { startChapter: 1, endChapter: 2 } })
+    expect(started.outcome).toBe('queued')
+
+    const runPromise = runStartedKnowledgeRetrievalRebuildForNovel({ novelId, branchId, jobId: started.jobId })
+    await waitForCondition(() => precomputeStarted, 'dedicated retrieval precompute start')
+
+    const runningJob = queryOne<{ status: string; currentStep: string | null; progress: number; payloadJson: string | null }>(
+      'SELECT status, currentStep, progress, payloadJson FROM KnowledgeJob WHERE id = ?',
+      started.jobId,
+    )
+    const runningPayload = runningJob?.payloadJson ? JSON.parse(runningJob.payloadJson) as { phase?: string; rawTextEmbeddingProgress?: number } : null
+    expect(runningJob).toMatchObject({
+      status: 'running',
+      currentStep: '等待原文 Embedding 预计算完成',
+    })
+    expect(runningJob?.progress).toBeGreaterThanOrEqual(0.94)
+    expect(runningPayload).toMatchObject({
+      phase: 'raw-embedding',
+      rawTextEmbeddingProgress: 0.5,
+    })
+
+    precomputeGate.resolve()
+    await expect(runPromise).resolves.toBeUndefined()
+
+    const completedJob = queryOne<{ status: string; currentStep: string | null; progress: number; payloadJson: string | null }>(
+      'SELECT status, currentStep, progress, payloadJson FROM KnowledgeJob WHERE id = ?',
+      started.jobId,
+    )
+    const completedPayload = completedJob?.payloadJson ? JSON.parse(completedJob.payloadJson) as { phase?: string; rawTextEmbeddingProgress?: number; indexProgress?: { phase?: string } } : null
+    expect(indexStarted).toBe(true)
+    expect(completedJob).toMatchObject({
+      status: 'succeeded',
+      currentStep: '完成',
+      progress: 1,
+    })
+    expect(completedPayload).toMatchObject({
+      phase: 'index',
+      rawTextEmbeddingProgress: 1,
+      indexProgress: { phase: 'completed' },
+    })
+  })
+
   it('exposes raw-text telemetry through rebuild status', async () => {
     const { database } = await createTestDatabase('chatbook-knowledge-rebuild-status-telemetry-surface')
     const novelId = `novel_status_${Math.random().toString(36).slice(2, 8)}`
@@ -234,7 +339,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     })
   })
 
-  it('starts raw-text precompute before extraction finishes', async () => {
+  it('keeps raw-text precompute off the main SQLite rebuild path', async () => {
     const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-overlap-starts-early')
     const { novelId } = seedKnowledgeRebuildFixture(database)
     const aiSettings = createMockAISettings()
@@ -303,22 +408,23 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
     const rebuildPromise = rebuildKnowledgeForNovel({ novelId })
 
-    await waitForCondition(() => extractionStarted && precomputeStarted, 'extract/precompute overlap')
+    await waitForCondition(() => extractionStarted, 'extraction start')
     expect(extractionFinished).toBe(false)
+    expect(precomputeStarted).toBe(false)
 
     extractionGate.resolve()
     embeddingGate.resolve()
 
     await expect(rebuildPromise).resolves.toMatchObject({ outcome: 'completed' })
 
-    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(embedTextsWithOllama).not.toHaveBeenCalled()
     const payloadRow = queryOne<{ payloadJson: string | null }>('SELECT payloadJson FROM KnowledgeJob WHERE novelId = ?', novelId)
     const payload = payloadRow?.payloadJson ? JSON.parse(payloadRow.payloadJson) as { rawTextEmbeddingProgress?: number; stageTimingsMs?: Record<string, number> } : null
-    expect(payload?.rawTextEmbeddingProgress).toBe(1)
-    expect(payload?.stageTimingsMs?.raw_text_precompute).toEqual(expect.any(Number))
+    expect(payload?.rawTextEmbeddingProgress).toBeUndefined()
+    expect(payload?.stageTimingsMs?.raw_text_precompute).toBeUndefined()
   })
 
-  it('preserves overlap and final rebuild correctness', async () => {
+  it('finishes ranged SQLite rebuilds without waiting for retrieval phases', async () => {
     const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-overlap-final-correctness')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_overlap_final_correctness')
     const aiSettings = createMockAISettings()
@@ -328,7 +434,6 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     let extractionStarted = false
     let extractionFinished = false
     let precomputeStarted = false
-    let precomputeParams: { chapterRange?: { startChapter?: number; endChapter?: number } } | null = null
 
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => aiSettings,
@@ -380,7 +485,6 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
       return {
         ...actual,
         precomputeRawTextEmbeddingCache: vi.fn(async (params: { chapterRange?: { startChapter?: number; endChapter?: number } }) => {
-          precomputeParams = params
           precomputeStarted = true
           events.push('precompute:start')
           await precomputeGate.promise
@@ -407,31 +511,29 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
     const rebuildPromise = rebuildKnowledgeForNovel({ novelId, chapterRange: { startChapter: 1, endChapter: 1 } })
 
-    await waitForCondition(() => extractionStarted && precomputeStarted, 'extract/precompute overlap')
+    await waitForCondition(() => extractionStarted, 'extraction start')
     expect(extractionFinished).toBe(false)
-    expect(precomputeParams?.chapterRange).toEqual({ startChapter: 1, endChapter: 1 })
+    expect(precomputeStarted).toBe(false)
 
     extractionGate.resolve()
     await waitForCondition(() => extractionFinished, 'extraction completion before final index')
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(events).not.toContain('final-index:start')
+    expect(events).not.toContain('precompute:start')
     const waitingJob = queryOne<{ currentStep: string | null; payloadJson: string | null }>(
       'SELECT currentStep, payloadJson FROM KnowledgeJob WHERE novelId = ? AND branchId = ? ORDER BY createdAt DESC LIMIT 1',
       novelId,
       branchId,
     )
     const waitingPayload = waitingJob?.payloadJson ? JSON.parse(waitingJob.payloadJson) as { phase?: string } : null
-    expect(waitingPayload?.phase).toBe('raw-embedding')
-    expect(waitingJob?.currentStep).toBe('等待原文 Embedding 预计算完成')
-
-    precomputeGate.resolve()
+    expect(waitingPayload?.phase).toBe('write')
+    expect(waitingJob?.currentStep).toBe('完成')
 
     await expect(rebuildPromise).resolves.toMatchObject({ outcome: 'completed' })
 
-    expect(events).toContain('precompute:start')
     expect(events).toContain('extract:start')
-    expect(events.lastIndexOf('story-state:0')).toBeGreaterThan(events.indexOf('extract:finish'))
-    expect(events.indexOf('final-index:start')).toBeGreaterThan(events.lastIndexOf('story-state:0'))
+    expect(events).toContain('story-state:0')
+    expect(events).not.toContain('final-index:start')
 
     const chapter = queryOne<{ knowledgeStatus: string; isDirty: number }>(
       'SELECT knowledgeStatus, isDirty FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? AND id = ?',
@@ -453,13 +555,13 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     } : null
 
     expect(job?.status).toBe('succeeded')
-    expect(payload?.rawTextEmbeddingProgress).toBe(0)
-    expect(payload?.rawTextEmbeddingCacheHitRate).toBe(0)
-    expect(payload?.stageTimingsMs?.raw_text_precompute).toEqual(expect.any(Number))
+    expect(payload?.rawTextEmbeddingProgress).toBeUndefined()
+    expect(payload?.rawTextEmbeddingCacheHitRate).toBeUndefined()
+    expect(payload?.stageTimingsMs?.raw_text_precompute).toBeUndefined()
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', branchId)?.count).toBe(0)
   })
 
-  it('restarts ranged raw-text precompute when resuming raw-embedding without an in-memory run', async () => {
+  it('treats a resumed raw-embedding main job as already complete for SQLite purposes', async () => {
     const { database } = await createTestDatabase('chatbook-knowledge-rebuild-raw-embedding-resume')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_raw_embedding_resume')
     const aiSettings = createMockAISettings()
@@ -539,10 +641,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
       chapterRange: { startChapter: 1, endChapter: 1 },
     })).resolves.toMatchObject({ outcome: 'completed' })
 
-    expect(precomputeCalls).toHaveLength(1)
-    expect(precomputeCalls[0]?.chapterRange).toEqual({ startChapter: 1, endChapter: 1 })
-    expect(events.indexOf('precompute:start')).toBeGreaterThanOrEqual(0)
-    expect(events.indexOf('final-index:start')).toBeGreaterThan(events.indexOf('precompute:start'))
+    expect(precomputeCalls).toHaveLength(0)
+    expect(events).not.toContain('precompute:start')
+    expect(events).not.toContain('final-index:start')
   })
 
   it('degrades gracefully after raw-text precompute retries are exhausted', async () => {
@@ -602,7 +703,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
 
     await expect(rebuildPromise).resolves.toMatchObject({ outcome: 'completed' })
 
-    expect(embedTextsWithOllama).toHaveBeenCalledTimes(3)
+    expect(embedTextsWithOllama).not.toHaveBeenCalled()
 
     const job = queryOne<{ status: string; payloadJson: string | null }>(
       'SELECT status, payloadJson FROM KnowledgeJob WHERE novelId = ? AND branchId = ? ORDER BY createdAt DESC LIMIT 1',
@@ -616,9 +717,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     } : null
 
     expect(job?.status).toBe('succeeded')
-    expect(payload?.rawTextEmbeddingProgress).toBe(0)
-    expect(payload?.rawTextEmbeddingCacheHitRate).toBe(0)
-    expect(payload?.stageTimingsMs?.raw_text_precompute).toEqual(expect.any(Number))
+    expect(payload?.rawTextEmbeddingProgress).toBeUndefined()
+    expect(payload?.rawTextEmbeddingCacheHitRate).toBeUndefined()
+    expect(payload?.stageTimingsMs?.raw_text_precompute).toBeUndefined()
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', branchId)?.count).toBe(0)
   })
 

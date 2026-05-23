@@ -503,10 +503,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
 
     expect(hanlpCalls).toEqual([1, 2, 3, 4, 5])
     expect(extractionCalls).toEqual([3])
-    expect(rebuildBranchRetrievalIndex).toHaveBeenCalledWith(novelId, `${novelId}:main`, expect.objectContaining({
-      chapterRange: { startChapter: 2, endChapter: 3 },
-      onProgress: expect.any(Function),
-    }))
+    expect(rebuildBranchRetrievalIndex).not.toHaveBeenCalled()
     expect(jobPayload).toMatchObject({
       chapterRange: { startChapter: 2, endChapter: 3 },
       totalChapterCount: 2,
