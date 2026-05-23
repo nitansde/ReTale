@@ -909,7 +909,11 @@ function projectCharacterCompatibilityFields(
   return { role, goal, trait, note }
 }
 
-export async function buildKnowledgeProjection(novelIds?: string[], asOfChapter?: number): Promise<KnowledgeViewPayload> {
+export async function buildKnowledgeProjection(
+  novelIds?: string[],
+  asOfChapter?: number,
+  options?: { includeKnowledgeStatusOverview?: boolean }
+): Promise<KnowledgeViewPayload> {
   const knowledgeRebuildStatus = getKnowledgeRebuildStatus(novelIds)
   const hanlpCacheSnapshot = getKnowledgeViewHanlpCacheSnapshot(novelIds, knowledgeRebuildStatus)
   const novels = novelIds?.length
@@ -928,7 +932,9 @@ export async function buildKnowledgeProjection(novelIds?: string[], asOfChapter?
     }
   }
 
-  const knowledgeStatusOverview = novelIds?.length === 1
+  const knowledgeStatusOverview = options?.includeKnowledgeStatusOverview === false
+    ? null
+    : novelIds?.length === 1
     ? getKnowledgeStatusOverview(novelIds[0], getMainBranchId(novelIds[0]))
     : null
 
@@ -1152,7 +1158,7 @@ export async function rebuildAuthoritativeKnowledgeView(novelId: string, chapter
   })
 
   return {
-    ...(await buildKnowledgeProjection([novelId])),
+    ...(await buildKnowledgeProjection([novelId], undefined, { includeKnowledgeStatusOverview: false })),
     jobOutcome: rebuildResult.outcome,
     actionError: null,
   }
@@ -1230,7 +1236,7 @@ export async function pauseAuthoritativeKnowledgeRebuild(novelId: string): Promi
   })
 
   return {
-    ...(await buildKnowledgeProjection([novelId])),
+    ...(await buildKnowledgeProjection([novelId], undefined, { includeKnowledgeStatusOverview: false })),
     jobOutcome,
     actionError: null,
   }
@@ -1247,7 +1253,7 @@ export async function abortAuthoritativeKnowledgeRebuild(novelId: string): Promi
   })
 
   return {
-    ...(await buildKnowledgeProjection([novelId])),
+    ...(await buildKnowledgeProjection([novelId], undefined, { includeKnowledgeStatusOverview: false })),
     jobOutcome,
     actionError: null,
   }
