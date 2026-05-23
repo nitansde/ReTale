@@ -77,6 +77,7 @@ type KnowledgeProjectionPayload = Pick<
 type KnowledgeRebuildStatus = {
   jobId: string
   novelId: string
+  jobType: 'extract_chapter_knowledge' | 'rebuild_retrieval_index'
   status: string
   errorMessage?: string | null
   progress: number
@@ -122,6 +123,31 @@ type HanlpCacheSnapshot = {
   settingsSnapshot?: NonNullable<KnowledgeRebuildStatus['hanlpSettingsSnapshot']>
 }
 
+type KnowledgeCoverageStatus = 'missing' | 'partial' | 'full'
+
+type KnowledgeChapterCoverageOverview = {
+  status: KnowledgeCoverageStatus
+  coveredChapterCount: number
+  totalChapterCount: number
+  validThroughChapterNo: number | null
+}
+
+type RetrievalIndexCoverageOverview = {
+  status: KnowledgeCoverageStatus
+  indexedScopeCount: number
+  chapterRange?: KnowledgeRebuildChapterRange
+  task: KnowledgeRebuildStatus | null
+}
+
+type KnowledgeStatusOverview = {
+  knowledgeGraph: KnowledgeChapterCoverageOverview
+  embeddingCache: KnowledgeChapterCoverageOverview & {
+    provider: string | null
+    model: string | null
+  }
+  retrievalIndex: RetrievalIndexCoverageOverview
+}
+
 type KnowledgeActionOutcome = 'completed' | 'queued' | 'running' | 'paused' | 'aborted' | 'blocked' | 'deleted' | 'idle'
 
 type KnowledgeActionError = {
@@ -137,6 +163,7 @@ type PresetCompatImportResult = {
 type KnowledgeProjectionResult = KnowledgeProjectionPayload & {
   knowledgeRebuildStatus: KnowledgeRebuildStatus | null
   hanlpCacheSnapshot: HanlpCacheSnapshot | null
+  knowledgeStatusOverview: KnowledgeStatusOverview | null
   jobOutcome: KnowledgeActionOutcome | null
   actionError: KnowledgeActionError | null
 }
@@ -156,6 +183,7 @@ function normalizeKnowledgeProjectionResult(data: Partial<KnowledgeProjectionRes
     ...normalizeKnowledgeProjection(data),
     knowledgeRebuildStatus: data.knowledgeRebuildStatus ?? null,
     hanlpCacheSnapshot: data.hanlpCacheSnapshot ?? null,
+    knowledgeStatusOverview: data.knowledgeStatusOverview ?? null,
     jobOutcome: data.jobOutcome ?? null,
     actionError: data.actionError ?? null,
   }
@@ -165,7 +193,7 @@ async function fetchKnowledgeProjection(options?: {
   novelId?: string
   asOfChapter?: number
   method?: 'GET' | 'POST'
-  action?: 'rebuild' | 'pause' | 'abort' | 'delete-knowledge' | 'delete-hanlp-cache' | 'delete-extraction-cache' | 'delete-embedding-cache'
+  action?: 'rebuild' | 'rebuild-retrieval-index' | 'pause' | 'abort' | 'delete-knowledge' | 'delete-hanlp-cache' | 'delete-extraction-cache' | 'delete-embedding-cache'
   chapterRange?: KnowledgeRebuildChapterRange
 }): Promise<KnowledgeProjectionResult> {
   const novelId = options?.novelId
@@ -455,6 +483,7 @@ type NovelStore = PersistedNovelState & {
   deleteChapter: (chapterId: string) => void
   deleteNovel: (novelId: string) => void
   rebuildStoryKnowledge: (novelId?: string, options?: { chapterRange?: KnowledgeRebuildChapterRange }) => Promise<KnowledgeProjectionResult | null>
+  rebuildStoryRetrievalIndex: (novelId?: string, options?: { chapterRange?: KnowledgeRebuildChapterRange }) => Promise<KnowledgeProjectionResult | null>
   pauseStoryKnowledgeRebuild: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   abortStoryKnowledgeRebuild: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   deleteStoryKnowledgeGraph: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
@@ -819,6 +848,26 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
             ...current.trajectories,
           ]
         : current.trajectories,
+    }))
+
+    return result
+  },
+  rebuildStoryRetrievalIndex: async (novelId, options) => {
+    const state = get()
+    const targetNovelId = novelId ?? state.currentNovelId
+    const chaptersForNovel = state.localChapters.filter((chapter) => chapter.novelId === targetNovelId && !chapter.parentChapterId)
+    if (!targetNovelId || !chaptersForNovel.length) return null
+
+    const result = await fetchKnowledgeProjection({
+      novelId: targetNovelId,
+      method: 'POST',
+      action: 'rebuild-retrieval-index',
+      chapterRange: options?.chapterRange,
+    })
+    const projection = normalizeKnowledgeProjection(result)
+
+    set((current) => ({
+      ...mergeKnowledgeProjection(current, projection, targetNovelId),
     }))
 
     return result

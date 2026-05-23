@@ -9,7 +9,9 @@ import {
   type KnowledgeViewActionPayload,
   type KnowledgeViewPayload,
   pauseAuthoritativeKnowledgeRebuild,
+  rebuildAuthoritativeRetrievalIndex,
   rebuildAuthoritativeKnowledgeView,
+  runAuthoritativeRetrievalIndexRebuild,
   runAuthoritativeKnowledgeViewRebuild,
 } from '@/lib/server/knowledge-view'
 import type { KnowledgeRebuildChapterRange } from '@/lib/types'
@@ -99,16 +101,27 @@ export async function POST(request: Request) {
           ? await deleteAuthoritativeEmbeddingCache(novelId)
         : action === 'delete-knowledge'
           ? await deleteAuthoritativeKnowledgeGraph(novelId)
+          : action === 'rebuild-retrieval-index'
+            ? await rebuildAuthoritativeRetrievalIndex(novelId, chapterRange)
           : await rebuildAuthoritativeKnowledgeView(novelId, chapterRange)
 
+    const scheduledJobId = action === 'rebuild-retrieval-index'
+      ? projection.knowledgeStatusOverview?.retrievalIndex.task?.jobId
+      : projection.knowledgeRebuildStatus?.jobId
+
     if (
-      action === 'rebuild'
+      (action === 'rebuild' || action === 'rebuild-retrieval-index')
       && (projection.jobOutcome === 'queued' || projection.jobOutcome === 'running')
-      && projection.knowledgeRebuildStatus?.jobId
+      && scheduledJobId
     ) {
-      const jobId = projection.knowledgeRebuildStatus.jobId
+      const jobId = scheduledJobId
       scheduleAfterResponse(async () => {
         try {
+          if (action === 'rebuild-retrieval-index') {
+            await runAuthoritativeRetrievalIndexRebuild(novelId, jobId)
+            return
+          }
+
           await runAuthoritativeKnowledgeViewRebuild(novelId, jobId)
         } catch (error) {
           console.error('Knowledge rebuild background worker failed', error)
