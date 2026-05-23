@@ -1259,11 +1259,15 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     const state = get()
     set({ isSaving: true })
     try {
-      await fetch('/api/workspace', {
+      const response = await fetch('/api/workspace', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(serializeState(state)),
       })
+      const data = (await response.json()) as { ok?: boolean; error?: string }
+      if (!response.ok || data.ok === false) {
+        throw new Error(data.error || 'Failed to save workspace')
+      }
       try {
         const projection = await fetchKnowledgeProjection({
           novelId: state.currentNovelId || undefined,

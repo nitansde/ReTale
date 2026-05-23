@@ -401,6 +401,27 @@ describe('preset compat store lifecycle', () => {
     expect(useNovelStore.getState().presetCompatLibrary.revision).toBe(5)
   })
 
+  it('surfaces failed workspace saves and skips projection refresh', async () => {
+    const requests: string[] = []
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      requests.push(url)
+      if (url === '/api/workspace') {
+        return new Response(
+          JSON.stringify({ ok: false, error: 'Refusing to overwrite a recoverable workspace with an empty payload' }),
+          { status: 409 }
+        )
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await expect(useNovelStore.getState().saveToBackend()).rejects.toThrow('Refusing to overwrite a recoverable workspace with an empty payload')
+
+    expect(requests).toEqual(['/api/workspace'])
+    expect(useNovelStore.getState().isSaving).toBe(false)
+  })
+
   it('retains the last good library when load, save, or import fails and records explicit errors', async () => {
     useNovelStore.setState({
       presetCompatLibrary: createLibrary({ revision: 7 }),
