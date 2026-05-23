@@ -73,6 +73,34 @@ function seedKnowledgeChapter(database: DatabaseSync, params: {
   )
 }
 
+function insertTextSpanFixture(database: DatabaseSync, params: {
+  id: string
+  novelId: string
+  branchId: string
+  chapterId: string
+  chapterNo: number
+  text: string
+}) {
+  database.prepare(
+    `INSERT INTO TextSpan (
+      id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd, charStart, charEnd, text, spanType, tokenEstimate
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    params.id,
+    params.novelId,
+    params.branchId,
+    params.chapterId,
+    params.chapterNo,
+    1,
+    1,
+    0,
+    params.text.length,
+    params.text,
+    'paragraph',
+    params.text.length,
+  )
+}
+
 function insertHanlpCacheFixture(database: DatabaseSync, params: {
   idPrefix: string
   novelId: string
@@ -434,6 +462,148 @@ describe('/api/knowledge-view', () => {
     })
   })
 
+  it('surfaces retrieval task status in the overview payload while preserving main rebuild status priority', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-retrieval-overview-task')
+    const novelId = `novel_retrieval_overview_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-retrieval-overview-1', chapterNo: 1 })
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-2 minutes'), datetime('now', '-2 minutes'))`
+    ).run(
+      'job_main_priority',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'running',
+      '抽取章节知识',
+      0.32,
+      JSON.stringify({
+        phase: 'extract',
+        steps: [{
+          key: 'extract',
+          label: '抽取章节知识',
+          status: 'running',
+          progress: 0.32,
+          etaMinutes: 4,
+          detail: '主知识重建进行中',
+        }],
+      })
+    )
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-1 minute'), datetime('now', '-1 minute'))`
+    ).run(
+      'job_retrieval_live_task',
+      novelId,
+      mainBranchId,
+      'rebuild_retrieval_index',
+      'running',
+      '生成检索向量',
+      0.97,
+      JSON.stringify({
+        phase: 'raw-embedding',
+        rawTextEmbeddingProgress: 0.6,
+        rawTextEmbeddingCacheHitRate: 0.25,
+        steps: [{
+          key: 'raw-embedding',
+          label: '原文 Embedding 预计算',
+          status: 'running',
+          progress: 0.6,
+          etaMinutes: 2,
+          detail: '原文向量缓存 60%',
+        }],
+      })
+    )
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      ok: boolean
+      knowledgeRebuildStatus: { jobId?: string; jobType?: string; status?: string } | null
+      knowledgeStatusOverview: {
+        retrievalIndex: {
+          status: string
+          indexedScopeCount: number
+          task: { jobId?: string; jobType?: string; status?: string; rawTextEmbeddingProgress?: number; steps?: Array<{ key?: string; status?: string }> } | null
+        }
+      } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.knowledgeRebuildStatus).toMatchObject({
+      jobId: 'job_main_priority',
+      jobType: 'extract_chapter_knowledge',
+      status: 'running',
+    })
+    expect(payload.knowledgeStatusOverview?.retrievalIndex).toMatchObject({
+      status: 'missing',
+      indexedScopeCount: 0,
+      task: {
+        jobId: 'job_retrieval_live_task',
+        jobType: 'rebuild_retrieval_index',
+        status: 'running',
+        rawTextEmbeddingProgress: 0.6,
+        steps: [
+          expect.objectContaining({
+            key: 'raw-embedding',
+            status: 'running',
+          }),
+        ],
+      },
+    })
+  })
+
+  it('reports retrieval jobs through knowledgeRebuildStatus with an explicit retrieval jobType', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-retrieval-jobtype')
+    const novelId = `novel_retrieval_jobtype_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-retrieval-jobtype-1', chapterNo: 1 })
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      'job_retrieval_jobtype',
+      novelId,
+      mainBranchId,
+      'rebuild_retrieval_index',
+      'paused',
+      '已暂停',
+      0.98,
+      JSON.stringify({
+        phase: 'index',
+        steps: [{
+          key: 'index',
+          label: '构建 Lance 检索索引',
+          status: 'paused',
+          progress: 0.5,
+          etaMinutes: null,
+          detail: '已暂停',
+        }],
+      })
+    )
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      ok: boolean
+      knowledgeRebuildStatus: { jobId?: string; jobType?: string; status?: string } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.knowledgeRebuildStatus).toMatchObject({
+      jobId: 'job_retrieval_jobtype',
+      jobType: 'rebuild_retrieval_index',
+      status: 'paused',
+    })
+  })
+
   it('returns the latest failed rebuild status with errorMessage for the selected novel main branch', async () => {
     const { database } = await createTestDatabase('chatbook-knowledge-view-failed-status')
     const novelId = `novel_knowledge_view_failed_${Math.random().toString(36).slice(2, 8)}`
@@ -608,6 +778,75 @@ describe('/api/knowledge-view', () => {
     })
   })
 
+  it('surfaces the latest retrieval rebuild status through the existing knowledge rebuild payload', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-retrieval-status-surface')
+    const novelId = `novel_knowledge_view_retrieval_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-retrieval-main', chapterNo: 1 })
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-2 minutes'), datetime('now', '-2 minutes'))`
+    ).run(
+      'job_extract_succeeded_before_retrieval',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'succeeded',
+      '完成',
+      1,
+      JSON.stringify({
+        phase: 'write',
+        steps: [],
+      })
+    )
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-1 minutes'), datetime('now', '-1 minutes'))`
+    ).run(
+      'job_retrieval_running_visible',
+      novelId,
+      mainBranchId,
+      'rebuild_retrieval_index',
+      'running',
+      '等待原文 Embedding 预计算完成',
+      0.95,
+      JSON.stringify({
+        phase: 'raw-embedding',
+        rawTextEmbeddingProgress: 0.4,
+        steps: [
+          { key: 'hanlp-bootstrap', label: 'HanLP 引导扫描', status: 'completed', progress: 1, etaMinutes: null, detail: null },
+          { key: 'extract', label: '抽取章节知识', status: 'completed', progress: 1, etaMinutes: null, detail: null },
+          { key: 'batch-sync', label: '整理批次结果', status: 'completed', progress: 1, etaMinutes: null, detail: null },
+          { key: 'cleanup', label: '清理旧知识', status: 'completed', progress: 1, etaMinutes: null, detail: null },
+          { key: 'write', label: '写入结构化知识', status: 'completed', progress: 1, etaMinutes: null, detail: null },
+          { key: 'raw-embedding', label: '原文 Embedding 预计算', status: 'running', progress: 0.4, etaMinutes: 2, detail: '等待原文 Embedding 预计算完成' },
+          { key: 'index', label: '构建 Lance 检索索引', status: 'pending', progress: 0, etaMinutes: null, detail: null },
+        ],
+      })
+    )
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      ok: boolean
+      knowledgeRebuildStatus: Record<string, unknown> | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.knowledgeRebuildStatus).toMatchObject({
+      jobId: 'job_retrieval_running_visible',
+      novelId,
+      status: 'running',
+      currentStep: '等待原文 Embedding 预计算完成',
+      progress: 0.95,
+      rawTextEmbeddingProgress: 0.4,
+    })
+  })
+
   it('surfaces populated HanLP cache readiness without an active rebuild', async () => {
     const { database } = await createTestDatabase('chatbook-knowledge-view-idle-hanlp-cache')
     const novelId = `novel_knowledge_view_idle_hanlp_${Math.random().toString(36).slice(2, 8)}`
@@ -658,6 +897,102 @@ describe('/api/knowledge-view', () => {
         hanlpModelOrConfigHash: 'model-hash-idle-hanlp-main',
         outputSchemaVersion: 'v1',
         pipelineVersion: 'hanlp-bootstrap:v1',
+      },
+    })
+  })
+
+  it('returns persistent knowledge, embedding, and LanceDB coverage overview for the selected novel', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-status-overview')
+    const novelId = `novel_knowledge_overview_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId, altBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-overview-1', chapterNo: 1 })
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-overview-2', chapterNo: 2 })
+    seedKnowledgeChapter(database, { novelId, branchId: altBranchId, chapterId: 'chapter-overview-alt', chapterNo: 1 })
+    database.prepare("UPDATE KnowledgeChapter SET knowledgeStatus = 'ready', isDirty = 0 WHERE id = ?").run('chapter-overview-1')
+
+    insertTextSpanFixture(database, {
+      id: 'span-overview-1',
+      novelId,
+      branchId: mainBranchId,
+      chapterId: 'chapter-overview-1',
+      chapterNo: 1,
+      text: '第1章原文内容。',
+    })
+    insertTextSpanFixture(database, {
+      id: 'span-overview-2',
+      novelId,
+      branchId: mainBranchId,
+      chapterId: 'chapter-overview-2',
+      chapterNo: 2,
+      text: '第2章原文内容。',
+    })
+    insertTextSpanFixture(database, {
+      id: 'span-overview-alt',
+      novelId,
+      branchId: altBranchId,
+      chapterId: 'chapter-overview-alt',
+      chapterNo: 1,
+      text: 'Alt branch text.',
+    })
+
+    const { loadStoredAISettings } = await import('@/lib/server/ai-settings')
+    const { buildRawTextRetrievalEmbeddingInput, loadRawTextRetrievalDocs } = await import('@/lib/server/retrieval-index')
+    const embeddingSettings = loadStoredAISettings().embeddings
+    const embeddingProvider = embeddingSettings.provider
+    const embeddingModel = embeddingProvider === 'openai-compatible'
+      ? embeddingSettings.openAICompatible.model
+      : embeddingSettings.ollama.model
+    const chapterOneDoc = loadRawTextRetrievalDocs(novelId, mainBranchId).find((row) => row.chapterNo === 1)
+    expect(chapterOneDoc).toBeTruthy()
+    const chapterOneHash = buildRawTextRetrievalEmbeddingInput(chapterOneDoc!).embeddingInputHash
+
+    database.prepare(
+      `INSERT INTO RawTextEmbeddingCache (
+        branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension
+      ) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(mainBranchId, embeddingProvider, embeddingModel, chapterOneHash, '[0.1,0.2]', 2)
+    database.prepare(
+      `INSERT INTO ActiveRetrievalIndex (
+        branchId, scopeKey, tableName, scopeStartChapter, scopeEndChapter
+      ) VALUES (?, ?, ?, ?, ?)`
+    ).run(mainBranchId, 'chapter-range:1:1', 'retrieval_docs_partial_fixture', 1, 1)
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      ok: boolean
+      knowledgeStatusOverview: {
+        knowledgeGraph?: Record<string, unknown>
+        embeddingCache?: Record<string, unknown>
+        retrievalIndex?: Record<string, unknown>
+      } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.knowledgeStatusOverview).toMatchObject({
+      knowledgeGraph: {
+        status: 'partial',
+        coveredChapterCount: 1,
+        totalChapterCount: 2,
+        validThroughChapterNo: 1,
+      },
+      embeddingCache: {
+        status: 'partial',
+        coveredChapterCount: 1,
+        totalChapterCount: 2,
+        validThroughChapterNo: 1,
+        provider: embeddingProvider,
+        model: embeddingModel,
+      },
+      retrievalIndex: {
+        status: 'partial',
+        indexedScopeCount: 1,
+        chapterRange: {
+          startChapter: 1,
+          endChapter: 1,
+        },
       },
     })
   })
@@ -906,6 +1241,52 @@ describe('/api/knowledge-view', () => {
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', mainBranchId)?.count).toBe(1)
   })
 
+  it('blocks raw embedding cache deletion while a retrieval rebuild is active', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-delete-embedding-cache-retrieval-blocked')
+    const novelId = `novel_block_retrieval_cache_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-retrieval-blocked', chapterNo: 1 })
+    database.prepare(
+      `INSERT INTO RawTextEmbeddingCache (
+        branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension
+      ) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(mainBranchId, 'ollama', 'embed-model', 'raw-cache-retrieval-blocked', '[0.1,0.2]', 2)
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      'job_block_retrieval_cache_delete',
+      novelId,
+      mainBranchId,
+      'rebuild_retrieval_index',
+      'running',
+      '构建 Lance 检索索引',
+      0.98,
+      JSON.stringify({
+        phase: 'index',
+        steps: [],
+      })
+    )
+
+    const { POST } = await loadKnowledgeViewRoute()
+    const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', {
+      novelId,
+      action: 'delete-embedding-cache',
+    }))
+    const payload = await response.json() as {
+      ok: boolean
+      jobOutcome: string
+      actionError: { code: string; message: string } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.jobOutcome).toBe('blocked')
+    expect(payload.actionError?.code).toBe('active-rebuild')
+    expect(payload.actionError?.message).toContain('Cannot delete raw embedding cache')
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', mainBranchId)?.count).toBe(1)
+  })
+
   it('queues rebuild jobs with a bounded chapter range payload', async () => {
     const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-range-rebuild')
     const novelId = `novel_range_rebuild_${Math.random().toString(36).slice(2, 8)}`
@@ -945,6 +1326,131 @@ describe('/api/knowledge-view', () => {
       chapterRange: { startChapter: 2, endChapter: 3 },
       rebuildStartChapter: 2,
     })
+  })
+
+  it('queues dedicated retrieval rebuild jobs with retrieval status payloads', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-retrieval-start')
+    const novelId = `novel_retrieval_start_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    for (let chapterNo = 1; chapterNo <= 3; chapterNo += 1) {
+      seedKnowledgeChapter(database, {
+        novelId,
+        branchId: mainBranchId,
+        chapterId: `chapter-retrieval-start-${chapterNo}`,
+        chapterNo,
+      })
+    }
+
+    const { POST } = await loadKnowledgeViewRoute()
+    const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', {
+      novelId,
+      action: 'rebuild-retrieval-index',
+      chapterRange: { startChapter: 2, endChapter: 3 },
+    }))
+    const payload = await response.json() as {
+      ok: boolean
+      jobOutcome: string
+      actionError: unknown
+      knowledgeRebuildStatus: { jobId?: string; novelId?: string; jobType?: string; status?: string; chapterRange?: { startChapter?: number; endChapter?: number } } | null
+      knowledgeStatusOverview: { retrievalIndex: { task: { jobId?: string; jobType?: string } | null } } | null
+    }
+
+    const jobPayload = JSON.parse(queryOne<{ payloadJson: string | null }>(
+      'SELECT payloadJson FROM KnowledgeJob WHERE novelId = ? AND jobType = ? ORDER BY createdAt DESC LIMIT 1',
+      novelId,
+      'rebuild_retrieval_index',
+    )?.payloadJson ?? '{}') as { chapterRange?: { startChapter?: number; endChapter?: number }; rebuildStartChapter?: number }
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({
+      ok: true,
+      jobOutcome: 'queued',
+      actionError: null,
+      knowledgeRebuildStatus: {
+        novelId,
+        jobType: 'rebuild_retrieval_index',
+        status: 'queued',
+        chapterRange: { startChapter: 2, endChapter: 3 },
+      },
+      knowledgeStatusOverview: {
+        retrievalIndex: {
+          task: {
+            jobType: 'rebuild_retrieval_index',
+          },
+        },
+      },
+    })
+    expect(payload.knowledgeRebuildStatus?.jobId).toEqual(expect.any(String))
+    expect(payload.knowledgeStatusOverview?.retrievalIndex.task?.jobId).toBe(payload.knowledgeRebuildStatus?.jobId)
+    expect(jobPayload).toMatchObject({
+      chapterRange: { startChapter: 2, endChapter: 3 },
+      rebuildStartChapter: 2,
+    })
+  })
+
+  it('blocks dedicated retrieval rebuild start while a main knowledge rebuild is active', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-retrieval-start-blocked')
+    const novelId = `novel_retrieval_start_blocked_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-retrieval-blocked-1', chapterNo: 1 })
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      'job_active_main_rebuild',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'running',
+      '抽取章节知识',
+      0.41,
+      JSON.stringify({
+        phase: 'extract',
+        steps: [{
+          key: 'extract',
+          label: '抽取章节知识',
+          status: 'running',
+          progress: 0.41,
+          etaMinutes: 3,
+          detail: null,
+        }],
+      })
+    )
+
+    const { POST } = await loadKnowledgeViewRoute()
+    const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', {
+      novelId,
+      action: 'rebuild-retrieval-index',
+    }))
+    const payload = await response.json() as {
+      ok: boolean
+      jobOutcome: string
+      actionError: { code: string; message: string } | null
+      knowledgeRebuildStatus: { jobId?: string; jobType?: string; status?: string } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({
+      ok: true,
+      jobOutcome: 'blocked',
+      actionError: {
+        code: 'active-rebuild',
+      },
+      knowledgeRebuildStatus: {
+        jobId: 'job_active_main_rebuild',
+        jobType: 'extract_chapter_knowledge',
+        status: 'running',
+      },
+    })
+    expect(payload.actionError?.message).toContain('Cannot start retrieval index rebuild while a main knowledge rebuild is running')
+    expect(queryOne<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = ?',
+      novelId,
+      mainBranchId,
+      'rebuild_retrieval_index',
+    )?.count).toBe(0)
   })
 
   it('queues a fresh imported novel rebuild without blocking the POST response', async () => {

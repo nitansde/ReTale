@@ -7,17 +7,22 @@ import {
   normalizeCharacterRoleCardProfile,
   type CharacterRoleCardProfile,
 } from '@/lib/story-knowledge'
+import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import {
   abortKnowledgeRebuildForNovel,
   deleteKnowledgeGraphForNovel,
+  type KnowledgeJobType,
   type KnowledgeRebuildJobOutcome,
   type KnowledgeRebuildPayloadStep,
   type KnowledgeRebuildStartOutcome,
   pauseKnowledgeRebuildForNovel,
+  runStartedKnowledgeRetrievalRebuildForNovel,
   runStartedKnowledgeRebuildForNovel,
+  startKnowledgeRetrievalRebuildForNovel,
   startKnowledgeRebuildForNovel,
 } from '@/lib/server/knowledge-rebuild'
 import { getCharacterClassificationMetadata, type CharacterImportanceTier } from '@/lib/server/hanlp-contracts'
+import { buildRawTextRetrievalEmbeddingInput, loadRawTextRetrievalDocs } from '@/lib/server/retrieval-index'
 import { getMainBranchId } from '@/lib/server/knowledge-store'
 import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
 
@@ -45,6 +50,7 @@ export type KnowledgeProjectionPayload = {
 export type KnowledgeRebuildStatus = {
   jobId: string
   novelId: string
+  jobType: KnowledgeJobType
   status: string
   errorMessage?: string | null
   progress: number
@@ -83,9 +89,35 @@ export type HanlpCacheSnapshot = {
   settingsSnapshot?: NonNullable<KnowledgeRebuildStatus['hanlpSettingsSnapshot']>
 }
 
+export type KnowledgeCoverageStatus = 'missing' | 'partial' | 'full'
+
+export type KnowledgeChapterCoverageOverview = {
+  status: KnowledgeCoverageStatus
+  coveredChapterCount: number
+  totalChapterCount: number
+  validThroughChapterNo: number | null
+}
+
+export type RetrievalIndexCoverageOverview = {
+  status: KnowledgeCoverageStatus
+  indexedScopeCount: number
+  chapterRange?: KnowledgeRebuildChapterRange
+  task: KnowledgeRebuildStatus | null
+}
+
+export type KnowledgeStatusOverview = {
+  knowledgeGraph: KnowledgeChapterCoverageOverview
+  embeddingCache: KnowledgeChapterCoverageOverview & {
+    provider: string | null
+    model: string | null
+  }
+  retrievalIndex: RetrievalIndexCoverageOverview
+}
+
 export type KnowledgeViewPayload = KnowledgeProjectionPayload & {
   knowledgeRebuildStatus: KnowledgeRebuildStatus | null
   hanlpCacheSnapshot: HanlpCacheSnapshot | null
+  knowledgeStatusOverview: KnowledgeStatusOverview | null
 }
 
 export type KnowledgeViewActionOutcome = KnowledgeRebuildJobOutcome | KnowledgeRebuildStartOutcome | 'blocked' | 'deleted' | 'idle'
@@ -313,8 +345,193 @@ function createIdleActionPayload(): KnowledgeViewActionPayload {
     ...createEmptyProjection(),
     knowledgeRebuildStatus: null,
     hanlpCacheSnapshot: null,
+    knowledgeStatusOverview: null,
     jobOutcome: 'idle',
     actionError: null,
+  }
+}
+
+function buildSqlPlaceholders(count: number) {
+  return Array.from({ length: count }, () => '?').join(', ')
+}
+
+function chunkValues<T>(values: T[], size = 500) {
+  const chunks: T[][] = []
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size))
+  }
+  return chunks
+}
+
+function getCurrentEmbeddingModel() {
+  const settings = loadStoredAISettings().embeddings
+  return {
+    provider: settings.provider,
+    model: settings.provider === 'openai-compatible'
+      ? settings.openAICompatible.model
+      : settings.ollama.model,
+  }
+}
+
+function buildKnowledgeCoverageOverview(params: {
+  chapters: Array<{ chapterNo: number }>
+  isCovered: (chapterNo: number) => boolean
+}): KnowledgeChapterCoverageOverview {
+  const orderedChapters = params.chapters
+    .slice()
+    .sort((left, right) => left.chapterNo - right.chapterNo)
+
+  let coveredChapterCount = 0
+  let validThroughChapterNo: number | null = null
+
+  for (const chapter of orderedChapters) {
+    if (!params.isCovered(chapter.chapterNo)) {
+      break
+    }
+
+    coveredChapterCount += 1
+    validThroughChapterNo = chapter.chapterNo
+  }
+
+  const totalChapterCount = orderedChapters.length
+  const status: KnowledgeCoverageStatus = coveredChapterCount <= 0
+    ? 'missing'
+    : coveredChapterCount >= totalChapterCount
+      ? 'full'
+      : 'partial'
+
+  return {
+    status,
+    coveredChapterCount,
+    totalChapterCount,
+    validThroughChapterNo,
+  }
+}
+
+function getKnowledgeStatusOverview(novelId: string, branchId: string): KnowledgeStatusOverview {
+  const chapters = queryAll<{ chapterNo: number; isDirty: number; knowledgeStatus: string }>(
+    `
+      SELECT chapterNo, isDirty, knowledgeStatus
+      FROM KnowledgeChapter
+      WHERE novelId = ? AND branchId = ?
+      ORDER BY chapterNo ASC
+    `,
+    novelId,
+    branchId,
+  )
+
+  const knowledgeGraph = buildKnowledgeCoverageOverview({
+    chapters,
+    isCovered: (chapterNo) => {
+      const chapter = chapters.find((item) => item.chapterNo === chapterNo)
+      return Boolean(chapter) && chapter.isDirty === 0 && chapter.knowledgeStatus === 'ready'
+    },
+  })
+
+  const embeddingSettings = getCurrentEmbeddingModel()
+  const chapterHashesByNo = new Map<number, Set<string>>()
+  const uniqueHashes = new Set<string>()
+  for (const row of loadRawTextRetrievalDocs(novelId, branchId)) {
+    const { embeddingInputHash } = buildRawTextRetrievalEmbeddingInput(row)
+    uniqueHashes.add(embeddingInputHash)
+    const current = chapterHashesByNo.get(row.chapterNo) ?? new Set<string>()
+    current.add(embeddingInputHash)
+    chapterHashesByNo.set(row.chapterNo, current)
+  }
+
+  const cachedHashes = new Set<string>()
+  const orderedHashes = Array.from(uniqueHashes)
+  for (const hashBatch of chunkValues(orderedHashes)) {
+    const rows = queryAll<{ embeddingInputHash: string }>(
+      `
+        SELECT embeddingInputHash
+        FROM RawTextEmbeddingCache
+        WHERE branchId = ?
+          AND provider = ?
+          AND model = ?
+          AND embeddingInputHash IN (${buildSqlPlaceholders(hashBatch.length)})
+      `,
+      branchId,
+      embeddingSettings.provider,
+      embeddingSettings.model,
+      ...hashBatch,
+    )
+    for (const row of rows) {
+      cachedHashes.add(row.embeddingInputHash)
+    }
+  }
+
+  const embeddingCacheCoverage = buildKnowledgeCoverageOverview({
+    chapters,
+    isCovered: (chapterNo) => {
+      const chapterHashes = chapterHashesByNo.get(chapterNo)
+      if (!chapterHashes?.size) {
+        return false
+      }
+
+      for (const hash of chapterHashes) {
+        if (!cachedHashes.has(hash)) {
+          return false
+        }
+      }
+
+      return true
+    },
+  })
+
+  const retrievalIndexRows = queryAll<{
+    scopeKey: string
+    scopeStartChapter: number | null
+    scopeEndChapter: number | null
+  }>(
+    `
+      SELECT scopeKey, scopeStartChapter, scopeEndChapter
+      FROM ActiveRetrievalIndex
+      WHERE branchId = ?
+      ORDER BY scopeStartChapter ASC, scopeEndChapter ASC, scopeKey ASC
+    `,
+    branchId,
+  )
+  const fullRetrievalRow = retrievalIndexRows.find((row) => row.scopeKey === 'full') ?? null
+  const primaryPartialRetrievalRow = retrievalIndexRows[0] ?? null
+  const retrievalTask = getKnowledgeJobStatusByTypes({
+    novelId,
+    branchId,
+    jobTypes: ['rebuild_retrieval_index'],
+  })
+
+  return {
+    knowledgeGraph,
+    embeddingCache: {
+      ...embeddingCacheCoverage,
+      provider: embeddingSettings.provider,
+      model: embeddingSettings.model,
+    },
+    retrievalIndex: fullRetrievalRow
+      ? {
+          status: 'full',
+          indexedScopeCount: retrievalIndexRows.length,
+          task: retrievalTask,
+        }
+      : primaryPartialRetrievalRow
+        ? {
+            status: 'partial',
+            indexedScopeCount: retrievalIndexRows.length,
+            chapterRange: {
+              ...(typeof primaryPartialRetrievalRow.scopeStartChapter === 'number'
+                ? { startChapter: primaryPartialRetrievalRow.scopeStartChapter }
+                : {}),
+              ...(typeof primaryPartialRetrievalRow.scopeEndChapter === 'number'
+                ? { endChapter: primaryPartialRetrievalRow.scopeEndChapter }
+                : {}),
+            },
+            task: retrievalTask,
+          }
+        : {
+            status: 'missing',
+            indexedScopeCount: 0,
+            task: retrievalTask,
+          },
   }
 }
 
@@ -323,11 +540,14 @@ function buildActiveRebuildBlockedMessage(status: KnowledgeRebuildStatus, cacheL
 }
 
 function getActiveKnowledgeRebuildRow(novelId: string, branchId: string) {
-  return queryOne<Pick<KnowledgeRebuildStatus, 'jobId' | 'novelId' | 'status'>>(
+  return queryOne<Pick<KnowledgeRebuildStatus, 'jobId' | 'novelId' | 'jobType' | 'status'>>(
     `
-      SELECT id as jobId, novelId, status
+      SELECT id as jobId, novelId, jobType, status
       FROM KnowledgeJob
-      WHERE novelId = ? AND branchId = ? AND jobType = 'extract_chapter_knowledge' AND status IN ('queued', 'running', 'paused')
+      WHERE novelId = ?
+        AND branchId = ?
+        AND jobType IN ('extract_chapter_knowledge', 'rebuild_retrieval_index')
+        AND status IN ('queued', 'running', 'paused')
       ORDER BY updatedAt DESC, createdAt DESC
       LIMIT 1
     `,
@@ -433,30 +653,7 @@ function estimateRebuildEtaMinutes(progress: number, createdAt: string) {
   return Math.max(1, Math.ceil(remainingMs / 60000))
 }
 
-function getKnowledgeRebuildStatus(novelIds?: string[]): KnowledgeRebuildStatus | null {
-  if (!novelIds?.length || novelIds.length !== 1) {
-    return null
-  }
-
-  const branchId = getMainBranchId(novelIds[0])
-
-  const status = queryAll<KnowledgeRebuildStatusRow>(
-    `
-      SELECT id as jobId, novelId, status, errorMessage, progress, currentStep, createdAt, updatedAt
-           , payloadJson
-      FROM KnowledgeJob
-      WHERE novelId = ? AND branchId = ? AND jobType = 'extract_chapter_knowledge'
-      ORDER BY updatedAt DESC, createdAt DESC
-      LIMIT 1
-    `,
-    novelIds[0],
-    branchId,
-  )[0] ?? null
-
-  if (!status) {
-    return null
-  }
-
+function hydrateKnowledgeRebuildStatus(status: KnowledgeRebuildStatusRow, branchId: string): KnowledgeRebuildStatus | null {
   if (status.status !== 'queued' && status.status !== 'running' && status.status !== 'paused' && status.status !== 'failed') {
     return null
   }
@@ -472,13 +669,64 @@ function getKnowledgeRebuildStatus(novelIds?: string[]): KnowledgeRebuildStatus 
     steps,
     ...telemetry,
   } satisfies KnowledgeRebuildStatus
-  const hanlpCacheSnapshot = getHanlpCacheSnapshot(novelIds[0], branchId, provisionalStatus)
+  const hanlpCacheSnapshot = getHanlpCacheSnapshot(status.novelId, branchId, provisionalStatus)
 
   return {
     ...provisionalStatus,
     hanlpCacheStatus: hanlpCacheSnapshot.status,
     hanlpSettingsSnapshot: telemetry.hanlpSettingsSnapshot ?? hanlpCacheSnapshot.settingsSnapshot,
   }
+}
+
+function getKnowledgeJobStatusByTypes(params: {
+  novelId: string
+  branchId: string
+  jobTypes: KnowledgeJobType[]
+}): KnowledgeRebuildStatus | null {
+  if (!params.jobTypes.length) {
+    return null
+  }
+
+  const jobTypePlaceholders = params.jobTypes.map(() => '?').join(', ')
+  const status = queryAll<KnowledgeRebuildStatusRow>(
+    `
+      SELECT id as jobId, novelId, jobType, status, errorMessage, progress, currentStep, createdAt, updatedAt
+           , payloadJson
+      FROM KnowledgeJob
+      WHERE novelId = ?
+        AND branchId = ?
+        AND jobType IN (${jobTypePlaceholders})
+      ORDER BY updatedAt DESC, createdAt DESC
+      LIMIT 1
+    `,
+    params.novelId,
+    params.branchId,
+    ...params.jobTypes,
+  )[0] ?? null
+
+  if (!status) {
+    return null
+  }
+
+  return hydrateKnowledgeRebuildStatus(status, params.branchId)
+}
+
+function getKnowledgeRebuildStatus(novelIds?: string[]): KnowledgeRebuildStatus | null {
+  if (!novelIds?.length || novelIds.length !== 1) {
+    return null
+  }
+
+  const branchId = getMainBranchId(novelIds[0])
+
+  return getKnowledgeJobStatusByTypes({
+    novelId: novelIds[0],
+    branchId,
+    jobTypes: ['extract_chapter_knowledge'],
+  }) ?? getKnowledgeJobStatusByTypes({
+    novelId: novelIds[0],
+    branchId,
+    jobTypes: ['rebuild_retrieval_index'],
+  })
 }
 
 function getKnowledgeViewHanlpCacheSnapshot(novelIds?: string[], status?: KnowledgeRebuildStatus | null): HanlpCacheSnapshot | null {
@@ -676,8 +924,13 @@ export async function buildKnowledgeProjection(novelIds?: string[], asOfChapter?
       ...createEmptyProjection(),
       knowledgeRebuildStatus,
       hanlpCacheSnapshot,
+      knowledgeStatusOverview: null,
     }
   }
+
+  const knowledgeStatusOverview = novelIds?.length === 1
+    ? getKnowledgeStatusOverview(novelIds[0], getMainBranchId(novelIds[0]))
+    : null
 
   const branchIds = novels.map((novel) => getMainBranchId(novel.id))
   const applyAsOfChapter = typeof asOfChapter === 'number' && Number.isFinite(asOfChapter) && novels.length === 1
@@ -883,6 +1136,7 @@ export async function buildKnowledgeProjection(novelIds?: string[], asOfChapter?
     localOutlines,
     knowledgeRebuildStatus,
     hanlpCacheSnapshot,
+    knowledgeStatusOverview,
   }
 }
 
@@ -904,12 +1158,61 @@ export async function rebuildAuthoritativeKnowledgeView(novelId: string, chapter
   }
 }
 
+export async function rebuildAuthoritativeRetrievalIndex(novelId: string, chapterRange?: KnowledgeRebuildChapterRange): Promise<KnowledgeViewActionPayload> {
+  const trimmedNovelId = novelId.trim()
+  if (!trimmedNovelId) {
+    return createIdleActionPayload()
+  }
+
+  const branchId = getMainBranchId(trimmedNovelId)
+  const activeMainJob = getKnowledgeJobStatusByTypes({
+    novelId: trimmedNovelId,
+    branchId,
+    jobTypes: ['extract_chapter_knowledge'],
+  })
+
+  if (activeMainJob && (activeMainJob.status === 'queued' || activeMainJob.status === 'running' || activeMainJob.status === 'paused')) {
+    return {
+      ...(await buildKnowledgeProjection([trimmedNovelId])),
+      jobOutcome: 'blocked',
+      actionError: {
+        code: 'active-rebuild',
+        message: `Cannot start retrieval index rebuild while a main knowledge rebuild is ${activeMainJob.status} for this novel branch.`,
+      },
+    }
+  }
+
+  const rebuildResult = await startKnowledgeRetrievalRebuildForNovel({
+    novelId: trimmedNovelId,
+    branchId,
+    chapterRange,
+  })
+
+  return {
+    ...(await buildKnowledgeProjection([trimmedNovelId])),
+    jobOutcome: rebuildResult.outcome,
+    actionError: null,
+  }
+}
+
 export async function runAuthoritativeKnowledgeViewRebuild(novelId: string, jobId: string) {
   const normalizedNovelId = novelId.trim()
   const normalizedJobId = jobId.trim()
   if (!normalizedNovelId || !normalizedJobId) return
 
   await runStartedKnowledgeRebuildForNovel({
+    novelId: normalizedNovelId,
+    branchId: getMainBranchId(normalizedNovelId),
+    jobId: normalizedJobId,
+  })
+}
+
+export async function runAuthoritativeRetrievalIndexRebuild(novelId: string, jobId: string) {
+  const normalizedNovelId = novelId.trim()
+  const normalizedJobId = jobId.trim()
+  if (!normalizedNovelId || !normalizedJobId) return
+
+  await runStartedKnowledgeRetrievalRebuildForNovel({
     novelId: normalizedNovelId,
     branchId: getMainBranchId(normalizedNovelId),
     jobId: normalizedJobId,
