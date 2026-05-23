@@ -536,6 +536,7 @@ function runBootMigrations(database: DatabaseSync) {
     END
   `)
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_lookup ON hanlp_bootstrap_cache(branch_id, chapter_no, chapter_text_hash, hanlp_script_version_hash, hanlp_model_or_config_hash, output_schema_version)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_workspace_state_backup_state_created ON WorkspaceStateBackup(workspaceStateId, createdAt)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_last_seen ON hanlp_bootstrap_cache(branch_id, last_seen_at)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_processing_batch ON chapter_extraction_candidates(branch_id, processing_batch_id)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_chapter_extraction_processing_batches_branch ON chapter_extraction_processing_batches(branch_id, updated_at)')

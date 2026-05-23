@@ -14,6 +14,16 @@ CREATE TABLE IF NOT EXISTS WorkspaceState (
   updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS WorkspaceStateBackup (
+  id TEXT PRIMARY KEY,
+  workspaceStateId TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT 'overwrite',
+  sourceUpdatedAt TEXT,
+  createdAt TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+  FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceState(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS AppSetting (
   id TEXT PRIMARY KEY,
   key TEXT NOT NULL UNIQUE,
@@ -828,6 +838,7 @@ CREATE TABLE IF NOT EXISTS future_jump_revisions (
 CREATE INDEX IF NOT EXISTS idx_knowledge_chapter_branch_no ON KnowledgeChapter(branchId, chapterNo);
 CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_order ON chapter_extraction_candidates(branch_id, chapter_no, status);
 CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_chapter ON chapter_extraction_candidates(branch_id, chapter_id, chapter_source_hash);
+CREATE INDEX IF NOT EXISTS idx_workspace_state_backup_state_created ON WorkspaceStateBackup(workspaceStateId, createdAt);
 CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_last_seen ON hanlp_bootstrap_cache(branch_id, last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_lookup ON hanlp_bootstrap_results(branch_id, chapter_id, chapter_source_hash, result_kind);
 CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_job ON hanlp_bootstrap_results(knowledge_job_id, status);

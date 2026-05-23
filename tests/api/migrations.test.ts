@@ -65,6 +65,7 @@ describe('authored branching schema migrations', () => {
         'outline_node_chapters',
         'future_jump_runs',
         'future_jump_revisions',
+        'WorkspaceStateBackup',
       ])
     )
 
@@ -92,6 +93,7 @@ describe('authored branching schema migrations', () => {
         'idx_future_jump_runs_target_outline_chapter',
         'idx_future_jump_runs_branch_target_chapter',
         'idx_future_jump_revisions_run',
+        'idx_workspace_state_backup_state_created',
       ])
     )
 
