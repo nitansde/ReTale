@@ -84,6 +84,8 @@ type ChapterExtractionCandidateRow = {
   chapterRevision: number | null
   chapterSourceHash: string
   extractionJson: string
+  processingBatchId: string | null
+  processingBatchContextJson: string | null
   processingResultJson: string | null
   status: ChapterExtractionCandidateStatus
   provider: string | null
@@ -98,6 +100,8 @@ type ChapterExtractionCandidate = {
   chapterRevision: number | null
   chapterSourceHash: string
   extractionJson: string
+  processingBatchId: string | null
+  processingBatchContextJson: string | null
   processingResultJson: string | null
   status: ChapterExtractionCandidateStatus
   provider: string | null
@@ -118,6 +122,11 @@ type ChapterExtractionBatchProcessingContext = {
 type ChapterExtractionProcessingCache = {
   schemaVersion: typeof CHAPTER_EXTRACTION_PROCESSING_SCHEMA_VERSION
   batch: ChapterExtractionBatchProcessingContext
+  resolved: ResolvedChapterKnowledge
+}
+
+type ChapterExtractionResolvedProcessingCache = {
+  schemaVersion: typeof CHAPTER_EXTRACTION_RESOLVED_SCHEMA_VERSION
   resolved: ResolvedChapterKnowledge
 }
 
@@ -228,6 +237,8 @@ const KNOWLEDGE_REBUILD_STEP_ORDER: KnowledgeRebuildStepKey[] = ['hanlp-bootstra
 const RAW_TEXT_PRECOMPUTE_STAGE_KEY = 'raw_text_precompute'
 const CHAPTER_EXTRACTION_CANDIDATE_SCHEMA_VERSION = 'knowledge-extraction-candidate:v2'
 const CHAPTER_EXTRACTION_PROCESSING_SCHEMA_VERSION = 'knowledge-extraction-processing:v1'
+const CHAPTER_EXTRACTION_RESOLVED_SCHEMA_VERSION = 'knowledge-extraction-processing:v2'
+const CHAPTER_EXTRACTION_BATCH_CONTEXT_SCHEMA_VERSION = 'knowledge-extraction-processing-batch:v1'
 const CANDIDATE_PROMOTION_CHAPTER_THRESHOLD = 10
 const CANDIDATE_PROMOTION_SUMMARY_STATUS = 'candidate_promoted_summary'
 const rawTextEmbeddingPrecomputeRuns = new Map<string, RawTextEmbeddingPrecomputeRun>()
@@ -1640,6 +1651,7 @@ async function deleteNovelProjectionArtifacts(novelId: string, branchId: string)
     execute('DELETE FROM outline_node_chapters WHERE outline_node_id IN (SELECT id FROM outline_nodes WHERE novel_id = ?)', novelId)
     execute('DELETE FROM outline_nodes WHERE novel_id = ?', novelId)
     execute('DELETE FROM chapter_extraction_candidates WHERE novel_id = ?', novelId)
+    cleanupOrphanedChapterExtractionProcessingBatches({ novelId })
     execute('DELETE FROM KnowledgeJob WHERE novelId = ?', novelId)
     execute('DELETE FROM NovelRecord WHERE id = ?', novelId)
   })
@@ -1692,6 +1704,7 @@ async function clearExtractionCandidatesInChapterRange(branchId: string, chapter
     branchId,
     ...range.params
   )
+  cleanupOrphanedChapterExtractionProcessingBatches({ branchId })
 }
 
 async function clearDerivedKnowledgeInChapterRange(novelId: string, branchId: string, chapterRange: Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'>) {
@@ -1892,6 +1905,8 @@ function readChapterExtractionCandidate(row: ChapterExtractionCandidateRow | nul
     chapterRevision: row.chapterRevision,
     chapterSourceHash: row.chapterSourceHash,
     extractionJson: row.extractionJson,
+    processingBatchId: row.processingBatchId,
+    processingBatchContextJson: row.processingBatchContextJson,
     processingResultJson: row.processingResultJson,
     status: row.status,
     provider: row.provider,
@@ -1904,21 +1919,27 @@ function loadChapterExtractionCandidate(params: { branchId: string; chapterId: s
   return readChapterExtractionCandidate(
     queryOne<ChapterExtractionCandidateRow>(
       `
-        SELECT id,
-               novel_id AS novelId,
-               branch_id AS branchId,
-               chapter_id AS chapterId,
-               chapter_no AS chapterNo,
-               chapter_revision AS chapterRevision,
-               chapter_source_hash AS chapterSourceHash,
-               extraction_json AS extractionJson,
-               processing_result_json AS processingResultJson,
-               status,
-               provider,
-               model,
-               error_message AS errorMessage
+        SELECT chapter_extraction_candidates.id AS id,
+               chapter_extraction_candidates.novel_id AS novelId,
+               chapter_extraction_candidates.branch_id AS branchId,
+               chapter_extraction_candidates.chapter_id AS chapterId,
+               chapter_extraction_candidates.chapter_no AS chapterNo,
+               chapter_extraction_candidates.chapter_revision AS chapterRevision,
+               chapter_extraction_candidates.chapter_source_hash AS chapterSourceHash,
+               chapter_extraction_candidates.extraction_json AS extractionJson,
+               chapter_extraction_candidates.processing_batch_id AS processingBatchId,
+               chapter_extraction_processing_batches.batch_context_json AS processingBatchContextJson,
+               chapter_extraction_candidates.processing_result_json AS processingResultJson,
+               chapter_extraction_candidates.status AS status,
+               chapter_extraction_candidates.provider AS provider,
+               chapter_extraction_candidates.model AS model,
+               chapter_extraction_candidates.error_message AS errorMessage
         FROM chapter_extraction_candidates
-        WHERE branch_id = ? AND chapter_id = ? AND chapter_source_hash = ?
+        LEFT JOIN chapter_extraction_processing_batches
+          ON chapter_extraction_processing_batches.id = chapter_extraction_candidates.processing_batch_id
+        WHERE chapter_extraction_candidates.branch_id = ?
+          AND chapter_extraction_candidates.chapter_id = ?
+          AND chapter_extraction_candidates.chapter_source_hash = ?
         LIMIT 1
       `,
       params.branchId,
@@ -1926,6 +1947,57 @@ function loadChapterExtractionCandidate(params: { branchId: string; chapterId: s
       params.chapterSourceHash
     )
   )
+}
+
+function loadChapterExtractionCandidatesForBatch(params: {
+  branchId: string
+  chapters: Array<{ chapterId: string; chapterSourceHash: string }>
+}) {
+  const uniqueChapters = Array.from(
+    new Map(params.chapters.map((chapter) => [`${chapter.chapterId}:${chapter.chapterSourceHash}`, chapter])).values()
+  )
+  if (!uniqueChapters.length) {
+    return new Map<string, ChapterExtractionCandidate>()
+  }
+
+  const matchSql = uniqueChapters
+    .map(() => '(chapter_extraction_candidates.chapter_id = ? AND chapter_extraction_candidates.chapter_source_hash = ?)')
+    .join(' OR ')
+  const rows = queryAll<ChapterExtractionCandidateRow>(
+    `
+      SELECT chapter_extraction_candidates.id AS id,
+             chapter_extraction_candidates.novel_id AS novelId,
+             chapter_extraction_candidates.branch_id AS branchId,
+             chapter_extraction_candidates.chapter_id AS chapterId,
+             chapter_extraction_candidates.chapter_no AS chapterNo,
+             chapter_extraction_candidates.chapter_revision AS chapterRevision,
+             chapter_extraction_candidates.chapter_source_hash AS chapterSourceHash,
+             chapter_extraction_candidates.extraction_json AS extractionJson,
+             chapter_extraction_candidates.processing_batch_id AS processingBatchId,
+             chapter_extraction_processing_batches.batch_context_json AS processingBatchContextJson,
+             chapter_extraction_candidates.processing_result_json AS processingResultJson,
+             chapter_extraction_candidates.status AS status,
+             chapter_extraction_candidates.provider AS provider,
+             chapter_extraction_candidates.model AS model,
+             chapter_extraction_candidates.error_message AS errorMessage
+      FROM chapter_extraction_candidates
+      LEFT JOIN chapter_extraction_processing_batches
+        ON chapter_extraction_processing_batches.id = chapter_extraction_candidates.processing_batch_id
+      WHERE chapter_extraction_candidates.branch_id = ?
+        AND (${matchSql})
+    `,
+    params.branchId,
+    ...uniqueChapters.flatMap((chapter) => [chapter.chapterId, chapter.chapterSourceHash]),
+  )
+
+  const candidates = new Map<string, ChapterExtractionCandidate>()
+  for (const row of rows) {
+    const candidate = readChapterExtractionCandidate(row)
+    if (candidate) {
+      candidates.set(candidate.chapterId, candidate)
+    }
+  }
+  return candidates
 }
 
 function getKnowledgeExtractionSettingsVersionPayload(settings: KnowledgeExtractionScenarioSettings) {
@@ -1997,11 +2069,60 @@ function batchProcessingContextMatches(left: ChapterExtractionBatchProcessingCon
     && JSON.stringify(left.aliasDiscoveries) === JSON.stringify(right.aliasDiscoveries)
 }
 
-function readChapterExtractionProcessingCache(value: string | null | undefined, context: ChapterExtractionBatchProcessingContext | undefined) {
-  if (!value || !context) return null
+function readChapterExtractionBatchProcessingContext(value: string | null | undefined) {
+  if (!value) return null
 
   try {
-    const parsed = JSON.parse(value) as Partial<ChapterExtractionProcessingCache> | null
+    const parsed = JSON.parse(value) as {
+      schemaVersion?: string
+      batch?: ChapterExtractionBatchProcessingContext
+    } | ChapterExtractionBatchProcessingContext | null
+    if (!parsed || typeof parsed !== 'object') {
+      return null
+    }
+    if ('chapterIds' in parsed && 'chapterNos' in parsed && 'aliasDiscoveries' in parsed) {
+      return parsed as ChapterExtractionBatchProcessingContext
+    }
+    if ('schemaVersion' in parsed && parsed.schemaVersion === CHAPTER_EXTRACTION_BATCH_CONTEXT_SCHEMA_VERSION && 'batch' in parsed) {
+      return parsed.batch ?? null
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+function readResolvedChapterExtractionProcessingCache(value: string | null | undefined) {
+  if (!value) return null
+
+  try {
+    const parsed = JSON.parse(value) as Partial<ChapterExtractionResolvedProcessingCache> | null
+    if (!parsed || parsed.schemaVersion !== CHAPTER_EXTRACTION_RESOLVED_SCHEMA_VERSION || !parsed.resolved) {
+      return null
+    }
+    return parsed.resolved
+  } catch {
+    return null
+  }
+}
+
+function readChapterExtractionProcessingCache(candidate: Pick<ChapterExtractionCandidate, 'processingBatchId' | 'processingBatchContextJson' | 'processingResultJson'>, context: ChapterExtractionBatchProcessingContext | undefined) {
+  if (!candidate.processingResultJson || !context) return null
+
+  const resolved = readResolvedChapterExtractionProcessingCache(candidate.processingResultJson)
+  if (resolved) {
+    const sharedContext = readChapterExtractionBatchProcessingContext(candidate.processingBatchContextJson)
+    if (candidate.processingBatchId && sharedContext && batchProcessingContextMatches(sharedContext, context)) {
+      return resolved
+    }
+  }
+
+  if (candidate.processingBatchId) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(candidate.processingResultJson) as Partial<ChapterExtractionProcessingCache> | null
     if (!parsed || parsed.schemaVersion !== CHAPTER_EXTRACTION_PROCESSING_SCHEMA_VERSION || !parsed.batch || !parsed.resolved) {
       return null
     }
@@ -2019,10 +2140,115 @@ function serializeChapterExtractionProcessingCache(params: {
   resolved: ResolvedChapterKnowledge
 }) {
   return JSON.stringify({
-    schemaVersion: CHAPTER_EXTRACTION_PROCESSING_SCHEMA_VERSION,
-    batch: params.batchContext,
+    schemaVersion: CHAPTER_EXTRACTION_RESOLVED_SCHEMA_VERSION,
     resolved: params.resolved,
-  } satisfies ChapterExtractionProcessingCache)
+  } satisfies ChapterExtractionResolvedProcessingCache)
+}
+
+function serializeChapterExtractionBatchProcessingContext(batchContext: ChapterExtractionBatchProcessingContext) {
+  return JSON.stringify({
+    schemaVersion: CHAPTER_EXTRACTION_BATCH_CONTEXT_SCHEMA_VERSION,
+    batch: batchContext,
+  })
+}
+
+function buildChapterExtractionBatchIdentityHash(batchContext: ChapterExtractionBatchProcessingContext) {
+  return hashContent(serializeChapterExtractionBatchProcessingContext(batchContext))
+}
+
+function createOrReuseChapterExtractionProcessingBatch(params: {
+  novelId: string
+  branchId: string
+  batchContext: ChapterExtractionBatchProcessingContext
+}) {
+  const batchContextJson = serializeChapterExtractionBatchProcessingContext(params.batchContext)
+  const batchIdentityHash = buildChapterExtractionBatchIdentityHash(params.batchContext)
+  const existing = queryOne<{ id: string }>(
+    'SELECT id FROM chapter_extraction_processing_batches WHERE branch_id = ? AND batch_identity_hash = ? LIMIT 1',
+    params.branchId,
+    batchIdentityHash,
+  )
+
+  if (existing?.id) {
+    execute(
+      `
+        UPDATE chapter_extraction_processing_batches
+        SET novel_id = ?,
+            batch_context_json = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `,
+      params.novelId,
+      batchContextJson,
+      existing.id,
+    )
+    return existing.id
+  }
+
+  const batchId = uid('candidate-batch')
+  execute(
+    `
+      INSERT INTO chapter_extraction_processing_batches (
+        id, novel_id, branch_id, batch_identity_hash, batch_context_json
+      ) VALUES (?, ?, ?, ?, ?)
+    `,
+    batchId,
+    params.novelId,
+    params.branchId,
+    batchIdentityHash,
+    batchContextJson,
+  )
+  return batchId
+}
+
+function assignChapterExtractionProcessingBatch(params: {
+  branchId: string
+  chapterId: string
+  chapterSourceHash: string
+  processingBatchId: string
+}) {
+  execute(
+    `
+      UPDATE chapter_extraction_candidates
+      SET processing_batch_id = ?,
+          processing_result_json = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE branch_id = ? AND chapter_id = ? AND chapter_source_hash = ?
+    `,
+    params.processingBatchId,
+    params.branchId,
+    params.chapterId,
+    params.chapterSourceHash,
+  )
+}
+
+function cleanupOrphanedChapterExtractionProcessingBatches(params: {
+  branchId?: string
+  novelId?: string
+} = {}) {
+  const filters: string[] = []
+  const filterParams: SqlParam[] = []
+  if (params.branchId) {
+    filters.push('branch_id = ?')
+    filterParams.push(params.branchId)
+  }
+  if (params.novelId) {
+    filters.push('novel_id = ?')
+    filterParams.push(params.novelId)
+  }
+
+  const whereSql = filters.length ? `${filters.join(' AND ')} AND ` : ''
+  execute(
+    `
+      DELETE FROM chapter_extraction_processing_batches
+      WHERE ${whereSql}NOT EXISTS (
+        SELECT 1
+        FROM chapter_extraction_candidates
+        WHERE chapter_extraction_candidates.processing_batch_id = chapter_extraction_processing_batches.id
+      )
+    `,
+    ...filterParams,
+  )
 }
 
 function updateHanlpBootstrapState(jobId: string, updater: (state: KnowledgeRebuildHanlpBootstrapState) => KnowledgeRebuildHanlpBootstrapState) {
@@ -2103,6 +2329,7 @@ function upsertChapterExtractionCandidate(params: {
   chapterRevision?: number | null
   chapterSourceHash: string
   extractionJson: string
+  processingBatchId?: string | null
   processingResultJson?: string | null
   status: ChapterExtractionCandidateStatus
   provider?: string | null
@@ -2110,7 +2337,14 @@ function upsertChapterExtractionCandidate(params: {
   errorMessage?: string | null
 }) {
   execute(
-    'UPDATE chapter_extraction_candidates SET status = \'stale\', updated_at = CURRENT_TIMESTAMP WHERE branch_id = ? AND chapter_id = ? AND chapter_source_hash != ?',
+    `
+      UPDATE chapter_extraction_candidates
+      SET status = 'stale',
+          processing_batch_id = NULL,
+          processing_result_json = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE branch_id = ? AND chapter_id = ? AND chapter_source_hash != ?
+    `,
     params.branchId,
     params.chapterId,
     params.chapterSourceHash
@@ -2127,17 +2361,22 @@ function upsertChapterExtractionCandidate(params: {
         chapter_revision,
         chapter_source_hash,
         extraction_json,
+        processing_batch_id,
         processing_result_json,
         status,
         provider,
         model,
         error_message
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(branch_id, chapter_id, chapter_source_hash) DO UPDATE SET
         chapter_no = excluded.chapter_no,
         chapter_revision = excluded.chapter_revision,
         extraction_json = excluded.extraction_json,
+        processing_batch_id = CASE
+          WHEN ? THEN chapter_extraction_candidates.processing_batch_id
+          ELSE excluded.processing_batch_id
+        END,
         processing_result_json = CASE
           WHEN ? THEN chapter_extraction_candidates.processing_result_json
           ELSE excluded.processing_result_json
@@ -2156,11 +2395,13 @@ function upsertChapterExtractionCandidate(params: {
     params.chapterRevision ?? null,
     params.chapterSourceHash,
     params.extractionJson,
+    params.processingBatchId ?? null,
     params.processingResultJson ?? null,
     params.status,
     params.provider ?? null,
     params.model ?? null,
     params.errorMessage ?? null,
+    params.processingBatchId === undefined ? 1 : 0,
     params.processingResultJson === undefined ? 1 : 0,
   )
 }
@@ -2188,9 +2429,10 @@ function updateExistingChapterExtractionCandidate(params: {
   candidateId: string
   status: ChapterExtractionCandidateStatus
   errorMessage?: string | null
+  processingBatchId?: string | null
   processingResultJson?: string | null
 }) {
-  if (params.processingResultJson === undefined) {
+  if (params.processingResultJson === undefined && params.processingBatchId === undefined) {
     execute(
       `
         UPDATE chapter_extraction_candidates
@@ -2211,13 +2453,23 @@ function updateExistingChapterExtractionCandidate(params: {
       UPDATE chapter_extraction_candidates
       SET status = ?,
           error_message = ?,
-          processing_result_json = ?,
+          processing_batch_id = CASE
+            WHEN ? THEN processing_batch_id
+            ELSE ?
+          END,
+          processing_result_json = CASE
+            WHEN ? THEN processing_result_json
+            ELSE ?
+          END,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `,
     params.status,
     params.errorMessage ?? null,
-    params.processingResultJson,
+    params.processingBatchId === undefined ? 1 : 0,
+    params.processingBatchId ?? null,
+    params.processingResultJson === undefined ? 1 : 0,
+    params.processingResultJson ?? null,
     params.candidateId
   )
 }
@@ -2266,6 +2518,7 @@ async function extractChapterCandidates(params: {
     chapterRevision: params.chapter.revision,
     chapterSourceHash: candidateSourceHash,
     extractionJson: existing?.extractionJson ?? '{}',
+    processingBatchId: null,
     status: 'extracting',
     errorMessage: null,
   })
@@ -2293,6 +2546,7 @@ async function extractChapterCandidates(params: {
     chapterRevision: params.chapter.revision,
     chapterSourceHash: candidateSourceHash,
     extractionJson: JSON.stringify(extractionResult.extraction),
+    processingBatchId: null,
     processingResultJson: null,
     status: 'extracted',
     provider: extractionResult.provider,
@@ -2505,12 +2759,15 @@ function buildBatchAliasDiscoveryPlan(params: {
   branchId: string
   chapters: Array<{ chapterId: string; chapterNo: number; chapterSourceHash: string }>
 }) {
-  const candidates = params.chapters.flatMap((chapter) => {
-    const candidate = loadChapterExtractionCandidate({
-      branchId: params.branchId,
+  const candidateByChapterId = loadChapterExtractionCandidatesForBatch({
+    branchId: params.branchId,
+    chapters: params.chapters.map((chapter) => ({
       chapterId: chapter.chapterId,
       chapterSourceHash: chapter.chapterSourceHash,
-    })
+    })),
+  })
+  const candidates = params.chapters.flatMap((chapter) => {
+    const candidate = candidateByChapterId.get(chapter.chapterId) ?? null
     if (!candidate || (candidate.status !== 'extracted' && candidate.status !== 'persisted' && candidate.status !== 'resolving')) {
       return []
     }
@@ -2670,7 +2927,7 @@ function resolveChapterCandidate(params: {
 }): ResolvedChapterKnowledge {
   void params.storyState
 
-  const cached = readChapterExtractionProcessingCache(params.candidate.processingResultJson, params.batchContext)
+  const cached = readChapterExtractionProcessingCache(params.candidate, params.batchContext)
   if (cached) return cached
 
   const parsed = JSON.parse(params.candidate.extractionJson) as unknown
@@ -5101,10 +5358,10 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
                   throw error
                 }
 
-                  upsertChapterExtractionCandidate({
-                    novelId: params.novelId,
-                    branchId,
-                    chapterId: chapter.id,
+                upsertChapterExtractionCandidate({
+                  novelId: params.novelId,
+                  branchId,
+                  chapterId: chapter.id,
                     chapterNo: chapter.chapterNo,
                     chapterRevision: chapter.revision,
                     chapterSourceHash: buildChapterExtractionCandidateSourceHash({
@@ -5112,6 +5369,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
                       settings: extractionSettings,
                     }),
                     extractionJson: '{}',
+                    processingBatchId: null,
                     processingResultJson: null,
                     status: 'failed',
                     errorMessage: error instanceof Error ? error.message : `Chapter ${chapter.chapterNo} candidate extraction failed`,
@@ -5173,6 +5431,28 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             currentStep: '按稳定章节顺序整理批次抽取结果',
             progress: 0.81,
           })
+          const batchContext = buildChapterExtractionBatchProcessingContext({
+            chapters: currentBatchChapters,
+            aliasDiscoveries: orderedAliasDiscoveries,
+          })
+          const processingBatchId = createOrReuseChapterExtractionProcessingBatch({
+            novelId: params.novelId,
+            branchId,
+            batchContext,
+          })
+          for (const queuedChapter of currentBatchChapters) {
+            const currentChapter = currentChapters.find((item) => item.id === queuedChapter.chapterId)
+            if (!currentChapter) continue
+            assignChapterExtractionProcessingBatch({
+              branchId,
+              chapterId: queuedChapter.chapterId,
+              chapterSourceHash: buildChapterExtractionCandidateSourceHash({
+                chapterSourceHash: currentChapter.sourceHash,
+                settings: extractionSettings,
+              }),
+              processingBatchId,
+            })
+          }
           setBatchAliasSyncPlanInKnowledgeJob({
             jobId: job.id,
             chapters: currentBatchChapters,
@@ -5224,102 +5504,109 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             break
           }
 
-          const queuedChapter = writeQueue[0]
-          const chapter = chapterById.get(queuedChapter.chapterId)
-          if (!chapter) {
-            removeExtractedChapterFromKnowledgeJob(job.id, queuedChapter.chapterId)
-            continue
-          }
-
-          updateKnowledgeJob(job.id, {
-            currentStep: `按章节顺序整理并写入第 ${chapter.chapterNo} 章知识`,
-            progress: currentJobState.payload.totalChapterCount
-              ? 0.82 + ((currentJobState.payload.totalChapterCount - writeQueue.length) / currentJobState.payload.totalChapterCount) * 0.14
-              : 0.82,
-          })
-
-          assertKnowledgeRebuildContinues(job.id)
-          const storyState = buildKnowledgeExtractionStoryState({
-            novelId: params.novelId,
-            branchId,
-            asOfChapter: Math.max(0, chapter.chapterNo - 1),
-            currentChapterText: chapter.rawText,
-          })
           const extractionSettings = getKnowledgeExtractionSettingsSnapshot(currentJobState.payload)
-          const candidate = loadChapterExtractionCandidate({
+          const currentBatchChapters = getCurrentBatchChaptersForProcessing(currentJobState, writeQueue)
+          const batchContext = buildChapterExtractionBatchProcessingContext({
+            chapters: currentBatchChapters,
+            aliasDiscoveries: currentJobState.payload.orderedAliasDiscoveries ?? [],
+          })
+          const candidateByChapterId = loadChapterExtractionCandidatesForBatch({
             branchId,
-            chapterId: chapter.id,
-            chapterSourceHash: buildChapterExtractionCandidateSourceHash({
-              chapterSourceHash: chapter.sourceHash,
-              settings: extractionSettings,
+            chapters: currentBatchChapters.flatMap((batchChapter) => {
+              const chapter = chapterById.get(batchChapter.chapterId)
+              if (!chapter) return []
+              return [{
+                chapterId: chapter.id,
+                chapterSourceHash: buildChapterExtractionCandidateSourceHash({
+                  chapterSourceHash: chapter.sourceHash,
+                  settings: extractionSettings,
+                }),
+              }]
             }),
           })
 
-          if (candidate?.status === 'persisted' && chapter.knowledgeStatus === 'ready' && chapter.isDirty === 0) {
-            removeExtractedChapterFromKnowledgeJob(job.id, chapter.id)
-            continue
-          }
-
-          if (!candidate || candidate.status === 'failed' || candidate.status === 'stale') {
-            updateChapterKnowledgeStatus({
-              chapterId: chapter.id,
-              knowledgeStatus: 'degraded',
-              dirtyReason: candidate?.errorMessage ?? 'Candidate missing or unavailable for ordered apply',
-            })
-            removeExtractedChapterFromKnowledgeJob(job.id, chapter.id)
-            continue
-          }
-
-          try {
-            const batchContext = buildChapterExtractionBatchProcessingContext({
-              chapters: getCurrentBatchChaptersForProcessing(currentJobState, writeQueue),
-              aliasDiscoveries: currentJobState.payload.orderedAliasDiscoveries ?? [],
-            })
-            updateExistingChapterExtractionCandidate({
-              candidateId: candidate.id,
-              status: 'resolving',
-              errorMessage: null,
-            })
-
-            const resolved = resolveChapterCandidate({
-              candidate,
-              storyState,
-              batchContext,
-            })
-            updateExistingChapterExtractionCandidate({
-              candidateId: candidate.id,
-              status: 'resolving',
-              errorMessage: null,
-              processingResultJson: serializeChapterExtractionProcessingCache({
-                batchContext,
-                resolved,
-              }),
-            })
-            await persistResolvedChapterKnowledge({
-              novelId: params.novelId,
-              branchId,
-              chapterId: chapter.id,
-              chapterNo: chapter.chapterNo,
-              candidateId: candidate.id,
-              resolved,
-            })
-          } catch (error) {
-            if (isKnowledgeRebuildControlError(error)) {
-              throw error
+          for (let index = 0; index < writeQueue.length; index += 1) {
+            const queuedChapter = writeQueue[index]
+            const chapter = chapterById.get(queuedChapter.chapterId)
+            if (!chapter) {
+              removeExtractedChapterFromKnowledgeJob(job.id, queuedChapter.chapterId)
+              continue
             }
 
-            updateExistingChapterExtractionCandidate({
-              candidateId: candidate.id,
-              status: 'failed',
-              errorMessage: error instanceof Error ? error.message : `Chapter ${chapter.chapterNo} ordered apply failed`,
+            updateKnowledgeJob(job.id, {
+              currentStep: `按章节顺序整理并写入第 ${chapter.chapterNo} 章知识`,
+              progress: currentJobState.payload.totalChapterCount
+                ? 0.82 + ((currentJobState.payload.totalChapterCount - (writeQueue.length - index)) / currentJobState.payload.totalChapterCount) * 0.14
+                : 0.82,
             })
-            updateChapterKnowledgeStatus({
-              chapterId: chapter.id,
-              knowledgeStatus: 'degraded',
-              dirtyReason: error instanceof Error ? error.message : 'Ordered apply failed',
-            })
-          } finally {
-            removeExtractedChapterFromKnowledgeJob(job.id, chapter.id)
+
+            assertKnowledgeRebuildContinues(job.id)
+            const candidate = candidateByChapterId.get(chapter.id) ?? null
+
+            if (candidate?.status === 'persisted' && chapter.knowledgeStatus === 'ready' && chapter.isDirty === 0) {
+              removeExtractedChapterFromKnowledgeJob(job.id, chapter.id)
+              continue
+            }
+
+            if (!candidate || candidate.status === 'failed' || candidate.status === 'stale') {
+              updateChapterKnowledgeStatus({
+                chapterId: chapter.id,
+                knowledgeStatus: 'degraded',
+                dirtyReason: candidate?.errorMessage ?? 'Candidate missing or unavailable for ordered apply',
+              })
+              removeExtractedChapterFromKnowledgeJob(job.id, chapter.id)
+              continue
+            }
+
+            try {
+              updateExistingChapterExtractionCandidate({
+                candidateId: candidate.id,
+                status: 'resolving',
+                errorMessage: null,
+              })
+
+              const resolved = resolveChapterCandidate({
+                candidate,
+                storyState: '',
+                batchContext,
+              })
+              updateExistingChapterExtractionCandidate({
+                candidateId: candidate.id,
+                status: 'resolving',
+                errorMessage: null,
+                processingResultJson: serializeChapterExtractionProcessingCache({
+                  batchContext,
+                  resolved,
+                }),
+              })
+              await persistResolvedChapterKnowledge({
+                novelId: params.novelId,
+                branchId,
+                chapterId: chapter.id,
+                chapterNo: chapter.chapterNo,
+                candidateId: candidate.id,
+                resolved,
+              })
+            } catch (error) {
+              if (isKnowledgeRebuildControlError(error)) {
+                throw error
+              }
+
+              updateExistingChapterExtractionCandidate({
+                candidateId: candidate.id,
+                status: 'failed',
+                errorMessage: error instanceof Error ? error.message : `Chapter ${chapter.chapterNo} ordered apply failed`,
+                processingBatchId: null,
+                processingResultJson: null,
+              })
+              updateChapterKnowledgeStatus({
+                chapterId: chapter.id,
+                knowledgeStatus: 'degraded',
+                dirtyReason: error instanceof Error ? error.message : 'Ordered apply failed',
+              })
+            } finally {
+              removeExtractedChapterFromKnowledgeJob(job.id, chapter.id)
+            }
           }
           continue
         }

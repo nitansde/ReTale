@@ -488,13 +488,17 @@ describe('knowledge rebuild HanLP orchestration', () => {
     const keptAlias = queryOne<{ id: string }>('SELECT id FROM EntityAlias WHERE id = ?', 'alias-range-keep')
     const staleMapping = queryOne<{ id: string }>('SELECT id FROM EntityAliasMapping WHERE id = ?', 'mapping-range-stale')
     const keptMapping = queryOne<{ id: string }>('SELECT id FROM EntityAliasMapping WHERE id = ?', 'mapping-range-keep')
-    const cachedCandidate = queryOne<{ status: string; processingResultJson: string | null }>(
-      'SELECT status, processing_result_json AS processingResultJson FROM chapter_extraction_candidates WHERE id = ?',
+    const cachedCandidate = queryOne<{ status: string; processingBatchId: string | null; processingResultJson: string | null }>(
+      'SELECT status, processing_batch_id AS processingBatchId, processing_result_json AS processingResultJson FROM chapter_extraction_candidates WHERE id = ?',
       'cached-candidate-chapter-2',
     )
-    const freshCandidate = queryOne<{ processingResultJson: string | null }>(
-      'SELECT processing_result_json AS processingResultJson FROM chapter_extraction_candidates WHERE chapter_id = ?',
+    const freshCandidate = queryOne<{ processingBatchId: string | null; processingResultJson: string | null }>(
+      'SELECT processing_batch_id AS processingBatchId, processing_result_json AS processingResultJson FROM chapter_extraction_candidates WHERE chapter_id = ?',
       'chapter-3',
+    )
+    const sharedBatch = queryOne<{ batchContextJson: string | null }>(
+      'SELECT batch_context_json AS batchContextJson FROM chapter_extraction_processing_batches WHERE id = ?',
+      cachedCandidate?.processingBatchId ?? '',
     )
 
     expect(hanlpCalls).toEqual([1, 2, 3, 4, 5])
@@ -520,20 +524,28 @@ describe('knowledge rebuild HanLP orchestration', () => {
     expect(staleMapping).toBeNull()
     expect(keptMapping).toEqual({ id: 'mapping-range-keep' })
     expect(cachedCandidate?.status).toBe('persisted')
+    expect(cachedCandidate?.processingBatchId).toBeTruthy()
+    expect(freshCandidate?.processingBatchId).toBe(cachedCandidate?.processingBatchId)
     const cachedProcessingResult = JSON.parse(cachedCandidate?.processingResultJson ?? '{}') as {
       schemaVersion?: string
-      batch?: { chapterNos?: number[] }
+      resolved?: { extraction?: { summary?: string } }
     }
     const freshProcessingResult = JSON.parse(freshCandidate?.processingResultJson ?? '{}') as {
       schemaVersion?: string
+      resolved?: { extraction?: { summary?: string } }
+    }
+    const sharedBatchContext = JSON.parse(sharedBatch?.batchContextJson ?? '{}') as {
       batch?: { chapterNos?: number[] }
     }
     expect(cachedProcessingResult).toMatchObject({
-      schemaVersion: 'knowledge-extraction-processing:v1',
-      batch: { chapterNos: [2, 3] },
+      schemaVersion: 'knowledge-extraction-processing:v2',
+      resolved: { extraction: { summary: 'summary-2' } },
     })
     expect(freshProcessingResult).toMatchObject({
-      schemaVersion: 'knowledge-extraction-processing:v1',
+      schemaVersion: 'knowledge-extraction-processing:v2',
+      resolved: { extraction: { summary: 'summary-3' } },
+    })
+    expect(sharedBatchContext).toMatchObject({
       batch: { chapterNos: [2, 3] },
     })
   })
@@ -795,17 +807,29 @@ describe('knowledge rebuild HanLP orchestration', () => {
       'SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ? AND processing_result_json IS NOT NULL',
       branchId,
     )?.count).toBe(50)
-    const firstBatchCache = JSON.parse(queryOne<{ processingResultJson: string | null }>(
-      'SELECT processing_result_json AS processingResultJson FROM chapter_extraction_candidates WHERE chapter_id = ?',
+    const firstBatchCache = queryOne<{ processingBatchId: string | null }>(
+      'SELECT processing_batch_id AS processingBatchId FROM chapter_extraction_candidates WHERE chapter_id = ?',
       'chapter-1',
-    )?.processingResultJson ?? '{}') as { batch?: { chapterNos?: number[] } }
-    const lastBatchCache = JSON.parse(queryOne<{ processingResultJson: string | null }>(
-      'SELECT processing_result_json AS processingResultJson FROM chapter_extraction_candidates WHERE chapter_id = ?',
+    )
+    const lastBatchCache = queryOne<{ processingBatchId: string | null }>(
+      'SELECT processing_batch_id AS processingBatchId FROM chapter_extraction_candidates WHERE chapter_id = ?',
       'chapter-50',
-    )?.processingResultJson ?? '{}') as { batch?: { chapterNos?: number[] } }
+    )
+    const firstBatchContext = JSON.parse(queryOne<{ batchContextJson: string | null }>(
+      'SELECT batch_context_json AS batchContextJson FROM chapter_extraction_processing_batches WHERE id = ?',
+      firstBatchCache?.processingBatchId ?? '',
+    )?.batchContextJson ?? '{}') as { batch?: { chapterNos?: number[] } }
+    const lastBatchContext = JSON.parse(queryOne<{ batchContextJson: string | null }>(
+      'SELECT batch_context_json AS batchContextJson FROM chapter_extraction_processing_batches WHERE id = ?',
+      lastBatchCache?.processingBatchId ?? '',
+    )?.batchContextJson ?? '{}') as { batch?: { chapterNos?: number[] } }
 
-    expect(firstBatchCache.batch?.chapterNos).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-    expect(lastBatchCache.batch?.chapterNos).toEqual([41, 42, 43, 44, 45, 46, 47, 48, 49, 50])
+    expect(queryOne<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM chapter_extraction_processing_batches WHERE branch_id = ?',
+      branchId,
+    )?.count).toBe(5)
+    expect(firstBatchContext.batch?.chapterNos).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    expect(lastBatchContext.batch?.chapterNos).toEqual([41, 42, 43, 44, 45, 46, 47, 48, 49, 50])
   })
 
   it('clears stale batch processing cache when a candidate is re-extracted', async () => {
@@ -897,11 +921,19 @@ describe('knowledge rebuild HanLP orchestration', () => {
       'chapter-1',
     )?.summary).toBe('fresh extraction summary')
 
-    const processingResult = JSON.parse(queryOne<{ processingResultJson: string | null }>(
-      'SELECT processing_result_json AS processingResultJson FROM chapter_extraction_candidates WHERE id = ?',
+    const processingResult = queryOne<{ processingBatchId: string | null; processingResultJson: string | null }>(
+      'SELECT processing_batch_id AS processingBatchId, processing_result_json AS processingResultJson FROM chapter_extraction_candidates WHERE id = ?',
       'stale-processing-candidate',
-    )?.processingResultJson ?? '{}') as { resolved?: { extraction?: { summary?: string } } }
-    expect(processingResult.resolved?.extraction?.summary).toBe('fresh extraction summary')
+    )
+    const resolvedPayload = JSON.parse(processingResult?.processingResultJson ?? '{}') as {
+      schemaVersion?: string
+      resolved?: { extraction?: { summary?: string } }
+    }
+    expect(processingResult?.processingBatchId).toBeTruthy()
+    expect(resolvedPayload).toMatchObject({
+      schemaVersion: 'knowledge-extraction-processing:v2',
+      resolved: { extraction: { summary: 'fresh extraction summary' } },
+    })
   })
 
   it('can pause during HanLP before any extraction starts', async () => {

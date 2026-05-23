@@ -397,6 +397,7 @@ async function deleteExtractionCacheForNovel(novelId: string): Promise<Knowledge
     cacheLabel: 'LLM extraction cache',
     deleteRows: (trimmedNovelId, branchId) => {
       execute('DELETE FROM chapter_extraction_candidates WHERE novel_id = ? AND branch_id = ?', trimmedNovelId, branchId)
+      execute('DELETE FROM chapter_extraction_processing_batches WHERE novel_id = ? AND branch_id = ?', trimmedNovelId, branchId)
     },
   })
 }
