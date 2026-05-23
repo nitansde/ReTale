@@ -1,7 +1,11 @@
 import { after, NextResponse } from 'next/server'
-import { findWorkspaceState, upsertWorkspaceState } from '@/lib/server/persistence'
+import { upsertWorkspaceState } from '@/lib/server/persistence'
 import { syncWorkspacePayloadToKnowledgeStore } from '@/lib/server/knowledge-rebuild'
-import { normalizeWorkspaceState } from '@/lib/workspace-state'
+import {
+  isExplicitWorkspaceResetRequest,
+  loadWorkspacePayloadWithRecovery,
+  shouldBlockEmptyWorkspaceOverwrite,
+} from '@/lib/server/workspace-resilience'
 
 export const maxDuration = 3600
 
@@ -70,8 +74,7 @@ function queueWorkspaceKnowledgeSync(payload: unknown) {
 
 export async function GET() {
   try {
-    const workspaceState = findWorkspaceState('singleton')
-    const payload = normalizeWorkspaceState(workspaceState ? JSON.parse(workspaceState.payload) : undefined)
+    const payload = loadWorkspacePayloadWithRecovery()
     return NextResponse.json(payload)
   } catch (error) {
     console.error('Failed to restore workspace payload:', error)
@@ -82,7 +85,19 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const payload = await request.json()
-    const saved = upsertWorkspaceState('singleton', JSON.stringify(payload))
+    const allowReset = isExplicitWorkspaceResetRequest(request)
+    if (shouldBlockEmptyWorkspaceOverwrite(payload, allowReset)) {
+      return NextResponse.json(
+        { ok: false, error: 'Refusing to overwrite a recoverable workspace with an empty payload' },
+        { status: 409 }
+      )
+    }
+
+    const saved = upsertWorkspaceState(
+      'singleton',
+      JSON.stringify(payload),
+      { backupReason: allowReset ? 'explicit-reset' : 'workspace-save' }
+    )
 
     queueWorkspaceKnowledgeSync(payload)
 
