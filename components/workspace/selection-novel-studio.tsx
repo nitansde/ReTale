@@ -3751,7 +3751,9 @@ export function SelectionNovelStudio() {
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
       setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
-      setKnowledgeStatusOverview(result.knowledgeStatusOverview)
+      if (result.knowledgeStatusOverview) {
+        setKnowledgeStatusOverview(result.knowledgeStatusOverview)
+      }
 
       if (
         result.knowledgeRebuildStatus?.jobId
@@ -3791,7 +3793,9 @@ export function SelectionNovelStudio() {
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
       setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
-      setKnowledgeStatusOverview(result.knowledgeStatusOverview)
+      if (result.knowledgeStatusOverview) {
+        setKnowledgeStatusOverview(result.knowledgeStatusOverview)
+      }
 
       if (
         result.knowledgeRebuildStatus?.jobId
@@ -3858,7 +3862,9 @@ export function SelectionNovelStudio() {
       lastActiveKnowledgeJobIdRef.current = null
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
       setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
-      setKnowledgeStatusOverview(result.knowledgeStatusOverview)
+      if (result.knowledgeStatusOverview) {
+        setKnowledgeStatusOverview(result.knowledgeStatusOverview)
+      }
       setKnowledgeRebuilding(false)
       const activeJobLabel = result.knowledgeRebuildStatus?.jobType === 'rebuild_retrieval_index' ? 'LanceDB 检索索引任务' : '知识重建'
       showKnowledgeToast(result.jobOutcome === 'aborted' ? `${activeJobLabel}已终止` : '当前没有可终止的知识重建任务')
