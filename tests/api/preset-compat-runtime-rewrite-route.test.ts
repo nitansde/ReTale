@@ -569,8 +569,12 @@ describe('preset compat rewrite route runtime', () => {
       messages: Array<{ role: string; content: string }>
     }
     expect(requestBody.messages[1]?.content).toContain('用户要求：把情绪压低。')
-    expect(requestBody.messages[1]?.content).toContain('任务要求：根据用户指导，续写下面给出的正文。')
-    expect(requestBody.messages[1]?.content).toContain('# 待续写正文\n上一个 block 的最新正文 BETA')
+    expect(requestBody.messages[1]?.content).toContain('任务类型：续写后续故事')
+    expect(requestBody.messages[1]?.content).toContain('任务要求：接着下面给出的正文，继续根据用户指令写接下来的故事。')
+    expect(requestBody.messages[1]?.content).toContain('输出要求：只输出后续新正文，不要复述、解释或重新输出下面已经给出的正文。')
+    expect(requestBody.messages[1]?.content).toContain('# 已有正文（从这里之后继续写）\n上一个 block 的最新正文 BETA')
+    expect(requestBody.messages[1]?.content).not.toContain('操作类型：rewrite')
+    expect(requestBody.messages[1]?.content).not.toContain('不要改写')
     expect(requestBody.messages[1]?.content).not.toContain('# 选中文本')
   })
 

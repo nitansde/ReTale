@@ -639,10 +639,12 @@ test('workspace rewrite flow saves a macro-bearing preset binding and sends Alic
       userInstruction?: string
       operationType?: string
       recoverableRewriteJob?: boolean
+      stream?: boolean
     }
     expect(route.request().url()).toContain('/api/rewrite')
     expect(body.operationType).toBe('rewrite')
     expect(body.recoverableRewriteJob).toBe(true)
+    expect(body.stream).toBe(true)
 
     const activePresetId = library.surfaceBindings.rewrite.presetId
     const activePreset = activePresetId ? library.presets[activePresetId] : null

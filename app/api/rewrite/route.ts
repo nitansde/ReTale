@@ -4,6 +4,7 @@ import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
 import { applyPresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runtime'
 import {
+  deserializePresetCompatResponseMetadata,
   resolveCreativeRoutePresetCompatMetadata,
   serializePresetCompatResponseMetadata,
 } from '@/lib/preset-compat/runtime-integration'
@@ -15,6 +16,7 @@ import {
 } from '@/lib/server/openai-compatible'
 import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
 import { generateRewriteWithOllama, streamRewriteWithOllama } from '@/lib/server/ollama-local'
+import { buildRewriteTaskPromptLines, CONTINUATION_SOURCE_BLOCK_LABEL, isContinuationRewriteTask } from '@/lib/server/rewrite-task-prompt'
 import { uid } from '@/lib/utils'
 import type { PresetCompatPromptRuleRuntimeContext, PresetCompatRuntimeContextBlock } from '@/lib/preset-compat/types'
 import type { GenerationContextBlock, RoleplayContextMessage } from '@/lib/server/context-builder'
@@ -24,6 +26,9 @@ export const maxDuration = 3600
 
 const INVALID_OPERATION_TYPE_ERROR = `Invalid operationType. Expected one of: ${PRODUCT_SURFACE_IDS.join(', ')}`
 const RECOVERABLE_REWRITE_JOB_TYPE = 'rewrite_generation'
+const PARTIAL_REWRITE_PERSIST_MIN_CHARS = 120
+const PARTIAL_REWRITE_PERSIST_MIN_MS = 500
+const MAX_PARTIAL_REWRITE_RESULT_CHARS = 200_000
 
 type RewriteResultPayload = {
   provider: string
@@ -49,6 +54,7 @@ type RecoverableRewriteJobPayload = {
     rewriteLaunchSource: string | null
     createdAt: string
   }
+  stream?: boolean
   result?: RewriteResultPayload
   error?: string
 }
@@ -227,6 +233,7 @@ function normalizeRecoverableRewriteJobPayload(payloadJson: string | null): Reco
       rewriteLaunchSource: typeof panelRecord.rewriteLaunchSource === 'string' ? panelRecord.rewriteLaunchSource : null,
       createdAt: String(panelRecord.createdAt ?? ''),
     },
+    stream: record.stream === true,
     result: normalizeRewriteResultPayload(record.result) ?? undefined,
     error: typeof record.error === 'string' ? record.error : undefined,
   }
@@ -342,6 +349,108 @@ function createResultPayload(params: {
   } satisfies RewriteResultPayload
 }
 
+function readStreamResponseMetadata(response: Response) {
+  const presetCompatHeader = response.headers.get('x-chatbook-preset-compat')
+  if (!presetCompatHeader) return null
+
+  try {
+    return deserializePresetCompatResponseMetadata(presetCompatHeader)
+  } catch {
+    return null
+  }
+}
+
+function normalizeStreamedRewriteText(value: string) {
+  const content = value.trim()
+  const parsedContent = parseJsonRecord(content)
+  if (typeof parsedContent?.result === 'string' && parsedContent.result.trim()) {
+    return parsedContent.result.trim()
+  }
+  return content
+}
+
+async function readRewriteResponseResultWithProgress(
+  jobId: string,
+  payload: RecoverableRewriteJobPayload,
+  response: Response,
+): Promise<RewriteResultPayload> {
+  const contentType = response.headers.get('content-type') ?? ''
+  if (contentType.includes('application/json') || !response.body || !contentType.includes('text/plain')) {
+    return readRewriteResponseResult(response)
+  }
+
+  const fallbackResponse = response.clone()
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const provider = response.headers.get('x-chatbook-provider') ?? 'context-stream'
+  const presetCompat = readStreamResponseMetadata(response)
+  let content = ''
+  let lastPersistedLength = 0
+  let lastPersistedAt = 0
+  let hasPersistedPartial = false
+
+  const persistPartial = (force = false) => {
+    const visibleContent = normalizeStreamedRewriteText(content)
+    if (!visibleContent) return
+    const now = Date.now()
+    const shouldPersist = force
+      || !hasPersistedPartial
+      || visibleContent.length - lastPersistedLength >= PARTIAL_REWRITE_PERSIST_MIN_CHARS
+      || now - lastPersistedAt >= PARTIAL_REWRITE_PERSIST_MIN_MS
+    if (!shouldPersist) return
+
+    const persistedContent = visibleContent.length > MAX_PARTIAL_REWRITE_RESULT_CHARS
+      ? visibleContent.slice(0, MAX_PARTIAL_REWRITE_RESULT_CHARS)
+      : visibleContent
+
+    updateRecoverableRewriteJob(jobId, {
+      status: 'running',
+      progress: 0.65,
+      currentStep: `正在流式生成改写版本（已输出 ${visibleContent.length} 字）`,
+      payload: {
+        ...payload,
+        result: createResultPayload({
+          provider,
+          title: '生成版本',
+          summary: '正在流式生成，结果会持续更新。',
+          content: persistedContent,
+          presetCompat,
+        }),
+      },
+    })
+    lastPersistedLength = visibleContent.length
+    lastPersistedAt = now
+    hasPersistedPartial = true
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    const chunk = decoder.decode(value, { stream: true })
+    if (!chunk) continue
+    content += chunk
+    persistPartial()
+  }
+
+  const finalChunk = decoder.decode()
+  if (finalChunk) {
+    content += finalChunk
+    persistPartial(true)
+  }
+
+  const finalContent = normalizeStreamedRewriteText(content)
+  if (!finalContent) {
+    return readRewriteResponseResult(fallbackResponse)
+  }
+
+  return createResultPayload({
+    provider,
+    title: '生成版本',
+    content: finalContent,
+    presetCompat,
+  })
+}
+
 function scheduleRecoverableRewriteJob(jobId: string) {
   try {
     after(async () => {
@@ -403,24 +512,23 @@ function buildUserPrompt(params: {
 
   const sourceText = params.sourceText.trim()
   const selectedText = params.selectedText.trim()
-  const isContinuationBody = !selectedText && Boolean(sourceText)
+  const isContinuationBody = isContinuationRewriteTask({
+    selectedText,
+    hasContinuationSource: Boolean(sourceText),
+  })
   const sourceBlock = selectedText
     ? ['# 选中文本', selectedText, '']
     : sourceText
-      ? ['# 待续写正文', sourceText, '']
+      ? [`# ${CONTINUATION_SOURCE_BLOCK_LABEL}`, sourceText, '']
       : []
-  const automaticTaskLines = isContinuationBody
-    ? [
-        '任务要求：根据用户指导，续写下面给出的正文。',
-        '输出要求：只输出续写的新正文，不要改写、复述或解释下面已经给出的正文。',
-      ]
-    : []
 
   return [
     '# 任务',
-    `操作类型：${params.operationType}`,
-    `用户要求：${params.userInstruction || '按当前模式生成。'}`,
-    ...automaticTaskLines,
+    ...buildRewriteTaskPromptLines({
+      operationType: params.operationType,
+      userInstruction: params.userInstruction,
+      continuation: isContinuationBody,
+    }),
     '',
     '# 当前章节',
     params.chapterNo ? `当前章节：第 ${params.chapterNo} 章` : '当前章节：未知',
@@ -536,7 +644,11 @@ async function createRecoverableRewriteJob(body: Record<string, unknown>) {
   delete requestPayload.stream
 
   const jobId = uid('rewrite-job')
-  const payload = { request: requestPayload, panel } satisfies RecoverableRewriteJobPayload
+  const payload = {
+    request: requestPayload,
+    panel,
+    stream: body.stream === true,
+  } satisfies RecoverableRewriteJobPayload
   execute(
     `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, progress, currentStep, payloadJson)
      VALUES (?, ?, ?, ?, 'queued', 0.1, ?, ?)`,
@@ -612,14 +724,16 @@ async function runRecoverableRewriteJob(jobId: string) {
     const response = await handleRewritePost(new Request('http://localhost/api/rewrite', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload.request),
+      body: JSON.stringify(payload.stream ? { ...payload.request, stream: true } : payload.request),
     }), { allowRecoverable: false })
     if (!response.ok) {
       const errorText = await response.text().catch(() => '')
       throw new Error(errorText || `Rewrite job failed with status ${response.status}`)
     }
 
-    const result = await readRewriteResponseResult(response)
+    const result = payload.stream
+      ? await readRewriteResponseResultWithProgress(jobId, payload, response)
+      : await readRewriteResponseResult(response)
     updateRecoverableRewriteJob(jobId, {
       status: 'succeeded',
       progress: 1,
@@ -795,6 +909,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
           headers: {
             'Content-Type': 'text/plain; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
+            'X-ChatBook-Provider': runtime.resolvedRuntime.providerRuntime.provider,
             'X-ChatBook-Preset-Compat': presetCompatHeader,
           },
         })
@@ -804,6 +919,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
         headers: {
           'Content-Type': 'text/plain; charset=utf-8',
           'Cache-Control': 'no-cache, no-transform',
+          'X-ChatBook-Provider': runtime.resolvedRuntime.providerRuntime.provider,
           'X-ChatBook-Preset-Compat': presetCompatHeader,
         },
       })
@@ -814,6 +930,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
+        'X-ChatBook-Provider': runtime.resolvedRuntime.providerRuntime.provider,
         'X-ChatBook-Preset-Compat': presetCompatHeader,
       },
     })

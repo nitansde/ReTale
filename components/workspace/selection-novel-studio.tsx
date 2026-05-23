@@ -1130,7 +1130,7 @@ async function callCreateRecoverableRewriteJobApi(payload: Record<string, unknow
   const response = await fetch('/api/rewrite', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...payload, recoverableRewriteJob: true }),
+    body: JSON.stringify({ ...payload, recoverableRewriteJob: true, stream: true }),
   })
 
   const data = await response.json() as { ok?: boolean; job?: RecoverableRewriteJob | null; error?: string }
@@ -2748,6 +2748,7 @@ export function SelectionNovelStudio() {
   }
 
   const selectedRewriteCandidate = rewriteFlow.candidates[rewriteFlow.selectedIndex] ?? rewriteFlow.candidates[0]
+  const previewRewriteContent = selectedRewriteCandidate?.content || rewriteState.result
   const activeGraphContext = graphContext ?? generationContext?.graphContext ?? null
   const activePromptBlockCount = generationContext
     ? getVisibleAdvancedContextPromptBlocks(generationContext.promptBlocks).length
@@ -6071,7 +6072,10 @@ export function SelectionNovelStudio() {
                     <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">生成版本</p>
                     {rewriteFlow.loading ? (
                       <div className="rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">
-                        {rewriteFlow.jobCurrentStep?.trim() || '正在生成版本…'}
+                        <p>{rewriteFlow.jobCurrentStep?.trim() || '正在生成版本…'}</p>
+                        {previewRewriteContent ? (
+                          <p className="mt-3 line-clamp-4 text-xs leading-6 text-zinc-500">{previewRewriteContent}</p>
+                        ) : null}
                       </div>
                     ) : selectedRewriteCandidate ? (
                       <div className="w-full rounded-[24px] border border-violet-400/30 bg-violet-500/12 px-4 py-4 text-left">
@@ -6092,7 +6096,7 @@ export function SelectionNovelStudio() {
                       <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">预览结果</p>
                       {selectedRewriteCandidate ? <span className="text-xs text-zinc-500">{selectedRewriteCandidate.title}</span> : null}
                     </div>
-                    <p className="min-h-72 whitespace-pre-wrap text-sm leading-7 text-zinc-300">{selectedRewriteCandidate?.content || rewriteState.result || '选择文本并生成后，完整章节版本会显示在这里。'}</p>
+                    <p className="min-h-72 whitespace-pre-wrap text-sm leading-7 text-zinc-300">{previewRewriteContent || '选择文本并生成后，完整章节版本会显示在这里。'}</p>
                   </div>
                 </div>
               </div>

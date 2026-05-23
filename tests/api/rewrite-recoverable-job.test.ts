@@ -158,7 +158,7 @@ describe('recoverable rewrite jobs', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { GET, POST, runRecoverableRewriteJobForTesting } = await importRewriteRoute()
-    const createdResponse = await POST(createRewriteRequest({ recoverableRewriteJob: true, stream: true }))
+    const createdResponse = await POST(createRewriteRequest({ recoverableRewriteJob: true }))
     const created = await createdResponse.json() as { ok: boolean; job: { jobId: string; status: string; result: null } }
 
     expect(created.ok).toBe(true)
@@ -195,6 +195,111 @@ describe('recoverable rewrite jobs', () => {
     const restoredByChapter = await restoredByChapterResponse.json() as { job: { jobId: string; result: { content: string } } }
     expect(restoredByChapter.job.jobId).toBe(created.job.jobId)
     expect(restoredByChapter.job.result.content).toBe('完成后的单个改写版本。')
+  }, 30000)
+
+  it('exposes partial streamed output while a recoverable rewrite job is running', async () => {
+    const { queryOne } = await createTestDatabase('chatbook-rewrite-recoverable-streaming')
+    const encoder = new TextEncoder()
+    let upstreamController: ReadableStreamDefaultController<Uint8Array> | null = null
+    const upstream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        upstreamController = controller
+      },
+    })
+    const fetchMock = vi.fn().mockResolvedValue(new Response(upstream, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { GET, POST, runRecoverableRewriteJobForTesting } = await importRewriteRoute()
+    const createdResponse = await POST(createRewriteRequest({ recoverableRewriteJob: true, stream: true }))
+    const created = await createdResponse.json() as { ok: boolean; job: { jobId: string; status: string; result: null } }
+    expect(created.ok).toBe(true)
+
+    const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId)
+    await waitForCondition(() => fetchMock.mock.calls.length === 1 && upstreamController !== null)
+    const controller = upstreamController
+    if (!controller) {
+      throw new Error('Expected streaming response controller')
+    }
+
+    controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"第一段"}}]}\n\n'))
+    await waitForCondition(async () => {
+      const response = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+      const data = await response.json() as { job: { status: string; result: { content: string } | null } }
+      return data.job.status === 'running' && data.job.result?.content === '第一段'
+    })
+
+    const payloadDuringRun = JSON.parse(queryOne<{ payloadJson: string }>(
+      'SELECT payloadJson FROM KnowledgeJob WHERE id = ?',
+      created.job.jobId,
+    )?.payloadJson ?? '{}') as { request?: { stream?: unknown; recoverableRewriteJob?: unknown }; result?: { content?: string } }
+    expect(payloadDuringRun.request?.stream).toBeUndefined()
+    expect(payloadDuringRun.request?.recoverableRewriteJob).toBeUndefined()
+    expect(payloadDuringRun.result?.content).toBe('第一段')
+
+    controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"第二段"}}]}\n\n'))
+    controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+    controller.close()
+    await runPromise
+
+    const restoredResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const restored = await restoredResponse.json() as { job: { status: string; result: { content: string; provider: string } } }
+    expect(restored.job.status).toBe('succeeded')
+    expect(restored.job.result.content).toBe('第一段第二段')
+    expect(restored.job.result.provider).toBe('openai-compatible')
+  }, 30000)
+
+  it('throttles tiny streamed partial updates before final completion', async () => {
+    await createTestDatabase('chatbook-rewrite-recoverable-streaming-throttle')
+    const encoder = new TextEncoder()
+    let upstreamController: ReadableStreamDefaultController<Uint8Array> | null = null
+    const upstream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        upstreamController = controller
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(upstream, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    })))
+
+    const { GET, POST, runRecoverableRewriteJobForTesting } = await importRewriteRoute()
+    const createdResponse = await POST(createRewriteRequest({ recoverableRewriteJob: true, stream: true }))
+    const created = await createdResponse.json() as { job: { jobId: string } }
+
+    const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId)
+    await waitForCondition(() => upstreamController !== null)
+    const controller = upstreamController
+    if (!controller) {
+      throw new Error('Expected streaming response controller')
+    }
+
+    controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"一"}}]}\n\n'))
+    await waitForCondition(async () => {
+      const response = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+      const data = await response.json() as { job: { result: { content: string } | null } }
+      return data.job.result?.content === '一'
+    })
+
+    for (let index = 0; index < 50; index += 1) {
+      controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"一"}}]}\n\n'))
+    }
+
+    const throttledResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const throttled = await throttledResponse.json() as { job: { status: string; result: { content: string } | null } }
+    expect(throttled.job.status).toBe('running')
+    expect(throttled.job.result?.content).toBe('一')
+
+    controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+    controller.close()
+    await runPromise
+
+    const restoredResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const restored = await restoredResponse.json() as { job: { status: string; result: { content: string } } }
+    expect(restored.job.status).toBe('succeeded')
+    expect(restored.job.result.content).toBe('一'.repeat(51))
   }, 30000)
 
   it('falls back to timer scheduling when after is unavailable', async () => {
