@@ -2,8 +2,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
+
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
 
 const ROOT = process.cwd()
 const SOURCE_DB_PATH = path.join(ROOT, 'dev.db')
@@ -177,5 +179,60 @@ describe('authored branching schema migrations', () => {
     })
 
     ;(migratedDatabase as DatabaseSync & { close?: () => void }).close?.()
+  })
+
+  it('adds shared extraction batch storage to a legacy extraction-cache schema and stays idempotent', () => {
+    const databasePath = makeTempDatabasePath('chatbook-extraction-batch-migration')
+    const legacyDatabase = new DatabaseSync(databasePath)
+    legacyDatabase.exec(`
+      CREATE TABLE NovelRecord (id TEXT PRIMARY KEY, title TEXT NOT NULL, sourceType TEXT NOT NULL DEFAULT 'txt');
+      CREATE TABLE StoryBranch (id TEXT PRIMARY KEY, novelId TEXT NOT NULL, name TEXT NOT NULL);
+      CREATE TABLE KnowledgeChapter (
+        id TEXT PRIMARY KEY,
+        novelId TEXT NOT NULL,
+        branchId TEXT NOT NULL,
+        chapterNo INTEGER NOT NULL,
+        title TEXT,
+        rawText TEXT NOT NULL,
+        sourceHash TEXT NOT NULL
+      );
+      CREATE TABLE chapter_extraction_candidates (
+        id TEXT PRIMARY KEY,
+        novel_id TEXT NOT NULL,
+        branch_id TEXT NOT NULL,
+        chapter_id TEXT NOT NULL,
+        chapter_no INTEGER NOT NULL,
+        chapter_revision INTEGER,
+        chapter_source_hash TEXT NOT NULL,
+        extraction_json TEXT NOT NULL,
+        processing_result_json TEXT,
+        status TEXT NOT NULL DEFAULT 'extracted',
+        provider TEXT,
+        model TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(branch_id, chapter_id, chapter_source_hash)
+      );
+    `)
+    ;(legacyDatabase as DatabaseSync & { close?: () => void }).close?.()
+
+    const migratedDatabase = initializeDatabase(new DatabaseSync(databasePath))
+    const migratedColumns = listTableColumns(migratedDatabase, 'chapter_extraction_candidates').map((column) => column.name)
+    const migratedTables = new Set(listTableNames(migratedDatabase).map((entry) => entry.name))
+    const migratedIndexes = new Set(listIndexNames(migratedDatabase).map((entry) => entry.name))
+    ;(migratedDatabase as DatabaseSync & { close?: () => void }).close?.()
+
+    const reopenedDatabase = initializeDatabase(new DatabaseSync(databasePath))
+    const reopenedColumns = listTableColumns(reopenedDatabase, 'chapter_extraction_candidates').map((column) => column.name)
+
+    expect(migratedColumns).toContain('processing_batch_id')
+    expect(reopenedColumns).toContain('processing_batch_id')
+    expect(migratedTables.has('chapter_extraction_processing_batches')).toBe(true)
+    expect(migratedIndexes.has('idx_chapter_extraction_candidates_processing_batch')).toBe(true)
+    expect(migratedIndexes.has('idx_chapter_extraction_processing_batches_branch')).toBe(true)
+    expect(migratedIndexes.has('uq_chapter_extraction_processing_batches_identity')).toBe(true)
+
+    ;(reopenedDatabase as DatabaseSync & { close?: () => void }).close?.()
   })
 })

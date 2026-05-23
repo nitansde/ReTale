@@ -426,7 +426,22 @@ function runBootMigrations(database: DatabaseSync) {
   addColumnIfMissing(database, 'hanlp_bootstrap_cache', 'hanlp_script_version_hash', 'hanlp_script_version_hash TEXT')
   addColumnIfMissing(database, 'hanlp_bootstrap_cache', 'hanlp_model_or_config_hash', 'hanlp_model_or_config_hash TEXT')
   addColumnIfMissing(database, 'hanlp_bootstrap_cache', 'output_schema_version', "output_schema_version TEXT DEFAULT 'v1'")
+  addColumnIfMissing(database, 'chapter_extraction_candidates', 'processing_batch_id', 'processing_batch_id TEXT')
   addColumnIfMissing(database, 'chapter_extraction_candidates', 'processing_result_json', 'processing_result_json TEXT')
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS chapter_extraction_processing_batches (
+      id TEXT PRIMARY KEY,
+      novel_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      batch_identity_hash TEXT NOT NULL,
+      batch_context_json TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+      FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+      UNIQUE (branch_id, batch_identity_hash)
+    )
+  `)
   addColumnIfMissing(database, 'character_candidates', 'surface_text', 'surface_text TEXT')
   addColumnIfMissing(database, 'character_candidates', 'chapter_count', 'chapter_count INTEGER DEFAULT 1')
   addColumnIfMissing(database, 'character_candidates', 'observations_json', 'observations_json TEXT')
@@ -522,6 +537,9 @@ function runBootMigrations(database: DatabaseSync) {
   `)
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_lookup ON hanlp_bootstrap_cache(branch_id, chapter_no, chapter_text_hash, hanlp_script_version_hash, hanlp_model_or_config_hash, output_schema_version)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_last_seen ON hanlp_bootstrap_cache(branch_id, last_seen_at)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_processing_batch ON chapter_extraction_candidates(branch_id, processing_batch_id)')
+  database.exec('CREATE INDEX IF NOT EXISTS idx_chapter_extraction_processing_batches_branch ON chapter_extraction_processing_batches(branch_id, updated_at)')
+  database.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_chapter_extraction_processing_batches_identity ON chapter_extraction_processing_batches(branch_id, batch_identity_hash)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_lookup ON hanlp_bootstrap_results(branch_id, chapter_id, chapter_source_hash, result_kind)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_job ON hanlp_bootstrap_results(knowledge_job_id, status)')
   database.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_character_candidates_surface_text ON character_candidates(novel_id, branch_id, surface_text)')

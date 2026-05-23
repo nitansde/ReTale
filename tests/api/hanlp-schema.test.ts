@@ -59,6 +59,8 @@ describe('hanlp schema bootstrap', () => {
     const candidateColumns = new Set(listTableColumns(database, 'character_candidates').map((column) => column.name))
     const candidateChapterColumns = new Set(listTableColumns(database, 'character_candidate_chapters').map((column) => column.name))
     const cacheColumns = new Set(listTableColumns(database, 'hanlp_bootstrap_cache').map((column) => column.name))
+    const extractionCandidateColumns = new Set(listTableColumns(database, 'chapter_extraction_candidates').map((column) => column.name))
+    const extractionBatchColumns = new Set(listTableColumns(database, 'chapter_extraction_processing_batches').map((column) => column.name))
     const entityColumns = new Set(listTableColumns(database, 'hanlp_bootstrap_entities').map((column) => column.name))
     const coverageColumns = new Set(listTableColumns(database, 'hanlp_bootstrap_coverage').map((column) => column.name))
     const candidateTableSql = getCreateSql(database, 'table', 'character_candidates')
@@ -69,6 +71,7 @@ describe('hanlp schema bootstrap', () => {
       'hanlp_bootstrap_results',
       'hanlp_bootstrap_entities',
       'hanlp_bootstrap_coverage',
+      'chapter_extraction_processing_batches',
       'character_candidates',
       'character_candidate_chapters',
       'EntityAliasMapping',
@@ -77,6 +80,8 @@ describe('hanlp schema bootstrap', () => {
 
     expect([...indexes]).toEqual(expect.arrayContaining([
       'idx_hanlp_bootstrap_cache_lookup',
+      'idx_chapter_extraction_candidates_processing_batch',
+      'idx_chapter_extraction_processing_batches_branch',
       'idx_hanlp_bootstrap_results_lookup',
       'idx_hanlp_bootstrap_entities_branch_type',
       'idx_hanlp_bootstrap_coverage_novel',
@@ -84,8 +89,23 @@ describe('hanlp schema bootstrap', () => {
       'idx_character_candidate_chapters_candidate_count',
       'idx_entity_alias_mapping_branch_alias',
       'idx_entity_alias_conflict_branch_alias',
+      'uq_chapter_extraction_processing_batches_identity',
       'uq_character_candidates_surface_text',
       'uq_character_candidate_chapters_chapter_no',
+    ]))
+
+    expect([...extractionCandidateColumns]).toEqual(expect.arrayContaining([
+      'processing_batch_id',
+      'processing_result_json',
+    ]))
+    expect([...extractionBatchColumns]).toEqual(expect.arrayContaining([
+      'id',
+      'novel_id',
+      'branch_id',
+      'batch_identity_hash',
+      'batch_context_json',
+      'created_at',
+      'updated_at',
     ]))
 
     expect([...candidateColumns]).toEqual(expect.arrayContaining([
