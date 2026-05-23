@@ -8,6 +8,19 @@ type WorkspaceStateRow = {
   updatedAt: string
 }
 
+type WorkspaceStateBackupRow = {
+  id: string
+  workspaceStateId: string
+  payload: string
+  reason: string
+  sourceUpdatedAt: string | null
+  createdAt: string
+}
+
+type WorkspaceStateWriteOptions = {
+  backupReason?: string
+}
+
 type AppSettingRow = {
   id: string
   key: string
@@ -21,6 +34,7 @@ type SqliteTableRow = {
 }
 
 const [PRESET_COMPAT_LIBRARY_V1_KEY, AI_SETTINGS_V2_KEY, OLLAMA_TIMEOUT_MS_KEY] = PROTECTED_RESET_APP_SETTING_KEYS
+const WORKSPACE_BACKUP_RETENTION = 20
 
 export type ProtectedAppSettingsResetSnapshot = {
   presetCompatLibraryV1: string | null
@@ -32,6 +46,16 @@ export function findWorkspaceState(id = 'singleton') {
   return queryOne<WorkspaceStateRow>('SELECT id, payload, createdAt, updatedAt FROM WorkspaceState WHERE id = ?', id)
 }
 
+export function findWorkspaceStateBackups(id = 'singleton') {
+  return queryAll<WorkspaceStateBackupRow>(
+    `SELECT id, workspaceStateId, payload, reason, sourceUpdatedAt, createdAt
+     FROM WorkspaceStateBackup
+     WHERE workspaceStateId = ?
+     ORDER BY createdAt DESC, rowid DESC`,
+    id
+  )
+}
+
 export function createWorkspaceState(id: string, payload: string) {
   execute('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)', id, payload)
   const created = findWorkspaceState(id)
@@ -41,18 +65,63 @@ export function createWorkspaceState(id: string, payload: string) {
   return created
 }
 
-export function upsertWorkspaceState(id: string, payload: string) {
+function createWorkspaceStateBackup(row: WorkspaceStateRow, reason: string) {
   execute(
-    `
-      INSERT INTO WorkspaceState (id, payload)
-      VALUES (?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        payload = excluded.payload,
-        updatedAt = CURRENT_TIMESTAMP
-    `,
-    id,
-    payload
+    `INSERT INTO WorkspaceStateBackup (id, workspaceStateId, payload, reason, sourceUpdatedAt)
+     VALUES (lower(hex(randomblob(16))), ?, ?, ?, ?)`,
+    row.id,
+    row.payload,
+    reason,
+    row.updatedAt
   )
+}
+
+function pruneWorkspaceStateBackups(id: string) {
+  execute(
+    `DELETE FROM WorkspaceStateBackup
+     WHERE workspaceStateId = ?
+       AND id NOT IN (
+         SELECT id
+         FROM WorkspaceStateBackup
+         WHERE workspaceStateId = ?
+         ORDER BY createdAt DESC, rowid DESC
+         LIMIT ?
+       )`,
+    id,
+    id,
+    WORKSPACE_BACKUP_RETENTION
+  )
+}
+
+export function upsertWorkspaceState(id: string, payload: string, options: WorkspaceStateWriteOptions = {}) {
+  execute('BEGIN IMMEDIATE')
+  try {
+    const existing = findWorkspaceState(id)
+    if (existing && existing.payload !== payload) {
+      createWorkspaceStateBackup(existing, options.backupReason ?? 'overwrite')
+    }
+
+    execute(
+      `
+        INSERT INTO WorkspaceState (id, payload)
+        VALUES (?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          payload = excluded.payload,
+          updatedAt = CURRENT_TIMESTAMP
+      `,
+      id,
+      payload
+    )
+
+    pruneWorkspaceStateBackups(id)
+    execute('COMMIT')
+  } catch (error) {
+    try {
+      execute('ROLLBACK')
+    } catch {
+    }
+    throw error
+  }
 
   const saved = findWorkspaceState(id)
   if (!saved) {
