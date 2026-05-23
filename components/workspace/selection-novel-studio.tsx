@@ -204,6 +204,7 @@ type FutureMapLaunchState = {
 type KnowledgeRebuildStatus = {
   jobId: string
   novelId: string
+  jobType: 'extract_chapter_knowledge' | 'rebuild_retrieval_index'
   status: string
   errorMessage?: string | null
   progress: number
@@ -247,6 +248,31 @@ type KnowledgeRebuildStatus = {
 type HanlpCacheSnapshot = {
   status: NonNullable<KnowledgeRebuildStatus['hanlpCacheStatus']>
   settingsSnapshot?: NonNullable<KnowledgeRebuildStatus['hanlpSettingsSnapshot']>
+}
+
+type KnowledgeCoverageStatus = 'missing' | 'partial' | 'full'
+
+type KnowledgeChapterCoverageOverview = {
+  status: KnowledgeCoverageStatus
+  coveredChapterCount: number
+  totalChapterCount: number
+  validThroughChapterNo: number | null
+}
+
+type RetrievalIndexCoverageOverview = {
+  status: KnowledgeCoverageStatus
+  indexedScopeCount: number
+  chapterRange?: KnowledgeRebuildChapterRange
+  task: KnowledgeRebuildStatus | null
+}
+
+type KnowledgeStatusOverview = {
+  knowledgeGraph: KnowledgeChapterCoverageOverview
+  embeddingCache: KnowledgeChapterCoverageOverview & {
+    provider: string | null
+    model: string | null
+  }
+  retrievalIndex: RetrievalIndexCoverageOverview
 }
 
 export function resolveCurrentNodeMetrics(params: {
@@ -582,7 +608,49 @@ export function resolveKnowledgeRebuildFailureMessage(status: Pick<KnowledgeRebu
   return status.errorMessage?.trim() || '知识视图重建失败，请重新发起重建。'
 }
 
+function formatKnowledgeCoverageBadge(coverage: KnowledgeChapterCoverageOverview | null | undefined) {
+  if (!coverage) return '等待状态'
+  if (coverage.status === 'full') return '已完成'
+  if (coverage.status === 'partial') return coverage.validThroughChapterNo ? `至第 ${coverage.validThroughChapterNo} 章` : '部分完成'
+  return '缺失'
+}
+
+function formatKnowledgeCoverageDetail(label: string, coverage: KnowledgeChapterCoverageOverview | null | undefined) {
+  if (!coverage) return `${label}状态暂未加载。`
+  if (coverage.totalChapterCount <= 0) return '当前小说还没有可统计的章节。'
+  if (coverage.status === 'full') return `${label}已覆盖全部 ${coverage.totalChapterCount} 章。`
+  if (coverage.status === 'partial') {
+    return coverage.validThroughChapterNo
+      ? `已连续覆盖到第 ${coverage.validThroughChapterNo} 章（${coverage.coveredChapterCount} / ${coverage.totalChapterCount} 章）。`
+      : `已覆盖 ${coverage.coveredChapterCount} / ${coverage.totalChapterCount} 章。`
+  }
+  return `${label}尚未建立（0 / ${coverage.totalChapterCount} 章）。`
+}
+
+function formatRetrievalIndexBadge(overview: RetrievalIndexCoverageOverview | null | undefined) {
+  if (!overview) return '等待状态'
+  if (overview.status === 'full') return '已索引'
+  if (overview.status === 'partial') {
+    if (overview.chapterRange) return formatKnowledgeRebuildChapterRangeLabel(overview.chapterRange)
+    return overview.indexedScopeCount > 1 ? `${overview.indexedScopeCount} 个范围` : '部分完成'
+  }
+  return '未建立'
+}
+
+function formatRetrievalIndexDetail(overview: RetrievalIndexCoverageOverview | null | undefined) {
+  if (!overview) return 'LanceDB 状态暂未加载。'
+  if (overview.status === 'full') return 'LanceDB 检索索引已覆盖整本书。'
+  if (overview.status === 'partial') {
+    if (overview.chapterRange) {
+      return `LanceDB 当前只覆盖 ${formatKnowledgeRebuildChapterRangeLabel(overview.chapterRange)}。`
+    }
+    return `LanceDB 当前只保留 ${overview.indexedScopeCount} 个局部范围索引。`
+  }
+  return 'LanceDB 检索索引尚未建立。'
+}
+
 type KnowledgeActionLoading =
+  | 'rebuild-retrieval-index'
   | 'pause'
   | 'abort'
   | 'delete'
@@ -590,6 +658,92 @@ type KnowledgeActionLoading =
   | 'delete-extraction-cache'
   | 'delete-embedding-cache'
   | null
+
+type RetrievalTaskControlAction = 'start' | 'refresh' | 'pause' | 'abort' | 'continue' | 'retry'
+
+function isKnowledgeJobBusy(status: Pick<KnowledgeRebuildStatus, 'status'> | null | undefined) {
+  return status?.status === 'queued' || status?.status === 'running' || status?.status === 'paused'
+}
+
+function formatKnowledgeJobStatusLabel(status: string | null | undefined) {
+  switch (status) {
+    case 'queued':
+      return '排队中'
+    case 'running':
+      return '进行中'
+    case 'paused':
+      return '已暂停'
+    case 'failed':
+      return '失败'
+    case 'completed':
+      return '已完成'
+    case 'aborted':
+      return '已终止'
+    default:
+      return '等待状态'
+  }
+}
+
+function resolveKnowledgeJobPhaseLabel(status: KnowledgeRebuildStatus | null | undefined) {
+  if (!status) return null
+  const activeStep = status.steps.find((step) => step.status === 'running' || step.status === 'paused') ?? null
+  const detail = activeStep?.detail?.trim()
+  if (detail) return detail
+  const currentStep = status.currentStep?.trim()
+  if (currentStep) return currentStep
+  return activeStep?.label ?? null
+}
+
+export function resolveRetrievalTaskControlsState(params: {
+  retrievalTask: Pick<KnowledgeRebuildStatus, 'status'> | null
+  retrievalIndexOverview: Pick<RetrievalIndexCoverageOverview, 'status'> | null
+  knowledgeRebuildStatus: Pick<KnowledgeRebuildStatus, 'status' | 'jobType'> | null
+  knowledgeActionLoading: KnowledgeActionLoading
+  knowledgeRebuilding: boolean
+}) {
+  const mainRebuildBusy = params.knowledgeRebuildStatus?.jobType === 'extract_chapter_knowledge'
+    && isKnowledgeJobBusy(params.knowledgeRebuildStatus)
+  const disabled = mainRebuildBusy || params.knowledgeRebuilding || Boolean(params.knowledgeActionLoading)
+  const hasCoverage = params.retrievalIndexOverview?.status === 'full' || params.retrievalIndexOverview?.status === 'partial'
+
+  if (!params.retrievalTask) {
+    return {
+      disabled,
+      helperText: mainRebuildBusy ? '主知识重建进行中时，LanceDB 检索索引操作会暂时锁定。' : null,
+      actions: [hasCoverage ? 'refresh' : 'start'] satisfies RetrievalTaskControlAction[],
+    }
+  }
+
+  if (params.retrievalTask.status === 'queued' || params.retrievalTask.status === 'running') {
+    return {
+      disabled,
+      helperText: mainRebuildBusy ? '主知识重建进行中时，LanceDB 检索索引操作会暂时锁定。' : null,
+      actions: ['pause', 'abort'] satisfies RetrievalTaskControlAction[],
+    }
+  }
+
+  if (params.retrievalTask.status === 'paused') {
+    return {
+      disabled,
+      helperText: mainRebuildBusy ? '主知识重建进行中时，LanceDB 检索索引操作会暂时锁定。' : null,
+      actions: ['continue', 'abort'] satisfies RetrievalTaskControlAction[],
+    }
+  }
+
+  if (params.retrievalTask.status === 'failed') {
+    return {
+      disabled,
+      helperText: mainRebuildBusy ? '主知识重建进行中时，LanceDB 检索索引操作会暂时锁定。' : null,
+      actions: ['retry'] satisfies RetrievalTaskControlAction[],
+    }
+  }
+
+  return {
+    disabled,
+    helperText: mainRebuildBusy ? '主知识重建进行中时，LanceDB 检索索引操作会暂时锁定。' : null,
+    actions: [hasCoverage ? 'refresh' : 'start'] satisfies RetrievalTaskControlAction[],
+  }
+}
 
 export function resolveCacheDeleteState(params: {
   knowledgeRebuildStatus: Pick<KnowledgeRebuildStatus, 'status'> | null
@@ -1197,6 +1351,7 @@ export function SelectionNovelStudio() {
   const loadPresetCompatLibrary = useNovelStore((state) => state.loadPresetCompatLibrary)
   const savePresetCompatLibrary = useNovelStore((state) => state.savePresetCompatLibrary)
   const rebuildStoryKnowledge = useNovelStore((state) => state.rebuildStoryKnowledge)
+  const rebuildStoryRetrievalIndex = useNovelStore((state) => state.rebuildStoryRetrievalIndex)
   const pauseStoryKnowledgeRebuild = useNovelStore((state) => state.pauseStoryKnowledgeRebuild)
   const abortStoryKnowledgeRebuild = useNovelStore((state) => state.abortStoryKnowledgeRebuild)
   const deleteStoryKnowledgeGraph = useNovelStore((state) => state.deleteStoryKnowledgeGraph)
@@ -1373,6 +1528,7 @@ export function SelectionNovelStudio() {
   const [presetCompatLibraryOpen, setPresetCompatLibraryOpen] = useState(false)
   const [knowledgeRebuildStatus, setKnowledgeRebuildStatus] = useState<KnowledgeRebuildStatus | null>(null)
   const [hanlpCacheSnapshot, setHanlpCacheSnapshot] = useState<HanlpCacheSnapshot | null>(null)
+  const [knowledgeStatusOverview, setKnowledgeStatusOverview] = useState<KnowledgeStatusOverview | null>(null)
   const [knowledgeActionLoading, setKnowledgeActionLoading] = useState<KnowledgeActionLoading>(null)
   const [confirmDeleteHanlpCache, setConfirmDeleteHanlpCache] = useState(false)
   const [confirmDeleteExtractionCache, setConfirmDeleteExtractionCache] = useState(false)
@@ -1542,6 +1698,7 @@ export function SelectionNovelStudio() {
       const resetTimer = window.setTimeout(() => {
         setKnowledgeRebuildStatus(null)
         setHanlpCacheSnapshot(null)
+        setKnowledgeStatusOverview(null)
       }, 0)
       lastActiveKnowledgeJobIdRef.current = null
       return () => {
@@ -1571,12 +1728,14 @@ export function SelectionNovelStudio() {
           ok?: boolean
           knowledgeRebuildStatus?: KnowledgeRebuildStatus | null
           hanlpCacheSnapshot?: HanlpCacheSnapshot | null
+          knowledgeStatusOverview?: KnowledgeStatusOverview | null
         }
 
         if (cancelled || !response.ok || !data.ok) return
 
         const nextStatus = data.knowledgeRebuildStatus ?? null
         setHanlpCacheSnapshot(data.hanlpCacheSnapshot ?? null)
+        setKnowledgeStatusOverview(data.knowledgeStatusOverview ?? null)
         const hadActiveJob = Boolean(lastActiveKnowledgeJobIdRef.current)
         const failureMessage = resolveKnowledgeRebuildFailureMessage(nextStatus)
 
@@ -1957,21 +2116,27 @@ export function SelectionNovelStudio() {
       searchText: normalizeSourceSearchText(item.text || buildChapterLineExcerpt(targetChapter, item.lineStart, item.lineEnd)),
     } satisfies PendingSourceJump
   }
-  const knowledgeRebuildEtaMinutes = useMemo(() => {
-    return knowledgeRebuildStatus?.etaMinutes ?? null
-  }, [knowledgeRebuildStatus])
-  const knowledgeRebuildSteps = useMemo(() => knowledgeRebuildStatus?.steps ?? [], [knowledgeRebuildStatus])
-  const knowledgeRebuildFailed = knowledgeRebuildStatus?.status === 'failed'
-  const knowledgeRebuildPaused = knowledgeRebuildStatus?.status === 'paused'
-  const knowledgeRebuildActive = knowledgeRebuildStatus?.status === 'running' || knowledgeRebuildStatus?.status === 'queued'
-  const knowledgeRebuildBusy = knowledgeRebuildActive || knowledgeRebuildPaused
-  const knowledgeRebuildFailureMessage = useMemo(
-    () => resolveKnowledgeRebuildFailureMessage(knowledgeRebuildStatus),
+  const mainKnowledgeRebuildStatus = useMemo(
+    () => knowledgeRebuildStatus?.jobType === 'extract_chapter_knowledge' ? knowledgeRebuildStatus : null,
     [knowledgeRebuildStatus]
   )
+  const currentKnowledgeJobActive = knowledgeRebuildStatus?.status === 'running' || knowledgeRebuildStatus?.status === 'queued'
+  const currentKnowledgeJobBusy = currentKnowledgeJobActive || knowledgeRebuildStatus?.status === 'paused'
+  const knowledgeRebuildEtaMinutes = useMemo(() => {
+    return mainKnowledgeRebuildStatus?.etaMinutes ?? null
+  }, [mainKnowledgeRebuildStatus])
+  const knowledgeRebuildSteps = useMemo(() => mainKnowledgeRebuildStatus?.steps ?? [], [mainKnowledgeRebuildStatus])
+  const knowledgeRebuildFailed = mainKnowledgeRebuildStatus?.status === 'failed'
+  const knowledgeRebuildPaused = mainKnowledgeRebuildStatus?.status === 'paused'
+  const knowledgeRebuildActive = mainKnowledgeRebuildStatus?.status === 'running' || mainKnowledgeRebuildStatus?.status === 'queued'
+  const knowledgeRebuildBusy = knowledgeRebuildActive || knowledgeRebuildPaused
+  const knowledgeRebuildFailureMessage = useMemo(
+    () => resolveKnowledgeRebuildFailureMessage(mainKnowledgeRebuildStatus),
+    [mainKnowledgeRebuildStatus]
+  )
   const knowledgeRebuildOverallPercent = useMemo(
-    () => toProgressPercent(knowledgeRebuildStatus?.progress),
-    [knowledgeRebuildStatus]
+    () => toProgressPercent(mainKnowledgeRebuildStatus?.progress),
+    [mainKnowledgeRebuildStatus]
   )
   const hanlpBootstrapStep = useMemo(
     () => knowledgeRebuildSteps.find((step) => step.key === HANLP_BOOTSTRAP_STAGE_KEY) ?? null,
@@ -1981,9 +2146,9 @@ export function SelectionNovelStudio() {
     () => knowledgeRebuildSteps.find((step) => step.key === 'raw-embedding') ?? null,
     [knowledgeRebuildSteps]
   )
-  const hanlpBootstrapCompletedChapterCount = knowledgeRebuildStatus?.hanlpBootstrapCompletedChapterCount ?? null
-  const hanlpBootstrapTotalChapterCount = knowledgeRebuildStatus?.hanlpBootstrapTotalChapterCount ?? null
-  const hanlpBootstrapProgress = knowledgeRebuildStatus?.hanlpBootstrapProgress ?? hanlpBootstrapStep?.progress ?? null
+  const hanlpBootstrapCompletedChapterCount = mainKnowledgeRebuildStatus?.hanlpBootstrapCompletedChapterCount ?? null
+  const hanlpBootstrapTotalChapterCount = mainKnowledgeRebuildStatus?.hanlpBootstrapTotalChapterCount ?? null
+  const hanlpBootstrapProgress = mainKnowledgeRebuildStatus?.hanlpBootstrapProgress ?? hanlpBootstrapStep?.progress ?? null
   const hanlpBootstrapPercent = useMemo(
     () => hanlpBootstrapProgress === null ? null : toProgressPercent(hanlpBootstrapProgress),
     [hanlpBootstrapProgress]
@@ -1994,30 +2159,30 @@ export function SelectionNovelStudio() {
     || hanlpBootstrapTotalChapterCount !== null
   )
   const hanlpBootstrapCacheHitRatePercent = useMemo(() => {
-    if (knowledgeRebuildStatus?.hanlpCacheHitRate !== undefined) {
-      return toProgressPercent(knowledgeRebuildStatus.hanlpCacheHitRate)
+    if (mainKnowledgeRebuildStatus?.hanlpCacheHitRate !== undefined) {
+      return toProgressPercent(mainKnowledgeRebuildStatus.hanlpCacheHitRate)
     }
 
-    const hitCount = knowledgeRebuildStatus?.hanlpBootstrapCacheHitCount ?? 0
-    const missCount = knowledgeRebuildStatus?.hanlpBootstrapCacheMissCount ?? 0
+    const hitCount = mainKnowledgeRebuildStatus?.hanlpBootstrapCacheHitCount ?? 0
+    const missCount = mainKnowledgeRebuildStatus?.hanlpBootstrapCacheMissCount ?? 0
     const total = hitCount + missCount
     return total > 0 ? toProgressPercent(hitCount / total) : null
-  }, [knowledgeRebuildStatus])
+  }, [mainKnowledgeRebuildStatus])
   const hanlpBootstrapTimingLabel = useMemo(() => {
-    const duration = knowledgeRebuildStatus?.stageTimingsMs?.[HANLP_BOOTSTRAP_STAGE_KEY]
+    const duration = mainKnowledgeRebuildStatus?.stageTimingsMs?.[HANLP_BOOTSTRAP_STAGE_KEY]
     return typeof duration === 'number' && Number.isFinite(duration) ? formatStageDuration(duration) : null
-  }, [knowledgeRebuildStatus])
+  }, [mainKnowledgeRebuildStatus])
   const hanlpBootstrapPhaseLabel = useMemo(() => {
     const detail = hanlpBootstrapStep?.detail?.trim()
     if (detail) return detail
 
-    const currentStep = knowledgeRebuildStatus?.currentStep?.trim()
+    const currentStep = mainKnowledgeRebuildStatus?.currentStep?.trim()
     if (knowledgeRebuildFailed) return '已失败'
     if (currentStep) return currentStep
 
     if (knowledgeRebuildPaused) return '等待继续'
     return hanlpBootstrapHasProgressTelemetry ? '计算中' : '等待进度'
-  }, [hanlpBootstrapHasProgressTelemetry, hanlpBootstrapStep, knowledgeRebuildFailed, knowledgeRebuildPaused, knowledgeRebuildStatus])
+  }, [hanlpBootstrapHasProgressTelemetry, hanlpBootstrapStep, knowledgeRebuildFailed, knowledgeRebuildPaused, mainKnowledgeRebuildStatus])
   const hanlpBootstrapEtaLabel = useMemo(() => formatKnowledgeEtaLabel({
     etaMinutes: hanlpBootstrapStep?.etaMinutes ?? knowledgeRebuildEtaMinutes,
     isPaused: knowledgeRebuildPaused,
@@ -2040,13 +2205,13 @@ export function SelectionNovelStudio() {
     if (hanlpCacheSnapshot?.status === 'ready') return 'HanLP Bootstrap 缓存已就绪，可直接复用已有扫描结果。'
     return '当前还没有可展示的 HanLP Bootstrap 进度。'
   }, [hanlpBootstrapCompletedChapterCount, hanlpBootstrapHasProgressTelemetry, hanlpBootstrapTotalChapterCount, hanlpCacheSnapshot, knowledgeRebuildBusy, knowledgeRebuildFailed, knowledgeRebuildPaused])
-  const hanlpCacheStatus = knowledgeRebuildStatus?.hanlpCacheStatus ?? hanlpCacheSnapshot?.status ?? 'empty'
+  const hanlpCacheStatus = mainKnowledgeRebuildStatus?.hanlpCacheStatus ?? hanlpCacheSnapshot?.status ?? 'empty'
   const hanlpCacheStatusLabel = HANLP_CACHE_STATUS_LABELS[hanlpCacheStatus]
   const hanlpSettingsLine = useMemo(() => {
-    const snapshot = knowledgeRebuildStatus?.hanlpSettingsSnapshot ?? hanlpCacheSnapshot?.settingsSnapshot
+    const snapshot = mainKnowledgeRebuildStatus?.hanlpSettingsSnapshot ?? hanlpCacheSnapshot?.settingsSnapshot
     if (!snapshot) return null
     return `script ${snapshot.hanlpScriptVersionHash.slice(0, 8)} · config ${snapshot.hanlpModelOrConfigHash.slice(0, 8)} · schema ${snapshot.outputSchemaVersion} · pipeline ${snapshot.pipelineVersion}`
-  }, [hanlpCacheSnapshot, knowledgeRebuildStatus])
+  }, [hanlpCacheSnapshot, mainKnowledgeRebuildStatus])
   const hanlpCacheDeleteState = useMemo(() => resolveHanlpCacheDeleteState({
     knowledgeRebuildStatus,
     knowledgeActionLoading,
@@ -2061,35 +2226,35 @@ export function SelectionNovelStudio() {
     knowledgeActionLoading,
     idleHelperText: '只会删除当前小说主分支的原文 Embedding 缓存，不会影响 HanLP 缓存或 LLM 抽取缓存。',
   }), [knowledgeActionLoading, knowledgeRebuildStatus])
-  const rawTextEmbeddingProgress = knowledgeRebuildStatus?.rawTextEmbeddingProgress
+  const rawTextEmbeddingProgress = mainKnowledgeRebuildStatus?.rawTextEmbeddingProgress
   const rawTextEmbeddingPercent = useMemo(
     () => rawTextEmbeddingProgress === undefined ? null : toProgressPercent(rawTextEmbeddingProgress),
     [rawTextEmbeddingProgress]
   )
   const rawEmbeddingCurrentStep = useMemo(() => {
-    const currentStep = knowledgeRebuildStatus?.currentStep?.trim().toLowerCase() ?? ''
+    const currentStep = mainKnowledgeRebuildStatus?.currentStep?.trim().toLowerCase() ?? ''
     return currentStep.includes('raw') && currentStep.includes('embedding')
-  }, [knowledgeRebuildStatus])
+  }, [mainKnowledgeRebuildStatus])
   const rawEmbeddingWaitingFinalization = Boolean(rawEmbeddingStep && rawEmbeddingStep.status === 'running')
   const rawEmbeddingRunningInParallel = knowledgeRebuildActive
     && !rawEmbeddingWaitingFinalization
     && ((rawTextEmbeddingPercent !== null && rawTextEmbeddingPercent < 100) || rawEmbeddingCurrentStep)
   const rawEmbeddingCompleted = rawTextEmbeddingPercent !== null && rawTextEmbeddingPercent >= 100
   const rawTextEmbeddingCacheHitRatePercent = useMemo(
-    () => knowledgeRebuildStatus?.rawTextEmbeddingCacheHitRate === undefined
+    () => mainKnowledgeRebuildStatus?.rawTextEmbeddingCacheHitRate === undefined
       ? null
-      : toProgressPercent(knowledgeRebuildStatus.rawTextEmbeddingCacheHitRate),
-    [knowledgeRebuildStatus]
+      : toProgressPercent(mainKnowledgeRebuildStatus.rawTextEmbeddingCacheHitRate),
+    [mainKnowledgeRebuildStatus]
   )
   const rawTextEmbeddingTimingLabel = useMemo(() => {
-    const duration = knowledgeRebuildStatus?.stageTimingsMs?.[RAW_TEXT_PRECOMPUTE_STAGE_KEY]
+    const duration = mainKnowledgeRebuildStatus?.stageTimingsMs?.[RAW_TEXT_PRECOMPUTE_STAGE_KEY]
     return typeof duration === 'number' && Number.isFinite(duration) ? formatStageDuration(duration) : null
-  }, [knowledgeRebuildStatus])
+  }, [mainKnowledgeRebuildStatus])
   const rawTextEmbeddingSettingsLine = useMemo(() => {
-    const snapshot = knowledgeRebuildStatus?.embeddingSettingsSnapshot
+    const snapshot = mainKnowledgeRebuildStatus?.embeddingSettingsSnapshot
     if (!snapshot) return null
     return `${formatEmbeddingProviderLabel(snapshot.provider)} · ${snapshot.model} · batch ${snapshot.embeddingBatchSize}`
-  }, [knowledgeRebuildStatus])
+  }, [mainKnowledgeRebuildStatus])
   const rawTextEmbeddingPhaseBadge = useMemo(() => {
     if (knowledgeRebuildFailed) return '已失败'
     if (knowledgeRebuildPaused) return '已暂停'
@@ -2126,6 +2291,54 @@ export function SelectionNovelStudio() {
 
     return '原文向量预计算尚未开始。'
   }, [knowledgeRebuildFailed, knowledgeRebuildPaused, rawEmbeddingCompleted, rawEmbeddingRunningInParallel, rawEmbeddingWaitingFinalization, rawTextEmbeddingPercent])
+  const retrievalIndexStep = useMemo(
+    () => knowledgeRebuildSteps.find((step) => step.key === 'index') ?? null,
+    [knowledgeRebuildSteps]
+  )
+  const retrievalIndexOverview = knowledgeStatusOverview?.retrievalIndex ?? null
+  const retrievalTaskStatus = useMemo(
+    () => retrievalIndexOverview?.task ?? (knowledgeRebuildStatus?.jobType === 'rebuild_retrieval_index' ? knowledgeRebuildStatus : null),
+    [knowledgeRebuildStatus, retrievalIndexOverview]
+  )
+  const retrievalTaskPercent = useMemo(
+    () => toProgressPercent(retrievalTaskStatus?.progress ?? 0),
+    [retrievalTaskStatus]
+  )
+  const retrievalTaskPhaseLabel = useMemo(
+    () => resolveKnowledgeJobPhaseLabel(retrievalTaskStatus),
+    [retrievalTaskStatus]
+  )
+  const retrievalTaskStatusLabel = useMemo(
+    () => formatKnowledgeJobStatusLabel(retrievalTaskStatus?.status),
+    [retrievalTaskStatus]
+  )
+  const retrievalControlsState = useMemo(() => resolveRetrievalTaskControlsState({
+    retrievalTask: retrievalTaskStatus,
+    retrievalIndexOverview,
+    knowledgeRebuildStatus,
+    knowledgeActionLoading,
+    knowledgeRebuilding,
+  }), [knowledgeActionLoading, knowledgeRebuildStatus, knowledgeRebuilding, retrievalIndexOverview, retrievalTaskStatus])
+  const retrievalIndexStatusLine = useMemo(() => {
+    if (retrievalTaskStatus?.status === 'failed') {
+      return resolveKnowledgeRebuildFailureMessage(retrievalTaskStatus) ?? 'LanceDB 检索索引刷新失败，请重试。'
+    }
+    if (retrievalTaskStatus?.status === 'paused') {
+      return 'LanceDB 检索任务已暂停，等待继续。'
+    }
+    if (retrievalTaskStatus?.status === 'queued') {
+      return 'LanceDB 检索任务已入队，等待后台开始处理。'
+    }
+    if (rawEmbeddingStep?.status === 'running' && mainKnowledgeRebuildStatus) {
+      return '后台正在预热原文 Embedding，完成后会自动刷新 LanceDB。'
+    }
+    if (retrievalTaskStatus?.status === 'running') {
+      return '后台正在刷新 LanceDB 检索索引。'
+    }
+    return formatRetrievalIndexDetail(retrievalIndexOverview)
+  }, [mainKnowledgeRebuildStatus, rawEmbeddingStep, retrievalIndexOverview, retrievalTaskStatus])
+  const knowledgeGraphOverview = knowledgeStatusOverview?.knowledgeGraph ?? null
+  const embeddingCacheOverview = knowledgeStatusOverview?.embeddingCache ?? null
   const currentKnowledgeRunningStepKey = useMemo(() => {
     const runningSteps = knowledgeRebuildSteps.filter((step) => step.status === 'running')
     if (runningSteps.length === 0) return null
@@ -3538,6 +3751,7 @@ export function SelectionNovelStudio() {
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
       setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
+      setKnowledgeStatusOverview(result.knowledgeStatusOverview)
 
       if (
         result.knowledgeRebuildStatus?.jobId
@@ -3568,8 +3782,46 @@ export function SelectionNovelStudio() {
     }
   }
 
+  const handleRebuildRetrievalIndex = async () => {
+    if (!currentNovelId || knowledgeRebuilding || knowledgeActionLoading || knowledgeRebuildBusy) return
+    setKnowledgeActionLoading('rebuild-retrieval-index')
+    try {
+      const result = await rebuildStoryRetrievalIndex(currentNovelId, { chapterRange: selectedKnowledgeRebuildChapterRange })
+      if (!result) return
+
+      setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
+      setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
+      setKnowledgeStatusOverview(result.knowledgeStatusOverview)
+
+      if (
+        result.knowledgeRebuildStatus?.jobId
+        && (result.knowledgeRebuildStatus.status === 'queued'
+          || result.knowledgeRebuildStatus.status === 'running'
+          || result.knowledgeRebuildStatus.status === 'paused')
+      ) {
+        lastActiveKnowledgeJobIdRef.current = result.knowledgeRebuildStatus.jobId
+      } else {
+        lastActiveKnowledgeJobIdRef.current = null
+      }
+
+      if (result.jobOutcome === 'completed') {
+        showKnowledgeToast(`LanceDB 检索索引已更新：${selectedKnowledgeRebuildChapterRangeLabel}`)
+      } else if (result.knowledgeRebuildStatus?.status === 'paused') {
+        showKnowledgeToast('LanceDB 检索索引已暂停')
+      } else if (result.knowledgeRebuildStatus?.status === 'failed') {
+        showKnowledgeToast(resolveKnowledgeRebuildFailureMessage(result.knowledgeRebuildStatus) ?? 'LanceDB 检索索引刷新失败，请重试。', 2600)
+      } else {
+        showKnowledgeToast('LanceDB 检索索引任务已启动')
+      }
+    } catch {
+      showKnowledgeToast('启动 LanceDB 检索索引任务失败', 2200)
+    } finally {
+      setKnowledgeActionLoading(null)
+    }
+  }
+
   const handlePauseKnowledge = async () => {
-    if (!currentNovelId || !knowledgeRebuildActive || knowledgeActionLoading) return
+    if (!currentNovelId || !currentKnowledgeJobActive || knowledgeActionLoading) return
     setKnowledgeActionLoading('pause')
     try {
       const result = await pauseStoryKnowledgeRebuild(currentNovelId)
@@ -3577,6 +3829,7 @@ export function SelectionNovelStudio() {
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
       setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
+      setKnowledgeStatusOverview(result.knowledgeStatusOverview)
       if (
         result.knowledgeRebuildStatus?.jobId
         && (result.knowledgeRebuildStatus.status === 'queued'
@@ -3586,16 +3839,17 @@ export function SelectionNovelStudio() {
         lastActiveKnowledgeJobIdRef.current = result.knowledgeRebuildStatus.jobId
       }
 
-      showKnowledgeToast(result.jobOutcome === 'paused' ? '知识重建已暂停' : '当前没有进行中的知识重建任务')
+      const activeJobLabel = result.knowledgeRebuildStatus?.jobType === 'rebuild_retrieval_index' ? 'LanceDB 检索索引任务' : '知识重建'
+      showKnowledgeToast(result.jobOutcome === 'paused' ? `${activeJobLabel}已暂停` : '当前没有进行中的知识重建任务')
     } catch {
-      showKnowledgeToast('暂停知识重建失败', 2200)
+      showKnowledgeToast('暂停知识任务失败', 2200)
     } finally {
       setKnowledgeActionLoading(null)
     }
   }
 
   const handleAbortKnowledge = async () => {
-    if (!currentNovelId || (!knowledgeRebuildStatus && !knowledgeRebuilding) || knowledgeActionLoading) return
+    if (!currentNovelId || (!currentKnowledgeJobBusy && !knowledgeRebuilding) || knowledgeActionLoading) return
     setKnowledgeActionLoading('abort')
     try {
       const result = await abortStoryKnowledgeRebuild(currentNovelId)
@@ -3604,10 +3858,12 @@ export function SelectionNovelStudio() {
       lastActiveKnowledgeJobIdRef.current = null
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
       setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
+      setKnowledgeStatusOverview(result.knowledgeStatusOverview)
       setKnowledgeRebuilding(false)
-      showKnowledgeToast(result.jobOutcome === 'aborted' ? '知识重建已终止' : '当前没有可终止的知识重建任务')
+      const activeJobLabel = result.knowledgeRebuildStatus?.jobType === 'rebuild_retrieval_index' ? 'LanceDB 检索索引任务' : '知识重建'
+      showKnowledgeToast(result.jobOutcome === 'aborted' ? `${activeJobLabel}已终止` : '当前没有可终止的知识重建任务')
     } catch {
-      showKnowledgeToast('终止知识重建失败', 2200)
+      showKnowledgeToast('终止知识任务失败', 2200)
     } finally {
       setKnowledgeActionLoading(null)
     }
@@ -3623,6 +3879,7 @@ export function SelectionNovelStudio() {
       lastActiveKnowledgeJobIdRef.current = null
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
       setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
+      setKnowledgeStatusOverview(result.knowledgeStatusOverview)
       setKnowledgeRebuilding(false)
       setConfirmDeleteKnowledge(false)
       showKnowledgeToast(result.jobOutcome === 'deleted' ? '已清空当前小说的知识图谱数据' : '当前小说知识图谱未发生变化', 2000)
@@ -3642,6 +3899,7 @@ export function SelectionNovelStudio() {
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
       setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
+      setKnowledgeStatusOverview(result.knowledgeStatusOverview)
       setConfirmDeleteHanlpCache(false)
 
       if (result.actionError?.message) {
@@ -3666,6 +3924,7 @@ export function SelectionNovelStudio() {
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
       setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
+      setKnowledgeStatusOverview(result.knowledgeStatusOverview)
       setConfirmDeleteExtractionCache(false)
 
       if (result.actionError?.message) {
@@ -3690,6 +3949,7 @@ export function SelectionNovelStudio() {
 
       setKnowledgeRebuildStatus(result.knowledgeRebuildStatus)
       setHanlpCacheSnapshot(result.hanlpCacheSnapshot)
+      setKnowledgeStatusOverview(result.knowledgeStatusOverview)
       setConfirmDeleteEmbeddingCache(false)
 
       if (result.actionError?.message) {
@@ -4465,7 +4725,141 @@ export function SelectionNovelStudio() {
           本次将处理：{selectedKnowledgeRebuildChapterRangeLabel}。范围外知识会保留。
         </p>
       </div>
-      {knowledgeRebuildStatus ? (
+      {knowledgeStatusOverview ? (
+        <div className="mt-3 rounded-2xl border border-violet-300/15 bg-violet-500/[0.06] px-3 py-3 text-xs text-zinc-300" data-testid="workspace-knowledge-status-overview-card">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.18em] text-violet-100/70">KG status overview</p>
+              <p className="mt-1 leading-5 text-zinc-300">结构化知识、Embedding 缓存和 LanceDB 的当前覆盖度。</p>
+            </div>
+            <span className="rounded-full border border-violet-300/20 bg-black/20 px-3 py-1.5 text-[11px] text-violet-100/85">
+              {currentKnowledgeJobBusy ? '任务进行中' : '最近状态'}
+            </span>
+          </div>
+          <div className="mt-3 space-y-2">
+            <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-medium text-zinc-100">Knowledge graph</p>
+                  <p className="mt-1 text-[10px] leading-4 text-zinc-400">{formatKnowledgeCoverageDetail('知识图谱', knowledgeGraphOverview)}</p>
+                </div>
+                <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">
+                  {formatKnowledgeCoverageBadge(knowledgeGraphOverview)}
+                </span>
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-medium text-zinc-100">Embedding cache</p>
+                  <p className="mt-1 text-[10px] leading-4 text-zinc-400">{formatKnowledgeCoverageDetail('Embedding 缓存', embeddingCacheOverview)}</p>
+                </div>
+                <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">
+                  {formatKnowledgeCoverageBadge(embeddingCacheOverview)}
+                </span>
+              </div>
+              {embeddingCacheOverview?.provider && embeddingCacheOverview.model ? (
+                <p className="mt-1 text-[10px] leading-4 text-zinc-500">{formatEmbeddingProviderLabel(embeddingCacheOverview.provider)} · {embeddingCacheOverview.model}</p>
+              ) : null}
+            </div>
+            <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-medium text-zinc-100">LanceDB index</p>
+                  <p className="mt-1 text-[10px] leading-4 text-zinc-400">{retrievalIndexStatusLine}</p>
+                  {retrievalTaskStatus ? (
+                    <>
+                      <div className="mt-2 flex items-center justify-between gap-2 text-[10px] leading-4 text-zinc-400">
+                        <span>任务状态：{retrievalTaskStatusLabel}</span>
+                        <span className="text-violet-100/85">{retrievalTaskPercent}%</span>
+                      </div>
+                      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
+                        <div
+                          className={cn(
+                            'h-full rounded-full transition-all',
+                            retrievalTaskStatus.status === 'failed' ? 'bg-rose-300' : 'bg-violet-300'
+                          )}
+                          style={{ width: `${Math.max(retrievalTaskPercent > 0 ? 8 : 0, Math.min(100, retrievalTaskPercent))}%` }}
+                        />
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] leading-4 text-zinc-500">
+                        {retrievalTaskPhaseLabel ? <span>阶段：{retrievalTaskPhaseLabel}</span> : null}
+                        {retrievalTaskStatus.chapterRange ? (
+                          <span>范围：{formatKnowledgeRebuildChapterRangeLabel(retrievalTaskStatus.chapterRange)}</span>
+                        ) : null}
+                      </div>
+                    </>
+                  ) : null}
+                  {retrievalControlsState.helperText ? (
+                    <p className="mt-2 text-[10px] leading-4 text-zinc-500">{retrievalControlsState.helperText}</p>
+                  ) : null}
+                </div>
+                <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">
+                  {formatRetrievalIndexBadge(retrievalIndexOverview)}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {retrievalControlsState.actions.map((action) => {
+                  const isPrimary = action === 'start' || action === 'refresh' || action === 'continue' || action === 'retry'
+                  const isDanger = action === 'abort'
+                  const isLoading = knowledgeActionLoading === 'rebuild-retrieval-index'
+                    ? action === 'start' || action === 'refresh' || action === 'continue' || action === 'retry'
+                    : knowledgeActionLoading === 'pause'
+                      ? action === 'pause'
+                      : knowledgeActionLoading === 'abort'
+                        ? action === 'abort'
+                        : false
+                  const label = action === 'start'
+                    ? 'Start'
+                    : action === 'refresh'
+                      ? 'Refresh'
+                      : action === 'pause'
+                        ? 'Pause'
+                        : action === 'abort'
+                          ? 'Abort'
+                          : action === 'continue'
+                            ? 'Continue'
+                            : 'Retry'
+                  const loadingLabel = action === 'pause'
+                    ? '暂停中…'
+                    : action === 'abort'
+                      ? '终止中…'
+                      : '启动中…'
+                  return (
+                    <button
+                      key={action}
+                      type="button"
+                      onClick={() => {
+                        if (action === 'pause') {
+                          void handlePauseKnowledge()
+                          return
+                        }
+                        if (action === 'abort') {
+                          void handleAbortKnowledge()
+                          return
+                        }
+                        void handleRebuildRetrievalIndex()
+                      }}
+                      disabled={retrievalControlsState.disabled}
+                      className={cn(
+                        'rounded-xl px-3 py-2 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
+                        isDanger
+                          ? 'border border-amber-400/20 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20'
+                          : isPrimary
+                            ? 'border border-violet-400/30 bg-violet-500/15 text-violet-100 hover:bg-violet-500/25'
+                            : 'border border-white/10 bg-white/[0.04] text-zinc-300 hover:bg-white/[0.08]'
+                      )}
+                    >
+                      {isLoading ? loadingLabel : label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {mainKnowledgeRebuildStatus ? (
         <div className={cn(
           'mt-3 rounded-2xl px-3 py-3 text-xs',
           knowledgeRebuildFailed
@@ -4485,15 +4879,15 @@ export function SelectionNovelStudio() {
           <p className={cn('mt-2 text-[11px] leading-5', knowledgeRebuildFailed ? 'text-rose-100/90' : 'text-zinc-400')}>
             {knowledgeRebuildFailed
               ? knowledgeRebuildFailureMessage
-              : knowledgeRebuildStatus.currentStep || (knowledgeRebuildPaused ? '等待继续重建…' : '正在准备知识重建…')}
+              : mainKnowledgeRebuildStatus.currentStep || (knowledgeRebuildPaused ? '等待继续重建…' : '正在准备知识重建…')}
           </p>
           <p className={cn('mt-1 text-[11px] leading-5', knowledgeRebuildFailed ? 'text-rose-100/70' : 'text-zinc-500')}>
             {knowledgeRebuildFailed
               ? '本次重建未完成，可重新发起知识重建。'
               : `预估剩余：${knowledgeRebuildPaused ? '已暂停' : knowledgeRebuildEtaMinutes ? `约 ${knowledgeRebuildEtaMinutes} 分钟` : '计算中'}`}
           </p>
-          {knowledgeRebuildStatus.chapterRange ? (
-            <p className="mt-1 text-[11px] leading-5 text-violet-100/75">任务范围：{formatKnowledgeRebuildChapterRangeLabel(knowledgeRebuildStatus.chapterRange)}</p>
+          {mainKnowledgeRebuildStatus.chapterRange ? (
+            <p className="mt-1 text-[11px] leading-5 text-violet-100/75">任务范围：{formatKnowledgeRebuildChapterRangeLabel(mainKnowledgeRebuildStatus.chapterRange)}</p>
           ) : null}
           <div className="mt-3 rounded-xl border border-violet-300/15 bg-violet-500/[0.08] px-3 py-3" data-testid="workspace-hanlp-bootstrap-card">
             <div className="flex flex-wrap items-start justify-between gap-2">

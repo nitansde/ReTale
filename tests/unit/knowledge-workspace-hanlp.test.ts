@@ -7,6 +7,7 @@ import {
   getCharacterClassificationBadgeLabel,
   filterWorkspaceVisibleCharacters,
   resolveCacheDeleteState,
+  resolveRetrievalTaskControlsState,
   hasCharacterProfile,
   isWorkspaceCharacterVisible,
   normalizeKnowledgeRebuildChapterRangeInput,
@@ -435,5 +436,65 @@ describe('knowledge workspace HanLP helpers', () => {
       status: 'running',
       errorMessage: 'ignored',
     })).toBeNull()
+  })
+
+  it('switches LanceDB inline controls based on retrieval task status', () => {
+    expect(resolveRetrievalTaskControlsState({
+      retrievalTask: null,
+      retrievalIndexOverview: { status: 'missing' },
+      knowledgeRebuildStatus: null,
+      knowledgeActionLoading: null,
+      knowledgeRebuilding: false,
+    })).toMatchObject({
+      disabled: false,
+      actions: ['start'],
+      helperText: null,
+    })
+
+    expect(resolveRetrievalTaskControlsState({
+      retrievalTask: null,
+      retrievalIndexOverview: { status: 'partial' },
+      knowledgeRebuildStatus: null,
+      knowledgeActionLoading: null,
+      knowledgeRebuilding: false,
+    }).actions).toEqual(['refresh'])
+
+    expect(resolveRetrievalTaskControlsState({
+      retrievalTask: { status: 'running' },
+      retrievalIndexOverview: { status: 'partial' },
+      knowledgeRebuildStatus: null,
+      knowledgeActionLoading: null,
+      knowledgeRebuilding: false,
+    }).actions).toEqual(['pause', 'abort'])
+
+    expect(resolveRetrievalTaskControlsState({
+      retrievalTask: { status: 'paused' },
+      retrievalIndexOverview: { status: 'partial' },
+      knowledgeRebuildStatus: null,
+      knowledgeActionLoading: null,
+      knowledgeRebuilding: false,
+    }).actions).toEqual(['continue', 'abort'])
+
+    expect(resolveRetrievalTaskControlsState({
+      retrievalTask: { status: 'failed' },
+      retrievalIndexOverview: { status: 'partial' },
+      knowledgeRebuildStatus: null,
+      knowledgeActionLoading: null,
+      knowledgeRebuilding: false,
+    }).actions).toEqual(['retry'])
+  })
+
+  it('disables LanceDB inline controls while the main extract rebuild is busy', () => {
+    expect(resolveRetrievalTaskControlsState({
+      retrievalTask: null,
+      retrievalIndexOverview: { status: 'missing' },
+      knowledgeRebuildStatus: { status: 'running', jobType: 'extract_chapter_knowledge' },
+      knowledgeActionLoading: null,
+      knowledgeRebuilding: false,
+    })).toMatchObject({
+      disabled: true,
+      actions: ['start'],
+      helperText: expect.stringContaining('主知识重建进行中'),
+    })
   })
 })
