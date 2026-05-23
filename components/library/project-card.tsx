@@ -1,15 +1,17 @@
-import { Trash2 } from 'lucide-react'
+import { LoaderCircle, Trash2 } from 'lucide-react'
 import type { Novel } from '@/lib/types'
 
 export function ProjectCard({
   novel,
   onOpen,
   onDelete,
+  opening,
   deleting,
 }: {
   novel: Novel
   onOpen: () => void
   onDelete: () => void
+  opening?: boolean
   deleting?: boolean
 }) {
   return (
@@ -18,7 +20,9 @@ export function ProjectCard({
         <button
           type="button"
           onClick={onOpen}
-          className="flex-1 text-left"
+          disabled={opening}
+          aria-busy={opening}
+          className="flex-1 text-left disabled:cursor-progress"
         >
           <div className="mb-5 h-32 rounded-[22px] bg-[radial-gradient(circle_at_top_left,_rgba(124,156,255,0.45),_transparent_35%),radial-gradient(circle_at_bottom_right,_rgba(168,85,247,0.25),_transparent_35%),linear-gradient(135deg,_rgba(255,255,255,0.05),_rgba(255,255,255,0.01))]" />
 
@@ -48,13 +52,20 @@ export function ProjectCard({
               <span>{novel.wordCount.toLocaleString()} 字</span>
               <span>{novel.updatedAt}</span>
             </div>
+
+            {opening ? (
+              <div className="flex items-center gap-2 text-xs text-zinc-300">
+                <LoaderCircle className="h-3.5 w-3.5 animate-spin text-indigo-200" />
+                <span>打开中…</span>
+              </div>
+            ) : null}
           </div>
         </button>
 
         <button
           type="button"
           onClick={onDelete}
-          disabled={deleting}
+          disabled={deleting || opening}
           className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-2 text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
           aria-label={`删除小说 ${novel.title}`}
         >

@@ -40,6 +40,7 @@ export function ProjectGrid() {
   const novels = getNovels()
   const [isImporting, setIsImporting] = useState(false)
   const [deletingNovelId, setDeletingNovelId] = useState<string | null>(null)
+  const [openingNovelId, setOpeningNovelId] = useState<string | null>(null)
   const [importMessage, setImportMessage] = useState<string | null>(null)
   const [uploadPercent, setUploadPercent] = useState<number>(0)
   const [phase, setPhase] = useState<'idle' | 'uploading' | 'processing'>('idle')
@@ -53,14 +54,28 @@ export function ProjectGrid() {
     const chapter = resolveOpenNovelChapter(useNovelStore.getState().localChapters, novelId, chapterId)
 
     if (!chapter) {
+      setOpeningNovelId(null)
       setImportMessage('这个小说当前没有可用章节，请刷新后重试，或重新导入一次。')
       return
     }
 
     setCurrentNovelId(novelId)
     setCurrentChapterId(chapter.id)
-    await saveToBackend().catch(() => undefined)
-    router.push('/workspace')
+    setOpeningNovelId(novelId)
+
+    let didNavigate = false
+
+    try {
+      await saveToBackend()
+      router.push('/workspace')
+      didNavigate = true
+    } catch {
+      setImportMessage('进入工作区前保存进度失败，请稍后重试。')
+    } finally {
+      if (!didNavigate) {
+        setOpeningNovelId(null)
+      }
+    }
   }
 
   const handleImportTxt = async (file: File) => {
@@ -152,6 +167,10 @@ export function ProjectGrid() {
           <div className="w-full max-w-xl rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
             读取已保存工作区时遇到问题：{backendLoadError}。你仍然可以继续导入 TXT 进行恢复。
           </div>
+        ) : !backendLoaded ? (
+          <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300">
+            正在恢复书库与上次工作区…如果本地数据较大，可能需要几秒钟。
+          </div>
         ) : null}
         <button
           type="button"
@@ -204,6 +223,7 @@ export function ProjectGrid() {
             onDelete={() => {
               void handleDeleteNovel(novel.id, novel.title)
             }}
+            opening={openingNovelId === novel.id}
             deleting={deletingNovelId === novel.id}
           />
         ))}

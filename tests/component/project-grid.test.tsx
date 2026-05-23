@@ -35,8 +35,21 @@ vi.mock('next/navigation', () => ({
 }))
 
 vi.mock('@/components/library/project-card', () => ({
-  ProjectCard: ({ onOpen }: { onOpen: () => void }) => (
-    <button type="button" onClick={onOpen}>Open project</button>
+  ProjectCard: ({ novel, onOpen, onDelete, opening, deleting }: {
+    novel: { id: string; title: string }
+    onOpen: () => void
+    onDelete: () => void
+    opening?: boolean
+    deleting?: boolean
+  }) => (
+    <div data-testid={`project-card-${novel.id}`} data-opening={opening ? 'true' : 'false'} data-deleting={deleting ? 'true' : 'false'}>
+      <button type="button" onClick={onOpen} disabled={opening} aria-busy={opening}>
+        {opening ? '打开中…' : 'Open project'}
+      </button>
+      <button type="button" onClick={onDelete} disabled={opening || deleting}>
+        Delete project
+      </button>
+    </div>
   ),
 }))
 
@@ -76,6 +89,16 @@ class MockXMLHttpRequest {
 
 function renderProjectGrid() {
   return render(<ProjectGrid />)
+}
+
+function createDeferredPromise<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
 }
 
 async function importTxt(container: HTMLElement, fileName = 'fixture.txt') {
@@ -226,6 +249,24 @@ describe('ProjectGrid chapter resolution', () => {
     expect(pushMock).not.toHaveBeenCalled()
   })
 
+  it('shows a lightweight loading message while recovering the library from backend state', () => {
+    mockStoreState = {
+      backendLoadError: '',
+      backendLoaded: false,
+      localChapters: [],
+      getNovels: () => [],
+      loadFromBackend: vi.fn(async () => undefined),
+      saveToBackend: vi.fn(async () => undefined),
+      setCurrentNovelId: vi.fn(),
+      setCurrentChapterId: vi.fn(),
+      deleteNovel: vi.fn(),
+    }
+
+    renderProjectGrid()
+
+    expect(screen.getByText('正在恢复书库与上次工作区…如果本地数据较大，可能需要几秒钟。')).toBeInTheDocument()
+  })
+
   it('saves the selected novel and chapter before navigating from an existing library card', async () => {
     const callOrder: string[] = []
     const setCurrentNovelId = vi.fn((novelId: string) => {
@@ -264,5 +305,43 @@ describe('ProjectGrid chapter resolution', () => {
     expect(saveToBackend).toHaveBeenCalledTimes(1)
     expect(pushMock).toHaveBeenCalledWith('/workspace')
     expect(callOrder).toEqual(['novel:novel-a', 'chapter:ch-1', 'save', 'push'])
+  })
+
+  it('shows per-card opening feedback and keeps delete disabled while save is pending', async () => {
+    const saveDeferred = createDeferredPromise<void>()
+    const saveToBackend = vi.fn(() => saveDeferred.promise)
+
+    mockStoreState = {
+      backendLoadError: '',
+      backendLoaded: true,
+      localChapters: [{ id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 }],
+      getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
+      loadFromBackend: vi.fn(async () => undefined),
+      saveToBackend,
+      setCurrentNovelId: vi.fn(),
+      setCurrentChapterId: vi.fn(),
+      deleteNovel: vi.fn(),
+    }
+
+    renderProjectGrid()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Open project' }))
+      await Promise.resolve()
+    })
+
+    expect(screen.getByRole('button', { name: '打开中…' })).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByRole('button', { name: 'Delete project' })).toBeDisabled()
+    expect(screen.getByTestId('project-card-novel-a')).toHaveAttribute('data-opening', 'true')
+    expect(pushMock).not.toHaveBeenCalled()
+
+    await act(async () => {
+      saveDeferred.resolve()
+      await saveDeferred.promise
+    })
+
+    await waitFor(() => {
+      expect(pushMock).toHaveBeenCalledWith('/workspace')
+    })
   })
 })
