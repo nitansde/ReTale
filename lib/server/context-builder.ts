@@ -5,6 +5,7 @@ import { findStoryTimelineNodeById } from '@/lib/server/story-timeline-store'
 import type { GraphAwareResult } from '@/lib/server/graph-types'
 import { estimateTokenCount, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { searchLanceEvidence, type RetrievalDocSourceType } from '@/lib/server/retrieval-index'
+import { buildRewriteTaskPromptLines, isContinuationRewriteTask } from '@/lib/server/rewrite-task-prompt'
 import { queryAll, queryOne } from '@/lib/server/sqlite'
 import {
   buildCharacterDescriptionDelta,
@@ -1167,12 +1168,10 @@ export async function buildGenerationContext(request: GenerationContextRequest):
       }]
     : []
 
-  const automaticTaskLines = !request.selectedText.trim() && request.branchContextNodeId
-    ? [
-        '任务要求：根据用户指导，续写下面给出的正文。',
-        '输出要求：只输出续写的新正文，不要改写、复述或解释下面已经给出的正文。',
-      ]
-    : []
+  const isContinuationTask = isContinuationRewriteTask({
+    selectedText: request.selectedText,
+    hasContinuationSource: Boolean(request.branchContextNodeId),
+  })
 
   const blocks: GenerationContextBlock[] = [
     {
@@ -1180,11 +1179,11 @@ export async function buildGenerationContext(request: GenerationContextRequest):
       label: '任务',
       enabled: true,
       priority: 'highest',
-      content: renderBlock('任务', [
-        `操作类型：${effectiveOperationType}`,
-        `用户要求：${request.userInstruction || '按当前模式生成。'}`,
-        ...automaticTaskLines,
-      ]),
+      content: renderBlock('任务', buildRewriteTaskPromptLines({
+        operationType: effectiveOperationType,
+        userInstruction: request.userInstruction,
+        continuation: isContinuationTask,
+      })),
     },
     ...selectedTextBlock,
     ...(roleplayContextBlock ? [roleplayContextBlock] : []),

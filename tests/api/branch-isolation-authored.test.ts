@@ -278,7 +278,7 @@ describe('branch-isolation-authored', () => {
       novelId: 'novel-001',
       branchId: 'novel-001:main',
       chapterId: 'chapter-10',
-      selectedText: '男主和女主暂时结盟',
+      selectedText: '',
       operationType: 'rewrite',
       userInstruction: '继续沿着当前续写块扩展新的版本。',
       branchContextNodeId: 'continue-node-001',
@@ -292,6 +292,13 @@ describe('branch-isolation-authored', () => {
     expect(branchLineageBlock?.content).toContain('续写正文：他们在雨夜里正式立下共同誓言。')
 
     const assembled = context.assembledContext
+    const taskBlock = context.promptBlocks.find((block) => block.id === 'user-instruction')
+    expect(taskBlock?.content).toContain('任务类型：续写后续故事')
+    expect(taskBlock?.content).toContain('任务要求：接着下面给出的正文，继续根据用户指令写接下来的故事。')
+    expect(taskBlock?.content).toContain('输出要求：只输出后续新正文，不要复述、解释或重新输出下面已经给出的正文。')
+    expect(taskBlock?.content).not.toContain('操作类型：rewrite')
+    expect(taskBlock?.content).not.toContain('不要改写')
+
     const chapterIndex = assembled.indexOf('男主和女主暂时结盟，准备一起行动。\n他们都还相信对方。')
     const rewriteIndex = assembled.indexOf('改写根正文：誓言让他们决定一起冒险。')
     const continueIndex = assembled.indexOf('续写正文：他们在雨夜里正式立下共同誓言。')
