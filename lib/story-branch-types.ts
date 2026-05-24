@@ -513,6 +513,8 @@ export type ContinueBlockMutationResponse = {
   continueBlockId: string
   timelineNodeId: string
   nodeType: Extract<StoryTimelineNodeType, 'rewrite' | 'continue_block'>
+  readableLabel?: string
+  readableLineageLabel?: string
   generatedText: string
   title: string
   subtitle: string | null

@@ -356,6 +356,8 @@ export const continueBlockMutationResponseSchema = z.object({
   continueBlockId: z.string().min(1),
   timelineNodeId: z.string().min(1),
   nodeType: z.enum(['rewrite', 'continue_block']),
+  readableLabel: z.string().min(1).optional(),
+  readableLineageLabel: z.string().min(1).optional(),
   generatedText: z.string().min(1),
   title: z.string().min(1),
   subtitle: z.string().nullable(),
