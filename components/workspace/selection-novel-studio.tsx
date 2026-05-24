@@ -135,6 +135,9 @@ type RecoverableRewriteJob = {
     sourceTextOverride: string | null
     userInstruction: string
     rewriteLaunchSource: string | null
+    branchContextNodeId: string | null
+    branchContextInclusion: string | null
+    continueBlockId: string | null
     createdAt: string
   }
   result: RecoverableRewriteResult | null
@@ -190,6 +193,7 @@ type RewriteLaunchSource = 'chapter' | 'what_if' | 'future_jump' | 'continue_blo
 type BranchContextPreviewOptions = {
   branchContextNodeId?: string
   branchContextInclusion?: 'ancestors_only' | 'include_selected'
+  continueBlockId?: string
   omitSelectedText?: boolean
 }
 
@@ -313,6 +317,7 @@ function buildContinueBlockLineageRequestContext(context: PendingContinueBlockRe
   return {
     branchContextNodeId: nodeId,
     branchContextInclusion: 'include_selected',
+    continueBlockId: context.continueBlockId,
     omitSelectedText: context.variant === 'continue',
   }
 }
@@ -1172,6 +1177,22 @@ async function callGetRecoverableRewriteJobApi(params: {
   return data.job ?? null
 }
 
+async function callAbortRecoverableRewriteJobApi(params: { jobId: string; novelId: string; branchId: string; chapterId?: string }) {
+  const searchParams = new URLSearchParams({
+    jobId: params.jobId,
+    novelId: params.novelId,
+    branchId: params.branchId,
+  })
+  if (params.chapterId) searchParams.set('chapterId', params.chapterId)
+  const response = await fetch(`/api/rewrite?${searchParams.toString()}`, { method: 'DELETE' })
+  const data = await response.json() as { ok?: boolean; job?: RecoverableRewriteJob | null; error?: string }
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || '中止生成任务失败')
+  }
+
+  return data.job ?? null
+}
+
 async function callCreateWhatIfSessionApi(payload: Record<string, unknown>): Promise<WhatIfCreateResponse> {
   const response = await fetch('/api/what-if/sessions', {
     method: 'POST',
@@ -1320,6 +1341,130 @@ export function resolveContinueBlockSelectionAfterSave(params: {
     continueBlockId: result.continueBlockId,
     anchorChapterNo: fallbackAnchorChapterNo,
   } satisfies Extract<TimelineSelection, { kind: 'rewrite' | 'continue_block' }>
+}
+
+function createOptimisticContinueBlockTimelineNode(params: {
+  result: ContinueBlockMutationResponse
+  storyTimeline: StoryTimelineResponse | null
+  parentTimelineNodeId: string | null
+  sourceChapterNo: number
+  selectedText: string
+  originalText: string
+  generatedText: string
+  inputTokens: number | null
+  outputTokens: number | null
+  userInstruction: string
+}) {
+  const trimLabel = (value?: string | null) => value?.trim() || ''
+  const parseContinueBlockLabelNumber = (value?: string | null) => {
+    const match = trimLabel(value).match(/^CONT-(\d+)$/)
+    return match ? Number.parseInt(match[1] ?? '', 10) : null
+  }
+  const formatContinueBlockLabel = (value: number) => `CONT-${String(value).padStart(2, '0')}`
+  const resolvedNodeType = params.result.nodeType ?? 'continue_block'
+  const branchNodes = params.storyTimeline?.branchNodes ?? []
+  const nodesById = new Map(branchNodes.map((node) => [node.id, node]))
+  const rootNodeIdByNodeId = new Map<string, string | null>()
+  const getRootNodeIdForNode = (nodeId: string) => {
+    if (rootNodeIdByNodeId.has(nodeId)) return rootNodeIdByNodeId.get(nodeId) ?? null
+
+    let currentNodeId: string | null = nodeId
+    const visited = new Set<string>()
+    while (currentNodeId && !visited.has(currentNodeId)) {
+      visited.add(currentNodeId)
+      const node = nodesById.get(currentNodeId)
+      if (!node) {
+        rootNodeIdByNodeId.set(nodeId, null)
+        return null
+      }
+      if (!node.parentNodeId) {
+        rootNodeIdByNodeId.set(nodeId, node.id)
+        return node.id
+      }
+      currentNodeId = node.parentNodeId
+    }
+
+    rootNodeIdByNodeId.set(nodeId, null)
+    return null
+  }
+  const existingNode = params.storyTimeline?.branchNodes.find(
+    (node) => node.id === params.result.timelineNodeId || node.continueBlockId === params.result.continueBlockId
+  ) ?? null
+  const parentNode = params.parentTimelineNodeId
+    ? params.storyTimeline?.branchNodes.find((node) => node.id === params.parentTimelineNodeId) ?? null
+    : null
+  const scopedRootNodeId = params.parentTimelineNodeId ? getRootNodeIdForNode(params.parentTimelineNodeId) : null
+  const maxScopedContinueBlockNumber = branchNodes
+    .filter((node) => node.nodeType === 'continue_block' && (!scopedRootNodeId || getRootNodeIdForNode(node.id) === scopedRootNodeId))
+    .reduce((max, node) => {
+      const labelNumber = parseContinueBlockLabelNumber(node.readableLabel)
+      return labelNumber == null ? max : Math.max(max, labelNumber)
+    }, 0)
+  const fallbackReadableLabel = trimLabel(existingNode?.readableLabel)
+    || trimLabel(params.result.readableLabel)
+    || (resolvedNodeType === 'continue_block' ? formatContinueBlockLabel(maxScopedContinueBlockNumber + 1) : '')
+  const fallbackParentLineage = trimLabel(parentNode?.readableLineageLabel) || trimLabel(parentNode?.readableLabel)
+  const fallbackReadableLineageLabel = trimLabel(existingNode?.readableLineageLabel)
+    || trimLabel(params.result.readableLineageLabel)
+    || (fallbackParentLineage ? `${fallbackParentLineage}, ${fallbackReadableLabel}` : fallbackReadableLabel)
+  const now = new Date().toISOString()
+  return {
+    type: 'branch_node',
+    id: params.result.timelineNodeId,
+    nodeType: resolvedNodeType,
+    readableLabel: fallbackReadableLabel || undefined,
+    readableLineageLabel: fallbackReadableLineageLabel || undefined,
+    anchorChapterNo: params.sourceChapterNo,
+    parentNodeId: params.parentTimelineNodeId,
+    title: params.result.title,
+    subtitle: params.result.subtitle,
+    laneIndex: 0,
+    colorToken: 'fuchsia',
+    sourceChapterNo: params.sourceChapterNo,
+    targetChapterNo: null,
+    continueBlockId: params.result.continueBlockId,
+    whatIfSessionId: null,
+    futureJumpRunId: null,
+    roleplaySessionId: null,
+    latestText: params.generatedText,
+    latestRevisionNo: params.result.latestRevisionNo,
+    userInstruction: params.userInstruction,
+    selectedText: params.selectedText,
+    originalText: params.originalText,
+    inputTokens: params.inputTokens,
+    outputTokens: params.outputTokens,
+    createdAt: now,
+    updatedAt: now,
+    status: 'active',
+  } satisfies StoryTimelineBranchNode
+}
+
+function upsertOptimisticContinueBlockTimelineNode(current: StoryTimelineResponse | null, nextNode: StoryTimelineBranchNode) {
+  if (!current) return null
+
+  const branchNodes = [
+    ...current.branchNodes.filter((node) => node.id !== nextNode.id),
+    nextNode,
+  ]
+  const edges = nextNode.parentNodeId && !current.edges.some((edge) => edge.fromNodeId === nextNode.parentNodeId && edge.toNodeId === nextNode.id)
+    ? [...current.edges, { fromNodeId: nextNode.parentNodeId, toNodeId: nextNode.id }]
+    : current.edges
+
+  return { ...current, branchNodes, edges }
+}
+
+function removeDeletedStoryTimelineNode(current: StoryTimelineResponse, deletedNode: StoryTimelineBranchNode) {
+  const branchNodes = current.branchNodes
+    .filter((node) => node.id !== deletedNode.id)
+    .map((node) => node.parentNodeId === deletedNode.id
+      ? { ...node, parentNodeId: deletedNode.parentNodeId }
+      : node
+    )
+  const edges = branchNodes
+    .filter((node) => node.parentNodeId)
+    .map((node) => ({ fromNodeId: node.parentNodeId!, toNodeId: node.id }))
+
+  return { ...current, branchNodes, edges }
 }
 
 function toPresetCompatSessionSurfaceId(mode: WorkspaceActionMode): PresetCompatSurfaceId {
@@ -3703,17 +3848,19 @@ export function SelectionNovelStudio() {
     setDeletingBranchNodeId(targetNode.id)
     try {
       await callDeleteStoryTimelineNodeApi(targetNode.id, currentNovelId, storyTimelineBranchId)
-      const refreshed = await loadStoryTimeline()
+      const optimisticTimeline = removeDeletedStoryTimelineNode(resolvedStoryTimeline, targetNode)
+      setStoryTimelineData((current) => current ? removeDeletedStoryTimelineNode(current, targetNode) : current)
       const nextSelection = resolveSelectionAfterDeletedBranchNode({
         deletedNode: targetNode,
         previousSelection,
         currentChapter,
         chapters: sortedChapters,
-        branchNodes: refreshed?.branchNodes ?? [],
+        branchNodes: optimisticTimeline.branchNodes,
       }) ?? toChapterTimelineSelection(currentChapter)
       handleTimelineSelection(nextSelection)
       setToast(`已删除 ${targetNode.title}`)
       window.setTimeout(() => setToast(''), 2000)
+      void loadStoryTimeline()
     } catch (error) {
       const message = error instanceof Error ? error.message : '删除时间线节点失败'
       setToast(message)
@@ -3721,7 +3868,7 @@ export function SelectionNovelStudio() {
     } finally {
       setDeletingBranchNodeId(null)
     }
-  }, [currentChapter, currentNovelId, deletingBranchNodeId, handleTimelineSelection, loadStoryTimeline, resolvedStoryTimeline.branchNodes, sortedChapters, storyTimelineBranchId, workspaceSelection])
+  }, [currentChapter, currentNovelId, deletingBranchNodeId, handleTimelineSelection, loadStoryTimeline, resolvedStoryTimeline, sortedChapters, storyTimelineBranchId, workspaceSelection])
 
   const handleDeleteNovel = async () => {
     if (!currentNovelId) return
@@ -3990,9 +4137,11 @@ export function SelectionNovelStudio() {
     try {
       await savePresetCompatLibrary()
       const continueBlockRequestContext = buildContinueBlockLineageRequestContext(activeContinueBlockRewriteContext)
-      await loadContextPreview('rewrite', rewritePrompt, undefined, {
-        ...continueBlockRequestContext,
-      })
+      if (!generationContext && !contextPreviewLoading) {
+        void loadContextPreview('rewrite', rewritePrompt, undefined, {
+          ...continueBlockRequestContext,
+        })
+      }
       const job = await callCreateRecoverableRewriteJobApi({
         novelId: currentNovelId,
         branchId: storyTimelineBranchId,
@@ -4006,6 +4155,7 @@ export function SelectionNovelStudio() {
         excludedEvidenceIds,
         branchContextNodeId: continueBlockRequestContext.branchContextNodeId,
         branchContextInclusion: continueBlockRequestContext.branchContextInclusion,
+        continueBlockId: continueBlockRequestContext.continueBlockId,
         presetCompatRuntimeContext: buildPresetCompatRuntimeContext('rewrite'),
         scope: 'chapter',
         mode: 'heavy',
@@ -4028,6 +4178,44 @@ export function SelectionNovelStudio() {
         jobStatus: null,
         jobCurrentStep: null,
       })
+    }
+  }
+
+  const handleAbortRewriteGeneration = async () => {
+    const jobId = rewriteFlow.jobId
+    if (!jobId || !currentNovelId || !currentChapter || !rewriteFlow.loading) return
+
+    setRewriteFlow((current) => ({
+      ...current,
+      loading: false,
+      error: '',
+      jobStatus: 'aborted',
+      jobCurrentStep: '已中止生成',
+    }))
+    setRewriteState((current) => ({ ...current, loading: false, error: '' }))
+
+    try {
+      const job = await callAbortRecoverableRewriteJobApi({
+        jobId,
+        novelId: currentNovelId,
+        branchId: storyTimelineBranchId,
+        chapterId: currentChapter.id,
+      })
+      if (job) {
+        syncRewriteFlowFromRecoverableJob(job)
+      }
+      setToast('已中止生成')
+      window.setTimeout(() => setToast(''), 1800)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '中止生成任务失败'
+      setRewriteFlow((current) => ({
+        ...current,
+        loading: false,
+        error: message,
+        jobStatus: 'failed',
+        jobCurrentStep: null,
+      }))
+      setRewriteState((current) => ({ ...current, loading: false, error: message }))
     }
   }
 
@@ -4107,6 +4295,7 @@ export function SelectionNovelStudio() {
     setSaveContinueBlockError('')
     try {
       const isContinueBlockRegenerate = rewriteLaunchSource === 'continue_block' && activeContinueBlockRewriteContext?.variant === 'regenerate'
+      const createUserInstruction = rewritePrompt.trim() || activeFutureJumpRewriteContext?.userInstruction.trim() || '保存当前改写结果'
       const result = isContinueBlockRegenerate
         ? await callRegenerateContinueBlockApi({
             continueBlockId: activeContinueBlockRewriteContext.continueBlockId,
@@ -4129,15 +4318,34 @@ export function SelectionNovelStudio() {
             generatedText: selectedCandidate,
             inputTokens: selectedRewriteCandidate?.inputTokens ?? null,
             outputTokens: selectedRewriteCandidate?.outputTokens ?? null,
-            userInstruction: rewritePrompt.trim() || activeFutureJumpRewriteContext?.userInstruction.trim() || '保存当前改写结果',
+            userInstruction: createUserInstruction,
             titleHint: selectedRewriteCandidate?.title?.trim() || rewritePrompt.trim().slice(0, 24),
             subtitleHint: selectedRewriteCandidate?.summary?.trim() || null,
           })
 
-      const refreshed = await loadStoryTimeline()
+      const optimisticNode = isContinueBlockRegenerate
+        ? null
+        : createOptimisticContinueBlockTimelineNode({
+            result,
+            storyTimeline: storyTimelineData,
+            parentTimelineNodeId,
+            sourceChapterNo: currentChapter.order,
+            selectedText: targetSelection,
+            originalText,
+            generatedText: result.generatedText,
+            inputTokens: selectedRewriteCandidate?.inputTokens ?? null,
+            outputTokens: selectedRewriteCandidate?.outputTokens ?? null,
+            userInstruction: createUserInstruction,
+          })
+
+      if (optimisticNode) {
+        setStoryTimelineData((current) => upsertOptimisticContinueBlockTimelineNode(current, optimisticNode))
+      }
+
+      const refreshed = isContinueBlockRegenerate ? await loadStoryTimeline() : null
       const matchingNode = refreshed?.branchNodes.find(
         (node) => node.id === result.timelineNodeId || node.continueBlockId === result.continueBlockId
-      )
+      ) ?? optimisticNode
 
       closePanel()
       setCenterPaneView('body')
@@ -4151,6 +4359,9 @@ export function SelectionNovelStudio() {
 
       setToast(`${isContinueBlockRegenerate ? '已更新' : '已创建'} ${result.title}`)
       window.setTimeout(() => setToast(''), 2200)
+      if (!isContinueBlockRegenerate) {
+        void loadStoryTimeline()
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : '保存续写块失败'
       setSaveContinueBlockError(message)
@@ -6047,6 +6258,11 @@ export function SelectionNovelStudio() {
                   <button onClick={handleRewrite} disabled={rewriteFlow.loading} className="inline-flex items-center gap-2 rounded-2xl bg-violet-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60">
                     {rewriteFlow.loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} 生成版本
                   </button>
+                  {rewriteFlow.loading && rewriteFlow.jobId ? (
+                    <button onClick={handleAbortRewriteGeneration} className="inline-flex items-center gap-2 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100 transition hover:bg-rose-500/20">
+                      <X className="h-4 w-4" /> 中止生成
+                    </button>
+                  ) : null}
                   <button onClick={handleSaveContinueBlock} disabled={!selectedRewriteCandidate || saveContinueBlockPending} className="rounded-2xl border border-fuchsia-400/30 bg-fuchsia-500/10 px-4 py-3 text-sm text-fuchsia-100 transition hover:bg-fuchsia-500/20 disabled:opacity-40">
                     {saveContinueBlockPending ? <span className="inline-flex items-center gap-2"><LoaderCircle className="h-4 w-4 animate-spin" /> 保存中</span> : '保存为续写块'}
                   </button>
@@ -6073,6 +6289,11 @@ export function SelectionNovelStudio() {
                     {rewriteFlow.loading ? (
                       <div className="rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">
                         <p>{rewriteFlow.jobCurrentStep?.trim() || '正在生成版本…'}</p>
+                        {rewriteFlow.jobId ? (
+                          <button onClick={handleAbortRewriteGeneration} className="mt-3 inline-flex items-center gap-1.5 rounded-xl border border-rose-400/25 px-3 py-1.5 text-xs text-rose-100 transition hover:bg-rose-500/10">
+                            <X className="h-3.5 w-3.5" /> 中止生成
+                          </button>
+                        ) : null}
                         {previewRewriteContent ? (
                           <p className="mt-3 line-clamp-4 text-xs leading-6 text-zinc-500">{previewRewriteContent}</p>
                         ) : null}

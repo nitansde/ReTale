@@ -967,6 +967,12 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
     }),
   }
   const continueBlockDetailRequests: string[] = []
+  let delayNextTimelineRefresh = false
+  let releaseDelayedTimelineRefresh: (() => void) | null = null
+  let markDelayedTimelineRefreshStarted: (() => void) | null = null
+  const delayedTimelineRefreshStarted = new Promise<void>((resolve) => {
+    markDelayedTimelineRefreshStarted = resolve
+  })
 
   await page.route('**/api/workspace', async (route) => {
     await route.fulfill({ json: buildWorkspacePayload() })
@@ -975,8 +981,17 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
     if (route.request().method() === 'DELETE') {
       const { nodeId } = route.request().postDataJSON() as { nodeId: string }
       timelineState = deleteTimelineNodeFromPayload(timelineState, nodeId)
+      delayNextTimelineRefresh = true
       await route.fulfill({ json: { ok: true } })
       return
+    }
+
+    if (delayNextTimelineRefresh) {
+      delayNextTimelineRefresh = false
+      markDelayedTimelineRefreshStarted?.()
+      await new Promise<void>((resolve) => {
+        releaseDelayedTimelineRefresh = resolve
+      })
     }
 
     await route.fulfill({ json: timelineState })
@@ -1017,11 +1032,13 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
 
   page.once('dialog', (dialog) => dialog.accept())
   await page.getByLabel('删除 Continue block 节点 CONT-01').click()
+  await delayedTimelineRefreshStarted
   await expect(page).toHaveURL(/selectionKind=rewrite/)
   await expect(page).toHaveURL(/selectionNodeId=rewrite-node-1/)
   await expect(page).not.toHaveURL(/selectionNodeId=continue-node-1/)
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('rewrite')
   expect(continueBlockDetailRequests).toContain('rewrite-block-1')
+  releaseDelayedTimelineRefresh?.()
 
   timelineState = buildDeleteAffordanceTimelinePayload()
   await page.goto(`/workspace?selectionKind=future_jump&selectionNodeId=${storyBranchFixtureIds.futureJumpNodeId}&selectionRunId=jump-run-001&selectionSourceChapterNo=10&selectionTargetChapterNo=100`, { waitUntil: 'networkidle' })
@@ -1438,6 +1455,12 @@ test('future jump view renders latest revision, revises in place, and reopens re
   let rewritePayload: Record<string, unknown> | null = null
   let continueBlockPayload: Record<string, unknown> | null = null
   let reviseRequestCount = 0
+  let delayNextTimelineRefresh = false
+  let releaseDelayedTimelineRefresh: (() => void) | null = null
+  let markDelayedTimelineRefreshStarted: (() => void) | null = null
+  const delayedTimelineRefreshStarted = new Promise<void>((resolve) => {
+    markDelayedTimelineRefreshStarted = resolve
+  })
   const continueBlockDetails: Record<string, ReturnType<typeof buildContinueBlockDetail>> = {}
   const continueBlockDetailRequests: string[] = []
 
@@ -1445,6 +1468,14 @@ test('future jump view renders latest revision, revises in place, and reopens re
     await route.fulfill({ json: buildWorkspacePayload() })
   })
   await page.route('**/api/story-timeline*', async (route) => {
+    if (delayNextTimelineRefresh) {
+      delayNextTimelineRefresh = false
+      markDelayedTimelineRefreshStarted?.()
+      await new Promise<void>((resolve) => {
+        releaseDelayedTimelineRefresh = resolve
+      })
+    }
+
     await route.fulfill({ json: timelineState })
   })
   await page.route('**/api/knowledge-view*', async (route) => {
@@ -1527,6 +1558,7 @@ test('future jump view renders latest revision, revises in place, and reopens re
   })
   await page.route('**/api/continue-blocks', async (route) => {
     continueBlockPayload = route.request().postDataJSON()
+    delayNextTimelineRefresh = true
     continueBlockDetails['continue-block-2'] = buildContinueBlockDetail({
       continueBlockId: 'continue-block-2',
       timelineNodeId: 'continue-node-2',
@@ -1626,11 +1658,13 @@ test('future jump view renders latest revision, revises in place, and reopens re
     originalText: '第三版未来正文：她被带走后，所有误会都在更慢地发酵。',
   })
   expect(reviseRequestCount).toBe(1)
+  await delayedTimelineRefreshStarted
   await expect(page).toHaveURL(/selectionKind=continue_block/)
   await expect(page).toHaveURL(/selectionNodeId=continue-node-2/)
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('未来续写块正文：她被带走后，誓言开始在更远的地方回响。')
   expect(continueBlockDetailRequests).toContain('continue-block-2')
+  releaseDelayedTimelineRefresh?.()
   await page.reload({ waitUntil: 'networkidle' })
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('未来续写块正文：她被带走后，誓言开始在更远的地方回响。')
@@ -1709,6 +1743,12 @@ test('continue-block continue creates a child node while regenerate updates the 
   let regeneratePayload: Record<string, unknown> | null = null
   const generationContextPayloads: Record<string, unknown>[] = []
   const rewritePayloads: Record<string, unknown>[] = []
+  let releaseInitialContextPreview: (() => void) | null = null
+  let markInitialContextPreviewStarted: (() => void) | null = null
+  let initialContextPreviewResolved = false
+  const initialContextPreviewStarted = new Promise<void>((resolve) => {
+    markInitialContextPreviewStarted = resolve
+  })
   const continueBlockDetails: Record<string, ReturnType<typeof buildContinueBlockDetail>> = {
     'continue-block-1': buildContinueBlockDetail({
       continueBlockId: 'continue-block-1',
@@ -1750,6 +1790,14 @@ test('continue-block continue creates a child node while regenerate updates the 
   })
   await page.route('**/api/rag/build-generation-context', async (route) => {
     generationContextPayloads.push(route.request().postDataJSON())
+    if (generationContextPayloads.length === 1) {
+      initialContextPreviewResolved = false
+      markInitialContextPreviewStarted?.()
+      await new Promise<void>((resolve) => {
+        releaseInitialContextPreview = resolve
+      })
+    }
+    initialContextPreviewResolved = true
     await route.fulfill({ json: buildGenerationContextPayload() })
   })
   const rewriteJobContents = new Map<string, string>()
@@ -1887,6 +1935,8 @@ test('continue-block continue creates a child node while regenerate updates the 
           type: 'branch_node' as const,
           id: 'continue-node-2',
           nodeType: 'continue_block' as const,
+          readableLabel: 'CONT-02',
+          readableLineageLabel: 'CONT-01, CONT-02',
           anchorChapterNo: 10,
           parentNodeId: 'continue-node-1',
           title: 'CONT-02 子续写块',
@@ -1912,8 +1962,11 @@ test('continue-block continue creates a child node while regenerate updates the 
       json: {
         continueBlockId: 'continue-block-2',
         timelineNodeId: 'continue-node-2',
+        nodeType: 'continue_block',
+        readableLabel: 'CONT-02',
+        readableLineageLabel: 'CONT-01, CONT-02',
         generatedText: '子续写块正文：誓言之后，她选择独自离开。',
-        title: 'CONT-02 子续写块',
+        title: 'CONT-01, CONT-02 子续写块',
         subtitle: '沿着当前续写块继续推进',
         latestRevisionNo: 1,
       },
@@ -1927,7 +1980,12 @@ test('continue-block continue creates a child node while regenerate updates the 
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
   await expect(page.getByTestId('workspace-action-overlay').getByText('当前续写块版本').first()).toBeVisible()
   await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue('把誓言后的情绪变化压进同一场景。')
+  await initialContextPreviewStarted
   await page.getByRole('button', { name: '生成版本' }).click()
+  await expect.poll(() => rewritePayloads.length).toBe(1)
+  expect(initialContextPreviewResolved).toBe(false)
+  releaseInitialContextPreview?.()
+  await expect.poll(() => initialContextPreviewResolved).toBe(true)
   await page.getByRole('button', { name: '保存为续写块' }).click()
 
   expect(createPayload).toMatchObject({
@@ -1945,6 +2003,8 @@ test('continue-block continue creates a child node while regenerate updates the 
     branchContextInclusion: 'include_selected',
   })
   await expect(page).toHaveURL(/selectionNodeId=continue-node-2/)
+  await expect(page.getByTestId('workspace-continue-block-view').getByRole('heading', { name: 'CONT-02' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'CONT-01, CONT-02 子续写块' })).toHaveCount(0)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('子续写块正文：誓言之后，她选择独自离开。')
   await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
   expect(continueBlockDetailRequests).toContain('continue-block-2')
