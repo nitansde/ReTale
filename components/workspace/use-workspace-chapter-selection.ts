@@ -62,7 +62,6 @@ type UseWorkspaceChapterSelectionOptions = {
   setCenterPaneView: Dispatch<SetStateAction<WorkspaceCenterPaneView>>
   setPendingSourceJump: Dispatch<SetStateAction<PendingSourceJump | null>>
   setLeftPanelOpen: Dispatch<SetStateAction<boolean>>
-  htmlToPlainText: (html: string) => string
   resetControls: ChapterResetControls
 }
 
@@ -75,11 +74,8 @@ export function useWorkspaceChapterSelection(options: UseWorkspaceChapterSelecti
     setCenterPaneView,
     setPendingSourceJump,
     setLeftPanelOpen,
-    htmlToPlainText,
     resetControls,
   } = options
-
-  void htmlToPlainText
 
   const sortedChapters = useMemo(
     () => localChapters.filter((chapter) => chapter.novelId === currentNovelId).slice().sort((a, b) => a.order - b.order),

@@ -72,7 +72,6 @@ describe('useWorkspaceChapterSelection', () => {
   it('resets selection and action state when selecting a chapter', () => {
     const chapterOne = buildChapter({ id: 'chapter-1', title: 'Chapter 1', content: '<p>Alpha</p>', order: 1 })
     const chapterTwo = buildChapter({ id: 'chapter-2', title: 'Chapter 2', content: '<p>Beta body</p>', order: 2 })
-    const htmlToPlainText = vi.fn((html: string) => html.replace(/<[^>]+>/g, '').trim())
     const setCurrentChapterId = vi.fn<(chapterId: string) => void>()
     const setCenterPaneView = createStateSetterMock<'body' | 'graph'>()
     const setPendingSourceJump = createStateSetterMock<PendingSourceJump | null>()
@@ -88,7 +87,6 @@ describe('useWorkspaceChapterSelection', () => {
         setCenterPaneView,
         setPendingSourceJump,
         setLeftPanelOpen,
-        htmlToPlainText,
         resetControls,
       })
     )
@@ -99,10 +97,7 @@ describe('useWorkspaceChapterSelection', () => {
 
     expect(setCurrentChapterId).toHaveBeenCalledWith(chapterTwo.id)
     expect(setLeftPanelOpen).toHaveBeenCalledWith(false)
-    expect(htmlToPlainText).toHaveBeenCalledWith(chapterTwo.content)
     expect(resetControls.resetPresetCompatSessionStateForChapter).toHaveBeenCalledWith(chapterTwo)
-    expect(resetControls.setRoleplayTurns).toHaveBeenCalledWith([])
-    expect(resetControls.setRoleplayDraft).toHaveBeenCalledWith('Beta body')
     expect(resetControls.setSelectionText).toHaveBeenCalledWith('')
     expect(resetControls.setLockedSelectionText).toHaveBeenCalledWith('')
     expect(resetControls.setGenerationContext).toHaveBeenCalledWith(null)
@@ -147,7 +142,6 @@ describe('useWorkspaceChapterSelection', () => {
         setCenterPaneView,
         setPendingSourceJump,
         setLeftPanelOpen,
-        htmlToPlainText: (html) => html.replace(/<[^>]+>/g, '').trim(),
         resetControls,
       })
     )

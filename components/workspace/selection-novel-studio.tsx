@@ -2024,7 +2024,6 @@ export function SelectionNovelStudio() {
     setCenterPaneView,
     setPendingSourceJump,
     setLeftPanelOpen,
-    htmlToPlainText,
     resetControls: {
       defaultGraphReviewControls: DEFAULT_GRAPH_REVIEW_CONTROLS,
       resetPresetCompatSessionStateForChapter: (chapter) => {
