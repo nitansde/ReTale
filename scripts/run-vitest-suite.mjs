@@ -4,6 +4,8 @@ import { spawnSync } from 'node:child_process'
 
 const ROOT = process.cwd()
 const EVIDENCE_ROOT = path.join(ROOT, '.sisyphus/evidence/task-1-test-harness')
+const TEST_DB_ROOT_RELATIVE = path.join('tests', '.runtime', 'test-db')
+const TEST_DB_ROOT = path.join(ROOT, TEST_DB_ROOT_RELATIVE)
 
 const suite = process.argv[2]
 const selector = process.argv[3] ?? 'all'
@@ -48,7 +50,22 @@ if (!selectedTests.length) {
 }
 
 fs.mkdirSync(EVIDENCE_ROOT, { recursive: true })
+fs.mkdirSync(TEST_DB_ROOT, { recursive: true })
+
+const sourceDbRelativePath = process.env.CHATBOOK_TEST_SOURCE_DB_PATH ?? path.join(TEST_DB_ROOT_RELATIVE, 'vitest-source.db')
+const sourceDbPath = path.isAbsolute(sourceDbRelativePath)
+  ? sourceDbRelativePath
+  : path.join(ROOT, sourceDbRelativePath)
+const runtimeDbRelativePath = path.join(TEST_DB_ROOT_RELATIVE, `${suite}-runtime-${Date.now()}-${process.pid}.db`)
+const runtimeDbPath = path.join(ROOT, runtimeDbRelativePath)
+
+fs.closeSync(fs.openSync(sourceDbPath, 'a'))
+fs.rmSync(runtimeDbPath, { force: true })
+
 const outputFile = path.join(EVIDENCE_ROOT, `${suite}-report.json`)
+
+console.log(`[chatbook-vitest] Dedicated source test DB ${sourceDbRelativePath}`)
+console.log(`[chatbook-vitest] Runtime DATABASE_URL=file:${runtimeDbRelativePath}`)
 
 const result = spawnSync(
   'npx',
@@ -58,6 +75,8 @@ const result = spawnSync(
     stdio: 'inherit',
     env: {
       ...process.env,
+      CHATBOOK_TEST_SOURCE_DB_PATH: sourceDbRelativePath,
+      DATABASE_URL: `file:${runtimeDbRelativePath}`,
       TASK_EVIDENCE_DIR: EVIDENCE_ROOT,
     },
   }

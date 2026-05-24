@@ -12,7 +12,7 @@ afterEach(() => {
 })
 
 describe('api harness temp database isolation', () => {
-  it('operates on a temp database without mutating dev.db', () => {
+  it('operates on a temp database without mutating the source test database', () => {
     const sourceDbPath = getSourceDbPath()
     const tempDatabase = createTempDatabaseCopy('chatbook-api-harness')
     cleanups.push(tempDatabase.cleanup)
@@ -35,7 +35,7 @@ describe('api harness temp database isolation', () => {
     expect(sourceTable).toBeUndefined()
 
     writeEvidenceFile(
-      'devdb-integrity.txt',
+      'test-db-integrity.txt',
       [`sourceDbPath=${sourceDbPath}`, `tempDbPath=${tempDatabase.dbPath}`, `tempDbHash=${copyHash}`].join('\n')
     )
   })
