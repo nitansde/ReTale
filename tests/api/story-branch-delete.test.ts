@@ -486,6 +486,39 @@ describe('story branch delete APIs', () => {
   it('deletes a leaf timeline node without disturbing surviving sibling order', async () => {
     const database = createTestDatabase('chatbook-story-branch-delete-leaf')
     seedPromoteFixture(database)
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, progress, currentStep, payloadJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      'rewrite-job-orphan-leaf',
+      'novel-promote',
+      'novel-promote:main',
+      'rewrite_generation',
+      'running',
+      0.65,
+      '正在流式生成改写版本',
+      JSON.stringify({
+        request: {
+          branchContextNodeId: 'continue-node-promote-a',
+          continueBlockId: 'continue-block-promote-a',
+        },
+        panel: {
+          novelId: 'novel-promote',
+          branchId: 'novel-promote:main',
+          chapterId: 'chapter-promote-10',
+          selectedText: '',
+          sourceText: '续写块正文',
+          sourceTextOverride: null,
+          userInstruction: '继续写',
+          rewriteLaunchSource: 'continue_block',
+          branchContextNodeId: 'continue-node-promote-a',
+          branchContextInclusion: 'include_selected',
+          continueBlockId: 'continue-block-promote-a',
+          createdAt: '2026-05-15T01:23:45.000Z',
+        },
+        stream: true,
+      })
+    )
     vi.resetModules()
 
     const { DELETE } = await import('@/app/api/story-timeline/route')
@@ -500,6 +533,7 @@ describe('story branch delete APIs', () => {
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ ok: true, nodeId: 'continue-node-promote-a' })
     expect(database.prepare('SELECT id FROM continue_blocks WHERE id = ?').get('continue-block-promote-a')).toBeUndefined()
+    expect(database.prepare('SELECT status FROM KnowledgeJob WHERE id = ?').get('rewrite-job-orphan-leaf')).toEqual({ status: 'aborted' })
 
     const orderedNodes = database.prepare(
       'SELECT id FROM story_timeline_nodes WHERE novel_id = ? AND branch_id = ? ORDER BY created_at ASC, id ASC'

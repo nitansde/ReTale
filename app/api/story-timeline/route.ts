@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { findStoryBranch, normalizeBranchId } from '@/lib/server/knowledge-store'
+import { abortRecoverableRewriteJobsForDeletedTimelineNode } from '@/lib/server/recoverable-rewrite-jobs'
 import { deleteStoryTimelineNode, findStoryTimelineNodeById, loadStoryTimeline } from '@/lib/server/story-timeline-store'
 
 export async function GET(request: Request) {
@@ -61,6 +62,12 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ ok: false, error: 'Story timeline node not found for the requested branch context' }, { status: 404 })
     }
 
+    abortRecoverableRewriteJobsForDeletedTimelineNode({
+      novelId,
+      branchId,
+      nodeId,
+      continueBlockId: node.continueBlockId,
+    })
     deleteStoryTimelineNode(nodeId)
     return NextResponse.json({ ok: true, nodeId })
   } catch (error) {
