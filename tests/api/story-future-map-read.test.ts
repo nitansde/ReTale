@@ -97,6 +97,13 @@ function seedFutureJumpDetailFixture(database: DatabaseSync) {
   ).run('outline_chapter_100_primary', 'outline_event_100', 100, 'chapter-100', '第100章 女主被反派绑走', 1, 0)
 
   database.prepare(
+    `INSERT INTO continue_blocks (
+      id, novel_id, branch_id, parent_timeline_node_id, source_chapter_no, title, subtitle,
+      user_instruction, selected_text, original_text, latest_text, latest_revision_no, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('continue-block-025', 'novel-001', 'novel-001:main', null, 25, 'CONT-02 深入误判', null, '继续误判线', '选区', '原文', '续写正文', 1, 'active')
+
+  database.prepare(
     `INSERT INTO story_timeline_nodes (
       id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
       parent_node_id, source_chapter_no, target_chapter_no, chapter_id, what_if_session_id,
