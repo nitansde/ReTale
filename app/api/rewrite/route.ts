@@ -16,6 +16,14 @@ import {
 } from '@/lib/server/openai-compatible'
 import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
 import { generateRewriteWithOllama, streamRewriteWithOllama } from '@/lib/server/ollama-local'
+import {
+  abortRecoverableRewriteJob,
+  clearRecoverableRewriteAbortController,
+  createRecoverableRewriteAbortController,
+  isRecoverableRewriteJobAborted,
+  isRecoverableRewriteJobRestorable,
+  RECOVERABLE_REWRITE_JOB_TYPE,
+} from '@/lib/server/recoverable-rewrite-jobs'
 import { buildRewriteTaskPromptLines, CONTINUATION_SOURCE_BLOCK_LABEL, isContinuationRewriteTask } from '@/lib/server/rewrite-task-prompt'
 import { uid } from '@/lib/utils'
 import type { PresetCompatPromptRuleRuntimeContext, PresetCompatRuntimeContextBlock } from '@/lib/preset-compat/types'
@@ -25,7 +33,6 @@ import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
 export const maxDuration = 3600
 
 const INVALID_OPERATION_TYPE_ERROR = `Invalid operationType. Expected one of: ${PRODUCT_SURFACE_IDS.join(', ')}`
-const RECOVERABLE_REWRITE_JOB_TYPE = 'rewrite_generation'
 const PARTIAL_REWRITE_PERSIST_MIN_CHARS = 120
 const PARTIAL_REWRITE_PERSIST_MIN_MS = 500
 const MAX_PARTIAL_REWRITE_RESULT_CHARS = 200_000
@@ -52,6 +59,9 @@ type RecoverableRewriteJobPayload = {
     sourceTextOverride: string | null
     userInstruction: string
     rewriteLaunchSource: string | null
+    branchContextNodeId: string | null
+    branchContextInclusion: string | null
+    continueBlockId: string | null
     createdAt: string
   }
   stream?: boolean
@@ -231,6 +241,9 @@ function normalizeRecoverableRewriteJobPayload(payloadJson: string | null): Reco
       sourceTextOverride: typeof panelRecord.sourceTextOverride === 'string' ? panelRecord.sourceTextOverride : null,
       userInstruction: String(panelRecord.userInstruction ?? ''),
       rewriteLaunchSource: typeof panelRecord.rewriteLaunchSource === 'string' ? panelRecord.rewriteLaunchSource : null,
+      branchContextNodeId: typeof panelRecord.branchContextNodeId === 'string' ? panelRecord.branchContextNodeId : null,
+      branchContextInclusion: typeof panelRecord.branchContextInclusion === 'string' ? panelRecord.branchContextInclusion : null,
+      continueBlockId: typeof panelRecord.continueBlockId === 'string' ? panelRecord.continueBlockId : null,
       createdAt: String(panelRecord.createdAt ?? ''),
     },
     stream: record.stream === true,
@@ -267,6 +280,23 @@ function serializeRecoverableRewriteJob(row: RecoverableRewriteJobRow | null) {
   }
 }
 
+function recoverableRewritePanelScopeExists(panel: RecoverableRewriteJobPayload['panel']) {
+  return Boolean(queryOne<{ id: string }>(
+    `SELECT KnowledgeChapter.id
+     FROM KnowledgeChapter
+     INNER JOIN StoryBranch ON StoryBranch.id = KnowledgeChapter.branchId
+     INNER JOIN NovelRecord ON NovelRecord.id = KnowledgeChapter.novelId
+     WHERE KnowledgeChapter.id = ?
+       AND KnowledgeChapter.novelId = ?
+       AND KnowledgeChapter.branchId = ?
+       AND StoryBranch.novelId = KnowledgeChapter.novelId
+     LIMIT 1`,
+    panel.chapterId,
+    panel.novelId,
+    panel.branchId,
+  ))
+}
+
 function updateRecoverableRewriteJob(jobId: string, params: {
   status: string
   progress: number
@@ -288,7 +318,14 @@ function updateRecoverableRewriteJob(jobId: string, params: {
   )
 }
 
-function findLatestRecoverableRewriteJob(params: { novelId: string; branchId?: string | null; chapterId?: string | null }) {
+function findLatestRecoverableRewriteJob(params: {
+  novelId: string
+  branchId?: string | null
+  chapterId?: string | null
+  rewriteLaunchSource?: string | null
+  branchContextNodeId?: string | null
+  continueBlockId?: string | null
+}) {
   const rows = queryAll<RecoverableRewriteJobRow>(
     `SELECT id, novelId, branchId, status, progress, currentStep, payloadJson, errorMessage, createdAt, updatedAt
      FROM KnowledgeJob
@@ -300,10 +337,14 @@ function findLatestRecoverableRewriteJob(params: { novelId: string; branchId?: s
   )
 
   return rows.find((row) => {
+    if (!isRecoverableRewriteJobRestorable(row.status)) return false
     const payload = normalizeRecoverableRewriteJobPayload(row.payloadJson)
     if (!payload) return false
     if (params.branchId && payload.panel.branchId !== params.branchId) return false
     if (params.chapterId && payload.panel.chapterId !== params.chapterId) return false
+    if (params.rewriteLaunchSource && payload.panel.rewriteLaunchSource !== params.rewriteLaunchSource) return false
+    if (params.branchContextNodeId && payload.panel.branchContextNodeId !== params.branchContextNodeId) return false
+    if (params.continueBlockId && payload.panel.continueBlockId !== params.continueBlockId) return false
     return true
   }) ?? null
 }
@@ -323,6 +364,9 @@ function buildRecoverableRewritePanel(body: Record<string, unknown>) {
     sourceTextOverride: String(body.rewriteSourceTextOverride ?? '').trim() || null,
     userInstruction: String(body.userInstruction ?? body.prompt ?? ''),
     rewriteLaunchSource: String(body.rewriteLaunchSource ?? '').trim() || null,
+    branchContextNodeId: String(body.branchContextNodeId ?? '').trim() || null,
+    branchContextInclusion: String(body.branchContextInclusion ?? '').trim() || null,
+    continueBlockId: String(body.continueBlockId ?? '').trim() || null,
     createdAt: new Date().toISOString(),
   } satisfies RecoverableRewriteJobPayload['panel']
 }
@@ -626,13 +670,59 @@ export async function GET(request: Request) {
   })
 }
 
+export async function DELETE(request: Request) {
+  const { searchParams } = new URL(request.url)
+  const jobId = searchParams.get('jobId')?.trim()
+  const novelId = searchParams.get('novelId')?.trim()
+  const branchId = searchParams.get('branchId')?.trim()
+  const chapterId = searchParams.get('chapterId')?.trim()
+  if (!jobId) {
+    return NextResponse.json({ ok: false, error: 'jobId is required' }, { status: 400 })
+  }
+  if (!novelId || !branchId) {
+    return NextResponse.json({ ok: false, error: 'novelId and branchId are required' }, { status: 400 })
+  }
+
+  const row = readRecoverableRewriteJob(jobId)
+  const payload = normalizeRecoverableRewriteJobPayload(row?.payloadJson ?? null)
+  const inScope = row
+    && payload
+    && row.novelId === novelId
+    && row.branchId === branchId
+    && payload.panel.novelId === novelId
+    && payload.panel.branchId === branchId
+    && (!chapterId || payload.panel.chapterId === chapterId)
+  if (!inScope) {
+    return NextResponse.json({ ok: false, error: 'Recoverable rewrite job not found' }, { status: 404 })
+  }
+
+  const job = abortRecoverableRewriteJob(jobId)
+  if (!job) {
+    return NextResponse.json({ ok: false, error: 'Recoverable rewrite job not found' }, { status: 404 })
+  }
+
+  return NextResponse.json({ ok: true, job }, {
+    headers: { 'Cache-Control': 'no-store' },
+  })
+}
+
 async function createRecoverableRewriteJob(body: Record<string, unknown>) {
   const panel = buildRecoverableRewritePanel(body)
   if (!panel) {
     return NextResponse.json({ ok: false, error: 'novelId, branchId, and chapterId are required for recoverable rewrite jobs' }, { status: 400 })
   }
+  if (!recoverableRewritePanelScopeExists(panel)) {
+    return NextResponse.json({ ok: false, error: 'Recoverable rewrite job scope not found' }, { status: 404 })
+  }
 
-  const activeJob = findLatestRecoverableRewriteJob({ novelId: panel.novelId, branchId: panel.branchId, chapterId: panel.chapterId })
+  const activeJob = findLatestRecoverableRewriteJob({
+    novelId: panel.novelId,
+    branchId: panel.branchId,
+    chapterId: panel.chapterId,
+    rewriteLaunchSource: panel.rewriteLaunchSource,
+    branchContextNodeId: panel.branchContextNodeId,
+    continueBlockId: panel.continueBlockId,
+  })
   if (activeJob?.status === 'queued' || activeJob?.status === 'running') {
     return NextResponse.json({ ok: true, job: serializeRecoverableRewriteJob(activeJob) }, {
       headers: { 'Cache-Control': 'no-store' },
@@ -649,16 +739,25 @@ async function createRecoverableRewriteJob(body: Record<string, unknown>) {
     panel,
     stream: body.stream === true,
   } satisfies RecoverableRewriteJobPayload
-  execute(
-    `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, progress, currentStep, payloadJson)
-     VALUES (?, ?, ?, ?, 'queued', 0.1, ?, ?)`,
-    jobId,
-    panel.novelId,
-    panel.branchId,
-    RECOVERABLE_REWRITE_JOB_TYPE,
-    '已创建可恢复魔改任务',
-    JSON.stringify(payload),
-  )
+  try {
+    execute(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, progress, currentStep, payloadJson)
+       VALUES (?, ?, ?, ?, 'queued', 0.1, ?, ?)`,
+      jobId,
+      panel.novelId,
+      panel.branchId,
+      RECOVERABLE_REWRITE_JOB_TYPE,
+      '已创建可恢复魔改任务',
+      JSON.stringify(payload),
+    )
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to create recoverable rewrite job'
+    const isMissingScope = message.includes('FOREIGN KEY') || message.includes('constraint failed')
+    return NextResponse.json(
+      { ok: false, error: isMissingScope ? 'Recoverable rewrite job scope not found' : message },
+      { status: isMissingScope ? 404 : 500 },
+    )
+  }
 
   scheduleRecoverableRewriteJob(jobId)
 
@@ -720,12 +819,15 @@ async function runRecoverableRewriteJob(jobId: string) {
   )
   if (claim.changes !== 1) return
 
+  const controller = createRecoverableRewriteAbortController(jobId)
   try {
     const response = await handleRewritePost(new Request('http://localhost/api/rewrite', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload.stream ? { ...payload.request, stream: true } : payload.request),
-    }), { allowRecoverable: false })
+      signal: controller.signal,
+    }), { allowRecoverable: false, signal: controller.signal })
+    if (isRecoverableRewriteJobAborted(jobId)) return
     if (!response.ok) {
       const errorText = await response.text().catch(() => '')
       throw new Error(errorText || `Rewrite job failed with status ${response.status}`)
@@ -734,6 +836,7 @@ async function runRecoverableRewriteJob(jobId: string) {
     const result = payload.stream
       ? await readRewriteResponseResultWithProgress(jobId, payload, response)
       : await readRewriteResponseResult(response)
+    if (isRecoverableRewriteJobAborted(jobId)) return
     updateRecoverableRewriteJob(jobId, {
       status: 'succeeded',
       progress: 1,
@@ -741,6 +844,10 @@ async function runRecoverableRewriteJob(jobId: string) {
       payload: { ...payload, result },
     })
   } catch (error) {
+    if (controller.signal.aborted || isRecoverableRewriteJobAborted(jobId)) {
+      abortRecoverableRewriteJob(jobId)
+      return
+    }
     const message = error instanceof Error ? error.message : 'Rewrite failed.'
     updateRecoverableRewriteJob(jobId, {
       status: 'failed',
@@ -749,6 +856,8 @@ async function runRecoverableRewriteJob(jobId: string) {
       payload: { ...payload, error: message },
       errorMessage: message,
     })
+  } finally {
+    clearRecoverableRewriteAbortController(jobId, controller)
   }
 }
 
@@ -760,7 +869,7 @@ export async function POST(request: Request) {
   return handleRewritePost(request, { allowRecoverable: true })
 }
 
-async function handleRewritePost(request: Request, options: { allowRecoverable: boolean }) {
+async function handleRewritePost(request: Request, options: { allowRecoverable: boolean; signal?: AbortSignal }) {
   const body = await request.json()
   if (
     options.allowRecoverable
@@ -884,6 +993,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
         ? runtime.resolvedRuntime.providerRuntime.request
         : runtime.resolvedRuntime.providerRuntime.request.options,
       presetCompat: presetCompatMetadata,
+      signal: options.signal,
     }
     const streamResult = runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
       ? await streamRewriteWithOpenAICompatible(promptPayload, runtime.resolvedRuntime.providerRuntime.config)
@@ -953,6 +1063,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
       ? runtime.resolvedRuntime.providerRuntime.request
       : runtime.resolvedRuntime.providerRuntime.request.options,
     presetCompat: presetCompatMetadata,
+    signal: options.signal,
   }
   const result = runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
     ? await generateRewriteWithOpenAICompatible(rewriteInput, runtime.resolvedRuntime.providerRuntime.config)

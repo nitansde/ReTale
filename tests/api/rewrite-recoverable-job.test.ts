@@ -104,6 +104,16 @@ function createRewriteRequest(payload: Record<string, unknown>) {
   })
 }
 
+function createAbortRequest(jobId: string, overrides: { novelId?: string; branchId?: string; chapterId?: string } = {}) {
+  const searchParams = new URLSearchParams({
+    jobId,
+    novelId: overrides.novelId ?? 'novel-rewrite',
+    branchId: overrides.branchId ?? 'novel-rewrite:main',
+    chapterId: overrides.chapterId ?? 'chapter-rewrite-1',
+  })
+  return new Request(`http://localhost/api/rewrite?${searchParams.toString()}`, { method: 'DELETE' })
+}
+
 async function waitForCondition(assertion: () => boolean | Promise<boolean>) {
   const startedAt = Date.now()
   while (Date.now() - startedAt < 5000) {
@@ -249,6 +259,100 @@ describe('recoverable rewrite jobs', () => {
     expect(restored.job.status).toBe('succeeded')
     expect(restored.job.result.content).toBe('第一段第二段')
     expect(restored.job.result.provider).toBe('openai-compatible')
+  }, 30000)
+
+  it('aborts an on-the-fly recoverable rewrite job and excludes it from latest restore', async () => {
+    await createTestDatabase('chatbook-rewrite-recoverable-abort')
+    let capturedSignal: AbortSignal | null = null
+    const fetchMock = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      capturedSignal = init?.signal ?? null
+      capturedSignal?.addEventListener('abort', () => {
+        const error = new Error('The operation was aborted')
+        error.name = 'AbortError'
+        reject(error)
+      }, { once: true })
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { DELETE, GET, POST, runRecoverableRewriteJobForTesting } = await importRewriteRoute()
+    const createdResponse = await POST(createRewriteRequest({ recoverableRewriteJob: true, stream: true }))
+    const created = await createdResponse.json() as { job: { jobId: string; status: string } }
+    expect(created.job.status).toBe('queued')
+
+    const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId)
+    await waitForCondition(() => capturedSignal !== null)
+
+    const abortResponse = await DELETE(createAbortRequest(created.job.jobId))
+    const aborted = await abortResponse.json() as { ok: boolean; job: { jobId: string; status: string } }
+    expect(aborted.ok).toBe(true)
+    expect(aborted.job.jobId).toBe(created.job.jobId)
+    expect(aborted.job.status).toBe('aborted')
+    expect(capturedSignal?.aborted).toBe(true)
+    await runPromise
+
+    const restoredByIdResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const restoredById = await restoredByIdResponse.json() as { job: { status: string; errorMessage: string | null } }
+    expect(restoredById.job.status).toBe('aborted')
+
+    const restoredByChapterResponse = await GET(new Request('http://localhost/api/rewrite?novelId=novel-rewrite&branchId=novel-rewrite%3Amain&chapterId=chapter-rewrite-1'))
+    const restoredByChapter = await restoredByChapterResponse.json() as { job: null }
+    expect(restoredByChapter.job).toBeNull()
+
+    const nextResponse = await POST(createRewriteRequest({ recoverableRewriteJob: true, stream: true }))
+    const next = await nextResponse.json() as { job: { jobId: string; status: string } }
+    expect(next.job.status).toBe('queued')
+    expect(next.job.jobId).not.toBe(created.job.jobId)
+  }, 30000)
+
+  it('rejects abort requests outside the recoverable rewrite job scope', async () => {
+    await createTestDatabase('chatbook-rewrite-recoverable-abort-scope')
+    let capturedSignal: AbortSignal | null = null
+    const fetchMock = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      capturedSignal = init?.signal ?? null
+      capturedSignal?.addEventListener('abort', () => {
+        const error = new Error('The operation was aborted')
+        error.name = 'AbortError'
+        reject(error)
+      }, { once: true })
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { DELETE, GET, POST, runRecoverableRewriteJobForTesting } = await importRewriteRoute()
+    const createdResponse = await POST(createRewriteRequest({ recoverableRewriteJob: true, stream: true }))
+    const created = await createdResponse.json() as { job: { jobId: string; status: string } }
+    const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId)
+    await waitForCondition(() => capturedSignal !== null)
+
+    const wrongScopeResponse = await DELETE(createAbortRequest(created.job.jobId, { branchId: 'novel-rewrite:other' }))
+    const wrongScope = await wrongScopeResponse.json() as { ok: boolean; error: string }
+    expect(wrongScopeResponse.status).toBe(404)
+    expect(wrongScope.ok).toBe(false)
+    expect(capturedSignal?.aborted).toBe(false)
+
+    const runningResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const running = await runningResponse.json() as { job: { status: string } }
+    expect(running.job.status).toBe('running')
+
+    const abortResponse = await DELETE(createAbortRequest(created.job.jobId))
+    expect(abortResponse.status).toBe(200)
+    expect(capturedSignal?.aborted).toBe(true)
+    await runPromise
+  }, 30000)
+
+  it('rejects recoverable rewrite job creation when the requested scope is missing', async () => {
+    await createTestDatabase('chatbook-rewrite-recoverable-missing-scope')
+    vi.stubGlobal('fetch', vi.fn())
+
+    const { POST } = await importRewriteRoute()
+    const response = await POST(createRewriteRequest({
+      recoverableRewriteJob: true,
+      chapterId: 'missing-chapter',
+    }))
+    const data = await response.json() as { ok: boolean; error: string }
+
+    expect(response.status).toBe(404)
+    expect(data.ok).toBe(false)
+    expect(data.error).toBe('Recoverable rewrite job scope not found')
   }, 30000)
 
   it('throttles tiny streamed partial updates before final completion', async () => {
