@@ -87,6 +87,7 @@ type OllamaRewriteRequest = {
     num_predict: number
     seed: number
   }>
+  signal?: AbortSignal
 }
 
 type OllamaRewriteResult = {
@@ -116,6 +117,7 @@ type OllamaStreamRewriteRequest = {
     num_predict: number
     seed: number
   }>
+  signal?: AbortSignal
 }
 
 type OllamaStreamRewriteResult = {
@@ -2237,9 +2239,16 @@ async function requestOllamaChat(params: {
   }>
   format?: unknown
   debug?: Pick<LlmDebugLogParams, 'folder' | 'stage' | 'attempt'>
+  signal?: AbortSignal
 }) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), params.timeoutMs)
+  const abortFromInputSignal = () => controller.abort()
+  if (params.signal?.aborted) {
+    controller.abort()
+  } else {
+    params.signal?.addEventListener('abort', abortFromInputSignal, { once: true })
+  }
   const url = `${params.baseUrl.replace(/\/$/, '')}/api/chat`
   const requestBody = buildOllamaChatRequestBody({ ...params, stream: false })
 
@@ -2295,6 +2304,7 @@ async function requestOllamaChat(params: {
     throw error
   } finally {
     clearTimeout(timeout)
+    params.signal?.removeEventListener('abort', abortFromInputSignal)
   }
 }
 
@@ -2313,9 +2323,16 @@ async function requestOllamaChatStream(params: {
     num_predict: number
     seed: number
   }>
+  signal?: AbortSignal
 }) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), params.timeoutMs)
+  const abortFromInputSignal = () => controller.abort()
+  if (params.signal?.aborted) {
+    controller.abort()
+  } else {
+    params.signal?.addEventListener('abort', abortFromInputSignal, { once: true })
+  }
   const url = `${params.baseUrl.replace(/\/$/, '')}/api/chat`
   const requestBody = buildOllamaChatRequestBody({ ...params, stream: true })
 
@@ -2354,7 +2371,7 @@ async function requestOllamaChatStream(params: {
       throw new Error('No response body returned from Ollama')
     }
 
-    return { body: response.body, url, requestBody, status: response.status }
+    return { body: response.body, url, requestBody, status: response.status, cleanupSignal: () => params.signal?.removeEventListener('abort', abortFromInputSignal) }
   } catch (error) {
     if (error instanceof Error && (error.message.startsWith('Ollama HTTP ') || error.message === 'No response body returned from Ollama')) {
       throw error
@@ -2425,6 +2442,7 @@ export async function generateRewriteWithOllama(
       ],
       requestOptions: input.requestOptions,
       debug: { folder: 'rewrite', stage: 'rewrite' },
+      signal: input.signal,
     })
 
     const raw = response.message?.content?.trim() ?? ''
@@ -2480,6 +2498,7 @@ export async function streamRewriteWithOllama(
       temperature: input.temperature ?? 0.7,
       messages,
       requestOptions: input.requestOptions,
+      signal: input.signal,
     })
 
     const decoder = new TextDecoder()
@@ -2564,6 +2583,7 @@ export async function streamRewriteWithOllama(
             await reader.cancel()
           } catch {
           }
+          upstream.cleanupSignal()
         }
 
         if (streamErrorMessage) {

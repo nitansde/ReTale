@@ -29,6 +29,7 @@ type RewriteRequest = {
     max_tokens: number
   }>
   presetCompat?: unknown
+  signal?: AbortSignal
 }
 
 export type RewriteResult = {
@@ -53,6 +54,7 @@ export type StreamRewriteRequest = {
     max_tokens: number
   }>
   presetCompat?: unknown
+  signal?: AbortSignal
 }
 
 export type StreamRewriteResult = {
@@ -555,6 +557,13 @@ export async function generateRewriteWithOpenAICompatible(
   const controller = new AbortController()
   const timeoutMs = 20000
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  const abortFromInputSignal = () => controller.abort()
+  const cleanupInputSignal = () => input.signal?.removeEventListener('abort', abortFromInputSignal)
+  if (input.signal?.aborted) {
+    controller.abort()
+  } else {
+    input.signal?.addEventListener('abort', abortFromInputSignal, { once: true })
+  }
   const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`
   const messages: OpenAICompatibleChatMessage[] = [
     {
@@ -591,7 +600,6 @@ export async function generateRewriteWithOpenAICompatible(
       signal: controller.signal,
     })
   } catch (error) {
-    clearTimeout(timeout)
     await writeLlmDebugLog({
       folder: 'rewrite',
       provider: 'openai-compatible',
@@ -603,11 +611,14 @@ export async function generateRewriteWithOpenAICompatible(
       response: { error: error instanceof Error ? error.message : 'Model request failed' },
     })
     if (error instanceof Error && error.name === 'AbortError') {
-      return { enabled: true, error: `Model request timed out after ${timeoutMs}ms` }
+      cleanupInputSignal()
+      return { enabled: true, error: input.signal?.aborted ? 'Model request aborted' : `Model request timed out after ${timeoutMs}ms` }
     }
+    cleanupInputSignal()
     return { enabled: true, error: error instanceof Error ? error.message : 'Model request failed' }
   } finally {
     clearTimeout(timeout)
+    cleanupInputSignal()
   }
 
   if (!response.ok) {
@@ -707,6 +718,13 @@ export async function streamRewriteWithOpenAICompatible(
   const controller = new AbortController()
   const timeoutMs = 30000
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  const abortFromInputSignal = () => controller.abort()
+  const cleanupInputSignal = () => input.signal?.removeEventListener('abort', abortFromInputSignal)
+  if (input.signal?.aborted) {
+    controller.abort()
+  } else {
+    input.signal?.addEventListener('abort', abortFromInputSignal, { once: true })
+  }
   const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`
   const messages: OpenAICompatibleChatMessage[] = [
     { role: 'system', content: input.systemPrompt },
@@ -735,7 +753,6 @@ export async function streamRewriteWithOpenAICompatible(
       signal: controller.signal,
     })
   } catch (error) {
-    clearTimeout(timeout)
     await writeLlmDebugLog({
       folder: 'rewrite',
       provider: 'openai-compatible',
@@ -747,8 +764,10 @@ export async function streamRewriteWithOpenAICompatible(
       response: { error: error instanceof Error ? error.message : 'Model request failed' },
     })
     if (error instanceof Error && error.name === 'AbortError') {
-      return { enabled: true, error: `Model request timed out after ${timeoutMs}ms` }
+      cleanupInputSignal()
+      return { enabled: true, error: input.signal?.aborted ? 'Model request aborted' : `Model request timed out after ${timeoutMs}ms` }
     }
+    cleanupInputSignal()
     return { enabled: true, error: error instanceof Error ? error.message : 'Model request failed' }
   } finally {
     clearTimeout(timeout)
@@ -765,6 +784,7 @@ export async function streamRewriteWithOpenAICompatible(
       request: { url, body: requestBody, messages },
       response: { status: response.status, error: `HTTP ${response.status}` },
     })
+    cleanupInputSignal()
     return { enabled: true, error: `HTTP ${response.status}` }
   }
 
@@ -779,6 +799,7 @@ export async function streamRewriteWithOpenAICompatible(
       request: { url, body: requestBody, messages },
       response: { status: response.status, error: 'No response body returned from model' },
     })
+    cleanupInputSignal()
     return { enabled: true, error: 'No response body returned from model' }
   }
 
@@ -848,6 +869,8 @@ export async function streamRewriteWithOpenAICompatible(
         })
         controller.error(error)
         return
+      } finally {
+        cleanupInputSignal()
       }
 
       const finalDecoderChunk = decoder.decode()
