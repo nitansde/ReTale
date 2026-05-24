@@ -4,11 +4,11 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
+import { getSourceDbPath } from '@/tests/helpers/temp-db'
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
 
 const ROOT = process.cwd()
-const SOURCE_DB_PATH = path.join(ROOT, 'dev.db')
 const EVIDENCE_DIR = path.join(ROOT, '.sisyphus/evidence/task-2-authored-schema')
 
 const createdDirectories: string[] = []
@@ -116,7 +116,7 @@ describe('authored branching schema migrations', () => {
 
   it('is idempotent across repeated initialization and preserves an existing copied database', () => {
     const databasePath = makeTempDatabasePath('chatbook-authored-idempotence')
-    fs.copyFileSync(SOURCE_DB_PATH, databasePath)
+    fs.copyFileSync(getSourceDbPath(), databasePath)
 
     const firstOpen = initializeDatabase(new DatabaseSync(databasePath))
     const firstTableCount = listTableNames(firstOpen).length
