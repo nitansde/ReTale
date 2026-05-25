@@ -424,7 +424,8 @@ function getKnowledgeStatusOverview(novelId: string, branchId: string): Knowledg
     chapters,
     isCovered: (chapterNo) => {
       const chapter = chapters.find((item) => item.chapterNo === chapterNo)
-      return Boolean(chapter) && chapter.isDirty === 0 && chapter.knowledgeStatus === 'ready'
+      if (!chapter) return false
+      return chapter.isDirty === 0 && chapter.knowledgeStatus === 'ready'
     },
   })
 
