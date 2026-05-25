@@ -1,6 +1,7 @@
 import { after, NextResponse } from 'next/server'
 import { upsertWorkspaceState } from '@/lib/server/persistence'
 import { syncWorkspacePayloadToKnowledgeStore } from '@/lib/server/knowledge-rebuild'
+import type { WorkspaceKnowledgeSyncPayload } from '@/lib/server/knowledge-rebuild'
 import {
   isExplicitWorkspaceResetRequest,
   loadWorkspacePayloadWithRecovery,
@@ -9,7 +10,7 @@ import {
 
 export const maxDuration = 3600
 
-let queuedWorkspaceSyncPayload: unknown
+let queuedWorkspaceSyncPayload: WorkspaceKnowledgeSyncPayload | undefined
 let hasQueuedWorkspaceSyncPayload = false
 let workspaceSyncScheduled = false
 let workspaceSyncRunning = false
@@ -51,6 +52,8 @@ async function runQueuedWorkspaceKnowledgeSync() {
       queuedWorkspaceSyncPayload = undefined
       hasQueuedWorkspaceSyncPayload = false
 
+      if (!payload) continue
+
       try {
         await syncWorkspacePayloadToKnowledgeStore(payload)
       } catch (error) {
@@ -62,7 +65,7 @@ async function runQueuedWorkspaceKnowledgeSync() {
   }
 }
 
-function queueWorkspaceKnowledgeSync(payload: unknown) {
+function queueWorkspaceKnowledgeSync(payload: WorkspaceKnowledgeSyncPayload) {
   queuedWorkspaceSyncPayload = payload
   hasQueuedWorkspaceSyncPayload = true
 
@@ -84,7 +87,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const payload = await request.json()
+    const payload = await request.json() as WorkspaceKnowledgeSyncPayload
     const allowReset = isExplicitWorkspaceResetRequest(request)
     if (shouldBlockEmptyWorkspaceOverwrite(payload, allowReset)) {
       return NextResponse.json(

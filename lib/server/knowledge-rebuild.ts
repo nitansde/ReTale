@@ -6113,7 +6113,7 @@ export async function persistImportedNovelToKnowledgeStore(params: PersistImport
   }
 }
 
-type WorkspaceKnowledgeSyncPayload = {
+export type WorkspaceKnowledgeSyncPayload = {
   localNovels?: Array<{ id: string; title: string; summary: string; tags: string[] }>
   localChapters?: Chapter[]
   localOutlines?: PersistedNovelState['localOutlines']
