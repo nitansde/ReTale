@@ -170,6 +170,7 @@ export type RawTextEmbeddingPrecomputeResult = RawTextEmbeddingPrecomputeProgres
 const LANCEDB_DIR = process.env.LANCEDB_DIR?.trim() || path.join(process.cwd(), '.lancedb')
 const TABLE_PREFIX = 'retrieval_docs_'
 const DEFAULT_EMBEDDING_BATCH_SIZE = 16
+const RETRIEVAL_EMBEDDING_RETRY_DELAYS_MS = [500, 1500] as const
 const LANCEDB_INDEX_LOG_PREFIX = '[LanceDB Index]'
 const LANCE_INDEX_UNAVAILABLE_WARNING = 'Lance retrieval index is missing or stale for this branch; rebuild knowledge to refresh retrieval evidence.'
 const PACKABLE_TEXT_SPAN_TYPES = new Set(['paragraph', 'evidence', 'summary'])
@@ -752,6 +753,61 @@ function formatElapsed(elapsedMs: number) {
   return `${(elapsedMs / 1000).toFixed(1)}s`
 }
 
+function formatRetrievalBatchPreview(rows: Array<Pick<RetrievalDocEmbeddingPlanRow, 'row'>>) {
+  return rows
+    .slice(0, 3)
+    .map(({ row }) => `id=${row.id}, source=${row.sourceType}/${row.sourceId}, chapter=${row.chapterNo}`)
+    .join(' | ')
+}
+
+type RetrievalErrorLikeDetails = {
+  name: string | null
+  code: string | null
+  message: string | null
+}
+
+function readRetrievalErrorLikeDetails(value: unknown): RetrievalErrorLikeDetails {
+  if (value instanceof Error) {
+    const record = value as Error & { code?: unknown }
+    return {
+      name: value.name || null,
+      code: typeof record.code === 'string' || typeof record.code === 'number' ? String(record.code) : null,
+      message: value.message || null,
+    }
+  }
+
+  if (typeof value === 'string') {
+    return {
+      name: null,
+      code: null,
+      message: value,
+    }
+  }
+
+  if (!value || typeof value !== 'object') {
+    return {
+      name: null,
+      code: null,
+      message: null,
+    }
+  }
+
+  const record = value as Record<string, unknown>
+  return {
+    name: typeof record.name === 'string' ? record.name : null,
+    code: typeof record.code === 'string' || typeof record.code === 'number' ? String(record.code) : null,
+    message: typeof record.message === 'string' ? record.message : null,
+  }
+}
+
+function buildRetrievalBatchErrorMessage(
+  rows: Array<Pick<RetrievalDocEmbeddingPlanRow, 'row'>>,
+  error: unknown,
+) {
+  const preview = formatRetrievalBatchPreview(rows)
+  return `Failed to generate retrieval embeddings for batchSize=${rows.length}${preview ? `, preview=${preview}` : ''}: ${getErrorMessage(error)}`
+}
+
 function logLanceIndex(message: string) {
   console.log(`${LANCEDB_INDEX_LOG_PREFIX} ${message}`)
 }
@@ -787,6 +843,65 @@ async function embedRetrievalRowBatch(
     ...row,
     vector: embeddings[index],
   }))
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function isRetryableRetrievalEmbeddingError(error: unknown) {
+  const topLevelDetails = readRetrievalErrorLikeDetails(error)
+  const nestedCause = error instanceof Error ? (error as Error & { cause?: unknown }).cause : undefined
+  const causeDetails = readRetrievalErrorLikeDetails(nestedCause)
+  const normalizedHaystack = [
+    topLevelDetails.name,
+    topLevelDetails.code,
+    topLevelDetails.message,
+    causeDetails.name,
+    causeDetails.code,
+    causeDetails.message,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(' ')
+    .toLowerCase()
+
+  return normalizedHaystack.includes('fetch failed')
+    || normalizedHaystack.includes('timed out')
+    || normalizedHaystack.includes('aborterror')
+    || normalizedHaystack.includes('ecconnreset')
+    || normalizedHaystack.includes('econnreset')
+    || normalizedHaystack.includes('econnrefused')
+    || normalizedHaystack.includes('etimedout')
+    || normalizedHaystack.includes('socket hang up')
+    || normalizedHaystack.includes('und_err')
+}
+
+async function waitForRetrievalEmbeddingRetry(delayMs: number) {
+  await new Promise((resolve) => setTimeout(resolve, delayMs))
+}
+
+async function embedRetrievalRowBatchWithRetry(
+  rows: Array<Pick<RetrievalDocEmbeddingPlanRow, 'row' | 'embeddingInput'>>,
+  settings: EmbeddingsScenarioSettings,
+) {
+  let lastError: unknown = null
+
+  for (let attempt = 0; attempt <= RETRIEVAL_EMBEDDING_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await embedRetrievalRowBatch(rows, settings)
+    } catch (error) {
+      lastError = error
+      if (!isRetryableRetrievalEmbeddingError(error) || attempt >= RETRIEVAL_EMBEDDING_RETRY_DELAYS_MS.length) {
+        throw new Error(buildRetrievalBatchErrorMessage(rows, error))
+      }
+
+      const delayMs = RETRIEVAL_EMBEDDING_RETRY_DELAYS_MS[attempt]
+      logLanceIndex(`embedding retry ${attempt + 1}/${RETRIEVAL_EMBEDDING_RETRY_DELAYS_MS.length + 1} in ${delayMs}ms: ${buildRetrievalBatchErrorMessage(rows, error)}`)
+      await waitForRetrievalEmbeddingRetry(delayMs)
+    }
+  }
+
+  throw new Error(buildRetrievalBatchErrorMessage(rows, lastError ?? 'unknown retrieval embedding failure'))
 }
 
 function getEmbeddingModel(settings: EmbeddingsScenarioSettings) {
@@ -1054,7 +1169,7 @@ async function writeBranchTableRows(params: {
   for (let index = 0; index < liveRows.length; index += embeddingBatchSize) {
     const batch = liveRows.slice(index, index + embeddingBatchSize)
     const embeddingBatchStartedAt = Date.now()
-    const embeddedBatch = await embedRetrievalRowBatch(batch, embeddingSettings)
+    const embeddedBatch = await embedRetrievalRowBatchWithRetry(batch, embeddingSettings)
     embeddingElapsedMs += Date.now() - embeddingBatchStartedAt
     const batchDimension = embeddedBatch[0]?.vector.length ?? 0
 
@@ -1127,7 +1242,7 @@ async function writeBranchTableRows(params: {
     for (let index = 0; index < deferredRawTextRows.length; index += embeddingBatchSize) {
       const batch = deferredRawTextRows.slice(index, index + embeddingBatchSize)
       const embeddingBatchStartedAt = Date.now()
-      const embeddedBatch = await embedRetrievalRowBatch(batch, embeddingSettings)
+      const embeddedBatch = await embedRetrievalRowBatchWithRetry(batch, embeddingSettings)
       embeddingElapsedMs += Date.now() - embeddingBatchStartedAt
 
       const batchDimension = embeddedBatch[0]?.vector.length ?? 0

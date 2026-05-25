@@ -1071,6 +1071,49 @@ describe('retrieval-index cache reuse helpers', () => {
     await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
   }, 120000)
 
+  it('retries a transient final rebuild embedding failure and still writes cache and table rows', async () => {
+    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-transient-final-rebuild-embedding-retry')
+
+    const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+
+    embedTextsWithOllama.mockImplementationOnce(async () => {
+      throw new Error('fetch failed')
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: mergedDocs.length,
+    })
+
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(2)
+    expect(Array.isArray(embedTextsWithOllama.mock.calls[0]?.[0]) ? embedTextsWithOllama.mock.calls[0][0] : []).toHaveLength(mergedDocs.length)
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
+    expect(
+      (mockLanceDb.database.createTable.mock.calls[0]?.[1] as Array<{ id: string }> | undefined)?.map((row) => row.id)
+    ).toEqual(mergedDocs.map((row) => row.id))
+    expect(getActiveMockTable(database, mockLanceDb)?.rows).toHaveLength(mergedDocs.length)
+    expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
+      count: rawTextDocs.length,
+    })
+  })
+
+  it('surfaces batch context after retryable retrieval embedding failures exhaust retries', async () => {
+    const { embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-final-rebuild-retry-context')
+
+    const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    embedTextsWithOllama.mockRejectedValue(new Error(
+      'Ollama embedding fetch failed (endpoint=http://127.0.0.1:11434/api/embed, baseUrl=http://127.0.0.1:11434, model=unit-test-embedding-model, inputCount=3, timeoutMs=600000, causeName=SocketError, causeCode=ECONNRESET, causeMessage=socket hang up): fetch failed'
+    ))
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).rejects.toThrow(
+      /Failed to generate retrieval embeddings for batchSize=3, preview=id=.*source=.*chapter=.*fetch failed/
+    )
+
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(3)
+    expect(mockLanceDb.database.createTable).not.toHaveBeenCalled()
+    expect(mergedDocs).toHaveLength(3)
+  })
+
   it('preserves the existing retrieval table when scoped materialization fails during embedding', async () => {
     const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-materialization-failure-preserves-table')
 

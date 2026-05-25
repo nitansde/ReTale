@@ -143,6 +143,49 @@ export type OllamaEmbeddingResult = {
   error?: string
 }
 
+type ErrorWithCause = Error & {
+  cause?: unknown
+  code?: unknown
+}
+
+type ErrorLikeDetails = {
+  name: string | null
+  code: string | null
+  message: string | null
+}
+
+function readErrorLikeDetails(value: unknown): ErrorLikeDetails {
+  if (value instanceof Error) {
+    const errorWithCause = value as ErrorWithCause
+    return {
+      name: value.name || null,
+      code: typeof errorWithCause.code === 'string' || typeof errorWithCause.code === 'number' ? String(errorWithCause.code) : null,
+      message: value.message || null,
+    }
+  }
+  if (typeof value === 'string') {
+    return {
+      name: null,
+      code: null,
+      message: value,
+    }
+  }
+  if (!value || typeof value !== 'object') {
+    return {
+      name: null,
+      code: null,
+      message: null,
+    }
+  }
+
+  const record = value as Record<string, unknown>
+  return {
+    name: typeof record.name === 'string' ? record.name : null,
+    code: typeof record.code === 'string' || typeof record.code === 'number' ? String(record.code) : null,
+    message: typeof record.message === 'string' ? record.message : null,
+  }
+}
+
 const DEFAULT_BASE_URL = 'http://127.0.0.1:11434'
 const DEFAULT_TIMEOUT_MS = 600000
 const EXTRACTION_TOP_LEVEL_ARRAY_KEYS = ['relations', 'events', 'worldbuilding', 'open_threads'] as const
@@ -1417,6 +1460,8 @@ export async function embedTextsWithOllama(
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs)
+  const requestBaseUrl = config.baseUrl.replace(/\/$/, '')
+  let requestUrl = `${requestBaseUrl}/api/embed`
   const requestBody = {
     model: config.model,
     input: Array.isArray(input) ? normalizedInput : normalizedInput[0],
@@ -1424,7 +1469,7 @@ export async function embedTextsWithOllama(
   }
 
   try {
-    let response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/api/embed`, {
+    let response = await fetch(requestUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
@@ -1433,7 +1478,8 @@ export async function embedTextsWithOllama(
     })
 
     if (response.status === 404) {
-      response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/api/embeddings`, {
+      requestUrl = `${requestBaseUrl}/api/embeddings`
+      response = await fetch(requestUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
@@ -1476,10 +1522,28 @@ export async function embedTextsWithOllama(
       model: data.model ?? config.model,
     }
   } catch (error) {
+    const topLevelDetails = readErrorLikeDetails(error)
+    const nestedCause = error instanceof Error ? (error as ErrorWithCause).cause : undefined
+    const causeDetails = readErrorLikeDetails(nestedCause)
+    const requestSummary = `endpoint=${requestUrl}, baseUrl=${requestBaseUrl}, model=${config.model}, inputCount=${normalizedInput.length}, timeoutMs=${config.timeoutMs}`
+    const errorSummary = [
+      topLevelDetails.name ? `errorName=${topLevelDetails.name}` : null,
+      topLevelDetails.code ? `errorCode=${topLevelDetails.code}` : null,
+      topLevelDetails.message ? `errorMessage=${topLevelDetails.message}` : null,
+      causeDetails.name ? `causeName=${causeDetails.name}` : null,
+      causeDetails.code ? `causeCode=${causeDetails.code}` : null,
+      causeDetails.message ? `causeMessage=${causeDetails.message}` : null,
+    ].filter(Boolean).join(', ')
+    const isAbort = topLevelDetails.name === 'AbortError' || causeDetails.name === 'AbortError'
+
     return {
       enabled: false,
       model: config.model,
-      error: error instanceof Error ? error.message : 'Failed to generate embeddings with Ollama',
+      error: error instanceof Error
+        ? isAbort
+          ? `Ollama embedding request timed out or was aborted (${requestSummary}${errorSummary ? `, ${errorSummary}` : ''}): request timed out after ${config.timeoutMs}ms`
+          : `Ollama embedding fetch failed (${requestSummary}${errorSummary ? `, ${errorSummary}` : ''}): ${topLevelDetails.message ?? 'unknown fetch error'}`
+        : `Ollama embedding fetch failed (${requestSummary}): ${String(error)}`,
     }
   } finally {
     clearTimeout(timeout)
