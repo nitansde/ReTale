@@ -171,6 +171,7 @@ const LANCEDB_DIR = process.env.LANCEDB_DIR?.trim() || path.join(process.cwd(), 
 const TABLE_PREFIX = 'retrieval_docs_'
 const DEFAULT_EMBEDDING_BATCH_SIZE = 16
 const RETRIEVAL_EMBEDDING_RETRY_DELAYS_MS = [500, 1500] as const
+const OLLAMA_RETRIEVAL_EMBEDDING_MAX_BATCH_CHARS = 6000
 const LANCEDB_INDEX_LOG_PREFIX = '[LanceDB Index]'
 const LANCE_INDEX_UNAVAILABLE_WARNING = 'Lance retrieval index is missing or stale for this branch; rebuild knowledge to refresh retrieval evidence.'
 const PACKABLE_TEXT_SPAN_TYPES = new Set(['paragraph', 'evidence', 'summary'])
@@ -904,6 +905,43 @@ async function embedRetrievalRowBatchWithRetry(
   throw new Error(buildRetrievalBatchErrorMessage(rows, lastError ?? 'unknown retrieval embedding failure'))
 }
 
+function buildRetrievalEmbeddingBatches(
+  rows: RetrievalDocEmbeddingPlanRow[],
+  settings: EmbeddingsScenarioSettings,
+  embeddingBatchSize: number,
+) {
+  const maxRows = Math.max(1, Math.floor(embeddingBatchSize))
+  const maxChars = settings.provider === 'ollama'
+    ? OLLAMA_RETRIEVAL_EMBEDDING_MAX_BATCH_CHARS
+    : Number.POSITIVE_INFINITY
+  const batches: RetrievalDocEmbeddingPlanRow[][] = []
+  let currentBatch: RetrievalDocEmbeddingPlanRow[] = []
+  let currentChars = 0
+
+  const flushBatch = () => {
+    if (!currentBatch.length) return
+    batches.push(currentBatch)
+    currentBatch = []
+    currentChars = 0
+  }
+
+  for (const row of rows) {
+    const inputChars = row.embeddingInput.length
+    const exceedsRowLimit = currentBatch.length >= maxRows
+    const exceedsCharLimit = currentBatch.length > 0 && currentChars + inputChars > maxChars
+
+    if (exceedsRowLimit || exceedsCharLimit) {
+      flushBatch()
+    }
+
+    currentBatch.push(row)
+    currentChars += inputChars
+  }
+
+  flushBatch()
+  return batches
+}
+
 function getEmbeddingModel(settings: EmbeddingsScenarioSettings) {
   return settings.provider === 'openai-compatible'
     ? settings.openAICompatible.model
@@ -1131,7 +1169,8 @@ async function writeBranchTableRows(params: {
   const database = await getDatabase()
   const rawTextCacheScope = buildRawTextEmbeddingCacheScope(novelId, branchId, embeddingSettings)
   const liveRows = rows.filter((item) => item.row.sourceType !== 'text_span' || !item.cachedVector)
-  const totalBatches = Math.ceil(rows.length / embeddingBatchSize)
+  const liveBatches = buildRetrievalEmbeddingBatches(liveRows, embeddingSettings, embeddingBatchSize)
+  let totalBatches = Math.max(Math.ceil(rows.length / embeddingBatchSize), liveBatches.length)
   const embeddingProvider = embeddingSettings.provider
   const embeddingModel = getEmbeddingModel(embeddingSettings)
   const embeddingStartedAt = Date.now()
@@ -1164,10 +1203,9 @@ async function writeBranchTableRows(params: {
     }
   }
 
-  logLanceIndex(`embedding started: docs=${rows.length}, batchSize=${embeddingBatchSize}`)
+  logLanceIndex(`embedding started: docs=${rows.length}, batchSize=${embeddingBatchSize}, liveBatches=${liveBatches.length}`)
 
-  for (let index = 0; index < liveRows.length; index += embeddingBatchSize) {
-    const batch = liveRows.slice(index, index + embeddingBatchSize)
+  for (const batch of liveBatches) {
     const embeddingBatchStartedAt = Date.now()
     const embeddedBatch = await embedRetrievalRowBatchWithRetry(batch, embeddingSettings)
     embeddingElapsedMs += Date.now() - embeddingBatchStartedAt
@@ -1239,8 +1277,10 @@ async function writeBranchTableRows(params: {
       embeddingInputHashes: deferredRawTextRows.map((item) => item.embeddingInputHash),
     })
 
-    for (let index = 0; index < deferredRawTextRows.length; index += embeddingBatchSize) {
-      const batch = deferredRawTextRows.slice(index, index + embeddingBatchSize)
+    const deferredBatches = buildRetrievalEmbeddingBatches(deferredRawTextRows, embeddingSettings, embeddingBatchSize)
+    totalBatches = Math.max(totalBatches, completedBatches + deferredBatches.length)
+
+    for (const batch of deferredBatches) {
       const embeddingBatchStartedAt = Date.now()
       const embeddedBatch = await embedRetrievalRowBatchWithRetry(batch, embeddingSettings)
       embeddingElapsedMs += Date.now() - embeddingBatchStartedAt

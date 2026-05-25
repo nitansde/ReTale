@@ -1097,6 +1097,50 @@ describe('retrieval-index cache reuse helpers', () => {
     })
   })
 
+  it('splits long Ollama final embedding batches by input size', async () => {
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-long-ollama-embedding-batches')
+    aiSettings.embeddings.embeddingBatchSize = 32
+
+    const insertWorld = database.prepare(
+      `INSERT INTO KnowledgeWorld (
+        id, novelId, branchId, term, category, definition, firstSeenChapter,
+        validFromChapter, validUntilChapter, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    for (let index = 0; index < 6; index += 1) {
+      insertWorld.run(
+        `world-long-${index}`,
+        'novel-001',
+        'novel-001:main',
+        `超长设定${index}`,
+        '设定',
+        `超长设定${index}${'甲'.repeat(3500)}`,
+        1,
+        1,
+        999999999,
+        'ready',
+      )
+    }
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+
+    const embeddingCalls = embedTextsWithOllama.mock.calls
+      .map((call) => call[0])
+      .map((input) => (Array.isArray(input) ? input : [input]))
+    const longWorldCalls = embeddingCalls.filter((input) => input.some((text) => text.includes('超长设定')))
+    expect(longWorldCalls.length).toBeGreaterThan(1)
+    expect(longWorldCalls.every((input) => input.length < 6)).toBe(true)
+    for (const input of embeddingCalls) {
+      const totalChars = input.reduce((sum, text) => sum + text.length, 0)
+      if (input.length > 1) {
+        expect(totalChars).toBeLessThanOrEqual(6000)
+      }
+    }
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
+  })
+
   it('surfaces batch context after retryable retrieval embedding failures exhaust retries', async () => {
     const { embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-final-rebuild-retry-context')
 
