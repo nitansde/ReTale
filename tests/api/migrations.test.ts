@@ -237,4 +237,28 @@ describe('authored branching schema migrations', () => {
 
     ;(reopenedDatabase as DatabaseSync & { close?: () => void }).close?.()
   })
+
+  it('creates pending retrieval index state storage during initialization', () => {
+    const databasePath = makeTempDatabasePath('chatbook-pending-retrieval-index-table')
+    const database = initializeDatabase(new DatabaseSync(databasePath))
+
+    const columns = listTableColumns(database, 'PendingRetrievalIndex')
+
+    expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      'branchId',
+      'scopeKey',
+      'tableName',
+      'phase',
+      'rowCount',
+      'textIndexCompleted',
+      'vectorIndexCompleted',
+      'rebuildFingerprint',
+      'createdAt',
+      'updatedAt',
+    ]))
+    expect(columns.find((column) => column.name === 'branchId')?.pk).toBe(1)
+    expect(columns.find((column) => column.name === 'scopeKey')?.pk).toBe(2)
+
+    ;(database as DatabaseSync & { close?: () => void }).close?.()
+  })
 })

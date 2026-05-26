@@ -588,6 +588,21 @@ CREATE TABLE IF NOT EXISTS ActiveRetrievalIndex (
   FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS PendingRetrievalIndex (
+  branchId TEXT NOT NULL,
+  scopeKey TEXT NOT NULL DEFAULT 'full',
+  tableName TEXT NOT NULL UNIQUE,
+  phase TEXT NOT NULL,
+  rowCount INTEGER NOT NULL DEFAULT 0,
+  textIndexCompleted INTEGER NOT NULL DEFAULT 0,
+  vectorIndexCompleted INTEGER NOT NULL DEFAULT 0,
+  rebuildFingerprint TEXT,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (branchId, scopeKey),
+  FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS story_timeline_nodes (
   id TEXT PRIMARY KEY,
   novel_id TEXT NOT NULL,
