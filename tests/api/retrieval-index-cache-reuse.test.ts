@@ -222,6 +222,23 @@ function getActiveRetrievalIndexRows(database: DatabaseSync) {
       tableName: string
       scopeStartChapter: number | null
       scopeEndChapter: number | null
+     }>
+}
+
+function getPendingRetrievalIndexRows(database: DatabaseSync) {
+  return database
+    .prepare([
+      'SELECT scopeKey, tableName, phase, rowCount, textIndexCompleted, vectorIndexCompleted, rebuildFingerprint',
+      'FROM PendingRetrievalIndex WHERE branchId = ? ORDER BY scopeKey ASC',
+    ].join(' '))
+    .all('novel-001:main') as Array<{
+      scopeKey: string
+      tableName: string
+      phase: string
+      rowCount: number
+      textIndexCompleted: number
+      vectorIndexCompleted: number
+      rebuildFingerprint: string | null
     }>
 }
 
@@ -258,7 +275,8 @@ async function createRetrievalIndexHarness(testName: string) {
   vi.doMock('@lancedb/lancedb', () => ({
     connect: mockLanceDb.connect,
     Index: {
-      fts: () => ({}) ,
+      fts: () => ({}),
+      ivfFlat: () => ({}),
     },
   }))
 
@@ -449,6 +467,27 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(rangedDocs.every((row) => row.chapterNo === 2)).toBe(true)
   })
 
+  it('treats a default full-equivalent chapter range as the full retrieval scope', async () => {
+    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-full-equivalent-range-scope')
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+      chapterRange: { startChapter: 1 },
+    })).resolves.toMatchObject({
+      rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+
+    expect(getActiveRetrievalIndexRows(database)).toEqual([
+      expect.objectContaining({
+        scopeKey: 'full',
+        scopeStartChapter: null,
+        scopeEndChapter: null,
+      }),
+    ])
+    expect(database.prepare('SELECT COUNT(*) AS count FROM ActiveRetrievalIndex WHERE branchId = ? AND scopeKey = ?')
+      .get('novel-001:main', 'chapter-range:1:open')).toMatchObject({ count: 0 })
+    expect(getActiveMockTable(database, mockLanceDb)).toBeTruthy()
+  })
+
   it('reuses embeddingInputHash when packed text is unchanged', async () => {
     const tempDatabase = createTempDatabaseCopy('chatbook-retrieval-index-cache-reuse-hash')
     cleanups.push(tempDatabase.cleanup)
@@ -543,6 +582,9 @@ describe('retrieval-index cache reuse helpers', () => {
 
     const packedInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(packedDoc!).text
     const sceneInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(sceneDoc!).text
+    const chapterSummaryDoc = mergedDocs.find((row) => row.id === 'chapter-summary:chapter-1')
+    expect(chapterSummaryDoc).toBeTruthy()
+    const chapterSummaryInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(chapterSummaryDoc!).text
     const packedHash = retrievalCache.buildEmbeddingInputHash(packedInput)
     const sceneHash = retrievalCache.buildEmbeddingInputHash(sceneInput)
 
@@ -555,7 +597,7 @@ describe('retrieval-index cache reuse helpers', () => {
       (mockLanceDb.database.createTable.mock.calls[0]?.[1] as Array<{ id: string }> | undefined)?.map((row) => row.id)
     ).toEqual(mergedDocs.map((row) => row.id))
     expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
-      count: rawTextDocs.length,
+      count: mergedDocs.length,
     })
 
     await retrievalCache.upsertRawTextEmbeddingCacheEntries({
@@ -574,6 +616,10 @@ describe('retrieval-index cache reuse helpers', () => {
           embeddingInput: sceneInput,
           vector: [8, 8, 8],
         },
+        {
+          embeddingInput: chapterSummaryInput,
+          vector: [7, 7, 7],
+        },
       ],
     })
 
@@ -583,17 +629,13 @@ describe('retrieval-index cache reuse helpers', () => {
       rowCount: mergedDocs.length,
     })
 
-    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
-    expect(embedTextsWithOllama.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
-      expect.stringContaining('章节摘要'),
-    ]))
-    expect(embedTextsWithOllama.mock.calls[0]?.[0]).not.toContain(packedInput)
-    expect(embedTextsWithOllama.mock.calls[0]?.[0]).not.toContain(sceneInput)
+    expect(embedTextsWithOllama).not.toHaveBeenCalled()
 
     const warmStoredRows = mockLanceDb.database.createTable.mock.calls[0]?.[1] as Array<{ id: string; vector: number[] }>
     expect(warmStoredRows.map((row) => row.id)).toEqual(mergedDocs.map((row) => row.id))
     expect(warmStoredRows.find((row) => row.id === packedDoc!.id)?.vector).toEqual([9, 9, 9])
     expect(warmStoredRows.find((row) => row.id === sceneDoc!.id)?.vector).toEqual([8, 8, 8])
+    expect(warmStoredRows.find((row) => row.id === chapterSummaryDoc!.id)?.vector).toEqual([7, 7, 7])
 
     database.prepare('DELETE FROM RawTextEmbeddingCache WHERE embeddingInputHash = ?').run(packedHash)
     database.prepare('UPDATE RawTextEmbeddingCache SET vectorJson = ?, vectorDimension = ? WHERE embeddingInputHash = ?')
@@ -606,11 +648,9 @@ describe('retrieval-index cache reuse helpers', () => {
     })
 
     expect(embedTextsWithOllama).toHaveBeenCalledTimes(2)
-    expect(embedTextsWithOllama.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
-      packedInput,
-      expect.stringContaining('章节摘要'),
-    ]))
+    expect(embedTextsWithOllama.mock.calls[0]?.[0]).toEqual([packedInput])
     expect(embedTextsWithOllama.mock.calls[0]?.[0]).not.toContain(sceneInput)
+    expect(embedTextsWithOllama.mock.calls[0]?.[0]).not.toContain(chapterSummaryInput)
     expect(embedTextsWithOllama.mock.calls[1]?.[0]).toEqual([sceneInput])
 
     const repairedSceneRow = database.prepare(
@@ -649,7 +689,7 @@ describe('retrieval-index cache reuse helpers', () => {
       vectorJson: string
       vectorDimension: number
     }>
-    expect(emptyCacheRows).toHaveLength(emptyRawTextDocs.length)
+    expect(emptyCacheRows).toHaveLength(emptyHarness.retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length)
     expect(emptyCacheRows.every((row) => row.vectorDimension === 3)).toBe(true)
 
     const degradedHarness = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-partial-cache')
@@ -1042,13 +1082,14 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('preserves the existing full retrieval table when a replacement rebuild fails during embedding', async () => {
-    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-full-rebuild-failure-preserves-table')
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-full-rebuild-failure-preserves-table')
 
     await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
 
     const originalTable = getActiveMockTable(database, mockLanceDb)
     expect(originalTable).toBeTruthy()
 
+    aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v2'
     embedTextsWithOllama.mockClear()
     mockLanceDb.database.createTable.mockClear()
     mockLanceDb.database.dropTable.mockClear()
@@ -1093,7 +1134,7 @@ describe('retrieval-index cache reuse helpers', () => {
     ).toEqual(mergedDocs.map((row) => row.id))
     expect(getActiveMockTable(database, mockLanceDb)?.rows).toHaveLength(mergedDocs.length)
     expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
-      count: rawTextDocs.length,
+      count: mergedDocs.length,
     })
   })
 
@@ -1312,8 +1353,8 @@ describe('retrieval-index cache reuse helpers', () => {
     await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
   }, 120000)
 
-  it('keeps the previous table active when index creation fails', async () => {
-    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-index-failure-preserves-active-table')
+  it('preserves a pending replacement table when full index creation fails and resumes it on the next rebuild', async () => {
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-index-failure-preserves-active-table')
 
     database.prepare(
       `INSERT INTO KnowledgeChapter (
@@ -1334,18 +1375,23 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(originalTable).toBeTruthy()
 
     aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v2'
+    embedTextsWithOllama.mockClear()
     mockLanceDb.database.createTable.mockClear()
     mockLanceDb.database.dropTable.mockClear()
     originalTable?.delete.mockClear()
     originalTable?.add.mockClear()
+    let textIndexAttempts = 0
 
     mockLanceDb.database.createTable.mockImplementationOnce(async (name: string, rows: Array<Record<string, unknown>>) => {
       const table = {
         rows: [...rows],
         add: vi.fn(async () => undefined),
         delete: vi.fn(async () => undefined),
-        createIndex: vi.fn(async () => {
-          throw new Error('Lance index failed')
+        createIndex: vi.fn(async (column: string) => {
+          if (column === 'text' && textIndexAttempts === 0) {
+            textIndexAttempts += 1
+            throw new Error('Lance index failed')
+          }
         }),
         waitForIndex: vi.fn(async () => undefined),
         query: () => ({
@@ -1358,18 +1404,235 @@ describe('retrieval-index cache reuse helpers', () => {
       return table
     })
 
-    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
-      chapterRange: { startChapter: 2, endChapter: 2 },
-    })).rejects.toThrow('Failed to create LanceDB FTS index: Lance index failed')
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).rejects.toThrow('Failed to create LanceDB FTS index: Lance index failed')
 
     expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
-    expect(mockLanceDb.database.dropTable).toHaveBeenCalledTimes(1)
-    expect(Array.from(mockLanceDb.tables.values())).toHaveLength(1)
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.dropTable).not.toHaveBeenCalled()
+    expect(Array.from(mockLanceDb.tables.values())).toHaveLength(2)
     expect(getActiveMockTableName(database)).toBe(originalTableName)
     expect(getActiveMockTable(database, mockLanceDb)).toBe(originalTable)
     expect(originalTable?.delete).not.toHaveBeenCalled()
     expect(originalTable?.add).not.toHaveBeenCalled()
+    const pendingRows = getPendingRetrievalIndexRows(database)
+    expect(pendingRows).toEqual([
+      expect.objectContaining({
+        scopeKey: 'full',
+        phase: 'building_text_index',
+        rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+        textIndexCompleted: 0,
+        vectorIndexCompleted: 0,
+        rebuildFingerprint: expect.any(String),
+      }),
+    ])
     await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+
+    const pendingTableName = pendingRows[0]!.tableName
+    const pendingTable = mockLanceDb.tables.get(pendingTableName)
+    expect(pendingTable).toBeTruthy()
+
+    embedTextsWithOllama.mockClear()
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+
+    expect(embedTextsWithOllama).not.toHaveBeenCalled()
+    expect(mockLanceDb.database.createTable).not.toHaveBeenCalled()
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledWith(originalTableName)
+    expect(getPendingRetrievalIndexRows(database)).toEqual([])
+    expect(getActiveMockTableName(database)).toBe(pendingTableName)
+    expect(getActiveMockTable(database, mockLanceDb)).toBe(pendingTable)
+  }, 120000)
+
+  it('discards a stale pending table when the embedding model changes after an index failure', async () => {
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-stale-pending-model-change')
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    const originalTable = getActiveMockTable(database, mockLanceDb)
+    const originalTableName = getActiveMockTableName(database)
+    expect(originalTable).toBeTruthy()
+
+    aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v2'
+    embedTextsWithOllama.mockClear()
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+    let textIndexAttempts = 0
+
+    mockLanceDb.database.createTable.mockImplementationOnce(async (name: string, rows: Array<Record<string, unknown>>) => {
+      const table = {
+        rows: [...rows],
+        add: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+        createIndex: vi.fn(async (column: string) => {
+          if (column === 'text' && textIndexAttempts === 0) {
+            textIndexAttempts += 1
+            throw new Error('Lance index failed')
+          }
+        }),
+        waitForIndex: vi.fn(async () => undefined),
+        query: () => ({
+          limit: () => ({
+            toArray: async () => table.rows.slice(0, 1),
+          }),
+        }),
+      }
+      mockLanceDb.tables.set(name, table)
+      return table
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).rejects.toThrow('Failed to create LanceDB FTS index: Lance index failed')
+
+    const pendingTableName = getPendingRetrievalIndexRows(database)[0]?.tableName
+    expect(pendingTableName).toBeTruthy()
+
+    aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v3'
+    embedTextsWithOllama.mockClear()
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledTimes(2)
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledWith(pendingTableName)
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledWith(originalTableName)
+    expect(getPendingRetrievalIndexRows(database)).toEqual([])
+    expect(getActiveMockTable(database, mockLanceDb)).not.toBe(originalTable)
+  }, 120000)
+
+  it('discards a stale pending table when source docs change after an index failure', async () => {
+    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-stale-pending-doc-change')
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    const originalTable = getActiveMockTable(database, mockLanceDb)
+    const originalTableName = getActiveMockTableName(database)
+    expect(originalTable).toBeTruthy()
+
+    embedTextsWithOllama.mockClear()
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+    let textIndexAttempts = 0
+
+    mockLanceDb.database.createTable.mockImplementationOnce(async (name: string, rows: Array<Record<string, unknown>>) => {
+      const table = {
+        rows: [...rows],
+        add: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+        createIndex: vi.fn(async (column: string) => {
+          if (column === 'text' && textIndexAttempts === 0) {
+            textIndexAttempts += 1
+            throw new Error('Lance index failed')
+          }
+        }),
+        waitForIndex: vi.fn(async () => undefined),
+        query: () => ({
+          limit: () => ({
+            toArray: async () => table.rows.slice(0, 1),
+          }),
+        }),
+      }
+      mockLanceDb.tables.set(name, table)
+      return table
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).rejects.toThrow('Failed to create LanceDB FTS index: Lance index failed')
+
+    const pendingTableName = getPendingRetrievalIndexRows(database)[0]?.tableName
+    expect(pendingTableName).toBeTruthy()
+
+    database.prepare('UPDATE KnowledgeChapter SET summary = ? WHERE id = ?').run('第1章摘要已变化', 'chapter-1')
+    embedTextsWithOllama.mockClear()
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledTimes(2)
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledWith(pendingTableName)
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledWith(originalTableName)
+    expect(getPendingRetrievalIndexRows(database)).toEqual([])
+    expect(getActiveMockTable(database, mockLanceDb)).not.toBe(originalTable)
+  }, 120000)
+
+  it('resumes from building_vector_index without recreating the pending table', async () => {
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-resume-vector-stage')
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    const originalTable = getActiveMockTable(database, mockLanceDb)
+    const originalTableName = getActiveMockTableName(database)
+    expect(originalTable).toBeTruthy()
+
+    aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v2'
+    embedTextsWithOllama.mockClear()
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+    let vectorIndexAttempts = 0
+
+    mockLanceDb.database.createTable.mockImplementationOnce(async (name: string, rows: Array<Record<string, unknown>>) => {
+      const table = {
+        rows: [...rows],
+        add: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+        createIndex: vi.fn(async (column: string) => {
+          if (column === 'vector' && vectorIndexAttempts === 0) {
+            vectorIndexAttempts += 1
+            throw new Error('Vector index failed')
+          }
+        }),
+        waitForIndex: vi.fn(async () => undefined),
+        query: () => ({
+          limit: () => ({
+            toArray: async () => table.rows.slice(0, 1),
+          }),
+        }),
+      }
+      mockLanceDb.tables.set(name, table)
+      return table
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).rejects.toThrow('Failed to create LanceDB vector index: Vector index failed')
+
+    const pendingRows = getPendingRetrievalIndexRows(database)
+    expect(pendingRows).toEqual([
+      expect.objectContaining({
+        scopeKey: 'full',
+        phase: 'building_vector_index',
+        rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+        textIndexCompleted: 1,
+        vectorIndexCompleted: 0,
+        rebuildFingerprint: expect.any(String),
+      }),
+    ])
+    const pendingTableName = pendingRows[0]?.tableName
+    const pendingTable = pendingTableName ? mockLanceDb.tables.get(pendingTableName) : null
+    expect(pendingTable).toBeTruthy()
+
+    embedTextsWithOllama.mockClear()
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+
+    expect(embedTextsWithOllama).not.toHaveBeenCalled()
+    expect(mockLanceDb.database.createTable).not.toHaveBeenCalled()
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledWith(originalTableName)
+    expect(getPendingRetrievalIndexRows(database)).toEqual([])
+    expect(getActiveMockTableName(database)).toBe(pendingTableName)
+    expect(getActiveMockTable(database, mockLanceDb)).toBe(pendingTable)
   }, 120000)
 
 

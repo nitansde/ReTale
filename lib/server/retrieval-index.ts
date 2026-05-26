@@ -128,6 +128,16 @@ type ActiveRetrievalIndexRow = {
   scopeEndChapter: number | null
 }
 
+type PendingRetrievalIndexRow = {
+  scopeKey: string
+  tableName: string
+  phase: Exclude<RetrievalIndexBuildPhase, 'loading' | 'embedding' | 'completed'>
+  rowCount: number
+  textIndexCompleted: number
+  vectorIndexCompleted: number
+  rebuildFingerprint: string | null
+}
+
 type LanceDatabase = Awaited<ReturnType<typeof getDatabase>>
 
 export type RetrievalIndexBuildPhase = 'loading' | 'embedding' | 'creating_table' | 'building_text_index' | 'building_vector_index' | 'completed'
@@ -173,6 +183,14 @@ const DEFAULT_EMBEDDING_BATCH_SIZE = 16
 const RETRIEVAL_EMBEDDING_RETRY_DELAYS_MS = [500, 1500] as const
 const OLLAMA_RETRIEVAL_EMBEDDING_MAX_BATCH_CHARS = 6000
 const LANCEDB_INDEX_LOG_PREFIX = '[LanceDB Index]'
+const LANCEDB_INDEX_WAIT_TIMEOUT_SECONDS = 3600
+const LANCEDB_VECTOR_INDEX_NPROBES = 32
+const LANCEDB_VECTOR_INDEX_CONFIG = lancedb.Index.ivfFlat({
+  distanceType: 'l2',
+  numPartitions: 128,
+  maxIterations: 20,
+  sampleRate: 64,
+})
 const LANCE_INDEX_UNAVAILABLE_WARNING = 'Lance retrieval index is missing or stale for this branch; rebuild knowledge to refresh retrieval evidence.'
 const PACKABLE_TEXT_SPAN_TYPES = new Set(['paragraph', 'evidence', 'summary'])
 const MAX_PACKED_TEXT_SPAN_TOKENS = 320
@@ -286,6 +304,14 @@ function getRetrievalIndexScope(chapterRange?: KnowledgeRebuildChapterRange) {
   }
 
   const { startChapter, endChapter } = normalizeKnowledgeRebuildChapterRange(chapterRange)
+  if (startChapter === 1 && endChapter === undefined) {
+    return {
+      scopeKey: FULL_RETRIEVAL_INDEX_SCOPE_KEY,
+      scopeStartChapter: null,
+      scopeEndChapter: null,
+    }
+  }
+
   return {
     scopeKey: `chapter-range:${startChapter}:${endChapter ?? 'open'}`,
     scopeStartChapter: startChapter,
@@ -342,6 +368,63 @@ function clearActiveBranchTableName(branchId: string, scopeKey?: string) {
   }
 
   execute('DELETE FROM ActiveRetrievalIndex WHERE branchId = ?', branchId)
+}
+
+function getPendingBranchTableRow(branchId: string, scopeKey = FULL_RETRIEVAL_INDEX_SCOPE_KEY) {
+  return queryOne<PendingRetrievalIndexRow>(
+    `
+      SELECT scopeKey, tableName, phase, rowCount, textIndexCompleted, vectorIndexCompleted, rebuildFingerprint
+      FROM PendingRetrievalIndex
+      WHERE branchId = ? AND scopeKey = ?
+    `,
+    branchId,
+    scopeKey,
+  ) ?? null
+}
+
+function setPendingBranchTableRow(params: {
+  branchId: string
+  scopeKey: string
+  tableName: string
+  phase: PendingRetrievalIndexRow['phase']
+  rowCount: number
+  textIndexCompleted: boolean
+  vectorIndexCompleted: boolean
+  rebuildFingerprint: string
+}) {
+  execute(
+    `
+      INSERT INTO PendingRetrievalIndex (
+        branchId, scopeKey, tableName, phase, rowCount, textIndexCompleted, vectorIndexCompleted, rebuildFingerprint, updatedAt
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(branchId, scopeKey) DO UPDATE SET
+        tableName = excluded.tableName,
+        phase = excluded.phase,
+        rowCount = excluded.rowCount,
+        textIndexCompleted = excluded.textIndexCompleted,
+        vectorIndexCompleted = excluded.vectorIndexCompleted,
+        rebuildFingerprint = excluded.rebuildFingerprint,
+        updatedAt = CURRENT_TIMESTAMP
+    `,
+    params.branchId,
+    params.scopeKey,
+    params.tableName,
+    params.phase,
+    params.rowCount,
+    params.textIndexCompleted ? 1 : 0,
+    params.vectorIndexCompleted ? 1 : 0,
+    params.rebuildFingerprint,
+  )
+}
+
+function clearPendingBranchTableRow(branchId: string, scopeKey?: string) {
+  if (scopeKey) {
+    execute('DELETE FROM PendingRetrievalIndex WHERE branchId = ? AND scopeKey = ?', branchId, scopeKey)
+    return
+  }
+
+  execute('DELETE FROM PendingRetrievalIndex WHERE branchId = ?', branchId)
 }
 
 function branchTableNameBelongsToBranch(branchId: string, tableName: string) {
@@ -974,20 +1057,19 @@ async function buildRetrievalEmbeddingPlan(params: {
     }
   })
 
-  const rawTextRows = plannedRows.filter((item) => item.row.sourceType === 'text_span')
-  if (!rawTextRows.length) {
+  if (!plannedRows.length) {
     return plannedRows
   }
 
   const cacheScope = buildRawTextEmbeddingCacheScope(params.novelId, params.branchId, params.embeddingSettings)
   const cacheHits = await lookupRawTextEmbeddingCacheEntries({
     scope: cacheScope,
-    embeddingInputHashes: rawTextRows.map((item) => item.embeddingInputHash),
+    embeddingInputHashes: plannedRows.map((item) => item.embeddingInputHash),
     touchOnHit: true,
   })
   const cacheHitVectors = new Map(cacheHits.map((entry) => [entry.embeddingInputHash, entry.vector]))
 
-  for (const item of rawTextRows) {
+  for (const item of plannedRows) {
     item.cachedVector = cacheHitVectors.get(item.embeddingInputHash) ?? null
   }
 
@@ -1069,6 +1151,173 @@ async function openBranchTable(branchId: string) {
   return database.openTable(tableName)
 }
 
+async function pendingBranchTableIsValid(database: LanceDatabase, branchId: string, tableName: string) {
+  if (!branchTableNameBelongsToBranch(branchId, tableName)) {
+    return false
+  }
+
+  const tableNames = await database.tableNames()
+  return tableNames.includes(tableName)
+}
+
+async function invalidatePendingBranchTable(params: {
+  database: LanceDatabase
+  branchId: string
+  scopeKey: string
+  tableName: string
+}) {
+  clearPendingBranchTableRow(params.branchId, params.scopeKey)
+  await dropInactiveBranchTable(params.database, params.branchId, params.tableName)
+}
+
+function buildPendingRebuildFingerprint(params: {
+  scope: ReturnType<typeof getRetrievalIndexScope>
+  embeddingSettings: EmbeddingsScenarioSettings
+  plannedRows: RetrievalDocEmbeddingPlanRow[]
+}) {
+  return hashValue(JSON.stringify({
+    scopeKey: params.scope.scopeKey,
+    scopeStartChapter: params.scope.scopeStartChapter,
+    scopeEndChapter: params.scope.scopeEndChapter,
+    embeddingProvider: params.embeddingSettings.provider,
+    embeddingModel: getEmbeddingModel(params.embeddingSettings),
+    plannedRows: params.plannedRows.map((item) => ({
+      id: item.row.id,
+      sourceType: item.row.sourceType,
+      sourceId: item.row.sourceId,
+      chapterNo: item.row.chapterNo,
+      validFromChapter: item.row.validFromChapter,
+      validUntilChapter: item.row.validUntilChapter,
+      contentHash: item.row.contentHash,
+      embeddingInputHash: item.embeddingInputHash,
+    })),
+  }))
+}
+
+async function resumePendingBranchTable(params: {
+  database: LanceDatabase
+  branchId: string
+  scope: ReturnType<typeof getRetrievalIndexScope>
+  pendingRow: PendingRetrievalIndexRow
+  rebuildFingerprint: string
+  totalBatches: number
+  onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
+}) {
+  const { database, branchId, scope, pendingRow, rebuildFingerprint, totalBatches, onProgress } = params
+  if (!pendingRow.rebuildFingerprint || pendingRow.rebuildFingerprint !== rebuildFingerprint) {
+    await invalidatePendingBranchTable({
+      database,
+      branchId,
+      scopeKey: scope.scopeKey,
+      tableName: pendingRow.tableName,
+    })
+    return false
+  }
+
+  const isValid = await pendingBranchTableIsValid(database, branchId, pendingRow.tableName)
+  if (!isValid) {
+    await invalidatePendingBranchTable({
+      database,
+      branchId,
+      scopeKey: scope.scopeKey,
+      tableName: pendingRow.tableName,
+    })
+    return false
+  }
+
+  const table = await database.openTable(pendingRow.tableName)
+  if (!table) {
+    await invalidatePendingBranchTable({
+      database,
+      branchId,
+      scopeKey: scope.scopeKey,
+      tableName: pendingRow.tableName,
+    })
+    return false
+  }
+
+  if (!(await hasUsableVectorColumn(table))) {
+    await invalidatePendingBranchTable({
+      database,
+      branchId,
+      scopeKey: scope.scopeKey,
+      tableName: pendingRow.tableName,
+    })
+    return false
+  }
+
+  const totalRows = pendingRow.rowCount
+  const completedBatches = totalRows > 0 ? 1 : 0
+
+  if (!pendingRow.textIndexCompleted) {
+    await onProgress?.({
+      phase: 'building_text_index',
+      totalRows,
+      embeddedRows: totalRows,
+      totalBatches,
+      completedBatches,
+    })
+    const textIndexError = await ensureTextIndex(table)
+    if (textIndexError) {
+      setPendingBranchTableRow({
+        branchId,
+        scopeKey: scope.scopeKey,
+        tableName: pendingRow.tableName,
+        phase: 'building_text_index',
+        rowCount: totalRows,
+        textIndexCompleted: false,
+        vectorIndexCompleted: false,
+        rebuildFingerprint,
+      })
+      throw new Error(`Failed to create LanceDB FTS index: ${textIndexError}`)
+    }
+
+    setPendingBranchTableRow({
+      branchId,
+      scopeKey: scope.scopeKey,
+      tableName: pendingRow.tableName,
+      phase: 'building_vector_index',
+      rowCount: totalRows,
+      textIndexCompleted: true,
+      vectorIndexCompleted: false,
+      rebuildFingerprint,
+    })
+  }
+
+  if (!pendingRow.vectorIndexCompleted) {
+    await onProgress?.({
+      phase: 'building_vector_index',
+      totalRows,
+      embeddedRows: totalRows,
+      totalBatches,
+      completedBatches,
+    })
+    const vectorIndexError = await ensureVectorIndex(table)
+    if (vectorIndexError) {
+      setPendingBranchTableRow({
+        branchId,
+        scopeKey: scope.scopeKey,
+        tableName: pendingRow.tableName,
+        phase: 'building_vector_index',
+        rowCount: totalRows,
+        textIndexCompleted: true,
+        vectorIndexCompleted: false,
+        rebuildFingerprint,
+      })
+      throw new Error(`Failed to create LanceDB vector index: ${vectorIndexError}`)
+    }
+  }
+
+  const previousActiveTableName = getActiveBranchTableName(branchId, scope.scopeKey)
+  setActiveBranchTableName(branchId, pendingRow.tableName, scope)
+  clearPendingBranchTableRow(branchId, scope.scopeKey)
+  if (previousActiveTableName && previousActiveTableName !== pendingRow.tableName) {
+    await dropInactiveBranchTable(database, branchId, previousActiveTableName)
+  }
+
+  return true
+}
+
 export async function hasBranchRetrievalIndex(branchId: string) {
   return hasBranchTable(branchId)
 }
@@ -1077,9 +1326,9 @@ async function ensureTextIndex(table: Awaited<ReturnType<typeof openBranchTable>
   try {
     await table.createIndex('text', {
       config: lancedb.Index.fts(),
-      waitTimeoutSeconds: 3600,
+      waitTimeoutSeconds: LANCEDB_INDEX_WAIT_TIMEOUT_SECONDS,
     })
-    await table.waitForIndex(['text_idx'], 3600)
+    await table.waitForIndex(['text_idx'], LANCEDB_INDEX_WAIT_TIMEOUT_SECONDS)
     return null
   } catch (error) {
     return error instanceof Error ? error.message : 'unknown LanceDB FTS index error'
@@ -1088,8 +1337,11 @@ async function ensureTextIndex(table: Awaited<ReturnType<typeof openBranchTable>
 
 async function ensureVectorIndex(table: Awaited<ReturnType<typeof openBranchTable>> extends infer T ? Exclude<T, null> : never) {
   try {
-    await table.createIndex('vector', { waitTimeoutSeconds: 3600 })
-    await table.waitForIndex(['vector_idx'], 3600)
+    await table.createIndex('vector', {
+      config: LANCEDB_VECTOR_INDEX_CONFIG,
+      waitTimeoutSeconds: LANCEDB_INDEX_WAIT_TIMEOUT_SECONDS,
+    })
+    await table.waitForIndex(['vector_idx'], LANCEDB_INDEX_WAIT_TIMEOUT_SECONDS)
     return null
   } catch (error) {
     return error instanceof Error ? error.message : 'unknown LanceDB vector index error'
@@ -1153,6 +1405,7 @@ async function writeBranchTableRows(params: {
   novelId: string
   scope: ReturnType<typeof getRetrievalIndexScope>
   embeddingSettings: EmbeddingsScenarioSettings
+  rebuildFingerprint: string
   embeddingBatchSize: number
   onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
 }) {
@@ -1162,13 +1415,14 @@ async function writeBranchTableRows(params: {
     novelId,
     scope,
     embeddingSettings,
+    rebuildFingerprint,
     embeddingBatchSize,
     onProgress,
   } = params
 
   const database = await getDatabase()
-  const rawTextCacheScope = buildRawTextEmbeddingCacheScope(novelId, branchId, embeddingSettings)
-  const liveRows = rows.filter((item) => item.row.sourceType !== 'text_span' || !item.cachedVector)
+  const retrievalEmbeddingCacheScope = buildRawTextEmbeddingCacheScope(novelId, branchId, embeddingSettings)
+  const liveRows = rows.filter((item) => !item.cachedVector)
   const liveBatches = buildRetrievalEmbeddingBatches(liveRows, embeddingSettings, embeddingBatchSize)
   let totalBatches = Math.max(Math.ceil(rows.length / embeddingBatchSize), liveBatches.length)
   const embeddingProvider = embeddingSettings.provider
@@ -1180,7 +1434,7 @@ async function writeBranchTableRows(params: {
   let embeddedRowsCount = 0
   let expectedVectorDimension: number | null = null
   const resolvedRows = Array<RetrievalDocRow | null>(rows.length).fill(null)
-  const deferredRawTextRows: RetrievalDocEmbeddingPlanRow[] = []
+  const deferredCachedRows: RetrievalDocEmbeddingPlanRow[] = []
 
   const assignResolvedRow = (plannedRow: RetrievalDocEmbeddingPlanRow, vector: number[]) => {
     if (!vector.length) {
@@ -1224,13 +1478,13 @@ async function writeBranchTableRows(params: {
       assignResolvedRow(batch[batchIndex], embeddedRow.vector)
     }
 
-    const rawTextBatch = batch
+    const cacheableBatch = batch
       .map((item, itemIndex) => ({ item, vector: embeddedBatch[itemIndex]?.vector }))
-      .filter((entry): entry is { item: RetrievalDocEmbeddingPlanRow; vector: number[] } => entry.item.row.sourceType === 'text_span' && Array.isArray(entry.vector))
-    if (rawTextBatch.length) {
+      .filter((entry): entry is { item: RetrievalDocEmbeddingPlanRow; vector: number[] } => Array.isArray(entry.vector))
+    if (cacheableBatch.length) {
       await upsertRawTextEmbeddingCacheEntries({
-        scope: rawTextCacheScope,
-        entries: rawTextBatch.map(({ item, vector }) => ({
+        scope: retrievalEmbeddingCacheScope,
+        entries: cacheableBatch.map(({ item, vector }) => ({
           embeddingInput: item.embeddingInput,
           vector,
         })),
@@ -1256,12 +1510,12 @@ async function writeBranchTableRows(params: {
   }
 
   for (const item of rows) {
-    if (item.row.sourceType !== 'text_span' || !item.cachedVector) {
+    if (!item.cachedVector) {
       continue
     }
 
     if (expectedVectorDimension !== null && item.cachedVector.length !== expectedVectorDimension) {
-      deferredRawTextRows.push({
+      deferredCachedRows.push({
         ...item,
         cachedVector: null,
       })
@@ -1271,13 +1525,13 @@ async function writeBranchTableRows(params: {
     assignResolvedRow(item, item.cachedVector)
   }
 
-  if (deferredRawTextRows.length) {
+  if (deferredCachedRows.length) {
     await deleteRawTextEmbeddingCacheEntries({
-      scope: rawTextCacheScope,
-      embeddingInputHashes: deferredRawTextRows.map((item) => item.embeddingInputHash),
+      scope: retrievalEmbeddingCacheScope,
+      embeddingInputHashes: deferredCachedRows.map((item) => item.embeddingInputHash),
     })
 
-    const deferredBatches = buildRetrievalEmbeddingBatches(deferredRawTextRows, embeddingSettings, embeddingBatchSize)
+    const deferredBatches = buildRetrievalEmbeddingBatches(deferredCachedRows, embeddingSettings, embeddingBatchSize)
     totalBatches = Math.max(totalBatches, completedBatches + deferredBatches.length)
 
     for (const batch of deferredBatches) {
@@ -1300,7 +1554,7 @@ async function writeBranchTableRows(params: {
       }
 
       await upsertRawTextEmbeddingCacheEntries({
-        scope: rawTextCacheScope,
+        scope: retrievalEmbeddingCacheScope,
         entries: batch.map((item, itemIndex) => ({
           embeddingInput: item.embeddingInput,
           vector: embeddedBatch[itemIndex].vector,
@@ -1345,6 +1599,16 @@ async function writeBranchTableRows(params: {
   writeElapsedMs = Date.now() - writeStartedAt
   logLanceIndex(`embedding done: elapsed=${formatElapsed(embeddingElapsedMs)}`)
   logLanceIndex(`LanceDB write done: elapsed=${formatElapsed(writeElapsedMs)}`)
+  setPendingBranchTableRow({
+    branchId,
+    scopeKey: scope.scopeKey,
+    tableName,
+    phase: 'building_text_index',
+    rowCount: finalRows.length,
+    textIndexCompleted: false,
+    vectorIndexCompleted: false,
+    rebuildFingerprint,
+  })
 
   try {
     await onProgress?.({
@@ -1367,8 +1631,28 @@ async function writeBranchTableRows(params: {
     const textIndexError = await ensureTextIndex(table)
     logLanceIndex(`create FTS index done: elapsed=${formatElapsed(Date.now() - textIndexStartedAt)}${textIndexError ? `, error=${textIndexError}` : ''}`)
     if (textIndexError) {
+      setPendingBranchTableRow({
+        branchId,
+        scopeKey: scope.scopeKey,
+        tableName,
+        phase: 'building_text_index',
+        rowCount: finalRows.length,
+        textIndexCompleted: false,
+        vectorIndexCompleted: false,
+        rebuildFingerprint,
+      })
       throw new Error(`Failed to create LanceDB FTS index: ${textIndexError}`)
     }
+    setPendingBranchTableRow({
+      branchId,
+      scopeKey: scope.scopeKey,
+      tableName,
+      phase: 'building_vector_index',
+      rowCount: finalRows.length,
+      textIndexCompleted: true,
+      vectorIndexCompleted: false,
+      rebuildFingerprint,
+    })
 
     const vectorIndexStartedAt = Date.now()
     logLanceIndex('create vector index started')
@@ -1382,15 +1666,25 @@ async function writeBranchTableRows(params: {
     const vectorIndexError = await ensureVectorIndex(table)
     logLanceIndex(`create vector index done: elapsed=${formatElapsed(Date.now() - vectorIndexStartedAt)}${vectorIndexError ? `, error=${vectorIndexError}` : ''}`)
     if (vectorIndexError) {
+      setPendingBranchTableRow({
+        branchId,
+        scopeKey: scope.scopeKey,
+        tableName,
+        phase: 'building_vector_index',
+        rowCount: finalRows.length,
+        textIndexCompleted: true,
+        vectorIndexCompleted: false,
+        rebuildFingerprint,
+      })
       throw new Error(`Failed to create LanceDB vector index: ${vectorIndexError}`)
     }
 
     setActiveBranchTableName(branchId, tableName, scope)
+    clearPendingBranchTableRow(branchId, scope.scopeKey)
     if (previousActiveTableName && previousActiveTableName !== tableName) {
       await dropInactiveBranchTable(database, branchId, previousActiveTableName)
     }
   } catch (error) {
-    await dropInactiveBranchTable(database, branchId, tableName)
     throw error
   }
   return table
@@ -1402,6 +1696,7 @@ async function createOrReplaceBranchTable(
   novelId: string,
   scope: ReturnType<typeof getRetrievalIndexScope>,
   embeddingSettings: EmbeddingsScenarioSettings,
+  rebuildFingerprint: string,
   embeddingBatchSize: number,
   onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
 ) {
@@ -1411,6 +1706,7 @@ async function createOrReplaceBranchTable(
     novelId,
     scope,
     embeddingSettings,
+    rebuildFingerprint,
     embeddingBatchSize,
     onProgress,
   })
@@ -2002,10 +2298,11 @@ function loadRetrievalDocsForRebuild(params: {
   branchId: string
   chapterRange?: KnowledgeRebuildChapterRange
 }) {
-  return params.chapterRange
+  const scope = getRetrievalIndexScope(params.chapterRange)
+  return scope.scopeKey !== FULL_RETRIEVAL_INDEX_SCOPE_KEY
     ? mergeRetrievalDocGroups(
         loadRawTextRetrievalDocs(params.novelId, params.branchId, params.chapterRange),
-        loadScopedKnowledgeDerivedRetrievalDocs(params.novelId, params.branchId, params.chapterRange),
+        loadScopedKnowledgeDerivedRetrievalDocs(params.novelId, params.branchId, params.chapterRange!),
       )
     : loadBranchRetrievalDocs(params.novelId, params.branchId)
 }
@@ -2305,6 +2602,7 @@ async function rebuildBranchRetrievalIndexUnlocked(
 ): Promise<RetrievalIndexBuildResult> {
   const scope = getRetrievalIndexScope(options?.chapterRange)
   const totalStartedAt = Date.now()
+  const database = await getDatabase()
   await options?.onProgress?.({
     phase: 'loading',
     totalRows: 0,
@@ -2330,10 +2628,41 @@ async function rebuildBranchRetrievalIndexUnlocked(
     embeddingSettings,
   })
   const totalBatches = Math.ceil(rows.length / embeddingBatchSize)
+  const rebuildFingerprint = buildPendingRebuildFingerprint({
+    scope,
+    embeddingSettings,
+    plannedRows,
+  })
+  const pendingRow = getPendingBranchTableRow(branchId, scope.scopeKey)
+  if (pendingRow) {
+    const resumed = await resumePendingBranchTable({
+      database,
+      branchId,
+      scope,
+      pendingRow,
+      rebuildFingerprint,
+      totalBatches,
+      onProgress: options?.onProgress,
+    })
+    if (resumed) {
+      await options?.onProgress?.({
+        phase: 'completed',
+        totalRows: pendingRow.rowCount,
+        embeddedRows: pendingRow.rowCount,
+        totalBatches,
+        completedBatches: totalBatches,
+      })
+      logLanceIndex(`rebuild done from pending table: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
+      return {
+        rowCount: pendingRow.rowCount,
+        embeddingBatchCount: totalBatches,
+      }
+    }
+  }
   await options?.onProgress?.({
     phase: rows.length ? 'embedding' : 'completed',
     totalRows: rows.length,
-    embeddedRows: plannedRows.filter((item) => item.row.sourceType === 'text_span' && item.cachedVector).length,
+      embeddedRows: plannedRows.filter((item) => item.cachedVector).length,
     totalBatches,
     completedBatches: 0,
   })
@@ -2351,7 +2680,7 @@ async function rebuildBranchRetrievalIndexUnlocked(
     }
   }
 
-  await createOrReplaceBranchTable(branchId, plannedRows, novelId, scope, embeddingSettings, embeddingBatchSize, options?.onProgress)
+  await createOrReplaceBranchTable(branchId, plannedRows, novelId, scope, embeddingSettings, rebuildFingerprint, embeddingBatchSize, options?.onProgress)
   await options?.onProgress?.({
     phase: 'completed',
     totalRows: rows.length,
@@ -2376,6 +2705,7 @@ async function deleteBranchRetrievalIndexScopeUnlocked(branchId: string, scopeKe
       await database.dropTable(activeTableName)
     }
   } finally {
+    clearPendingBranchTableRow(branchId, scopeKey)
     clearActiveBranchTableName(branchId, scopeKey)
   }
 }
@@ -2387,6 +2717,7 @@ async function deleteBranchRetrievalIndexUnlocked(branchId: string) {
   try {
     await Promise.all(branchTableNames.map((tableName) => database.dropTable(tableName)))
   } finally {
+    clearPendingBranchTableRow(branchId)
     clearActiveBranchTableName(branchId)
   }
 }
@@ -2454,6 +2785,7 @@ export async function searchLanceEvidence(params: {
         .query()
         .where(predicate)
         .nearestTo(queryVector)
+        .nprobes(LANCEDB_VECTOR_INDEX_NPROBES)
         .column('vector')
         .withRowId()
         .limit(searchLimit)
