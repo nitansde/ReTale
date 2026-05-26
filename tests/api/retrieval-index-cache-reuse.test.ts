@@ -252,6 +252,7 @@ async function createRetrievalIndexHarness(testName: string) {
 
   const aiSettings = createMockAISettings()
   const mockLanceDb = createMockLanceDb()
+  const ivfFlat = vi.fn((config: Record<string, unknown>) => ({ kind: 'ivfFlat', config, callIndex: ivfFlat.mock.calls.length }))
   const embedTextsWithOllama = vi.fn(async (input: string | string[]) => {
     const values = Array.isArray(input) ? input : [input]
     return {
@@ -276,7 +277,7 @@ async function createRetrievalIndexHarness(testName: string) {
     connect: mockLanceDb.connect,
     Index: {
       fts: () => ({}),
-      ivfFlat: () => ({}),
+      ivfFlat,
     },
   }))
 
@@ -287,6 +288,7 @@ async function createRetrievalIndexHarness(testName: string) {
     aiSettings,
     database,
     embedTextsWithOllama,
+    ivfFlat,
     mockLanceDb,
     retrievalIndex,
     retrievalCache,
@@ -1566,7 +1568,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('resumes from building_vector_index without recreating the pending table', async () => {
-    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-resume-vector-stage')
+    const { aiSettings, database, embedTextsWithOllama, ivfFlat, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-resume-vector-stage')
 
     await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
     const originalTable = getActiveMockTable(database, mockLanceDb)
@@ -1575,6 +1577,7 @@ describe('retrieval-index cache reuse helpers', () => {
 
     aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v2'
     embedTextsWithOllama.mockClear()
+    ivfFlat.mockClear()
     mockLanceDb.database.createTable.mockClear()
     mockLanceDb.database.dropTable.mockClear()
     let vectorIndexAttempts = 0
@@ -1626,7 +1629,22 @@ describe('retrieval-index cache reuse helpers', () => {
       rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
     })
 
+    const vectorIndexCalls = pendingTable?.createIndex.mock.calls.filter(([column]) => column === 'vector') ?? []
+
     expect(embedTextsWithOllama).not.toHaveBeenCalled()
+    expect(ivfFlat).toHaveBeenCalledTimes(2)
+    expect(ivfFlat.mock.calls).toEqual([
+      [{ distanceType: 'l2', numPartitions: 128, maxIterations: 20, sampleRate: 64 }],
+      [{ distanceType: 'l2', numPartitions: 128, maxIterations: 20, sampleRate: 64 }],
+    ])
+    expect(vectorIndexCalls).toHaveLength(2)
+    expect(vectorIndexCalls[0]?.[1]).toMatchObject({
+      config: ivfFlat.mock.results[0]?.value,
+    })
+    expect(vectorIndexCalls[1]?.[1]).toMatchObject({
+      config: ivfFlat.mock.results[1]?.value,
+    })
+    expect(ivfFlat.mock.results[0]?.value).not.toBe(ivfFlat.mock.results[1]?.value)
     expect(mockLanceDb.database.createTable).not.toHaveBeenCalled()
     expect(mockLanceDb.database.dropTable).toHaveBeenCalledTimes(1)
     expect(mockLanceDb.database.dropTable).toHaveBeenCalledWith(originalTableName)

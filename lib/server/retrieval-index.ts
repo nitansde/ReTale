@@ -185,18 +185,21 @@ const OLLAMA_RETRIEVAL_EMBEDDING_MAX_BATCH_CHARS = 6000
 const LANCEDB_INDEX_LOG_PREFIX = '[LanceDB Index]'
 const LANCEDB_INDEX_WAIT_TIMEOUT_SECONDS = 3600
 const LANCEDB_VECTOR_INDEX_NPROBES = 32
-const LANCEDB_VECTOR_INDEX_CONFIG = lancedb.Index.ivfFlat({
-  distanceType: 'l2',
-  numPartitions: 128,
-  maxIterations: 20,
-  sampleRate: 64,
-})
 const LANCE_INDEX_UNAVAILABLE_WARNING = 'Lance retrieval index is missing or stale for this branch; rebuild knowledge to refresh retrieval evidence.'
 const PACKABLE_TEXT_SPAN_TYPES = new Set(['paragraph', 'evidence', 'summary'])
 const MAX_PACKED_TEXT_SPAN_TOKENS = 320
 const MAX_PACKED_TEXT_SPAN_ITEMS = 8
 const FULL_RETRIEVAL_INDEX_SCOPE_KEY = 'full'
 const branchRetrievalIndexLocks = new Map<string, Promise<void>>()
+
+function createLanceDbVectorIndexConfig() {
+  return lancedb.Index.ivfFlat({
+    distanceType: 'l2',
+    numPartitions: 128,
+    maxIterations: 20,
+    sampleRate: 64,
+  })
+}
 
 const SOURCE_TYPE_PRIORITY: Record<RetrievalDocSourceType, number> = {
   text_span: 1,
@@ -1338,7 +1341,7 @@ async function ensureTextIndex(table: Awaited<ReturnType<typeof openBranchTable>
 async function ensureVectorIndex(table: Awaited<ReturnType<typeof openBranchTable>> extends infer T ? Exclude<T, null> : never) {
   try {
     await table.createIndex('vector', {
-      config: LANCEDB_VECTOR_INDEX_CONFIG,
+      config: createLanceDbVectorIndexConfig(),
       waitTimeoutSeconds: LANCEDB_INDEX_WAIT_TIMEOUT_SECONDS,
     })
     await table.waitForIndex(['vector_idx'], LANCEDB_INDEX_WAIT_TIMEOUT_SECONDS)
