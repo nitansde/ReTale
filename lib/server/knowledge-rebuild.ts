@@ -3332,12 +3332,373 @@ type BatchAliasClaimResult = {
   conflict: boolean
 }
 
+type CanonicalMergeCharacterEntityRow = {
+  id: string
+  canonicalName: string
+  description: string | null
+  firstSeenChapter: number | null
+  lastSeenChapter: number | null
+  importanceTier: CharacterImportanceTier | null
+  status: string | null
+  userConfirmed: number
+  createdAt: string
+}
+
+const CHARACTER_CANONICAL_MERGE_SEPARATOR_REGEX = /[\s·・･•‧∙⋅·]+/gu
+
 export function normalizeCharacterMentionName(name: string) {
   return name.trim()
 }
 
+function buildCharacterCanonicalMergeKey(name: string) {
+  const normalizedName = normalizeCharacterMentionName(name)
+  if (!normalizedName) return ''
+  return normalizedName.normalize('NFKC').replace(CHARACTER_CANONICAL_MERGE_SEPARATOR_REGEX, '')
+}
+
 export function isBlockedCharacterMention(name: string) {
   return BLOCKED_CHARACTER_MENTIONS.has(normalizeCharacterMentionName(name))
+}
+
+function getCharacterEntityStatusRank(status: string | null | undefined) {
+  switch (status?.trim() || '') {
+    case 'user_confirmed':
+      return 100
+    case 'candidate_promoted':
+      return 80
+    case 'known_character_update':
+      return 70
+    case 'ready':
+      return 60
+    case 'ai_generated':
+      return 50
+    case 'conflicted':
+      return 40
+    case 'hanlp_bootstrap':
+      return 10
+    default:
+      return status?.trim() ? 25 : 0
+  }
+}
+
+function chooseStrongerCharacterEntityStatus(existing: string | null | undefined, incoming: string | null | undefined) {
+  const normalizedExisting = existing?.trim() || null
+  const normalizedIncoming = incoming?.trim() || null
+  if (!normalizedExisting) return normalizedIncoming
+  if (!normalizedIncoming) return normalizedExisting
+  return getCharacterEntityStatusRank(normalizedIncoming) > getCharacterEntityStatusRank(normalizedExisting)
+    ? normalizedIncoming
+    : normalizedExisting
+}
+
+function chooseEarlierChapterNumber(existing: number | null | undefined, incoming: number | null | undefined) {
+  if (typeof existing !== 'number') return typeof incoming === 'number' ? incoming : null
+  if (typeof incoming !== 'number') return existing
+  return Math.min(existing, incoming)
+}
+
+function chooseLaterChapterNumber(existing: number | null | undefined, incoming: number | null | undefined) {
+  if (typeof existing !== 'number') return typeof incoming === 'number' ? incoming : null
+  if (typeof incoming !== 'number') return existing
+  return Math.max(existing, incoming)
+}
+
+function compareCanonicalMergeCharacterEntities(left: CanonicalMergeCharacterEntityRow, right: CanonicalMergeCharacterEntityRow) {
+  if (left.userConfirmed !== right.userConfirmed) {
+    return right.userConfirmed - left.userConfirmed
+  }
+
+  const tierDelta = getFormalCharacterImportanceTierRank(right.importanceTier) - getFormalCharacterImportanceTierRank(left.importanceTier)
+  if (tierDelta !== 0) {
+    return tierDelta
+  }
+
+  const leftNameLength = normalizeCharacterMentionName(left.canonicalName).length
+  const rightNameLength = normalizeCharacterMentionName(right.canonicalName).length
+  if (leftNameLength !== rightNameLength) {
+    return leftNameLength - rightNameLength
+  }
+
+  const leftFirstSeen = left.firstSeenChapter ?? Number.POSITIVE_INFINITY
+  const rightFirstSeen = right.firstSeenChapter ?? Number.POSITIVE_INFINITY
+  if (leftFirstSeen !== rightFirstSeen) {
+    return leftFirstSeen - rightFirstSeen
+  }
+
+  if (left.createdAt !== right.createdAt) {
+    return left.createdAt.localeCompare(right.createdAt)
+  }
+
+  return left.id.localeCompare(right.id)
+}
+
+function mergeCanonicalCharacterEntityMetadata(
+  winner: CanonicalMergeCharacterEntityRow,
+  loser: CanonicalMergeCharacterEntityRow,
+): CanonicalMergeCharacterEntityRow {
+  const nextWinner = { ...winner }
+  nextWinner.firstSeenChapter = chooseEarlierChapterNumber(winner.firstSeenChapter, loser.firstSeenChapter)
+  nextWinner.lastSeenChapter = chooseLaterChapterNumber(winner.lastSeenChapter, loser.lastSeenChapter)
+
+  if (!winner.userConfirmed) {
+    nextWinner.description = chooseConciseKnowledgeText(winner.description, loser.description) || null
+    nextWinner.status = chooseStrongerCharacterEntityStatus(winner.status, loser.status)
+    if (isFormalCharacterImportanceTier(loser.importanceTier)) {
+      nextWinner.importanceTier = chooseStrongerFormalCharacterTier(winner.importanceTier, loser.importanceTier)
+    }
+  }
+  return nextWinner
+}
+
+function repointCharacterEventParticipants(params: {
+  loserEntityId: string
+  winnerEntityId: string
+}) {
+  const participants = queryAll<{
+    id: string
+    eventId: string
+    role: string | null
+  }>(
+    'SELECT id, eventId, role FROM EventParticipant WHERE entityId = ?',
+    params.loserEntityId,
+  )
+
+  for (const participant of participants) {
+    const existingWinnerParticipant = queryOne<{ id: string }>(
+      'SELECT id FROM EventParticipant WHERE eventId = ? AND entityId = ? AND role IS ? LIMIT 1',
+      participant.eventId,
+      params.winnerEntityId,
+      participant.role,
+    )
+    if (existingWinnerParticipant?.id) {
+      execute('DELETE FROM EventParticipant WHERE id = ?', participant.id)
+      continue
+    }
+
+    execute(
+      'UPDATE EventParticipant SET entityId = ? WHERE id = ?',
+      params.winnerEntityId,
+      participant.id,
+    )
+  }
+}
+
+function moveCharacterAliasesToWinner(params: {
+  branchId: string
+  loserEntityId: string
+  winnerEntityId: string
+}) {
+  const loserAliases = queryAll<{
+    id: string
+    alias: string
+    evidenceSpanId: string | null
+    evidenceQuote: string | null
+    sourceChapter: number | null
+    confidence: number
+    userConfirmed: number
+  }>(
+    `
+      SELECT id, alias, evidenceSpanId, evidenceQuote, sourceChapter, confidence, userConfirmed
+      FROM EntityAlias
+      WHERE entityId = ?
+      ORDER BY alias ASC, createdAt ASC, id ASC
+    `,
+    params.loserEntityId,
+  )
+
+  for (const loserAlias of loserAliases) {
+    const existingWinnerAlias = queryOne<{
+      id: string
+      sourceChapter: number | null
+      confidence: number
+      userConfirmed: number
+      evidenceSpanId: string | null
+      evidenceQuote: string | null
+    }>(
+      `
+        SELECT id, sourceChapter, confidence, userConfirmed, evidenceSpanId, evidenceQuote
+        FROM EntityAlias
+        WHERE entityId = ? AND alias = ?
+        LIMIT 1
+      `,
+      params.winnerEntityId,
+      loserAlias.alias,
+    )
+
+    if (existingWinnerAlias?.id) {
+      const mergedSourceChapter = chooseEarlierChapterNumber(existingWinnerAlias.sourceChapter, loserAlias.sourceChapter)
+      execute(
+        `
+          UPDATE EntityAlias
+          SET sourceChapter = ?,
+              confidence = ?,
+              userConfirmed = ?,
+              evidenceSpanId = COALESCE(evidenceSpanId, ?),
+              evidenceQuote = COALESCE(evidenceQuote, ?),
+              updatedAt = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `,
+        mergedSourceChapter,
+        Math.max(existingWinnerAlias.confidence, loserAlias.confidence),
+        Math.max(existingWinnerAlias.userConfirmed, loserAlias.userConfirmed),
+        loserAlias.evidenceSpanId,
+        loserAlias.evidenceQuote,
+        existingWinnerAlias.id,
+      )
+      execute(
+        `
+          UPDATE EntityAliasMapping
+          SET entityId = ?,
+              sourceAliasId = ?,
+              sourceChapter = MIN(COALESCE(sourceChapter, ?), ?),
+              updatedAt = CURRENT_TIMESTAMP
+          WHERE branchId = ? AND entityId = ? AND alias = ?
+        `,
+        params.winnerEntityId,
+        existingWinnerAlias.id,
+        loserAlias.sourceChapter,
+        loserAlias.sourceChapter,
+        params.branchId,
+        params.loserEntityId,
+        loserAlias.alias,
+      )
+      execute('DELETE FROM EntityAlias WHERE id = ?', loserAlias.id)
+      continue
+    }
+
+    execute(
+      'UPDATE EntityAlias SET entityId = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+      params.winnerEntityId,
+      loserAlias.id,
+    )
+    execute(
+      `
+        UPDATE EntityAliasMapping
+        SET entityId = ?,
+            sourceAliasId = ?,
+            sourceChapter = MIN(COALESCE(sourceChapter, ?), ?),
+            updatedAt = CURRENT_TIMESTAMP
+        WHERE branchId = ? AND entityId = ? AND alias = ?
+      `,
+      params.winnerEntityId,
+      loserAlias.id,
+      loserAlias.sourceChapter,
+      loserAlias.sourceChapter,
+      params.branchId,
+      params.loserEntityId,
+      loserAlias.alias,
+    )
+  }
+
+  const remainingMappings = queryAll<{
+    id: string
+    alias: string
+    sourceChapter: number | null
+  }>(
+    'SELECT id, alias, sourceChapter FROM EntityAliasMapping WHERE branchId = ? AND entityId = ?',
+    params.branchId,
+    params.loserEntityId,
+  )
+  for (const mapping of remainingMappings) {
+    const winnerAlias = queryOne<{ id: string }>(
+      'SELECT id FROM EntityAlias WHERE entityId = ? AND alias = ? LIMIT 1',
+      params.winnerEntityId,
+      mapping.alias,
+    )
+    execute(
+      `
+        UPDATE EntityAliasMapping
+        SET entityId = ?,
+            sourceAliasId = COALESCE(?, sourceAliasId),
+            updatedAt = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `,
+      params.winnerEntityId,
+      winnerAlias?.id ?? null,
+      mapping.id,
+    )
+  }
+}
+
+function mergeDuplicateCharacterEntitiesForBranch(params: {
+  novelId: string
+  branchId: string
+}) {
+  const rows = queryAll<CanonicalMergeCharacterEntityRow>(
+    `
+      SELECT id, canonicalName, description, firstSeenChapter, lastSeenChapter, importanceTier, status, userConfirmed, createdAt
+      FROM KnowledgeEntity
+      WHERE novelId = ?
+        AND branchId = ?
+        AND entityType = 'character'
+        AND importanceTier IN ('protagonist', 'important', 'arc')
+      ORDER BY createdAt ASC, id ASC
+    `,
+    params.novelId,
+    params.branchId,
+  )
+
+  const groups = new Map<string, CanonicalMergeCharacterEntityRow[]>()
+  for (const row of rows) {
+    const mergeKey = buildCharacterCanonicalMergeKey(row.canonicalName)
+    if (!mergeKey) continue
+    const existingGroup = groups.get(mergeKey) ?? []
+    existingGroup.push(row)
+    groups.set(mergeKey, existingGroup)
+  }
+
+  for (const group of groups.values()) {
+    if (group.length < 2) continue
+    const orderedGroup = group.slice().sort(compareCanonicalMergeCharacterEntities)
+    let winner = orderedGroup[0]
+
+    for (const loser of orderedGroup.slice(1)) {
+      if (loser.id === winner.id) continue
+
+      execute('UPDATE EntityMention SET entityId = ? WHERE branchId = ? AND entityId = ?', winner.id, params.branchId, loser.id)
+      execute('UPDATE EntityAppearance SET entityId = ? WHERE entityId = ?', winner.id, loser.id)
+      execute('UPDATE EntityLink SET sourceEntityId = ? WHERE branchId = ? AND sourceEntityId = ?', winner.id, params.branchId, loser.id)
+      execute('UPDATE EntityLink SET targetEntityId = ? WHERE branchId = ? AND targetEntityId = ?', winner.id, params.branchId, loser.id)
+      execute('UPDATE EntityState SET entityId = ? WHERE branchId = ? AND entityId = ?', winner.id, params.branchId, loser.id)
+      execute('UPDATE KnowledgeFact SET subjectEntityId = ? WHERE branchId = ? AND subjectEntityId = ?', winner.id, params.branchId, loser.id)
+      execute('UPDATE KnowledgeFact SET objectEntityId = ? WHERE branchId = ? AND objectEntityId = ?', winner.id, params.branchId, loser.id)
+      execute('UPDATE KnowledgeRelation SET sourceEntityId = ? WHERE branchId = ? AND sourceEntityId = ?', winner.id, params.branchId, loser.id)
+      execute('UPDATE KnowledgeRelation SET targetEntityId = ? WHERE branchId = ? AND targetEntityId = ?', winner.id, params.branchId, loser.id)
+      execute('UPDATE what_if_deltas SET subject_entity_id = ? WHERE subject_entity_id = ?', winner.id, loser.id)
+      execute('UPDATE what_if_deltas SET target_entity_id = ? WHERE target_entity_id = ?', winner.id, loser.id)
+      execute('UPDATE EntityAliasConflictLog SET existingEntityId = ? WHERE branchId = ? AND existingEntityId = ?', winner.id, params.branchId, loser.id)
+      execute('UPDATE EntityAliasConflictLog SET attemptedEntityId = ? WHERE branchId = ? AND attemptedEntityId = ?', winner.id, params.branchId, loser.id)
+      repointCharacterEventParticipants({ loserEntityId: loser.id, winnerEntityId: winner.id })
+      execute('UPDATE character_candidates SET promoted_entity_id = ? WHERE branch_id = ? AND promoted_entity_id = ?', winner.id, params.branchId, loser.id)
+      execute('UPDATE character_candidates SET merged_entity_id = ? WHERE branch_id = ? AND merged_entity_id = ?', winner.id, params.branchId, loser.id)
+      moveCharacterAliasesToWinner({
+        branchId: params.branchId,
+        loserEntityId: loser.id,
+        winnerEntityId: winner.id,
+      })
+
+      winner = mergeCanonicalCharacterEntityMetadata(winner, loser)
+      execute(
+        `
+          UPDATE KnowledgeEntity
+          SET description = ?,
+              firstSeenChapter = ?,
+              lastSeenChapter = ?,
+              importanceTier = ?,
+              status = ?,
+              updatedAt = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `,
+        winner.description,
+        winner.firstSeenChapter,
+        winner.lastSeenChapter,
+        winner.importanceTier,
+        winner.status,
+        winner.id,
+      )
+      execute('DELETE FROM KnowledgeEntity WHERE id = ?', loser.id)
+    }
+  }
 }
 
 function normalizeAliasDiscoveryRecord(alias: string, target: string) {
@@ -5316,6 +5677,11 @@ async function persistChapterExtraction(params: {
     params.extraction.summary,
     params.chapterId
   )
+
+  mergeDuplicateCharacterEntitiesForBranch({
+    novelId: params.novelId,
+    branchId: params.branchId,
+  })
 
   return {
     promotedCandidates: [...promotedCandidates.values()],
