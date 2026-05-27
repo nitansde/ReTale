@@ -38,6 +38,7 @@ yarn-error.log*
 dev.db
 dev.db-shm
 dev.db-wal
+backups/
 
 # local verification artifacts
 .playwright-mcp/
