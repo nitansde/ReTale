@@ -297,9 +297,9 @@ describe('knowledge rebuild alias sync', () => {
     expect(entityCount?.count).toBe(2)
   })
 
-  it('merges mutually confirmed canonical alias variants for formal characters', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-rebuild-mutual-canonical-alias-merge')
-    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_mutual_canonical_alias_merge', 1)
+  it('merges one-way canonical alias variants for formal characters', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-rebuild-one-way-canonical-alias-merge')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_one_way_canonical_alias_merge', 1)
     const aiSettings = createMockAISettings(1)
 
     database.prepare(
@@ -317,16 +317,10 @@ describe('knowledge rebuild alias sync', () => {
 
     database.prepare('INSERT INTO EntityAlias (id, entityId, alias, sourceChapter) VALUES (?, ?, ?, ?)')
       .run('alias-short-full', 'entity-subaru-short', '菜月昴', 18)
-    database.prepare('INSERT INTO EntityAlias (id, entityId, alias, sourceChapter) VALUES (?, ?, ?, ?)')
-      .run('alias-full-short', 'entity-subaru-full', '昴', 9)
     database.prepare(
       `INSERT INTO EntityAliasMapping (id, novelId, branchId, alias, entityId, sourceAliasId, sourceChapter)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run('alias-map-short-full', novelId, branchId, '菜月昴', 'entity-subaru-short', 'alias-short-full', 18)
-    database.prepare(
-      `INSERT INTO EntityAliasMapping (id, novelId, branchId, alias, entityId, sourceAliasId, sourceChapter)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run('alias-map-full-short', novelId, branchId, '昴', 'entity-subaru-full', 'alias-full-short', 9)
 
     vi.doMock('@/lib/server/ai-settings', () => ({ loadStoredAISettings: () => aiSettings }))
     vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
@@ -354,24 +348,7 @@ describe('knowledge rebuild alias sync', () => {
         extraction: {
           chapterNo: 1,
           summary: 'summary-1',
-          characters: [
-            {
-              name: '昴',
-              aliases: ['菜月昴'],
-              descriptionDelta: '短名记录更新',
-              profile: {},
-              status: 'known_character_update',
-              evidence: [{ quote: '昴看向前方。', lineStart: 1, lineEnd: 1 }],
-            },
-            {
-              name: '菜月昴',
-              aliases: ['昴'],
-              descriptionDelta: '全名记录更新',
-              profile: {},
-              status: 'candidate_promoted',
-              evidence: [{ quote: '菜月昴停下脚步。', lineStart: 1, lineEnd: 1 }],
-            },
-          ],
+          characters: [],
           knownCharacterUpdates: [],
           unknownCharacterObservations: [],
           aliasDiscoveries: [],
@@ -416,12 +393,6 @@ describe('knowledge rebuild alias sync', () => {
       lastSeenChapter: number | null
       importanceTier: string | null
     }>
-    const aliasRows = database.prepare(
-      `SELECT alias, entityId
-       FROM EntityAlias
-       WHERE alias IN ('昴', '菜月昴')
-       ORDER BY alias ASC`
-    ).all() as Array<{ alias: string; entityId: string }>
     const aliasMappings = database.prepare(
       `SELECT alias, entityId
        FROM EntityAliasMapping
@@ -437,11 +408,7 @@ describe('knowledge rebuild alias sync', () => {
         importanceTier: 'protagonist',
       },
     ])
-    expect(aliasRows).toEqual([
-      { alias: '昴', entityId: 'entity-subaru-short' },
-    ])
     expect(aliasMappings).toEqual([
-      { alias: '昴', entityId: 'entity-subaru-short' },
       { alias: '菜月昴', entityId: 'entity-subaru-short' },
     ])
   })

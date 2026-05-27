@@ -3616,7 +3616,7 @@ function findCanonicalNameMergeGroup(rows: CanonicalMergeCharacterEntityRow[]) {
   return null
 }
 
-function findMutualCanonicalAliasMergeGroup(params: {
+function findCanonicalAliasMergeGroup(params: {
   branchId: string
   rows: CanonicalMergeCharacterEntityRow[]
 }) {
@@ -3664,7 +3664,7 @@ function findMutualCanonicalAliasMergeGroup(params: {
 
       const leftAliases = aliasKeysByEntityId.get(left.id)
       const rightAliases = aliasKeysByEntityId.get(right.id)
-      if (leftAliases?.has(rightKey) && rightAliases?.has(leftKey)) {
+      if (leftAliases?.has(rightKey) || rightAliases?.has(leftKey)) {
         return [left, right]
       }
     }
@@ -3743,9 +3743,9 @@ function mergeDuplicateCharacterEntitiesForBranch(params: {
       continue
     }
 
-    const mutualAliasGroup = findMutualCanonicalAliasMergeGroup({ branchId: params.branchId, rows })
-    if (mutualAliasGroup) {
-      mergeCanonicalCharacterEntityGroup({ branchId: params.branchId, group: mutualAliasGroup })
+    const aliasGroup = findCanonicalAliasMergeGroup({ branchId: params.branchId, rows })
+    if (aliasGroup) {
+      mergeCanonicalCharacterEntityGroup({ branchId: params.branchId, group: aliasGroup })
       continue
     }
 
