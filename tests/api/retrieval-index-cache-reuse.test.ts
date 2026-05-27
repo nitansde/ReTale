@@ -790,6 +790,31 @@ describe('retrieval-index cache reuse helpers', () => {
     ).get('novel-001:main', staleHash)).toMatchObject({ count: 0 })
   })
 
+  it('repairs missing raw-text line and span artifacts before precompute', async () => {
+    const { database, embedTextsWithOllama, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-precompute-artifact-repair')
+
+    database.prepare('DELETE FROM TextSpan WHERE chapterId = ?').run('chapter-1')
+    database.prepare('DELETE FROM ChapterLine WHERE chapterId = ?').run('chapter-1')
+
+    expect(retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')).toHaveLength(0)
+
+    const result = await retrievalIndex.precomputeRawTextEmbeddingCache({
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      settingsSnapshot: {
+        provider: 'ollama',
+        model: 'unit-test-embedding-model',
+        embeddingBatchSize: 16,
+      },
+    })
+
+    expect(result.totalDocs).toBeGreaterThan(0)
+    expect(result.completedDocs).toBe(result.totalDocs)
+    expect(embedTextsWithOllama).toHaveBeenCalled()
+    expect(database.prepare('SELECT COUNT(*) AS count FROM ChapterLine WHERE chapterId = ?').get('chapter-1')).toMatchObject({ count: 1 })
+    expect((database.prepare('SELECT COUNT(*) AS count FROM TextSpan WHERE chapterId = ?').get('chapter-1') as { count: number }).count).toBeGreaterThan(0)
+  })
+
   it('does not garbage collect out-of-range raw-text cache rows during ranged precompute', async () => {
     const { database, retrievalCache, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-precompute-range-gc')
 

@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import * as lancedb from '@lancedb/lancedb'
 import type { AIProvider, EmbeddingsScenarioSettings, KnowledgeRebuildChapterRange } from '@/lib/types'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
-import { estimateTokenCount, type TextSpanInput } from '@/lib/server/knowledge-store'
+import { estimateTokenCount, healMissingKnowledgeChapterDerivedArtifacts, type TextSpanInput } from '@/lib/server/knowledge-store'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { embedTextsWithOpenAICompatible } from '@/lib/server/openai-compatible'
 import { embedTextsWithOllama } from '@/lib/server/ollama-local'
@@ -713,6 +713,11 @@ export async function precomputeRawTextEmbeddingCache(params: {
     provider: params.settingsSnapshot.provider,
     model: params.settingsSnapshot.model,
   }
+  await healMissingKnowledgeChapterDerivedArtifacts({
+    novelId: params.novelId,
+    branchId: params.branchId,
+    chapterRange: params.chapterRange,
+  })
   const rawTextDocs = loadRawTextRetrievalDocs(params.novelId, params.branchId, params.chapterRange)
   const docsWithInputs = rawTextDocs.map((row) => ({
     row,
@@ -2615,6 +2620,11 @@ async function rebuildBranchRetrievalIndexUnlocked(
   })
   logLanceIndex('build retrieval docs started')
   const docBuildStartedAt = Date.now()
+  await healMissingKnowledgeChapterDerivedArtifacts({
+    novelId,
+    branchId,
+    chapterRange: options?.chapterRange,
+  })
   const rows = loadRetrievalDocsForRebuild({
     novelId,
     branchId,
