@@ -3620,11 +3620,11 @@ function moveCharacterAliasesToWinner(params: {
   }
 }
 
-function mergeDuplicateCharacterEntitiesForBranch(params: {
+function getCanonicalMergeCharacterEntityRows(params: {
   novelId: string
   branchId: string
 }) {
-  const rows = queryAll<CanonicalMergeCharacterEntityRow>(
+  return queryAll<CanonicalMergeCharacterEntityRow>(
     `
       SELECT id, canonicalName, description, firstSeenChapter, lastSeenChapter, importanceTier, status, userConfirmed, createdAt
       FROM KnowledgeEntity
@@ -3637,7 +3637,9 @@ function mergeDuplicateCharacterEntitiesForBranch(params: {
     params.novelId,
     params.branchId,
   )
+}
 
+function findCanonicalNameMergeGroup(rows: CanonicalMergeCharacterEntityRow[]) {
   const groups = new Map<string, CanonicalMergeCharacterEntityRow[]>()
   for (const row of rows) {
     const mergeKey = buildCharacterCanonicalMergeKey(row.canonicalName)
@@ -3648,56 +3650,145 @@ function mergeDuplicateCharacterEntitiesForBranch(params: {
   }
 
   for (const group of groups.values()) {
-    if (group.length < 2) continue
-    const orderedGroup = group.slice().sort(compareCanonicalMergeCharacterEntities)
-    let winner = orderedGroup[0]
+    if (group.length > 1) return group
+  }
+  return null
+}
 
-    for (const loser of orderedGroup.slice(1)) {
-      if (loser.id === winner.id) continue
-
-      execute('UPDATE EntityMention SET entityId = ? WHERE branchId = ? AND entityId = ?', winner.id, params.branchId, loser.id)
-      execute('UPDATE EntityAppearance SET entityId = ? WHERE entityId = ?', winner.id, loser.id)
-      execute('UPDATE EntityLink SET sourceEntityId = ? WHERE branchId = ? AND sourceEntityId = ?', winner.id, params.branchId, loser.id)
-      execute('UPDATE EntityLink SET targetEntityId = ? WHERE branchId = ? AND targetEntityId = ?', winner.id, params.branchId, loser.id)
-      execute('UPDATE EntityState SET entityId = ? WHERE branchId = ? AND entityId = ?', winner.id, params.branchId, loser.id)
-      execute('UPDATE KnowledgeFact SET subjectEntityId = ? WHERE branchId = ? AND subjectEntityId = ?', winner.id, params.branchId, loser.id)
-      execute('UPDATE KnowledgeFact SET objectEntityId = ? WHERE branchId = ? AND objectEntityId = ?', winner.id, params.branchId, loser.id)
-      execute('UPDATE KnowledgeRelation SET sourceEntityId = ? WHERE branchId = ? AND sourceEntityId = ?', winner.id, params.branchId, loser.id)
-      execute('UPDATE KnowledgeRelation SET targetEntityId = ? WHERE branchId = ? AND targetEntityId = ?', winner.id, params.branchId, loser.id)
-      execute('UPDATE what_if_deltas SET subject_entity_id = ? WHERE subject_entity_id = ?', winner.id, loser.id)
-      execute('UPDATE what_if_deltas SET target_entity_id = ? WHERE target_entity_id = ?', winner.id, loser.id)
-      execute('UPDATE EntityAliasConflictLog SET existingEntityId = ? WHERE branchId = ? AND existingEntityId = ?', winner.id, params.branchId, loser.id)
-      execute('UPDATE EntityAliasConflictLog SET attemptedEntityId = ? WHERE branchId = ? AND attemptedEntityId = ?', winner.id, params.branchId, loser.id)
-      repointCharacterEventParticipants({ loserEntityId: loser.id, winnerEntityId: winner.id })
-      execute('UPDATE character_candidates SET promoted_entity_id = ? WHERE branch_id = ? AND promoted_entity_id = ?', winner.id, params.branchId, loser.id)
-      execute('UPDATE character_candidates SET merged_entity_id = ? WHERE branch_id = ? AND merged_entity_id = ?', winner.id, params.branchId, loser.id)
-      moveCharacterAliasesToWinner({
-        branchId: params.branchId,
-        loserEntityId: loser.id,
-        winnerEntityId: winner.id,
-      })
-
-      winner = mergeCanonicalCharacterEntityMetadata(winner, loser)
-      execute(
-        `
-          UPDATE KnowledgeEntity
-          SET description = ?,
-              firstSeenChapter = ?,
-              lastSeenChapter = ?,
-              importanceTier = ?,
-              status = ?,
-              updatedAt = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `,
-        winner.description,
-        winner.firstSeenChapter,
-        winner.lastSeenChapter,
-        winner.importanceTier,
-        winner.status,
-        winner.id,
+function findMutualCanonicalAliasMergeGroup(params: {
+  branchId: string
+  rows: CanonicalMergeCharacterEntityRow[]
+}) {
+  const aliases = queryAll<{ entityId: string; alias: string }>(
+    `
+      SELECT DISTINCT entityId, alias
+      FROM (
+        SELECT a.entityId AS entityId, a.alias AS alias
+        FROM EntityAlias a
+        JOIN KnowledgeEntity e ON e.id = a.entityId
+        WHERE e.branchId = ?
+          AND e.entityType = 'character'
+          AND e.importanceTier IN ('protagonist', 'important', 'arc')
+        UNION
+        SELECT m.entityId AS entityId, m.alias AS alias
+        FROM EntityAliasMapping m
+        JOIN KnowledgeEntity e ON e.id = m.entityId
+        WHERE m.branchId = ?
+          AND e.entityType = 'character'
+          AND e.importanceTier IN ('protagonist', 'important', 'arc')
       )
-      execute('DELETE FROM KnowledgeEntity WHERE id = ?', loser.id)
+    `,
+    params.branchId,
+    params.branchId,
+  )
+
+  const aliasKeysByEntityId = new Map<string, Set<string>>()
+  for (const alias of aliases) {
+    const aliasKey = buildCharacterCanonicalMergeKey(alias.alias)
+    if (!aliasKey) continue
+    const existingKeys = aliasKeysByEntityId.get(alias.entityId) ?? new Set<string>()
+    existingKeys.add(aliasKey)
+    aliasKeysByEntityId.set(alias.entityId, existingKeys)
+  }
+
+  for (let leftIndex = 0; leftIndex < params.rows.length; leftIndex += 1) {
+    const left = params.rows[leftIndex]
+    const leftKey = buildCharacterCanonicalMergeKey(left.canonicalName)
+    if (!leftKey) continue
+
+    for (let rightIndex = leftIndex + 1; rightIndex < params.rows.length; rightIndex += 1) {
+      const right = params.rows[rightIndex]
+      const rightKey = buildCharacterCanonicalMergeKey(right.canonicalName)
+      if (!rightKey || leftKey === rightKey) continue
+
+      const leftAliases = aliasKeysByEntityId.get(left.id)
+      const rightAliases = aliasKeysByEntityId.get(right.id)
+      if (leftAliases?.has(rightKey) && rightAliases?.has(leftKey)) {
+        return [left, right]
+      }
     }
+  }
+
+  return null
+}
+
+function mergeCanonicalCharacterEntityGroup(params: {
+  branchId: string
+  group: CanonicalMergeCharacterEntityRow[]
+}) {
+  if (params.group.length < 2) return false
+  const orderedGroup = params.group.slice().sort(compareCanonicalMergeCharacterEntities)
+  let winner = orderedGroup[0]
+
+  for (const loser of orderedGroup.slice(1)) {
+    if (loser.id === winner.id) continue
+
+    execute('UPDATE EntityMention SET entityId = ? WHERE branchId = ? AND entityId = ?', winner.id, params.branchId, loser.id)
+    execute('UPDATE EntityAppearance SET entityId = ? WHERE entityId = ?', winner.id, loser.id)
+    execute('UPDATE EntityLink SET sourceEntityId = ? WHERE branchId = ? AND sourceEntityId = ?', winner.id, params.branchId, loser.id)
+    execute('UPDATE EntityLink SET targetEntityId = ? WHERE branchId = ? AND targetEntityId = ?', winner.id, params.branchId, loser.id)
+    execute('UPDATE EntityState SET entityId = ? WHERE branchId = ? AND entityId = ?', winner.id, params.branchId, loser.id)
+    execute('UPDATE KnowledgeFact SET subjectEntityId = ? WHERE branchId = ? AND subjectEntityId = ?', winner.id, params.branchId, loser.id)
+    execute('UPDATE KnowledgeFact SET objectEntityId = ? WHERE branchId = ? AND objectEntityId = ?', winner.id, params.branchId, loser.id)
+    execute('UPDATE KnowledgeRelation SET sourceEntityId = ? WHERE branchId = ? AND sourceEntityId = ?', winner.id, params.branchId, loser.id)
+    execute('UPDATE KnowledgeRelation SET targetEntityId = ? WHERE branchId = ? AND targetEntityId = ?', winner.id, params.branchId, loser.id)
+    execute('UPDATE what_if_deltas SET subject_entity_id = ? WHERE subject_entity_id = ?', winner.id, loser.id)
+    execute('UPDATE what_if_deltas SET target_entity_id = ? WHERE target_entity_id = ?', winner.id, loser.id)
+    execute('UPDATE EntityAliasConflictLog SET existingEntityId = ? WHERE branchId = ? AND existingEntityId = ?', winner.id, params.branchId, loser.id)
+    execute('UPDATE EntityAliasConflictLog SET attemptedEntityId = ? WHERE branchId = ? AND attemptedEntityId = ?', winner.id, params.branchId, loser.id)
+    repointCharacterEventParticipants({ loserEntityId: loser.id, winnerEntityId: winner.id })
+    execute('UPDATE character_candidates SET promoted_entity_id = ? WHERE branch_id = ? AND promoted_entity_id = ?', winner.id, params.branchId, loser.id)
+    execute('UPDATE character_candidates SET merged_entity_id = ? WHERE branch_id = ? AND merged_entity_id = ?', winner.id, params.branchId, loser.id)
+    moveCharacterAliasesToWinner({
+      branchId: params.branchId,
+      loserEntityId: loser.id,
+      winnerEntityId: winner.id,
+    })
+
+    winner = mergeCanonicalCharacterEntityMetadata(winner, loser)
+    execute(
+      `
+        UPDATE KnowledgeEntity
+        SET description = ?,
+            firstSeenChapter = ?,
+            lastSeenChapter = ?,
+            importanceTier = ?,
+            status = ?,
+            updatedAt = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `,
+      winner.description,
+      winner.firstSeenChapter,
+      winner.lastSeenChapter,
+      winner.importanceTier,
+      winner.status,
+      winner.id,
+    )
+    execute('DELETE FROM KnowledgeEntity WHERE id = ?', loser.id)
+  }
+
+  return true
+}
+
+function mergeDuplicateCharacterEntitiesForBranch(params: {
+  novelId: string
+  branchId: string
+}) {
+  for (;;) {
+    const rows = getCanonicalMergeCharacterEntityRows(params)
+    const canonicalGroup = findCanonicalNameMergeGroup(rows)
+    if (canonicalGroup) {
+      mergeCanonicalCharacterEntityGroup({ branchId: params.branchId, group: canonicalGroup })
+      continue
+    }
+
+    const mutualAliasGroup = findMutualCanonicalAliasMergeGroup({ branchId: params.branchId, rows })
+    if (mutualAliasGroup) {
+      mergeCanonicalCharacterEntityGroup({ branchId: params.branchId, group: mutualAliasGroup })
+      continue
+    }
+
+    break
   }
 }
 

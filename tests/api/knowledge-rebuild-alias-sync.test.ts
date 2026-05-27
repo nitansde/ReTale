@@ -297,6 +297,155 @@ describe('knowledge rebuild alias sync', () => {
     expect(entityCount?.count).toBe(2)
   })
 
+  it('merges mutually confirmed canonical alias variants for formal characters', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-rebuild-mutual-canonical-alias-merge')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_mutual_canonical_alias_merge', 1)
+    const aiSettings = createMockAISettings(1)
+
+    database.prepare(
+      `INSERT INTO KnowledgeEntity (
+        id, novelId, branchId, entityType, canonicalName, description,
+        firstSeenChapter, lastSeenChapter, importanceTier, status, userConfirmed
+      ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, ?, ?)`
+    ).run('entity-subaru-short', novelId, branchId, '昴', '短名记录', 4, 73, 'protagonist', 'known_character_update', 1)
+    database.prepare(
+      `INSERT INTO KnowledgeEntity (
+        id, novelId, branchId, entityType, canonicalName, description,
+        firstSeenChapter, lastSeenChapter, importanceTier, status, userConfirmed
+      ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, ?, ?)`
+    ).run('entity-subaru-full', novelId, branchId, '菜月昴', '全名记录', 1, 9, 'important', 'candidate_promoted', 1)
+
+    database.prepare('INSERT INTO EntityAlias (id, entityId, alias, sourceChapter) VALUES (?, ?, ?, ?)')
+      .run('alias-short-full', 'entity-subaru-short', '菜月昴', 18)
+    database.prepare('INSERT INTO EntityAlias (id, entityId, alias, sourceChapter) VALUES (?, ?, ?, ?)')
+      .run('alias-full-short', 'entity-subaru-full', '昴', 9)
+    database.prepare(
+      `INSERT INTO EntityAliasMapping (id, novelId, branchId, alias, entityId, sourceAliasId, sourceChapter)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run('alias-map-short-full', novelId, branchId, '菜月昴', 'entity-subaru-short', 'alias-short-full', 18)
+    database.prepare(
+      `INSERT INTO EntityAliasMapping (id, novelId, branchId, alias, entityId, sourceAliasId, sourceChapter)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run('alias-map-full-short', novelId, branchId, '昴', 'entity-subaru-full', 'alias-full-short', 9)
+
+    vi.doMock('@/lib/server/ai-settings', () => ({ loadStoredAISettings: () => aiSettings }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { rawText: string }) => ({
+        source: 'cache' as const,
+        cache: {} as never,
+        result: {} as never,
+        output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+        cacheKey: {} as never,
+        scriptPath: '/tmp/mock-hanlp.py',
+        normalizedChapterText: input.rawText,
+      })),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
+    vi.doMock('@/lib/server/knowledge-extraction', () => ({
+      extractChapterKnowledgeOffline: vi.fn(async () => ({
+        provider: 'openai-compatible' as const,
+        model: aiSettings.knowledgeExtraction.openAICompatible.model,
+        extraction: {
+          chapterNo: 1,
+          summary: 'summary-1',
+          characters: [
+            {
+              name: '昴',
+              aliases: ['菜月昴'],
+              descriptionDelta: '短名记录更新',
+              profile: {},
+              status: 'known_character_update',
+              evidence: [{ quote: '昴看向前方。', lineStart: 1, lineEnd: 1 }],
+            },
+            {
+              name: '菜月昴',
+              aliases: ['昴'],
+              descriptionDelta: '全名记录更新',
+              profile: {},
+              status: 'candidate_promoted',
+              evidence: [{ quote: '菜月昴停下脚步。', lineStart: 1, lineEnd: 1 }],
+            },
+          ],
+          knownCharacterUpdates: [],
+          unknownCharacterObservations: [],
+          aliasDiscoveries: [],
+          relations: [],
+          events: [],
+          worldbuilding: [],
+          openThreads: [],
+        },
+      })),
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        precomputeRawTextEmbeddingCache: vi.fn(async () => ({
+          totalDocs: 0,
+          completedDocs: 0,
+          cacheHits: 0,
+          cacheMisses: 0,
+          failedDocs: 0,
+          totalBatches: 0,
+          completedBatches: 0,
+          degraded: false,
+          cancelled: false,
+          durationMs: 0,
+        })),
+        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
+      }
+    })
+
+    const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
+    await expect(rebuildKnowledgeForNovel({ novelId })).resolves.toMatchObject({ outcome: 'completed' })
+
+    const mergedEntities = database.prepare(
+      `SELECT id, canonicalName, firstSeenChapter, lastSeenChapter, importanceTier
+       FROM KnowledgeEntity
+       WHERE branchId = ? AND canonicalName IN ('昴', '菜月昴')`
+    ).all(branchId) as Array<{
+      id: string
+      canonicalName: string
+      firstSeenChapter: number | null
+      lastSeenChapter: number | null
+      importanceTier: string | null
+    }>
+    const aliasRows = database.prepare(
+      `SELECT alias, entityId
+       FROM EntityAlias
+       WHERE alias IN ('昴', '菜月昴')
+       ORDER BY alias ASC`
+    ).all() as Array<{ alias: string; entityId: string }>
+    const aliasMappings = database.prepare(
+      `SELECT alias, entityId
+       FROM EntityAliasMapping
+       WHERE branchId = ? AND alias IN ('昴', '菜月昴')
+       ORDER BY alias ASC`
+    ).all(branchId) as Array<{ alias: string; entityId: string }>
+    expect(mergedEntities).toEqual([
+      {
+        id: 'entity-subaru-short',
+        canonicalName: '昴',
+        firstSeenChapter: 1,
+        lastSeenChapter: 4,
+        importanceTier: 'protagonist',
+      },
+    ])
+    expect(aliasRows).toEqual([
+      { alias: '昴', entityId: 'entity-subaru-short' },
+    ])
+    expect(aliasMappings).toEqual([
+      { alias: '昴', entityId: 'entity-subaru-short' },
+      { alias: '菜月昴', entityId: 'entity-subaru-short' },
+    ])
+  })
+
   it('merges safe canonical character variants and repoints mentions, aliases, and event participants to one entity', async () => {
     const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-safe-canonical-merge')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_safe_canonical_merge', 1)
