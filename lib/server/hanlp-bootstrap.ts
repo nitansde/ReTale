@@ -17,8 +17,8 @@ export const UNKNOWN_LOCAL_CONFIG_MARKER = 'unknown-local-config'
 
 const DEFAULT_TIMEOUT_MS = 600_000
 const DEFAULT_SCRIPT_CANDIDATE_PATHS = [
-  path.join(process.cwd(), 'hanlp_bootstrap.py'),
-  path.join(process.cwd(), 'scripts', 'hanlp_bootstrap.py'),
+  path.join(/* turbopackIgnore: true */ process.cwd(), 'hanlp_bootstrap.py'),
+  path.join(/* turbopackIgnore: true */ process.cwd(), 'scripts', 'hanlp_bootstrap.py'),
 ] as const
 
 const HANLP_ENTITY_GROUPS = [
@@ -358,7 +358,7 @@ export function resolveHanlpBootstrapScriptPath(scriptPath?: string | null) {
     return path.isAbsolute(explicit) ? explicit : path.resolve(/* turbopackIgnore: true */ process.cwd(), explicit)
   }
 
-  const existing = DEFAULT_SCRIPT_CANDIDATE_PATHS.find((candidate) => fs.existsSync(candidate))
+  const existing = DEFAULT_SCRIPT_CANDIDATE_PATHS.find((candidate) => fs.existsSync(/* turbopackIgnore: true */ candidate))
   return existing ?? DEFAULT_SCRIPT_CANDIDATE_PATHS[0]
 }
 
@@ -369,8 +369,8 @@ export function buildHanlpModelOrConfigHash(identity?: string | null) {
 
 export function buildHanlpScriptVersionHash(scriptPath: string, outputSchemaVersion = HANLP_BOOTSTRAP_OUTPUT_SCHEMA_VERSION) {
   const normalizedPath = path.isAbsolute(scriptPath) ? scriptPath : path.resolve(/* turbopackIgnore: true */ process.cwd(), scriptPath)
-  const scriptSource = fs.existsSync(normalizedPath)
-    ? fs.readFileSync(normalizedPath, 'utf8')
+  const scriptSource = fs.existsSync(/* turbopackIgnore: true */ normalizedPath)
+    ? fs.readFileSync(/* turbopackIgnore: true */ normalizedPath, 'utf8')
     : buildScriptMissingFallback(normalizedPath)
 
   return hashContent(`${outputSchemaVersion}\n${scriptSource}`)
@@ -436,7 +436,7 @@ export function defaultHanlpBootstrapRunner(invocation: HanlpBootstrapSubprocess
   return new Promise((resolve) => {
     const maxBuffer = 10 * 1024 * 1024
     const child = spawn(invocation.pythonBin, [invocation.scriptPath], {
-      cwd: process.cwd(),
+      cwd: /* turbopackIgnore: true */ process.cwd(),
       stdio: ['pipe', 'pipe', 'pipe'],
     })
 

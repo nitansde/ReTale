@@ -5,6 +5,9 @@ const tsconfigPath = process.env.CHATBOOK_NEXT_TSCONFIG_PATH?.trim() || 'tsconfi
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ['@lancedb/lancedb'],
+  outputFileTracingExcludes: {
+    '/*': ['./next.config.ts'],
+  },
   allowedDevOrigins: ['localhost', '127.0.0.1', 'retale.example'],
   distDir,
   typescript: {

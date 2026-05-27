@@ -34,7 +34,7 @@ function resolveDatabasePath(databaseUrl: string) {
       return rawPath
     }
 
-    return path.join(process.cwd(), rawPath.replace(/^\.\//, ''))
+    return path.join(/* turbopackIgnore: true */ process.cwd(), rawPath.replace(/^\.\//, ''))
   }
 
   if (path.isAbsolute(databaseUrl)) {
