@@ -13,12 +13,12 @@ import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 import { buildKnowledgeExtractionStoryState } from '@/lib/server/context-builder'
 import {
-  buildTextSpansFromLines,
   enqueueKnowledgeJob,
+  ensureKnowledgeChapterDerivedArtifacts,
   getMainBranchId,
   hashContent,
   markKnowledgeStaleFromChapter,
-  splitChapterLines,
+  replaceKnowledgeChapterDerivedArtifacts,
 } from '@/lib/server/knowledge-store'
 import {
   deleteBranchRetrievalIndex,
@@ -1884,45 +1884,6 @@ function upsertStoryBranch(novelId: string, branchId: string, name: string) {
     novelId,
     name
   )
-}
-
-function insertChapterLines(chapterId: string, lines: ReturnType<typeof splitChapterLines>) {
-  for (const line of lines) {
-    execute(
-      'INSERT INTO ChapterLine (id, chapterId, lineNo, text, charStart, charEnd) VALUES (?, ?, ?, ?, ?, ?)',
-      uid('line'),
-      chapterId,
-      line.lineNo,
-      line.text,
-      line.charStart,
-      line.charEnd
-    )
-  }
-}
-
-function insertTextSpans(spans: ReturnType<typeof buildTextSpansFromLines>) {
-  for (const span of spans) {
-    execute(
-      `
-        INSERT INTO TextSpan (
-          id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd, charStart, charEnd, text, spanType, tokenEstimate
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      span.id,
-      span.novelId,
-      span.branchId,
-      span.chapterId,
-      span.chapterNo,
-      span.lineStart,
-      span.lineEnd,
-      span.charStart ?? null,
-      span.charEnd ?? null,
-      span.text,
-      span.spanType,
-      span.tokenEstimate ?? null
-    )
-  }
 }
 
 async function deleteNovelProjectionArtifacts(novelId: string, branchId: string) {
@@ -6538,18 +6499,13 @@ export async function persistImportedNovelToKnowledgeStore(params: PersistImport
         row.sourceHash
       )
 
-      const lines = splitChapterLines(row.rawText)
-      insertChapterLines(row.chapterId, lines)
-      insertTextSpans(
-        buildTextSpansFromLines({
-          novelId: params.novelId,
-          branchId,
-          chapterId: row.chapterId,
-          chapterNo: row.chapterNo,
-          text: row.rawText,
-          lines,
-        })
-      )
+      replaceKnowledgeChapterDerivedArtifacts({
+        id: row.chapterId,
+        novelId: params.novelId,
+        branchId,
+        chapterNo: row.chapterNo,
+        rawText: row.rawText,
+      })
     }
   })
 
@@ -6686,70 +6642,79 @@ async function performWorkspacePayloadToKnowledgeStoreSync(payload: WorkspaceKno
     const shouldBootstrapKnowledge = novelChapters.length > 0 && (existing.length === 0 || existingStructuredKnowledgeCount === 0)
 
     let firstChangedChapterNo: number | null = null
-    const refreshedSpans: ReturnType<typeof buildTextSpansFromLines> = []
 
     for (let index = 0; index < novelChapters.length; index += 1) {
       const chapter = novelChapters[index]
       const chapterNo = index + 1
       const rawText = htmlToPlainText(chapter.content)
       const sourceHash = hashContent(rawText)
-      const lines = splitChapterLines(rawText)
-      const spans = buildTextSpansFromLines({
-        novelId,
-        branchId,
-        chapterId: chapter.id,
-        chapterNo,
-        text: rawText,
-        lines,
-      })
       const current = existingById.get(chapter.id)
 
       if (!current) {
-        execute(
-          `
-            INSERT INTO KnowledgeChapter (
-              id, novelId, branchId, chapterNo, title, rawText, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
-            )
-            VALUES (?, ?, ?, ?, ?, ?, 1, 1, 'Created from workspace sync', ?, 'stale')
-          `,
-          chapter.id,
-          novelId,
-          branchId,
-          chapterNo,
-          chapter.title,
-          rawText,
-          sourceHash
-        )
-        insertChapterLines(chapter.id, lines)
-        insertTextSpans(spans)
-        refreshedSpans.push(...spans)
+        await withTransaction(() => {
+          execute(
+            `
+              INSERT INTO KnowledgeChapter (
+                id, novelId, branchId, chapterNo, title, rawText, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+              )
+              VALUES (?, ?, ?, ?, ?, ?, 1, 1, 'Created from workspace sync', ?, 'stale')
+            `,
+            chapter.id,
+            novelId,
+            branchId,
+            chapterNo,
+            chapter.title,
+            rawText,
+            sourceHash
+          )
+          replaceKnowledgeChapterDerivedArtifacts({
+            id: chapter.id,
+            novelId,
+            branchId,
+            chapterNo,
+            rawText,
+          })
+        })
         firstChangedChapterNo = firstChangedChapterNo === null ? chapterNo : Math.min(firstChangedChapterNo, chapterNo)
         continue
       }
 
       if (current.sourceHash === sourceHash && current.chapterNo === chapterNo && current.title === chapter.title) {
+        await withTransaction(() => {
+          ensureKnowledgeChapterDerivedArtifacts({
+            id: current.id,
+            novelId,
+            branchId,
+            chapterNo,
+            rawText,
+          })
+        })
         continue
       }
 
-      execute(
-        `
-          UPDATE KnowledgeChapter
-          SET chapterNo = ?, title = ?, rawText = ?, sourceHash = ?, revision = ?, isDirty = 1,
-              dirtyReason = 'Updated from workspace sync', knowledgeStatus = 'stale', updatedAt = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `,
-        chapterNo,
-        chapter.title,
-        rawText,
-        sourceHash,
-        current.sourceHash === sourceHash ? current.revision : current.revision + 1,
-        chapter.id
-      )
-        execute('DELETE FROM ChapterLine WHERE chapterId = ?', chapter.id)
-      execute('DELETE FROM TextSpan WHERE chapterId = ?', chapter.id)
-      insertChapterLines(chapter.id, lines)
-      insertTextSpans(spans)
-      refreshedSpans.push(...spans)
+      await withTransaction(() => {
+        execute(
+          `
+            UPDATE KnowledgeChapter
+            SET chapterNo = ?, title = ?, rawText = ?, sourceHash = ?, revision = ?, isDirty = 1,
+                dirtyReason = 'Updated from workspace sync', knowledgeStatus = 'stale', updatedAt = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `,
+          chapterNo,
+          chapter.title,
+          rawText,
+          sourceHash,
+          current.sourceHash === sourceHash ? current.revision : current.revision + 1,
+          chapter.id
+        )
+        replaceKnowledgeChapterDerivedArtifacts({
+          id: chapter.id,
+          novelId,
+          branchId,
+          chapterNo,
+          rawText,
+        })
+      })
       firstChangedChapterNo = firstChangedChapterNo === null ? chapterNo : Math.min(firstChangedChapterNo, chapterNo)
     }
 

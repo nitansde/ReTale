@@ -1,7 +1,9 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { syncWorkspacePayloadToKnowledgeStore } from '@/lib/server/knowledge-rebuild'
-import { initializeDatabase, queryOne } from '@/lib/server/sqlite'
+import { hashContent } from '@/lib/server/knowledge-store'
+import { execute, initializeDatabase, queryOne } from '@/lib/server/sqlite'
+import { htmlToPlainText } from '@/lib/utils'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
@@ -82,5 +84,63 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
     expect(queryOne<{ id: string }>('SELECT id FROM StoryBranch WHERE id = ?', 'novel_imported:main')).toMatchObject({ id: 'novel_imported:main' })
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeChapter WHERE novelId = ?', 'novel_imported')).toMatchObject({ count: 1 })
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeJob WHERE novelId = ?', 'novel_imported')).toMatchObject({ count: 0 })
+  })
+
+  it('repairs missing derived line and span artifacts for unchanged chapters', async () => {
+    createTestDatabase('chatbook-knowledge-sync-repairs-derived-artifacts')
+    const chapterContent = '<p>林澄开始记录这次练习。</p>'
+    const rawText = htmlToPlainText(chapterContent)
+
+    execute('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)', 'novel_repair', 'Imported Novel', 'txt')
+    execute('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)', 'novel_repair:main', 'novel_repair', 'main')
+    execute(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      'ch_repair_1',
+      'novel_repair',
+      'novel_repair:main',
+      1,
+      '第1章 初遇',
+      rawText,
+      7,
+      0,
+      null,
+      hashContent(rawText),
+      'ready'
+    )
+
+    await syncWorkspacePayloadToKnowledgeStore({
+      currentNovelId: 'novel_repair',
+      localNovels: [
+        {
+          id: 'novel_repair',
+          title: 'Imported Novel',
+          summary: 'summary',
+          tags: ['导入'],
+        },
+      ],
+      localChapters: [
+        {
+          id: 'ch_repair_1',
+          novelId: 'novel_repair',
+          volumeId: 'volume-1',
+          title: '第1章 初遇',
+          content: chapterContent,
+          order: 1,
+          status: 'draft',
+          wordCount: 8,
+          updatedAt: '2026-05-16T00:00:00.000Z',
+        },
+      ],
+    })
+
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM ChapterLine WHERE chapterId = ?', 'ch_repair_1')?.count).toBeGreaterThan(0)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM TextSpan WHERE chapterId = ?', 'ch_repair_1')?.count).toBeGreaterThan(0)
+    expect(queryOne<{ revision: number; isDirty: number; knowledgeStatus: string }>(
+      'SELECT revision, isDirty, knowledgeStatus FROM KnowledgeChapter WHERE id = ?',
+      'ch_repair_1'
+    )).toMatchObject({ revision: 7, isDirty: 0, knowledgeStatus: 'ready' })
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeJob WHERE novelId = ?', 'novel_repair')).toMatchObject({ count: 0 })
   })
 })

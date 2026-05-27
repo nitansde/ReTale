@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { execute, queryOne, withTransaction } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne, type SqlParam, withTransaction } from '@/lib/server/sqlite'
 import { uid } from '@/lib/utils'
 
 export const MAIN_BRANCH_NAME = 'main'
@@ -43,6 +43,18 @@ export type EvidenceSearchResult = {
   spanId: string
   chapterNo: number
   score: number
+}
+
+export type KnowledgeChapterDerivedArtifactSource = {
+  id: string
+  novelId: string
+  branchId: string
+  chapterNo: number
+  rawText: string
+}
+
+export type KnowledgeChapterDerivedArtifactRepairResult = {
+  repairedChapterNos: number[]
 }
 
 export function hashContent(value: string) {
@@ -184,6 +196,157 @@ export function buildTextSpansFromLines(params: {
   }
 
   return spans
+}
+
+function buildDerivedArtifacts(chapter: KnowledgeChapterDerivedArtifactSource) {
+  const lines = splitChapterLines(chapter.rawText)
+  const spans = buildTextSpansFromLines({
+    novelId: chapter.novelId,
+    branchId: chapter.branchId,
+    chapterId: chapter.id,
+    chapterNo: chapter.chapterNo,
+    text: chapter.rawText,
+    lines,
+  })
+
+  return { lines, spans }
+}
+
+function insertChapterLines(chapterId: string, lines: ReturnType<typeof splitChapterLines>) {
+  for (const line of lines) {
+    execute(
+      'INSERT INTO ChapterLine (id, chapterId, lineNo, text, charStart, charEnd) VALUES (?, ?, ?, ?, ?, ?)',
+      uid('line'),
+      chapterId,
+      line.lineNo,
+      line.text,
+      line.charStart,
+      line.charEnd
+    )
+  }
+}
+
+function insertTextSpans(spans: ReturnType<typeof buildTextSpansFromLines>) {
+  for (const span of spans) {
+    execute(
+      `
+        INSERT INTO TextSpan (
+          id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd, charStart, charEnd, text, spanType, tokenEstimate
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      span.id,
+      span.novelId,
+      span.branchId,
+      span.chapterId,
+      span.chapterNo,
+      span.lineStart,
+      span.lineEnd,
+      span.charStart ?? null,
+      span.charEnd ?? null,
+      span.text,
+      span.spanType,
+      span.tokenEstimate ?? null
+    )
+  }
+}
+
+function getDerivedArtifactCounts(chapterId: string) {
+  return queryOne<{ lineCount: number; spanCount: number }>(
+    `
+      SELECT
+        (SELECT COUNT(*) FROM ChapterLine WHERE chapterId = ?) AS lineCount,
+        (SELECT COUNT(*) FROM TextSpan WHERE chapterId = ?) AS spanCount
+    `,
+    chapterId,
+    chapterId
+  ) ?? { lineCount: 0, spanCount: 0 }
+}
+
+function chapterHasMissingDerivedArtifacts(chapter: KnowledgeChapterDerivedArtifactSource) {
+  const expected = buildDerivedArtifacts(chapter)
+  const counts = getDerivedArtifactCounts(chapter.id)
+  return counts.lineCount <= 0 || (expected.spans.length > 0 && counts.spanCount <= 0)
+}
+
+export function replaceKnowledgeChapterDerivedArtifacts(chapter: KnowledgeChapterDerivedArtifactSource) {
+  const artifacts = buildDerivedArtifacts(chapter)
+
+  execute('DELETE FROM TextSpan WHERE chapterId = ?', chapter.id)
+  execute('DELETE FROM ChapterLine WHERE chapterId = ?', chapter.id)
+  insertChapterLines(chapter.id, artifacts.lines)
+  insertTextSpans(artifacts.spans)
+
+  return {
+    lineCount: artifacts.lines.length,
+    spanCount: artifacts.spans.length,
+  }
+}
+
+export function ensureKnowledgeChapterDerivedArtifacts(chapter: KnowledgeChapterDerivedArtifactSource) {
+  const artifacts = buildDerivedArtifacts(chapter)
+  const counts = getDerivedArtifactCounts(chapter.id)
+  let repaired = false
+
+  if (counts.lineCount <= 0) {
+    execute('DELETE FROM ChapterLine WHERE chapterId = ?', chapter.id)
+    insertChapterLines(chapter.id, artifacts.lines)
+    repaired = true
+  }
+
+  if (artifacts.spans.length > 0 && counts.spanCount <= 0) {
+    execute('DELETE FROM TextSpan WHERE chapterId = ?', chapter.id)
+    insertTextSpans(artifacts.spans)
+    repaired = true
+  }
+
+  return {
+    repaired,
+    lineCount: counts.lineCount <= 0 ? artifacts.lines.length : counts.lineCount,
+    spanCount: artifacts.spans.length > 0 && counts.spanCount <= 0 ? artifacts.spans.length : counts.spanCount,
+  }
+}
+
+export async function healMissingKnowledgeChapterDerivedArtifacts(params: {
+  novelId: string
+  branchId: string
+  chapterRange?: { startChapter?: number; endChapter?: number }
+}): Promise<KnowledgeChapterDerivedArtifactRepairResult> {
+  const queryParams: SqlParam[] = [params.novelId, params.branchId]
+  const rangeFilters: string[] = []
+  if (typeof params.chapterRange?.startChapter === 'number') {
+    rangeFilters.push('chapterNo >= ?')
+    queryParams.push(Math.max(1, Math.floor(params.chapterRange.startChapter)))
+  }
+  if (typeof params.chapterRange?.endChapter === 'number') {
+    rangeFilters.push('chapterNo <= ?')
+    queryParams.push(Math.max(1, Math.floor(params.chapterRange.endChapter)))
+  }
+
+  const chapters = queryAll<KnowledgeChapterDerivedArtifactSource>(
+    `
+      SELECT id, novelId, branchId, chapterNo, rawText
+      FROM KnowledgeChapter
+      WHERE novelId = ? AND branchId = ?
+      ${rangeFilters.length ? `AND ${rangeFilters.join(' AND ')}` : ''}
+      ORDER BY chapterNo ASC
+    `,
+    ...queryParams
+  )
+  const chaptersToRepair = chapters.filter(chapterHasMissingDerivedArtifacts)
+  if (!chaptersToRepair.length) {
+    return { repairedChapterNos: [] }
+  }
+
+  await withTransaction(() => {
+    for (const chapter of chaptersToRepair) {
+      ensureKnowledgeChapterDerivedArtifacts(chapter)
+    }
+  })
+
+  return {
+    repairedChapterNos: chaptersToRepair.map((chapter) => chapter.chapterNo),
+  }
 }
 
 export async function ensureMainBranch(novelId: string) {
