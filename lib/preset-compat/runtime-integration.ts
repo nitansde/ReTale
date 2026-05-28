@@ -285,6 +285,7 @@ export function createPresetCompatRuntimeMetadata(processing: PresetCompatRuntim
 export function resolveRewriteContextWindow(params: {
   providerControlIntents: readonly PresetCompatResolvedProviderControlIntent[]
   blocks: RouteContextBlock[] | null
+  unlockMaximum?: boolean | null
 }) : ContextWindowResolution {
   const requestedBudgetIntent = findProviderControlIntent(
     params.providerControlIntents,
@@ -298,7 +299,7 @@ export function resolveRewriteContextWindow(params: {
   const requestedMaxContextTokens = typeof requestedBudgetIntent?.value === 'number'
     ? requestedBudgetIntent.value
     : null
-  const unlockMaximum = false
+  const requestedUnlockMaximum = params.unlockMaximum === true
 
   if (requestedMaxContextTokens === null) {
     return {
@@ -319,7 +320,7 @@ export function resolveRewriteContextWindow(params: {
         supported: false,
         requestedMaxContextTokens,
         effectiveMaxContextTokens: null,
-        unlockMaximum,
+        unlockMaximum: false,
         tokenEstimate: null,
         trimmedBlockIds: [],
       },
@@ -328,7 +329,10 @@ export function resolveRewriteContextWindow(params: {
     }
   }
 
-  const effectiveMaxContextTokens = Math.min(requestedMaxContextTokens, DEFAULT_SAFE_CONTEXT_MAX_TOKENS)
+  const unlockMaximum = requestedUnlockMaximum
+  const effectiveMaxContextTokens = unlockMaximum
+    ? requestedMaxContextTokens
+    : Math.min(requestedMaxContextTokens, DEFAULT_SAFE_CONTEXT_MAX_TOKENS)
   const trimmed = trimContextBlocksToBudget(params.blocks, effectiveMaxContextTokens)
   const applied = trimmed.tokenEstimate <= effectiveMaxContextTokens
 
@@ -440,6 +444,7 @@ export function resolveCreativeRoutePresetCompatMetadata(params: {
   const contextWindowResolution = resolveRewriteContextWindow({
     providerControlIntents: params.runtime.resolvedRuntime.providerControlIntents,
     blocks: params.blocks,
+    unlockMaximum: params.runtime.resolvedRuntime.activePreset?.transport.maxContextUnlocked ?? null,
   })
   const streamPolicy = resolveStreamPolicy({
     providerControlIntents: params.runtime.resolvedRuntime.providerControlIntents,

@@ -574,25 +574,49 @@ function buildUserPrompt(params: {
     : sourceText
       ? [`# ${CONTINUATION_SOURCE_BLOCK_LABEL}`, sourceText, '']
       : []
+  const selectedLineText = params.selectedLineStart && params.selectedLineEnd
+    ? `选中行：${params.selectedLineStart} - ${params.selectedLineEnd}`
+    : '选中行：未知'
 
   return [
+    '# 当前章节',
+    params.chapterNo ? `当前章节：第 ${params.chapterNo} 章` : '当前章节：未知',
+    '',
+    roleplayContract,
+    params.assembledContext,
+    selectedLineText,
+    ...sourceBlock,
     '# 任务',
     ...buildRewriteTaskPromptLines({
       operationType: params.operationType,
       userInstruction: params.userInstruction,
       continuation: isContinuationBody,
     }),
-    '',
-    '# 当前章节',
-    params.chapterNo ? `当前章节：第 ${params.chapterNo} 章` : '当前章节：未知',
-    params.selectedLineStart && params.selectedLineEnd
-      ? `选中行：${params.selectedLineStart} - ${params.selectedLineEnd}`
-      : '选中行：未知',
-    '',
-    ...sourceBlock,
-    params.assembledContext,
-    roleplayContract,
   ].join('\n')
+}
+
+function orderPromptBlocksForLlmRequest(promptBlocks: readonly GenerationContextBlock[]) {
+  const stableBlocks: GenerationContextBlock[] = []
+  const tailBlocks: GenerationContextBlock[] = []
+
+  for (const block of promptBlocks) {
+    if (block.id === 'user-instruction' || block.id === 'selected-text') {
+      continue
+    }
+
+    if (block.id === 'branch-lineage-full-text') {
+      tailBlocks.push(block)
+      continue
+    }
+
+    stableBlocks.push(block)
+  }
+
+  return [...stableBlocks, ...tailBlocks]
+}
+
+function assemblePromptBlockContents(promptBlocks: readonly GenerationContextBlock[] | null) {
+  return promptBlocks ? promptBlocks.map((block) => block.content).join('\n\n') : null
 }
 
 function normalizeRoleplayMessages(value: unknown) {
@@ -895,7 +919,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
   const userInstruction = String(body.userInstruction ?? body.prompt ?? '')
 
   const sourceText = String(body.sourceText ?? '')
-  const selectedText = String(body.selectedText ?? body.sourceText ?? '')
+  const selectedText = String(body.selectedText ?? '')
   const operationType = parseOperationType(body.operationType)
   if (!operationType) {
     return NextResponse.json({ ok: false, error: INVALID_OPERATION_TYPE_ERROR }, { status: 400 })
@@ -926,6 +950,9 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
     : null
   const activePromptBlocks = context
     ? context.promptBlocks.filter((block) => !disabledBlockIds.includes(block.id))
+    : null
+  const orderedActivePromptBlocks = activePromptBlocks
+    ? orderPromptBlocksForLlmRequest(activePromptBlocks)
     : null
   const buildRuntime = (
     assembledContext: string,
@@ -961,23 +988,22 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
     ),
   })
   const initialAssembledContext = activePromptBlocks
-    ? activePromptBlocks.map((block) => block.content).join('\n\n')
+    ? assemblePromptBlockContents(orderedActivePromptBlocks) ?? ''
     : String(body.prompt ?? '')
-  const initialRuntime = buildRuntime(initialAssembledContext, activePromptBlocks)
+  const initialRuntime = buildRuntime(initialAssembledContext, orderedActivePromptBlocks)
   const requestStreamOverride = getExplicitStreamOverride(body as Record<string, unknown>)
   const initialRouteMetadata = resolveCreativeRoutePresetCompatMetadata({
     runtime: initialRuntime,
-    blocks: buildRouteContextBlocks(activePromptBlocks),
+    blocks: buildRouteContextBlocks(orderedActivePromptBlocks),
     requestOverride: requestStreamOverride,
     providerDefaultEnabled: false,
     streamSupported: true,
   })
-  const trimmedPromptBlocks = activePromptBlocks
-    ? activePromptBlocks.filter((block) => !initialRouteMetadata.contextWindow?.trimmedBlockIds.includes(block.id))
+  const trimmedPromptBlocks = orderedActivePromptBlocks
+    ? orderedActivePromptBlocks.filter((block) => !initialRouteMetadata.contextWindow?.trimmedBlockIds.includes(block.id))
     : null
   const assembledContext = activePromptBlocks
-    ? (trimmedPromptBlocks ?? []).map((block) => block.content)
-        .join('\n\n')
+    ? assemblePromptBlockContents(trimmedPromptBlocks) ?? ''
     : String(body.prompt ?? '')
   const runtime = buildRuntime(assembledContext, trimmedPromptBlocks)
   const routeMetadata = resolveCreativeRoutePresetCompatMetadata({

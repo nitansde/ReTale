@@ -574,9 +574,55 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.messages[1]?.content).toContain('任务要求：接着下面给出的正文，继续根据用户指令写接下来的故事。')
     expect(requestBody.messages[1]?.content).toContain('输出要求：只输出后续新正文，不要复述、解释或重新输出下面已经给出的正文。')
     expect(requestBody.messages[1]?.content).toContain('# 已有正文（从这里之后继续写）\n上一个 block 的最新正文 BETA')
+    expect(requestBody.messages[1]?.content.indexOf('选中行：未知')).toBeLessThan(
+      requestBody.messages[1]?.content.indexOf('# 已有正文（从这里之后继续写）')
+    )
+    expect(requestBody.messages[1]?.content.indexOf('# 已有正文（从这里之后继续写）')).toBeLessThan(
+      requestBody.messages[1]?.content.lastIndexOf('# 任务')
+    )
+    expect(requestBody.messages[1]?.content.trim().endsWith([
+      '# 任务',
+      '任务类型：续写后续故事',
+      '用户要求：把情绪压低。',
+      '任务要求：接着下面给出的正文，继续根据用户指令写接下来的故事。',
+      '输出要求：只输出后续新正文，不要复述、解释或重新输出下面已经给出的正文。',
+    ].join('\n'))).toBe(true)
     expect(requestBody.messages[1]?.content).not.toContain('操作类型：rewrite')
     expect(requestBody.messages[1]?.content).not.toContain('不要改写')
     expect(requestBody.messages[1]?.content).not.toContain('# 选中文本')
+  })
+
+  it('uses source text as the continuation body when selected text is truly absent', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createCreativeLibrary(),
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT'] }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', {
+      stream: false,
+      selectedText: undefined,
+      sourceText: '省略 selectedText 时的续写正文 ALPHA',
+      userInstruction: '继续压低情绪。',
+    }))
+
+    expect(response.status).toBe(200)
+    const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    const content = requestBody.messages[1]?.content ?? ''
+    expect(content).toContain('# 已有正文（从这里之后继续写）\n省略 selectedText 时的续写正文 BETA')
+    expect(content).toContain('任务类型：续写后续故事')
+    expect(content).toContain('用户要求：继续压低情绪。')
+    expect(content).not.toContain('# 选中文本')
+    expect(content.indexOf('# 已有正文（从这里之后继续写）')).toBeLessThan(content.lastIndexOf('# 任务'))
   })
 
   it('routes generic future-jump rewrite requests through rewrite surface bindings', async () => {
@@ -1171,7 +1217,7 @@ describe('preset compat rewrite route runtime', () => {
       supported: true,
       requestedMaxContextTokens: 20,
       effectiveMaxContextTokens: 20,
-      unlockMaximum: false,
+      unlockMaximum: true,
       trimmedBlockIds: ['worldbuilding'],
     })
     expect(payload.presetCompat.fieldStatuses).toEqual(expect.arrayContaining([
@@ -1180,6 +1226,85 @@ describe('preset compat rewrite route runtime', () => {
     ]))
     expect(requestBody.messages[1]?.content).toContain('summary keep keep keep keep')
     expect(requestBody.messages[1]?.content).not.toContain('world trim trim trim')
+  })
+
+  it('honors max context unlock so large imported budgets keep rewrite context blocks', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createRouteEffectsLibrary({
+        openaiMaxContext: 1_000_000,
+        maxContextUnlocked: true,
+      }),
+    }))
+    vi.doMock('@/lib/server/context-builder', () => ({
+      buildGenerationContext: async () => ({
+        novelId: 'novel-unlocked-context',
+        branchId: 'novel-unlocked-context:main',
+        chapterId: 'chapter-unlocked-context',
+        chapterNo: 7,
+        selectedLineStart: null,
+        selectedLineEnd: null,
+        warnings: [],
+        promptBlocks: [
+          { id: 'current-summary', label: '当前章节摘要', enabled: true, priority: 'high' as const, content: '# 当前章节摘要\n稳定摘要必须保留' },
+          { id: 'chapter-state', label: '截至当前章节的知识状态', enabled: true, priority: 'high' as const, content: '# 截至当前章节的知识状态\n稳定状态必须保留' },
+          { id: 'branch-lineage-full-text', label: '当前分支谱系全文', enabled: true, priority: 'highest' as const, content: '# 当前分支谱系全文\n原始章节正文：\n前文正文必须保留' },
+        ],
+        assembledContext: '',
+        graphContext: { nodes: [], edges: [], seedEntities: [], contextText: '', warnings: [] },
+        lanceEvidence: [],
+        tokenEstimate: 0,
+      }),
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT'] }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', {
+      stream: false,
+      novelId: 'novel-unlocked-context',
+      chapterId: 'chapter-unlocked-context',
+      selectedText: '选中文本尾部',
+    }))
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as {
+      presetCompat: {
+        contextWindow: {
+          requestedMaxContextTokens: number
+          effectiveMaxContextTokens: number
+          unlockMaximum: boolean
+          trimmedBlockIds: string[]
+        } | null
+        fieldStatuses: Array<{ field: string; status: string; reason: string }>
+      }
+    }
+    const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    const content = requestBody.messages[1]?.content ?? ''
+
+    expect(payload.presetCompat.contextWindow).toMatchObject({
+      requestedMaxContextTokens: 1_000_000,
+      effectiveMaxContextTokens: 1_000_000,
+      unlockMaximum: true,
+      trimmedBlockIds: [],
+    })
+    expect(payload.presetCompat.fieldStatuses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'openai_max_context', status: 'applied', reason: 'SUPPORTED_RUNTIME' }),
+      expect.objectContaining({ field: 'max_context_unlocked', status: 'preserved', reason: 'PRESERVED_EXPORT_ONLY' }),
+    ]))
+    expect(content).toContain('# 当前章节摘要\n稳定摘要必须保留')
+    expect(content).toContain('# 截至当前章节的知识状态\n稳定状态必须保留')
+    expect(content).toContain('# 当前分支谱系全文\n原始章节正文：\n前文正文必须保留')
+    expect(content.indexOf('# 当前章节摘要')).toBeLessThan(content.indexOf('# 当前分支谱系全文'))
+    expect(content.indexOf('# 当前分支谱系全文')).toBeLessThan(content.indexOf('# 选中文本'))
+    expect(content.indexOf('# 选中文本')).toBeLessThan(content.lastIndexOf('# 任务'))
   })
 
   it('degrades formatting statuses for context blocks removed by max-context trimming', async () => {
@@ -1460,9 +1585,10 @@ describe('preset compat rewrite route runtime', () => {
       selectedLineEnd: 2,
       warnings: [],
       promptBlocks: [
+        { id: 'current-summary', label: '当前章节摘要', enabled: true, priority: 'high' as const, content: '# 当前章节摘要\n稳定摘要' },
         { id: 'branch-lineage-full-text', label: '当前分支谱系全文', enabled: true, priority: 'highest' as const, content: '# 当前分支谱系全文\n原始章节正文：\n原始正文\n\nRewrite 根节点全文（RE-01）：\n重写正文\n\nContinue 祖先全文（CONT-01）：\n续写正文' },
       ],
-      assembledContext: '# 当前分支谱系全文\n原始章节正文：\n原始正文\n\nRewrite 根节点全文（RE-01）：\n重写正文\n\nContinue 祖先全文（CONT-01）：\n续写正文',
+      assembledContext: '# 当前章节摘要\n稳定摘要\n\n# 当前分支谱系全文\n原始章节正文：\n原始正文\n\nRewrite 根节点全文（RE-01）：\n重写正文\n\nContinue 祖先全文（CONT-01）：\n续写正文',
       graphContext: { nodes: [], edges: [], seedEntities: [], contextText: '', warnings: [] },
       lanceEvidence: [],
       tokenEstimate: 0,
@@ -1497,5 +1623,17 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.messages[1]?.content).toContain('原始章节正文：')
     expect(requestBody.messages[1]?.content).toContain('重写正文')
     expect(requestBody.messages[1]?.content).toContain('续写正文')
+    const content = requestBody.messages[1]?.content ?? ''
+    expect(content.indexOf('# 当前章节摘要\n稳定摘要')).toBeLessThan(content.indexOf('# 当前分支谱系全文'))
+    expect(content.match(/^# 选中文本$/gm)?.length ?? 0).toBe(1)
+    expect(content.indexOf('# 当前分支谱系全文')).toBeLessThan(content.indexOf('# 选中文本'))
+    expect(content.indexOf('选中行：1 - 2')).toBeGreaterThan(content.indexOf('# 当前分支谱系全文'))
+    expect(content.indexOf('选中行：1 - 2')).toBeLessThan(content.indexOf('# 选中文本'))
+    expect(content.indexOf('# 选中文本')).toBeLessThan(content.lastIndexOf('# 任务'))
+    expect(content.trim().endsWith([
+      '# 任务',
+      '操作类型：rewrite',
+      '用户要求：指令 BETA',
+    ].join('\n'))).toBe(true)
   })
 })

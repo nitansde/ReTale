@@ -1173,21 +1173,20 @@ export async function buildGenerationContext(request: GenerationContextRequest):
     hasContinuationSource: Boolean(request.branchContextNodeId),
   })
 
+  const userInstructionBlock: GenerationContextBlock = {
+    id: 'user-instruction',
+    label: '任务',
+    enabled: true,
+    priority: 'highest',
+    content: renderBlock('任务', buildRewriteTaskPromptLines({
+      operationType: effectiveOperationType,
+      userInstruction: request.userInstruction,
+      continuation: isContinuationTask,
+    })),
+  }
+
   const blocks: GenerationContextBlock[] = [
-    {
-      id: 'user-instruction',
-      label: '任务',
-      enabled: true,
-      priority: 'highest',
-      content: renderBlock('任务', buildRewriteTaskPromptLines({
-        operationType: effectiveOperationType,
-        userInstruction: request.userInstruction,
-        continuation: isContinuationTask,
-      })),
-    },
-    ...selectedTextBlock,
     ...(roleplayContextBlock ? [roleplayContextBlock] : []),
-    ...(branchLineageContextBlock ? [branchLineageContextBlock] : []),
     {
       id: 'neighborhood',
       label: '选区附近原文',
@@ -1317,6 +1316,9 @@ export async function buildGenerationContext(request: GenerationContextRequest):
       priority: 'high',
       content: renderBlock('输出要求', [formatOutputConstraints(effectiveOperationType)]),
     },
+    ...(branchLineageContextBlock ? [branchLineageContextBlock] : []),
+    ...selectedTextBlock,
+    userInstructionBlock,
   ]
 
   const assembledContext = blocks.filter((block) => block.enabled).map((block) => block.content).join('\n\n')
