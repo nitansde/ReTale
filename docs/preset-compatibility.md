@@ -100,7 +100,7 @@ Route-effect intents:
 
 `seed` stays degraded and preserved-only for `openai-compatible`. It is imported, exported, status-reported, and warned, but it is not written into the outgoing OpenAI-compatible request body.
 
-`max_context_unlocked` stays preserved-only for ChatBook runtime. It is imported, stored, exported, and status-reported for metadata consumers, but it does not emit route metadata or alter context-window trimming.
+`max_context_unlocked` stays preserved-only at the provider capability layer: it is imported, stored, exported, and status-reported for metadata consumers, and it does not emit a provider control intent. `/api/rewrite` still reads the stored flag while resolving `openai_max_context`; when true, the route uses the requested context-window budget instead of the safe cap.
 
 Preserved-only or degraded-without-request-mapping warnings today include fields such as `top_k`, `top_a`, `min_p`, `repetition_penalty`, `send_if_empty`, `assistant_prefill`, `assistant_impersonation`, `continue_prefill`, `continue_postfix`, `use_sysprompt`, `function_calling`, `show_thoughts`, `reasoning_effort`, `verbosity`, and image-request metadata.
 
