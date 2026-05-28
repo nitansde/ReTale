@@ -139,7 +139,7 @@ The same current `ollama` preserved or degraded contract also covers route and t
 - It resolves preset runtime through `applyPresetCompatCreativeRuntime()` and `resolveCreativeRoutePresetCompatMetadata()`.
 - It supports context-window trimming when `openai_max_context` is present.
 - It supports the stream precedence rule `explicit request override > imported preset value > provider default`.
-- It returns structured preset metadata in JSON responses and in the base64 `X-ChatBook-Preset-Compat` header for streaming responses.
+- It returns structured preset metadata in JSON responses and in the base64 `X-ChatBook-Preset-Compat` header for streaming responses when the serialized metadata fits normal response-header limits. Oversized streaming metadata is omitted from the header and reported with `X-ChatBook-Preset-Metadata-Omitted: size-limit` so large-context requests do not fail on header limits.
 
 ### `future_jump`
 

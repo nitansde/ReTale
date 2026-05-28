@@ -455,6 +455,7 @@ function readPresetCompatHeader(response: Response) {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.doUnmock('@/lib/preset-compat/runtime-integration')
   vi.resetModules()
 })
 
@@ -763,6 +764,37 @@ describe('preset compat rewrite route runtime', () => {
     expect(secondRequestBody.stream).toBeUndefined()
     expect(secondRequestBody.response_format).toEqual({ type: 'json_object' })
     expect(thirdRequestBody.stream).toBe(true)
+  })
+
+  it('omits oversized preset compat response headers instead of overflowing clients', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createCreativeLibrary(),
+    }))
+    vi.doMock('@/lib/preset-compat/runtime-integration', async () => {
+      const actual = await vi.importActual<typeof import('@/lib/preset-compat/runtime-integration')>('@/lib/preset-compat/runtime-integration')
+      return {
+        ...actual,
+        serializePresetCompatResponseMetadata: () => 'a'.repeat(20_000),
+      }
+    })
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ result: 'RAW OUTPUT' }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', { stream: false }))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('X-ChatBook-Preset-Compat')).toBeNull()
+    expect(response.headers.get('X-ChatBook-Preset-Metadata-Omitted')).toBe('size-limit')
+    await expect(response.json()).resolves.toMatchObject({
+      result: { content: 'CLEAN OUTPUT' },
+    })
   })
 
   it('reads full chat completion JSON bodies returned to streaming OpenAI-compatible requests', async () => {

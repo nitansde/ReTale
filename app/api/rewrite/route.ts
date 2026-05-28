@@ -36,6 +36,7 @@ const INVALID_OPERATION_TYPE_ERROR = `Invalid operationType. Expected one of: ${
 const PARTIAL_REWRITE_PERSIST_MIN_CHARS = 120
 const PARTIAL_REWRITE_PERSIST_MIN_MS = 500
 const MAX_PARTIAL_REWRITE_RESULT_CHARS = 200_000
+const MAX_PRESET_COMPAT_RESPONSE_HEADER_BYTES = 16_000
 
 type RewriteResultPayload = {
   provider: string
@@ -250,6 +251,14 @@ function normalizeRecoverableRewriteJobPayload(payloadJson: string | null): Reco
     result: normalizeRewriteResultPayload(record.result) ?? undefined,
     error: typeof record.error === 'string' ? record.error : undefined,
   }
+}
+
+function buildPresetCompatResponseHeaders(serializedMetadata: string) {
+  if (Buffer.byteLength(serializedMetadata, 'utf8') <= MAX_PRESET_COMPAT_RESPONSE_HEADER_BYTES) {
+    return { 'X-ChatBook-Preset-Compat': serializedMetadata }
+  }
+
+  return { 'X-ChatBook-Preset-Metadata-Omitted': 'size-limit' }
 }
 
 function readRecoverableRewriteJob(jobId: string) {
@@ -1020,7 +1029,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
             'Content-Type': 'text/plain; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
             'X-ChatBook-Provider': runtime.resolvedRuntime.providerRuntime.provider,
-            'X-ChatBook-Preset-Compat': presetCompatHeader,
+            ...buildPresetCompatResponseHeaders(presetCompatHeader),
           },
         })
       }
@@ -1030,7 +1039,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
           'Content-Type': 'text/plain; charset=utf-8',
           'Cache-Control': 'no-cache, no-transform',
           'X-ChatBook-Provider': runtime.resolvedRuntime.providerRuntime.provider,
-          'X-ChatBook-Preset-Compat': presetCompatHeader,
+          ...buildPresetCompatResponseHeaders(presetCompatHeader),
         },
       })
     }
@@ -1041,7 +1050,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
         'Content-Type': 'text/plain; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
         'X-ChatBook-Provider': runtime.resolvedRuntime.providerRuntime.provider,
-        'X-ChatBook-Preset-Compat': presetCompatHeader,
+        ...buildPresetCompatResponseHeaders(presetCompatHeader),
       },
     })
   }
@@ -1113,9 +1122,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
       candidates: [rewriteResult],
       presetCompat: presetCompatMetadata,
     }, {
-      headers: {
-        'X-ChatBook-Preset-Compat': presetCompatHeader,
-      },
+      headers: buildPresetCompatResponseHeaders(presetCompatHeader),
     })
   }
 
@@ -1137,8 +1144,6 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
     candidates: [rewriteResult],
     presetCompat: presetCompatMetadata,
   }, {
-    headers: {
-      'X-ChatBook-Preset-Compat': presetCompatHeader,
-    },
+    headers: buildPresetCompatResponseHeaders(presetCompatHeader),
   })
 }
