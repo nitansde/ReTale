@@ -66,9 +66,11 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const novelId = searchParams.get('novelId')?.trim()
     const asOfChapter = Number(searchParams.get('asOfChapter'))
+    const statusOnly = searchParams.get('statusOnly') === '1'
     const projection = await buildKnowledgeProjection(
       novelId ? [novelId] : undefined,
-      Number.isFinite(asOfChapter) && asOfChapter >= 1 ? asOfChapter : undefined
+      Number.isFinite(asOfChapter) && asOfChapter >= 1 ? asOfChapter : undefined,
+      statusOnly ? { includeProjection: false } : undefined
     )
     return buildSuccessResponse(projection)
   } catch (error) {

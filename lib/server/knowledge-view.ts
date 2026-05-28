@@ -913,7 +913,7 @@ function projectCharacterCompatibilityFields(
 export async function buildKnowledgeProjection(
   novelIds?: string[],
   asOfChapter?: number,
-  options?: { includeKnowledgeStatusOverview?: boolean }
+  options?: { includeKnowledgeStatusOverview?: boolean; includeProjection?: boolean }
 ): Promise<KnowledgeViewPayload> {
   const knowledgeRebuildStatus = getKnowledgeRebuildStatus(novelIds)
   const hanlpCacheSnapshot = getKnowledgeViewHanlpCacheSnapshot(novelIds, knowledgeRebuildStatus)
@@ -938,6 +938,15 @@ export async function buildKnowledgeProjection(
     : novelIds?.length === 1
     ? getKnowledgeStatusOverview(novelIds[0], getMainBranchId(novelIds[0]))
     : null
+
+  if (options?.includeProjection === false) {
+    return {
+      ...createEmptyProjection(),
+      knowledgeRebuildStatus,
+      hanlpCacheSnapshot,
+      knowledgeStatusOverview,
+    }
+  }
 
   const branchIds = novels.map((novel) => getMainBranchId(novel.id))
   const applyAsOfChapter = typeof asOfChapter === 'number' && Number.isFinite(asOfChapter) && novels.length === 1
