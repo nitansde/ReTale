@@ -394,6 +394,7 @@ type NovelStore = PersistedNovelState & {
   backendLoaded: boolean
   backendLoadError: string
   presetCompatLibrary: PresetCompatLibrary
+  presetCompatLibraryDirty: boolean
   presetCompatLibraryLoading: boolean
   presetCompatLibraryError: string
 
@@ -583,6 +584,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
   backendLoaded: false,
   backendLoadError: '',
   presetCompatLibrary: createDefaultPresetCompatLibrary(),
+  presetCompatLibraryDirty: false,
   presetCompatLibraryLoading: false,
   presetCompatLibraryError: '',
 
@@ -1150,6 +1152,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       const library = await fetchPresetCompatLibrary()
       set({
         presetCompatLibrary: library,
+        presetCompatLibraryDirty: false,
         presetCompatLibraryLoading: false,
         presetCompatLibraryError: '',
       })
@@ -1234,6 +1237,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
 
     if (presetCompatResult.status === 'fulfilled') {
       nextState.presetCompatLibrary = presetCompatResult.value
+      nextState.presetCompatLibraryDirty = false
       nextState.presetCompatLibraryError = ''
     } else {
       const message = presetCompatResult.reason instanceof Error
@@ -1268,28 +1272,20 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       if (!response.ok || data.ok === false) {
         throw new Error(data.error || 'Failed to save workspace')
       }
-      try {
-        const projection = await fetchKnowledgeProjection({
-          novelId: state.currentNovelId || undefined,
-          asOfChapter: resolveCurrentChapterOrder(state, state.currentNovelId || undefined),
-        })
-        set(() => ({
-          ...normalizeKnowledgeProjection(projection),
-        }))
-      } catch (error) {
-        console.error('Knowledge projection refresh failed after save:', error)
-      }
     } finally {
       set({ isSaving: false })
     }
   },
   savePresetCompatLibrary: async () => {
-    const { presetCompatLibrary } = get()
+    const { presetCompatLibrary, presetCompatLibraryDirty } = get()
+    if (!presetCompatLibraryDirty) return
+
     set({ presetCompatLibraryLoading: true, presetCompatLibraryError: '' })
     try {
       const result = await savePresetCompatLibraryToBackend(presetCompatLibrary)
       set({
         presetCompatLibrary: result.library,
+        presetCompatLibraryDirty: false,
         presetCompatLibraryLoading: false,
         presetCompatLibraryError: '',
       })
@@ -1308,6 +1304,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       const result = await importPresetCompatPayload({ ...params, kind: 'preset' })
       set({
         presetCompatLibrary: result.library,
+        presetCompatLibraryDirty: false,
         presetCompatLibraryLoading: false,
         presetCompatLibraryError: '',
       })
@@ -1330,6 +1327,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       const result = await importPresetCompatPayload({ ...params, kind: 'regex' })
       set({
         presetCompatLibrary: result.library,
+        presetCompatLibraryDirty: false,
         presetCompatLibraryLoading: false,
         presetCompatLibraryError: '',
       })
@@ -1370,6 +1368,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
           },
         },
       },
+      presetCompatLibraryDirty: true,
       presetCompatLibraryError: '',
     }
   }),
@@ -1403,6 +1402,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         presets: nextPresets,
         surfaceBindings: nextSurfaceBindings,
       },
+      presetCompatLibraryDirty: true,
       presetCompatLibraryError: '',
     }
   }),
@@ -1433,6 +1433,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
           },
         },
       },
+      presetCompatLibraryDirty: true,
       presetCompatLibraryError: '',
     }
   }),
@@ -1456,6 +1457,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
           },
         },
       },
+      presetCompatLibraryDirty: true,
       presetCompatLibraryError: '',
     }
   }),
@@ -1481,6 +1483,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
           },
         },
       },
+      presetCompatLibraryDirty: true,
       presetCompatLibraryError: '',
     }
   }),
@@ -1506,6 +1509,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
           },
         },
       },
+      presetCompatLibraryDirty: true,
       presetCompatLibraryError: '',
     }
   }),
@@ -1532,6 +1536,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
           },
         },
       },
+      presetCompatLibraryDirty: true,
       presetCompatLibraryError: '',
     }
   }),
@@ -1558,6 +1563,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
           },
         },
       },
+      presetCompatLibraryDirty: true,
       presetCompatLibraryError: '',
     }
   }),
@@ -1580,6 +1586,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
           },
         },
       },
+      presetCompatLibraryDirty: true,
       presetCompatLibraryError: '',
     }
   }),
@@ -1603,6 +1610,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
           },
         },
       },
+      presetCompatLibraryDirty: true,
       presetCompatLibraryError: '',
     }
   }),
