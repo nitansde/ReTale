@@ -75,6 +75,11 @@ function toContinueBlockRecord(row: ContinueBlockRow): ContinueBlockRecord {
   }
 }
 
+function findContinueBlockRecordById(id: string, db: Db = defaultDb): ContinueBlockRecord | null {
+  const row = db.queryOne<ContinueBlockRow>('SELECT * FROM continue_blocks WHERE id = ?', id)
+  return row ? toContinueBlockRecord(row) : null
+}
+
 function toContinueBlockRevisionRecord(row: ContinueBlockRevisionRow): ContinueBlockRevisionRecord {
   return {
     id: row.id,
@@ -171,7 +176,7 @@ export async function createContinueBlockWithInitialRevision(
     )
   })
 
-  return findContinueBlockById(input.id, db)
+  return findContinueBlockRecordById(input.id, db)
 }
 
 export async function appendContinueBlockRevision(
@@ -235,5 +240,5 @@ export async function appendContinueBlockRevision(
     )
   })
 
-  return findContinueBlockById(input.continueBlockId, db)
+  return findContinueBlockRecordById(input.continueBlockId, db)
 }

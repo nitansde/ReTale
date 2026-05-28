@@ -1819,6 +1819,10 @@ export function SelectionNovelStudio() {
     }
   }, [backendLoaded, localChapters.length, router])
 
+  const selectedKnowledgeStatusChapterOrder = useMemo(() => {
+    return localChapters.find((chapter) => chapter.id === currentChapterId)?.order
+  }, [currentChapterId, localChapters])
+
   useEffect(() => {
     if (!backendLoaded) return
     if (!hydratedRef.current) {
@@ -1859,11 +1863,13 @@ export function SelectionNovelStudio() {
     }, 0)
 
     let cancelled = false
+    let intervalId: number | null = null
 
     const syncRebuildStatus = async () => {
       try {
         const searchParams = new URLSearchParams({ novelId: currentNovelId })
-        const selectedChapterOrder = localChapters.find((chapter) => chapter.id === currentChapterId)?.order
+        searchParams.set('statusOnly', '1')
+        const selectedChapterOrder = selectedKnowledgeStatusChapterOrder
         if (typeof selectedChapterOrder === 'number' && Number.isFinite(selectedChapterOrder) && selectedChapterOrder >= 1) {
           searchParams.set('asOfChapter', String(selectedChapterOrder))
         }
@@ -1914,16 +1920,26 @@ export function SelectionNovelStudio() {
     }
 
     void syncRebuildStatus()
-    const timer = window.setInterval(() => {
-      void syncRebuildStatus()
-    }, 1500)
+    const shouldPoll = Boolean(lastActiveKnowledgeJobIdRef.current)
+      || knowledgeRebuilding
+      || Boolean(knowledgeActionLoading)
+      || knowledgeRebuildStatus?.status === 'queued'
+      || knowledgeRebuildStatus?.status === 'running'
+      || knowledgeRebuildStatus?.status === 'paused'
+    if (shouldPoll) {
+      intervalId = window.setInterval(() => {
+        void syncRebuildStatus()
+      }, 1500)
+    }
 
     return () => {
       cancelled = true
       window.clearTimeout(confirmResetTimer)
-      window.clearInterval(timer)
+      if (intervalId !== null) {
+        window.clearInterval(intervalId)
+      }
     }
-  }, [currentChapterId, currentNovelId, knowledgeActionLoading, knowledgeRebuilding, localChapters, refreshKnowledgeProjection, setConfirmDeleteKnowledge])
+  }, [currentNovelId, knowledgeActionLoading, knowledgeRebuildStatus?.status, knowledgeRebuilding, refreshKnowledgeProjection, selectedKnowledgeStatusChapterOrder, setConfirmDeleteKnowledge])
 
   useEffect(() => {
     if (!settingsOpen || resolvedAISettings.rewrite.provider !== 'ollama') return
@@ -4322,8 +4338,35 @@ export function SelectionNovelStudio() {
             subtitleHint: selectedRewriteCandidate?.summary?.trim() || null,
           })
 
+      const existingRegenerateNode = isContinueBlockRegenerate
+        ? storyTimelineData?.branchNodes.find((node) => (
+            node.id === activeContinueBlockRewriteContext?.nodeId
+            || node.continueBlockId === activeContinueBlockRewriteContext?.continueBlockId
+          )) ?? null
+        : null
+      const refreshedRegenerateNode = existingRegenerateNode
+        ? {
+            ...existingRegenerateNode,
+            id: result.timelineNodeId,
+            nodeType: result.nodeType,
+            continueBlockId: result.continueBlockId,
+            title: result.title,
+            subtitle: result.subtitle,
+            readableLabel: result.readableLabel,
+            readableLineageLabel: result.readableLineageLabel,
+            currentText: result.generatedText,
+            latestText: result.generatedText,
+            latestRevisionNo: result.latestRevisionNo,
+            inputTokens: selectedRewriteCandidate?.inputTokens ?? existingRegenerateNode.inputTokens,
+            outputTokens: selectedRewriteCandidate?.outputTokens ?? existingRegenerateNode.outputTokens,
+            userInstruction: createUserInstruction,
+            selectedText: targetSelection,
+            originalText,
+            status: 'revised',
+          } satisfies StoryTimelineBranchNode
+        : null
       const optimisticNode = isContinueBlockRegenerate
-        ? null
+        ? refreshedRegenerateNode
         : createOptimisticContinueBlockTimelineNode({
             result,
             storyTimeline: storyTimelineData,
@@ -4341,10 +4384,7 @@ export function SelectionNovelStudio() {
         setStoryTimelineData((current) => upsertOptimisticContinueBlockTimelineNode(current, optimisticNode))
       }
 
-      const refreshed = isContinueBlockRegenerate ? await loadStoryTimeline() : null
-      const matchingNode = refreshed?.branchNodes.find(
-        (node) => node.id === result.timelineNodeId || node.continueBlockId === result.continueBlockId
-      ) ?? optimisticNode
+      const matchingNode = optimisticNode
 
       closePanel()
       setCenterPaneView('body')
