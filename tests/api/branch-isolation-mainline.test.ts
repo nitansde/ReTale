@@ -143,8 +143,8 @@ describe('branch-isolation-mainline', () => {
       embedTextsWithOllama,
     }))
 
-    const { precomputeRawTextEmbeddingCache } = await import('@/lib/server/retrieval-index')
-    await expect(precomputeRawTextEmbeddingCache({
+    const { loadRawTextRetrievalDocs, precomputeRawTextEmbeddingCache } = await import('@/lib/server/retrieval-index')
+    const firstPrecompute = await precomputeRawTextEmbeddingCache({
       novelId: 'novel-001',
       branchId: 'novel-001:main',
       settingsSnapshot: {
@@ -152,9 +152,11 @@ describe('branch-isolation-mainline', () => {
         model: aiSettings.embeddings.ollama.model,
         embeddingBatchSize: aiSettings.embeddings.embeddingBatchSize,
       },
-    })).resolves.toMatchObject({
-      totalDocs: 1,
-      completedDocs: 1,
+    })
+    const rawTextDocs = loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+    expect(firstPrecompute).toMatchObject({
+      totalDocs: rawTextDocs.length,
+      completedDocs: rawTextDocs.length,
       cacheHits: 0,
     })
     await expect(precomputeRawTextEmbeddingCache({
@@ -166,9 +168,9 @@ describe('branch-isolation-mainline', () => {
         embeddingBatchSize: aiSettings.embeddings.embeddingBatchSize,
       },
     })).resolves.toMatchObject({
-      totalDocs: 1,
-      completedDocs: 1,
-      cacheHits: 1,
+      totalDocs: rawTextDocs.length,
+      completedDocs: rawTextDocs.length,
+      cacheHits: rawTextDocs.length,
     })
     expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
 
@@ -201,7 +203,7 @@ describe('branch-isolation-mainline', () => {
     expect(retrieval.matches).toEqual([])
     expect(retrieval.matches.some((match) => match.sourceType === 'authored_delta' || match.sourceType === 'future_jump_revision')).toBe(false)
     expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
-      count: 1,
+      count: rawTextDocs.length,
     })
   })
 })

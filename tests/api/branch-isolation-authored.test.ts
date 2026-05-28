@@ -186,8 +186,8 @@ describe('branch-isolation-authored', () => {
       embedTextsWithOllama,
     }))
 
-    const { precomputeRawTextEmbeddingCache } = await import('@/lib/server/retrieval-index')
-    await expect(precomputeRawTextEmbeddingCache({
+    const { loadRawTextRetrievalDocs, precomputeRawTextEmbeddingCache } = await import('@/lib/server/retrieval-index')
+    const firstPrecompute = await precomputeRawTextEmbeddingCache({
       novelId: 'novel-001',
       branchId: 'novel-001:main',
       settingsSnapshot: {
@@ -195,9 +195,11 @@ describe('branch-isolation-authored', () => {
         model: aiSettings.embeddings.ollama.model,
         embeddingBatchSize: aiSettings.embeddings.embeddingBatchSize,
       },
-    })).resolves.toMatchObject({
-      totalDocs: 1,
-      completedDocs: 1,
+    })
+    const rawTextDocs = loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+    expect(firstPrecompute).toMatchObject({
+      totalDocs: rawTextDocs.length,
+      completedDocs: rawTextDocs.length,
       cacheHits: 0,
     })
     await expect(precomputeRawTextEmbeddingCache({
@@ -209,9 +211,9 @@ describe('branch-isolation-authored', () => {
         embeddingBatchSize: aiSettings.embeddings.embeddingBatchSize,
       },
     })).resolves.toMatchObject({
-      totalDocs: 1,
-      completedDocs: 1,
-      cacheHits: 1,
+      totalDocs: rawTextDocs.length,
+      completedDocs: rawTextDocs.length,
+      cacheHits: rawTextDocs.length,
     })
     expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
 
@@ -249,7 +251,7 @@ describe('branch-isolation-authored', () => {
     expect(retrieval.matches.some((match) => match.sourceType === 'authored_delta' && match.text.includes('决裂 / 不信任'))).toBe(true)
     expect(retrieval.matches.some((match) => match.sourceType === 'future_jump_revision' && match.text.includes('新的未来节点正文'))).toBe(true)
     expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
-      count: 1,
+      count: rawTextDocs.length,
     })
   })
 
