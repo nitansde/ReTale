@@ -45,13 +45,25 @@ export function ProjectGrid() {
   const [uploadPercent, setUploadPercent] = useState<number>(0)
   const [phase, setPhase] = useState<'idle' | 'uploading' | 'processing'>('idle')
 
+  const selectNovelChapter = (novelId: string, chapterId?: string) => {
+    const chapter = resolveOpenNovelChapter(useNovelStore.getState().localChapters, novelId, chapterId)
+
+    if (!chapter) {
+      return null
+    }
+
+    setCurrentNovelId(novelId)
+    setCurrentChapterId(chapter.id)
+    return chapter
+  }
+
   useEffect(() => {
     if (backendLoaded) return
     loadFromBackend().catch(() => undefined)
   }, [backendLoaded, loadFromBackend])
 
   const openNovel = async (novelId: string, chapterId?: string) => {
-    const chapter = resolveOpenNovelChapter(useNovelStore.getState().localChapters, novelId, chapterId)
+    const chapter = selectNovelChapter(novelId, chapterId)
 
     if (!chapter) {
       setOpeningNovelId(null)
@@ -59,14 +71,33 @@ export function ProjectGrid() {
       return
     }
 
-    setCurrentNovelId(novelId)
-    setCurrentChapterId(chapter.id)
     setOpeningNovelId(novelId)
 
     let didNavigate = false
 
     try {
       await saveToBackend()
+    } catch (error) {
+      console.warn('Failed to save workspace before opening novel; attempting to refresh state once.', error)
+      try {
+        await loadFromBackend()
+
+        const refreshedChapter = selectNovelChapter(novelId, chapterId)
+        if (refreshedChapter) {
+          try {
+            await saveToBackend()
+          } catch (retryError) {
+            console.warn('Failed to save workspace after refreshing library state; continuing with in-memory selection.', retryError)
+          }
+        } else {
+          console.warn('Failed to resolve chapter after refreshing library state; continuing with previous in-memory selection.')
+        }
+      } catch (refreshError) {
+        console.warn('Failed to refresh library state before opening novel; continuing with previous in-memory selection.', refreshError)
+      }
+    }
+
+    try {
       router.push('/workspace')
       didNavigate = true
     } catch {
