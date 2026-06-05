@@ -248,6 +248,41 @@ function mergeKnowledgeProjection(state: PersistedNovelState, projection: Knowle
   }
 }
 
+function hasKnowledgeProjectionContent(projection: KnowledgeProjectionPayload) {
+  return projection.localOutlines.length > 0
+    || projection.localCharacters.length > 0
+    || projection.localCharacterRelations.length > 0
+    || projection.localWorldEntries.length > 0
+    || projection.localTimelineEvents.length > 0
+}
+
+function mergeKnowledgeProjectionPreservingExistingIfEmpty(
+  state: PersistedNovelState,
+  projection: KnowledgeProjectionPayload,
+  novelId?: string,
+  preserveExistingIfEmpty = true,
+): KnowledgeProjectionPayload {
+  if (hasKnowledgeProjectionContent(projection)) {
+    return mergeKnowledgeProjection(state, projection, novelId)
+  }
+
+  if (!preserveExistingIfEmpty) {
+    return mergeKnowledgeProjection(state, projection, novelId)
+  }
+
+  if (!novelId) {
+    return projection
+  }
+
+  return {
+    localOutlines: state.localOutlines,
+    localCharacters: state.localCharacters,
+    localCharacterRelations: state.localCharacterRelations,
+    localWorldEntries: state.localWorldEntries,
+    localTimelineEvents: state.localTimelineEvents,
+  }
+}
+
 function resolveCurrentChapterOrder(state: Pick<PersistedNovelState, 'currentNovelId' | 'currentChapterId' | 'localChapters'>, novelId?: string) {
   const targetNovelId = novelId ?? state.currentNovelId
   if (!targetNovelId) return undefined
@@ -836,7 +871,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     const projection = normalizeKnowledgeProjection(result)
 
     set((current) => ({
-      ...mergeKnowledgeProjection(current, projection, targetNovelId),
+      ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId, result.jobOutcome !== 'completed'),
       trajectories: result.jobOutcome === 'completed'
         ? [
             {
@@ -869,7 +904,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     const projection = normalizeKnowledgeProjection(result)
 
     set((current) => ({
-      ...mergeKnowledgeProjection(current, projection, targetNovelId),
+      ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId),
     }))
 
     return result
@@ -882,7 +917,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'pause' })
     const projection = normalizeKnowledgeProjection(result)
     set((current) => ({
-      ...mergeKnowledgeProjection(current, projection, targetNovelId),
+      ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId),
     }))
     return result
   },
@@ -894,7 +929,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'abort' })
     const projection = normalizeKnowledgeProjection(result)
     set((current) => ({
-      ...mergeKnowledgeProjection(current, projection, targetNovelId),
+      ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId),
     }))
     return result
   },
