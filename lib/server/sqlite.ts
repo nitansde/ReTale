@@ -1,10 +1,12 @@
 import path from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import type * as NodeSqlite from 'node:sqlite'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 import { SCHEMA_SQL } from '@/lib/server/schema'
 
+type DatabaseSync = NodeSqlite.DatabaseSync
 type SqlParam = string | number | bigint | Uint8Array | null
 type TableColumnInfo = { name: string; notnull: number; pk: number }
+type DatabaseListRow = { name: string; file: string }
 
 type CanonicalTableRebuild = {
   tableName: 'EntityLink' | 'EntityState' | 'KnowledgeFact' | 'KnowledgeRelation' | 'KnowledgeWorld'
@@ -13,8 +15,82 @@ type CanonicalTableRebuild = {
   insertSql: string
 }
 
+type BootMigrationPlan = {
+  intervalTablesNeedingRebuild: CanonicalTableRebuild[]
+  shouldRebuildActiveRetrievalIndex: boolean
+  hasSnapshotTable: boolean
+  hasGraphContextCacheTable: boolean
+}
+
 const globalForSqlite = globalThis as {
   sqlite?: DatabaseSync
+}
+
+const processWithBuiltins = process as typeof process & {
+  getBuiltinModule?: (moduleName: 'node:sqlite') => typeof NodeSqlite
+}
+
+function loadNodeSqlite() {
+  const sqliteModule = processWithBuiltins.getBuiltinModule?.('node:sqlite')
+  if (!sqliteModule) {
+    throw new Error('node:sqlite is required but is not available in this Node.js runtime')
+  }
+
+  return sqliteModule
+}
+
+const { DatabaseSync } = loadNodeSqlite()
+
+export const SQLITE_BUSY_TIMEOUT_MS = 15_000
+const SQLITE_WAL_ATTEMPT_BUSY_TIMEOUT_MS = 250
+const SQLITE_BUSY_RETRY_DELAYS_MS = [25, 50, 100, 200] as const
+
+function getErrorCode(error: unknown) {
+  if (typeof error !== 'object' || error === null || !('code' in error)) {
+    return ''
+  }
+
+  const code = (error as { code?: unknown }).code
+  return typeof code === 'string' ? code : ''
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+export function isSqliteLockError(error: unknown) {
+  const code = getErrorCode(error)
+  if (code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED') {
+    return true
+  }
+
+  const message = getErrorMessage(error).toLowerCase()
+  return message.includes('database is locked')
+    || message.includes('database table is locked')
+    || message.includes('sqlite_busy')
+    || message.includes('sqlite_locked')
+}
+
+function sleepSync(ms: number) {
+  if (ms <= 0) return
+  const buffer = new SharedArrayBuffer(4)
+  Atomics.wait(new Int32Array(buffer), 0, 0, ms)
+}
+
+export function runWithSqliteBusyRetry<T>(operation: () => T, options: { delaysMs?: readonly number[] } = {}) {
+  const delaysMs = options.delaysMs ?? SQLITE_BUSY_RETRY_DELAYS_MS
+  for (let attempt = 0; attempt <= delaysMs.length; attempt += 1) {
+    try {
+      return operation()
+    } catch (error) {
+      if (!isSqliteLockError(error) || attempt === delaysMs.length) {
+        throw error
+      }
+      sleepSync(delaysMs[attempt])
+    }
+  }
+
+  throw new Error('SQLite busy retry exhausted')
 }
 
 function resolveDatabasePath(databaseUrl: string) {
@@ -51,11 +127,48 @@ function createDatabase() {
 }
 
 export function initializeDatabase(database: DatabaseSync) {
-  database.exec('PRAGMA foreign_keys = ON')
-  database.exec('PRAGMA busy_timeout = 5000')
-  database.exec(SCHEMA_SQL)
-  runBootMigrations(database)
+  applyConnectionPragmas(database)
+  const migrationPlan = getBootMigrationPlan(database)
+  if (!bootMigrationPlanNeedsWork(migrationPlan) && bootSchemaIsCurrent(database)) {
+    return database
+  }
+
+  execWithBusyRetry(database, SCHEMA_SQL)
+  runBootMigrations(database, migrationPlan)
   return database
+}
+
+function execWithBusyRetry(database: DatabaseSync, sql: string) {
+  runWithSqliteBusyRetry(() => database.exec(sql))
+}
+
+function databaseIsFileBacked(database: DatabaseSync) {
+  const rows = database.prepare('PRAGMA database_list').all() as DatabaseListRow[]
+  const mainDatabase = rows.find((row) => row.name === 'main')
+  return Boolean(mainDatabase?.file)
+}
+
+function tryEnableWal(database: DatabaseSync) {
+  if (!databaseIsFileBacked(database)) {
+    return
+  }
+
+  try {
+    database.exec('PRAGMA journal_mode = WAL')
+  } catch (error) {
+    if (isSqliteLockError(error)) {
+      console.warn('Skipping SQLite WAL enable because the database is currently locked.', error)
+      return
+    }
+    throw error
+  }
+}
+
+function applyConnectionPragmas(database: DatabaseSync) {
+  database.exec('PRAGMA foreign_keys = ON')
+  database.exec(`PRAGMA busy_timeout = ${SQLITE_WAL_ATTEMPT_BUSY_TIMEOUT_MS}`)
+  tryEnableWal(database)
+  database.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`)
 }
 
 function tableExists(database: DatabaseSync, tableName: string) {
@@ -76,6 +189,107 @@ function columnExists(database: DatabaseSync, tableName: string, columnName: str
   return getTableColumns(database, tableName).some((column) => column.name === columnName)
 }
 
+function tableHasColumns(database: DatabaseSync, tableName: string, columnNames: readonly string[]) {
+  const existingColumnNames = new Set(getTableColumns(database, tableName).map((column) => column.name))
+  return columnNames.every((columnName) => existingColumnNames.has(columnName))
+}
+
+function indexExists(database: DatabaseSync, indexName: string) {
+  return Boolean(
+    database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ? LIMIT 1").get(indexName)
+  )
+}
+
+function triggerExists(database: DatabaseSync, triggerName: string) {
+  return Boolean(
+    database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ? LIMIT 1").get(triggerName)
+  )
+}
+
+const BOOT_SCHEMA_INDEX_NAMES = [
+  'idx_knowledge_chapter_branch_no',
+  'idx_chapter_extraction_candidates_order',
+  'idx_chapter_extraction_candidates_chapter',
+  'idx_workspace_state_backup_state_created',
+  'idx_hanlp_bootstrap_cache_lookup',
+  'idx_hanlp_bootstrap_cache_last_seen',
+  'idx_chapter_extraction_candidates_processing_batch',
+  'idx_chapter_extraction_processing_batches_branch',
+  'uq_chapter_extraction_processing_batches_identity',
+  'idx_hanlp_bootstrap_results_lookup',
+  'idx_hanlp_bootstrap_results_job',
+  'uq_character_candidates_surface_text',
+  'uq_character_candidate_chapters_chapter_no',
+  'idx_hanlp_bootstrap_entities_branch_type',
+  'idx_hanlp_bootstrap_entities_result_lookup',
+  'idx_hanlp_bootstrap_coverage_novel',
+  'idx_character_candidates_branch_status',
+  'idx_character_candidates_promotion_lookup',
+  'idx_character_candidate_chapters_candidate_count',
+  'idx_character_candidate_chapters_branch_chapter',
+  'idx_text_span_branch_chapter',
+  'idx_text_span_chapter_type',
+  'idx_knowledge_entity_branch_name',
+  'idx_knowledge_entity_branch_tier',
+  'idx_entity_alias_mapping_branch_alias',
+  'idx_entity_alias_mapping_branch_entity',
+  'idx_entity_alias_conflict_branch_alias',
+  'idx_entity_mention_branch_chapter',
+  'idx_entity_mention_entity_chapter',
+  'idx_entity_link_source_valid_until',
+  'idx_entity_link_target_valid_until',
+  'idx_entity_link_chapter',
+  'idx_entity_link_status',
+  'idx_entity_state_entity_valid_until',
+  'idx_entity_state_status',
+  'idx_knowledge_fact_branch_source',
+  'idx_knowledge_relation_branch_valid_until',
+  'idx_knowledge_event_branch_chapter',
+  'idx_event_link_source_valid',
+  'idx_event_link_target_valid',
+  'idx_event_link_status',
+  'idx_knowledge_world_branch_valid_until',
+  'idx_job_novel_status',
+  'idx_job_branch_status',
+  'idx_story_timeline_nodes_label_scope',
+  'idx_story_timeline_nodes_anchor_chapter',
+  'idx_story_timeline_nodes_parent',
+  'idx_story_timeline_nodes_session',
+  'idx_story_timeline_nodes_run',
+  'uq_story_timeline_nodes_continue_block',
+  'idx_story_timeline_nodes_continue_block',
+  'uq_story_timeline_nodes_roleplay_session',
+  'idx_story_timeline_nodes_roleplay_session',
+  'idx_continue_blocks_branch_source',
+  'idx_continue_blocks_parent_node',
+  'idx_continue_block_revisions_block',
+  'idx_what_if_sessions_branch_source',
+  'idx_what_if_deltas_session',
+  'idx_roleplay_sessions_branch_source',
+  'idx_roleplay_sessions_source_node',
+  'idx_roleplay_messages_session_order',
+  'idx_roleplay_messages_parent',
+  'idx_roleplay_messages_fork',
+  'idx_roleplay_messages_variant_group',
+  'idx_outline_nodes_branch_track_sort',
+  'idx_outline_nodes_branch_chapter',
+  'idx_outline_nodes_source_type',
+  'idx_outline_node_chapters_outline_primary_sort',
+  'idx_outline_node_chapters_chapter_anchor',
+  'idx_future_jump_runs_session',
+  'idx_future_jump_runs_parent_node',
+  'idx_future_jump_runs_source_node',
+  'idx_future_jump_runs_source_chapter',
+  'idx_future_jump_runs_target_outline',
+  'idx_future_jump_runs_target_outline_chapter',
+  'idx_future_jump_runs_branch_target_chapter',
+  'idx_future_jump_revisions_run',
+] as const
+
+function bootSchemaIndexesAreCurrent(database: DatabaseSync) {
+  return BOOT_SCHEMA_INDEX_NAMES.every((indexName) => indexExists(database, indexName))
+}
+
 function addColumnIfMissing(database: DatabaseSync, tableName: string, columnName: string, columnSql: string) {
   if (columnExists(database, tableName, columnName)) {
     return
@@ -88,6 +302,25 @@ function addColumnIfMissing(database: DatabaseSync, tableName: string, columnNam
       return
     }
     throw error
+  }
+}
+
+function runStatementIfRowsExist(database: DatabaseSync, countSql: string, statementSql: string) {
+  const row = database.prepare(countSql).get() as { count?: number } | undefined
+  if ((row?.count ?? 0) > 0) {
+    database.exec(statementSql)
+  }
+}
+
+function createIndexIfMissing(database: DatabaseSync, indexName: string, createSql: string) {
+  if (!indexExists(database, indexName)) {
+    database.exec(createSql)
+  }
+}
+
+function createTriggerIfMissing(database: DatabaseSync, triggerName: string, createSql: string) {
+  if (!triggerExists(database, triggerName)) {
+    database.exec(createSql)
   }
 }
 
@@ -389,11 +622,81 @@ function rebuildTableToCanonicalSchema(database: DatabaseSync, config: Canonical
   database.exec(`ALTER TABLE ${config.tempTableName} RENAME TO ${config.tableName}`)
 }
 
-function runBootMigrations(database: DatabaseSync) {
-  const intervalTablesNeedingRebuild = CANONICAL_INTERVAL_TABLE_REBUILDS.filter((config) => needsCanonicalIntervalRebuild(database, config.tableName))
-  const shouldRebuildActiveRetrievalIndex = needsActiveRetrievalIndexRebuild(database)
-  const hasSnapshotTable = tableExists(database, 'ChapterSnapshot')
-  const hasGraphContextCacheTable = tableExists(database, 'GraphContextCache')
+function getBootMigrationPlan(database: DatabaseSync): BootMigrationPlan {
+  return {
+    intervalTablesNeedingRebuild: CANONICAL_INTERVAL_TABLE_REBUILDS.filter((config) => needsCanonicalIntervalRebuild(database, config.tableName)),
+    shouldRebuildActiveRetrievalIndex: needsActiveRetrievalIndexRebuild(database),
+    hasSnapshotTable: tableExists(database, 'ChapterSnapshot'),
+    hasGraphContextCacheTable: tableExists(database, 'GraphContextCache'),
+  }
+}
+
+function bootMigrationPlanNeedsWork(plan: BootMigrationPlan) {
+  return Boolean(
+    plan.intervalTablesNeedingRebuild.length
+      || plan.shouldRebuildActiveRetrievalIndex
+      || plan.hasSnapshotTable
+      || plan.hasGraphContextCacheTable
+  )
+}
+
+function bootSchemaIsCurrent(database: DatabaseSync) {
+  return tableHasColumns(database, 'hanlp_bootstrap_cache', [
+    'chapter_id',
+    'chapter_no',
+    'chapter_text_hash',
+    'hanlp_script_version_hash',
+    'hanlp_model_or_config_hash',
+    'output_schema_version',
+  ])
+    && tableHasColumns(database, 'PendingRetrievalIndex', ['rebuildFingerprint'])
+    && tableHasColumns(database, 'chapter_extraction_candidates', ['processing_batch_id', 'processing_result_json'])
+    && tableExists(database, 'chapter_extraction_processing_batches')
+    && tableHasColumns(database, 'character_candidates', [
+      'surface_text',
+      'chapter_count',
+      'observations_json',
+      'status',
+      'promotion_summary_status',
+      'promotion_summary_generated_at',
+      'merged_entity_id',
+    ])
+    && tableHasColumns(database, 'character_candidate_chapters', ['best_observation', 'best_evidence', 'chapter_id'])
+    && tableExists(database, 'hanlp_bootstrap_entities')
+    && tableExists(database, 'hanlp_bootstrap_coverage')
+    && tableHasColumns(database, 'KnowledgeEntity', ['importanceTier'])
+    && triggerExists(database, 'trg_knowledge_entity_character_tier_insert')
+    && triggerExists(database, 'trg_knowledge_entity_character_tier_update')
+    && bootSchemaIndexesAreCurrent(database)
+    && tableHasColumns(database, 'EntityAlias', ['createdAt', 'updatedAt'])
+    && tableHasColumns(database, 'story_timeline_nodes', [
+      'continue_block_id',
+      'readable_label',
+      'readable_lineage_label',
+      'roleplay_session_id',
+    ])
+    && tableHasColumns(database, 'continue_blocks', ['latest_input_tokens', 'latest_output_tokens'])
+    && tableHasColumns(database, 'continue_block_revisions', ['input_tokens', 'output_tokens'])
+    && tableHasColumns(database, 'what_if_sessions', ['input_tokens', 'output_tokens'])
+    && tableExists(database, 'roleplay_sessions')
+    && tableExists(database, 'roleplay_messages')
+    && tableHasColumns(database, 'future_jump_runs', [
+      'source_timeline_node_id',
+      'source_timeline_node_type',
+      'source_chapter_id',
+      'source_what_if_session_id',
+      'latest_input_tokens',
+      'latest_output_tokens',
+    ])
+    && tableHasColumns(database, 'future_jump_revisions', ['input_tokens', 'output_tokens'])
+}
+
+function runBootMigrations(database: DatabaseSync, migrationPlan = getBootMigrationPlan(database)) {
+  const { intervalTablesNeedingRebuild, shouldRebuildActiveRetrievalIndex, hasSnapshotTable, hasGraphContextCacheTable } = migrationPlan
+
+  if (!bootMigrationPlanNeedsWork(migrationPlan) && bootSchemaIsCurrent(database)) {
+    return
+  }
 
   if (intervalTablesNeedingRebuild.length || shouldRebuildActiveRetrievalIndex || hasSnapshotTable || hasGraphContextCacheTable) {
     database.exec('PRAGMA foreign_keys = OFF')
@@ -634,16 +937,16 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 export function execute(sql: string, ...params: SqlParam[]) {
-  return sqlite.prepare(sql).run(...params)
+  return runWithSqliteBusyRetry(() => sqlite.prepare(sql).run(...params))
 }
 
 export function queryOne<T>(sql: string, ...params: SqlParam[]) {
-  const row = sqlite.prepare(sql).get(...params)
+  const row = runWithSqliteBusyRetry(() => sqlite.prepare(sql).get(...params))
   return (row ?? null) as T | null
 }
 
 export function queryAll<T>(sql: string, ...params: SqlParam[]) {
-  return sqlite.prepare(sql).all(...params) as T[]
+  return runWithSqliteBusyRetry(() => sqlite.prepare(sql).all(...params)) as T[]
 }
 
 export async function withTransaction<T>(callback: () => T | Promise<T>) {
@@ -655,7 +958,10 @@ export async function withTransaction<T>(callback: () => T | Promise<T>) {
   } catch (error) {
     try {
       execute('ROLLBACK')
-    } catch {
+    } catch (rollbackError) {
+      if (!isSqliteLockError(rollbackError)) {
+        console.warn('SQLite rollback failed after transaction error.', rollbackError)
+      }
     }
     throw error
   }

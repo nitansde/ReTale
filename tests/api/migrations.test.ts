@@ -3,7 +3,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { initializeDatabase } from '@/lib/server/sqlite'
+import {
+  initializeDatabase,
+  isSqliteLockError,
+  runWithSqliteBusyRetry,
+  SQLITE_BUSY_TIMEOUT_MS,
+} from '@/lib/server/sqlite'
 import { getSourceDbPath } from '@/tests/helpers/temp-db'
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
@@ -35,6 +40,11 @@ function listTableColumns(database: DatabaseSync, tableName: string) {
   return database
     .prepare(`PRAGMA table_info(${tableName})`)
     .all() as Array<{ name: string; pk: number }>
+}
+
+function readBusyTimeout(database: DatabaseSync) {
+  const row = database.prepare('PRAGMA busy_timeout').get() as { timeout: number }
+  return row.timeout
 }
 
 afterEach(() => {
@@ -136,6 +146,87 @@ describe('authored branching schema migrations', () => {
     )
 
   ;(secondOpen as DatabaseSync & { close?: () => void }).close?.()
+  })
+
+  it('skips boot schema writes when an existing database is current and another writer is active', () => {
+    const databasePath = makeTempDatabasePath('chatbook-authored-current-locked')
+    fs.copyFileSync(getSourceDbPath(), databasePath)
+
+    const currentSchema = initializeDatabase(new DatabaseSync(databasePath))
+    ;(currentSchema as DatabaseSync & { close?: () => void }).close?.()
+
+    const writer = new DatabaseSync(databasePath)
+    writer.exec('BEGIN IMMEDIATE')
+
+    const reader = initializeDatabase(new DatabaseSync(databasePath))
+    const workspaceStateCount = reader.prepare('SELECT COUNT(*) AS count FROM WorkspaceState').get() as { count: number }
+
+    expect(workspaceStateCount.count).toBeGreaterThanOrEqual(0)
+    expect(readBusyTimeout(reader)).toBe(SQLITE_BUSY_TIMEOUT_MS)
+
+    writer.exec('ROLLBACK')
+    ;(writer as DatabaseSync & { close?: () => void }).close?.()
+    ;(reader as DatabaseSync & { close?: () => void }).close?.()
+  })
+
+  it('recognizes and retries transient SQLite lock errors', () => {
+    let attempts = 0
+
+    const result = runWithSqliteBusyRetry(() => {
+      attempts += 1
+      if (attempts < 3) {
+        throw new Error('database is locked')
+      }
+      return 'ok'
+    }, { delaysMs: [0, 0] })
+
+    expect(result).toBe('ok')
+    expect(attempts).toBe(3)
+    expect(isSqliteLockError(new Error('database table is locked'))).toBe(true)
+  })
+
+  it('does not fast-skip legacy continue and what-if token column migrations', () => {
+    const databasePath = makeTempDatabasePath('chatbook-token-column-migration')
+    const currentDatabase = initializeDatabase(new DatabaseSync(databasePath))
+
+    currentDatabase.exec('ALTER TABLE continue_blocks DROP COLUMN latest_input_tokens')
+    currentDatabase.exec('ALTER TABLE continue_blocks DROP COLUMN latest_output_tokens')
+    currentDatabase.exec('ALTER TABLE continue_block_revisions DROP COLUMN input_tokens')
+    currentDatabase.exec('ALTER TABLE continue_block_revisions DROP COLUMN output_tokens')
+    currentDatabase.exec('ALTER TABLE what_if_sessions DROP COLUMN input_tokens')
+    currentDatabase.exec('ALTER TABLE what_if_sessions DROP COLUMN output_tokens')
+    ;(currentDatabase as DatabaseSync & { close?: () => void }).close?.()
+
+    const migratedDatabase = initializeDatabase(new DatabaseSync(databasePath))
+
+    expect(listTableColumns(migratedDatabase, 'continue_blocks').map((column) => column.name)).toEqual(expect.arrayContaining([
+      'latest_input_tokens',
+      'latest_output_tokens',
+    ]))
+    expect(listTableColumns(migratedDatabase, 'continue_block_revisions').map((column) => column.name)).toEqual(expect.arrayContaining([
+      'input_tokens',
+      'output_tokens',
+    ]))
+    expect(listTableColumns(migratedDatabase, 'what_if_sessions').map((column) => column.name)).toEqual(expect.arrayContaining([
+      'input_tokens',
+      'output_tokens',
+    ]))
+
+    ;(migratedDatabase as DatabaseSync & { close?: () => void }).close?.()
+  })
+
+  it('does not fast-skip missing boot schema indexes', () => {
+    const databasePath = makeTempDatabasePath('chatbook-index-current-gate')
+    const currentDatabase = initializeDatabase(new DatabaseSync(databasePath))
+    currentDatabase.exec('DROP INDEX idx_continue_blocks_parent_node')
+    ;(currentDatabase as DatabaseSync & { close?: () => void }).close?.()
+
+    const migratedDatabase = initializeDatabase(new DatabaseSync(databasePath))
+    const migratedIndexes = new Set(listIndexNames(migratedDatabase).map((entry) => entry.name))
+
+    expect(migratedIndexes.has('idx_continue_blocks_parent_node')).toBe(true)
+
+    ;(migratedDatabase as DatabaseSync & { close?: () => void }).close?.()
   })
 
   it('migrates legacy active retrieval pointers to scoped rows', () => {
