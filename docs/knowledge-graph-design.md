@@ -29,7 +29,7 @@ ChatBook 的知识图谱不是一个独立数据库产品，而是小说改写�
 图谱检索：自研 SQLite Graph-aware Retriever
 中文 NLP Bootstrap：本地 Python + HanLP
 服务端编排：Next.js Route Handlers + TypeScript server modules
-后台调度：Next.js after() + persisted KnowledgeJob
+后台调度：detached `scripts/knowledge-worker.mjs` + persisted KnowledgeJob
 前端状态：Zustand
 动态图谱 / 可视化依赖：@xyflow/react
 UI：React + Tailwind CSS
@@ -219,7 +219,7 @@ index
 
 历史上暴露过的 `cleanup` step 仍可作为进度/兼容状态存在；当前实现会在第一次抽取前完成范围内旧派生知识清理，然后进入 batch-by-batch 循环。
 
-### 4.1 API start 和 background worker
+### 4.1 API start 和 detached background worker
 
 `POST /api/knowledge-view` 的 rebuild action 不等待完整 rebuild：
 
@@ -227,12 +227,13 @@ index
 POST /api/knowledge-view?action=rebuild
   -> startKnowledgeRebuildForNovel()
   -> return projection with jobOutcome queued/running
-  -> after(() => runAuthoritativeKnowledgeViewRebuild(novelId, jobId))
+  -> scheduleKnowledgeWorkerProcess(...)
+  -> detached scripts/knowledge-worker.mjs runs targeted worker entrypoints
 ```
 
-这样 HTTP response 可以快速返回。后台 worker 继续运行，并通过 `KnowledgeJob.payloadJson` 更新 progress、steps、ETA、HanLP telemetry 和 stage timings。
+这样 HTTP response 可以快速返回。Route 只负责持久化 `KnowledgeJob` 并调度 detached worker 进程；后台 worker 继续运行，并通过 `KnowledgeJob.payloadJson` 更新 progress、steps、ETA、HanLP telemetry 和 stage timings。
 
-`activeKnowledgeRebuildRuns` 是进程内 guard，用于避免同一个 job 被重复启动 worker。真正的 lifecycle 仍以 SQLite `KnowledgeJob` 为准。
+`activeKnowledgeRebuildRuns` / `activeKnowledgeRetrievalRuns` 只是进程内优化，用于减少同一进程里的重复启动。真正的 lifecycle 和跨进程 claim 仍以 SQLite `KnowledgeJob.status` 的条件更新为准。
 
 ### 4.2 HanLP bootstrap phase
 
@@ -512,7 +513,7 @@ do not silently fall back to LLM-only rebuild
 
 ### 9.2 Background worker failure
 
-`after()` worker 中的错误会被 route scheduler 捕获并记录。可见状态以 `KnowledgeJob` payload/status 为准。后续 UI 可以继续轮询 projection。
+detached worker 进程中的错误会被调度层捕获并记录。可见状态以 `KnowledgeJob` payload/status 为准。后续 UI 可以继续轮询 projection。
 
 ### 9.3 Active rebuild duplicate start
 
@@ -587,7 +588,13 @@ Acceptance focus：
 
 ```text
 app/api/knowledge-view/route.ts
-  API entry, after() background scheduling, maxDuration, cache delete action.
+  API entry, detached worker scheduling, maxDuration, cache delete action.
+
+lib/server/knowledge-worker-scheduler.ts
+  Spawns detached `scripts/knowledge-worker.mjs` processes for targeted jobs.
+
+scripts/knowledge-worker.mjs
+  Node worker entry that runs targeted knowledge rebuild / retrieval rebuild jobs.
 
 lib/server/knowledge-rebuild.ts
   KnowledgeJob state machine, HanLP phase, batch sync, candidate promotion, index rebuild.
