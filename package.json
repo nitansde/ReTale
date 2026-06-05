@@ -7,6 +7,7 @@
     "dev": "node scripts/next-dev.mjs",
     "dev:prod": "node scripts/next-dev.mjs",
     "dev:test": "node scripts/next-test-server.mjs",
+    "knowledge:worker": "node scripts/knowledge-worker.mjs",
     "server:prod": "node scripts/next-dev.mjs",
     "server:test": "node scripts/next-test-server.mjs",
     "build": "next build",
