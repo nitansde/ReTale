@@ -1,4 +1,4 @@
-import { after, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import {
   abortAuthoritativeKnowledgeRebuild,
   buildKnowledgeProjection,
@@ -11,35 +11,15 @@ import {
   pauseAuthoritativeKnowledgeRebuild,
   rebuildAuthoritativeRetrievalIndex,
   rebuildAuthoritativeKnowledgeView,
-  runAuthoritativeRetrievalIndexRebuild,
-  runAuthoritativeKnowledgeViewRebuild,
 } from '@/lib/server/knowledge-view'
+import { getMainBranchId } from '@/lib/server/knowledge-store'
+import { scheduleKnowledgeWorkerProcess } from '@/lib/server/knowledge-worker-scheduler'
 import type { KnowledgeRebuildChapterRange } from '@/lib/types'
 
 export const maxDuration = 3600
 
 function buildSuccessResponse(projection: KnowledgeViewPayload | KnowledgeViewActionPayload) {
   return NextResponse.json({ ok: true, ...projection })
-}
-
-function scheduleAfterResponse(callback: () => Promise<void>) {
-  if (process.env.NODE_ENV === 'test') {
-    void callback
-    return
-  }
-
-  try {
-    after(callback)
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('outside a request scope')) {
-      return
-    }
-
-    console.warn('Falling back to timer-based knowledge rebuild scheduling', error)
-    setTimeout(() => {
-      void callback()
-    }, 0)
-  }
 }
 
 function normalizePostChapterRange(value: unknown): KnowledgeRebuildChapterRange | undefined {
@@ -70,7 +50,7 @@ export async function GET(request: Request) {
     const projection = await buildKnowledgeProjection(
       novelId ? [novelId] : undefined,
       Number.isFinite(asOfChapter) && asOfChapter >= 1 ? asOfChapter : undefined,
-      statusOnly ? { includeProjection: false } : undefined
+      statusOnly ? { includeProjection: false, knowledgeStatusOverviewMode: 'lightweight' } : undefined
     )
     return buildSuccessResponse(projection)
   } catch (error) {
@@ -110,24 +90,20 @@ export async function POST(request: Request) {
     const scheduledJobId = action === 'rebuild-retrieval-index'
       ? projection.knowledgeStatusOverview?.retrievalIndex.task?.jobId
       : projection.knowledgeRebuildStatus?.jobId
+    const scheduledJobType = action === 'rebuild-retrieval-index'
+      ? 'rebuild_retrieval_index'
+      : 'extract_chapter_knowledge'
 
     if (
       (action === 'rebuild' || action === 'rebuild-retrieval-index')
       && (projection.jobOutcome === 'queued' || projection.jobOutcome === 'running')
       && scheduledJobId
     ) {
-      const jobId = scheduledJobId
-      scheduleAfterResponse(async () => {
-        try {
-          if (action === 'rebuild-retrieval-index') {
-            await runAuthoritativeRetrievalIndexRebuild(novelId, jobId)
-            return
-          }
-
-          await runAuthoritativeKnowledgeViewRebuild(novelId, jobId)
-        } catch (error) {
-          console.error('Knowledge rebuild background worker failed', error)
-        }
+      scheduleKnowledgeWorkerProcess({
+        novelId,
+        branchId: getMainBranchId(novelId),
+        jobId: scheduledJobId,
+        jobType: scheduledJobType,
       })
     }
 
