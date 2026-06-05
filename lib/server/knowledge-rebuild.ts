@@ -530,6 +530,39 @@ function updateKnowledgeJob(
   )
 }
 
+async function claimQueuedKnowledgeJob(params: {
+  jobId: string
+  currentStep: string | null
+  progress: number
+  payload?: unknown
+}) {
+  return withTransaction(() => {
+    const currentJob = queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', params.jobId)
+    if (!currentJob?.status || currentJob.status !== 'queued') {
+      return { claimed: false as const, status: currentJob?.status ?? null }
+    }
+
+    const claimResult = execute(
+      "UPDATE KnowledgeJob SET status = 'running', errorMessage = NULL, updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued'",
+      params.jobId,
+    )
+    if (claimResult.changes !== 1) {
+      const nextJob = queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', params.jobId)
+      return { claimed: false as const, status: nextJob?.status ?? null }
+    }
+
+    updateKnowledgeJob(params.jobId, {
+      status: 'running',
+      errorMessage: null,
+      currentStep: params.currentStep,
+      progress: params.progress,
+      ...(params.payload !== undefined ? { payload: params.payload } : {}),
+    })
+
+    return { claimed: true as const, status: 'running' as const }
+  })
+}
+
 function clampProgress(value: number) {
   if (!Number.isFinite(value)) return 0
   return Math.max(0, Math.min(1, value))
@@ -1684,13 +1717,21 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
   }
 
   if (activeJob?.id) {
-    if (params.jobId && activeJob.status !== 'queued' && activeJob.status !== 'running' && activeJob.status !== 'paused') {
+    if (params.jobId && activeJob.status !== 'queued') {
+      if (activeJob.status === 'running') {
+        return null
+      }
+
       return { jobId: activeJob.id, outcome: getKnowledgeJobOutcome(activeJob.id) }
     }
 
-    if (!params.jobId && activeJob.status !== 'paused') {
+    if (!params.jobId && activeJob.status === 'running') {
       await waitForKnowledgeJobCompletion(activeJob.id)
       return { jobId: activeJob.id, outcome: getKnowledgeJobOutcome(activeJob.id) }
+    }
+
+    if (!params.jobId && activeJob.status === 'paused') {
+      return { jobId: activeJob.id, outcome: 'paused' as const }
     }
   }
 
@@ -1731,6 +1772,23 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
   }
 
   try {
+    const claimedProgress = Math.max(0.94, queryOne<{ progress: number }>('SELECT progress FROM KnowledgeJob WHERE id = ?', job.id)?.progress ?? 0.94)
+    const claimedJob = await claimQueuedKnowledgeJob({
+      jobId: job.id,
+      currentStep: '等待原文 Embedding 预计算完成',
+      progress: claimedProgress,
+    })
+    if (!claimedJob.claimed) {
+      if (claimedJob.status === 'running') {
+        if (params.jobId) return { jobId: job.id, outcome: 'running' as const }
+
+        await waitForKnowledgeJobCompletion(job.id)
+        return { jobId: job.id, outcome: getKnowledgeJobOutcome(job.id) }
+      }
+
+      return { jobId: job.id, outcome: getKnowledgeJobOutcome(job.id) }
+    }
+
     const initialState = getKnowledgeRebuildJobState(job.id)
     const defaultChapterRange = resolveKnowledgeRebuildChapterRange({
       payload: {
@@ -1741,10 +1799,8 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
     })
 
     updateKnowledgeJob(job.id, {
-      status: 'running',
-      errorMessage: null,
       currentStep: '等待原文 Embedding 预计算完成',
-      progress: Math.max(0.94, queryOne<{ progress: number }>('SELECT progress FROM KnowledgeJob WHERE id = ?', job.id)?.progress ?? 0.94),
+      progress: claimedProgress,
       payload: {
         ...(initialState?.payload ?? {}),
         branchId,
@@ -5846,13 +5902,21 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
   }
 
   if (activeJob?.id) {
-    if (params.jobId && activeJob.status !== 'queued' && activeJob.status !== 'running' && activeJob.status !== 'paused') {
+    if (params.jobId && activeJob.status !== 'queued') {
+      if (activeJob.status === 'running') {
+        return null
+      }
+
       return { jobId: activeJob.id, outcome: getKnowledgeJobOutcome(activeJob.id) }
     }
 
-    if (!params.jobId && activeJob.status !== 'paused') {
+    if (!params.jobId && activeJob.status === 'running') {
       await waitForKnowledgeJobCompletion(activeJob.id)
       return { jobId: activeJob.id, outcome: getKnowledgeJobOutcome(activeJob.id) }
+    }
+
+    if (!params.jobId && activeJob.status === 'paused') {
+      return { jobId: activeJob.id, outcome: 'paused' as const }
     }
   }
 
@@ -5871,6 +5935,24 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
   }
 
   try {
+    let jobState = getKnowledgeRebuildJobState(job.id)
+    const claimedProgress = Math.max(0.05, queryOne<{ progress: number }>('SELECT progress FROM KnowledgeJob WHERE id = ?', job.id)?.progress ?? 0)
+    const claimedJob = await claimQueuedKnowledgeJob({
+      jobId: job.id,
+      currentStep: jobState?.phase === 'extract' ? '抽取章节知识' : '继续知识重建',
+      progress: claimedProgress,
+    })
+    if (!claimedJob.claimed) {
+      if (claimedJob.status === 'running') {
+        if (params.jobId) return { jobId: job.id, outcome: 'running' as const }
+
+        await waitForKnowledgeJobCompletion(job.id)
+        return { jobId: job.id, outcome: getKnowledgeJobOutcome(job.id) }
+      }
+
+      return { jobId: job.id, outcome: getKnowledgeJobOutcome(job.id) }
+    }
+
     const chapters = queryAll<KnowledgeChapterRow>(
       'SELECT id, novelId, branchId, chapterNo, title, rawText, summary, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? ORDER BY chapterNo ASC',
       params.novelId,
@@ -5878,7 +5960,6 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
     )
     const defaultRebuildStartChapter = getRebuildStartChapter(chapters)
     const requestedChapterRange = normalizeKnowledgeRebuildChapterRange(params.chapterRange)
-    let jobState = getKnowledgeRebuildJobState(job.id)
     const defaultChapterRange = resolveKnowledgeRebuildChapterRange({
       payload: {
         rebuildStartChapter: jobState?.payload.rebuildStartChapter ?? defaultRebuildStartChapter,
@@ -5919,10 +6000,8 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
     }
 
     updateKnowledgeJob(job.id, {
-      status: 'running',
-      errorMessage: null,
       currentStep: jobState?.phase === 'extract' ? '抽取章节知识' : '继续知识重建',
-      progress: Math.max(0.05, queryOne<{ progress: number }>('SELECT progress FROM KnowledgeJob WHERE id = ?', job.id)?.progress ?? 0),
+      progress: claimedProgress,
     })
 
     while (true) {

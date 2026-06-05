@@ -275,6 +275,79 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     })
   })
 
+  it('no-ops duplicate targeted retrieval workers once the job is already running', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-retrieval-targeted-duplicate-worker')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_targeted_duplicate_retrieval_worker', 2)
+    const aiSettings = createMockAISettings()
+    const precomputeGate = createDeferred<void>()
+    let precomputeStarted = false
+    let precomputeCalls = 0
+    let indexCalls = 0
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+      saveAISettings: vi.fn(),
+      maskApiKey: (value: string) => value,
+    }))
+
+    vi.doMock('@/lib/server/retrieval-index', async () => {
+      const actual = await vi.importActual<typeof import('@/lib/server/retrieval-index')>('@/lib/server/retrieval-index')
+      return {
+        ...actual,
+        precomputeRawTextEmbeddingCache: vi.fn(async () => {
+          precomputeCalls += 1
+          precomputeStarted = true
+          await precomputeGate.promise
+          return {
+            totalDocs: 2,
+            completedDocs: 2,
+            cacheHits: 1,
+            cacheMisses: 1,
+            failedDocs: 0,
+            totalBatches: 2,
+            completedBatches: 2,
+            degraded: false,
+            cancelled: false,
+            durationMs: 25,
+          }
+        }),
+        rebuildBranchRetrievalIndex: vi.fn(async () => {
+          indexCalls += 1
+          return { rowCount: 2, embeddingBatchCount: 2 }
+        }),
+      }
+    })
+
+    const primaryWorker = await import('@/lib/server/knowledge-rebuild')
+    const started = await primaryWorker.startKnowledgeRetrievalRebuildForNovel({ novelId, branchId, chapterRange: { startChapter: 1, endChapter: 2 } })
+    expect(started.outcome).toBe('queued')
+
+    const primaryRun = primaryWorker.runStartedKnowledgeRetrievalRebuildForNovel({ novelId, branchId, jobId: started.jobId })
+    await waitForCondition(() => precomputeStarted, 'retrieval targeted duplicate primary start')
+
+    vi.resetModules()
+    const duplicateWorker = await import('@/lib/server/knowledge-rebuild')
+    await expect(duplicateWorker.runStartedKnowledgeRetrievalRebuildForNovel({ novelId, branchId, jobId: started.jobId })).resolves.toBeUndefined()
+
+    const runningJob = queryOne<{ status: string; currentStep: string | null }>(
+      'SELECT status, currentStep FROM KnowledgeJob WHERE id = ?',
+      started.jobId,
+    )
+    expect(runningJob).toMatchObject({
+      status: 'running',
+      currentStep: '等待原文 Embedding 预计算完成',
+    })
+    expect(precomputeCalls).toBe(1)
+    expect(indexCalls).toBe(0)
+
+    precomputeGate.resolve()
+    await expect(primaryRun).resolves.toBeUndefined()
+
+    expect(precomputeCalls).toBe(1)
+    expect(indexCalls).toBe(1)
+    expect(queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', started.jobId)?.status).toBe('succeeded')
+  })
+
   it('exposes raw-text telemetry through rebuild status', async () => {
     const { database } = await createTestDatabase('chatbook-knowledge-rebuild-status-telemetry-surface')
     const novelId = `novel_status_${Math.random().toString(36).slice(2, 8)}`
@@ -337,6 +410,130 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
         embeddingBatchSize: 16,
       },
     })
+  })
+
+  it('skips duplicate detached retrieval workers once another process claimed the job', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-retrieval-detached-claim')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_detached_retrieval_claim', 2)
+    const aiSettings = createMockAISettings()
+    const precomputeGate = createDeferred<void>()
+    let precomputeCallCount = 0
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+      saveAISettings: vi.fn(),
+      maskApiKey: (value: string) => value,
+    }))
+
+    vi.doMock('@/lib/server/retrieval-index', async () => {
+      const actual = await vi.importActual<typeof import('@/lib/server/retrieval-index')>('@/lib/server/retrieval-index')
+      return {
+        ...actual,
+        precomputeRawTextEmbeddingCache: vi.fn(async () => {
+          precomputeCallCount += 1
+          await precomputeGate.promise
+          return {
+            totalDocs: 2,
+            completedDocs: 2,
+            cacheHits: 1,
+            cacheMisses: 1,
+            failedDocs: 0,
+            totalBatches: 2,
+            completedBatches: 2,
+            degraded: false,
+            cancelled: false,
+            durationMs: 5,
+          }
+        }),
+        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 2, embeddingBatchCount: 1 })),
+      }
+    })
+
+    const firstModule = await import('@/lib/server/knowledge-rebuild')
+    const started = await firstModule.startKnowledgeRetrievalRebuildForNovel({ novelId, branchId, chapterRange: { startChapter: 1, endChapter: 2 } })
+    const firstRunPromise = firstModule.runStartedKnowledgeRetrievalRebuildForNovel({ novelId, branchId, jobId: started.jobId })
+
+    await waitForCondition(() => precomputeCallCount === 1, 'first retrieval worker claim')
+
+    vi.resetModules()
+    const secondModule = await import('@/lib/server/knowledge-rebuild')
+    await expect(secondModule.runStartedKnowledgeRetrievalRebuildForNovel({
+      novelId,
+      branchId,
+      jobId: started.jobId,
+    })).resolves.toBeUndefined()
+
+    expect(precomputeCallCount).toBe(1)
+
+    precomputeGate.resolve()
+    await expect(firstRunPromise).resolves.toBeUndefined()
+  })
+
+  it('skips duplicate detached main rebuild workers once another process claimed the job', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-main-detached-claim')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_detached_main_claim', 1)
+    const aiSettings = createMockAISettings()
+    const extractionGate = createDeferred<void>()
+    let extractionCallCount = 0
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { rawText: string }) => ({
+        source: 'cache' as const,
+        cache: {} as never,
+        result: {} as never,
+        output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+        cacheKey: {} as never,
+        scriptPath: '/tmp/mock-hanlp.py',
+        normalizedChapterText: input.rawText,
+      })),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
+    vi.doMock('@/lib/server/knowledge-extraction', () => ({
+      extractChapterKnowledgeOffline: vi.fn(async () => {
+        extractionCallCount += 1
+        await extractionGate.promise
+        return {
+          extraction: createMockExtraction(1),
+          provider: 'ollama',
+          model: aiSettings.knowledgeExtraction.ollama.model,
+        }
+      }),
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
+      }
+    })
+
+    const firstModule = await import('@/lib/server/knowledge-rebuild')
+    const started = await firstModule.startKnowledgeRebuildForNovel({ novelId, branchId })
+    const firstRunPromise = firstModule.runStartedKnowledgeRebuildForNovel({ novelId, branchId, jobId: started.jobId })
+
+    await waitForCondition(() => extractionCallCount === 1, 'first main rebuild worker claim')
+
+    vi.resetModules()
+    const secondModule = await import('@/lib/server/knowledge-rebuild')
+    await expect(secondModule.runStartedKnowledgeRebuildForNovel({
+      novelId,
+      branchId,
+      jobId: started.jobId,
+    })).resolves.toBeUndefined()
+
+    expect(extractionCallCount).toBe(1)
+
+    extractionGate.resolve()
+    await expect(firstRunPromise).resolves.toBeUndefined()
   })
 
   it('keeps raw-text precompute off the main SQLite rebuild path', async () => {
@@ -422,6 +619,77 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     const payload = payloadRow?.payloadJson ? JSON.parse(payloadRow.payloadJson) as { rawTextEmbeddingProgress?: number; stageTimingsMs?: Record<string, number> } : null
     expect(payload?.rawTextEmbeddingProgress).toBeUndefined()
     expect(payload?.stageTimingsMs?.raw_text_precompute).toBeUndefined()
+  })
+
+  it('no-ops duplicate targeted main rebuild workers once the job is already running', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-main-targeted-duplicate-worker')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_targeted_duplicate_main_worker')
+    const aiSettings = createMockAISettings()
+    const extractionGate = createDeferred<void>()
+    let extractionStarted = false
+    let extractionCalls = 0
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { rawText: string }) => ({
+        source: 'cache' as const,
+        cache: {} as never,
+        result: {} as never,
+        output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+        cacheKey: {} as never,
+        scriptPath: '/tmp/mock-hanlp.py',
+        normalizedChapterText: input.rawText,
+      })),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
+    vi.doMock('@/lib/server/knowledge-extraction', () => ({
+      extractChapterKnowledgeOffline: vi.fn(async () => {
+        extractionCalls += 1
+        extractionStarted = true
+        await extractionGate.promise
+        return {
+          extraction: createMockExtraction(1),
+          provider: 'ollama',
+          model: aiSettings.knowledgeExtraction.ollama.model,
+        }
+      }),
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
+      }
+    })
+
+    const primaryWorker = await import('@/lib/server/knowledge-rebuild')
+    const started = await primaryWorker.startKnowledgeRebuildForNovel({ novelId, branchId })
+    expect(started.outcome).toBe('queued')
+
+    const primaryRun = primaryWorker.runStartedKnowledgeRebuildForNovel({ novelId, branchId, jobId: started.jobId })
+    await waitForCondition(() => extractionStarted, 'main targeted duplicate primary start')
+
+    vi.resetModules()
+    const duplicateWorker = await import('@/lib/server/knowledge-rebuild')
+    await expect(duplicateWorker.runStartedKnowledgeRebuildForNovel({ novelId, branchId, jobId: started.jobId })).resolves.toBeUndefined()
+
+    const runningJob = queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', started.jobId)
+    expect(runningJob?.status).toBe('running')
+    expect(extractionCalls).toBe(1)
+
+    extractionGate.resolve()
+    await expect(primaryRun).resolves.toBeUndefined()
+
+    expect(extractionCalls).toBe(1)
+    expect(queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', started.jobId)?.status).toBe('succeeded')
   })
 
   it('finishes ranged SQLite rebuilds without waiting for retrieval phases', async () => {
