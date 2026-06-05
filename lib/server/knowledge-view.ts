@@ -146,6 +146,14 @@ type KnowledgeRebuildStatusRow = Omit<KnowledgeRebuildStatus, 'etaMinutes' | 'st
   payloadJson: string | null
 }
 
+type KnowledgeStatusOverviewMode = 'full' | 'lightweight'
+
+type BuildKnowledgeProjectionOptions = {
+  includeKnowledgeStatusOverview?: boolean
+  includeProjection?: boolean
+  knowledgeStatusOverviewMode?: KnowledgeStatusOverviewMode
+}
+
 function isKnowledgeRebuildPayloadStep(value: unknown): value is KnowledgeRebuildPayloadStep {
   if (!value || typeof value !== 'object') return false
 
@@ -351,6 +359,13 @@ function createIdleActionPayload(): KnowledgeViewActionPayload {
   }
 }
 
+async function buildLightweightKnowledgeActionPayload(novelId: string) {
+  return buildKnowledgeProjection([novelId], undefined, {
+    includeProjection: false,
+    knowledgeStatusOverviewMode: 'lightweight',
+  })
+}
+
 function buildSqlPlaceholders(count: number) {
   return Array.from({ length: count }, () => '?').join(', ')
 }
@@ -408,8 +423,8 @@ function buildKnowledgeCoverageOverview(params: {
   }
 }
 
-function getKnowledgeStatusOverview(novelId: string, branchId: string): KnowledgeStatusOverview {
-  const chapters = queryAll<{ chapterNo: number; isDirty: number; knowledgeStatus: string }>(
+function loadKnowledgeChapterStatusRows(novelId: string, branchId: string) {
+  return queryAll<{ chapterNo: number; isDirty: number; knowledgeStatus: string }>(
     `
       SELECT chapterNo, isDirty, knowledgeStatus
       FROM KnowledgeChapter
@@ -419,15 +434,44 @@ function getKnowledgeStatusOverview(novelId: string, branchId: string): Knowledg
     novelId,
     branchId,
   )
+}
 
-  const knowledgeGraph = buildKnowledgeCoverageOverview({
+function getKnowledgeGraphCoverageOverview(chapters: Array<{ chapterNo: number; isDirty: number; knowledgeStatus: string }>) {
+  const readyChapterNos = new Set(
+    chapters
+      .filter((chapter) => chapter.isDirty === 0 && chapter.knowledgeStatus === 'ready')
+      .map((chapter) => chapter.chapterNo)
+  )
+
+  return buildKnowledgeCoverageOverview({
     chapters,
-    isCovered: (chapterNo) => {
-      const chapter = chapters.find((item) => item.chapterNo === chapterNo)
-      if (!chapter) return false
-      return chapter.isDirty === 0 && chapter.knowledgeStatus === 'ready'
-    },
+    isCovered: (chapterNo) => readyChapterNos.has(chapterNo),
   })
+}
+
+function buildProgressCoverageOverview(chapters: Array<{ chapterNo: number }>, progress: number): KnowledgeChapterCoverageOverview {
+  const orderedChapters = chapters.slice().sort((left, right) => left.chapterNo - right.chapterNo)
+  const totalChapterCount = orderedChapters.length
+  const coveredChapterCount = Math.max(0, Math.min(totalChapterCount, Math.floor(totalChapterCount * progress)))
+  const validThroughChapterNo = coveredChapterCount > 0
+    ? orderedChapters[coveredChapterCount - 1]?.chapterNo ?? null
+    : null
+
+  return {
+    status: coveredChapterCount <= 0
+      ? 'missing'
+      : coveredChapterCount >= totalChapterCount
+        ? 'full'
+        : 'partial',
+    coveredChapterCount,
+    totalChapterCount,
+    validThroughChapterNo,
+  }
+}
+
+function getKnowledgeStatusOverview(novelId: string, branchId: string): KnowledgeStatusOverview {
+  const chapters = loadKnowledgeChapterStatusRows(novelId, branchId)
+  const knowledgeGraph = getKnowledgeGraphCoverageOverview(chapters)
 
   const embeddingSettings = getCurrentEmbeddingModel()
   const chapterHashesByNo = new Map<number, Set<string>>()
@@ -500,6 +544,85 @@ function getKnowledgeStatusOverview(novelId: string, branchId: string): Knowledg
     branchId,
     jobTypes: ['rebuild_retrieval_index'],
   })
+
+  return {
+    knowledgeGraph,
+    embeddingCache: {
+      ...embeddingCacheCoverage,
+      provider: embeddingSettings.provider,
+      model: embeddingSettings.model,
+    },
+    retrievalIndex: fullRetrievalRow
+      ? {
+          status: 'full',
+          indexedScopeCount: retrievalIndexRows.length,
+          task: retrievalTask,
+        }
+      : primaryPartialRetrievalRow
+        ? {
+            status: 'partial',
+            indexedScopeCount: retrievalIndexRows.length,
+            chapterRange: {
+              ...(typeof primaryPartialRetrievalRow.scopeStartChapter === 'number'
+                ? { startChapter: primaryPartialRetrievalRow.scopeStartChapter }
+                : {}),
+              ...(typeof primaryPartialRetrievalRow.scopeEndChapter === 'number'
+                ? { endChapter: primaryPartialRetrievalRow.scopeEndChapter }
+                : {}),
+            },
+            task: retrievalTask,
+          }
+        : {
+            status: 'missing',
+            indexedScopeCount: 0,
+            task: retrievalTask,
+          },
+  }
+}
+
+function getLightweightKnowledgeStatusOverview(novelId: string, branchId: string): KnowledgeStatusOverview {
+  const chapters = loadKnowledgeChapterStatusRows(novelId, branchId)
+  const knowledgeGraph = getKnowledgeGraphCoverageOverview(chapters)
+  const embeddingSettings = getCurrentEmbeddingModel()
+  const retrievalTask = getKnowledgeJobStatusByTypes({
+    novelId,
+    branchId,
+    jobTypes: ['rebuild_retrieval_index'],
+  })
+  const retrievalIndexRows = queryAll<{
+    scopeKey: string
+    scopeStartChapter: number | null
+    scopeEndChapter: number | null
+  }>(
+    `
+      SELECT scopeKey, scopeStartChapter, scopeEndChapter
+      FROM ActiveRetrievalIndex
+      WHERE branchId = ?
+      ORDER BY scopeStartChapter ASC, scopeEndChapter ASC, scopeKey ASC
+    `,
+    branchId,
+  )
+  const fullRetrievalRow = retrievalIndexRows.find((row) => row.scopeKey === 'full') ?? null
+  const primaryPartialRetrievalRow = retrievalIndexRows[0] ?? null
+  const hasEmbeddingRows = Boolean(queryOne<{ value: number }>(
+    `
+      SELECT 1 AS value
+      FROM RawTextEmbeddingCache
+      WHERE branchId = ? AND provider = ? AND model = ?
+      LIMIT 1
+    `,
+    branchId,
+    embeddingSettings.provider,
+    embeddingSettings.model,
+  ))
+  const embeddingProgress = typeof retrievalTask?.rawTextEmbeddingProgress === 'number'
+    ? Math.max(0, Math.min(1, retrievalTask.rawTextEmbeddingProgress))
+    : fullRetrievalRow
+      ? 1
+      : hasEmbeddingRows
+        ? Math.min(1, 1 / Math.max(1, chapters.length))
+        : 0
+  const embeddingCacheCoverage = buildProgressCoverageOverview(chapters, embeddingProgress)
 
   return {
     knowledgeGraph,
@@ -689,7 +812,32 @@ function getKnowledgeJobStatusByTypes(params: {
   }
 
   const jobTypePlaceholders = params.jobTypes.map(() => '?').join(', ')
-  const status = queryAll<KnowledgeRebuildStatusRow>(
+  const activeStatusPlaceholders = ['queued', 'running', 'paused'].map(() => '?').join(', ')
+  const activeStatus = queryAll<KnowledgeRebuildStatusRow>(
+    `
+      SELECT id as jobId, novelId, jobType, status, errorMessage, progress, currentStep, createdAt, updatedAt
+           , payloadJson
+      FROM KnowledgeJob
+      WHERE novelId = ?
+        AND branchId = ?
+        AND jobType IN (${jobTypePlaceholders})
+        AND status IN (${activeStatusPlaceholders})
+      ORDER BY updatedAt DESC, createdAt DESC
+      LIMIT 1
+    `,
+    params.novelId,
+    params.branchId,
+    ...params.jobTypes,
+    'queued',
+    'running',
+    'paused',
+  )[0] ?? null
+
+  if (activeStatus) {
+    return hydrateKnowledgeRebuildStatus(activeStatus, params.branchId)
+  }
+
+  const latestStatus = queryAll<KnowledgeRebuildStatusRow>(
     `
       SELECT id as jobId, novelId, jobType, status, errorMessage, progress, currentStep, createdAt, updatedAt
            , payloadJson
@@ -705,11 +853,11 @@ function getKnowledgeJobStatusByTypes(params: {
     ...params.jobTypes,
   )[0] ?? null
 
-  if (!status) {
+  if (!latestStatus) {
     return null
   }
 
-  return hydrateKnowledgeRebuildStatus(status, params.branchId)
+  return hydrateKnowledgeRebuildStatus(latestStatus, params.branchId)
 }
 
 function getKnowledgeRebuildStatus(novelIds?: string[]): KnowledgeRebuildStatus | null {
@@ -913,7 +1061,7 @@ function projectCharacterCompatibilityFields(
 export async function buildKnowledgeProjection(
   novelIds?: string[],
   asOfChapter?: number,
-  options?: { includeKnowledgeStatusOverview?: boolean; includeProjection?: boolean }
+  options?: BuildKnowledgeProjectionOptions
 ): Promise<KnowledgeViewPayload> {
   const knowledgeRebuildStatus = getKnowledgeRebuildStatus(novelIds)
   const hanlpCacheSnapshot = getKnowledgeViewHanlpCacheSnapshot(novelIds, knowledgeRebuildStatus)
@@ -936,7 +1084,9 @@ export async function buildKnowledgeProjection(
   const knowledgeStatusOverview = options?.includeKnowledgeStatusOverview === false
     ? null
     : novelIds?.length === 1
-    ? getKnowledgeStatusOverview(novelIds[0], getMainBranchId(novelIds[0]))
+    ? options?.knowledgeStatusOverviewMode === 'lightweight'
+      ? getLightweightKnowledgeStatusOverview(novelIds[0], getMainBranchId(novelIds[0]))
+      : getKnowledgeStatusOverview(novelIds[0], getMainBranchId(novelIds[0]))
     : null
 
   if (options?.includeProjection === false) {
@@ -1157,18 +1307,19 @@ export async function buildKnowledgeProjection(
 }
 
 export async function rebuildAuthoritativeKnowledgeView(novelId: string, chapterRange?: KnowledgeRebuildChapterRange): Promise<KnowledgeViewActionPayload> {
-  if (!novelId.trim()) {
+  const trimmedNovelId = novelId.trim()
+  if (!trimmedNovelId) {
     return createIdleActionPayload()
   }
 
   const rebuildResult = await startKnowledgeRebuildForNovel({
-    novelId,
-    branchId: getMainBranchId(novelId),
+    novelId: trimmedNovelId,
+    branchId: getMainBranchId(trimmedNovelId),
     chapterRange,
   })
 
   return {
-    ...(await buildKnowledgeProjection([novelId], undefined, { includeKnowledgeStatusOverview: false })),
+    ...(await buildLightweightKnowledgeActionPayload(trimmedNovelId)),
     jobOutcome: rebuildResult.outcome,
     actionError: null,
   }
@@ -1189,7 +1340,10 @@ export async function rebuildAuthoritativeRetrievalIndex(novelId: string, chapte
 
   if (activeMainJob && (activeMainJob.status === 'queued' || activeMainJob.status === 'running' || activeMainJob.status === 'paused')) {
     return {
-      ...(await buildKnowledgeProjection([trimmedNovelId])),
+      ...(await buildKnowledgeProjection([trimmedNovelId], undefined, {
+        includeProjection: false,
+        knowledgeStatusOverviewMode: 'lightweight',
+      })),
       jobOutcome: 'blocked',
       actionError: {
         code: 'active-rebuild',
@@ -1205,7 +1359,10 @@ export async function rebuildAuthoritativeRetrievalIndex(novelId: string, chapte
   })
 
   return {
-    ...(await buildKnowledgeProjection([trimmedNovelId])),
+    ...(await buildKnowledgeProjection([trimmedNovelId], undefined, {
+      includeProjection: false,
+      knowledgeStatusOverviewMode: 'lightweight',
+    })),
     jobOutcome: rebuildResult.outcome,
     actionError: null,
   }
@@ -1236,34 +1393,36 @@ export async function runAuthoritativeRetrievalIndexRebuild(novelId: string, job
 }
 
 export async function pauseAuthoritativeKnowledgeRebuild(novelId: string): Promise<KnowledgeViewActionPayload> {
-  if (!novelId.trim()) {
+  const trimmedNovelId = novelId.trim()
+  if (!trimmedNovelId) {
     return createIdleActionPayload()
   }
 
   const jobOutcome = await pauseKnowledgeRebuildForNovel({
-    novelId,
-    branchId: getMainBranchId(novelId),
+    novelId: trimmedNovelId,
+    branchId: getMainBranchId(trimmedNovelId),
   })
 
   return {
-    ...(await buildKnowledgeProjection([novelId], undefined, { includeKnowledgeStatusOverview: false })),
+    ...(await buildLightweightKnowledgeActionPayload(trimmedNovelId)),
     jobOutcome,
     actionError: null,
   }
 }
 
 export async function abortAuthoritativeKnowledgeRebuild(novelId: string): Promise<KnowledgeViewActionPayload> {
-  if (!novelId.trim()) {
+  const trimmedNovelId = novelId.trim()
+  if (!trimmedNovelId) {
     return createIdleActionPayload()
   }
 
   const jobOutcome = await abortKnowledgeRebuildForNovel({
-    novelId,
-    branchId: getMainBranchId(novelId),
+    novelId: trimmedNovelId,
+    branchId: getMainBranchId(trimmedNovelId),
   })
 
   return {
-    ...(await buildKnowledgeProjection([novelId], undefined, { includeKnowledgeStatusOverview: false })),
+    ...(await buildLightweightKnowledgeActionPayload(trimmedNovelId)),
     jobOutcome,
     actionError: null,
   }

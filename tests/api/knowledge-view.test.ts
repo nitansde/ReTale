@@ -1,5 +1,3 @@
-import fs from 'node:fs'
-import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
@@ -7,7 +5,6 @@ import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
-const WORKSPACE_IMPORT_SMOKE_PATH = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
 const API_TEST_TIMEOUT_MS = 120_000
 
 vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
@@ -70,6 +67,81 @@ function seedKnowledgeChapter(database: DatabaseSync, params: {
     0,
     `source-hash-${params.chapterId}`,
     'queued',
+  )
+}
+
+function insertFormalKnowledgeFixtures(database: DatabaseSync, params: {
+  novelId: string
+  branchId: string
+  chapterId: string
+  chapterNo: number
+  idPrefix: string
+}) {
+  database.prepare(
+    `INSERT INTO KnowledgeEntity (
+      id, novelId, branchId, entityType, canonicalName, importanceTier, importance, firstSeenChapter, lastSeenChapter, status
+    ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, ?)`
+  ).run(
+    `${params.idPrefix}-entity`,
+    params.novelId,
+    params.branchId,
+    `${params.idPrefix}角色`,
+    'important',
+    4,
+    params.chapterNo,
+    params.chapterNo,
+    'ready',
+  )
+
+  database.prepare(
+    `INSERT INTO KnowledgeWorld (
+      id, novelId, branchId, term, category, definition,
+      firstSeenChapter, validFromChapter, validUntilChapter, status, confidence
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    `${params.idPrefix}-world`,
+    params.novelId,
+    params.branchId,
+    `${params.idPrefix}地点`,
+    'location',
+    '已有正式知识。',
+    params.chapterNo,
+    params.chapterNo,
+    999999,
+    'ready',
+    1,
+  )
+
+  database.prepare(
+    `INSERT INTO KnowledgeEvent (
+      id, novelId, branchId, name, summary, chapterNo, importance, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    `${params.idPrefix}-event`,
+    params.novelId,
+    params.branchId,
+    `${params.idPrefix}事件`,
+    '已有时间线事件。',
+    params.chapterNo,
+    1,
+    'ready',
+  )
+
+  database.prepare(
+    `INSERT INTO KnowledgeFact (
+      id, novelId, branchId, factType, predicate, valueJson, sourceChapter, validFromChapter, validUntilChapter, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    `${params.idPrefix}-fact`,
+    params.novelId,
+    params.branchId,
+    'open_thread',
+    `${params.idPrefix}伏笔`,
+    JSON.stringify({ description: '已有大纲伏笔。' }),
+    params.chapterNo,
+    params.chapterNo,
+    999999,
+    'ready',
   )
 }
 
@@ -780,6 +852,82 @@ describe('/api/knowledge-view', () => {
     })
   })
 
+  it('prefers an older active rebuild over a newer terminal rebuild row for the main branch', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-prefer-active-over-terminal')
+    const novelId = `novel_knowledge_view_prefer_active_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-prefer-active-main', chapterNo: 1 })
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-5 minutes'), datetime('now', '-5 minutes'))`
+    ).run(
+      'job_rebuild_running_should_win',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'running',
+      'extract',
+      0.42,
+      JSON.stringify({
+        steps: [{
+          key: 'extract',
+          label: '抽取章节知识',
+          status: 'running',
+          progress: 0.42,
+          etaMinutes: 4,
+          detail: '正在处理第 1 章',
+        }],
+      })
+    )
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-1 minutes'), datetime('now', '-1 minutes'))`
+    ).run(
+      'job_rebuild_aborted_newer_should_not_mask',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'aborted',
+      '已中止',
+      1,
+      JSON.stringify({ steps: [] })
+    )
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, errorMessage, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-30 seconds'), datetime('now', '-30 seconds'))`
+    ).run(
+      'job_rebuild_failed_newer_should_not_mask',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'failed',
+      'newer failed row should not mask an active job',
+      'failed',
+      0.12,
+      JSON.stringify({ steps: [] })
+    )
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      ok: boolean
+      knowledgeRebuildStatus: Record<string, unknown> | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.knowledgeRebuildStatus).toMatchObject({
+      jobId: 'job_rebuild_running_should_win',
+      status: 'running',
+      currentStep: 'extract',
+      progress: 0.42,
+    })
+  })
+
   it('surfaces the latest retrieval rebuild status through the existing knowledge rebuild payload', async () => {
     const { database } = await createTestDatabase('chatbook-knowledge-view-retrieval-status-surface')
     const novelId = `novel_knowledge_view_retrieval_${Math.random().toString(36).slice(2, 8)}`
@@ -997,6 +1145,75 @@ describe('/api/knowledge-view', () => {
         },
       },
     })
+  })
+
+  it('returns lightweight status-only payloads without loading retrieval docs', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-status-only-lightweight')
+    const novelId = `novel_status_only_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-status-only-1', chapterNo: 1 })
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-status-only-2', chapterNo: 2 })
+    database.prepare("UPDATE KnowledgeChapter SET knowledgeStatus = 'ready', isDirty = 0 WHERE id = ?").run('chapter-status-only-1')
+    database.prepare(
+      `INSERT INTO ActiveRetrievalIndex (
+        branchId, scopeKey, tableName, scopeStartChapter, scopeEndChapter
+      ) VALUES (?, ?, ?, ?, ?)`
+    ).run(mainBranchId, 'chapter-range:1:1', 'retrieval_docs_partial_fixture', 1, 1)
+
+    vi.doMock('@/lib/server/retrieval-index', async () => {
+      const actual = await vi.importActual<typeof import('@/lib/server/retrieval-index')>('@/lib/server/retrieval-index')
+      return {
+        ...actual,
+        loadRawTextRetrievalDocs: vi.fn(() => {
+          throw new Error('loadRawTextRetrievalDocs should not run during statusOnly GET response')
+        }),
+      }
+    })
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}&statusOnly=1`))
+    const payload = await response.json() as {
+      ok: boolean
+      localCharacters: unknown[]
+      localCharacterRelations: unknown[]
+      localWorldEntries: unknown[]
+      localTimelineEvents: unknown[]
+      localOutlines: unknown[]
+      knowledgeStatusOverview: {
+        knowledgeGraph: { status: string; coveredChapterCount: number; totalChapterCount: number; validThroughChapterNo: number | null }
+        embeddingCache: { status: string; provider: string | null; model: string | null }
+        retrievalIndex: { status: string; indexedScopeCount: number; chapterRange?: { startChapter?: number; endChapter?: number } }
+      } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({
+      ok: true,
+      localCharacters: [],
+      localCharacterRelations: [],
+      localWorldEntries: [],
+      localTimelineEvents: [],
+      localOutlines: [],
+      knowledgeStatusOverview: {
+        knowledgeGraph: {
+          status: 'partial',
+          coveredChapterCount: 1,
+          totalChapterCount: 2,
+          validThroughChapterNo: 1,
+        },
+        retrievalIndex: {
+          status: 'partial',
+          indexedScopeCount: 1,
+          chapterRange: {
+            startChapter: 1,
+            endChapter: 1,
+          },
+        },
+      },
+    })
+    expect(payload.knowledgeStatusOverview?.embeddingCache.provider).toEqual(expect.any(String))
+    expect(payload.knowledgeStatusOverview?.embeddingCache.model).toEqual(expect.any(String))
   })
 
   it('deletes only the target main-branch HanLP cache rows and preserves raw embedding cache', async () => {
@@ -1330,7 +1547,7 @@ describe('/api/knowledge-view', () => {
     })
   })
 
-  it('queues main rebuild jobs without recomputing the full status overview in the POST response', async () => {
+  it('queues main rebuild jobs with a lightweight POST response that avoids full projections and retrieval doc loading', async () => {
     const { database } = await createTestDatabase('chatbook-knowledge-view-range-rebuild-fast-response')
     const novelId = `novel_range_rebuild_fast_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -1343,14 +1560,22 @@ describe('/api/knowledge-view', () => {
         chapterNo,
       })
     }
+    insertFormalKnowledgeFixtures(database, {
+      novelId,
+      branchId: mainBranchId,
+      chapterId: 'chapter-range-fast-1',
+      chapterNo: 1,
+      idPrefix: 'rebuild-fast',
+    })
 
+    const loadRawTextRetrievalDocs = vi.fn(() => {
+      throw new Error('loadRawTextRetrievalDocs should not run during main rebuild POST response')
+    })
     vi.doMock('@/lib/server/retrieval-index', async () => {
       const actual = await vi.importActual<typeof import('@/lib/server/retrieval-index')>('@/lib/server/retrieval-index')
       return {
         ...actual,
-        loadRawTextRetrievalDocs: vi.fn(() => {
-          throw new Error('loadRawTextRetrievalDocs should not run during main rebuild POST response')
-        }),
+        loadRawTextRetrievalDocs,
       }
     })
 
@@ -1363,18 +1588,104 @@ describe('/api/knowledge-view', () => {
     const payload = await response.json() as {
       ok: boolean
       jobOutcome: string
-      knowledgeStatusOverview: unknown
+      localCharacters: unknown[]
+      localCharacterRelations: unknown[]
+      localWorldEntries: unknown[]
+      localTimelineEvents: unknown[]
+      localOutlines: unknown[]
+      knowledgeRebuildStatus: { jobId?: string; status?: string; chapterRange?: { startChapter?: number; endChapter?: number } } | null
+      knowledgeStatusOverview: { knowledgeGraph?: { totalChapterCount?: number } } | null
     }
 
     expect(response.status).toBe(200)
-    expect(payload).toMatchObject({
-      ok: true,
-      jobOutcome: 'queued',
-      knowledgeStatusOverview: null,
+    expect(payload.ok).toBe(true)
+    expect(['queued', 'running']).toContain(payload.jobOutcome)
+    expect(payload.knowledgeRebuildStatus).toMatchObject({
+      status: expect.stringMatching(/^(queued|running)$/),
+      chapterRange: { startChapter: 2, endChapter: 3 },
     })
+    expect(payload.knowledgeRebuildStatus?.jobId).toEqual(expect.any(String))
+    expect(payload.localCharacters).toEqual([])
+    expect(payload.localCharacterRelations).toEqual([])
+    expect(payload.localWorldEntries).toEqual([])
+    expect(payload.localTimelineEvents).toEqual([])
+    expect(payload.localOutlines).toEqual([])
+    expect(payload.knowledgeStatusOverview?.knowledgeGraph?.totalChapterCount).toBe(3)
+    expect(loadRawTextRetrievalDocs).not.toHaveBeenCalled()
   })
 
-  it('aborts active rebuild jobs without recomputing the full status overview in the POST response', async () => {
+  it('pauses active rebuild jobs with a lightweight POST response that avoids full projections and retrieval doc loading', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-pause-fast-response')
+    const novelId = `novel_pause_fast_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, {
+      novelId,
+      branchId: mainBranchId,
+      chapterId: 'chapter-pause-fast-1',
+      chapterNo: 1,
+    })
+    insertFormalKnowledgeFixtures(database, {
+      novelId,
+      branchId: mainBranchId,
+      chapterId: 'chapter-pause-fast-1',
+      chapterNo: 1,
+      idPrefix: 'pause-fast',
+    })
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      'job_pause_fast',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'running',
+      '抽取章节知识',
+      0.42,
+      JSON.stringify({ phase: 'extract', steps: [] }),
+    )
+
+    const loadRawTextRetrievalDocs = vi.fn(() => {
+      throw new Error('loadRawTextRetrievalDocs should not run during pause POST response')
+    })
+    vi.doMock('@/lib/server/retrieval-index', async () => {
+      const actual = await vi.importActual<typeof import('@/lib/server/retrieval-index')>('@/lib/server/retrieval-index')
+      return {
+        ...actual,
+        loadRawTextRetrievalDocs,
+      }
+    })
+
+    const { POST } = await loadKnowledgeViewRoute()
+    const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', {
+      novelId,
+      action: 'pause',
+    }))
+    const payload = await response.json() as {
+      ok: boolean
+      jobOutcome: string
+      localCharacters: unknown[]
+      localCharacterRelations: unknown[]
+      localWorldEntries: unknown[]
+      localTimelineEvents: unknown[]
+      localOutlines: unknown[]
+      knowledgeRebuildStatus: { status?: string } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.jobOutcome).toBe('paused')
+    expect(payload.knowledgeRebuildStatus?.status).toBe('paused')
+    expect(payload.localCharacters).toEqual([])
+    expect(payload.localCharacterRelations).toEqual([])
+    expect(payload.localWorldEntries).toEqual([])
+    expect(payload.localTimelineEvents).toEqual([])
+    expect(payload.localOutlines).toEqual([])
+    expect(loadRawTextRetrievalDocs).not.toHaveBeenCalled()
+  })
+
+  it('aborts active rebuild jobs with a lightweight POST response that avoids full projections and retrieval doc loading', async () => {
     const { database } = await createTestDatabase('chatbook-knowledge-view-abort-fast-response')
     const novelId = `novel_abort_fast_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -1384,6 +1695,13 @@ describe('/api/knowledge-view', () => {
       branchId: mainBranchId,
       chapterId: 'chapter-abort-fast-1',
       chapterNo: 1,
+    })
+    insertFormalKnowledgeFixtures(database, {
+      novelId,
+      branchId: mainBranchId,
+      chapterId: 'chapter-abort-fast-1',
+      chapterNo: 1,
+      idPrefix: 'abort-fast',
     })
     database.prepare(
       `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson)
@@ -1399,13 +1717,14 @@ describe('/api/knowledge-view', () => {
       JSON.stringify({ phase: 'extract', steps: [] }),
     )
 
+    const loadRawTextRetrievalDocs = vi.fn(() => {
+      throw new Error('loadRawTextRetrievalDocs should not run during abort POST response')
+    })
     vi.doMock('@/lib/server/retrieval-index', async () => {
       const actual = await vi.importActual<typeof import('@/lib/server/retrieval-index')>('@/lib/server/retrieval-index')
       return {
         ...actual,
-        loadRawTextRetrievalDocs: vi.fn(() => {
-          throw new Error('loadRawTextRetrievalDocs should not run during abort POST response')
-        }),
+        loadRawTextRetrievalDocs,
       }
     })
 
@@ -1417,15 +1736,26 @@ describe('/api/knowledge-view', () => {
     const payload = await response.json() as {
       ok: boolean
       jobOutcome: string
-      knowledgeStatusOverview: unknown
+      localCharacters: unknown[]
+      localCharacterRelations: unknown[]
+      localWorldEntries: unknown[]
+      localTimelineEvents: unknown[]
+      localOutlines: unknown[]
+      knowledgeRebuildStatus: unknown
+      knowledgeStatusOverview: { knowledgeGraph?: { totalChapterCount?: number } } | null
     }
 
     expect(response.status).toBe(200)
-    expect(payload).toMatchObject({
-      ok: true,
-      jobOutcome: 'aborted',
-      knowledgeStatusOverview: null,
-    })
+    expect(payload.ok).toBe(true)
+    expect(payload.jobOutcome).toBe('aborted')
+    expect(payload.knowledgeRebuildStatus).toBeNull()
+    expect(payload.localCharacters).toEqual([])
+    expect(payload.localCharacterRelations).toEqual([])
+    expect(payload.localWorldEntries).toEqual([])
+    expect(payload.localTimelineEvents).toEqual([])
+    expect(payload.localOutlines).toEqual([])
+    expect(payload.knowledgeStatusOverview?.knowledgeGraph?.totalChapterCount).toBe(1)
+    expect(loadRawTextRetrievalDocs).not.toHaveBeenCalled()
   })
 
   it('queues dedicated retrieval rebuild jobs with retrieval status payloads', async () => {
