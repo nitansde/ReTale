@@ -2,6 +2,7 @@
 
 import { forwardRef } from 'react'
 import { GitBranch, LoaderCircle, Sparkles, Trash2 } from 'lucide-react'
+import { useI18n } from '@/lib/i18n/provider'
 import { formatStoryBranchInstructionPreview, resolveStoryBranchDisplayLabel } from '@/lib/story-branch-labels'
 import type { StoryTimelineBranchNode } from '@/lib/story-branch-types'
 import { cn } from '@/lib/utils'
@@ -22,18 +23,19 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
   onDelete?: () => void
   onHoverChange: (hovered: boolean) => void
 }>((props, ref) => {
+  const { t } = useI18n()
   const isWhatIfLike = props.node.nodeType === 'rewrite' || props.node.nodeType === 'what_if' || props.node.nodeType === 'continue_block'
   const isRoleplay = props.node.nodeType === 'roleplay_session'
   const Icon = isWhatIfLike || isRoleplay ? GitBranch : Sparkles
   const branchKindLabel = props.node.nodeType === 'rewrite'
-    ? 'Rewrite'
+    ? t('workspace.timeline.branchKind.rewrite')
     : props.node.nodeType === 'continue_block'
-      ? 'Continue block'
+      ? t('workspace.timeline.branchKind.continueBlock')
       : props.node.nodeType === 'what_if'
-        ? 'What if'
+        ? t('workspace.timeline.branchKind.whatIf')
         : props.node.nodeType === 'roleplay_session'
-          ? 'Roleplay session'
-          : 'Future jump'
+          ? t('workspace.timeline.branchKind.roleplaySession')
+          : t('workspace.timeline.branchKind.futureJump')
   const displayLabel = resolveStoryBranchDisplayLabel(props.node)
   const instructionPreview = formatStoryBranchInstructionPreview(props.node.userInstruction ?? props.node.subtitle)
 
@@ -79,7 +81,7 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
               {branchKindLabel}
             </p>
             <p className="mt-1 text-sm font-medium text-zinc-50">{displayLabel}</p>
-            {instructionPreview ? <p className="mt-2 text-xs leading-5 text-zinc-300">指令预览 · {instructionPreview}</p> : null}
+            {instructionPreview ? <p className="mt-2 text-xs leading-5 text-zinc-300">{t('workspace.instructionPreview')} · {instructionPreview}</p> : null}
             {!instructionPreview && props.node.subtitle ? <p className="mt-2 text-xs leading-5 text-zinc-300">{props.node.subtitle}</p> : null}
           </div>
         </div>
@@ -90,7 +92,7 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
           disabled={props.deleting}
           onClick={props.onDelete}
           className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-2 text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-          aria-label={`删除 ${branchKindLabel} 节点 ${displayLabel}`}
+          aria-label={t('workspace.timeline.deleteNodeAria', { kind: branchKindLabel, title: displayLabel })}
         >
           {props.deleting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
         </button>

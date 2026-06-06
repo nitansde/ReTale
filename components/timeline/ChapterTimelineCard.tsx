@@ -2,6 +2,7 @@
 
 import { forwardRef, type ReactNode } from 'react'
 import { Trash2 } from 'lucide-react'
+import { useI18n } from '@/lib/i18n/provider'
 import type { ChapterTimelineItem } from '@/lib/story-branch-types'
 import type { Chapter } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -16,6 +17,7 @@ export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
   onDeleteBranchChapter: (chapter: Chapter) => void
   branchArtifacts?: ReactNode
 }>((props, ref) => {
+  const { t } = useI18n()
   const chapterSelected = props.activeChapterId === props.chapter.chapterId
 
   return (
@@ -31,15 +33,15 @@ export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
               chapterSelected ? 'border-violet-400/30 bg-violet-500/12' : 'border-white/8 bg-black/20 hover:bg-white/[0.06]'
             )}
           >
-            <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Chapter {props.chapter.chapterNo}</p>
+            <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('workspace.timeline.chapterLabel', { count: props.chapter.chapterNo })}</p>
             <p className="mt-1 text-sm font-medium text-zinc-100">{props.chapter.title}</p>
-            <p className="mt-2 text-xs text-zinc-500">{props.chapter.wordCount} 字</p>
+            <p className="mt-2 text-xs text-zinc-500">{t('workspace.wordCount', { count: props.chapter.wordCount })}</p>
           </button>
           <button
             type="button"
             onClick={props.onDeleteChapter}
             className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-2 text-rose-200 transition hover:bg-rose-500/20"
-            aria-label={`删除章节 ${props.chapter.title}`}
+            aria-label={t('workspace.timeline.deleteChapterAria', { title: props.chapter.title })}
           >
             <Trash2 className="h-4 w-4" />
           </button>
@@ -59,14 +61,14 @@ export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
                       branchSelected ? 'border-fuchsia-400/30 bg-fuchsia-500/12' : 'border-white/8 bg-black/20 hover:bg-white/[0.06]'
                     )}
                   >
-                    <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Branch {branch.branchLabel ?? 'B'}</p>
+                    <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('workspace.timeline.branchLabel', { label: branch.branchLabel ?? 'B' })}</p>
                     <p className="mt-1 text-sm font-medium text-zinc-100">{branch.title}</p>
                   </button>
                   <button
                     type="button"
                     onClick={() => props.onDeleteBranchChapter(branch)}
                     className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-2 text-rose-200 transition hover:bg-rose-500/20"
-                    aria-label={`删除章节 ${branch.title}`}
+                    aria-label={t('workspace.timeline.deleteChapterAria', { title: branch.title })}
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>

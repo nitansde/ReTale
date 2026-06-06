@@ -320,7 +320,7 @@ describe('StoryTimeline', () => {
     expect(jumpNode).toHaveAttribute('data-visible-depth', '0')
     expect(futureContinueNode).toHaveAttribute('data-visible-depth', '1')
     expect(jumpNode.compareDocumentPosition(futureContinueNode) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(screen.getAllByText('Continue block')).toHaveLength(2)
+    expect(screen.getAllByText('续写块')).toHaveLength(2)
   })
 
   it('emits delete callbacks for rewrite, continue, what-if, and future-jump nodes', () => {
@@ -368,10 +368,10 @@ describe('StoryTimeline', () => {
       />
     )
 
-    fireEvent.click(screen.getByLabelText('删除 Rewrite 节点 RE-01'))
-    fireEvent.click(screen.getByLabelText('删除 Continue block 节点 CONT-01'))
-    fireEvent.click(screen.getByLabelText('删除 What if 节点 IF-01'))
-    fireEvent.click(screen.getByLabelText('删除 Future jump 节点 JUMP-01'))
+    fireEvent.click(screen.getByLabelText('删除 改写分支 节点 RE-01'))
+    fireEvent.click(screen.getByLabelText('删除 续写块 节点 CONT-01'))
+    fireEvent.click(screen.getByLabelText('删除 What-if 节点 IF-01'))
+    fireEvent.click(screen.getByLabelText('删除 Future Jump 节点 JUMP-01'))
 
     expect(onDeleteBranchNode).toHaveBeenNthCalledWith(1, branchNodes[0])
     expect(onDeleteBranchNode).toHaveBeenNthCalledWith(2, branchNodes[2])

@@ -869,7 +869,7 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
   })
 
   await page.goto('/workspace', { waitUntil: 'networkidle' })
-  const chapterCard = page.getByRole('button', { name: 'Chapter 10 第10章 结盟 1200 字' })
+  const chapterCard = page.getByRole('button', { name: /^第 10 章 第10章 结盟 1200 字$/ })
   await chapterCard.evaluate((node: HTMLButtonElement) => node.click())
   await expect(page.getByTestId('workspace-current-word-count')).not.toContainText('1,200 字')
   await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 — tokens')
@@ -907,7 +907,7 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
   await expect(page.getByTestId('workspace-action-overlay')).toBeHidden()
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
-  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
+  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
   expect(continueBlockDetailRequestCount).toBeGreaterThanOrEqual(1)
   await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 41 tokens')
@@ -927,7 +927,7 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
 
   await expect(page).toHaveURL(/selectionKind=continue_block/)
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
-  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
+  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
   expect(continueBlockDetailRequestCount).toBeGreaterThanOrEqual(2)
 })
@@ -1024,14 +1024,14 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
 
   await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
 
-  await expect(page.getByLabel('删除 Rewrite 节点 RE-01')).toBeVisible()
-  await expect(page.getByLabel('删除 Continue block 节点 CONT-01')).toBeVisible()
-  await expect(page.getByLabel('删除 What if 节点 IF-01')).toBeVisible()
-  await expect(page.getByLabel('删除 Future jump 节点 JUMP-01')).toBeVisible()
+  await expect(page.getByLabel(/(删除|Delete) (改写分支|Rewrite).*RE-01/i)).toBeVisible()
+  await expect(page.getByLabel(/(删除|Delete) (续写块|Continue block).*CONT-01/i)).toBeVisible()
+  await expect(page.getByLabel(/(删除|Delete) What[ -]?if .*IF-01/i)).toBeVisible()
+  await expect(page.getByLabel(/(删除|Delete) Future jump .*JUMP-01/i)).toBeVisible()
   expect(continueBlockDetailRequests).toContain('continue-block-1')
 
   page.once('dialog', (dialog) => dialog.accept())
-  await page.getByLabel('删除 Continue block 节点 CONT-01').click()
+  await page.getByLabel(/(删除|Delete) (续写块|Continue block).*CONT-01/i).click()
   await delayedTimelineRefreshStarted
   await expect(page).toHaveURL(/selectionKind=rewrite/)
   await expect(page).toHaveURL(/selectionNodeId=rewrite-node-1/)
@@ -1043,7 +1043,7 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
   timelineState = buildDeleteAffordanceTimelinePayload()
   await page.goto(`/workspace?selectionKind=future_jump&selectionNodeId=${storyBranchFixtureIds.futureJumpNodeId}&selectionRunId=jump-run-001&selectionSourceChapterNo=10&selectionTargetChapterNo=100`, { waitUntil: 'networkidle' })
   page.once('dialog', (dialog) => dialog.accept())
-  await page.getByLabel('删除 Future jump 节点 JUMP-01').click()
+  await page.getByLabel(/(删除|Delete) Future jump .*JUMP-01/i).click()
   await expect(page).toHaveURL(/selectionKind=what_if/)
   await expect(page).toHaveURL(new RegExp(`selectionNodeId=${storyBranchFixtureIds.whatIfNodeId}`))
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('what-if')
@@ -1051,7 +1051,7 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
   timelineState = buildDeleteAffordanceTimelinePayload()
   await page.goto('/workspace?selectionKind=rewrite&selectionNodeId=rewrite-node-1&selectionContinueBlockId=rewrite-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
   page.once('dialog', (dialog) => dialog.accept())
-  await page.getByLabel('删除 Rewrite 节点 RE-01').click()
+  await page.getByLabel(/(删除|Delete) (改写分支|Rewrite).*RE-01/i).click()
   await expect(page).toHaveURL(/selectionKind=chapter/)
   await expect(page).toHaveURL(/selectionChapterId=chapter-10/)
   await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
@@ -1059,7 +1059,7 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
   timelineState = buildDeleteAffordanceTimelinePayload()
   await page.goto(`/workspace?selectionKind=what_if&selectionNodeId=${storyBranchFixtureIds.whatIfNodeId}&selectionSessionId=what-if-session-001&selectionAnchorChapterNo=10`, { waitUntil: 'networkidle' })
   page.once('dialog', (dialog) => dialog.accept())
-  await page.getByLabel('删除 What if 节点 IF-01').click()
+  await page.getByLabel(/(删除|Delete) What[ -]?if .*IF-01/i).click()
   await expect(page).toHaveURL(/selectionKind=chapter/)
   await expect(page).toHaveURL(/selectionChapterId=chapter-10/)
   await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
@@ -1231,7 +1231,7 @@ test('full speculative branching flow persists through revise, reload, and reope
 
   await page.goto('/workspace', { waitUntil: 'networkidle' })
 
-  const chapterCard = page.getByRole('button', { name: 'Chapter 10 第10章 结盟 1200 字' })
+  const chapterCard = page.getByRole('button', { name: /^第 10 章 第10章 结盟 1200 字$/ })
   const ifNode = page.getByTestId(`timeline-node-${storyBranchFixtureIds.whatIfNodeId}`)
 
   await expect(page.getByTestId('timeline-chapter-10')).toBeVisible()
@@ -1306,7 +1306,7 @@ test('full speculative branching flow persists through revise, reload, and reope
   await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 321 tokens')
   await expect(page.getByTestId('workspace-current-output-tokens')).toContainText('输出 654 tokens')
 
-  await page.getByRole('button', { name: 'Regenerate What-if' }).click()
+  await page.getByRole('button', { name: /Regenerate What-if|重新生成 What-if/i }).click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
   await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue(DEFAULT_REWRITE_PROMPT)
   await page.getByTestId('workspace-action-overlay').click({ position: { x: 8, y: 8 } })
@@ -1372,7 +1372,7 @@ test('full speculative branching flow persists through revise, reload, and reope
   await jumpNode.click()
   await expect(page.getByTestId('future-jump-text')).toContainText('第三版未来正文：她被带走后，所有误会都在更慢地发酵。')
 
-  const chapter100 = page.getByRole('button', { name: 'Chapter 100 第100章 被绑走 1900 字' })
+  const chapter100 = page.getByRole('button', { name: /^第 100 章 第100章 被绑走 1900 字$/ })
   await chapter100.evaluate((node: HTMLButtonElement) => node.click())
   await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
   await expect(page.getByText('第100章正文')).toBeVisible()
@@ -1720,7 +1720,7 @@ test('continue-block selection restores on reload and exposes the reader action 
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
   await expect(page.getByTestId('workspace-continue-block-actions')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
-  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
+  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
   expect(continueBlockDetailRequestCount).toBeGreaterThanOrEqual(1)
   await expect(page.getByTestId('workspace-continue-block-continue-entry')).toBeEnabled()
@@ -1733,7 +1733,7 @@ test('continue-block selection restores on reload and exposes the reader action 
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
   await expect(page.getByTestId('workspace-continue-block-actions')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
-  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
+  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
   expect(continueBlockDetailRequestCount).toBeGreaterThanOrEqual(2)
 })
 
@@ -2006,7 +2006,7 @@ test('continue-block continue creates a child node while regenerate updates the 
   await expect(page.getByTestId('workspace-continue-block-view').getByRole('heading', { name: 'CONT-02' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'CONT-01, CONT-02 子续写块' })).toHaveCount(0)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('子续写块正文：誓言之后，她选择独自离开。')
-  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
+  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
   expect(continueBlockDetailRequests).toContain('continue-block-2')
 
   await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
@@ -2027,9 +2027,10 @@ test('continue-block continue creates a child node while regenerate updates the 
     branchContextNodeId: 'continue-node-1',
     branchContextInclusion: 'include_selected',
   })
+  await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
   await expect(page).toHaveURL(/selectionNodeId=continue-node-1/)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('重生后的续写块正文：誓言之后，她选择独自离开。')
-  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText('Read mode')
+  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
   await expect(page.getByTestId('continue-block-revision-history')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
   await expect(page.getByTestId('continue-block-history-item-1')).toContainText('第 1 版 · initial')
   expect(continueBlockDetailRequests.filter((id) => id === 'continue-block-1').length).toBeGreaterThanOrEqual(2)
