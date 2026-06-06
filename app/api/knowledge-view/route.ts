@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { jsonError, readJsonObject } from '@/lib/server/api-route'
 import {
   abortAuthoritativeKnowledgeRebuild,
   buildKnowledgeProjection,
@@ -17,6 +18,16 @@ import { scheduleKnowledgeWorkerProcess } from '@/lib/server/knowledge-worker-sc
 import type { KnowledgeRebuildChapterRange } from '@/lib/types'
 
 export const maxDuration = 3600
+const KNOWLEDGE_VIEW_ACTIONS = new Set([
+  'rebuild',
+  'pause',
+  'abort',
+  'delete-hanlp-cache',
+  'delete-extraction-cache',
+  'delete-embedding-cache',
+  'delete-knowledge',
+  'rebuild-retrieval-index',
+])
 
 function buildSuccessResponse(projection: KnowledgeViewPayload | KnowledgeViewActionPayload) {
   return NextResponse.json({ ok: true, ...projection })
@@ -63,12 +74,15 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json()
+    const body = await readJsonObject(request)
     const novelId = String(body.novelId ?? '').trim()
     const action = String(body.action ?? 'rebuild').trim()
     const chapterRange = normalizePostChapterRange(body.chapterRange)
     if (!novelId) {
-      return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+      return jsonError('novelId is required', 400)
+    }
+    if (!KNOWLEDGE_VIEW_ACTIONS.has(action)) {
+      return jsonError('action is invalid', 400)
     }
 
     const projection = action === 'pause'

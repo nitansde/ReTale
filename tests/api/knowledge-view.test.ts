@@ -1927,4 +1927,40 @@ describe('/api/knowledge-view', () => {
     })
     expect(payload.knowledgeRebuildStatus?.jobId).toEqual(expect.any(String))
   })
+
+  it('rejects invalid POST actions with stable 400 JSON and no job rows', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-invalid-action')
+    const novelId = 'novel_invalid_action'
+    seedNovel(database, novelId)
+
+    const { POST } = await loadKnowledgeViewRoute()
+    const jobCountBefore = (database.prepare('SELECT COUNT(*) AS count FROM KnowledgeJob').get() as { count: number }).count
+
+    const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', {
+      novelId,
+      action: 'totally-invalid-action',
+    }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ ok: false, error: 'action is invalid' })
+
+    const jobCountAfter = (database.prepare('SELECT COUNT(*) AS count FROM KnowledgeJob').get() as { count: number }).count
+    expect(jobCountAfter).toBe(jobCountBefore)
+  })
+
+  it('rejects missing novel ids with stable 400 JSON and no job rows', async () => {
+    const { database } = await createTestDatabase('chatbook-knowledge-view-missing-novel-id')
+    const { POST } = await loadKnowledgeViewRoute()
+    const jobCountBefore = (database.prepare('SELECT COUNT(*) AS count FROM KnowledgeJob').get() as { count: number }).count
+
+    const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', {
+      action: 'rebuild-retrieval-index',
+    }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ ok: false, error: 'novelId is required' })
+
+    const jobCountAfter = (database.prepare('SELECT COUNT(*) AS count FROM KnowledgeJob').get() as { count: number }).count
+    expect(jobCountAfter).toBe(jobCountBefore)
+  })
 })
