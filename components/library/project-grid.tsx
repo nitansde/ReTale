@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ProjectCard } from './project-card'
+import { useI18n } from '@/lib/i18n/provider'
+import { toUserFacingWorkspaceError } from '@/lib/workspace-user-facing-errors'
 import { useNovelStore } from '@/store/novel-store'
 
 export function resolveOpenNovelChapter(
@@ -25,6 +27,7 @@ export function resolveOpenNovelChapter(
 }
 
 export function ProjectGrid() {
+  const { t, locale } = useI18n()
   const router = useRouter()
   const fileRef = useRef<HTMLInputElement | null>(null)
   const {
@@ -67,45 +70,20 @@ export function ProjectGrid() {
 
     if (!chapter) {
       setOpeningNovelId(null)
-      setImportMessage('这个小说当前没有可用章节，请刷新后重试，或重新导入一次。')
+      setImportMessage(t('library.noChapter'))
       return
     }
 
     setOpeningNovelId(novelId)
 
-    let didNavigate = false
-
-    try {
-      await saveToBackend()
-    } catch (error) {
-      console.warn('Failed to save workspace before opening novel; attempting to refresh state once.', error)
-      try {
-        await loadFromBackend()
-
-        const refreshedChapter = selectNovelChapter(novelId, chapterId)
-        if (refreshedChapter) {
-          try {
-            await saveToBackend()
-          } catch (retryError) {
-            console.warn('Failed to save workspace after refreshing library state; continuing with in-memory selection.', retryError)
-          }
-        } else {
-          console.warn('Failed to resolve chapter after refreshing library state; continuing with previous in-memory selection.')
-        }
-      } catch (refreshError) {
-        console.warn('Failed to refresh library state before opening novel; continuing with previous in-memory selection.', refreshError)
-      }
-    }
-
     try {
       router.push('/workspace')
-      didNavigate = true
+      void saveToBackend().catch((error) => {
+        console.warn('Failed to persist the newly opened workspace selection in the background.', error)
+      })
     } catch {
-      setImportMessage('进入工作区前保存进度失败，请稍后重试。')
-    } finally {
-      if (!didNavigate) {
-        setOpeningNovelId(null)
-      }
+      setImportMessage(t('library.openFailed'))
+      setOpeningNovelId(null)
     }
   }
 
@@ -113,7 +91,7 @@ export function ProjectGrid() {
     setIsImporting(true)
     setPhase('uploading')
     setUploadPercent(0)
-    setImportMessage(`正在上传 ${file.name} …`)
+    setImportMessage(t('library.uploadingFile', { name: file.name }))
 
     try {
       const formData = new FormData()
@@ -127,14 +105,14 @@ export function ProjectGrid() {
           if (event.lengthComputable) {
             const percent = Math.min(100, Math.round((event.loaded / event.total) * 100))
             setUploadPercent(percent)
-            setImportMessage(`正在上传 ${file.name} … ${percent}%`)
+            setImportMessage(t('library.uploadingFilePercent', { name: file.name, percent }))
           }
         }
 
         xhr.upload.onload = () => {
           setPhase('processing')
           setUploadPercent(100)
-          setImportMessage(`文件上传完成，服务器正在解析并入库 ${file.name} …`)
+          setImportMessage(t('library.uploadCompleteProcessing', { name: file.name }))
         }
 
         xhr.onload = () => {
@@ -143,14 +121,14 @@ export function ProjectGrid() {
             if (xhr.status >= 200 && xhr.status < 300) {
               resolve(json)
             } else {
-              reject(new Error(json.error || '导入失败'))
+              reject(new Error(json.error || t('library.importFailed')))
             }
           } catch {
-            reject(new Error('服务器返回了无效结果'))
+            reject(new Error(t('library.invalidServerResult')))
           }
         }
 
-        xhr.onerror = () => reject(new Error('上传失败，请检查本地服务是否正常'))
+        xhr.onerror = () => reject(new Error(t('library.uploadFailed')))
         xhr.send(formData)
       })
 
@@ -159,14 +137,14 @@ export function ProjectGrid() {
       await loadFromBackend()
 
       if (data.chapterCount <= 120) {
-        setImportMessage(`上传完成，已导入 ${data.chapterCount} 章，正在进入工作区…`)
+        setImportMessage(t('library.importedAndOpening', { count: data.chapterCount }))
         await openNovel(data.novelId, data.chapterId)
         return
       }
 
-      setImportMessage(`上传完成，服务器已解析完成：共 ${data.chapterCount} 章。已刷新书库，请从书库卡片进入工作区。`) 
+      setImportMessage(t('library.importedRefresh', { count: data.chapterCount }))
     } catch (error) {
-      setImportMessage(error instanceof Error ? error.message : '导入失败')
+      setImportMessage(error instanceof Error ? error.message : t('library.importFailed'))
     } finally {
       setIsImporting(false)
       setPhase('idle')
@@ -174,7 +152,7 @@ export function ProjectGrid() {
   }
 
   const handleDeleteNovel = async (novelId: string, title: string) => {
-    if (!window.confirm(`确认删除小说《${title}》吗？这会同时删除它的全部章节和本地知识数据。`)) {
+    if (!window.confirm(t('library.deleteConfirm', { title }))) {
       return
     }
 
@@ -182,10 +160,10 @@ export function ProjectGrid() {
     deleteNovel(novelId)
     try {
       await saveToBackend()
-      setImportMessage(`已删除《${title}》`)
+      setImportMessage(t('library.deleted', { title }))
     } catch {
       await loadFromBackend()
-      setImportMessage(`删除《${title}》失败，已恢复本地状态。`)
+      setImportMessage(t('library.deleteFailed', { title }))
     } finally {
       setDeletingNovelId(null)
     }
@@ -196,11 +174,11 @@ export function ProjectGrid() {
       <div className="mb-6 flex flex-col items-end gap-3">
         {backendLoadError ? (
           <div className="w-full max-w-xl rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-            读取已保存工作区时遇到问题：{backendLoadError}。你仍然可以继续导入 TXT 进行恢复。
+            {t('library.restoreError', { message: toUserFacingWorkspaceError(backendLoadError, locale) })}
           </div>
         ) : !backendLoaded ? (
           <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300">
-            正在恢复书库与上次工作区…如果本地数据较大，可能需要几秒钟。
+            {t('library.restoreLoading')}
           </div>
         ) : null}
         <button
@@ -209,7 +187,7 @@ export function ProjectGrid() {
           disabled={isImporting}
           className="rounded-2xl border border-indigo-400/20 bg-indigo-500/90 px-4 py-2.5 text-sm font-medium text-white shadow-[0_12px_30px_rgba(99,102,241,0.35)] transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isImporting ? (phase === 'uploading' ? '上传中…' : '解析中…') : '导入 TXT 小说'}
+          {isImporting ? (phase === 'uploading' ? t('library.uploading') : t('library.processing')) : t('library.importButton')}
         </button>
         <input
           ref={fileRef}
@@ -226,9 +204,9 @@ export function ProjectGrid() {
           <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300">
             <div className="mb-2 flex items-center justify-between gap-3 text-xs text-zinc-500">
               <span>
-                {phase === 'uploading' && isImporting ? '上传进度' : phase === 'processing' ? '服务器处理' : '导入结果'}
+                {phase === 'uploading' && isImporting ? t('library.uploadProgress') : phase === 'processing' ? t('library.serverProcessing') : t('library.importResult')}
               </span>
-              <span>{phase === 'uploading' ? `${uploadPercent}%` : phase === 'processing' ? '处理中' : '完成'}</span>
+              <span>{phase === 'uploading' ? `${uploadPercent}%` : phase === 'processing' ? t('library.processing') : t('library.completed')}</span>
             </div>
             {(isImporting || uploadPercent > 0) && (
               <div className="mb-3 h-2 overflow-hidden rounded-full bg-white/10">

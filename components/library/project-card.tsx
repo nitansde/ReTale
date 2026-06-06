@@ -1,4 +1,7 @@
+"use client"
+
 import { LoaderCircle, Trash2 } from 'lucide-react'
+import { useI18n } from '@/lib/i18n/provider'
 import type { Novel } from '@/lib/types'
 
 export function ProjectCard({
@@ -14,6 +17,8 @@ export function ProjectCard({
   opening?: boolean
   deleting?: boolean
 }) {
+  const { t } = useI18n()
+
   return (
     <article className="group rounded-[28px] border border-white/8 bg-white/[0.04] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur transition hover:border-white/12 hover:bg-white/[0.06]">
       <div className="mb-4 flex items-start justify-between gap-3">
@@ -48,15 +53,15 @@ export function ProjectCard({
             </div>
 
             <div className="flex items-center justify-between text-xs text-zinc-500">
-              <span>{novel.chapterCount} 章</span>
-              <span>{novel.wordCount.toLocaleString()} 字</span>
+              <span>{t('library.cardChapterCount', { count: novel.chapterCount })}</span>
+              <span>{t('library.cardWordCount', { count: novel.wordCount.toLocaleString() })}</span>
               <span>{novel.updatedAt}</span>
             </div>
 
             {opening ? (
               <div className="flex items-center gap-2 text-xs text-zinc-300">
                 <LoaderCircle className="h-3.5 w-3.5 animate-spin text-indigo-200" />
-                <span>打开中…</span>
+                <span>{t('library.cardOpening')}</span>
               </div>
             ) : null}
           </div>
@@ -67,7 +72,7 @@ export function ProjectCard({
           onClick={onDelete}
           disabled={deleting || opening}
           className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-2 text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-          aria-label={`删除小说 ${novel.title}`}
+          aria-label={t('library.cardDeleteAria', { title: novel.title })}
         >
           <Trash2 className="h-4 w-4" />
         </button>
