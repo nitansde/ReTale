@@ -20,9 +20,9 @@ import type { Character, WorldEntry } from '@/lib/types'
 
 describe('knowledge workspace HanLP helpers', () => {
   it('maps projected character tiers to visible workspace labels', () => {
-    expect(getCharacterClassificationBadgeLabel({ classificationKey: 'tier0', classificationLabel: 'Tier 0', importanceTier: 'protagonist' })).toBe('Tier 0 主角')
-    expect(getCharacterClassificationBadgeLabel({ classificationKey: 'tier1', classificationLabel: 'Tier 1', importanceTier: 'important' })).toBe('Tier 1 重要配角')
-    expect(getCharacterClassificationBadgeLabel({ classificationKey: 'tier2', classificationLabel: 'Tier 2', importanceTier: 'arc' })).toBe('Tier 2 篇章配角')
+    expect(getCharacterClassificationBadgeLabel({ classificationKey: 'tier0', classificationLabel: 'Tier 0', importanceTier: 'protagonist' })).toBe('Tier 0')
+    expect(getCharacterClassificationBadgeLabel({ classificationKey: 'tier1', classificationLabel: 'Tier 1', importanceTier: 'important' })).toBe('Tier 1')
+    expect(getCharacterClassificationBadgeLabel({ classificationKey: 'tier2', classificationLabel: 'Tier 2', importanceTier: 'arc' })).toBe('Tier 2')
     expect(getCharacterClassificationBadgeLabel({ classificationKey: 'candidate', classificationLabel: null, importanceTier: 'candidate' })).toBe('Candidate')
   })
 

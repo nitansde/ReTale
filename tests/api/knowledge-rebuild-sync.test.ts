@@ -143,4 +143,38 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
     )).toMatchObject({ revision: 7, isDirty: 0, knowledgeStatus: 'ready' })
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeJob WHERE novelId = ?', 'novel_repair')).toMatchObject({ count: 0 })
   })
+
+  it('syncs a large workspace payload without queuing rebuild jobs', async () => {
+    createTestDatabase('chatbook-knowledge-sync-large-workspace')
+
+    const localChapters = Array.from({ length: 64 }, (_, index) => ({
+      id: `large_ch_${index + 1}`,
+      novelId: 'novel_large_workspace',
+      volumeId: 'volume-large',
+      title: `第${index + 1}章`,
+      content: `<p>第 ${index + 1} 章内容。</p>`,
+      order: index + 1,
+      status: 'draft' as const,
+      wordCount: 8,
+      updatedAt: '2026-05-16T00:00:00.000Z',
+    }))
+
+    await syncWorkspacePayloadToKnowledgeStore({
+      currentNovelId: 'novel_large_workspace',
+      localNovels: [
+        {
+          id: 'novel_large_workspace',
+          title: 'Large Workspace Novel',
+          summary: 'summary',
+          tags: ['大体量'],
+        },
+      ],
+      localChapters,
+    })
+
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeChapter WHERE novelId = ?', 'novel_large_workspace')).toMatchObject({ count: 64 })
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM ChapterLine WHERE chapterId = ?', 'large_ch_64')?.count).toBeGreaterThan(0)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM TextSpan WHERE chapterId = ?', 'large_ch_64')?.count).toBeGreaterThan(0)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeJob WHERE novelId = ?', 'novel_large_workspace')).toMatchObject({ count: 0 })
+  })
 })

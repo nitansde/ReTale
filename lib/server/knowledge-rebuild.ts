@@ -35,6 +35,10 @@ import { runHanlpBootstrapForChapter } from '@/lib/server/hanlp-bootstrap'
 import { initializeHanlpBootstrapCharacterEntities } from '@/lib/server/hanlp-bootstrap-initializer'
 import { generateCandidatePromotionSummary } from '@/lib/server/candidate-promotion-summary'
 import { classifyHanlpBootstrapCharacters } from '@/lib/server/character-tier'
+import { abortKnowledgeRebuildUntilIdle, waitForKnowledgeJobCompletionStatus } from '@/lib/server/knowledge-job-status'
+import { createWorkspaceKnowledgeSync, type WorkspaceKnowledgeSyncPayload } from '@/lib/server/knowledge-workspace-sync'
+
+export type { WorkspaceKnowledgeSyncPayload } from '@/lib/server/knowledge-workspace-sync'
 
 type PersistImportedNovelParams = {
   novelId: string
@@ -1544,41 +1548,22 @@ function assertKnowledgeRebuildContinues(jobId: string) {
 }
 
 async function waitForKnowledgeJobCompletion(jobId: string, options?: { timeoutMs?: number; pollMs?: number }) {
-  const timeoutMs = options?.timeoutMs ?? 10 * 60 * 1000
-  const pollMs = options?.pollMs ?? 1000
-  const startedAt = Date.now()
-
-  while (Date.now() - startedAt <= timeoutMs) {
-    const job = queryOne<{ status: string; errorMessage: string | null }>(
+  await waitForKnowledgeJobCompletionStatus({
+    jobId,
+    timeoutMs: options?.timeoutMs,
+    pollMs: options?.pollMs,
+    loadJob: (currentJobId) => queryOne<{ status: string; errorMessage: string | null }>(
       'SELECT status, errorMessage FROM KnowledgeJob WHERE id = ?',
-      jobId
-    )
-
-    if (!job) {
-      throw new Error('Knowledge job not found')
-    }
-
-    if (job.status === 'succeeded') {
-      return
-    }
-
-    if (job.status === 'failed') {
-      throw new Error(job.errorMessage || 'Knowledge rebuild failed')
-    }
-
-    if (job.status === 'paused' || job.status === 'aborted') {
-      return
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, pollMs))
-  }
-
-  updateKnowledgeJob(jobId, {
-    status: 'failed',
-    currentStep: '超时',
-    errorMessage: 'Knowledge rebuild timed out',
+      currentJobId,
+    ),
+    onTimeout: (timedOutJobId) => {
+      updateKnowledgeJob(timedOutJobId, {
+        status: 'failed',
+        currentStep: '超时',
+        errorMessage: 'Knowledge rebuild timed out',
+      })
+    },
   })
-  throw new Error('Knowledge rebuild timed out')
 }
 
 function getKnowledgeJobOutcome(jobId: string): KnowledgeRebuildJobOutcome {
@@ -5854,7 +5839,7 @@ export async function runStartedKnowledgeRebuildForNovel(params: { novelId: stri
     return
   }
 
-  let result: { jobId: string; outcome: KnowledgeRebuildJobOutcome } | null = null
+  let result: Awaited<ReturnType<typeof rebuildKnowledgeForNovel>> | null = null
   activeKnowledgeRebuildRuns.add(params.jobId)
   try {
     result = await rebuildKnowledgeForNovel(params)
@@ -6518,11 +6503,17 @@ export async function abortKnowledgeRebuildForNovel(params: { novelId: string; b
   return 'aborted' as const
 }
 
+async function abortKnowledgeRebuildForNovelUntilIdle(params: { novelId: string; branchId: string }) {
+  await abortKnowledgeRebuildUntilIdle({
+    novelId: params.novelId,
+    branchId: params.branchId,
+    abortAttempt: () => abortKnowledgeRebuildForNovel(params),
+  })
+}
+
 export async function deleteKnowledgeGraphForNovel(params: { novelId: string; branchId?: string }) {
   const branchId = params.branchId ?? getMainBranchId(params.novelId)
-  while ((await abortKnowledgeRebuildForNovel({ novelId: params.novelId, branchId })) !== 'idle') {
-    continue
-  }
+  await abortKnowledgeRebuildForNovelUntilIdle({ novelId: params.novelId, branchId })
   await deleteBranchRetrievalIndex(branchId)
   await clearKnowledgeGraphData(params.novelId, branchId)
   return 'deleted' as const
@@ -6605,231 +6596,6 @@ export async function persistImportedNovelToKnowledgeStore(params: PersistImport
   }
 }
 
-export type WorkspaceKnowledgeSyncPayload = {
-  localNovels?: Array<{ id: string; title: string; summary: string; tags: string[] }>
-  localChapters?: Chapter[]
-  localOutlines?: PersistedNovelState['localOutlines']
-  localTimelineEvents?: PersistedNovelState['localTimelineEvents']
-  currentNovelId?: string
-}
-
-let workspaceKnowledgeSyncQueue: Promise<void> = Promise.resolve()
-
-async function performWorkspacePayloadToKnowledgeStoreSync(payload: WorkspaceKnowledgeSyncPayload) {
-  const novelMetaById = new Map((payload.localNovels ?? []).map((item) => [item.id, item]))
-  const chapters = (payload.localChapters ?? [])
-    .filter((chapter) => !chapter.parentChapterId)
-    .slice()
-    .sort((a, b) => a.order - b.order)
-
-  const groupedByNovel = new Map<string, Chapter[]>()
-  for (const chapter of chapters) {
-    const current = groupedByNovel.get(chapter.novelId) ?? []
-    current.push(chapter)
-    groupedByNovel.set(chapter.novelId, current)
-  }
-
-  const desiredNovelIds = new Set(groupedByNovel.keys())
-  const staleNovelIds = queryAll<{ id: string }>('SELECT id FROM NovelRecord').filter((row) => !desiredNovelIds.has(row.id))
-
-  if (staleNovelIds.length) {
-    for (const novel of staleNovelIds) {
-      const branchId = getMainBranchId(novel.id)
-      while ((await abortKnowledgeRebuildForNovel({ novelId: novel.id, branchId })) !== 'idle') {
-        continue
-      }
-
-      await deleteBranchRetrievalIndex(branchId)
-
-      await deleteNovelProjectionArtifacts(novel.id, branchId)
-    }
-  }
-
-  if (!desiredNovelIds.size) return
-
-  const orderedNovelIds = Array.from(groupedByNovel.keys()).sort((left, right) => {
-    if (left === payload.currentNovelId) return -1
-    if (right === payload.currentNovelId) return 1
-    return 0
-  })
-
-  for (const novelId of orderedNovelIds) {
-    const novelChapters = groupedByNovel.get(novelId) ?? []
-    const branchId = getMainBranchId(novelId)
-    const novelMeta = novelMetaById.get(novelId)
-    upsertNovelRecord({
-      novelId,
-      title: novelMeta?.title?.trim() || novelChapters[0]?.title?.replace(/^第\s*[0-9一二三四五六七八九十百千零两]+\s*章\s*/, '') || novelId,
-    })
-    upsertStoryBranch(novelId, branchId, 'main')
-
-    const existing = queryAll<KnowledgeChapterRow>(
-      'SELECT id, novelId, branchId, chapterNo, title, rawText, summary, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? ORDER BY chapterNo ASC',
-      novelId,
-      branchId
-    )
-    const desiredChapterIds = new Set(novelChapters.map((chapter) => chapter.id))
-    const staleChapters = existing.filter((chapter) => !desiredChapterIds.has(chapter.id))
-    const activeJob = queryOne<{ id: string; status: string }>(
-      'SELECT id, status FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = ? AND status IN (\'queued\', \'running\', \'paused\') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1',
-      novelId,
-      branchId,
-      MAIN_KNOWLEDGE_JOB_TYPE,
-    )
-    if (staleChapters.length) {
-      await withTransaction(async () => {
-        for (const chapter of staleChapters) {
-          execute('DELETE FROM KnowledgeChapter WHERE id = ?', chapter.id)
-        }
-      })
-
-      if (activeJob?.id) {
-        removePendingChaptersFromKnowledgeJob(
-          activeJob.id,
-          staleChapters.map((chapter) => chapter.id)
-        )
-      }
-    }
-    const existingById = new Map(existing.map((item) => [item.id, item]))
-    const existingStructuredKnowledgeCount = queryOne<{ count: number }>(
-      `
-        SELECT (
-          (SELECT COUNT(*) FROM KnowledgeEntity WHERE novelId = ? AND branchId = ?)
-          + (SELECT COUNT(*) FROM KnowledgeFact WHERE novelId = ? AND branchId = ?)
-          + (SELECT COUNT(*) FROM KnowledgeRelation WHERE novelId = ? AND branchId = ?)
-          + (SELECT COUNT(*) FROM EntityLink WHERE novelId = ? AND branchId = ?)
-          + (SELECT COUNT(*) FROM EntityState WHERE novelId = ? AND branchId = ?)
-          + (SELECT COUNT(*) FROM KnowledgeEvent WHERE novelId = ? AND branchId = ?)
-          + (SELECT COUNT(*) FROM KnowledgeWorld WHERE novelId = ? AND branchId = ?)
-        ) AS count
-      `,
-      novelId,
-      branchId,
-      novelId,
-      branchId,
-      novelId,
-      branchId,
-      novelId,
-      branchId,
-      novelId,
-      branchId,
-      novelId,
-      branchId,
-      novelId,
-      branchId
-    )?.count ?? 0
-    const shouldBootstrapKnowledge = novelChapters.length > 0 && (existing.length === 0 || existingStructuredKnowledgeCount === 0)
-
-    let firstChangedChapterNo: number | null = null
-
-    for (let index = 0; index < novelChapters.length; index += 1) {
-      const chapter = novelChapters[index]
-      const chapterNo = index + 1
-      const rawText = htmlToPlainText(chapter.content)
-      const sourceHash = hashContent(rawText)
-      const current = existingById.get(chapter.id)
-
-      if (!current) {
-        await withTransaction(() => {
-          execute(
-            `
-              INSERT INTO KnowledgeChapter (
-                id, novelId, branchId, chapterNo, title, rawText, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
-              )
-              VALUES (?, ?, ?, ?, ?, ?, 1, 1, 'Created from workspace sync', ?, 'stale')
-            `,
-            chapter.id,
-            novelId,
-            branchId,
-            chapterNo,
-            chapter.title,
-            rawText,
-            sourceHash
-          )
-          replaceKnowledgeChapterDerivedArtifacts({
-            id: chapter.id,
-            novelId,
-            branchId,
-            chapterNo,
-            rawText,
-          })
-        })
-        firstChangedChapterNo = firstChangedChapterNo === null ? chapterNo : Math.min(firstChangedChapterNo, chapterNo)
-        continue
-      }
-
-      if (current.sourceHash === sourceHash && current.chapterNo === chapterNo && current.title === chapter.title) {
-        await withTransaction(() => {
-          ensureKnowledgeChapterDerivedArtifacts({
-            id: current.id,
-            novelId,
-            branchId,
-            chapterNo,
-            rawText,
-          })
-        })
-        continue
-      }
-
-      await withTransaction(() => {
-        execute(
-          `
-            UPDATE KnowledgeChapter
-            SET chapterNo = ?, title = ?, rawText = ?, sourceHash = ?, revision = ?, isDirty = 1,
-                dirtyReason = 'Updated from workspace sync', knowledgeStatus = 'stale', updatedAt = CURRENT_TIMESTAMP
-            WHERE id = ?
-          `,
-          chapterNo,
-          chapter.title,
-          rawText,
-          sourceHash,
-          current.sourceHash === sourceHash ? current.revision : current.revision + 1,
-          chapter.id
-        )
-        replaceKnowledgeChapterDerivedArtifacts({
-          id: chapter.id,
-          novelId,
-          branchId,
-          chapterNo,
-          rawText,
-        })
-      })
-      firstChangedChapterNo = firstChangedChapterNo === null ? chapterNo : Math.min(firstChangedChapterNo, chapterNo)
-    }
-
-    const invalidationFromChapterNo = [
-      firstChangedChapterNo,
-      staleChapters.length ? Math.min(...staleChapters.map((chapter) => chapter.chapterNo)) : null,
-    ].reduce<number | null>((current, value) => {
-      if (value === null) return current
-      if (current === null) return value
-      return Math.min(current, value)
-    }, null)
-
-    if (shouldBootstrapKnowledge || staleChapters.length || firstChangedChapterNo !== null) {
-      if (invalidationFromChapterNo !== null) {
-        await markKnowledgeStaleFromChapter({
-          novelId,
-          branchId,
-          fromChapterNo: invalidationFromChapterNo,
-        })
-      }
-
-      if (activeJob?.id) {
-        await abortKnowledgeRebuildForNovel({ novelId, branchId })
-      }
-    }
-
-    await bootstrapOutlineNodesForFutureMap({
-      novelId,
-      branchId,
-      workspaceState: payload,
-    })
-  }
-}
-
-export async function syncWorkspacePayloadToKnowledgeStore(payload: WorkspaceKnowledgeSyncPayload) {
-  const run = workspaceKnowledgeSyncQueue.then(() => performWorkspacePayloadToKnowledgeStoreSync(payload))
-  workspaceKnowledgeSyncQueue = run.catch(() => undefined)
-  return run
-}
+export const syncWorkspacePayloadToKnowledgeStore = createWorkspaceKnowledgeSync({
+  abortKnowledgeRebuildUntilIdle: abortKnowledgeRebuildForNovelUntilIdle,
+})
