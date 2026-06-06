@@ -11,21 +11,6 @@ import type {
   OpenAICompatibleProviderSettings,
 } from '@/lib/types'
 
-type LegacyFlatAISettings = Partial<{
-  rewriteProvider: unknown
-  knowledgeProvider: unknown
-  baseUrl: unknown
-  apiKey: unknown
-  apiKeyConfigured: unknown
-  apiKeyMasked: unknown
-  model: unknown
-  configured: unknown
-  ollamaBaseUrl: unknown
-  ollamaRewriteModel: unknown
-  ollamaModel: unknown
-  ollamaEmbeddingModel: unknown
-}>
-
 type PartialAISettings = Partial<{
   rewrite: unknown
   knowledgeExtraction: unknown
@@ -219,91 +204,21 @@ function normalizeKnowledgeExtractionOllamaProviderSettings(
   }
 }
 
-function buildLegacyScenarioDefaults(legacy: LegacyFlatAISettings, defaults: AISettings): AISettings {
-  return {
-    rewrite: {
-      provider: normalizeProvider(legacy.rewriteProvider, defaults.rewrite.provider),
-      openAICompatible: normalizeOpenAICompatibleProviderSettings(
-        {
-          baseUrl: legacy.baseUrl,
-          apiKey: legacy.apiKey,
-          apiKeyConfigured: legacy.apiKeyConfigured,
-          apiKeyMasked: legacy.apiKeyMasked,
-          model: legacy.model,
-          configured: legacy.configured,
-        },
-        defaults.rewrite.openAICompatible
-      ),
-      ollama: normalizeOllamaProviderSettings(
-        {
-          baseUrl: legacy.ollamaBaseUrl,
-          model: legacy.ollamaRewriteModel,
-        },
-        defaults.rewrite.ollama
-      ),
-    },
-    knowledgeExtraction: {
-      provider: normalizeProvider(legacy.knowledgeProvider, defaults.knowledgeExtraction.provider),
-      openAICompatible: normalizeKnowledgeExtractionOpenAICompatibleProviderSettings(
-        {
-          baseUrl: legacy.baseUrl,
-          apiKey: legacy.apiKey,
-          apiKeyConfigured: legacy.apiKeyConfigured,
-          apiKeyMasked: legacy.apiKeyMasked,
-          model: legacy.model,
-          configured: legacy.configured,
-        },
-        defaults.knowledgeExtraction.openAICompatible
-      ),
-      ollama: normalizeKnowledgeExtractionOllamaProviderSettings(
-        {
-          baseUrl: legacy.ollamaBaseUrl,
-          model: legacy.ollamaModel,
-        },
-        defaults.knowledgeExtraction.ollama
-      ),
-    },
-    embeddings: {
-      provider: defaults.embeddings.provider,
-      openAICompatible: normalizeOpenAICompatibleProviderSettings(
-        {
-          baseUrl: legacy.baseUrl,
-          apiKey: legacy.apiKey,
-          apiKeyConfigured: legacy.apiKeyConfigured,
-          apiKeyMasked: legacy.apiKeyMasked,
-          model: legacy.model,
-          configured: legacy.configured,
-        },
-        defaults.embeddings.openAICompatible
-      ),
-      ollama: normalizeOllamaProviderSettings(
-        {
-          baseUrl: legacy.ollamaBaseUrl,
-          model: legacy.ollamaEmbeddingModel,
-        },
-        defaults.embeddings.ollama
-      ),
-      embeddingBatchSize: defaults.embeddings.embeddingBatchSize,
-    },
-  }
-}
-
 function normalizeKnowledgeExtractionScenarioSettings(
   value: unknown,
   fallback: KnowledgeExtractionScenarioSettings,
-  legacyFallback: KnowledgeExtractionScenarioSettings
 ): KnowledgeExtractionScenarioSettings {
   const record = isRecord(value) ? value : {}
 
   return {
-    provider: normalizeProvider(record.provider, legacyFallback.provider),
+    provider: normalizeProvider(record.provider, fallback.provider),
     openAICompatible: normalizeKnowledgeExtractionOpenAICompatibleProviderSettings(
       record.openAICompatible,
-      legacyFallback.openAICompatible ?? fallback.openAICompatible
+      fallback.openAICompatible
     ),
     ollama: normalizeKnowledgeExtractionOllamaProviderSettings(
       record.ollama,
-      legacyFallback.ollama ?? fallback.ollama
+      fallback.ollama
     ),
   }
 }
@@ -311,31 +226,29 @@ function normalizeKnowledgeExtractionScenarioSettings(
 function normalizeScenarioSettings(
   value: unknown,
   fallback: AIScenarioSettings,
-  legacyFallback: AIScenarioSettings
 ): AIScenarioSettings {
   const record = isRecord(value) ? value : {}
 
   return {
-    provider: normalizeProvider(record.provider, legacyFallback.provider),
+    provider: normalizeProvider(record.provider, fallback.provider),
     openAICompatible: normalizeOpenAICompatibleProviderSettings(
       record.openAICompatible,
-      legacyFallback.openAICompatible ?? fallback.openAICompatible
+      fallback.openAICompatible
     ),
-    ollama: normalizeOllamaProviderSettings(record.ollama, legacyFallback.ollama ?? fallback.ollama),
+    ollama: normalizeOllamaProviderSettings(record.ollama, fallback.ollama),
   }
 }
 
 function normalizeEmbeddingsScenarioSettings(
   value: unknown,
   fallback: EmbeddingsScenarioSettings,
-  legacyFallback: EmbeddingsScenarioSettings
 ): EmbeddingsScenarioSettings {
   const record = isRecord(value) ? value : {}
-  const base = normalizeScenarioSettings(value, fallback, legacyFallback)
+  const base = normalizeScenarioSettings(value, fallback)
 
   return {
     ...base,
-    embeddingBatchSize: normalizeEmbeddingBatchSize(record.embeddingBatchSize, legacyFallback.embeddingBatchSize),
+    embeddingBatchSize: normalizeEmbeddingBatchSize(record.embeddingBatchSize, fallback.embeddingBatchSize),
   }
 }
 
@@ -346,17 +259,14 @@ export function normalizeAISettings(value?: unknown): AISettings {
   }
 
   const partial = value as PartialAISettings
-  const legacy = value as LegacyFlatAISettings
-  const legacyFallback = buildLegacyScenarioDefaults(legacy, defaults)
 
   return {
-    rewrite: normalizeScenarioSettings(partial.rewrite, defaults.rewrite, legacyFallback.rewrite),
+    rewrite: normalizeScenarioSettings(partial.rewrite, defaults.rewrite),
     knowledgeExtraction: normalizeKnowledgeExtractionScenarioSettings(
       partial.knowledgeExtraction,
       defaults.knowledgeExtraction,
-      legacyFallback.knowledgeExtraction
     ),
-    embeddings: normalizeEmbeddingsScenarioSettings(partial.embeddings, defaults.embeddings, legacyFallback.embeddings),
+    embeddings: normalizeEmbeddingsScenarioSettings(partial.embeddings, defaults.embeddings),
   }
 }
 
