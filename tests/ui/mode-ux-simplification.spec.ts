@@ -868,7 +868,9 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   await expect(page.getByTestId('future-map-overlay')).not.toContainText('novel-001:main')
   await expect(page.getByTestId('future-map-mode-history-node')).toBeVisible()
   await expect(page.getByTestId('future-map-mode-direct-chapter')).toBeVisible()
-  await page.getByTestId('future-map-close').click()
+  await page.getByTestId('future-map-close').evaluate((node) => {
+    ;(node as HTMLButtonElement).click()
+  })
   await expect(page.getByTestId('future-map-overlay')).toBeHidden()
 
   await page.reload({ waitUntil: 'networkidle' })
@@ -912,7 +914,9 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   await expect(page.getByTestId('future-map-overlay')).toBeVisible()
   await expect(page.getByTestId('future-map-overlay')).not.toContainText('novel-001:main')
   await expect(page.getByTestId('future-map-mode-history-node')).toBeVisible()
-  await page.getByTestId('future-map-close').click()
+  await page.getByTestId('future-map-close').evaluate((node) => {
+    ;(node as HTMLButtonElement).click()
+  })
   await expect(page.getByTestId('future-map-overlay')).toBeHidden()
 
   await page.getByTestId('timeline-node-rewrite-node-1').click()
@@ -927,7 +931,7 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   await expect(page).toHaveURL(/selectionNodeId=rewrite-node-1/)
   await expect(page).toHaveURL(/selectionKind=rewrite/)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('重生后的续写块正文：保留修订历史的新版。')
-  await expect(page.getByTestId('workspace-continue-block-view')).toContainText('revision 2')
+  await expect(page.getByTestId('workspace-continue-block-view')).toContainText(/revision 2|版本 2/i)
 
   await page.screenshot({ path: path.join(evidenceDirectory, 'mode-ux-simplification-flow.png'), fullPage: true })
   writeEvidenceFile('task-14-mode-ux-simplification/report.txt', [

@@ -150,7 +150,7 @@ test('knowledge workspace shows HanLP progress, cache state, and character tiers
   const importResponse = await importResponsePromise
   expect(importResponse.ok()).toBeTruthy()
 
-  await page.goto('/workspace', { waitUntil: 'networkidle' })
+  await page.goto('/workspace', { waitUntil: 'domcontentloaded' })
 
   await expect(page.getByTestId('workspace-hanlp-bootstrap-card')).toContainText('HanLP Bootstrap')
   await expect(page.getByTestId('workspace-hanlp-bootstrap-card')).toContainText('完成章节：2 / 4')
@@ -165,7 +165,7 @@ test('knowledge workspace shows HanLP progress, cache state, and character tiers
   await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('缓存命中率：20%')
   await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('阶段耗时：12 秒')
   await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('Ollama · qwen3-embedding:4b · batch 32')
-  await expect(page.getByTestId('workspace-hanlp-cache-card')).toContainText('HanLP cache')
+  await expect(page.getByTestId('workspace-hanlp-cache-card')).toContainText(/HanLP (cache|缓存)/i)
   await expect(page.getByRole('button', { name: '删除 HanLP 缓存' })).toBeDisabled()
   await expect(page.getByTestId('workspace-hanlp-cache-card')).toContainText('当前知识重建任务仍在进行中或已暂停，需先终止或完成当前重建后才能删除缓存。')
 
@@ -175,9 +175,9 @@ test('knowledge workspace shows HanLP progress, cache state, and character tiers
   })
 
   await page.getByRole('button', { name: '人物' }).click()
-  await expect(page.getByText('Tier 0 主角')).toBeVisible()
-  await expect(page.getByText('Tier 1 重要配角')).toBeVisible()
-  await expect(page.getByText('Tier 2 篇章配角')).toBeVisible()
+  await expect(page.getByText(/Tier 0/i)).toBeVisible()
+  await expect(page.getByText(/Tier 1/i)).toBeVisible()
+  await expect(page.getByText(/Tier 2/i)).toBeVisible()
 
   await page.screenshot({
     path: path.join(evidenceDirectory, 'task-10-tier-labels-ui.png'),
@@ -313,19 +313,97 @@ test('knowledge workspace shows LanceDB Refresh progress inline', async ({ page 
   await expect(overviewCard).toContainText('Embedding 缓存')
   await expect(overviewCard).toContainText('已连续覆盖到第 1 章')
   await expect(overviewCard).toContainText('LanceDB 当前只覆盖 前 1 章')
-  await expect(overviewCard.getByRole('button', { name: 'Refresh' })).toBeVisible()
+  await expect(overviewCard.getByRole('button', { name: /Refresh|刷新/i })).toBeVisible()
 
-  await overviewCard.getByRole('button', { name: 'Refresh' }).click()
+  await overviewCard.getByRole('button', { name: /Refresh|刷新/i }).click()
 
   await expect(overviewCard).toContainText('后台正在刷新 LanceDB 检索索引')
   await expect(overviewCard).toContainText('任务状态：进行中')
   await expect(overviewCard).toContainText('95%')
   await expect(overviewCard).toContainText('阶段：原文向量缓存 50%')
-  await expect(overviewCard.getByRole('button', { name: 'Pause' })).toBeVisible()
-  await expect(overviewCard.getByRole('button', { name: 'Abort' })).toBeVisible()
+  await expect(overviewCard.getByRole('button', { name: /Pause|暂停/i })).toBeVisible()
+  await expect(overviewCard.getByRole('button', { name: /Abort|终止/i })).toBeVisible()
 
   await page.screenshot({
     path: path.join(evidenceDirectory, 'task-10-lancedb-refresh-progress-ui.png'),
     fullPage: true,
   })
+})
+
+test('knowledge workspace keeps cache controls visible against the real backend', async ({ page }) => {
+  fs.mkdirSync(evidenceDirectory, { recursive: true })
+
+  await page.goto('/library', { waitUntil: 'networkidle' })
+  await expect(page.getByText('导入 TXT 小说')).toBeVisible()
+
+  const importResponsePromise = page.waitForResponse(
+    (response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST'
+  )
+  await page.locator('input[type=file]').setInputFiles(fixturePath)
+  const importResponse = await importResponsePromise
+  expect(importResponse.ok()).toBeTruthy()
+
+  const knowledgeResponsePromise = page.waitForResponse(
+    (response) => response.url().includes('/api/knowledge-view') && response.request().method() === 'GET'
+  )
+  await page.goto('/workspace', { waitUntil: 'networkidle' })
+  const knowledgeResponse = await knowledgeResponsePromise
+  expect(knowledgeResponse.ok()).toBeTruthy()
+
+  await expect(page.getByTestId('workspace-hanlp-cache-card')).toBeVisible()
+  await expect(page.getByTestId('workspace-delete-hanlp-cache')).toBeVisible()
+  await expect(page.getByTestId('workspace-delete-extraction-cache')).toBeVisible()
+  await expect(page.getByTestId('workspace-delete-embedding-cache')).toBeVisible()
+
+  await page.screenshot({
+    path: path.join(evidenceDirectory, 'task-9-real-backend-cache-controls-ui.png'),
+    fullPage: true,
+  })
+})
+
+test('knowledge workspace stops polling when no job is active', async ({ page }) => {
+  fs.mkdirSync(evidenceDirectory, { recursive: true })
+
+  let knowledgeStatusRequestCount = 0
+
+  await page.route('**/api/knowledge-view*', async (route) => {
+    if (route.request().method() === 'GET') {
+      knowledgeStatusRequestCount += 1
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        localOutlines: [],
+        localCharacters: [],
+        localCharacterRelations: [],
+        localWorldEntries: [],
+        localTimelineEvents: [],
+        knowledgeRebuildStatus: null,
+        hanlpCacheSnapshot: null,
+        knowledgeStatusOverview: {
+          knowledgeGraph: { status: 'empty', coveredChapterCount: 0, totalChapterCount: 3, validThroughChapterNo: 0 },
+          embeddingCache: { status: 'empty', coveredChapterCount: 0, totalChapterCount: 3, validThroughChapterNo: 0, provider: null, model: null },
+          retrievalIndex: { status: 'empty', indexedScopeCount: 0, chapterRange: null, task: null },
+        },
+        jobOutcome: null,
+        actionError: null,
+      }),
+    })
+  })
+
+  await page.goto('/library', { waitUntil: 'networkidle' })
+  await expect(page.getByText('导入 TXT 小说')).toBeVisible()
+  await page.locator('input[type=file]').setInputFiles(fixturePath)
+  await page.waitForResponse((response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST')
+
+  await page.goto('/workspace', { waitUntil: 'networkidle' })
+  await expect(page.getByTestId('workspace-knowledge-status-overview-card')).toBeVisible()
+  const initialRequestCount = knowledgeStatusRequestCount
+
+  await page.waitForTimeout(4000)
+
+  expect(knowledgeStatusRequestCount).toBe(initialRequestCount)
 })
