@@ -2,6 +2,7 @@
 
 import type { Dispatch, SetStateAction } from 'react'
 import { ChevronDown, X } from 'lucide-react'
+import { useI18n } from '@/lib/i18n/provider'
 import { StoryTimeline } from '@/components/timeline/StoryTimeline'
 import { cn } from '@/lib/utils'
 import type { ChapterTimelineItem, StoryTimelineBranchNode, StoryTimelineEdge, TimelineSelection } from '@/lib/story-branch-types'
@@ -28,6 +29,8 @@ export function WorkspaceChapterNav(props: {
   deletingBranchNodeId: string | null
   onDeleteBranchNode: (node: StoryTimelineBranchNode) => void
 }) {
+  const { t } = useI18n()
+
   return (
     <aside
       className={cn(
@@ -37,8 +40,8 @@ export function WorkspaceChapterNav(props: {
     >
       <div className="mb-4 flex items-center justify-between lg:block">
         <div>
-          <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Novel</p>
-          <h2 className="mt-1 text-lg font-semibold text-zinc-100">章节导航</h2>
+          <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">{t('chapterNav.novel')}</p>
+          <h2 className="mt-1 text-lg font-semibold text-zinc-100">{t('chapterNav.title')}</h2>
         </div>
         <button onClick={props.onClose} className="rounded-2xl border border-white/10 p-2 text-zinc-300 lg:hidden">
           <X className="h-4 w-4" />
@@ -49,7 +52,7 @@ export function WorkspaceChapterNav(props: {
         onClick={props.onCreateChapter}
         className="mb-4 w-full rounded-2xl bg-violet-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-400"
       >
-        + 新建章节
+        {t('chapterNav.newChapter')}
       </button>
 
       <div className="space-y-3">
@@ -66,7 +69,7 @@ export function WorkspaceChapterNav(props: {
               <div className="flex w-full items-center justify-between gap-3 rounded-2xl px-2 py-2 text-left">
                 <div>
                   <p className="text-sm font-medium text-zinc-100">{volume.title}</p>
-                  <p className="mt-1 text-xs text-zinc-500">{chaptersInVolume.length} 章</p>
+                  <p className="mt-1 text-xs text-zinc-500">{t('chapterNav.volumeChapters', { count: chaptersInVolume.length })}</p>
                 </div>
                 <ChevronDown className="h-4 w-4 text-zinc-500" />
               </div>
@@ -105,7 +108,7 @@ export function WorkspaceChapterNav(props: {
                     }
                     className="w-full rounded-2xl border border-dashed border-white/10 bg-black/20 px-3 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06]"
                   >
-                    显示更多章节（剩余 {hiddenCount} 章）
+                    {t('chapterNav.showMore', { count: hiddenCount })}
                   </button>
                 ) : null}
               </div>
