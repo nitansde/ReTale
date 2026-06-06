@@ -10,7 +10,6 @@ import {
 } from '@/lib/preset-compat/runtime-integration'
 import { bufferAndTransformTextStream } from '@/lib/preset-compat/stream-buffer'
 import {
-  buildFallbackRewriteStream,
   generateRewriteWithOpenAICompatible,
   streamRewriteWithOpenAICompatible,
 } from '@/lib/server/openai-compatible'
@@ -24,6 +23,7 @@ import {
   isRecoverableRewriteJobRestorable,
   RECOVERABLE_REWRITE_JOB_TYPE,
 } from '@/lib/server/recoverable-rewrite-jobs'
+import { safeParseJsonObject } from '@/lib/server/json-parse'
 import { buildRewriteTaskPromptLines, CONTINUATION_SOURCE_BLOCK_LABEL, isContinuationRewriteTask } from '@/lib/server/rewrite-task-prompt'
 import { uid } from '@/lib/utils'
 import type { PresetCompatPromptRuleRuntimeContext, PresetCompatRuntimeContextBlock } from '@/lib/preset-compat/types'
@@ -46,6 +46,17 @@ type RewriteResultPayload = {
   inputTokens: number | null
   outputTokens: number | null
   metadata: unknown
+  presetCompat: unknown
+}
+
+type RewriteErrorCode = 'provider_not_configured' | 'provider_request_failed'
+
+type RewriteErrorResponseBody = {
+  ok: false
+  error: string
+  code: RewriteErrorCode
+  provider: string
+  guidance: string
   presetCompat: unknown
 }
 
@@ -170,31 +181,8 @@ function inferProtagonistNameFromPromptBlocks(promptBlocks: readonly GenerationC
   return name
 }
 
-function fallbackCandidates(sourceText: string, mode: string, tone: string, prompt: string) {
-  const base = sourceText.trim()
-  return [
-    `${base} 空气里的湿冷像一把迟迟没有落下的刀。`,
-  ].map((text, index) => ({
-    title: index === 0 ? '生成版本' : `版本 ${index + 1}`,
-    summary: `模式：${mode} · 风格：${tone} · ${prompt || '默认提示词'}`,
-    content: text,
-  }))
-}
-
-function buildFallbackText(sourceText: string, mode: string, tone: string, prompt: string) {
-  return fallbackCandidates(sourceText, mode, tone, prompt)[0]?.content ?? sourceText
-}
-
 function parseJsonRecord(value: string | null) {
-  if (!value) return null
-  try {
-    const parsed = JSON.parse(value) as unknown
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null
-  } catch {
-    return null
-  }
+  return safeParseJsonObject(value)
 }
 
 function normalizeTokenValue(value: unknown) {
@@ -253,12 +241,59 @@ function normalizeRecoverableRewriteJobPayload(payloadJson: string | null): Reco
   }
 }
 
-function buildPresetCompatResponseHeaders(serializedMetadata: string) {
+function buildPresetCompatResponseHeaders(serializedMetadata: string): Record<string, string> {
   if (Buffer.byteLength(serializedMetadata, 'utf8') <= MAX_PRESET_COMPAT_RESPONSE_HEADER_BYTES) {
     return { 'X-ChatBook-Preset-Compat': serializedMetadata }
   }
 
   return { 'X-ChatBook-Preset-Metadata-Omitted': 'size-limit' }
+}
+
+function buildRewriteSetupGuidance(provider: string) {
+  return provider === 'ollama'
+    ? 'Open AI Settings, choose an available Ollama rewrite model, and confirm the local Ollama server is reachable.'
+    : 'Open AI Settings, configure the OpenAI-compatible rewrite base URL, API key, and model, then try again.'
+}
+
+function buildRewriteErrorBody(params: {
+  provider: string
+  code: RewriteErrorCode
+  error: string
+  presetCompat: unknown
+}): RewriteErrorResponseBody {
+  return {
+    ok: false,
+    error: params.error,
+    code: params.code,
+    provider: params.provider,
+    guidance: buildRewriteSetupGuidance(params.provider),
+    presetCompat: params.presetCompat,
+  }
+}
+
+function buildRewriteErrorResponse(params: {
+  provider: string
+  code: RewriteErrorCode
+  error: string
+  status: number
+  presetCompat: unknown
+  presetCompatHeader: string
+}) {
+  return NextResponse.json(buildRewriteErrorBody(params), {
+    status: params.status,
+    headers: buildPresetCompatResponseHeaders(params.presetCompatHeader),
+  })
+}
+
+async function readRewriteErrorResponse(response: Response) {
+  const contentType = response.headers.get('content-type') ?? ''
+  if (contentType.includes('application/json')) {
+    const payload = await response.json().catch(() => null) as Partial<RewriteErrorResponseBody> | null
+    return payload?.error?.trim() || `Rewrite job failed with status ${response.status}`
+  }
+
+  const text = await response.text().catch(() => '')
+  return text.trim() || `Rewrite job failed with status ${response.status}`
 }
 
 function readRecoverableRewriteJob(jobId: string) {
@@ -862,8 +897,7 @@ async function runRecoverableRewriteJob(jobId: string) {
     }), { allowRecoverable: false, signal: controller.signal })
     if (isRecoverableRewriteJobAborted(jobId)) return
     if (!response.ok) {
-      const errorText = await response.text().catch(() => '')
-      throw new Error(errorText || `Rewrite job failed with status ${response.status}`)
+      throw new Error(await readRewriteErrorResponse(response))
     }
 
     const result = payload.stream
@@ -1070,14 +1104,13 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
       })
     }
 
-    const fallback = buildFallbackText(sourceText || selectedText, String(body.mode ?? ''), String(body.tone ?? ''), String(body.prompt ?? ''))
-    return new Response(streamResult.error ? buildFallbackRewriteStream(`${fallback}\n`) : buildFallbackRewriteStream(fallback), {
-      headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'Cache-Control': 'no-cache, no-transform',
-        'X-ChatBook-Provider': runtime.resolvedRuntime.providerRuntime.provider,
-        ...buildPresetCompatResponseHeaders(presetCompatHeader),
-      },
+    return buildRewriteErrorResponse({
+      provider: runtime.resolvedRuntime.providerRuntime.provider,
+      code: streamResult.enabled ? 'provider_request_failed' : 'provider_not_configured',
+      error: streamResult.error || 'Rewrite provider did not return a stream.',
+      status: streamResult.enabled ? 502 : 400,
+      presetCompat: presetCompatMetadata,
+      presetCompatHeader,
     })
   }
 
@@ -1152,24 +1185,12 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
     })
   }
 
-  const fallbackResult = fallbackCandidates(body.sourceText, body.mode, body.tone, body.prompt)[0]
-  const rewriteResult = createResultPayload({
-    provider: result.enabled ? 'fallback-after-error' : 'fallback-no-config',
-    title: fallbackResult?.title,
-    summary: fallbackResult?.summary,
-    content: fallbackResult?.content ?? String(body.sourceText ?? ''),
-    metadata: runtime.metadata,
+  return buildRewriteErrorResponse({
+    provider: runtime.resolvedRuntime.providerRuntime.provider,
+    code: result.enabled ? 'provider_request_failed' : 'provider_not_configured',
+    error: result.error || 'Rewrite provider returned no usable result.',
+    status: result.enabled ? 502 : 400,
     presetCompat: presetCompatMetadata,
-  })
-
-  return NextResponse.json({
-    provider: result.enabled ? 'fallback-after-error' : 'fallback-no-config',
-    metadata: runtime.metadata,
-    error: result.error,
-    result: rewriteResult,
-    candidates: [rewriteResult],
-    presetCompat: presetCompatMetadata,
-  }, {
-    headers: buildPresetCompatResponseHeaders(presetCompatHeader),
+    presetCompatHeader,
   })
 }

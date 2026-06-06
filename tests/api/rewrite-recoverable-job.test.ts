@@ -125,11 +125,12 @@ async function waitForCondition(assertion: () => boolean | Promise<boolean>) {
 
 type ImportRewriteRouteOptions = {
   afterImpl?: (callback: () => Promise<void>) => void
+  aiSettings?: AISettings
 }
 
 async function importRewriteRoute(options: ImportRewriteRouteOptions = {}) {
   vi.doMock('@/lib/server/ai-settings', () => ({
-    loadStoredAISettings: () => createAiSettings(),
+    loadStoredAISettings: () => options.aiSettings ?? createAiSettings(),
   }))
   vi.doMock('@/lib/server/preset-compat-library', () => ({
     loadStoredPresetCompatLibrary: () => createDefaultPresetCompatLibrary(),
@@ -353,6 +354,43 @@ describe('recoverable rewrite jobs', () => {
     expect(response.status).toBe(404)
     expect(data.ok).toBe(false)
     expect(data.error).toBe('Recoverable rewrite job scope not found')
+  }, 30000)
+
+  it('fails recoverable rewrite jobs when the rewrite provider is not configured instead of fabricating a result', async () => {
+    await createTestDatabase('chatbook-rewrite-recoverable-missing-provider')
+    vi.stubGlobal('fetch', vi.fn())
+
+    const aiSettings = createAiSettings()
+    aiSettings.rewrite.openAICompatible = {
+      ...aiSettings.rewrite.openAICompatible,
+      apiKey: '',
+      apiKeyConfigured: false,
+      configured: false,
+    }
+
+    const { GET, POST, runRecoverableRewriteJobForTesting } = await importRewriteRoute({ aiSettings })
+    const createdResponse = await POST(createRewriteRequest({ recoverableRewriteJob: true, stream: true }))
+    const created = await createdResponse.json() as { ok: boolean; job: { jobId: string; status: string } }
+
+    expect(created.ok).toBe(true)
+    expect(created.job.status).toBe('queued')
+
+    await runRecoverableRewriteJobForTesting(created.job.jobId)
+
+    const restoredResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const restored = await restoredResponse.json() as {
+      ok: boolean
+      job: {
+        status: string
+        errorMessage: string | null
+        result: null
+      }
+    }
+
+    expect(restored.ok).toBe(true)
+    expect(restored.job.status).toBe('failed')
+    expect(restored.job.result).toBeNull()
+    expect(restored.job.errorMessage).toBe('OpenAI-compatible config not set')
   }, 30000)
 
   it('throttles tiny streamed partial updates before final completion', async () => {

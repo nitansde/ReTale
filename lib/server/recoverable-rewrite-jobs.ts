@@ -1,3 +1,4 @@
+import { safeParseJsonObject } from '@/lib/server/json-parse'
 import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
 
 export const RECOVERABLE_REWRITE_JOB_TYPE = 'rewrite_generation'
@@ -55,15 +56,7 @@ export type RecoverableRewriteJobRow = {
 const activeRewriteJobControllers = new Map<string, AbortController>()
 
 function parseJsonRecord(value: string | null) {
-  if (!value) return null
-  try {
-    const parsed = JSON.parse(value) as unknown
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null
-  } catch {
-    return null
-  }
+  return safeParseJsonObject(value)
 }
 
 function normalizeTokenValue(value: unknown) {
