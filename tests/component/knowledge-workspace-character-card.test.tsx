@@ -46,7 +46,7 @@ describe('WorkspaceCharacterReferenceCard', () => {
     expect(screen.getAllByText('被卷入旧案的书生').length).toBeGreaterThan(0)
     expect(screen.getAllByText('洞察布局').length).toBeGreaterThan(0)
     expect(screen.getByText('越危险越冷静')).toBeInTheDocument()
-    expect(screen.getByText('Tier 0 主角')).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-character-tier-tier0')).toHaveTextContent('Tier 0')
 
     const expandButton = screen.getByRole('button', { name: '展开详情' })
     expect(expandButton).toHaveAttribute('aria-expanded', 'false')
