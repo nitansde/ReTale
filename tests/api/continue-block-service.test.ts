@@ -368,6 +368,41 @@ describe('continue-block service', () => {
     )
   })
 
+  it('returns a stable 404 for invalid parent timeline ids without leaving continue-block rows behind', async () => {
+    const tempDatabase = createTempDatabaseCopy('chatbook-continue-block-invalid-parent')
+    cleanups.push(tempDatabase.cleanup)
+    const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+    globalForSqlite.sqlite = database
+    seedNovel(database)
+
+    const beforeContinueBlocks = (database.prepare('SELECT COUNT(*) AS count FROM continue_blocks').get() as { count: number }).count
+    const beforeRevisions = (database.prepare('SELECT COUNT(*) AS count FROM continue_block_revisions').get() as { count: number }).count
+    const beforeTimelineNodes = (database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes').get() as { count: number }).count
+
+    vi.resetModules()
+    const { POST } = await import('@/app/api/continue-blocks/route')
+    const response = await POST(new Request('http://localhost/api/continue-blocks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        sourceChapterNo: 10,
+        parentTimelineNodeId: 'missing-parent-node',
+        selectedText: '原始选区',
+        originalText: '原始片段',
+        generatedText: '不会被保存的续写正文',
+        userInstruction: '沿着不存在的父节点继续写',
+      }),
+    }))
+
+    expect(response.status).toBe(404)
+    await expect(response.json()).resolves.toEqual({ ok: false, error: 'Parent timeline node not found: missing-parent-node' })
+    expect((database.prepare('SELECT COUNT(*) AS count FROM continue_blocks').get() as { count: number }).count).toBe(beforeContinueBlocks)
+    expect((database.prepare('SELECT COUNT(*) AS count FROM continue_block_revisions').get() as { count: number }).count).toBe(beforeRevisions)
+    expect((database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes').get() as { count: number }).count).toBe(beforeTimelineNodes)
+  })
+
   it('rejects regenerate for a missing continue block', async () => {
     const tempDatabase = createTempDatabaseCopy('chatbook-continue-block-missing')
     cleanups.push(tempDatabase.cleanup)
@@ -385,5 +420,35 @@ describe('continue-block service', () => {
       selectedText: '原始选区',
       originalText: '原始片段',
     })).rejects.toThrow('Continue block not found: missing-continue-block')
+  })
+
+  it('returns stable 404 JSON for missing continue blocks on the route boundary', async () => {
+    const tempDatabase = createTempDatabaseCopy('chatbook-continue-block-route-missing')
+    cleanups.push(tempDatabase.cleanup)
+    const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+    globalForSqlite.sqlite = database
+    seedNovel(database)
+
+    vi.resetModules()
+    const { PUT } = await import('@/app/api/continue-blocks/route')
+    const revisionCountBefore = (database.prepare('SELECT COUNT(*) AS count FROM continue_block_revisions').get() as { count: number }).count
+
+    const response = await PUT(new Request('http://localhost/api/continue-blocks', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        continueBlockId: 'missing-continue-block',
+        generatedText: '不会写入',
+        userInstruction: '重新生成',
+        selectedText: '原始选区',
+        originalText: '原始片段',
+      }),
+    }))
+
+    expect(response.status).toBe(404)
+    await expect(response.json()).resolves.toEqual({ ok: false, error: 'Continue block not found: missing-continue-block' })
+
+    const revisionCountAfter = (database.prepare('SELECT COUNT(*) AS count FROM continue_block_revisions').get() as { count: number }).count
+    expect(revisionCountAfter).toBe(revisionCountBefore)
   })
 })

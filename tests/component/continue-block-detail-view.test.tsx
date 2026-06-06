@@ -209,7 +209,7 @@ describe('ContinueBlockDetailView', () => {
       { cache: 'no-store' }
     )
     expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('第三版续写正文')
-    expect(screen.getByText('revision 3')).toBeInTheDocument()
+    expect(screen.getByText('版本 3')).toBeInTheDocument()
     expect(screen.getByTestId('continue-block-revision-history')).toHaveTextContent('第二版续写正文')
     expect(screen.getByTestId('continue-block-revision-history')).toHaveTextContent('第一版续写正文')
   })
@@ -280,6 +280,6 @@ describe('ContinueBlockDetailView', () => {
     )
 
     expect(await screen.findByTestId('workspace-continue-block-reader-body')).toHaveTextContent('时间线回退正文')
-    expect(await screen.findByText('Continue block load failed')).toBeInTheDocument()
+    expect(await screen.findByText('读取续写块详情失败，请稍后重试。')).toBeInTheDocument()
   })
 })

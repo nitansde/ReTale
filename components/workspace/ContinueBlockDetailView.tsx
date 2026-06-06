@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Clock3, LoaderCircle } from 'lucide-react'
+import { useI18n } from '@/lib/i18n/provider'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import type { ContinueBlockDetail, ContinueBlockRecord } from '@/lib/story-branch-types'
+import { toUserFacingWorkspaceError } from '@/lib/workspace-user-facing-errors'
 import { cn, splitPlainTextParagraphs } from '@/lib/utils'
 
 async function loadContinueBlockDetail(input: {
@@ -62,6 +64,7 @@ export function ContinueBlockDetailView(props: {
   readableLineageLabel?: string | null
   onMetricsChange?: (metrics: { currentText: string; inputTokens: number | null; outputTokens: number | null }) => void
 }) {
+  const { locale, t } = useI18n()
   const { onMetricsChange } = props
   const [detail, setDetail] = useState<ContinueBlockDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -85,7 +88,7 @@ export function ContinueBlockDetailView(props: {
       } catch (loadError) {
         if (cancelled) return
         setDetail(null)
-        setError(loadError instanceof Error ? loadError.message : 'Continue block load failed')
+        setError(toUserFacingWorkspaceError(loadError instanceof Error ? loadError.message : 'Continue block load failed', locale))
       } finally {
         if (!cancelled) {
           setLoading(false)
@@ -124,18 +127,18 @@ export function ContinueBlockDetailView(props: {
       <section className="overflow-hidden rounded-[28px] border border-fuchsia-400/20 bg-[radial-gradient(circle_at_top,_rgba(217,70,239,0.12),_transparent_42%),#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
         <div className="flex flex-col gap-5 px-5 py-5 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-3xl">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">已保存续写块</p>
-            <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{readableLabel || effectiveDetail?.title || props.nodeTitle || '续写块'}</h3>
-            {instructionPreview ? <p className="mt-2 text-sm text-fuchsia-100">指令预览 · {instructionPreview}</p> : null}
-            <p className="mt-3 text-sm leading-7 text-zinc-300">{effectiveDetail?.subtitle?.trim() || props.nodeSubtitle?.trim() || '这里展示已保存的续写块最新版本，并在下方保留重生前的历史版本。'}</p>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">{t('continue.savedEyebrow')}</p>
+            <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{readableLabel || effectiveDetail?.title || props.nodeTitle || t('continue.defaultTitle')}</h3>
+            {instructionPreview ? <p className="mt-2 text-sm text-fuchsia-100">{t('continue.instructionPreview')} · {instructionPreview}</p> : null}
+            <p className="mt-3 text-sm leading-7 text-zinc-300">{effectiveDetail?.subtitle?.trim() || props.nodeSubtitle?.trim() || t('continue.defaultSubtitle')}</p>
             <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-zinc-300">
               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">reader mode</span>
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">revision {effectiveDetail?.latestRevisionNo ?? 1}</span>
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{readableLabel || `第 ${props.anchorChapterNo} 章`}</span>
+              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{t('continue.revision', { count: effectiveDetail?.latestRevisionNo ?? 1 })}</span>
+              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{readableLabel || t('continue.chapter', { count: props.anchorChapterNo })}</span>
             </div>
           </div>
           <div className="rounded-[22px] border border-fuchsia-300/20 bg-black/20 px-4 py-3 text-xs uppercase tracking-[0.18em] text-fuchsia-100" data-testid="workspace-continue-block-reader-mode">
-            Read mode
+            {t('continue.readerMode')}
           </div>
         </div>
       </section>
@@ -144,7 +147,7 @@ export function ContinueBlockDetailView(props: {
         <section className="rounded-[24px] border border-white/8 bg-black/20 p-5 text-sm text-zinc-300">
           <div className="flex items-center gap-2 text-zinc-100">
             <LoaderCircle className="h-4 w-4 animate-spin text-fuchsia-300" />
-            正在读取续写块详情…
+            {t('continue.loading')}
           </div>
         </section>
       ) : null}
@@ -159,11 +162,11 @@ export function ContinueBlockDetailView(props: {
         <>
           <section className="rounded-[28px] border border-white/8 bg-[#0b0d12] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:p-6">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Latest saved revision</p>
-              {instructionPreview ? <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">指令预览 {instructionPreview}</span> : null}
+              <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('continue.latestRevision')}</p>
+              {instructionPreview ? <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{t('continue.instructionPreview')} {instructionPreview}</span> : null}
             </div>
             <div className="rounded-[24px] border border-white/8 bg-black/20 p-5">
-              {renderReaderBodyParagraphs(effectiveReaderText || '当前续写块还没有可展示的已保存正文。', 'text-zinc-200', 'workspace-continue-block-reader-body')}
+              {renderReaderBodyParagraphs(effectiveReaderText || t('continue.emptyBody'), 'text-zinc-200', 'workspace-continue-block-reader-body')}
             </div>
           </section>
 
@@ -171,10 +174,10 @@ export function ContinueBlockDetailView(props: {
             <section className="rounded-[28px] border border-white/8 bg-[#0b0d12] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:p-6" data-testid="continue-block-revision-history">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Revision history</p>
-                  <p className="mt-1 text-sm text-zinc-300">最新版本保持为当前 reader；更早的重生前版本会继续保留在这里。</p>
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('continue.history')}</p>
+                  <p className="mt-1 text-sm text-zinc-300">{t('continue.historyDescription')}</p>
                 </div>
-                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{historyEntries.length} 条历史</span>
+                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{t('continue.historyCount', { count: historyEntries.length })}</span>
               </div>
 
               <div className="mt-4 space-y-4">
@@ -184,8 +187,8 @@ export function ContinueBlockDetailView(props: {
                     <article key={`${revision.revisionNo}-${revision.createdAt}`} className="rounded-[24px] border border-white/8 bg-black/20 p-4" data-testid={`continue-block-history-item-${revision.revisionNo}`}>
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
-                          <p className="text-sm font-medium text-zinc-100">第 {revision.revisionNo} 版 · {revision.revisionKind}</p>
-                          {revisionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">指令预览 · {revisionPreview}</p> : null}
+                          <p className="text-sm font-medium text-zinc-100">{t('continue.historyRevision', { count: revision.revisionNo, kind: revision.revisionKind })}</p>
+                          {revisionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">{t('continue.instructionPreview')} · {revisionPreview}</p> : null}
                         </div>
                         <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-400">
                           <Clock3 className="h-3.5 w-3.5" />
