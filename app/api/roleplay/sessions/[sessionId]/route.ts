@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { jsonError, requireNonEmptyId } from '@/lib/server/api-route'
 import { queryAll, queryOne } from '@/lib/server/sqlite'
 import type { RoleplayMessageRecord, RoleplaySessionDetail } from '@/lib/roleplay-types'
 
@@ -108,16 +109,17 @@ function toRoleplaySessionPayload(session: RoleplaySessionDetail) {
 
 export async function GET(request: Request, ctx: RouteContext<'/api/roleplay/sessions/[sessionId]'>) {
   try {
-    const { sessionId } = await ctx.params
+    const { sessionId: rawSessionId } = await ctx.params
+    const sessionId = requireNonEmptyId(rawSessionId, 'sessionId')
     const { searchParams } = new URL(request.url)
     const novelId = searchParams.get('novelId')?.trim() ?? ''
     const branchId = searchParams.get('branchId')?.trim() ?? ''
 
     if (!novelId) {
-      return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+      return jsonError('novelId is required', 400)
     }
     if (!branchId) {
-      return NextResponse.json({ ok: false, error: 'branchId is required' }, { status: 400 })
+      return jsonError('branchId is required', 400)
     }
 
     const session = queryOne<RoleplaySessionRow>(
@@ -149,9 +151,7 @@ export async function GET(request: Request, ctx: RouteContext<'/api/roleplay/ses
 
     return NextResponse.json(toRoleplaySessionPayload(toRoleplaySessionDetail(session, messages)))
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : 'Failed to load roleplay session' },
-      { status: 500 }
-    )
+    const message = error instanceof Error ? error.message : 'Failed to load roleplay session'
+    return jsonError(message, message.endsWith(' is required') ? 400 : 500)
   }
 }

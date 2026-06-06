@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server'
+import { isNotFoundErrorMessage, jsonError, readJsonObject, requireNonEmptyId, toErrorMessage } from '@/lib/server/api-route'
 import { appendRoleplayMessage, createRoleplayLatestTurnVariant } from '@/lib/server/roleplay-store'
 import { uid } from '@/lib/utils'
 
 export async function POST(request: Request, context: { params: Promise<{ sessionId: string }> }) {
   try {
-    const { sessionId } = await context.params
-    const body = await request.json()
+    const { sessionId: rawSessionId } = await context.params
+    const sessionId = requireNonEmptyId(rawSessionId, 'sessionId')
+    const body = await readJsonObject(request)
     const mode = body.mode === 'latest-turn-variant' ? 'latest-turn-variant' : 'append'
 
     const result = mode === 'latest-turn-variant'
@@ -30,8 +32,7 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
 
     return NextResponse.json(result, { status: 201 })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to append roleplay message'
-    const status = /not found/u.test(message) ? 404 : 400
-    return NextResponse.json({ error: message }, { status })
+    const message = toErrorMessage(error, 'Failed to append roleplay message')
+    return jsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
   }
 }

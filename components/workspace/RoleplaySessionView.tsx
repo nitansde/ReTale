@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, CornerDownRight, GitBranch, LoaderCircle, RefreshCcw, SendHorizonal, Settings2 } from 'lucide-react'
+import { useI18n } from '@/lib/i18n/provider'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import type { RoleplayMessageRecord, RoleplaySessionDetail } from '@/lib/story-branch-types'
 import { cn } from '@/lib/utils'
@@ -110,6 +111,12 @@ async function streamRoleplayReply(payload: Record<string, unknown>, onChunk: (c
   })
 
   if (!response.ok) {
+    const contentType = response.headers.get('content-type') ?? ''
+    if (contentType.includes('application/json')) {
+      const payload = await response.json().catch(() => null) as { error?: string } | null
+      throw new Error(payload?.error || 'Roleplay streaming request failed')
+    }
+
     const text = await response.text()
     throw new Error(text || 'Roleplay streaming request failed')
   }
@@ -189,6 +196,7 @@ export function RoleplaySessionView(props: {
   readableLineageLabel?: string | null
   onMetricsChange?: (metrics: { currentText: string; inputTokens: number | null; outputTokens: number | null }) => void
 }) {
+  const { t } = useI18n()
   const { onMetricsChange } = props
   const [detail, setDetail] = useState<RoleplaySessionDetailPayload | null>(null)
   const [loading, setLoading] = useState(true)
@@ -285,17 +293,17 @@ export function RoleplaySessionView(props: {
   }, [props.sessionId])
 
   const readableLabel = props.readableLineageLabel?.trim() || ''
-  const resolvedTitle = readableLabel || detail?.title?.trim() || props.nodeTitle?.trim() || `RP · 第 ${props.anchorChapterNo} 章角色扮演`
+  const resolvedTitle = readableLabel || detail?.title?.trim() || props.nodeTitle?.trim() || t('roleplay.defaultTitle', { count: props.anchorChapterNo })
   const instructionPreview = formatStoryBranchInstructionPreview(detail?.messages.find((message) => message.role === 'user')?.content ?? props.nodeSubtitle)
   const metaPills = useMemo(
     () => [
       readableLabel || null,
-      instructionPreview ? `首条用户消息 ${instructionPreview}` : null,
-      `source 第 ${detail?.sourceChapterNo ?? props.anchorChapterNo} 章`,
-      detail ? `${detail.messages.length} 条消息` : null,
-      detail ? `创建于 ${formatCreatedAt(detail.createdAt)}` : null,
+      instructionPreview ? t('roleplay.firstUserMessage', { text: instructionPreview }) : null,
+      t('roleplay.sourceChapter', { count: detail?.sourceChapterNo ?? props.anchorChapterNo }),
+      detail ? t('roleplay.messageCount', { count: detail.messages.length }) : null,
+      detail ? t('roleplay.createdAt', { value: formatCreatedAt(detail.createdAt) }) : null,
     ].filter(Boolean) as string[],
-    [detail, instructionPreview, props.anchorChapterNo, readableLabel]
+    [detail, instructionPreview, props.anchorChapterNo, readableLabel, t]
   )
   const messagesById = useMemo(
     () => new Map((detail?.messages ?? []).map((message) => [message.id, message])),
@@ -329,12 +337,12 @@ export function RoleplaySessionView(props: {
         hasImpersonationContext: true,
         namedTranscript: {
           kind: 'roleplay',
-          userName: '用户',
-          assistantName: detail.title?.trim() || '角色',
+          userName: t('roleplay.userLabel'),
+          assistantName: detail.title?.trim() || t('roleplay.defaultAssistantName'),
         },
       },
     }
-  }, [detail, props.branchId, props.novelId])
+  }, [detail, props.branchId, props.novelId, t])
 
   const handleSend = useCallback(async () => {
     if (!detail || !composerValue.trim()) return
@@ -387,7 +395,7 @@ export function RoleplaySessionView(props: {
 
       const assistantContent = streamed.trim()
       if (!assistantContent) {
-        throw new Error('角色扮演回复为空')
+        throw new Error(t('roleplay.replyEmpty'))
       }
 
       await appendRoleplayMessage({
@@ -402,7 +410,7 @@ export function RoleplaySessionView(props: {
       await refreshDetail()
     } catch (sendError) {
       setPendingAssistant(null)
-      setError(sendError instanceof Error ? sendError.message : 'Roleplay send failed')
+      setError(sendError instanceof Error ? sendError.message : t('errors.roleplayMessageAppendFailed'))
       await refreshDetail().catch(() => undefined)
     } finally {
       setSending(false)
@@ -414,7 +422,7 @@ export function RoleplaySessionView(props: {
 
     const parentUser = latestAssistant.parentMessageId ? messagesById.get(latestAssistant.parentMessageId) ?? null : null
     if (!parentUser || parentUser.role !== 'user') {
-      setError('最新助手回复缺少可重生的用户消息')
+      setError(t('roleplay.latestAssistantMissingUser'))
       return
     }
 
@@ -445,7 +453,7 @@ export function RoleplaySessionView(props: {
 
       const assistantContent = streamed.trim()
       if (!assistantContent) {
-        throw new Error('角色扮演重生回复为空')
+        throw new Error(t('roleplay.regenerateReplyEmpty'))
       }
 
       await createLatestAssistantVariant({
@@ -459,7 +467,7 @@ export function RoleplaySessionView(props: {
       await refreshDetail()
     } catch (regenerateError) {
       setPendingAssistant(null)
-      setError(regenerateError instanceof Error ? regenerateError.message : 'Roleplay regenerate failed')
+      setError(regenerateError instanceof Error ? regenerateError.message : t('errors.roleplayVariantCreationFailed'))
       await refreshDetail().catch(() => undefined)
     } finally {
       setRegenerating(false)
@@ -471,10 +479,10 @@ export function RoleplaySessionView(props: {
       <section className="overflow-hidden rounded-[28px] border border-emerald-400/20 bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.14),_transparent_40%),#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
         <div className="flex flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 max-w-3xl">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-emerald-200/70">Persisted roleplay session</p>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-emerald-200/70">{t('roleplay.persistedEyebrow')}</p>
             <h3 className="mt-2 text-xl font-semibold tracking-tight text-zinc-100 sm:text-2xl">{resolvedTitle}</h3>
             <p className="mt-2 text-sm leading-6 text-zinc-300 sm:mt-3 sm:leading-7">
-              {detail?.subtitle?.trim() || props.nodeSubtitle?.trim() || '角色扮演现在直接在会话视图里继续，消息历史、分叉点和最新变体都保留在同一个聊天核心里，不再回写章节正文。'}
+              {detail?.subtitle?.trim() || props.nodeSubtitle?.trim() || t('roleplay.subtitleFallback')}
             </p>
             <div className="mt-4 hidden flex-wrap gap-2 text-[11px] text-zinc-300 sm:flex">
               {metaPills.map((pill) => (
@@ -485,10 +493,10 @@ export function RoleplaySessionView(props: {
 
           <div className="hidden w-full max-w-md space-y-2 sm:block">
             <div className="rounded-[22px] border border-emerald-300/20 bg-black/20 px-4 py-3 text-xs text-emerald-100">
-              Timeline session reopen
+              {t('roleplay.timelineReopen')}
             </div>
             <div className="rounded-[22px] border border-amber-300/20 bg-amber-500/10 px-4 py-3 text-xs leading-6 text-amber-100">
-              Roleplay output stays chat-only here. There is no “应用到正文” path in this session view.
+              {t('roleplay.chatOnlyHint')}
             </div>
           </div>
         </div>
@@ -498,7 +506,7 @@ export function RoleplaySessionView(props: {
         <section className="rounded-[24px] border border-white/8 bg-black/20 p-5 text-sm text-zinc-300">
           <div className="flex items-center gap-2 text-zinc-100">
             <LoaderCircle className="h-4 w-4 animate-spin text-emerald-300" />
-            正在读取角色扮演会话…
+            {t('roleplay.loading')}
           </div>
         </section>
       ) : null}
@@ -514,8 +522,8 @@ export function RoleplaySessionView(props: {
           <div className="border-b border-white/8 px-4 py-4 sm:px-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Session messages</p>
-                <p className="mt-1 text-sm text-zinc-300">移动端优先的聊天核心：点击更早的消息可以为下一轮设置分叉点；重生只针对最新助手回复。</p>
+                <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('roleplay.sessionMessages')}</p>
+                <p className="mt-1 text-sm text-zinc-300">{t('roleplay.mobileChatHint')}</p>
               </div>
               <button
                 type="button"
@@ -525,12 +533,12 @@ export function RoleplaySessionView(props: {
                 className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-300/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100 transition hover:bg-emerald-500/18 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {regenerating ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                重生最新回复
+                {t('roleplay.regenerateLatest')}
               </button>
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-zinc-300">{detail.messages.length} 条消息</span>
+              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-zinc-300">{t('roleplay.messageCount', { count: detail.messages.length })}</span>
               <span
                 className={cn(
                   'rounded-full border px-3 py-1',
@@ -540,7 +548,7 @@ export function RoleplaySessionView(props: {
                 )}
                 data-testid="roleplay-fork-anchor"
               >
-                {forkMessage ? `下轮从 #${forkMessage.messageIndex} 分叉` : '下轮默认接在最新消息后'}
+                {forkMessage ? t('roleplay.nextForkFrom', { index: forkMessage.messageIndex }) : t('roleplay.nextFollowLatest')}
               </span>
               {forkMessage ? (
                 <button
@@ -548,8 +556,8 @@ export function RoleplaySessionView(props: {
                   onClick={() => setForkMessageId(null)}
                   className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-zinc-300 transition hover:bg-white/[0.08]"
                 >
-                  回到最新分支
-                </button>
+                   {t('roleplay.backToLatestBranch')}
+                 </button>
               ) : null}
             </div>
           </div>
@@ -579,13 +587,13 @@ export function RoleplaySessionView(props: {
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-[11px] uppercase tracking-[0.18em] text-current/75">
-                        {isUser ? 'User' : 'Assistant'} · #{message.messageIndex}
+                        {isUser ? t('roleplay.userLabel') : t('roleplay.assistantLabel')} · #{message.messageIndex}
                       </p>
                       <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-current/65">
-                        <span className="rounded-full border border-current/15 px-2.5 py-1">turn {message.variantMetadata.turnIndex}</span>
-                        <span className="rounded-full border border-current/15 px-2.5 py-1">variant {message.variantMetadata.variantIndex}</span>
+                        <span className="rounded-full border border-current/15 px-2.5 py-1">{t('roleplay.turn', { count: message.variantMetadata.turnIndex })}</span>
+                        <span className="rounded-full border border-current/15 px-2.5 py-1">{t('roleplay.variant', { count: message.variantMetadata.variantIndex })}</span>
                         {message.forkMetadata.forkedFromMessageId ? (
-                          <span className="rounded-full border border-current/15 px-2.5 py-1">fork from #{messagesById.get(message.forkMetadata.forkedFromMessageId)?.messageIndex ?? '?'}</span>
+                          <span className="rounded-full border border-current/15 px-2.5 py-1">{t('roleplay.forkFrom', { index: messagesById.get(message.forkMetadata.forkedFromMessageId)?.messageIndex ?? '?' })}</span>
                         ) : null}
                       </div>
                     </div>
@@ -595,7 +603,7 @@ export function RoleplaySessionView(props: {
                   {canForkFromMessage ? (
                     <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-current/15 px-3 py-1 text-[11px] text-current/70">
                       <GitBranch className="h-3.5 w-3.5" />
-                      点击这里作为下一轮分叉点
+                      {t('roleplay.clickAsFork')}
                     </div>
                   ) : null}
 
@@ -608,17 +616,17 @@ export function RoleplaySessionView(props: {
               <article className="rounded-[24px] border border-dashed border-emerald-300/28 bg-emerald-500/10 p-4 text-emerald-50">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <p className="text-[11px] uppercase tracking-[0.18em] text-emerald-100/75">
-                    Assistant · {pendingAssistant.mode === 'regenerate' ? 'regenerate variant' : 'replying'}
+                    {t('roleplay.assistantLabel')} · {pendingAssistant.mode === 'regenerate' ? t('roleplay.pendingRegenerate') : t('roleplay.pendingReplying')}
                   </p>
                   <LoaderCircle className="h-4 w-4 animate-spin text-emerald-200" />
                 </div>
                 {pendingAssistant.forkedFromMessageId ? (
                   <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-200/15 px-3 py-1 text-[11px] text-emerald-100/75">
                     <CornerDownRight className="h-3.5 w-3.5" />
-                    fork from #{messagesById.get(pendingAssistant.forkedFromMessageId)?.messageIndex ?? '?'}
+                    {t('roleplay.forkFrom', { index: messagesById.get(pendingAssistant.forkedFromMessageId)?.messageIndex ?? '?' })}
                   </div>
                 ) : null}
-                <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-7">{pendingAssistant.content || '正在生成这一轮回复…'}</p>
+                <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-7">{pendingAssistant.content || t('roleplay.pendingReply')}</p>
               </article>
             ) : null}
           </div>
@@ -628,12 +636,12 @@ export function RoleplaySessionView(props: {
               {forkMessage ? (
                 <div className="inline-flex max-w-full items-start gap-2 rounded-[18px] border border-amber-300/22 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-100">
                   <GitBranch className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span className="min-w-0 break-words">下一轮会从 #{forkMessage.messageIndex} 分叉：{forkMessage.content.slice(0, 72)}{forkMessage.content.length > 72 ? '…' : ''}</span>
+                  <span className="min-w-0 break-words">{t('roleplay.nextForkFrom', { index: forkMessage.messageIndex })}：{forkMessage.content.slice(0, 72)}{forkMessage.content.length > 72 ? '…' : ''}</span>
                 </div>
               ) : (
                 <div className="inline-flex items-center gap-2 rounded-[18px] border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-400">
                   <CornerDownRight className="h-3.5 w-3.5" />
-                  默认接在最新消息之后
+                  {t('roleplay.nextFollowLatest')}
                 </div>
               )}
             </div>
@@ -651,7 +659,7 @@ export function RoleplaySessionView(props: {
                     }
                   }
                 }}
-                placeholder="输入角色台词、动作，或你希望推动的剧情。⌘/Ctrl + Enter 发送"
+                placeholder={t('roleplay.composerPlaceholder')}
                 className="max-h-[220px] min-h-[84px] w-full resize-none overflow-y-auto rounded-[20px] border border-white/10 bg-[#0f1218] px-4 py-3 text-sm leading-7 text-zinc-100 outline-none transition focus:border-emerald-300/35"
               />
 
@@ -659,18 +667,18 @@ export function RoleplaySessionView(props: {
                 <details className="group max-w-full rounded-2xl border border-white/8 bg-black/20 px-3 py-2 text-xs text-zinc-400">
                   <summary className="flex cursor-pointer list-none items-center gap-2 text-zinc-300">
                     <Settings2 className="h-3.5 w-3.5" />
-                    高级设置与来源快照
+                    {t('roleplay.advancedSettings')}
                     <ChevronDown className="h-3.5 w-3.5 transition group-open:rotate-180" />
                   </summary>
                   <div className="mt-3 space-y-3 border-t border-white/8 pt-3">
                     <div>
-                      <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Source excerpt</p>
-                      <p className="mt-2 whitespace-pre-wrap break-words leading-6 text-zinc-300">{detail.sourceSnapshot.selectedText.trim() || detail.sourceSnapshot.textSnapshot.trim() || '当前会话没有保存可展示的起始片段。'}</p>
-                    </div>
-                    <div>
-                      <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Source snapshot</p>
-                      <p className="mt-2 whitespace-pre-wrap break-words leading-6 text-zinc-300">{detail.sourceSnapshot.textSnapshot.trim() || '当前会话没有保存正文快照。'}</p>
-                    </div>
+                        <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('roleplay.sourceExcerpt')}</p>
+                        <p className="mt-2 whitespace-pre-wrap break-words leading-6 text-zinc-300">{detail.sourceSnapshot.selectedText.trim() || detail.sourceSnapshot.textSnapshot.trim() || t('roleplay.sourceExcerptEmpty')}</p>
+                      </div>
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('roleplay.sourceSnapshot')}</p>
+                        <p className="mt-2 whitespace-pre-wrap break-words leading-6 text-zinc-300">{detail.sourceSnapshot.textSnapshot.trim() || t('roleplay.sourceSnapshotEmpty')}</p>
+                      </div>
                   </div>
                 </details>
 
@@ -683,7 +691,7 @@ export function RoleplaySessionView(props: {
                   className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <SendHorizonal className="h-4 w-4" />}
-                  发送
+                  {t('roleplay.send')}
                 </button>
               </div>
             </div>

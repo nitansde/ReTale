@@ -1,25 +1,38 @@
 import { NextResponse } from 'next/server'
+import { isNotFoundErrorMessage, jsonError, readJsonObject, toErrorMessage } from '@/lib/server/api-route'
 import { listRoleplaySessionsByNovel, createRoleplaySession } from '@/lib/server/roleplay-store'
+import type { RoleplaySourceNodeType } from '@/lib/roleplay-types'
 import { uid } from '@/lib/utils'
+
+function parseRoleplaySourceNodeType(value: unknown): RoleplaySourceNodeType | null {
+  return value === 'chapter'
+    || value === 'rewrite'
+    || value === 'continue_block'
+    || value === 'what_if'
+    || value === 'future_jump'
+    || value === 'roleplay_session'
+    ? value
+    : null
+}
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
     const novelId = searchParams.get('novelId')?.trim() ?? ''
     if (!novelId) {
-      return NextResponse.json({ error: 'novelId is required' }, { status: 400 })
+      return jsonError('novelId is required', 400)
     }
 
     return NextResponse.json({ sessions: listRoleplaySessionsByNovel(novelId) })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to load roleplay sessions'
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = toErrorMessage(error, 'Failed to load roleplay sessions')
+    return jsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json()
+    const body = await readJsonObject(request)
     const result = await createRoleplaySession({
       id: typeof body.id === 'string' && body.id.trim() ? body.id : uid('roleplay-session'),
       novelId: String(body.novelId ?? ''),
@@ -30,7 +43,7 @@ export async function POST(request: Request) {
       sourceChapterNo: Number(body.sourceChapterNo ?? 0),
       sourceChapterTitle: typeof body.sourceChapterTitle === 'string' ? body.sourceChapterTitle : null,
       sourceTimelineNodeId: typeof body.sourceTimelineNodeId === 'string' ? body.sourceTimelineNodeId : null,
-      sourceTimelineNodeType: typeof body.sourceTimelineNodeType === 'string' ? body.sourceTimelineNodeType : null,
+      sourceTimelineNodeType: parseRoleplaySourceNodeType(body.sourceTimelineNodeType),
       sourceSelectedText: String(body.sourceSelectedText ?? ''),
       sourceTextSnapshot: String(body.sourceTextSnapshot ?? ''),
       sourceSelectedLineStart: Number.isInteger(body.sourceSelectedLineStart) ? Number(body.sourceSelectedLineStart) : null,
@@ -40,7 +53,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ sessionId: result.session.id, timelineNodeId: result.timelineNodeId }, { status: 201 })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to create roleplay session'
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = toErrorMessage(error, 'Failed to create roleplay session')
+    return jsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
   }
 }
