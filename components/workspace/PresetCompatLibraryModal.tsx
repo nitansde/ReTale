@@ -9,7 +9,9 @@ import {
   type PresetCompatCreativeSurfaceId,
   type PresetCompatSurfaceId,
 } from '@/lib/preset-compat/types'
+import { useI18n } from '@/lib/i18n/provider'
 import type { PresetCompatSessionWorkspaceSelection } from '@/lib/types'
+import { toUserFacingPresetCompatError } from '@/lib/workspace-user-facing-errors'
 import { useNovelStore } from '@/store/novel-store'
 import { cn } from '@/lib/utils'
 
@@ -50,6 +52,7 @@ async function readUploadedFileText(file: File) {
 }
 
 export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelection = null, open, onClose }: PresetCompatLibraryModalProps) {
+  const { t, locale } = useI18n()
   const presetCompatLibrary = useNovelStore((state) => state.presetCompatLibrary)
   const presetCompatLibraryLoading = useNovelStore((state) => state.presetCompatLibraryLoading)
   const presetCompatLibraryError = useNovelStore((state) => state.presetCompatLibraryError)
@@ -73,6 +76,10 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
   const [statusMessage, setStatusMessage] = useState('')
   const [actionError, setActionError] = useState('')
   const [saving, setSaving] = useState(false)
+  const resolvedErrorMessage = useMemo(() => {
+    const nextError = actionError || presetCompatLibraryError
+    return nextError ? toUserFacingPresetCompatError(nextError, locale) : ''
+  }, [actionError, locale, presetCompatLibraryError])
 
   const presets = useMemo(
     () => Object.values(presetCompatLibrary.presets).slice().sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
@@ -102,11 +109,11 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
       if (kind === 'preset' && result.importedIds[0]) setSelectedPresetId(result.importedIds[0])
 
       const importedLabel = result.importedIds.length
-        ? `已导入 ${result.importedIds.length} 个${kind === 'preset' ? '预设' : '正则包条目'}。`
-        : `没有导入任何${kind === 'preset' ? '预设' : '正则'}条目。`
+        ? t(kind === 'preset' ? 'preset.importedPresets' : 'preset.importedRegexEntries', { count: result.importedIds.length })
+        : t(kind === 'preset' ? 'preset.importedNonePresets' : 'preset.importedNoneRegex')
       setStatusMessage(importedLabel)
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : `导入${kind === 'preset' ? '预设' : '正则'}失败`)
+      setActionError(error instanceof Error ? error.message : t(kind === 'preset' ? 'preset.importPresetFailed' : 'preset.importRegexFailed'))
     }
   }
 
@@ -116,9 +123,9 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
     setStatusMessage('')
     try {
       await savePresetCompatLibrary()
-      setStatusMessage('预设兼容库已保存。')
+      setStatusMessage(t('preset.saved'))
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : '保存预设兼容库失败')
+      setActionError(error instanceof Error ? error.message : t('preset.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -138,9 +145,9 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
       deletePresetCompatPreset(presetId)
       setSelectedPresetId(nextPresetId)
       await savePresetCompatLibrary()
-      setStatusMessage(`已删除预设“${presetName}”，并已保存。`)
+      setStatusMessage(t('preset.deletedAndSaved', { name: presetName }))
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : '删除预设后保存失败')
+      setActionError(error instanceof Error ? error.message : t('preset.deleteAfterSaveFailed'))
     } finally {
       setSaving(false)
     }
@@ -150,18 +157,18 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
     if (!selectedPreset) return
     const jsonText = exportPresetCompatPreset(selectedPreset.id)
     if (!jsonText) {
-      setActionError('导出预设失败：当前选中的预设已不存在。')
+      setActionError(t('preset.exportMissingSelected'))
       return
     }
     setActionError('')
-    setStatusMessage(`已导出 ${selectedPreset.name}。`)
+    setStatusMessage(t('preset.exportedPreset', { name: selectedPreset.name }))
     downloadTextFile(`${sanitizeFileStem(selectedPreset.name)}.json`, jsonText)
   }
 
   function handleExportRegexBundle() {
     const jsonText = exportPresetCompatStandaloneRegexBundle()
     setActionError('')
-    setStatusMessage('已导出独立正则包。')
+    setStatusMessage(t('preset.exportedRegexBundle'))
     downloadTextFile('preset-compat-standalone-regexes.json', jsonText)
   }
 
@@ -176,9 +183,9 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
       >
         <div className="mb-5 flex items-start justify-between gap-3">
           <div>
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">预设兼容</p>
-            <h3 className="mt-1 text-xl font-semibold text-zinc-100">全局预设兼容库</h3>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">导入预设 JSON，按创作界面绑定预设，编辑提示词规则与正则，再导出兼容 ST 的载荷，同时不混入工作区本地状态。</p>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">{t('preset.eyebrow')}</p>
+            <h3 className="mt-1 text-xl font-semibold text-zinc-100">{t('preset.title')}</h3>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">{t('preset.description')}</p>
           </div>
           <button onClick={onClose} className="rounded-2xl border border-white/10 p-2 text-zinc-300 hover:bg-white/[0.06]"><X className="h-4 w-4" /></button>
         </div>
@@ -186,10 +193,10 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
         <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
           <div className="space-y-4">
             <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
-              <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">导入</p>
+              <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.import')}</p>
               <div className="mt-4 space-y-3">
                 <label className="block">
-                  <span className="mb-2 block text-sm text-zinc-300">预设 JSON</span>
+                  <span className="mb-2 block text-sm text-zinc-300">{t('preset.presetJson')}</span>
                   <input
                     type="file"
                     accept="application/json,.json"
@@ -199,7 +206,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-2 block text-sm text-zinc-300">独立正则 JSON</span>
+                  <span className="mb-2 block text-sm text-zinc-300">{t('preset.regexJson')}</span>
                   <input
                     type="file"
                     accept="application/json,.json"
@@ -214,8 +221,8 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
             <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Library state</p>
-                  <p className="mt-2 text-sm text-zinc-300">版本 {presetCompatLibrary.revision} · {presets.length} 个预设 · {Object.keys(presetCompatLibrary.standaloneRegexes).length} 条独立正则</p>
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.libraryState')}</p>
+                  <p className="mt-2 text-sm text-zinc-300">{t('preset.librarySummary', { revision: presetCompatLibrary.revision, presets: presets.length, regexes: Object.keys(presetCompatLibrary.standaloneRegexes).length })}</p>
                 </div>
                 <span className={cn(
                   'rounded-full border px-3 py-1 text-[11px]',
@@ -223,12 +230,12 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                     ? 'border-violet-400/20 bg-violet-500/10 text-violet-100'
                     : 'border-white/10 bg-black/20 text-zinc-300'
                 )}>
-                  {presetCompatLibraryLoading || saving ? '处理中' : '就绪'}
+                  {presetCompatLibraryLoading || saving ? t('preset.processing') : t('preset.ready')}
                 </span>
               </div>
 
               {statusMessage ? <p className="mt-3 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">{statusMessage}</p> : null}
-              {actionError || presetCompatLibraryError ? <p className="mt-3 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{actionError || presetCompatLibraryError}</p> : null}
+              {resolvedErrorMessage ? <p className="mt-3 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{resolvedErrorMessage}</p> : null}
 
               <div className="mt-4 flex flex-wrap gap-2">
                 <button
@@ -237,20 +244,20 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                   disabled={saving || presetCompatLibraryLoading}
                   className="rounded-2xl bg-violet-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60"
                 >
-                  {saving ? '保存中…' : '保存兼容库'}
+                  {saving ? t('preset.saving') : t('preset.save')}
                 </button>
                 <button
                   type="button"
                   onClick={handleExportRegexBundle}
                   className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-zinc-100 transition hover:bg-white/[0.08]"
                 >
-                  导出正则包
+                  {t('preset.exportRegexBundle')}
                 </button>
               </div>
             </div>
 
             <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
-              <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">预设列表</p>
+              <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.list')}</p>
               <div className="mt-4 space-y-2">
                 {presets.length ? presets.map((preset) => (
                   <button
@@ -266,12 +273,12 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                   >
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-sm font-medium text-zinc-100">{preset.name}</p>
-                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{preset.promptRules.length} 条规则</span>
+                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.ruleCount', { count: preset.promptRules.length })}</span>
                     </div>
-                    <p className="mt-2 text-xs leading-5 text-zinc-400">{preset.embeddedRegexes.length} 条内嵌正则 · {preset.attachedStandaloneRegexIds.length} 条已附加独立正则</p>
+                    <p className="mt-2 text-xs leading-5 text-zinc-400">{t('preset.regexSummary', { embedded: preset.embeddedRegexes.length, attached: preset.attachedStandaloneRegexIds.length })}</p>
                   </button>
                 )) : (
-                  <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">导入一个预设文件后，这里才会显示全局兼容库内容。</div>
+                  <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">{t('preset.empty')}</div>
                 )}
               </div>
             </div>
@@ -307,9 +314,9 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                 <div className="rounded-[24px] border border-violet-400/16 bg-violet-500/8 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <p className="text-[11px] uppercase tracking-[0.18em] text-violet-200/80">ChatBook 内置 System Prompt</p>
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-violet-200/80">{t('preset.builtin.systemPrompt')}</p>
                       <p className="mt-2 text-sm leading-6 text-zinc-300">
-                        这些规则由 ChatBook 存储并默认启用，会以第一顺序插入 system prompt；导出预设 JSON 时不会写入预设文件。
+                        {t('preset.builtin.description')}
                       </p>
                     </div>
                     <span className="rounded-full border border-violet-300/20 bg-violet-400/10 px-3 py-1 text-[11px] text-violet-100">
@@ -326,7 +333,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
                               <p className="text-sm font-medium text-zinc-100">{BUILTIN_SURFACE_LABELS[surfaceId]}</p>
-                              <p className="mt-1 text-xs leading-5 text-zinc-500">ChatBook-owned · 不随预设导出</p>
+                              <p className="mt-1 text-xs leading-5 text-zinc-500">{t('preset.builtin.ownedNoExport')}</p>
                               <p className="mt-1 text-xs leading-5 text-zinc-500">{surfaceMeta.builtinPromptSummary}</p>
                             </div>
                             <label className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300">
@@ -337,7 +344,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                                 onChange={(event) => updatePresetCompatBuiltinSystemPrompt(surfaceId, { enabled: event.target.checked })}
                                 className="h-3.5 w-3.5 rounded border-white/20 bg-transparent"
                               />
-                              启用
+                              {t('preset.enabled')}
                             </label>
                           </div>
                           <label className="mt-3 block">
@@ -356,7 +363,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                 </div>
 
                 <div className="rounded-[24px] border border-white/8 bg-black/20 p-8 text-sm leading-7 text-zinc-400">
-                  先导入一个预设，这里才会显示界面绑定、提示词规则编辑、正则开关、独立正则附加与导出操作。
+                  {t('preset.importFirstDescription')}
                 </div>
               </div>
             )}

@@ -535,6 +535,49 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.messages[1]?.content).not.toContain('ALPHA')
   })
 
+  it('returns a structured missing-provider error for streamed rewrite requests instead of fake output', async () => {
+    const aiSettings = createAiSettings('openai-compatible')
+    aiSettings.rewrite.openAICompatible = {
+      ...aiSettings.rewrite.openAICompatible,
+      apiKey: '',
+      apiKeyConfigured: false,
+      configured: false,
+    }
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createCreativeLibrary('stream'),
+    }))
+    vi.stubGlobal('fetch', vi.fn())
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', { stream: true }))
+
+    expect(response.status).toBe(400)
+    const payload = await response.json() as {
+      ok: false
+      error: string
+      code: string
+      provider: string
+      guidance: string
+      presetCompat: {
+        streamPolicy: { effective: boolean; source: string }
+      }
+    }
+
+    expect(payload).toMatchObject({
+      ok: false,
+      error: 'OpenAI-compatible config not set',
+      code: 'provider_not_configured',
+      provider: 'openai-compatible',
+    })
+    expect(payload.guidance).toContain('Open AI Settings')
+    expect(payload.presetCompat.streamPolicy).toMatchObject({ effective: true, source: 'explicit_request' })
+    expect(readPresetCompatHeader(response).streamPolicy).toMatchObject({ effective: true, source: 'explicit_request' })
+  })
+
   it('uses source text as the continuation body when selected text is omitted', async () => {
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => createAiSettings('openai-compatible'),

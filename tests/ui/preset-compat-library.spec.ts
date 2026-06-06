@@ -714,3 +714,126 @@ test('workspace rewrite flow saves a macro-bearing preset binding and sends Alic
 
   await page.screenshot({ path: path.join(evidenceDirectory, 'task-11-ui-preset-macro.png'), fullPage: true })
 })
+
+test('workspace rewrite flow shows missing-provider errors from the rewrite API', async ({ page }) => {
+  await page.route('**/api/workspace', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
+      return
+    }
+    await route.fulfill({ status: 200, body: JSON.stringify(buildWorkspacePayload()) })
+  })
+  await page.route('**/api/settings/ai', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
+      return
+    }
+    await route.fulfill({ status: 200, body: JSON.stringify(buildWorkspacePayload().aiSettings) })
+  })
+  await page.route('**/api/knowledge-view*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      body: JSON.stringify({
+        ok: true,
+        localOutlines: [],
+        localCharacters: [],
+        localCharacterRelations: [],
+        localWorldEntries: [],
+        localTimelineEvents: [],
+        knowledgeRebuildStatus: null,
+        jobOutcome: null,
+      }),
+    })
+  })
+  await page.route('**/api/story-timeline*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      body: JSON.stringify({
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        chapters: [{ type: 'chapter', chapterNo: 1, chapterId: 'chapter-001', title: '第1章 开场', wordCount: 10 }],
+        branchNodes: [],
+        edges: [],
+      }),
+    })
+  })
+  await page.route('**/api/rag/build-generation-context', async (route) => {
+    await route.fulfill({
+      status: 200,
+      body: JSON.stringify({
+        ok: true,
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        chapterId: 'chapter-001',
+        chapterNo: 1,
+        chapterTitle: '第1章 开场',
+        selectedLineStart: 1,
+        selectedLineEnd: 1,
+        warnings: [],
+        promptBlocks: [{
+          id: 'current-summary',
+          label: '当前章节摘要',
+          enabled: true,
+          priority: 'high',
+          content: '# 当前章节摘要\n这里是一段测试正文。',
+        }],
+        assembledContext: '# 当前章节摘要\n这里是一段测试正文。',
+        lanceEvidence: [],
+        tokenEstimate: 12,
+        graphContext: {
+          seedEntities: [],
+          nodes: [],
+          edges: [],
+          contextText: '',
+          warnings: [],
+          tokenEstimate: 12,
+          status: 'ready',
+        },
+      }),
+    })
+  })
+  await page.route('**/api/settings/preset-compat', async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify(createDefaultPresetCompatLibrary()) })
+  })
+  await page.route('**/api/rewrite*', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true, job: null }) })
+      return
+    }
+
+    await route.fulfill({
+      status: 400,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: false,
+        error: 'OpenAI-compatible config not set',
+        code: 'provider_not_configured',
+        provider: 'openai-compatible',
+        guidance: 'Open AI Settings, configure the OpenAI-compatible rewrite base URL, API key, and model, then try again.',
+      }),
+    })
+  })
+
+  await page.goto('/workspace', { waitUntil: 'networkidle' })
+  await page.locator('[contenteditable="true"]').evaluate((editor) => {
+    const paragraph = editor.querySelector('p')
+    const textNode = paragraph?.firstChild
+    if (!paragraph || !textNode || textNode.nodeType !== Node.TEXT_NODE) {
+      throw new Error('Failed to resolve editor text node for selection')
+    }
+
+    const range = document.createRange()
+    range.setStart(textNode, 0)
+    range.setEnd(textNode, textNode.textContent?.length ?? 0)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    document.dispatchEvent(new Event('selectionchange'))
+  })
+
+  await page.getByRole('button', { name: '魔改 围绕选中片段与额外要求，产出一个完整章节重写版本。' }).click()
+  await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
+  await page.getByRole('button', { name: '生成版本' }).click()
+  await expect(page.getByTestId('rewrite-flow-error')).toContainText('OpenAI-compatible config not set')
+  await expect(page.getByTestId('workspace-action-overlay')).toContainText('OpenAI-compatible config not set')
+})

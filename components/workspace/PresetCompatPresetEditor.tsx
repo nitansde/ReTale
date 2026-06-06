@@ -23,6 +23,7 @@ import type {
 } from '@/lib/preset-compat/types'
 import { PresetCompatRegexEditor } from '@/components/workspace/PresetCompatRegexEditor'
 import { createDefaultAISettings } from '@/lib/ai-settings'
+import { useI18n } from '@/lib/i18n/provider'
 import { createPresetCompatSessionStateKey } from '@/lib/workspace-state'
 import type {
   AIScenarioSettings,
@@ -102,13 +103,13 @@ function getResetPhaseForSurface(): PresetCompatSessionPhase {
 }
 
 function formatSurfaceSelectionLabel(selection: PresetCompatSessionWorkspaceSelection | null | undefined) {
-  if (!selection) return '当前工作区上下文'
-  if (selection.kind === 'chapter') return `章节 ${selection.chapterId}`
-  if (selection.kind === 'rewrite') return `改写节点 ${selection.continueBlockId}`
-  if (selection.kind === 'continue_block') return `续写块 ${selection.continueBlockId}`
-  if (selection.kind === 'what_if') return `What-if ${selection.sessionId}`
-  if (selection.kind === 'roleplay_session') return `Roleplay ${selection.roleplaySessionId}`
-  return `Future Jump ${selection.runId}`
+  if (!selection) return 'preset.surface.currentWorkspaceContext'
+  if (selection.kind === 'chapter') return `preset.surface.chapter:${selection.chapterId}`
+  if (selection.kind === 'rewrite') return `preset.surface.rewriteNode:${selection.continueBlockId}`
+  if (selection.kind === 'continue_block') return `preset.surface.continueBlock:${selection.continueBlockId}`
+  if (selection.kind === 'what_if') return `preset.surface.whatIf:${selection.sessionId}`
+  if (selection.kind === 'roleplay_session') return `preset.surface.roleplay:${selection.roleplaySessionId}`
+  return `preset.surface.futureJump:${selection.runId}`
 }
 
 function isPreviewableSurfaceId(surfaceId: PresetCompatCreativeSurfaceId | null): surfaceId is PresetCompatCreativeSurfaceId {
@@ -209,17 +210,18 @@ export function PresetCompatBuiltinSystemPromptEditor({
   library,
   onUpdateBuiltinSystemPrompt,
 }: PresetCompatBuiltinSystemPromptEditorProps) {
+  const { t } = useI18n()
   return (
     <div className="rounded-[24px] border border-violet-400/16 bg-violet-500/8 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] uppercase tracking-[0.18em] text-violet-200/80">ChatBook 内置 System Prompt</p>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-violet-200/80">{t('preset.builtin.systemPrompt')}</p>
           <p className="mt-2 text-sm leading-6 text-zinc-300">
-            这些规则由 ChatBook 存储并默认启用，会以第一顺序插入 system prompt；导出预设 JSON 时不会写入预设文件。
+            {t('preset.builtin.description')}
           </p>
         </div>
         <span className="rounded-full border border-violet-300/20 bg-violet-400/10 px-3 py-1 text-[11px] text-violet-100">
-          Applied first
+          {t('preset.builtin.appliedFirst')}
         </span>
       </div>
 
@@ -232,7 +234,7 @@ export function PresetCompatBuiltinSystemPromptEditor({
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-medium text-zinc-100">{surfaceMeta.label}</p>
-                  <p className="mt-1 text-xs leading-5 text-zinc-500">ChatBook-owned · 不随预设导出</p>
+                  <p className="mt-1 text-xs leading-5 text-zinc-500">{t('preset.builtin.ownedNoExport')}</p>
                   <p className="mt-1 text-xs leading-5 text-zinc-500">{surfaceMeta.builtinPromptSummary}</p>
                 </div>
                 <label className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300">
@@ -243,7 +245,7 @@ export function PresetCompatBuiltinSystemPromptEditor({
                     onChange={(event) => onUpdateBuiltinSystemPrompt(surfaceId, { enabled: event.target.checked })}
                     className="h-3.5 w-3.5 rounded border-white/20 bg-transparent"
                   />
-                  启用
+                  {t('preset.enabled')}
                 </label>
               </div>
               <label className="mt-3 block">
@@ -279,6 +281,7 @@ export function PresetCompatPresetEditor({
   onDeletePreset,
   onExportPreset,
 }: PresetCompatPresetEditorProps) {
+  const { t } = useI18n()
   const [surfacePreview, setSurfacePreview] = useState<SurfaceRuntimePreview | null>(null)
   const [previewGenerationStatus, setPreviewGenerationStatus] = useState<PreviewGenerationStatus>('idle')
   const [visibleDeferredPromptRuleCount, setVisibleDeferredPromptRuleCount] = useState(0)
@@ -296,7 +299,20 @@ export function PresetCompatPresetEditor({
   const standardSurfaces = PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS
   const standaloneRegexes = Object.values(library.standaloneRegexes)
   const [firstPromptRule, ...deferredPromptRules] = preset.promptRules
-  const activeSelectionLabel = formatSurfaceSelectionLabel(effectiveSelection)
+  const rawActiveSelectionLabel = formatSurfaceSelectionLabel(effectiveSelection)
+  const activeSelectionLabel = rawActiveSelectionLabel.startsWith('preset.surface.chapter:')
+    ? t('preset.surface.chapter', { id: rawActiveSelectionLabel.split(':')[1] })
+    : rawActiveSelectionLabel.startsWith('preset.surface.rewriteNode:')
+      ? t('preset.surface.rewriteNode', { id: rawActiveSelectionLabel.split(':')[1] })
+      : rawActiveSelectionLabel.startsWith('preset.surface.continueBlock:')
+        ? t('preset.surface.continueBlock', { id: rawActiveSelectionLabel.split(':')[1] })
+        : rawActiveSelectionLabel.startsWith('preset.surface.whatIf:')
+          ? t('preset.surface.whatIf', { id: rawActiveSelectionLabel.split(':')[1] })
+          : rawActiveSelectionLabel.startsWith('preset.surface.roleplay:')
+            ? t('preset.surface.roleplay', { id: rawActiveSelectionLabel.split(':')[1] })
+            : rawActiveSelectionLabel.startsWith('preset.surface.futureJump:')
+              ? t('preset.surface.futureJump', { id: rawActiveSelectionLabel.split(':')[1] })
+              : t(rawActiveSelectionLabel as 'preset.surface.currentWorkspaceContext')
   const effectiveActiveSurfaceId = resolveActiveSurfaceFromSessionState({
     activeSelection: effectiveSelection,
     presetCompatSessionState,
@@ -401,10 +417,10 @@ export function PresetCompatPresetEditor({
       <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">预设详情</p>
+            <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.details')}</p>
             <h4 className="mt-2 text-lg font-semibold text-zinc-100">{preset.name}</h4>
             <p className="mt-2 text-sm leading-6 text-zinc-400">
-              {preset.promptRules.length} 条提示词规则 · {preset.embeddedRegexes.length} 条内嵌正则 · {preset.attachedStandaloneRegexIds.length} 条已附加独立正则
+              {t('preset.promptRuleSummary', { rules: preset.promptRules.length, embedded: preset.embeddedRegexes.length, attached: preset.attachedStandaloneRegexIds.length })}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -414,7 +430,7 @@ export function PresetCompatPresetEditor({
               onClick={onDeletePreset}
               className="rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 transition hover:bg-rose-500/20"
             >
-              删除预设
+              {t('preset.deletePreset')}
             </button>
             <button
               type="button"
@@ -422,7 +438,7 @@ export function PresetCompatPresetEditor({
               onClick={onExportPreset}
               className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-zinc-100 transition hover:bg-white/[0.08]"
             >
-              导出预设 JSON
+              {t('preset.exportPresetJson')}
             </button>
           </div>
         </div>
@@ -430,8 +446,8 @@ export function PresetCompatPresetEditor({
       </div>
 
       <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
-        <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">界面绑定</p>
-        <p className="mt-2 text-sm leading-6 text-zinc-400">为每个已接入的创作界面选择要使用的预设。</p>
+        <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.surfaceBindings')}</p>
+        <p className="mt-2 text-sm leading-6 text-zinc-400">{t('preset.surfaceBindingsDescription')}</p>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {standardSurfaces.map((surfaceId) => {
@@ -452,7 +468,7 @@ export function PresetCompatPresetEditor({
                   onChange={(event) => onBindSurface(surfaceId, event.target.value || null)}
                   className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
                 >
-                  <option value="">不使用预设</option>
+                  <option value="">{t('preset.noPreset')}</option>
                   {Object.values(library.presets).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
               </label>
@@ -463,8 +479,8 @@ export function PresetCompatPresetEditor({
       </div>
 
       <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
-        <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">生成设置</p>
-        <p className="mt-2 text-sm leading-6 text-zinc-400">这些值会直接写回预设记录，并随现有保存与导出路径一起持久化。</p>
+        <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.generationSettings')}</p>
+        <p className="mt-2 text-sm leading-6 text-zinc-400">{t('preset.generationSettingsDescription')}</p>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <label className="block rounded-[20px] border border-white/8 bg-[#0b0d12] p-3">
@@ -541,9 +557,9 @@ export function PresetCompatPresetEditor({
               onChange={(event) => updateTransportStreamField(event, onUpdateTransport)}
               className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
             >
-              <option value="">未设置</option>
-              <option value="true">开启</option>
-              <option value="false">关闭</option>
+              <option value="">{t('preset.unset')}</option>
+              <option value="true">{t('preset.enabled')}</option>
+              <option value="false">{t('preset.disabled')}</option>
             </select>
           </label>
         </div>
@@ -552,18 +568,18 @@ export function PresetCompatPresetEditor({
       <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">运行时 Prompt 预览</p>
-            <p className="mt-2 text-sm leading-6 text-zinc-400">这里展示 {activeSelectionLabel} 下当前所选创作界面的 prompt 结果。重置只作用于临时 preset-session 状态，不会改动全局预设库或账户设置。</p>
+            <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.runtimePromptPreview')}</p>
+            <p className="mt-2 text-sm leading-6 text-zinc-400">{t('preset.runtimePromptPreviewDescription', { selection: activeSelectionLabel })}</p>
           </div>
           <div className="flex flex-wrap gap-2">
             {effectiveSelection ? (
               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
-                作用域：{activeSelectionLabel}
+                {t('preset.scopeLabel', { value: activeSelectionLabel })}
               </span>
             ) : null}
             {activeSurfaceLabel ? (
               <span className="rounded-full border border-violet-400/20 bg-violet-500/10 px-3 py-1 text-[11px] text-violet-100">
-                当前创作界面：{activeSurfaceLabel}
+                {t('preset.currentSurfaceLabel', { value: activeSurfaceLabel })}
               </span>
             ) : null}
           </div>
@@ -573,7 +589,7 @@ export function PresetCompatPresetEditor({
           <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm leading-6 text-zinc-400">
-                预览不会在进入编辑器时自动计算。需要时手动生成，避免大型预设阻塞首屏与首条规则编辑。
+                {t('preset.previewManualHint')}
               </p>
               <div className="flex flex-wrap items-center gap-3">
                 <label className="block rounded-[18px] border border-white/8 bg-black/20 px-3 py-2">
@@ -593,7 +609,7 @@ export function PresetCompatPresetEditor({
                   onClick={handleGenerateSurfacePreviews}
                   className="rounded-2xl border border-white/10 bg-black/20 px-4 py-2 text-sm text-zinc-100 transition hover:bg-white/[0.06]"
                 >
-                  {previewGenerationStatus === 'idle' ? '生成预览' : previewGenerationStatus === 'generating' ? '刷新预览中…' : '刷新预览'}
+                  {previewGenerationStatus === 'idle' ? t('preset.preview.generate') : previewGenerationStatus === 'generating' ? t('preset.preview.refreshing') : t('preset.preview.refresh')}
                 </button>
               </div>
             </div>
@@ -613,7 +629,7 @@ export function PresetCompatPresetEditor({
                     className="mt-2 text-xs leading-5 text-zinc-400"
                     data-testid={`preset-compat-session-state-${surfacePreview.surfaceId}`}
                   >
-                    会话阶段：{surfacePreview.sessionPhase}{surfacePreview.resetPending ? ' · 待重置' : ' · 正常'}
+                    {t('preset.sessionPhaseLabel', { phase: `${surfacePreview.sessionPhase}${surfacePreview.resetPending ? ` · ${t('preset.preview.sessionResetPending')}` : ` · ${t('preset.preview.sessionNormal')}`}` })}
                   </p>
                 </div>
 
@@ -624,7 +640,7 @@ export function PresetCompatPresetEditor({
                     onClick={() => resetPresetCompatSessionStateForSelection(effectiveSelection, [surfacePreview.surfaceId], getResetPhaseForSurface())}
                     className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-200 transition hover:bg-white/[0.06]"
                   >
-                    重置当前上下文
+                    {t('preset.resetCurrentContext')}
                   </button>
                 ) : null}
               </div>
@@ -652,11 +668,11 @@ export function PresetCompatPresetEditor({
             </div>
           ) : previewGenerationStatus === 'generating' ? (
             <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">
-              正在生成运行时预览…
+              {t('preset.generatingRuntimePreview')}
             </div>
           ) : (
             <div className="rounded-[20px] border border-dashed border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-500">
-              点击“生成预览”后，会按当前下拉框所选创作界面生成运行时 prompt 预览。
+              {t('preset.generatePreviewHint')}
             </div>
           )}
         </div>
@@ -668,7 +684,7 @@ export function PresetCompatPresetEditor({
       />
 
       <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
-        <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">提示词规则</p>
+        <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.promptRules')}</p>
         <div className="mt-4 space-y-3">
           {firstPromptRule ? (() => {
             const activeOnSurfaceCount = PRESET_COMPAT_OPTED_IN_SURFACE_IDS.filter((surfaceId) => preset.promptOrderLists[surfaceId]?.includes(firstPromptRule.id)).length
@@ -679,8 +695,8 @@ export function PresetCompatPresetEditor({
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-medium text-zinc-100">{firstPromptRule.name}</p>
-                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">角色：{firstPromptRule.role}</span>
-                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">已在 {activeOnSurfaceCount} 个界面生效</span>
+                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.roleLabel', { role: firstPromptRule.role })}</span>
+                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.activeOnSurfaceCount', { count: activeOnSurfaceCount })}</span>
                     </div>
                   </div>
 
@@ -692,12 +708,12 @@ export function PresetCompatPresetEditor({
                       onChange={(event) => onUpdatePromptRule(firstPromptRule.id, { enabled: event.target.checked })}
                       className="h-3.5 w-3.5 rounded border-white/20 bg-transparent"
                     />
-                    启用
+                    {t('preset.enabled')}
                   </label>
                 </div>
 
                 <label className="mt-3 block">
-                  <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">内容</span>
+                  <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">{t('preset.content')}</span>
                   <textarea
                     data-testid={`preset-compat-rule-content-${firstPromptRule.id}`}
                     value={firstPromptRule.content}
@@ -719,8 +735,8 @@ export function PresetCompatPresetEditor({
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-medium text-zinc-100">{rule.name}</p>
-                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">角色：{rule.role}</span>
-                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">已在 {activeOnSurfaceCount} 个界面生效</span>
+                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.roleLabel', { role: rule.role })}</span>
+                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.activeOnSurfaceCount', { count: activeOnSurfaceCount })}</span>
                     </div>
                   </div>
 
@@ -732,12 +748,12 @@ export function PresetCompatPresetEditor({
                       onChange={(event) => onUpdatePromptRule(rule.id, { enabled: event.target.checked })}
                       className="h-3.5 w-3.5 rounded border-white/20 bg-transparent"
                     />
-                    启用
+                    {t('preset.enabled')}
                   </label>
                 </div>
 
                 <label className="mt-3 block">
-                  <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">内容</span>
+                  <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">{t('preset.content')}</span>
                   <textarea
                     data-testid={`preset-compat-rule-content-${rule.id}`}
                     value={rule.content}
@@ -752,38 +768,38 @@ export function PresetCompatPresetEditor({
 
           {visibleDeferredPromptRuleCount < deferredPromptRules.length ? (
             <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">
-              其余 {deferredPromptRules.length - visibleDeferredPromptRuleCount} 条规则正在就绪…
+              {t('preset.remainingRulesLoading', { count: deferredPromptRules.length - visibleDeferredPromptRuleCount })}
             </div>
           ) : null}
         </div>
       </div>
 
       <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
-        <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">内嵌正则</p>
+        <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.embeddedRegex')}</p>
         <div className="mt-4 space-y-3">
           {preset.embeddedRegexes.length ? preset.embeddedRegexes.map((regexRecord) => (
             <PresetCompatRegexEditor
               key={regexRecord.id}
-              title="Embedded regex"
+                title={t('preset.regex.embedded')}
               regexRecord={regexRecord}
               onUpdate={(updates) => onUpdateEmbeddedRegex(regexRecord.id, updates)}
             />
           )) : (
-            <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">这个预设没有内嵌正则规则。</div>
+            <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">{t('preset.noEmbeddedRegex')}</div>
           )}
         </div>
       </div>
 
       <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
-        <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">独立正则库</p>
-        <p className="mt-2 text-sm leading-6 text-zinc-400">把全局正则规则附加到当前预设上，而不改动原始导入的预设载荷。</p>
+        <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.standaloneRegexLibrary')}</p>
+        <p className="mt-2 text-sm leading-6 text-zinc-400">{t('preset.standaloneRegexLibraryDescription')}</p>
         <div className="mt-4 space-y-3">
           {standaloneRegexes.length ? standaloneRegexes.map((regexRecord) => {
             const attached = preset.attachedStandaloneRegexIds.includes(regexRecord.id)
             return (
               <PresetCompatRegexEditor
                 key={regexRecord.id}
-                title="Standalone regex"
+                title={t('preset.regex.standalone')}
                 regexRecord={regexRecord}
                 onUpdate={(updates) => onUpdateStandaloneRegex(regexRecord.id, updates)}
                 attachment={{
@@ -794,7 +810,7 @@ export function PresetCompatPresetEditor({
               />
             )
           }) : (
-            <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">先导入独立正则包，才能在这里附加全局正则规则。</div>
+            <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">{t('preset.importStandaloneRegexFirst')}</div>
           )}
         </div>
       </div>
