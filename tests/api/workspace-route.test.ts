@@ -38,9 +38,81 @@ function createWorkspacePayload(novelId = 'novel-1', title = 'First') {
   }
 }
 
+function createWorkspacePayloadWithSideData(novelId = 'novel-side', title = 'Side Data Novel') {
+  return {
+    currentNovelId: novelId,
+    currentChapterId: `${novelId}-chapter-1`,
+    expandedVolumeIds: [`${novelId}-volume-1`],
+    localNovels: [{ id: novelId, title, summary: '保留参考面板数据', tags: ['测试', '侧写'] }],
+    localVolumes: [{ id: `${novelId}-volume-1`, novelId, title: '第一卷', order: 1 }],
+    localChapters: [{
+      id: `${novelId}-chapter-1`,
+      novelId,
+      volumeId: `${novelId}-volume-1`,
+      title: '第一章',
+      order: 1,
+      content: '<p>正文</p>',
+      originalContent: '<p>正文</p>',
+      status: 'draft',
+      wordCount: 2,
+      updatedAt: '刚刚',
+    }],
+    localOutlines: [{
+      id: `${novelId}-outline-1`,
+      novelId,
+      title: '主线大纲',
+      type: 'main',
+      summary: '保留大纲',
+      relatedChapterIds: [`${novelId}-chapter-1`],
+    }],
+    localCharacters: [{
+      id: `${novelId}-character-1`,
+      novelId,
+      name: '沈砚',
+      role: '主角',
+      goal: '查明真相',
+      trait: '冷静',
+      note: '不能丢失',
+    }],
+    localCharacterRelations: [{
+      id: `${novelId}-relation-1`,
+      novelId,
+      fromCharacterId: `${novelId}-character-1`,
+      toCharacterId: `${novelId}-character-1`,
+      label: '自我怀疑',
+      strength: 'medium',
+      status: 'active',
+      note: '关系备注',
+      chapterIds: [`${novelId}-chapter-1`],
+    }],
+    localWorldEntries: [{
+      id: `${novelId}-world-1`,
+      novelId,
+      title: '北城档案馆',
+      type: 'location',
+      content: '世界设定',
+    }],
+    localTimelineEvents: [{
+      id: `${novelId}-timeline-1`,
+      novelId,
+      title: '暴雨夜',
+      phase: '开端',
+      worldline: '主线',
+      summary: '时间线事件',
+      order: 1,
+      chapterIds: [`${novelId}-chapter-1`],
+    }],
+  }
+}
+
 function clearWorkspaceRecoveryData(database: DatabaseSync) {
   database.exec(`
     PRAGMA foreign_keys = OFF;
+    DELETE FROM WorkspaceKnowledgeSyncState;
+    DELETE FROM WorkspaceRuntimeChapter;
+    DELETE FROM WorkspaceRuntimeVolume;
+    DELETE FROM WorkspaceRuntimeNovel;
+    DELETE FROM WorkspaceRuntimeState;
     DELETE FROM WorkspaceStateBackup;
     DELETE FROM WorkspaceState;
     DELETE FROM KnowledgeChapter;
@@ -50,8 +122,14 @@ function clearWorkspaceRecoveryData(database: DatabaseSync) {
   `)
 }
 
-function seedWorkspaceState(database: DatabaseSync, payload: Record<string, unknown> | string) {
-  const serialized = typeof payload === 'string' ? payload : JSON.stringify(payload)
+async function seedWorkspaceRuntime(payload: Record<string, unknown>) {
+  const { normalizeWorkspaceState } = await import('@/lib/workspace-state')
+  const { persistWorkspaceRuntimeState } = await import('@/lib/server/workspace-resilience')
+  persistWorkspaceRuntimeState(normalizeWorkspaceState(payload))
+}
+
+function seedWorkspaceState(database: DatabaseSync, payload: Record<string, unknown> | string | null) {
+  const serialized = payload === null ? null : typeof payload === 'string' ? payload : JSON.stringify(payload)
   database.prepare('DELETE FROM WorkspaceState WHERE id = ?').run('singleton')
   database.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', serialized)
 }
@@ -74,10 +152,43 @@ function readWorkspaceStatePayload(database: DatabaseSync) {
   return row ? JSON.parse(row.payload) as Record<string, unknown> : null
 }
 
+function readWorkspaceStateRawPayload(database: DatabaseSync) {
+  const row = database.prepare('SELECT payload FROM WorkspaceState WHERE id = ?').get('singleton') as { payload: string | null } | undefined
+  return row?.payload ?? null
+}
+
+function loadPayloadSafe(payload: string | null) {
+  if (!payload) return null
+  return JSON.parse(payload) as Record<string, unknown>
+}
+
+function readWorkspaceRuntimeChapterCount(database: DatabaseSync) {
+  return (database.prepare('SELECT COUNT(*) AS count FROM WorkspaceRuntimeChapter WHERE workspaceStateId = ?').get('singleton') as { count: number }).count
+}
+
 function readWorkspaceBackups(database: DatabaseSync) {
   return database.prepare(
     `SELECT payload, reason FROM WorkspaceStateBackup WHERE workspaceStateId = ? ORDER BY createdAt DESC, rowid DESC`
   ).all('singleton') as Array<{ payload: string; reason: string }>
+}
+
+function readWorkspaceKnowledgeSyncState(database: DatabaseSync) {
+  return database.prepare(
+    `SELECT requestedSourceUpdatedAt, startedSourceUpdatedAt, syncedSourceUpdatedAt, lastError
+     FROM WorkspaceKnowledgeSyncState
+     WHERE workspaceStateId = ?`
+  ).get('singleton') as {
+    requestedSourceUpdatedAt: string | null
+    startedSourceUpdatedAt: string | null
+    syncedSourceUpdatedAt: string | null
+    lastError: string | null
+  } | undefined
+}
+
+async function runAfterCallbacks(afterCallbacks: Array<() => Promise<void>>) {
+  for (const callback of afterCallbacks) {
+    await callback()
+  }
 }
 
 async function importWorkspaceRouteWithAfterCallbacks() {
@@ -132,11 +243,12 @@ describe('workspace route', () => {
     expect(payload.localNovels).toHaveLength(1)
     expect(payload.localChapters).toHaveLength(2)
     expect(payload.localNovels[0]).toMatchObject({ id: 'novel-recover', title: 'Recovered Novel' })
-    expect(readWorkspaceStatePayload(database)?.localChapters).toHaveLength(2)
+    expect(readWorkspaceRuntimeChapterCount(database)).toBe(2)
+    expect(readWorkspaceStateRawPayload(database)).toBeNull()
     expect(readWorkspaceBackups(database)).toHaveLength(0)
   })
 
-  it('repairs a corrupt workspace and snapshots the corrupt payload', async () => {
+  it('repairs a corrupt workspace by rebuilding normalized runtime state from recoverable knowledge data', async () => {
     const database = createTestDatabase('chatbook-workspace-route-recover-corrupt')
     clearWorkspaceRecoveryData(database)
     seedWorkspaceState(database, '{not-json')
@@ -149,10 +261,9 @@ describe('workspace route', () => {
     expect(response.status).toBe(200)
     expect(payload.localNovels).toHaveLength(1)
     expect(payload.localChapters).toHaveLength(2)
-    expect(readWorkspaceStatePayload(database)?.localNovels).toHaveLength(1)
-    expect(readWorkspaceBackups(database)).toMatchObject([
-      { payload: '{not-json', reason: 'recover-corrupt' },
-    ])
+    expect(readWorkspaceRuntimeChapterCount(database)).toBe(2)
+    expect(readWorkspaceStateRawPayload(database)).toBe('{not-json')
+    expect(readWorkspaceBackups(database)).toHaveLength(0)
   })
 
   it('repairs an empty workspace when knowledge data is still recoverable', async () => {
@@ -168,12 +279,84 @@ describe('workspace route', () => {
     expect(response.status).toBe(200)
     expect(payload.localNovels).toHaveLength(1)
     expect(payload.localChapters).toHaveLength(2)
-    expect(readWorkspaceBackups(database)).toMatchObject([
-      { reason: 'recover-empty' },
-    ])
+    expect(readWorkspaceRuntimeChapterCount(database)).toBe(2)
+    expect(readWorkspaceBackups(database)).toHaveLength(0)
   })
 
-  it('returns an error for corrupt workspace payloads when no recovery source exists', async () => {
+  it('serves normalized runtime state even when the workspace artifact payload is empty', async () => {
+    const database = createTestDatabase('chatbook-workspace-route-runtime-with-empty-artifact')
+    clearWorkspaceRecoveryData(database)
+    await seedWorkspaceRuntime(createWorkspacePayload('novel-runtime', 'Runtime Truth'))
+    seedWorkspaceState(database, '')
+
+    const { GET } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await GET()
+    const payload = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(payload.localNovels).toMatchObject([{ id: 'novel-runtime', title: 'Runtime Truth' }])
+    expect(readWorkspaceRuntimeChapterCount(database)).toBe(0)
+    expect(readWorkspaceStateRawPayload(database)).toBe('')
+  })
+
+  it('preserves outlines, characters, relations, world entries, and timeline events after the artifact payload is blanked', async () => {
+    const database = createTestDatabase('chatbook-workspace-route-side-data-survives-blanked-blob')
+    clearWorkspaceRecoveryData(database)
+    const payloadWithSideData = createWorkspacePayloadWithSideData()
+    await seedWorkspaceRuntime(payloadWithSideData)
+    seedWorkspaceState(database, '')
+
+    const { GET } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await GET()
+    const payload = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(payload.localOutlines).toMatchObject([{ title: '主线大纲' }])
+    expect(payload.localCharacters).toMatchObject([{ name: '沈砚' }])
+    expect(payload.localCharacterRelations).toMatchObject([{ label: '自我怀疑' }])
+    expect(payload.localWorldEntries).toMatchObject([{ title: '北城档案馆' }])
+    expect(payload.localTimelineEvents).toMatchObject([{ title: '暴雨夜' }])
+    expect(payload.localChapters).toMatchObject([{ title: '第一章' }])
+  })
+
+  it('preserves normalized runtime side/reference data when a real workspace artifact row exists with payload = NULL', async () => {
+    const database = createTestDatabase('chatbook-workspace-route-side-data-survives-null-artifact')
+    clearWorkspaceRecoveryData(database)
+    const payloadWithSideData = createWorkspacePayloadWithSideData('novel-null-artifact', 'Null Artifact Runtime Truth')
+    await seedWorkspaceRuntime(payloadWithSideData)
+    seedWorkspaceState(database, null)
+
+    const { GET } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await GET()
+    const payload = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(payload.localNovels).toMatchObject([{ id: 'novel-null-artifact', title: 'Null Artifact Runtime Truth' }])
+    expect(payload.localOutlines).toMatchObject([{ title: '主线大纲' }])
+    expect(payload.localCharacters).toMatchObject([{ name: '沈砚' }])
+    expect(payload.localCharacterRelations).toMatchObject([{ label: '自我怀疑' }])
+    expect(payload.localWorldEntries).toMatchObject([{ title: '北城档案馆' }])
+    expect(payload.localTimelineEvents).toMatchObject([{ title: '暴雨夜' }])
+    expect(readWorkspaceStateRawPayload(database)).toBeNull()
+  })
+
+  it('prefers normalized runtime state over a stale or invalid workspace artifact during normal GET', async () => {
+    const database = createTestDatabase('chatbook-workspace-route-runtime-wins-over-artifact')
+    clearWorkspaceRecoveryData(database)
+    await seedWorkspaceRuntime(createWorkspacePayloadWithSideData('novel-runtime', 'Runtime Winner'))
+    seedWorkspaceState(database, '{not-json')
+
+    const { GET } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await GET()
+    const payload = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(payload.localNovels).toMatchObject([{ id: 'novel-runtime', title: 'Runtime Winner' }])
+    expect(payload.localOutlines).toMatchObject([{ title: '主线大纲' }])
+    expect(readWorkspaceStateRawPayload(database)).toBe('{not-json')
+  })
+
+  it('ignores a corrupt workspace artifact during normal GET when no normalized runtime or recovery source exists', async () => {
     const database = createTestDatabase('chatbook-workspace-route-corrupt-unrecoverable')
     clearWorkspaceRecoveryData(database)
     seedWorkspaceState(database, '{not-json')
@@ -181,10 +364,12 @@ describe('workspace route', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { GET } = await importWorkspaceRouteWithAfterCallbacks()
     const response = await GET()
+    const payload = await response.json()
 
-    expect(response.status).toBe(500)
-    await expect(response.json()).resolves.toEqual({ ok: false, error: 'Failed to restore saved workspace payload' })
-    expect(consoleError).toHaveBeenCalled()
+    expect(response.status).toBe(200)
+    expect(payload.localNovels).toEqual([])
+    expect(payload.localChapters).toEqual([])
+    expect(consoleError).not.toHaveBeenCalled()
     expect(readWorkspaceBackups(database)).toHaveLength(0)
   })
 
@@ -192,7 +377,7 @@ describe('workspace route', () => {
     const database = createTestDatabase('chatbook-workspace-route-block-empty-current')
     clearWorkspaceRecoveryData(database)
     const currentPayload = createWorkspacePayload('novel-existing', 'Existing')
-    seedWorkspaceState(database, currentPayload)
+    await seedWorkspaceRuntime(currentPayload)
     const syncWorkspacePayloadToKnowledgeStore = vi.fn(async () => {})
 
     vi.doMock('@/lib/server/knowledge-rebuild', () => ({
@@ -204,8 +389,10 @@ describe('workspace route', () => {
 
     expect(response.status).toBe(409)
     await expect(response.json()).resolves.toMatchObject({ ok: false })
-    expect(readWorkspaceStatePayload(database)).toMatchObject(currentPayload)
+    expect(readWorkspaceStateRawPayload(database)).toBeNull()
+    expect(readWorkspaceRuntimeChapterCount(database)).toBe(0)
     expect(readWorkspaceBackups(database)).toHaveLength(0)
+    expect(readWorkspaceKnowledgeSyncState(database)).toBeUndefined()
     expect(afterCallbacks).toHaveLength(0)
     expect(syncWorkspacePayloadToKnowledgeStore).not.toHaveBeenCalled()
   })
@@ -234,6 +421,7 @@ describe('workspace route', () => {
     const database = createTestDatabase('chatbook-workspace-route-explicit-reset')
     clearWorkspaceRecoveryData(database)
     const currentPayload = createWorkspacePayload('novel-existing', 'Existing')
+    await seedWorkspaceRuntime(currentPayload)
     seedWorkspaceState(database, currentPayload)
     const syncWorkspacePayloadToKnowledgeStore = vi.fn(async () => {})
 
@@ -248,6 +436,7 @@ describe('workspace route', () => {
     ))
 
     expect(response.status).toBe(200)
+    expect(readWorkspaceRuntimeChapterCount(database)).toBe(0)
     expect(readWorkspaceStatePayload(database)).toMatchObject({ localNovels: [], localChapters: [] })
     expect(readWorkspaceBackups(database)).toMatchObject([
       { reason: 'explicit-reset' },
@@ -255,7 +444,11 @@ describe('workspace route', () => {
     expect(afterCallbacks).toHaveLength(1)
 
     await afterCallbacks[0]()
-    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith({ localNovels: [], localChapters: [] })
+    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith(expect.objectContaining({ localNovels: [], localChapters: [] }))
+    expect(readWorkspaceKnowledgeSyncState(database)).toMatchObject({
+      startedSourceUpdatedAt: null,
+      lastError: null,
+    })
   })
 
   it('returns success without waiting for workspace knowledge sync', async () => {
@@ -278,6 +471,7 @@ describe('workspace route', () => {
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ ok: true })
+    expect(readWorkspaceRuntimeChapterCount(database)).toBe(0)
     expect(syncWorkspacePayloadToKnowledgeStore).not.toHaveBeenCalled()
     expect(afterCallbacks).toHaveLength(1)
 
@@ -286,6 +480,10 @@ describe('workspace route', () => {
 
     syncControl.resolve?.()
     await backgroundSync
+    expect(readWorkspaceKnowledgeSyncState(database)).toMatchObject({
+      startedSourceUpdatedAt: null,
+      lastError: null,
+    })
   })
 
   it('logs workspace knowledge sync failures without failing the save response', async () => {
@@ -306,13 +504,19 @@ describe('workspace route', () => {
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ ok: true })
+    expect(readWorkspaceRuntimeChapterCount(database)).toBe(0)
     expect(afterCallbacks).toHaveLength(1)
 
     await afterCallbacks[0]()
     expect(consoleError).toHaveBeenCalledWith('Workspace knowledge sync failed after save:', syncError)
+    expect(readWorkspaceKnowledgeSyncState(database)).toMatchObject({
+      startedSourceUpdatedAt: null,
+      syncedSourceUpdatedAt: null,
+      lastError: 'sync failed',
+    })
   })
 
-  it('coalesces queued workspace knowledge syncs to the latest saved payload', async () => {
+  it('coalesces persisted workspace knowledge syncs to the latest saved payload', async () => {
     const database = createTestDatabase('chatbook-workspace-route-coalesced-sync')
     clearWorkspaceRecoveryData(database)
 
@@ -331,15 +535,21 @@ describe('workspace route', () => {
     await expect(POST(createWorkspaceRequest(secondPayload))).resolves.toMatchObject({ status: 200 })
     await expect(POST(createWorkspaceRequest(thirdPayload))).resolves.toMatchObject({ status: 200 })
 
+    expect(loadPayloadSafe(readWorkspaceStateRawPayload(database))).toMatchObject(thirdPayload)
     expect(syncWorkspacePayloadToKnowledgeStore).not.toHaveBeenCalled()
-    expect(afterCallbacks).toHaveLength(1)
+    expect(afterCallbacks).toHaveLength(3)
 
-    await afterCallbacks[0]()
+    await runAfterCallbacks(afterCallbacks)
     expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledTimes(1)
-    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith(thirdPayload)
+    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith(expect.objectContaining(thirdPayload))
+    expect(readWorkspaceKnowledgeSyncState(database)).toMatchObject({
+      startedSourceUpdatedAt: null,
+      syncedSourceUpdatedAt: expect.any(String),
+      lastError: null,
+    })
   })
 
-  it('runs the latest queued workspace knowledge sync after an active sync finishes', async () => {
+  it('runs the latest persisted workspace knowledge sync after an active sync finishes', async () => {
     const database = createTestDatabase('chatbook-workspace-route-running-coalesced-sync')
     clearWorkspaceRecoveryData(database)
 
@@ -366,18 +576,35 @@ describe('workspace route', () => {
 
     const backgroundSync = afterCallbacks[0]()
     expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledTimes(1)
-    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith(firstPayload)
+    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith(expect.objectContaining(firstPayload))
 
     await expect(POST(createWorkspaceRequest(secondPayload))).resolves.toMatchObject({ status: 200 })
     await expect(POST(createWorkspaceRequest(thirdPayload))).resolves.toMatchObject({ status: 200 })
-    expect(afterCallbacks).toHaveLength(1)
+    expect(afterCallbacks).toHaveLength(3)
     expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledTimes(1)
 
     firstSyncControl.resolve?.()
     await backgroundSync
+    await runAfterCallbacks(afterCallbacks.slice(1))
 
     expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledTimes(2)
-    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenLastCalledWith(thirdPayload)
+    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenLastCalledWith(expect.objectContaining(thirdPayload))
+  })
+
+  it('rejects malformed workspace JSON with a stable 400 response', async () => {
+    const database = createTestDatabase('chatbook-workspace-route-invalid-json')
+
+    const { POST, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await POST(new Request('http://localhost/api/workspace', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{not-json',
+    }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ ok: false, error: '工作区 JSON 无效，请刷新页面后重试。' })
+    expect(readWorkspaceRuntimeChapterCount(database)).toBe(0)
+    expect(afterCallbacks).toHaveLength(0)
   })
 
   it('backs up normal workspace overwrites and retains only recent snapshots', async () => {

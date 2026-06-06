@@ -1,19 +1,23 @@
 import { after, NextResponse } from 'next/server'
-import { upsertWorkspaceState } from '@/lib/server/persistence'
+import {
+  claimPendingWorkspaceKnowledgeSync,
+  completeWorkspaceKnowledgeSync,
+  failWorkspaceKnowledgeSync,
+  markWorkspaceKnowledgeSyncRequested,
+  upsertWorkspaceState,
+} from '@/lib/server/persistence'
 import { syncWorkspacePayloadToKnowledgeStore } from '@/lib/server/knowledge-rebuild'
 import type { WorkspaceKnowledgeSyncPayload } from '@/lib/server/knowledge-rebuild'
 import {
   isExplicitWorkspaceResetRequest,
-  loadWorkspacePayloadWithRecovery,
+  loadWorkspacePayloadFromRuntimeOrRecovery,
+  loadWorkspaceKnowledgeSyncPayload,
+  persistWorkspaceRuntimeState,
   shouldBlockEmptyWorkspaceOverwrite,
 } from '@/lib/server/workspace-resilience'
+import { normalizeWorkspaceState } from '@/lib/workspace-state'
 
 export const maxDuration = 3600
-
-let queuedWorkspaceSyncPayload: WorkspaceKnowledgeSyncPayload | undefined
-let hasQueuedWorkspaceSyncPayload = false
-let workspaceSyncScheduled = false
-let workspaceSyncRunning = false
 
 function scheduleAfterResponse(callback: () => Promise<void>) {
   if (process.env.NODE_ENV === 'test') {
@@ -40,44 +44,33 @@ function scheduleAfterResponse(callback: () => Promise<void>) {
   }
 }
 
-async function runQueuedWorkspaceKnowledgeSync() {
-  if (workspaceSyncRunning) return
+async function runPendingWorkspaceKnowledgeSync() {
+  while (true) {
+    const claimed = claimPendingWorkspaceKnowledgeSync('singleton')
+    if (!claimed) return
 
-  workspaceSyncScheduled = false
-  workspaceSyncRunning = true
-
-  try {
-    while (hasQueuedWorkspaceSyncPayload) {
-      const payload = queuedWorkspaceSyncPayload
-      queuedWorkspaceSyncPayload = undefined
-      hasQueuedWorkspaceSyncPayload = false
-
-      if (!payload) continue
-
-      try {
-        await syncWorkspacePayloadToKnowledgeStore(payload)
-      } catch (error) {
-        console.error('Workspace knowledge sync failed after save:', error)
-      }
+    try {
+      const payload = loadWorkspaceKnowledgeSyncPayload(claimed.workspaceStateId) ?? {
+        localNovels: [],
+        localChapters: [],
+        currentNovelId: '',
+      } satisfies WorkspaceKnowledgeSyncPayload
+      await syncWorkspacePayloadToKnowledgeStore(payload)
+      completeWorkspaceKnowledgeSync(claimed.workspaceStateId, claimed.revision, claimed.sourceUpdatedAt)
+    } catch (error) {
+      failWorkspaceKnowledgeSync(
+        claimed.workspaceStateId,
+        error instanceof Error ? error.message : 'Unknown workspace knowledge sync failure'
+      )
+      console.error('Workspace knowledge sync failed after save:', error)
+      return
     }
-  } finally {
-    workspaceSyncRunning = false
   }
-}
-
-function queueWorkspaceKnowledgeSync(payload: WorkspaceKnowledgeSyncPayload) {
-  queuedWorkspaceSyncPayload = payload
-  hasQueuedWorkspaceSyncPayload = true
-
-  if (workspaceSyncScheduled || workspaceSyncRunning) return
-
-  workspaceSyncScheduled = true
-  scheduleAfterResponse(runQueuedWorkspaceKnowledgeSync)
 }
 
 export async function GET() {
   try {
-    const payload = loadWorkspacePayloadWithRecovery()
+    const payload = loadWorkspacePayloadFromRuntimeOrRecovery()
     return NextResponse.json(payload)
   } catch (error) {
     console.error('Failed to restore workspace payload:', error)
@@ -87,7 +80,11 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const payload = await request.json() as WorkspaceKnowledgeSyncPayload
+    const payload = await request.json().catch(() => null)
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return NextResponse.json({ ok: false, error: '工作区 JSON 无效，请刷新页面后重试。' }, { status: 400 })
+    }
+
     const allowReset = isExplicitWorkspaceResetRequest(request)
     if (shouldBlockEmptyWorkspaceOverwrite(payload, allowReset)) {
       return NextResponse.json(
@@ -96,15 +93,18 @@ export async function POST(request: Request) {
       )
     }
 
+    const normalizedPayload = normalizeWorkspaceState(payload)
+    const savedRuntime = persistWorkspaceRuntimeState(normalizedPayload)
     const saved = upsertWorkspaceState(
       'singleton',
-      JSON.stringify(payload),
+      JSON.stringify(normalizedPayload),
       { backupReason: allowReset ? 'explicit-reset' : 'workspace-save' }
     )
 
-    queueWorkspaceKnowledgeSync(payload)
+    markWorkspaceKnowledgeSyncRequested('singleton', savedRuntime.updatedAt)
+    scheduleAfterResponse(runPendingWorkspaceKnowledgeSync)
 
-    return NextResponse.json({ ok: true, updatedAt: saved?.updatedAt ?? null })
+    return NextResponse.json({ ok: true, updatedAt: savedRuntime.updatedAt ?? saved?.updatedAt ?? null })
   } catch (error) {
     console.error('Failed to save workspace payload:', error)
     return NextResponse.json(

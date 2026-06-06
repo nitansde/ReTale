@@ -263,6 +263,7 @@ export function normalizeWorkspaceState(input?: Partial<PersistedNovelState> | n
     ...base,
     ...input,
     expandedVolumeIds: input.expandedVolumeIds ?? base.expandedVolumeIds,
+    selectedParagraphIndex: typeof input.selectedParagraphIndex === 'number' ? input.selectedParagraphIndex : base.selectedParagraphIndex,
     localNovels: input.localNovels ?? base.localNovels,
     localVolumes: input.localVolumes ?? base.localVolumes,
     localChapters: (input.localChapters ?? base.localChapters).map((chapter) => ({
