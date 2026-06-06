@@ -1,7 +1,7 @@
-import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import * as lancedb from '@lancedb/lancedb'
 import type { AIProvider, EmbeddingsScenarioSettings, KnowledgeRebuildChapterRange } from '@/lib/types'
+import { sleep, withScopedAsyncLock } from '@/lib/server/async-control'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 import { estimateTokenCount, healMissingKnowledgeChapterDerivedArtifacts, type TextSpanInput } from '@/lib/server/knowledge-store'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
@@ -30,6 +30,19 @@ import {
   type CharacterRoleCardProfile,
 } from '@/lib/story-knowledge'
 import { getCharacterClassificationMetadata, type CharacterImportanceTier } from '@/lib/server/hanlp-contracts'
+import { connectRetrievalDatabase, getRetrievalDatabaseDir } from '@/lib/server/retrieval-runtime'
+import {
+  precomputeRawTextEmbeddingCache as precomputeRawTextEmbeddingCacheImpl,
+  type RawTextEmbeddingPrecomputeProgress,
+  type RawTextEmbeddingPrecomputeResult,
+  type RawTextEmbeddingPrecomputeSettingsSnapshot,
+} from '@/lib/server/retrieval-precompute'
+
+export type {
+  RawTextEmbeddingPrecomputeProgress,
+  RawTextEmbeddingPrecomputeResult,
+  RawTextEmbeddingPrecomputeSettingsSnapshot,
+} from '@/lib/server/retrieval-precompute'
 
 export type RetrievalDocSourceType =
   | 'text_span'
@@ -155,29 +168,7 @@ export type RetrievalIndexBuildResult = {
   embeddingBatchCount: number
 }
 
-export type RawTextEmbeddingPrecomputeSettingsSnapshot = {
-  provider: AIProvider
-  model: string
-  embeddingBatchSize: number
-}
-
-export type RawTextEmbeddingPrecomputeProgress = {
-  totalDocs: number
-  completedDocs: number
-  cacheHits: number
-  cacheMisses: number
-  failedDocs: number
-  totalBatches: number
-  completedBatches: number
-  degraded: boolean
-}
-
-export type RawTextEmbeddingPrecomputeResult = RawTextEmbeddingPrecomputeProgress & {
-  cancelled: boolean
-  durationMs: number
-}
-
-const LANCEDB_DIR = process.env.LANCEDB_DIR?.trim() || path.join(process.cwd(), '.lancedb')
+const LANCEDB_DIR = getRetrievalDatabaseDir()
 const TABLE_PREFIX = 'retrieval_docs_'
 const DEFAULT_EMBEDDING_BATCH_SIZE = 16
 const RETRIEVAL_EMBEDDING_RETRY_DELAYS_MS = [500, 1500] as const
@@ -436,23 +427,7 @@ function branchTableNameBelongsToBranch(branchId: string, tableName: string) {
 }
 
 async function withBranchRetrievalIndexLock<T>(branchId: string, callback: () => Promise<T>) {
-  const previousLock = branchRetrievalIndexLocks.get(branchId) ?? Promise.resolve()
-  let releaseLock: () => void = () => undefined
-  const currentLock = new Promise<void>((resolve) => {
-    releaseLock = resolve
-  })
-  const nextLock = previousLock.catch(() => undefined).then(() => currentLock)
-  branchRetrievalIndexLocks.set(branchId, nextLock)
-
-  await previousLock.catch(() => undefined)
-  try {
-    return await callback()
-  } finally {
-    releaseLock()
-    if (branchRetrievalIndexLocks.get(branchId) === nextLock) {
-      branchRetrievalIndexLocks.delete(branchId)
-    }
-  }
+  return withScopedAsyncLock(branchRetrievalIndexLocks, branchId, callback)
 }
 
 async function dropInactiveBranchTable(database: LanceDatabase, branchId: string, tableName: string) {
@@ -658,44 +633,6 @@ export function buildRawTextRetrievalEmbeddingInput(row: RetrievalDocSeedRow) {
   return buildRetrievalEmbeddingInput(row)
 }
 
-async function embedTextsForRawTextPrecompute(
-  embeddingInputs: string[],
-  settingsSnapshot: RawTextEmbeddingPrecomputeSettingsSnapshot,
-) {
-  const result = settingsSnapshot.provider === 'openai-compatible'
-    ? await embedTextsWithOpenAICompatible(embeddingInputs, { model: settingsSnapshot.model })
-    : await embedTextsWithOllama(embeddingInputs, { model: settingsSnapshot.model })
-
-  if (!result.enabled || !result.embeddings) {
-    throw new Error(result.error || 'Failed to generate raw-text precompute embeddings')
-  }
-
-  if (result.embeddings.length !== embeddingInputs.length) {
-    throw new Error(`Embedding provider returned ${result.embeddings.length} embeddings for ${embeddingInputs.length} raw-text docs`)
-  }
-
-  const dimension = result.embeddings[0]?.length ?? 0
-  if (!dimension || result.embeddings.some((vector) => vector.length !== dimension)) {
-    throw new Error('Raw-text precompute embedding dimensions are inconsistent within an embedding batch')
-  }
-
-  return result.embeddings
-}
-
-async function waitForRawTextPrecomputeRetry(delayMs: number, shouldContinue?: () => boolean | Promise<boolean>) {
-  if (shouldContinue && !(await shouldContinue())) {
-    return false
-  }
-
-  await new Promise((resolve) => setTimeout(resolve, delayMs))
-
-  if (shouldContinue && !(await shouldContinue())) {
-    return false
-  }
-
-  return true
-}
-
 export async function precomputeRawTextEmbeddingCache(params: {
   novelId: string
   branchId: string
@@ -705,140 +642,12 @@ export async function precomputeRawTextEmbeddingCache(params: {
   shouldContinue?: () => boolean | Promise<boolean>
   onProgress?: (progress: RawTextEmbeddingPrecomputeProgress) => void | Promise<void>
 }): Promise<RawTextEmbeddingPrecomputeResult> {
-  const startedAt = Date.now()
-  const maxConcurrentBatches = Math.max(1, Math.floor(params.maxConcurrentBatches ?? 2))
-  const cacheScope = {
-    novelId: params.novelId,
-    branchId: params.branchId,
-    provider: params.settingsSnapshot.provider,
-    model: params.settingsSnapshot.model,
-  }
-  await healMissingKnowledgeChapterDerivedArtifacts({
-    novelId: params.novelId,
-    branchId: params.branchId,
-    chapterRange: params.chapterRange,
+  return precomputeRawTextEmbeddingCacheImpl({
+    ...params,
+    healMissingKnowledgeChapterDerivedArtifacts,
+    loadRawTextRetrievalDocs,
+    buildRawTextRetrievalEmbeddingInput,
   })
-  const rawTextDocs = loadRawTextRetrievalDocs(params.novelId, params.branchId, params.chapterRange)
-  const docsWithInputs = rawTextDocs.map((row) => ({
-    row,
-    ...buildRawTextRetrievalEmbeddingInput(row),
-  }))
-  const reachableEmbeddingInputHashes = docsWithInputs.map((item) => item.embeddingInputHash)
-  const hits = await lookupRawTextEmbeddingCacheEntries({
-    scope: cacheScope,
-    embeddingInputHashes: reachableEmbeddingInputHashes,
-    touchOnHit: true,
-  })
-
-  const hitHashes = new Set(hits.map((entry) => entry.embeddingInputHash))
-  const hitDocsCount = docsWithInputs.filter((item) => hitHashes.has(item.embeddingInputHash)).length
-  const missingDocs = docsWithInputs.filter((item) => !hitHashes.has(item.embeddingInputHash))
-  const batchSize = Math.max(1, Math.floor(params.settingsSnapshot.embeddingBatchSize || DEFAULT_EMBEDDING_BATCH_SIZE))
-  const missingBatches = Array.from(
-    { length: Math.ceil(missingDocs.length / batchSize) },
-    (_, index) => missingDocs.slice(index * batchSize, (index + 1) * batchSize),
-  ).filter((batch) => batch.length > 0)
-
-  const progress: RawTextEmbeddingPrecomputeProgress = {
-    totalDocs: docsWithInputs.length,
-    completedDocs: hitDocsCount,
-    cacheHits: hitDocsCount,
-    cacheMisses: missingDocs.length,
-    failedDocs: 0,
-    totalBatches: missingBatches.length,
-    completedBatches: 0,
-    degraded: false,
-  }
-  let cancelled = false
-
-  const finalizeReachableCacheSet = async () => {
-    if (cancelled) {
-      return
-    }
-
-    if (params.chapterRange) {
-      return
-    }
-
-    await garbageCollectRawTextEmbeddingCacheEntries({
-      scope: cacheScope,
-      reachableEmbeddingInputHashes,
-    })
-  }
-
-  await params.onProgress?.({ ...progress })
-
-  if (!missingBatches.length) {
-    await finalizeReachableCacheSet()
-    return {
-      ...progress,
-      cancelled: false,
-      durationMs: Date.now() - startedAt,
-    }
-  }
-
-  let nextBatchIndex = 0
-
-  const runBatch = async (batch: typeof missingBatches[number]) => {
-    const embeddingInputs = batch.map((item) => item.text)
-
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        const embeddings = await embedTextsForRawTextPrecompute(embeddingInputs, params.settingsSnapshot)
-        await upsertRawTextEmbeddingCacheEntries({
-          scope: cacheScope,
-          entries: batch.map((item, index) => ({
-            embeddingInput: item.text,
-            vector: embeddings[index],
-          })),
-        })
-        progress.completedDocs += batch.length
-        return
-      } catch (error) {
-        if (attempt >= 2) {
-          progress.failedDocs += batch.length
-          progress.degraded = true
-          return
-        }
-
-        const shouldRetry = await waitForRawTextPrecomputeRetry(attempt === 0 ? 500 : 1500, params.shouldContinue)
-        if (!shouldRetry) {
-          cancelled = true
-          return
-        }
-      }
-    }
-  }
-
-  const worker = async () => {
-    while (nextBatchIndex < missingBatches.length) {
-      if (params.shouldContinue && !(await params.shouldContinue())) {
-        cancelled = true
-        return
-      }
-
-      const batchIndex = nextBatchIndex
-      nextBatchIndex += 1
-      const batch = missingBatches[batchIndex]
-      await runBatch(batch)
-      progress.completedBatches += 1
-      await params.onProgress?.({ ...progress })
-      if (cancelled) {
-        return
-      }
-    }
-  }
-
-  await Promise.all(
-    Array.from({ length: Math.min(maxConcurrentBatches, missingBatches.length) }, () => worker())
-  )
-  await finalizeReachableCacheSet()
-
-  return {
-    ...progress,
-    cancelled,
-    durationMs: Date.now() - startedAt,
-  }
 }
 
 function formatElapsed(elapsedMs: number) {
@@ -969,7 +778,7 @@ function isRetryableRetrievalEmbeddingError(error: unknown) {
 }
 
 async function waitForRetrievalEmbeddingRetry(delayMs: number) {
-  await new Promise((resolve) => setTimeout(resolve, delayMs))
+  await sleep(delayMs)
 }
 
 async function embedRetrievalRowBatchWithRetry(
@@ -1128,7 +937,7 @@ function toRetrievalDocRow(span: TextSpanInput): RetrievalDocSeedRow {
 }
 
 async function getDatabase() {
-  return lancedb.connect(LANCEDB_DIR)
+  return connectRetrievalDatabase()
 }
 
 async function resolveBranchTableName(branchId: string, database: Awaited<ReturnType<typeof getDatabase>>) {
@@ -1140,8 +949,7 @@ async function resolveBranchTableName(branchId: string, database: Awaited<Return
       : null
   }
 
-  const legacyTableName = getBranchTableName(branchId)
-  return tableNames.includes(legacyTableName) ? legacyTableName : null
+  return null
 }
 
 async function hasBranchTable(branchId: string) {
