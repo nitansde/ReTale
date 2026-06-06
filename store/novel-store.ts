@@ -20,6 +20,7 @@ import type {
   PresetCompatRegexRecord,
   PresetCompatSurfaceId,
 } from '@/lib/preset-compat/types'
+import { getClientLocale, getMessage } from '@/lib/i18n/messages'
 import {
   countChineseFriendlyWords,
   formatNowLabel,
@@ -62,239 +63,16 @@ import {
   resetPresetCompatSessionStateForSelection,
   setPresetCompatSessionEntry,
 } from '@/lib/workspace-state'
-
-type GenerateRewriteParams = {
-  prompt?: string
-}
-
-type ImportPayload = Partial<PersistedNovelState>
-
-type KnowledgeProjectionPayload = Pick<
-  PersistedNovelState,
-  'localOutlines' | 'localCharacters' | 'localCharacterRelations' | 'localWorldEntries' | 'localTimelineEvents'
->
-
-type KnowledgeRebuildStatus = {
-  jobId: string
-  novelId: string
-  jobType: 'extract_chapter_knowledge' | 'rebuild_retrieval_index'
-  status: string
-  errorMessage?: string | null
-  progress: number
-  currentStep: string | null
-  createdAt: string
-  updatedAt: string
-  etaMinutes: number | null
-  steps: Array<{
-    key: 'hanlp-bootstrap' | 'extract' | 'batch-sync' | 'cleanup' | 'write' | 'raw-embedding' | 'index'
-    label: string
-    status: 'pending' | 'running' | 'paused' | 'completed'
-    progress: number
-    etaMinutes: number | null
-    detail: string | null
-  }>
-  chapterRange?: KnowledgeRebuildChapterRange
-  rawTextEmbeddingProgress?: number
-  rawTextEmbeddingCacheHitRate?: number
-  hanlpCacheStatus?: 'queued' | 'running' | 'paused' | 'ready' | 'empty'
-  hanlpCacheHitRate?: number
-  hanlpBootstrapProgress?: number
-  hanlpBootstrapCompletedChapterCount?: number
-  hanlpBootstrapTotalChapterCount?: number
-  hanlpBootstrapCacheHitCount?: number
-  hanlpBootstrapCacheMissCount?: number
-  hanlpBootstrapInitializedCharacterEntities?: boolean
-  hanlpSettingsSnapshot?: {
-    hanlpScriptVersionHash: string
-    hanlpModelOrConfigHash: string
-    outputSchemaVersion: string
-    pipelineVersion: string
-  }
-  stageTimingsMs?: Record<string, number>
-  embeddingSettingsSnapshot?: {
-    provider: string
-    model: string
-    embeddingBatchSize: number
-  }
-}
-
-type HanlpCacheSnapshot = {
-  status: NonNullable<KnowledgeRebuildStatus['hanlpCacheStatus']>
-  settingsSnapshot?: NonNullable<KnowledgeRebuildStatus['hanlpSettingsSnapshot']>
-}
-
-type KnowledgeCoverageStatus = 'missing' | 'partial' | 'full'
-
-type KnowledgeChapterCoverageOverview = {
-  status: KnowledgeCoverageStatus
-  coveredChapterCount: number
-  totalChapterCount: number
-  validThroughChapterNo: number | null
-}
-
-type RetrievalIndexCoverageOverview = {
-  status: KnowledgeCoverageStatus
-  indexedScopeCount: number
-  chapterRange?: KnowledgeRebuildChapterRange
-  task: KnowledgeRebuildStatus | null
-}
-
-type KnowledgeStatusOverview = {
-  knowledgeGraph: KnowledgeChapterCoverageOverview
-  embeddingCache: KnowledgeChapterCoverageOverview & {
-    provider: string | null
-    model: string | null
-  }
-  retrievalIndex: RetrievalIndexCoverageOverview
-}
-
-type KnowledgeActionOutcome = 'completed' | 'queued' | 'running' | 'paused' | 'aborted' | 'blocked' | 'deleted' | 'idle'
-
-type KnowledgeActionError = {
-  code: 'active-rebuild'
-  message: string
-}
-
-type PresetCompatImportResult = {
-  importedIds: string[]
-  warnings: string[]
-}
-
-type KnowledgeProjectionResult = KnowledgeProjectionPayload & {
-  knowledgeRebuildStatus: KnowledgeRebuildStatus | null
-  hanlpCacheSnapshot: HanlpCacheSnapshot | null
-  knowledgeStatusOverview: KnowledgeStatusOverview | null
-  jobOutcome: KnowledgeActionOutcome | null
-  actionError: KnowledgeActionError | null
-}
-
-function normalizeKnowledgeProjection(data: Partial<KnowledgeProjectionPayload>): KnowledgeProjectionPayload {
-  return {
-    localOutlines: data.localOutlines ?? [],
-    localCharacters: data.localCharacters ?? [],
-    localCharacterRelations: data.localCharacterRelations ?? [],
-    localWorldEntries: data.localWorldEntries ?? [],
-    localTimelineEvents: data.localTimelineEvents ?? [],
-  }
-}
-
-function normalizeKnowledgeProjectionResult(data: Partial<KnowledgeProjectionResult>): KnowledgeProjectionResult {
-  return {
-    ...normalizeKnowledgeProjection(data),
-    knowledgeRebuildStatus: data.knowledgeRebuildStatus ?? null,
-    hanlpCacheSnapshot: data.hanlpCacheSnapshot ?? null,
-    knowledgeStatusOverview: data.knowledgeStatusOverview ?? null,
-    jobOutcome: data.jobOutcome ?? null,
-    actionError: data.actionError ?? null,
-  }
-}
-
-async function fetchKnowledgeProjection(options?: {
-  novelId?: string
-  asOfChapter?: number
-  method?: 'GET' | 'POST'
-  action?: 'rebuild' | 'rebuild-retrieval-index' | 'pause' | 'abort' | 'delete-knowledge' | 'delete-hanlp-cache' | 'delete-extraction-cache' | 'delete-embedding-cache'
-  chapterRange?: KnowledgeRebuildChapterRange
-}): Promise<KnowledgeProjectionResult> {
-  const novelId = options?.novelId
-  const asOfChapter = options?.asOfChapter
-  const method = options?.method ?? 'GET'
-  const action = options?.action ?? 'rebuild'
-  const chapterRange = options?.chapterRange
-
-  if (method === 'POST') {
-    const response = await fetch('/api/knowledge-view', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ novelId, action, ...(chapterRange ? { chapterRange } : {}) }),
-    })
-    const data = (await response.json()) as Partial<KnowledgeProjectionResult> & { ok?: boolean; error?: string }
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || 'Failed to update knowledge projection')
-    }
-
-    return normalizeKnowledgeProjectionResult(data)
-  }
-
-  const searchParams = new URLSearchParams()
-  if (novelId) searchParams.set('novelId', novelId)
-  if (typeof asOfChapter === 'number' && Number.isFinite(asOfChapter) && asOfChapter >= 1) {
-    searchParams.set('asOfChapter', String(asOfChapter))
-  }
-  const search = searchParams.size ? `?${searchParams.toString()}` : ''
-  const response = await fetch(`/api/knowledge-view${search}`, { cache: 'no-store' })
-  const data = (await response.json()) as Partial<KnowledgeProjectionResult> & { ok?: boolean; error?: string }
-  if (!response.ok || !data.ok) {
-    throw new Error(data.error || 'Failed to load knowledge projection')
-  }
-
-  return normalizeKnowledgeProjectionResult(data)
-}
-
-function mergeKnowledgeProjection(state: PersistedNovelState, projection: KnowledgeProjectionPayload, novelId?: string): KnowledgeProjectionPayload {
-  if (!novelId) {
-    return projection
-  }
-
-  return {
-    localOutlines: [...state.localOutlines.filter((item) => item.novelId !== novelId), ...projection.localOutlines],
-    localCharacters: [...state.localCharacters.filter((item) => item.novelId !== novelId), ...projection.localCharacters],
-    localCharacterRelations: [
-      ...state.localCharacterRelations.filter((item) => item.novelId !== novelId),
-      ...projection.localCharacterRelations,
-    ],
-    localWorldEntries: [...state.localWorldEntries.filter((item) => item.novelId !== novelId), ...projection.localWorldEntries],
-    localTimelineEvents: [...state.localTimelineEvents.filter((item) => item.novelId !== novelId), ...projection.localTimelineEvents],
-  }
-}
-
-function hasKnowledgeProjectionContent(projection: KnowledgeProjectionPayload) {
-  return projection.localOutlines.length > 0
-    || projection.localCharacters.length > 0
-    || projection.localCharacterRelations.length > 0
-    || projection.localWorldEntries.length > 0
-    || projection.localTimelineEvents.length > 0
-}
-
-function mergeKnowledgeProjectionPreservingExistingIfEmpty(
-  state: PersistedNovelState,
-  projection: KnowledgeProjectionPayload,
-  novelId?: string,
-  preserveExistingIfEmpty = true,
-): KnowledgeProjectionPayload {
-  if (hasKnowledgeProjectionContent(projection)) {
-    return mergeKnowledgeProjection(state, projection, novelId)
-  }
-
-  if (!preserveExistingIfEmpty) {
-    return mergeKnowledgeProjection(state, projection, novelId)
-  }
-
-  if (!novelId) {
-    return projection
-  }
-
-  return {
-    localOutlines: state.localOutlines,
-    localCharacters: state.localCharacters,
-    localCharacterRelations: state.localCharacterRelations,
-    localWorldEntries: state.localWorldEntries,
-    localTimelineEvents: state.localTimelineEvents,
-  }
-}
-
-function resolveCurrentChapterOrder(state: Pick<PersistedNovelState, 'currentNovelId' | 'currentChapterId' | 'localChapters'>, novelId?: string) {
-  const targetNovelId = novelId ?? state.currentNovelId
-  if (!targetNovelId) return undefined
-
-  const activeChapter = state.localChapters.find((chapter) => chapter.id === state.currentChapterId && chapter.novelId === targetNovelId)
-  if (activeChapter) return activeChapter.order
-
-  return state.localChapters
-    .filter((chapter) => chapter.novelId === targetNovelId && !chapter.parentChapterId)
-    .slice()
-    .sort((left, right) => left.order - right.order)[0]?.order
-}
+import { createAISettingsActions } from '@/store/novel-store-ai'
+import { createKnowledgeActions } from '@/store/novel-store-knowledge'
+import { createPersistenceActions, serializeState } from '@/store/novel-store-persistence'
+import { createRewriteActions } from '@/store/novel-store-rewrite'
+import type {
+  GenerateRewriteParams,
+  ImportPayload,
+  KnowledgeProjectionResult,
+  PresetCompatImportResult,
+} from '@/store/novel-store-types'
 
 function collectChapterSubtreeIds(chapters: Chapter[], rootChapterId: string) {
   const collected = new Set<string>([rootChapterId])
@@ -327,6 +105,10 @@ function pickNextAvailableChapter(chapters: Chapter[], preferredNovelId?: string
   })
 
   return sorted[0] ?? null
+}
+
+function tm(key: import('@/lib/i18n/messages').TranslationKey, values?: import('@/lib/i18n/messages').TranslationValues) {
+  return getMessage(getClientLocale(), key, values)
 }
 
 function buildStateAfterNovelDeletion(state: PersistedNovelState, novelId: string) {
@@ -533,84 +315,6 @@ type NovelStore = PersistedNovelState & {
 }
 
 const initialState: PersistedNovelState = createEmptyWorkspaceState()
-const WORKSPACE_RESTORE_TIMEOUT_MS = 15_000
-
-function getWorkspaceRestoreErrorMessage(error: unknown) {
-  if (error instanceof Error && error.name === 'AbortError') {
-    return 'Workspace restore timed out'
-  }
-
-  return error instanceof Error ? error.message : 'Failed to restore workspace'
-}
-
-function serializeState(state: NovelStore): PersistedNovelState {
-  return {
-    currentNovelId: state.currentNovelId,
-    currentChapterId: state.currentChapterId,
-    currentTab: state.currentTab,
-    helperTab: state.helperTab,
-    expandedVolumeIds: state.expandedVolumeIds,
-    localNovels: state.localNovels,
-    localVolumes: state.localVolumes,
-    localChapters: state.localChapters,
-    localOutlines: state.localOutlines,
-    localCharacters: state.localCharacters,
-    localCharacterRelations: state.localCharacterRelations,
-    localWorldEntries: state.localWorldEntries,
-    localTimelineEvents: state.localTimelineEvents,
-    rewriteCandidates: state.rewriteCandidates,
-    rewriteHistory: state.rewriteHistory,
-    trajectories: state.trajectories,
-    rewriteMode: state.rewriteMode,
-    rewriteTone: state.rewriteTone,
-    rewriteOutput: state.rewriteOutput,
-    rewriteScope: state.rewriteScope,
-    selectionText: state.selectionText,
-    selectedParagraphIndex: state.selectedParagraphIndex,
-    thinkingLevel: state.thinkingLevel,
-    autoContinue: state.autoContinue,
-    keepCanon: state.keepCanon,
-    promptText: state.promptText,
-    selectedPresetId: state.selectedPresetId,
-    presets: state.presets,
-    constraints: state.constraints,
-    focusMode: state.focusMode,
-    presetCompatSessionState: state.presetCompatSessionState,
-    aiSettings: state.aiSettings,
-  }
-}
-
-function getScopeSource(chapter: Chapter, scope: RewriteScope, selectedParagraphIndex: number | null, selectionText: string) {
-  const chapterText = htmlToPlainText(chapter.content)
-  if (scope === 'selection' && selectionText.trim()) return selectionText.trim()
-  const paragraphs = getParagraphsFromHtml(chapter.content)
-  if (scope === 'paragraph' && paragraphs.length) {
-    const index = selectedParagraphIndex ?? 0
-    return paragraphs[Math.max(0, Math.min(index, paragraphs.length - 1))]
-  }
-  return chapterText
-}
-
-function buildFallbackCandidates(source: string, mode: RewriteMode, tone: RewriteTone, prompt: string): RewriteCandidate[] {
-  const batchId = uid('batch')
-  const variants = [
-    `${source} 空气里的湿冷像一把迟迟没有落下的刀。`,
-  ]
-  return variants.map((content, index) => ({
-    id: uid(`cand${index + 1}`),
-    batchId,
-    title: index === 0 ? '生成版本' : `版本 ${index + 1}`,
-    summary: `${prompt || '默认提示词'} · ${mode} / ${tone}`,
-    content,
-    mode,
-    tone,
-    selected: index === 0,
-    createdAt: formatNowLabel(),
-    prompt,
-    sourceExcerpt: source.slice(0, 120),
-    actions: ['apply', 'insert', 'branch', 'continue'],
-  }))
-}
 
 export const useNovelStore = create<NovelStore>((set, get) => ({
   ...initialState,
@@ -640,13 +344,13 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       const updatedAt = chapters[0]?.updatedAt ?? formatNowLabel()
       const novelMeta = state.localNovels.find((item) => item.id === novelId)
       const firstChapterText = chapters[0] ? htmlToPlainText(chapters[0].content).replace(/\s+/g, ' ').trim() : ''
-      const inferredTitle = novelMeta?.title ?? chapters[0]?.title?.replace(/^第\s*[0-9一二三四五六七八九十百千零两]+\s*章\s*/, '') ?? `小说 ${novelId.slice(-4)}`
-      const inferredSummary = novelMeta?.summary ?? (firstChapterText.slice(0, 120) || '你创建的新小说。')
+      const inferredTitle = novelMeta?.title ?? chapters[0]?.title?.replace(/^第\s*[0-9一二三四五六七八九十百千零两]+\s*章\s*/, '') ?? tm('store.inferredNovelTitle', { suffix: novelId.slice(-4) })
+      const inferredSummary = novelMeta?.summary ?? (firstChapterText.slice(0, 120) || tm('store.newNovelSummary'))
       return {
         id: novelId,
         title: inferredTitle,
         summary: inferredSummary,
-        tags: novelMeta?.tags ?? ['导入', 'TXT'],
+        tags: novelMeta?.tags ?? [tm('store.importTag'), tm('store.importTxtTag')],
         updatedAt,
         wordCount,
         chapterCount,
@@ -655,7 +359,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
   },
   importNovelFromText: ({ title, text, summary }) => {
     const state = get()
-    const cleanTitle = title.trim() || `导入小说 ${state.localVolumes.length + 1}`
+    const cleanTitle = title.trim() || tm('store.importNovelTitle', { count: state.localVolumes.length + 1 })
     const cleanText = text.trim()
     if (!cleanText) return null
 
@@ -667,7 +371,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     const newVolume = {
       id: volumeId,
       novelId,
-      title: '卷一：导入正文',
+      title: tm('store.importVolumeTitle'),
       order: 1,
     }
 
@@ -678,7 +382,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         const heading = parts[i]
         const body = parts[i + 1] ?? ''
         if (!heading) continue
-        const contentText = body.trim() || '（本章暂无正文）'
+        const contentText = body.trim() || tm('store.importEmptyChapterBody')
         importedChapters.push({
           id: uid('ch'),
           novelId,
@@ -689,8 +393,8 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
           originalContent: plainTextToHtml(contentText),
           status: 'draft',
           wordCount: countChineseFriendlyWords(contentText),
-          updatedAt: `${formatNowLabel()} · 导入`,
-          trajectory: ['从 TXT 导入'],
+          updatedAt: tm('store.importUpdatedAt', { time: formatNowLabel() }),
+          trajectory: [tm('store.importTrajectory')],
         })
       }
     }
@@ -700,14 +404,14 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         id: uid('ch'),
         novelId,
         volumeId,
-        title: '第1章 导入正文',
+        title: tm('store.importFallbackChapterTitle'),
         order: 1,
         content: plainTextToHtml(cleanText),
         originalContent: plainTextToHtml(cleanText),
         status: 'draft',
         wordCount: countChineseFriendlyWords(cleanText),
-        updatedAt: `${formatNowLabel()} · 导入`,
-        trajectory: ['从 TXT 导入'],
+        updatedAt: tm('store.importUpdatedAt', { time: formatNowLabel() }),
+        trajectory: [tm('store.importTrajectory')],
       })
     }
 
@@ -720,8 +424,8 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         {
           id: novelId,
           title: cleanTitle,
-          summary: summary?.trim() || `从 TXT 导入，共 ${importedChapters.length} 章。`,
-          tags: ['导入', 'TXT'],
+          summary: summary?.trim() || tm('store.importNovelSummary', { count: importedChapters.length }),
+          tags: [tm('store.importTag'), tm('store.importTxtTag')],
         },
       ],
       localVolumes: [...state.localVolumes, newVolume],
@@ -731,8 +435,8 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
           id: uid('traj'),
           chapterId: importedChapters[0].id,
           type: 'note',
-          title: `导入小说《${cleanTitle}》`,
-          detail: summary?.trim() || `共导入 ${importedChapters.length} 章。`,
+          title: tm('store.importTrajectoryTitle', { title: cleanTitle }),
+          detail: summary?.trim() || tm('store.importTrajectoryDetail', { count: importedChapters.length }),
           createdAt: formatNowLabel(),
         },
         ...state.trajectories,
@@ -770,7 +474,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
               ...chapter,
               content: html,
               wordCount: countChineseFriendlyWords(htmlToPlainText(html)),
-              updatedAt: `${formatNowLabel()} · 已编辑`,
+              updatedAt: tm('store.editedUpdatedAt', { time: formatNowLabel() }),
             }
           : chapter
       ),
@@ -861,134 +565,8 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     set((state) => buildStateAfterChapterDeletion(state, chapterId)),
   deleteNovel: (novelId) =>
     set((state) => buildStateAfterNovelDeletion(state, novelId)),
-  rebuildStoryKnowledge: async (novelId, options) => {
-    const state = get()
-    const targetNovelId = novelId ?? state.currentNovelId
-    const chaptersForNovel = state.localChapters.filter((chapter) => chapter.novelId === targetNovelId && !chapter.parentChapterId)
-    if (!targetNovelId || !chaptersForNovel.length) return null
-
-    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', chapterRange: options?.chapterRange })
-    const projection = normalizeKnowledgeProjection(result)
-
-    set((current) => ({
-      ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId, result.jobOutcome !== 'completed'),
-      trajectories: result.jobOutcome === 'completed'
-        ? [
-            {
-              id: uid('traj'),
-              chapterId: chaptersForNovel[0].id,
-              type: 'note',
-              title: '重建知识视图',
-              detail: `已基于本地知识库重建《${chaptersForNovel[0].title}》所在小说的人物、关系、设定与时间线视图。`,
-              createdAt: formatNowLabel(),
-            },
-            ...current.trajectories,
-          ]
-        : current.trajectories,
-    }))
-
-    return result
-  },
-  rebuildStoryRetrievalIndex: async (novelId, options) => {
-    const state = get()
-    const targetNovelId = novelId ?? state.currentNovelId
-    const chaptersForNovel = state.localChapters.filter((chapter) => chapter.novelId === targetNovelId && !chapter.parentChapterId)
-    if (!targetNovelId || !chaptersForNovel.length) return null
-
-    const result = await fetchKnowledgeProjection({
-      novelId: targetNovelId,
-      method: 'POST',
-      action: 'rebuild-retrieval-index',
-      chapterRange: options?.chapterRange,
-    })
-    const projection = normalizeKnowledgeProjection(result)
-
-    set((current) => ({
-      ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId),
-    }))
-
-    return result
-  },
-  pauseStoryKnowledgeRebuild: async (novelId) => {
-    const state = get()
-    const targetNovelId = novelId ?? state.currentNovelId
-    if (!targetNovelId) return null
-
-    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'pause' })
-    const projection = normalizeKnowledgeProjection(result)
-    set((current) => ({
-      ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId),
-    }))
-    return result
-  },
-  abortStoryKnowledgeRebuild: async (novelId) => {
-    const state = get()
-    const targetNovelId = novelId ?? state.currentNovelId
-    if (!targetNovelId) return null
-
-    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'abort' })
-    const projection = normalizeKnowledgeProjection(result)
-    set((current) => ({
-      ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId),
-    }))
-    return result
-  },
-  deleteStoryKnowledgeGraph: async (novelId) => {
-    const state = get()
-    const targetNovelId = novelId ?? state.currentNovelId
-    if (!targetNovelId) return null
-
-    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-knowledge' })
-    const projection = normalizeKnowledgeProjection(result)
-    set((current) => ({
-      ...mergeKnowledgeProjection(current, projection, targetNovelId),
-    }))
-    return result
-  },
-  deleteStoryHanlpCache: async (novelId) => {
-    const state = get()
-    const targetNovelId = novelId ?? state.currentNovelId
-    if (!targetNovelId) return null
-
-    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-hanlp-cache' })
-    const projection = normalizeKnowledgeProjection(result)
-    set((current) => ({
-      ...mergeKnowledgeProjection(current, projection, targetNovelId),
-    }))
-    return result
-  },
-  deleteStoryExtractionCache: async (novelId) => {
-    const state = get()
-    const targetNovelId = novelId ?? state.currentNovelId
-    if (!targetNovelId) return null
-
-    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-extraction-cache' })
-    const projection = normalizeKnowledgeProjection(result)
-    set((current) => ({
-      ...mergeKnowledgeProjection(current, projection, targetNovelId),
-    }))
-    return result
-  },
-  deleteStoryEmbeddingCache: async (novelId) => {
-    const state = get()
-    const targetNovelId = novelId ?? state.currentNovelId
-    if (!targetNovelId) return null
-
-    const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-embedding-cache' })
-    const projection = normalizeKnowledgeProjection(result)
-    set((current) => ({
-      ...mergeKnowledgeProjection(current, projection, targetNovelId),
-    }))
-    return result
-  },
-  refreshKnowledgeProjection: async (novelId, asOfChapter) => {
-    const result = await fetchKnowledgeProjection({ novelId, asOfChapter, method: 'GET' })
-    set((current) => ({
-      ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), novelId),
-    }))
-  },
-  setAISettings: (settings) =>
-    set({ aiSettings: normalizeAISettings(settings) }),
+  ...createKnowledgeActions(set, get),
+  ...createAISettingsActions(set, get),
   selectRewriteCandidate: (id) =>
     set((state) => ({
       rewriteCandidates: state.rewriteCandidates.map((item) => ({ ...item, selected: item.id === id })),
@@ -1001,12 +579,12 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       return {
         currentTab: 'editor',
         trajectories: [
-          { id: uid('traj'), chapterId: chapter.id, type: 'apply', title: `应用 ${candidate.title}`, detail: `把当前${state.rewriteScope === 'chapter' ? '章节' : '片段'}替换为改写结果。`, createdAt: formatNowLabel() },
+           { id: uid('traj'), chapterId: chapter.id, type: 'apply', title: tm('store.applyTrajectoryTitle', { title: candidate.title }), detail: state.rewriteScope === 'chapter' ? tm('store.applyTrajectoryDetailChapter') : tm('store.applyTrajectoryDetailSelection'), createdAt: formatNowLabel() },
           ...state.trajectories,
         ],
         localChapters: state.localChapters.map((item) =>
           item.id === chapter.id
-            ? { ...item, originalContent: item.originalContent ?? item.content, content: plainTextToHtml(candidate.content), wordCount: countChineseFriendlyWords(candidate.content), updatedAt: `${formatNowLabel()} · 已应用改写` }
+            ? { ...item, originalContent: item.originalContent ?? item.content, content: plainTextToHtml(candidate.content), wordCount: countChineseFriendlyWords(candidate.content), updatedAt: tm('store.appliedRewriteUpdatedAt', { time: formatNowLabel() }) }
             : item
         ),
         rewriteCandidates: state.rewriteCandidates.map((item) => ({ ...item, selected: item.id === id })),
@@ -1021,11 +599,11 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       return {
         currentTab: 'editor',
         trajectories: [
-          { id: uid('traj'), chapterId: chapter.id, type: 'insert', title: `插入 ${candidate.title}`, detail: '将改写结果追加到当前章节末尾，保留原文。', createdAt: formatNowLabel() },
+           { id: uid('traj'), chapterId: chapter.id, type: 'insert', title: tm('store.insertTrajectoryTitle', { title: candidate.title }), detail: tm('store.insertTrajectoryDetail'), createdAt: formatNowLabel() },
           ...state.trajectories,
         ],
         localChapters: state.localChapters.map((item) =>
-          item.id === chapter.id ? { ...item, content: plainTextToHtml(nextText), wordCount: countChineseFriendlyWords(nextText), updatedAt: `${formatNowLabel()} · 已插入候选` } : item
+          item.id === chapter.id ? { ...item, content: plainTextToHtml(nextText), wordCount: countChineseFriendlyWords(nextText), updatedAt: tm('store.insertedCandidateUpdatedAt', { time: formatNowLabel() }) } : item
         ),
       }
     }),
@@ -1033,24 +611,24 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     const state = get()
     const candidate = state.rewriteCandidates.find((item) => item.id === id)
     if (!candidate) return
-    get().addChapterBranch(state.currentChapterId, `${candidate.title} 分支`, candidate.content)
+    get().addChapterBranch(state.currentChapterId, tm('store.branchSuffix', { title: candidate.title }), candidate.content)
   },
   continueRewriteCandidate: (id) =>
     set((state) => {
       const candidate = state.rewriteCandidates.find((item) => item.id === id)
       const chapter = state.localChapters.find((item) => item.id === state.currentChapterId)
       if (!candidate || !chapter) return state
-      const continued: RewriteCandidate = { ...candidate, id: uid('cand-cont'), title: `${candidate.title} · 继续推进`, summary: '沿着当前版本继续续写一段。', content: `${candidate.content}\n\n广播在下一秒响起，像一把看不见的尺，把所有人重新按回座位。林砚这才意识到，她刚刚做出的选择，已经让整节车厢开始注意她。`, createdAt: formatNowLabel(), selected: true }
+      const continued: RewriteCandidate = { ...candidate, id: uid('cand-cont'), title: tm('store.continueTitle', { title: candidate.title }), summary: tm('store.continueSummary'), content: `${candidate.content}\n\n${tm('store.continueSampleEnding')}`, createdAt: formatNowLabel(), selected: true }
       return {
         rewriteCandidates: [continued, ...state.rewriteCandidates.map((item) => ({ ...item, selected: item.id === continued.id }))],
         trajectories: [
-          { id: uid('traj'), chapterId: chapter.id, type: 'continue', title: `续写 ${candidate.title}`, detail: '基于当前版本向后推进一段。', createdAt: formatNowLabel() },
+          { id: uid('traj'), chapterId: chapter.id, type: 'continue', title: tm('store.continueTrajectoryTitle', { title: candidate.title }), detail: tm('store.continueTrajectoryDetail'), createdAt: formatNowLabel() },
           ...state.trajectories,
         ],
       }
     }),
   addPreset: () => set((state) => {
-    const preset: RewritePreset = { id: uid('preset'), name: `自定义预设 ${state.presets.length + 1}`, mode: state.rewriteMode, tone: state.rewriteTone, prompt: state.promptText }
+    const preset: RewritePreset = { id: uid('preset'), name: tm('store.customPresetName', { count: state.presets.length + 1 }), mode: state.rewriteMode, tone: state.rewriteTone, prompt: state.promptText }
     return { presets: [preset, ...state.presets], selectedPresetId: preset.id }
   }),
   selectPreset: (id) => set((state) => {
@@ -1066,88 +644,21 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     const next: Record<RewriteConstraint['strength'], RewriteConstraint['strength']> = { off: 'soft', soft: 'strict', strict: 'off' }
     return { ...constraint, strength: next[constraint.strength] }
   }) })),
-  generateRewriteBatch: async ({ prompt } = {}) => {
-    const state = get()
-    const chapter = state.localChapters.find((item) => item.id === state.currentChapterId)
-    if (!chapter) return
-    const mergedPrompt = prompt ?? state.promptText
-    const source = getScopeSource(chapter, state.rewriteScope, state.selectedParagraphIndex, state.selectionText)
-    const currentNovelCharacters = state.localCharacters.filter((item) => item.novelId === state.currentNovelId)
-    const currentNovelRelations = state.localCharacterRelations.filter((item) => item.novelId === state.currentNovelId)
-    const currentNovelWorldEntries = state.localWorldEntries.filter((item) => item.novelId === state.currentNovelId)
-    const currentNovelTimelineEvents = state.localTimelineEvents.filter((item) => item.novelId === state.currentNovelId)
-    const currentNovelOutlines = state.localOutlines.filter((item) => item.novelId === state.currentNovelId)
-    const generationContext = buildGenerationContext({
-      currentChapter: chapter,
-      chapters: state.localChapters.filter((item) => item.novelId === state.currentNovelId && !item.parentChapterId),
-      selectionText: state.selectionText,
-      characters: currentNovelCharacters,
-      relations: currentNovelRelations,
-      worldEntries: currentNovelWorldEntries,
-      timelineEvents: currentNovelTimelineEvents,
-      outlines: currentNovelOutlines,
-      recentChapterCount: 3,
-    })
-
-    try {
-      const response = await fetch('/api/rewrite', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sourceText: source,
-          mode: state.rewriteMode,
-          tone: state.rewriteTone,
-          scope: state.rewriteScope,
-          prompt: `${mergedPrompt}\n\n${generationContext}`,
-          keepCanon: state.keepCanon,
-          autoContinue: state.autoContinue,
-          thoughtLevel: state.thinkingLevel,
-        }),
-      })
-      const data = await response.json()
-      const batchId = uid('batch')
-      const nextCandidates: RewriteCandidate[] = (data.candidates ?? []).map((item: { title: string; summary: string; content: string }, index: number) => ({
-        id: uid(`cand${index + 1}`),
-        batchId,
-        title: item.title,
-        summary: `${item.summary}${data.provider ? ` · ${data.provider}` : ''}`,
-        content: item.content,
-        mode: state.rewriteMode,
-        tone: state.rewriteTone,
-        selected: index === 0,
-        createdAt: formatNowLabel(),
-        prompt: mergedPrompt,
-        sourceExcerpt: source.slice(0, 120),
-        actions: ['apply', 'insert', 'branch', 'continue'],
-      }))
-      const historyEntry: RewriteHistoryEntry = { id: uid('hist'), batchId, chapterId: chapter.id, scope: state.rewriteScope, sourceExcerpt: source.slice(0, 120), mode: state.rewriteMode, tone: state.rewriteTone, createdAt: formatNowLabel(), candidateIds: nextCandidates.map((item) => item.id) }
-      set((current) => ({
-        currentTab: 'rewrite',
-        helperTab: 'trajectory',
-        rewriteCandidates: nextCandidates.length ? nextCandidates : buildFallbackCandidates(source, current.rewriteMode, current.rewriteTone, mergedPrompt),
-        rewriteHistory: [historyEntry, ...current.rewriteHistory],
-        trajectories: [{ id: uid('traj'), chapterId: chapter.id, type: 'rewrite', title: '生成改写版本', detail: `范围：${current.rewriteScope} · 模式：${current.rewriteMode} · 风格：${current.rewriteTone}`, createdAt: formatNowLabel() }, ...current.trajectories],
-      }))
-    } catch {
-      const nextCandidates = buildFallbackCandidates(source, state.rewriteMode, state.rewriteTone, mergedPrompt)
-      const historyEntry: RewriteHistoryEntry = { id: uid('hist'), batchId: nextCandidates[0].batchId, chapterId: chapter.id, scope: state.rewriteScope, sourceExcerpt: source.slice(0, 120), mode: state.rewriteMode, tone: state.rewriteTone, createdAt: formatNowLabel(), candidateIds: nextCandidates.map((item) => item.id) }
-      set((current) => ({ currentTab: 'rewrite', helperTab: 'trajectory', rewriteCandidates: nextCandidates, rewriteHistory: [historyEntry, ...current.rewriteHistory] }))
-    }
-  },
+  ...createRewriteActions(set, get),
   addChapterBranch: (sourceChapterId, title, content) => set((state) => {
     const sourceChapter = state.localChapters.find((chapter) => chapter.id === sourceChapterId)
     if (!sourceChapter) return state
     const branchId = uid('branch')
     const branchNumber = state.localChapters.filter((chapter) => chapter.parentChapterId === sourceChapterId).length + 1
     const nextText = content ?? htmlToPlainText(sourceChapter.content)
-    const nextChapter: Chapter = { ...sourceChapter, id: branchId, title: title ?? `${sourceChapter.title} · 分支 ${branchNumber}`, content: plainTextToHtml(nextText), originalContent: sourceChapter.content, kind: 'branch', parentChapterId: sourceChapterId, branchLabel: `B${branchNumber}`, order: sourceChapter.order + branchNumber / 10, status: 'draft', updatedAt: `${formatNowLabel()} · 新分支`, wordCount: countChineseFriendlyWords(nextText), trajectory: [...(sourceChapter.trajectory ?? []), '从父章节派生分支'] }
-    return { currentChapterId: branchId, currentTab: 'editor', localChapters: [...state.localChapters, nextChapter], trajectories: [{ id: uid('traj'), chapterId: branchId, type: 'branch', title: `创建分支 ${nextChapter.branchLabel}`, detail: `从《${sourceChapter.title}》派生出新的改写支线。`, createdAt: formatNowLabel() }, ...state.trajectories] }
+    const nextChapter: Chapter = { ...sourceChapter, id: branchId, title: title ?? tm('store.branchTitleFallback', { title: sourceChapter.title, count: branchNumber }), content: plainTextToHtml(nextText), originalContent: sourceChapter.content, kind: 'branch', parentChapterId: sourceChapterId, branchLabel: `B${branchNumber}`, order: sourceChapter.order + branchNumber / 10, status: 'draft', updatedAt: tm('store.branchUpdatedAt', { time: formatNowLabel() }), wordCount: countChineseFriendlyWords(nextText), trajectory: [...(sourceChapter.trajectory ?? []), tm('store.branchTrajectory')] }
+    return { currentChapterId: branchId, currentTab: 'editor', localChapters: [...state.localChapters, nextChapter], trajectories: [{ id: uid('traj'), chapterId: branchId, type: 'branch', title: tm('store.branchCreateTitle', { label: nextChapter.branchLabel ?? `B${branchNumber}` }), detail: tm('store.branchCreateDetail', { title: sourceChapter.title }), createdAt: formatNowLabel() }, ...state.trajectories] }
   }),
   createNewChapter: () => set((state) => {
     const volumeId = state.localVolumes[0]?.id
     if (!volumeId) return state
     const sameVolume = state.localChapters.filter((chapter) => chapter.volumeId === volumeId && !chapter.parentChapterId)
-    const nextChapter: Chapter = { id: uid('ch'), novelId: state.currentNovelId, volumeId, title: `第${sameVolume.length + 1}章 新章节`, order: sameVolume.length + 1, content: '<p>在这里开始新的章节。</p>', originalContent: '<p>在这里开始新的章节。</p>', status: 'draft', wordCount: 10, updatedAt: `${formatNowLabel()} · 新建`, trajectory: ['新建章节'] }
+    const nextChapter: Chapter = { id: uid('ch'), novelId: state.currentNovelId, volumeId, title: tm('store.newChapterTitle', { count: sameVolume.length + 1 }), order: sameVolume.length + 1, content: tm('store.newChapterBody'), originalContent: tm('store.newChapterBody'), status: 'draft', wordCount: 10, updatedAt: tm('store.newChapterUpdatedAt', { time: formatNowLabel() }), trajectory: [tm('store.newChapterTrajectory')] }
     return { currentChapterId: nextChapter.id, currentTab: 'editor', localChapters: [...state.localChapters, nextChapter] }
   }),
   exportWorkspace: () => JSON.stringify(serializeState(get()), null, 2),
@@ -1181,204 +692,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       phase
     ),
   })),
-  loadPresetCompatLibrary: async () => {
-    set({ presetCompatLibraryLoading: true, presetCompatLibraryError: '' })
-    try {
-      const library = await fetchPresetCompatLibrary()
-      set({
-        presetCompatLibrary: library,
-        presetCompatLibraryDirty: false,
-        presetCompatLibraryLoading: false,
-        presetCompatLibraryError: '',
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load preset compat library'
-      set({
-        presetCompatLibraryLoading: false,
-        presetCompatLibraryError: message,
-      })
-      throw error
-    }
-  },
-  loadFromBackend: async () => {
-    set({
-      backendLoadError: '',
-      presetCompatLibraryLoading: true,
-      presetCompatLibraryError: '',
-    })
-    let restoredWorkspace = initialState
-    const workspaceRestoreController = new AbortController()
-    const workspaceRestoreTimeoutId = globalThis.setTimeout(() => {
-      workspaceRestoreController.abort()
-    }, WORKSPACE_RESTORE_TIMEOUT_MS)
-
-    try {
-      const workspaceResponse = await fetch('/api/workspace', {
-        cache: 'no-store',
-        signal: workspaceRestoreController.signal,
-      })
-      if (!workspaceResponse.ok) {
-        const error = await workspaceResponse.json().catch(() => null) as { error?: string } | null
-        throw new Error(error?.error || 'Failed to restore workspace')
-      }
-
-      const workspace = await workspaceResponse.json().catch(() => {
-        throw new Error('Workspace endpoint returned invalid JSON')
-      })
-      const normalizedWorkspace = normalizeWorkspaceState(workspace)
-      restoredWorkspace = normalizedWorkspace
-
-      set({
-        ...normalizedWorkspace,
-        isHydrated: true,
-        backendLoaded: true,
-        backendLoadError: '',
-      })
-    } catch (error) {
-      const message = getWorkspaceRestoreErrorMessage(error)
-      console.error('Workspace restore failed:', error)
-      set({
-        backendLoaded: true,
-        isHydrated: true,
-        backendLoadError: message,
-        presetCompatLibraryLoading: false,
-      })
-      return
-    } finally {
-      globalThis.clearTimeout(workspaceRestoreTimeoutId)
-    }
-
-    const [aiResult, presetCompatResult, projectionResult] = await Promise.allSettled([
-      fetch('/api/settings/ai', { cache: 'no-store' }).then(async (response) => {
-        if (!response.ok) {
-          const error = await response.json().catch(() => null) as { error?: string } | null
-          throw new Error(error?.error || 'Failed to load AI settings')
-        }
-        return response.json()
-      }),
-      fetchPresetCompatLibrary(),
-      fetchKnowledgeProjection({
-        novelId: restoredWorkspace.currentNovelId || undefined,
-        asOfChapter: resolveCurrentChapterOrder(restoredWorkspace, restoredWorkspace.currentNovelId || undefined),
-      }),
-    ])
-
-    const nextState: Partial<NovelStore> = {}
-    if (aiResult.status === 'fulfilled') {
-      nextState.aiSettings = normalizeAISettings(aiResult.value)
-    } else {
-      console.error('AI settings restore failed:', aiResult.reason)
-    }
-
-    if (presetCompatResult.status === 'fulfilled') {
-      nextState.presetCompatLibrary = presetCompatResult.value
-      nextState.presetCompatLibraryDirty = false
-      nextState.presetCompatLibraryError = ''
-    } else {
-      const message = presetCompatResult.reason instanceof Error
-        ? presetCompatResult.reason.message
-        : 'Failed to load preset compat library'
-      console.error('Preset compat library restore failed:', presetCompatResult.reason)
-      nextState.presetCompatLibraryError = message
-    }
-
-    nextState.presetCompatLibraryLoading = false
-
-    if (projectionResult.status === 'fulfilled') {
-      Object.assign(nextState, normalizeKnowledgeProjection(projectionResult.value))
-    } else {
-      console.error('Knowledge projection restore failed:', projectionResult.reason)
-    }
-
-    if (Object.keys(nextState).length) {
-      set(nextState)
-    }
-  },
-  saveToBackend: async () => {
-    const state = get()
-    set({ isSaving: true })
-    try {
-      const response = await fetch('/api/workspace', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(serializeState(state)),
-      })
-      const data = (await response.json()) as { ok?: boolean; error?: string }
-      if (!response.ok || data.ok === false) {
-        throw new Error(data.error || 'Failed to save workspace')
-      }
-    } finally {
-      set({ isSaving: false })
-    }
-  },
-  savePresetCompatLibrary: async () => {
-    const { presetCompatLibrary, presetCompatLibraryDirty } = get()
-    if (!presetCompatLibraryDirty) return
-
-    set({ presetCompatLibraryLoading: true, presetCompatLibraryError: '' })
-    try {
-      const result = await savePresetCompatLibraryToBackend(presetCompatLibrary)
-      set({
-        presetCompatLibrary: result.library,
-        presetCompatLibraryDirty: false,
-        presetCompatLibraryLoading: false,
-        presetCompatLibraryError: '',
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to save preset compat library'
-      set({
-        presetCompatLibraryLoading: false,
-        presetCompatLibraryError: message,
-      })
-      throw error
-    }
-  },
-  importPresetCompatPreset: async (params) => {
-    set({ presetCompatLibraryLoading: true, presetCompatLibraryError: '' })
-    try {
-      const result = await importPresetCompatPayload({ ...params, kind: 'preset' })
-      set({
-        presetCompatLibrary: result.library,
-        presetCompatLibraryDirty: false,
-        presetCompatLibraryLoading: false,
-        presetCompatLibraryError: '',
-      })
-      return {
-        importedIds: result.importedIds,
-        warnings: result.warnings,
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to import preset compat preset'
-      set({
-        presetCompatLibraryLoading: false,
-        presetCompatLibraryError: message,
-      })
-      throw error
-    }
-  },
-  importPresetCompatRegexBundle: async (params) => {
-    set({ presetCompatLibraryLoading: true, presetCompatLibraryError: '' })
-    try {
-      const result = await importPresetCompatPayload({ ...params, kind: 'regex' })
-      set({
-        presetCompatLibrary: result.library,
-        presetCompatLibraryDirty: false,
-        presetCompatLibraryLoading: false,
-        presetCompatLibraryError: '',
-      })
-      return {
-        importedIds: result.importedIds,
-        warnings: result.warnings,
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to import preset compat regex bundle'
-      set({
-        presetCompatLibraryLoading: false,
-        presetCompatLibraryError: message,
-      })
-      throw error
-    }
-  },
+  ...createPersistenceActions(set, get, initialState),
   bindPresetCompatPresetToSurface: (surfaceId, presetId) => set((state) => {
     const binding = state.presetCompatLibrary.surfaceBindings[surfaceId]
     if (!binding) {
@@ -1654,19 +968,4 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     return preset ? exportPresetCompatPresetJson(get().presetCompatLibrary, presetId) : null
   },
   exportPresetCompatStandaloneRegexBundle: (regexIds) => exportPresetCompatStandaloneRegexJson(get().presetCompatLibrary, regexIds),
-  saveAISettings: async () => {
-    const { aiSettings } = get()
-    if (!aiSettings) return
-    const response = await fetch('/api/settings/ai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(aiSettings),
-    })
-    if (!response.ok) {
-      const error = await response.json().catch(() => null) as { error?: string } | null
-      throw new Error(error?.error || 'Failed to save AI settings')
-    }
-    const latest = await fetch('/api/settings/ai', { cache: 'no-store' }).then((res) => res.json())
-    set({ aiSettings: normalizeAISettings(latest) })
-  },
 }))
