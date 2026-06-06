@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
 import { createContinueBlockFromRewrite, regenerateContinueBlock } from '@/lib/server/continue-block-service'
+import { isNotFoundErrorMessage, jsonError, readJsonObject, toErrorMessage } from '@/lib/server/api-route'
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json()
+    const body = await readJsonObject(request)
     const result = await createContinueBlockFromRewrite({
       novelId: String(body.novelId ?? ''),
       branchId: String(body.branchId ?? ''),
@@ -21,14 +22,14 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to create continue block'
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = toErrorMessage(error, 'Failed to create continue block')
+    return jsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
   }
 }
 
 export async function PUT(request: Request) {
   try {
-    const body = await request.json()
+    const body = await readJsonObject(request)
     const result = await regenerateContinueBlock({
       continueBlockId: String(body.continueBlockId ?? ''),
       generatedText: String(body.generatedText ?? ''),
@@ -43,7 +44,7 @@ export async function PUT(request: Request) {
 
     return NextResponse.json(result)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to regenerate continue block'
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = toErrorMessage(error, 'Failed to regenerate continue block')
+    return jsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
   }
 }

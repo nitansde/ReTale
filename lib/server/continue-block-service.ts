@@ -10,12 +10,15 @@ import {
 } from '@/lib/server/continue-block-store'
 import {
   createStoryTimelineNode,
-  findStoryTimelineNodeById,
   findStoryTimelineNodeByContinueBlockId,
   getNextContinueReadableLabelIndex,
   getNextStoryTimelineLabelIndex,
   updateStoryTimelineNodePresentation,
 } from '@/lib/server/story-timeline-store'
+import {
+  buildChildReadableLineageLabel,
+  requireOptionalTimelineNodeInBranchContext,
+} from '@/lib/server/story-branch-mutation-helpers'
 import { formatStoryBranchReadableLabel, prefixStoryBranchTitle } from '@/lib/story-branch-labels'
 import type {
   ContinueBlockCreateRequest,
@@ -67,8 +70,13 @@ export async function createContinueBlockFromRewrite(rawInput: ContinueBlockCrea
     ? getNextContinueReadableLabelIndex(input.novelId, input.branchId, input.parentTimelineNodeId)
     : labelIndex
   const readableLabel = formatStoryBranchReadableLabel(nodeType, readableLabelIndex)
-  const parentNode = input.parentTimelineNodeId ? findStoryTimelineNodeById(input.parentTimelineNodeId) : null
-  const readableLineageLabel = parentNode?.readableLineageLabel ? `${parentNode.readableLineageLabel}, ${readableLabel}` : readableLabel
+  const parentNode = requireOptionalTimelineNodeInBranchContext({
+    nodeId: input.parentTimelineNodeId,
+    novelId: input.novelId,
+    branchId: input.branchId,
+    label: 'Parent timeline node',
+  })
+  const readableLineageLabel = buildChildReadableLineageLabel(parentNode, readableLabel)
   const title = buildContinueBlockTitle({
     readableLineageLabel,
     titleHint: input.titleHint,
