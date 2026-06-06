@@ -10,6 +10,7 @@ import {
   assertSafeQaUrls,
   cleanupLegacySafeQaArtifacts,
   prepareRoleplaySafeDatabaseFile,
+  shouldPreserveExistingDatabaseFile,
   writeRoleplaySafeQaManifest,
 } from './roleplay-safe-qa.mjs'
 
@@ -23,7 +24,8 @@ if (!tempDbPath) {
   throw new Error('[roleplay-safe-qa] Missing PLAYWRIGHT_TEST_DB_PATH for Playwright web server')
 }
 
-prepareRoleplaySafeDatabaseFile(tempDbPath)
+const preserveExistingDatabase = shouldPreserveExistingDatabaseFile(tempDbPath)
+prepareRoleplaySafeDatabaseFile(tempDbPath, { preserveExisting: preserveExistingDatabase })
 
 const manifest = writeRoleplaySafeQaManifest({
   databaseUrl: `file:${tempDbPath}`,
@@ -31,11 +33,13 @@ const manifest = writeRoleplaySafeQaManifest({
   mode: 'roleplay-safe-playwright',
   sourceDatabase: null,
   nextDistDir: SAFE_QA_NEXT_DIST_DIR,
+  preserveExistingDatabase,
   webServerCommand: 'node scripts/next-test-server.mjs',
 })
 
 console.log(`[roleplay-safe-qa] Starting isolated browser QA at ${SAFE_QA_BASE_URL}`)
 console.log(`[roleplay-safe-qa] Using dedicated test DB ${manifest.databasePath}`)
+console.log(`[roleplay-safe-qa] Preserve existing DB ${preserveExistingDatabase ? 'yes' : 'no'}`)
 console.log(`[roleplay-safe-qa] Verifying UI at ${SAFE_QA_LIBRARY_URL}`)
 console.log(`[roleplay-safe-qa] Using isolated Next dist dir ${SAFE_QA_NEXT_DIST_DIR}`)
 

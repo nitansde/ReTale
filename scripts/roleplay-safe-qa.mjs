@@ -54,9 +54,19 @@ export function createRoleplaySafeDatabasePath() {
   return dbPath
 }
 
-export function prepareRoleplaySafeDatabaseFile(dbPath) {
+export function shouldPreserveExistingDatabaseFile(dbPath) {
+  assertDoesNotTargetUnsafePort(dbPath, 'database path')
+  const resolvedDbPath = path.resolve(dbPath)
+  const resolvedSafeQaDbDir = path.resolve(SAFE_QA_DB_DIR)
+  return !resolvedDbPath.startsWith(`${resolvedSafeQaDbDir}${path.sep}`)
+}
+
+export function prepareRoleplaySafeDatabaseFile(dbPath, options = {}) {
   assertDoesNotTargetUnsafePort(dbPath, 'database path')
   fs.mkdirSync(path.dirname(dbPath), { recursive: true })
+  if (options.preserveExisting && fs.existsSync(dbPath)) {
+    return
+  }
   fs.rmSync(dbPath, { force: true })
 }
 

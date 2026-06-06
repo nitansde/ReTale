@@ -9,6 +9,7 @@ const evidenceDir = path.join(rootDir, '.sisyphus/evidence/task-1-test-harness/u
 export default defineConfig({
   testDir: './tests/ui',
   fullyParallel: false,
+  workers: process.env.PLAYWRIGHT_TEST_DB_PATH ? 1 : undefined,
   timeout: 90_000,
   expect: {
     timeout: 15_000,
