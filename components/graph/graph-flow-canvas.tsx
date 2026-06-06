@@ -13,6 +13,7 @@ import {
   useEdgesState,
   useNodesState,
 } from '@xyflow/react'
+import { useI18n } from '@/lib/i18n/provider'
 import { cn } from '@/lib/utils'
 import type { GraphEdge, GraphNode } from '@/lib/server/graph-types'
 import type { GraphReviewControls } from '@/components/graph/types'
@@ -159,6 +160,7 @@ function GraphFlowInner(props: {
   onChangeControls: (controls: GraphReviewControls) => void
   onRefresh: () => void
 }) {
+  const { t } = useI18n()
   const seedIds = useMemo(() => new Set(props.seedNodeIds), [props.seedNodeIds])
   const visibleEdges = useMemo(() => {
     return props.edges.filter((edge) => {
@@ -261,7 +263,7 @@ function GraphFlowInner(props: {
               props.controls.hideLowConfidence ? 'border-sky-300/30 bg-sky-500/14 text-sky-100' : 'border-white/10 bg-black/40 text-zinc-400'
             )}
           >
-            隐藏低置信度
+            {t('graph.controls.hideLowConfidence')}
           </button>
           <button
             type="button"
@@ -271,7 +273,7 @@ function GraphFlowInner(props: {
               props.controls.confirmedOnly ? 'border-emerald-300/30 bg-emerald-500/14 text-emerald-100' : 'border-white/10 bg-black/40 text-zinc-400'
             )}
           >
-            仅看已确认
+            {t('graph.controls.confirmedOnly')}
           </button>
           <button
             type="button"
@@ -281,18 +283,18 @@ function GraphFlowInner(props: {
               props.controls.showPotentiallyStale ? 'border-orange-300/30 bg-orange-500/14 text-orange-100' : 'border-white/10 bg-black/40 text-zinc-400'
             )}
           >
-            显示可能过时
+            {t('graph.controls.showPotentiallyStale')}
           </button>
           <button
             type="button"
             onClick={props.onRefresh}
             className="rounded-full border border-white/10 bg-black/40 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-white/[0.06]"
           >
-            刷新
+            {t('graph.controls.refresh')}
           </button>
         </Panel>
         <Panel position="bottom-left" className="m-3 rounded-full border border-white/10 bg-black/55 px-3 py-1.5 text-[11px] text-zinc-400">
-          {props.loading ? '正在刷新图谱…' : `${visibleNodes.length} nodes · ${visibleEdges.length} edges`}
+          {props.loading ? t('graph.refreshing') : t('graph.statusCounts', { nodes: visibleNodes.length, edges: visibleEdges.length })}
         </Panel>
       </ReactFlow>
     </div>
