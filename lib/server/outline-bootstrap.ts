@@ -4,7 +4,7 @@ import { normalizeWorkspaceState } from '@/lib/workspace-state'
 import { createOutlineNode, createOutlineNodeChapter, listOutlineNodeChapters, listOutlineNodes } from '@/lib/server/outline-node-store'
 import { getMainBranchId } from '@/lib/server/knowledge-store'
 import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
-import { loadWorkspacePayloadWithRecovery } from '@/lib/server/workspace-resilience'
+import { loadWorkspacePayloadFromRuntimeOrRecovery } from '@/lib/server/workspace-resilience'
 
 type Db = {
   execute: typeof execute
@@ -285,7 +285,7 @@ function loadWorkspaceStatePayload(workspaceState: Partial<PersistedNovelState> 
     return normalizeWorkspaceState(workspaceState)
   }
 
-  return loadWorkspacePayloadWithRecovery('singleton', db)
+  return loadWorkspacePayloadFromRuntimeOrRecovery('singleton', db)
 }
 
 function loadKnowledgeChapters(novelId: string, branchId: string, db: Db) {

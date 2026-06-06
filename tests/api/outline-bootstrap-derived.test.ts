@@ -201,17 +201,25 @@ describe('outline bootstrap derived fallback', () => {
       db: database.db,
     })
 
-    const saved = database.db.queryOne<{ payload: string }>('SELECT payload FROM WorkspaceState WHERE id = ?', 'singleton')
-    const recovered = JSON.parse(saved?.payload ?? '{}') as PersistedNovelState
-    const backup = database.db.queryOne<{ payload: string; reason: string }>(
+    const saved = database.db.queryOne<{ payload: string | null }>('SELECT payload FROM WorkspaceState WHERE id = ?', 'singleton')
+    const runtimeMeta = database.db.queryOne<{ currentNovelId: string; currentChapterId: string }>(
+      'SELECT currentNovelId, currentChapterId FROM WorkspaceRuntimeState WHERE id = ?',
+      'singleton'
+    )
+    const runtimeChapters = database.db.queryAll<{ id: string }>(
+      'SELECT id FROM WorkspaceRuntimeChapter WHERE workspaceStateId = ? ORDER BY id ASC',
+      'singleton'
+    )
+    const backup = database.db.queryOne<{ payload: string | null; reason: string }>(
       'SELECT payload, reason FROM WorkspaceStateBackup WHERE workspaceStateId = ? ORDER BY createdAt DESC, rowid DESC LIMIT 1',
       'singleton'
     )
 
     expect(futureMap.events.length).toBeGreaterThan(0)
-    expect(recovered.localNovels.some((novel) => novel.id === 'novel-002')).toBe(true)
-    expect(recovered.localChapters.some((chapter) => chapter.id === 'chapter-20')).toBe(true)
-    expect(backup).toEqual({ payload: '{not-json', reason: 'recover-corrupt' })
+    expect(runtimeMeta).toMatchObject({ currentNovelId: 'novel-002', currentChapterId: 'chapter-20' })
+    expect(runtimeChapters.map((chapter) => chapter.id)).toEqual(expect.arrayContaining(['chapter-20', 'chapter-35', 'chapter-120']))
+    expect(saved?.payload).toBe('{not-json')
+    expect(backup).toBeNull()
   })
 
   it('additively backfills later candidates when partial outline rows already exist', async () => {
