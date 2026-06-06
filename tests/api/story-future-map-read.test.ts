@@ -2,6 +2,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FUTURE_MAP_MISSING_SUMMARY_FALLBACK } from '@/lib/story-branch-types'
 import { initializeDatabase } from '@/lib/server/sqlite'
+import { persistWorkspaceRuntimeState } from '@/lib/server/workspace-resilience'
+import { normalizeWorkspaceState } from '@/lib/workspace-state'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
@@ -158,11 +160,7 @@ function seedWorkspaceDirectChapterFallbackFixture(database: DatabaseSync) {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run('workspace-outline-80', 'novel-002', 'novel-002:main', 80, '第80章 失控分岔', '', null, 'workspace-phase', '工作区阶段', 'authored', 1, '[]', '["失控分岔"]', 80)
 
-  database.prepare(
-    `INSERT INTO WorkspaceState (id, payload)
-     VALUES (?, ?)
-     ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updatedAt = CURRENT_TIMESTAMP`
-  ).run('singleton', JSON.stringify({
+  const workspaceState = {
     currentNovelId: 'novel-002',
     currentChapterId: 'chapter-25',
     localNovels: [{ id: 'novel-002', title: 'Workspace Future Map Novel', summary: '', tags: [] }],
@@ -206,7 +204,19 @@ function seedWorkspaceDirectChapterFallbackFixture(database: DatabaseSync) {
     rewriteCandidates: [],
     rewriteHistory: [],
     trajectories: [],
-  }))
+  }
+
+  persistWorkspaceRuntimeState(normalizeWorkspaceState(workspaceState), 'singleton', {
+    execute: (sql, ...params) => database.prepare(sql).run(...params),
+    queryAll: <T>(sql: string, ...params: Array<string | number | bigint | Uint8Array | null>) => database.prepare(sql).all(...params) as T[],
+    queryOne: <T>(sql: string, ...params: Array<string | number | bigint | Uint8Array | null>) => (database.prepare(sql).get(...params) ?? null) as T | null,
+  })
+
+  database.prepare(
+    `INSERT INTO WorkspaceState (id, payload)
+     VALUES (?, ?)
+     ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updatedAt = CURRENT_TIMESTAMP`
+  ).run('singleton', JSON.stringify(workspaceState))
 }
 
 afterEach(() => {
