@@ -25,7 +25,7 @@ This app now behaves like a local-first rewrite product with a real backend laye
 - JSON export / import for workspace state
 - In-app OpenAI-compatible API settings modal
 - Real rewrite requests through `/api/rewrite` when configured
-- Safe local fallback rewrite generation when AI config is missing or fails
+- Structured rewrite provider errors with in-app setup guidance when AI config is missing or the provider request fails
 
 ## Environment
 
@@ -108,7 +108,7 @@ npm run start
 - No auth, collaboration, or cloud sync: intentionally single-user.
 - The current persistence layer stores the full workspace state JSON in SQLite for simplicity.
 - OpenAI-compatible rewrite calls expect a server implementing `POST /chat/completions`.
-- If AI config is missing or the upstream request fails, rewrite generation falls back to a local simulated result.
+- If AI config is missing or the upstream request fails, `/api/rewrite` returns a structured provider error so you can configure or fix the selected OpenAI-compatible or Ollama settings.
 - Import currently assumes valid exported JSON.
 - Preset compatibility scope, provider mappings, preserved-only behavior, provenance notes, and MVP limitations live in `docs/preset-compatibility.md`.
 - Knowledge graph design, rebuild ordering, and runtime technology notes live in `docs/knowledge-graph-design.md`.
