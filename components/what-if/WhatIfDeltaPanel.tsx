@@ -1,10 +1,11 @@
 "use client"
 
+import { useI18n } from '@/lib/i18n/provider'
 import type { WhatIfDeltaRecord } from '@/lib/story-branch-types'
 import { cn } from '@/lib/utils'
 
-function formatConfidence(confidence: number | null) {
-  if (confidence === null || Number.isNaN(confidence)) return '未标注'
+function formatConfidence(confidence: number | null, unlabeled: string) {
+  if (confidence === null || Number.isNaN(confidence)) return unlabeled
   return `${Math.round(confidence * 100)}%`
 }
 
@@ -17,16 +18,17 @@ function buildDeltaTitle(delta: WhatIfDeltaRecord) {
 export function WhatIfDeltaPanel(props: {
   deltas: WhatIfDeltaRecord[]
 }) {
+  const { t } = useI18n()
   return (
     <section className="rounded-[24px] border border-fuchsia-400/20 bg-fuchsia-500/10 p-4 sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.18em] text-fuchsia-200/70">Speculative deltas</p>
-          <h3 className="mt-2 text-lg font-semibold text-zinc-100">这条 IF 会话改写了什么</h3>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">这些变化直接来自已持久化的 What-if 会话结果；Task 13 只负责读取和呈现，不在客户端重新推导。</p>
+          <h3 className="mt-2 text-lg font-semibold text-zinc-100">{t('whatIf.deltaTitle')}</h3>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">{t('whatIf.deltaDescription')}</p>
         </div>
         <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">
-          {props.deltas.length} 项变化
+          {t('whatIf.deltaCount', { count: props.deltas.length })}
         </span>
       </div>
 
@@ -40,9 +42,9 @@ export function WhatIfDeltaPanel(props: {
               </div>
               <div className="flex flex-wrap gap-2 text-[11px]">
                 {delta.validFromChapter !== null ? (
-                  <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-zinc-300">第 {delta.validFromChapter} 章起生效</span>
+                  <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-zinc-300">{t('whatIf.deltaValidFromChapter', { chapterNo: delta.validFromChapter })}</span>
                 ) : null}
-                <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-zinc-300">置信度 {formatConfidence(delta.confidence)}</span>
+                <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-zinc-300">{t('whatIf.deltaConfidence', { value: formatConfidence(delta.confidence, t('whatIf.unlabeled')) })}</span>
               </div>
             </div>
 

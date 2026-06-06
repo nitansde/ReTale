@@ -129,6 +129,7 @@ describe('FutureMapOverlay', () => {
     fireEvent.click(screen.getByTestId('future-map-event-outline_event_100'))
     expect(confirmButton).not.toBeDisabled()
     expect(screen.getByTestId('future-map-resolved-chapter')).toHaveTextContent('第 100 章')
+    expect(screen.getByTestId('future-map-resolved-chapter')).toHaveTextContent('第100章 被绑走')
 
     fireEvent.change(screen.getByPlaceholderText(/可选：给这次 Future Jump 一句额外方向/), {
       target: { value: '让救援更晚到来' },
@@ -210,6 +211,7 @@ describe('FutureMapOverlay', () => {
     fireEvent.click(screen.getByTestId('future-map-direct-chapter-100'))
     expect(confirmButton).not.toBeDisabled()
     expect(screen.getByTestId('future-map-resolved-chapter')).toHaveTextContent('第 100 章')
+    expect(screen.getByTestId('future-map-resolved-chapter')).toHaveTextContent('第100章 被绑走')
 
     fireEvent.click(confirmButton)
 
@@ -275,6 +277,7 @@ describe('FutureMapOverlay', () => {
     fireEvent.click(screen.getByTestId('future-map-direct-chapter-100'))
     expect(confirmButton).not.toBeDisabled()
     expect(screen.getByTestId('future-map-resolved-chapter')).toHaveTextContent('第 100 章')
+    expect(screen.getByTestId('future-map-resolved-chapter')).toHaveTextContent('第100章 被绑走')
   })
 
   it('shows an explicit create error when future jump generation fails', async () => {

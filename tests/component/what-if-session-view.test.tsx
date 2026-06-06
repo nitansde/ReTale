@@ -131,8 +131,8 @@ describe('WhatIfSessionView', () => {
     expect(screen.queryByText('当前版本')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('what-if-jump-button'))
-    fireEvent.click(screen.getByRole('button', { name: 'Regenerate What-if' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Continue in Branch' }))
+    fireEvent.click(screen.getByRole('button', { name: '重新生成 What-if' }))
+    fireEvent.click(screen.getByRole('button', { name: '在分支中继续' }))
 
     expect(onJumpToFuture).toHaveBeenCalledWith(sessionDetail)
     expect(onRegenerateWhatIf).toHaveBeenCalledWith(sessionDetail)

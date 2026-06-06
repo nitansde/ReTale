@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, GitBranch, LoaderCircle, RefreshCcw, Sparkles } from 'lucide-react'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import { WhatIfDeltaPanel } from '@/components/what-if/WhatIfDeltaPanel'
+import { useI18n } from '@/lib/i18n/provider'
+import { toUserFacingWorkspaceError } from '@/lib/workspace-user-facing-errors'
 import { cn, splitPlainTextParagraphs } from '@/lib/utils'
 import type { WhatIfSessionDetail } from '@/lib/story-branch-types'
 
@@ -27,7 +29,7 @@ async function loadWhatIfSessionDetail(input: {
 }
 
 function excerptText(detail: WhatIfSessionDetail) {
-  return detail.selectedText.trim() || detail.originalText.trim() || '当前会话没有保存可展示的原始片段。'
+  return detail.selectedText.trim() || detail.originalText.trim() || ''
 }
 
 function formatCreatedAt(value: string) {
@@ -68,6 +70,7 @@ export function WhatIfSessionView(props: {
   onRegenerateWhatIf: (detail: WhatIfSessionDetail) => void
   onContinueInBranch: (detail: WhatIfSessionDetail) => void
 }) {
+  const { locale, t } = useI18n()
   const { onMetricsChange } = props
   const [detail, setDetail] = useState<WhatIfSessionDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -92,7 +95,7 @@ export function WhatIfSessionView(props: {
       } catch (loadError) {
         if (cancelled) return
         setDetail(null)
-        setError(loadError instanceof Error ? loadError.message : 'What-if session load failed')
+        setError(toUserFacingWorkspaceError(loadError instanceof Error ? loadError.message : 'What-if session load failed', locale))
       } finally {
         if (!cancelled) {
           setLoading(false)
@@ -115,16 +118,16 @@ export function WhatIfSessionView(props: {
     })
   }, [detail, onMetricsChange])
 
-  const resolvedTitle = readableLabel || detail?.title || props.nodeTitle || `IF · 第 ${props.anchorChapterNo} 章分支推演`
+  const resolvedTitle = readableLabel || detail?.title || props.nodeTitle || t('whatIf.defaultTitle', { count: props.anchorChapterNo })
   const resolvedSubtitle = props.nodeSubtitle?.trim() || detail?.premise?.trim() || ''
   const instructionPreview = formatStoryBranchInstructionPreview(detail?.premise ?? props.nodeSubtitle)
   const canRunActions = Boolean(detail) && !loading
   const metaPills = useMemo(
     () => [
       readableLabel || null,
-      instructionPreview ? `指令预览 ${instructionPreview}` : null,
-      `source 第 ${detail?.sourceChapterNo ?? props.anchorChapterNo} 章`,
-      detail ? `创建于 ${formatCreatedAt(detail.createdAt)}` : null,
+        instructionPreview ? `${t('continue.instructionPreview')} ${instructionPreview}` : null,
+        t('futureJump.sourceChapter', { count: detail?.sourceChapterNo ?? props.anchorChapterNo }),
+        detail ? t('roleplay.createdAt', { value: formatCreatedAt(detail.createdAt) }) : null,
     ].filter(Boolean) as string[],
     [detail, instructionPreview, props.anchorChapterNo, readableLabel]
   )
@@ -142,10 +145,10 @@ export function WhatIfSessionView(props: {
       >
         <div className="flex flex-col gap-5 px-5 py-5 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-3xl">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">Persisted What-if session</p>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">{t('whatIf.eyebrow')}</p>
             <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{resolvedTitle}</h3>
             <p className="mt-3 text-sm leading-7 text-zinc-300">
-              {resolvedSubtitle || '当前视图直接读取已持久化的 What-if 会话详情，并把原文、推演结果与提炼出的差异放在同一个工作台里。'}
+              {resolvedSubtitle || t('whatIf.defaultSubtitle')}
             </p>
             <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-zinc-300">
               {metaPills.map((pill) => (
@@ -163,7 +166,7 @@ export function WhatIfSessionView(props: {
               className="inline-flex items-center justify-center gap-2 rounded-2xl bg-fuchsia-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <ArrowRight className="h-4 w-4" />
-              Jump to Future
+              {t('whatIf.jumpToFuture')}
             </button>
             <button
               type="button"
@@ -172,7 +175,7 @@ export function WhatIfSessionView(props: {
               className="inline-flex items-center justify-center gap-2 rounded-2xl border border-fuchsia-300/25 bg-black/20 px-4 py-3 text-sm text-fuchsia-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <RefreshCcw className="h-4 w-4" />
-              Regenerate What-if
+              {t('whatIf.regenerate')}
             </button>
             <button
               type="button"
@@ -181,7 +184,7 @@ export function WhatIfSessionView(props: {
               className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <GitBranch className="h-4 w-4" />
-              Continue in Branch
+              {t('whatIf.continueInBranch')}
             </button>
           </div>
         </div>
@@ -191,7 +194,7 @@ export function WhatIfSessionView(props: {
         <section className="rounded-[24px] border border-white/8 bg-black/20 p-5 text-sm text-zinc-300">
           <div className="flex items-center gap-2 text-zinc-100">
             <LoaderCircle className="h-4 w-4 animate-spin text-fuchsia-300" />
-            正在读取 What-if 会话详情…
+            {t('whatIf.loading')}
           </div>
         </section>
       ) : null}
@@ -211,14 +214,14 @@ export function WhatIfSessionView(props: {
                   <Sparkles className="h-4 w-4" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Original excerpt</p>
-                  {renderReaderBodyParagraphs(excerptText(detail), 'text-zinc-200')}
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('whatIf.originalExcerpt')}</p>
+                  {renderReaderBodyParagraphs(excerptText(detail) || t('whatIf.originalExcerptEmpty'), 'text-zinc-200')}
                 </div>
               </div>
             </section>
 
             <section className="rounded-[24px] border border-sky-300/18 bg-sky-500/10 p-5">
-              <p className="text-[11px] uppercase tracking-[0.18em] text-sky-100/70">Generated what-if</p>
+              <p className="text-[11px] uppercase tracking-[0.18em] text-sky-100/70">{t('whatIf.generated')}</p>
               {renderReaderBodyParagraphs(detail.generatedText, 'text-sky-50')}
             </section>
           </div>
@@ -229,10 +232,10 @@ export function WhatIfSessionView(props: {
             <section className="rounded-[24px] border border-white/8 bg-black/20 p-5" data-testid="what-if-revision-history">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Revision history</p>
-                  <p className="mt-1 text-sm text-zinc-300">最新 What-if 正文保持在主阅读区，下方保留更早版本供回看。</p>
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('whatIf.history')}</p>
+                  <p className="mt-1 text-sm text-zinc-300">{t('whatIf.historyDescription')}</p>
                 </div>
-                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{historyEntries.length} 条历史</span>
+                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{t('whatIf.historyCount', { count: historyEntries.length })}</span>
               </div>
 
               <div className="mt-4 space-y-4">
@@ -242,8 +245,8 @@ export function WhatIfSessionView(props: {
                     <article key={`${revision.revisionNo}-${revision.createdAt}`} className="rounded-[20px] border border-white/8 bg-white/[0.03] p-4" data-testid={`what-if-history-item-${revision.revisionNo}`}>
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
-                          <p className="text-sm font-medium text-zinc-100">第 {revision.revisionNo} 版 · {revision.revisionKind}</p>
-                          {revisionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">指令预览 · {revisionPreview}</p> : null}
+                          <p className="text-sm font-medium text-zinc-100">{t('whatIf.historyRevision', { count: revision.revisionNo, kind: revision.revisionKind })}</p>
+                          {revisionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">{t('continue.instructionPreview')} · {revisionPreview}</p> : null}
                         </div>
                         <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-400">{formatCreatedAt(revision.createdAt)}</span>
                       </div>
