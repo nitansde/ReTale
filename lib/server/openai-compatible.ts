@@ -1,7 +1,9 @@
 import type { AIScenarioKey, OpenAICompatibleProviderSettings } from '@/lib/types'
 import type { ChapterKnowledgeExtraction } from '@/lib/story-knowledge'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
+import { safeParseJson } from '@/lib/server/json-parse'
 import { writeLlmDebugLog, type LlmDebugLogParams } from '@/lib/server/llm-debug-log'
+import { parseProviderJsonResponse, requestProviderEndpoint } from '@/lib/server/provider-request'
 import {
   buildKnowledgeExtractionPrompt,
   hasUsableKnowledgeExtraction,
@@ -247,19 +249,6 @@ export async function listAvailableOpenAICompatibleModels(
   return { baseUrl, models }
 }
 
-function chunkTextStream(text: string) {
-  const encoder = new TextEncoder()
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      const chunks = text.split(/(。|！|？|\n)/).filter(Boolean)
-      for (const chunk of chunks) {
-        controller.enqueue(encoder.encode(chunk))
-      }
-      controller.close()
-    },
-  })
-}
-
 function collectChatCompletionText(content: unknown): string {
   if (typeof content === 'string') {
     return content
@@ -333,18 +322,19 @@ function extractStreamPayloadText(payload: string) {
   const trimmed = payload.trim()
   if (!trimmed || trimmed === '[DONE]') return ''
 
-  try {
-    return extractChatCompletionResponseText(JSON.parse(trimmed))
-  } catch {
-    return trimmed.startsWith('{')
-      || trimmed.startsWith('[')
-      || trimmed.startsWith('}')
-      || trimmed.startsWith(']')
-      || trimmed.startsWith('"')
-      || trimmed.startsWith(',')
-      ? ''
-      : trimmed
+  const parsed = safeParseJson(trimmed)
+  if (parsed !== null) {
+    return extractChatCompletionResponseText(parsed)
   }
+
+  return trimmed.startsWith('{')
+    || trimmed.startsWith('[')
+    || trimmed.startsWith('}')
+    || trimmed.startsWith(']')
+    || trimmed.startsWith('"')
+    || trimmed.startsWith(',')
+    ? ''
+    : trimmed
 }
 
 async function requestOpenAICompatibleChat(params: {
@@ -357,8 +347,6 @@ async function requestOpenAICompatibleChat(params: {
   responseFormat?: Record<string, unknown>
   debug?: Pick<LlmDebugLogParams, 'folder' | 'stage' | 'attempt'>
 }) {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), params.timeoutMs)
   const url = `${params.baseUrl.replace(/\/$/, '')}/chat/completions`
   const requestBody = {
     model: params.model,
@@ -366,33 +354,39 @@ async function requestOpenAICompatibleChat(params: {
     response_format: params.responseFormat,
     messages: params.messages,
   }
+  const request = { url, body: requestBody, messages: params.messages }
 
-  try {
-    const response = await fetch(url, {
+  const { response, cleanup } = await requestProviderEndpoint({
+    provider: 'openai-compatible',
+    action: 'OpenAI-compatible request',
+    url,
+    model: params.model,
+    requestBody,
+    requestInit: {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${params.apiKey}`,
       },
       body: JSON.stringify(requestBody),
-      signal: controller.signal,
+    },
+    timeoutMs: params.timeoutMs,
+    streamed: false,
+    debug: params.debug,
+    requestMessages: params.messages,
+  })
+
+  try {
+    const { data } = await parseProviderJsonResponse<OpenAICompatibleChatCompletionResponse>({
+      provider: 'openai-compatible',
+      model: params.model,
+      response,
+      streamed: false,
+      request,
+      debug: params.debug,
+      invalidJsonMessage: 'OpenAI-compatible provider returned malformed JSON.',
+      emptyBodyMessage: 'OpenAI-compatible provider returned an empty response body.',
     })
-
-    if (!response.ok) {
-      await writeLlmDebugLog({
-        folder: params.debug?.folder ?? 'openai-compatible',
-        provider: 'openai-compatible',
-        model: params.model,
-        streamed: false,
-        stage: params.debug?.stage,
-        attempt: params.debug?.attempt,
-        request: { url, body: requestBody, messages: params.messages },
-        response: { status: response.status, error: `HTTP ${response.status}` },
-      })
-      throw new Error(`HTTP ${response.status}`)
-    }
-
-    const data = await response.json() as OpenAICompatibleChatCompletionResponse
     await writeLlmDebugLog({
       folder: params.debug?.folder ?? 'openai-compatible',
       provider: 'openai-compatible',
@@ -408,23 +402,8 @@ async function requestOpenAICompatibleChat(params: {
       },
     })
     return data
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('HTTP ')) {
-      throw error
-    }
-    await writeLlmDebugLog({
-      folder: params.debug?.folder ?? 'openai-compatible',
-      provider: 'openai-compatible',
-      model: params.model,
-      streamed: false,
-      stage: params.debug?.stage,
-      attempt: params.debug?.attempt,
-      request: { url, body: requestBody, messages: params.messages },
-      response: { error: error instanceof Error ? error.message : 'OpenAI-compatible request failed' },
-    })
-    throw error
   } finally {
-    clearTimeout(timeout)
+    cleanup()
   }
 }
 
@@ -554,16 +533,7 @@ export async function generateRewriteWithOpenAICompatible(
     },
   }
 
-  const controller = new AbortController()
   const timeoutMs = 20000
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
-  const abortFromInputSignal = () => controller.abort()
-  const cleanupInputSignal = () => input.signal?.removeEventListener('abort', abortFromInputSignal)
-  if (input.signal?.aborted) {
-    controller.abort()
-  } else {
-    input.signal?.addEventListener('abort', abortFromInputSignal, { once: true })
-  }
   const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`
   const messages: OpenAICompatibleChatMessage[] = [
     {
@@ -587,79 +557,96 @@ export async function generateRewriteWithOpenAICompatible(
     response_format: { type: 'json_object' },
     messages,
   }
+  const request = { url, body: requestBody, messages }
 
-  let response: Response
   try {
-    response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.apiKey}`,
+    const { response, cleanup } = await requestProviderEndpoint({
+      provider: 'openai-compatible',
+      action: 'Provider request',
+      url,
+      model: config.model,
+      requestBody,
+      timeoutMs,
+      streamed: false,
+      debug: { folder: 'rewrite', stage: 'rewrite', presetCompat: input.presetCompat },
+      inputSignal: input.signal,
+      requestMessages: messages,
+      requestInit: {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
       },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
     })
-  } catch (error) {
-    await writeLlmDebugLog({
-      folder: 'rewrite',
-      provider: 'openai-compatible',
-      model: config.model,
-      streamed: false,
-      stage: 'rewrite',
-      presetCompat: input.presetCompat,
-      request: { url, body: requestBody, messages },
-      response: { error: error instanceof Error ? error.message : 'Model request failed' },
-    })
-    if (error instanceof Error && error.name === 'AbortError') {
-      cleanupInputSignal()
-      return { enabled: true, error: input.signal?.aborted ? 'Model request aborted' : `Model request timed out after ${timeoutMs}ms` }
-    }
-    cleanupInputSignal()
-    return { enabled: true, error: error instanceof Error ? error.message : 'Model request failed' }
-  } finally {
-    clearTimeout(timeout)
-    cleanupInputSignal()
-  }
+    try {
+      const { data } = await parseProviderJsonResponse<OpenAICompatibleChatCompletionResponse>({
+        provider: 'openai-compatible',
+        model: config.model,
+        response,
+        streamed: false,
+        request,
+        debug: { folder: 'rewrite', stage: 'rewrite', presetCompat: input.presetCompat },
+        invalidJsonMessage: 'Provider returned malformed JSON.',
+        emptyBodyMessage: 'Provider returned an empty response body.',
+      })
+      const raw = extractChatCompletionResponseText(data)
+      const usage = extractUsage(data.usage)
+      if (!raw) {
+        await writeLlmDebugLog({
+          folder: 'rewrite',
+          provider: 'openai-compatible',
+          model: config.model,
+          streamed: false,
+          stage: 'rewrite',
+          presetCompat: input.presetCompat,
+          request,
+          response: { status: response.status, parsed: data, error: 'Provider returned empty content.' },
+        })
+        return { enabled: true, error: 'Provider returned empty content.' }
+      }
 
-  if (!response.ok) {
-    await writeLlmDebugLog({
-      folder: 'rewrite',
-      provider: 'openai-compatible',
-      model: config.model,
-      streamed: false,
-      stage: 'rewrite',
-      presetCompat: input.presetCompat,
-      request: { url, body: requestBody, messages },
-      response: { status: response.status, error: `HTTP ${response.status}` },
-    })
-    return { enabled: true, error: `HTTP ${response.status}` }
-  }
+      const parsed = safeParseJson(raw)
+      if (!parsed || typeof parsed !== 'object') {
+        await writeLlmDebugLog({
+          folder: 'rewrite',
+          provider: 'openai-compatible',
+          model: config.model,
+          streamed: false,
+          stage: 'rewrite',
+          presetCompat: input.presetCompat,
+          request,
+          response: {
+            status: response.status,
+            rawText: extractChatCompletionText(raw),
+            parsed: data,
+            error: 'Provider returned malformed JSON.',
+          },
+        })
+        return { enabled: true, error: 'Provider returned malformed JSON.' }
+      }
 
-  const data = await response.json()
-  const raw = extractChatCompletionResponseText(data)
-  const usage = extractUsage((data as OpenAICompatibleChatCompletionResponse).usage)
-  if (!raw) {
-    await writeLlmDebugLog({
-      folder: 'rewrite',
-      provider: 'openai-compatible',
-      model: config.model,
-      streamed: false,
-      stage: 'rewrite',
-      presetCompat: input.presetCompat,
-      request: { url, body: requestBody, messages },
-      response: { status: response.status, parsed: data, error: 'No content returned from model' },
-    })
-    return { enabled: true, error: 'No content returned from model' }
-  }
+      const candidateRecord = parsed as { result?: unknown; candidates?: unknown[] }
+      const candidates = typeof candidateRecord.result === 'string'
+        ? [candidateRecord.result].filter(Boolean)
+        : Array.isArray(candidateRecord.candidates)
+          ? candidateRecord.candidates.map((item: unknown) => String(item)).filter(Boolean).slice(0, 1)
+          : []
+      if (!candidates.length) {
+        await writeLlmDebugLog({
+          folder: 'rewrite',
+          provider: 'openai-compatible',
+          model: config.model,
+          streamed: false,
+          stage: 'rewrite',
+          presetCompat: input.presetCompat,
+          request,
+          response: { status: response.status, rawText: extractChatCompletionText(raw), parsed, error: 'Provider returned empty content.' },
+        })
+        return { enabled: true, error: 'Provider returned empty content.' }
+      }
 
-  try {
-    const parsed = JSON.parse(raw)
-    const candidates = typeof parsed?.result === 'string'
-      ? [parsed.result].filter(Boolean)
-      : Array.isArray(parsed?.candidates)
-        ? parsed.candidates.map((item: unknown) => String(item)).filter(Boolean).slice(0, 1)
-        : []
-    if (!candidates.length) {
       await writeLlmDebugLog({
         folder: 'rewrite',
         provider: 'openai-compatible',
@@ -667,41 +654,17 @@ export async function generateRewriteWithOpenAICompatible(
         streamed: false,
         stage: 'rewrite',
         presetCompat: input.presetCompat,
-        request: { url, body: requestBody, messages },
-        response: { status: response.status, rawText: extractChatCompletionText(raw), parsed, error: 'Model returned empty candidates' },
+        request,
+        response: { status: response.status, rawText: extractChatCompletionText(raw), parsed },
       })
-      return { enabled: true, error: 'Model returned empty candidates' }
+      return { enabled: true, content: candidates, usage }
+    } finally {
+      cleanup()
     }
-    await writeLlmDebugLog({
-      folder: 'rewrite',
-      provider: 'openai-compatible',
-      model: config.model,
-      streamed: false,
-      stage: 'rewrite',
-      presetCompat: input.presetCompat,
-      request: { url, body: requestBody, messages },
-      response: { status: response.status, rawText: extractChatCompletionText(raw), parsed },
-    })
-    return { enabled: true, content: candidates, usage }
   } catch (error) {
-    await writeLlmDebugLog({
-      folder: 'rewrite',
-      provider: 'openai-compatible',
-      model: config.model,
-      streamed: false,
-      stage: 'rewrite',
-      presetCompat: input.presetCompat,
-      request: { url, body: requestBody, messages },
-      response: {
-        status: response.status,
-        rawText: extractChatCompletionText(raw),
-        parsed: data,
-        error: error instanceof Error ? error.message : 'Failed to parse model JSON',
-      },
-    })
     return {
       enabled: true,
-      error: error instanceof Error ? error.message : 'Failed to parse model JSON',
+      error: error instanceof Error ? error.message : 'Provider request failed',
     }
   }
 }
@@ -715,16 +678,7 @@ export async function streamRewriteWithOpenAICompatible(
     return { enabled: false, error: 'OpenAI-compatible config not set' }
   }
 
-  const controller = new AbortController()
   const timeoutMs = 30000
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
-  const abortFromInputSignal = () => controller.abort()
-  const cleanupInputSignal = () => input.signal?.removeEventListener('abort', abortFromInputSignal)
-  if (input.signal?.aborted) {
-    controller.abort()
-  } else {
-    input.signal?.addEventListener('abort', abortFromInputSignal, { once: true })
-  }
   const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`
   const messages: OpenAICompatibleChatMessage[] = [
     { role: 'system', content: input.systemPrompt },
@@ -740,117 +694,114 @@ export async function streamRewriteWithOpenAICompatible(
     stream: true,
     messages,
   }
+  const request = { url, body: requestBody, messages }
 
-  let response: Response
   try {
-    response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.apiKey}`,
+    const { response, cleanup } = await requestProviderEndpoint({
+      provider: 'openai-compatible',
+      action: 'Provider request',
+      url,
+      model: config.model,
+      requestBody,
+      timeoutMs,
+      streamed: true,
+      debug: { folder: 'rewrite', stage: 'rewrite', presetCompat: input.presetCompat },
+      inputSignal: input.signal,
+      requestMessages: messages,
+      noBodyMessage: 'Provider returned no response body.',
+      requestInit: {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
       },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
     })
-  } catch (error) {
-    await writeLlmDebugLog({
-      folder: 'rewrite',
-      provider: 'openai-compatible',
-      model: config.model,
-      streamed: true,
-      stage: 'rewrite',
-      presetCompat: input.presetCompat,
-      request: { url, body: requestBody, messages },
-      response: { error: error instanceof Error ? error.message : 'Model request failed' },
-    })
-    if (error instanceof Error && error.name === 'AbortError') {
-      cleanupInputSignal()
-      return { enabled: true, error: input.signal?.aborted ? 'Model request aborted' : `Model request timed out after ${timeoutMs}ms` }
-    }
-    cleanupInputSignal()
-    return { enabled: true, error: error instanceof Error ? error.message : 'Model request failed' }
-  } finally {
-    clearTimeout(timeout)
-  }
+    const decoder = new TextDecoder()
+    const encoder = new TextEncoder()
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader()
 
-  if (!response.ok) {
-    await writeLlmDebugLog({
-      folder: 'rewrite',
-      provider: 'openai-compatible',
-      model: config.model,
-      streamed: true,
-      stage: 'rewrite',
-      presetCompat: input.presetCompat,
-      request: { url, body: requestBody, messages },
-      response: { status: response.status, error: `HTTP ${response.status}` },
-    })
-    cleanupInputSignal()
-    return { enabled: true, error: `HTTP ${response.status}` }
-  }
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        let buffer = ''
+        let rawText = ''
+        let upstreamText = ''
 
-  if (!response.body) {
-    await writeLlmDebugLog({
-      folder: 'rewrite',
-      provider: 'openai-compatible',
-      model: config.model,
-      streamed: true,
-      stage: 'rewrite',
-      presetCompat: input.presetCompat,
-      request: { url, body: requestBody, messages },
-      response: { status: response.status, error: 'No response body returned from model' },
-    })
-    cleanupInputSignal()
-    return { enabled: true, error: 'No response body returned from model' }
-  }
-
-  const decoder = new TextDecoder()
-  const encoder = new TextEncoder()
-  const reader = response.body.getReader()
-
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      let buffer = ''
-      let rawText = ''
-      let upstreamText = ''
-
-      const enqueueText = (text: string) => {
-        if (!text) return
-        rawText += text
-        controller.enqueue(encoder.encode(text))
-      }
-
-      const consumePayload = (payload: string) => {
-        enqueueText(extractStreamPayloadText(payload))
-      }
-
-      const consumeLine = (rawLine: string) => {
-        const line = rawLine.trim()
-        if (!line) return
-
-        if (line.startsWith('data:')) {
-          consumePayload(line.slice(5).trim())
-          return
+        const enqueueText = (text: string) => {
+          if (!text) return
+          rawText += text
+          controller.enqueue(encoder.encode(text))
         }
 
-        consumePayload(line)
-      }
+        const consumePayload = (payload: string) => {
+          enqueueText(extractStreamPayloadText(payload))
+        }
 
-      try {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
+        const consumeLine = (rawLine: string) => {
+          const line = rawLine.trim()
+          if (!line) return
 
-          const chunk = decoder.decode(value, { stream: true })
-          upstreamText += chunk
-          buffer += chunk
-          const lines = buffer.split('\n')
-          buffer = lines.pop() ?? ''
-
-          for (const rawLine of lines) {
-            consumeLine(rawLine)
+          if (line.startsWith('data:')) {
+            consumePayload(line.slice(5).trim())
+            return
           }
+
+          consumePayload(line)
         }
-      } catch (error) {
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            const chunk = decoder.decode(value, { stream: true })
+            upstreamText += chunk
+            buffer += chunk
+            const lines = buffer.split('\n')
+            buffer = lines.pop() ?? ''
+
+            for (const rawLine of lines) {
+              consumeLine(rawLine)
+            }
+          }
+        } catch (error) {
+          await writeLlmDebugLog({
+            folder: 'rewrite',
+            provider: 'openai-compatible',
+            model: config.model,
+            streamed: true,
+            stage: 'rewrite',
+            presetCompat: input.presetCompat,
+            request,
+            response: {
+              status: response.status,
+              rawText,
+              parsed: { upstreamText },
+              error: error instanceof Error ? error.message : 'OpenAI-compatible stream failed',
+              partial: true,
+            },
+          })
+          controller.error(error)
+          return
+        } finally {
+          cleanup()
+        }
+
+        const finalDecoderChunk = decoder.decode()
+        if (finalDecoderChunk) {
+          upstreamText += finalDecoderChunk
+          buffer += finalDecoderChunk
+        }
+
+        if (buffer.trim()) {
+          consumeLine(buffer)
+        }
+
+        if (!rawText) {
+          consumePayload(upstreamText)
+        }
+
         await writeLlmDebugLog({
           folder: 'rewrite',
           provider: 'openai-compatible',
@@ -858,54 +809,17 @@ export async function streamRewriteWithOpenAICompatible(
           streamed: true,
           stage: 'rewrite',
           presetCompat: input.presetCompat,
-          request: { url, body: requestBody, messages },
-          response: {
-            status: response.status,
-            rawText,
-            parsed: { upstreamText },
-            error: error instanceof Error ? error.message : 'OpenAI-compatible stream failed',
-            partial: true,
-          },
+          request,
+          response: { status: response.status, rawText, parsed: rawText ? undefined : { upstreamText } },
         })
-        controller.error(error)
-        return
-      } finally {
-        cleanupInputSignal()
-      }
+        controller.close()
+      },
+    })
 
-      const finalDecoderChunk = decoder.decode()
-      if (finalDecoderChunk) {
-        upstreamText += finalDecoderChunk
-        buffer += finalDecoderChunk
-      }
-
-      if (buffer.trim()) {
-        consumeLine(buffer)
-      }
-
-      if (!rawText) {
-        consumePayload(upstreamText)
-      }
-
-      await writeLlmDebugLog({
-        folder: 'rewrite',
-        provider: 'openai-compatible',
-        model: config.model,
-        streamed: true,
-        stage: 'rewrite',
-        presetCompat: input.presetCompat,
-        request: { url, body: requestBody, messages },
-        response: { status: response.status, rawText, parsed: rawText ? undefined : { upstreamText } },
-      })
-      controller.close()
-    },
-  })
-
-  return { enabled: true, stream }
-}
-
-export function buildFallbackRewriteStream(text: string) {
-  return chunkTextStream(text)
+    return { enabled: true, stream }
+  } catch (error) {
+    return { enabled: true, error: error instanceof Error ? error.message : 'Provider request failed' }
+  }
 }
 
 export async function embedTextsWithOpenAICompatible(

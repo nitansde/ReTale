@@ -8,8 +8,10 @@ import {
 } from '@/lib/story-knowledge'
 import type { AIScenarioKey, OllamaProviderSettings } from '@/lib/types'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
+import { safeParseJson } from '@/lib/server/json-parse'
 import { writeLlmDebugLog, type LlmDebugLogParams } from '@/lib/server/llm-debug-log'
 import { findAppSettings } from '@/lib/server/persistence'
+import { parseProviderJsonResponse, requestProviderEndpoint } from '@/lib/server/provider-request'
 
 type OllamaTagsResponse = {
   models?: Array<{
@@ -2305,41 +2307,39 @@ async function requestOllamaChat(params: {
   debug?: Pick<LlmDebugLogParams, 'folder' | 'stage' | 'attempt'>
   signal?: AbortSignal
 }) {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), params.timeoutMs)
-  const abortFromInputSignal = () => controller.abort()
-  if (params.signal?.aborted) {
-    controller.abort()
-  } else {
-    params.signal?.addEventListener('abort', abortFromInputSignal, { once: true })
-  }
   const url = `${params.baseUrl.replace(/\/$/, '')}/api/chat`
   const requestBody = buildOllamaChatRequestBody({ ...params, stream: false })
+  const request = { url, body: requestBody, messages: params.messages }
 
-  try {
-    const response = await fetch(url, {
+  const { response, cleanup } = await requestProviderEndpoint({
+    provider: 'ollama',
+    action: 'Provider request',
+    url,
+    model: params.model,
+    requestBody,
+    requestInit: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
-      signal: controller.signal,
+    },
+    timeoutMs: params.timeoutMs,
+    streamed: false,
+    debug: params.debug,
+    inputSignal: params.signal,
+    requestMessages: params.messages,
+  })
+
+  try {
+    const { data } = await parseProviderJsonResponse<OllamaChatResponse>({
+      provider: 'ollama',
+      model: params.model,
+      response,
+      streamed: false,
+      request,
+      debug: params.debug,
+      invalidJsonMessage: 'Ollama provider returned malformed JSON.',
+      emptyBodyMessage: 'Ollama provider returned an empty response body.',
     })
-
-    if (!response.ok) {
-      const text = await response.text()
-      await writeLlmDebugLog({
-        folder: params.debug?.folder ?? 'ollama',
-        provider: 'ollama',
-        model: params.model,
-        streamed: false,
-        stage: params.debug?.stage,
-        attempt: params.debug?.attempt,
-        request: { url, body: requestBody, messages: params.messages },
-        response: { status: response.status, rawText: text, error: `Ollama HTTP ${response.status}` },
-      })
-      throw new Error(`Ollama HTTP ${response.status}: ${text.slice(0, 400)}`)
-    }
-
-    const data = await response.json() as OllamaChatResponse
     await writeLlmDebugLog({
       folder: params.debug?.folder ?? 'ollama',
       provider: 'ollama',
@@ -2351,24 +2351,8 @@ async function requestOllamaChat(params: {
       response: { status: response.status, rawText: data.message?.content?.trim() || '', parsed: data },
     })
     return data
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Ollama HTTP ')) {
-      throw error
-    }
-    await writeLlmDebugLog({
-      folder: params.debug?.folder ?? 'ollama',
-      provider: 'ollama',
-      model: params.model,
-      streamed: false,
-      stage: params.debug?.stage,
-      attempt: params.debug?.attempt,
-      request: { url, body: requestBody, messages: params.messages },
-      response: { error: error instanceof Error ? error.message : 'Ollama request failed' },
-    })
-    throw error
   } finally {
-    clearTimeout(timeout)
-    params.signal?.removeEventListener('abort', abortFromInputSignal)
+    cleanup()
   }
 }
 
@@ -2388,71 +2372,42 @@ async function requestOllamaChatStream(params: {
     seed: number
   }>
   signal?: AbortSignal
-}) {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), params.timeoutMs)
-  const abortFromInputSignal = () => controller.abort()
-  if (params.signal?.aborted) {
-    controller.abort()
-  } else {
-    params.signal?.addEventListener('abort', abortFromInputSignal, { once: true })
+}): Promise<{
+  body: ReadableStream<Uint8Array>
+  url: string
+  requestBody: ReturnType<typeof buildOllamaChatRequestBody>
+  status: number
+  cleanupSignal: () => void
+  request: {
+    url: string
+    body: ReturnType<typeof buildOllamaChatRequestBody>
+    messages: Array<{ role: 'system' | 'user'; content: string }>
   }
+}> {
   const url = `${params.baseUrl.replace(/\/$/, '')}/api/chat`
   const requestBody = buildOllamaChatRequestBody({ ...params, stream: true })
+  const request = { url, body: requestBody, messages: params.messages }
 
-  try {
-    const response = await fetch(url, {
+  const { response, cleanup } = await requestProviderEndpoint({
+    provider: 'ollama',
+    action: 'Provider request',
+    url,
+    model: params.model,
+    requestBody,
+    requestInit: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    })
+    },
+    timeoutMs: params.timeoutMs,
+    streamed: true,
+    debug: { folder: 'rewrite', stage: 'rewrite' },
+    inputSignal: params.signal,
+    requestMessages: params.messages,
+    noBodyMessage: 'Provider returned no response body.',
+  })
 
-    if (!response.ok) {
-      const text = await response.text()
-      await writeLlmDebugLog({
-        folder: 'rewrite',
-        provider: 'ollama',
-        model: params.model,
-        streamed: true,
-        stage: 'rewrite',
-        request: { url, body: requestBody, messages: params.messages },
-        response: { status: response.status, rawText: text, error: `Ollama HTTP ${response.status}` },
-      })
-      throw new Error(`Ollama HTTP ${response.status}: ${text.slice(0, 400)}`)
-    }
-
-    if (!response.body) {
-      await writeLlmDebugLog({
-        folder: 'rewrite',
-        provider: 'ollama',
-        model: params.model,
-        streamed: true,
-        stage: 'rewrite',
-        request: { url, body: requestBody, messages: params.messages },
-        response: { status: response.status, error: 'No response body returned from Ollama' },
-      })
-      throw new Error('No response body returned from Ollama')
-    }
-
-    return { body: response.body, url, requestBody, status: response.status, cleanupSignal: () => params.signal?.removeEventListener('abort', abortFromInputSignal) }
-  } catch (error) {
-    if (error instanceof Error && (error.message.startsWith('Ollama HTTP ') || error.message === 'No response body returned from Ollama')) {
-      throw error
-    }
-    await writeLlmDebugLog({
-      folder: 'rewrite',
-      provider: 'ollama',
-      model: params.model,
-      streamed: true,
-      stage: 'rewrite',
-      request: { url, body: requestBody, messages: params.messages },
-      response: { error: error instanceof Error ? error.message : 'Ollama stream request failed' },
-    })
-    throw error
-  } finally {
-    clearTimeout(timeout)
-  }
+  return { body: response.body as ReadableStream<Uint8Array>, url, requestBody, status: response.status, cleanupSignal: cleanup, request }
 }
 
 export async function generateRewriteWithOllama(
@@ -2511,17 +2466,23 @@ export async function generateRewriteWithOllama(
 
     const raw = response.message?.content?.trim() ?? ''
     if (!raw) {
-      return { enabled: true, error: 'No content returned from model' }
+      return { enabled: true, error: 'Provider returned empty content.' }
     }
 
-    const parsed = parseStructuredContent(raw) as { result?: unknown; candidates?: unknown[] }
+    let parsed: { result?: unknown; candidates?: unknown[] }
+    try {
+      parsed = parseStructuredContent(raw) as { result?: unknown; candidates?: unknown[] }
+    } catch {
+      return { enabled: true, error: 'Provider returned malformed JSON.' }
+    }
+
     const candidates = typeof parsed.result === 'string'
       ? [parsed.result].filter(Boolean)
       : Array.isArray(parsed.candidates)
         ? parsed.candidates.map((item) => String(item)).filter(Boolean).slice(0, 1)
         : []
     if (!candidates.length) {
-      return { enabled: true, error: 'Model returned empty candidates' }
+      return { enabled: true, error: 'Provider returned empty content.' }
     }
 
     return {
@@ -2581,28 +2542,27 @@ export async function streamRewriteWithOllama(
           const trimmed = line.trim()
           if (!trimmed) return
 
-          let parsed: OllamaChatStreamChunk
-          try {
-            parsed = JSON.parse(trimmed) as OllamaChatStreamChunk
-          } catch {
+          const parsed = safeParseJson(trimmed)
+          if (!parsed || typeof parsed !== 'object') {
             return
           }
+          const chunk = parsed as OllamaChatStreamChunk
 
-          if (parsed.error) {
-            streamErrorMessage = parsed.error
-            controller.error(new Error(parsed.error))
+          if (chunk.error) {
+            streamErrorMessage = chunk.error
+            controller.error(new Error(chunk.error))
             finished = true
             return
           }
 
-          const content = parsed.message?.content ?? ''
+          const content = chunk.message?.content ?? ''
           if (content) {
             sawContent = true
             rawText += content
             controller.enqueue(encoder.encode(content))
           }
 
-          if (parsed.done) {
+          if (chunk.done) {
             finished = true
           }
         }
@@ -2676,9 +2636,9 @@ export async function streamRewriteWithOllama(
             streamed: true,
             stage: 'rewrite',
             request: { url: upstream.url, body: upstream.requestBody, messages },
-            response: { status: upstream.status, rawText, error: 'No content returned from model' },
+            response: { status: upstream.status, rawText, error: 'Provider returned empty content.' },
           })
-          controller.error(new Error('No content returned from model'))
+          controller.error(new Error('Provider returned empty content.'))
           return
         }
 
