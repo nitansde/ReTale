@@ -1,9 +1,10 @@
+import { safeParseJson } from '@/lib/server/json-parse'
 import { PROTECTED_RESET_APP_SETTING_KEYS } from '@/lib/server/schema'
 import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
 
 type WorkspaceStateRow = {
   id: string
-  payload: string
+  payload: string | null
   createdAt: string
   updatedAt: string
 }
@@ -11,7 +12,7 @@ type WorkspaceStateRow = {
 type WorkspaceStateBackupRow = {
   id: string
   workspaceStateId: string
-  payload: string
+  payload: string | null
   reason: string
   sourceUpdatedAt: string | null
   createdAt: string
@@ -19,6 +20,24 @@ type WorkspaceStateBackupRow = {
 
 type WorkspaceStateWriteOptions = {
   backupReason?: string
+}
+
+type WorkspaceKnowledgeSyncStateRow = {
+  workspaceStateId: string
+  requestedRevision: number
+  startedRevision: number | null
+  syncedRevision: number
+  requestedSourceUpdatedAt: string | null
+  startedSourceUpdatedAt: string | null
+  startedAt: string | null
+  syncedSourceUpdatedAt: string | null
+  lastError: string | null
+}
+
+export type WorkspaceKnowledgeSyncClaim = {
+  workspaceStateId: string
+  revision: number
+  sourceUpdatedAt: string
 }
 
 type AppSettingRow = {
@@ -35,6 +54,7 @@ type SqliteTableRow = {
 
 const [PRESET_COMPAT_LIBRARY_V1_KEY, AI_SETTINGS_V2_KEY, OLLAMA_TIMEOUT_MS_KEY] = PROTECTED_RESET_APP_SETTING_KEYS
 const WORKSPACE_BACKUP_RETENTION = 20
+const WORKSPACE_KNOWLEDGE_SYNC_STALE_MS = 5 * 60 * 1000
 
 export type ProtectedAppSettingsResetSnapshot = {
   presetCompatLibraryV1: string | null
@@ -130,6 +150,139 @@ export function upsertWorkspaceState(id: string, payload: string, options: Works
   return saved
 }
 
+function findWorkspaceKnowledgeSyncState(id: string) {
+  return queryOne<WorkspaceKnowledgeSyncStateRow>(
+    `SELECT workspaceStateId, requestedRevision, startedRevision, syncedRevision,
+            requestedSourceUpdatedAt, startedSourceUpdatedAt, startedAt, syncedSourceUpdatedAt, lastError
+     FROM WorkspaceKnowledgeSyncState
+     WHERE workspaceStateId = ?`,
+    id
+  )
+}
+
+function parseSqliteTimestamp(value: string | null) {
+  if (!value) return Number.NaN
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T')
+  return Date.parse(/(?:Z|[+-]\d\d:\d\d)$/u.test(normalized) ? normalized : `${normalized}Z`)
+}
+
+function hasFreshWorkspaceKnowledgeSyncStart(startedAt: string | null) {
+  const startedAtMs = parseSqliteTimestamp(startedAt)
+  if (!Number.isFinite(startedAtMs)) return false
+  return Date.now() - startedAtMs < WORKSPACE_KNOWLEDGE_SYNC_STALE_MS
+}
+
+export function markWorkspaceKnowledgeSyncRequested(id: string, sourceUpdatedAt: string) {
+  execute(
+    `INSERT INTO WorkspaceKnowledgeSyncState (
+       workspaceStateId,
+       requestedRevision,
+       requestedSourceUpdatedAt,
+       startedSourceUpdatedAt,
+       startedAt,
+       syncedSourceUpdatedAt,
+       lastError
+     ) VALUES (?, 1, ?, NULL, NULL, NULL, NULL)
+     ON CONFLICT(workspaceStateId) DO UPDATE SET
+       requestedRevision = WorkspaceKnowledgeSyncState.requestedRevision + 1,
+       requestedSourceUpdatedAt = excluded.requestedSourceUpdatedAt,
+       updatedAt = CURRENT_TIMESTAMP`,
+    id,
+    sourceUpdatedAt
+  )
+}
+
+export function claimPendingWorkspaceKnowledgeSync(id = 'singleton'): WorkspaceKnowledgeSyncClaim | null {
+  execute('BEGIN IMMEDIATE')
+  try {
+    const syncState = findWorkspaceKnowledgeSyncState(id)
+    const requestedSourceUpdatedAt = syncState?.requestedSourceUpdatedAt ?? null
+    const requestedRevision = syncState?.requestedRevision ?? 0
+
+    if (!requestedSourceUpdatedAt || requestedRevision <= (syncState?.syncedRevision ?? 0)) {
+      execute('ROLLBACK')
+      return null
+    }
+
+    if (
+      syncState?.startedRevision === requestedRevision
+      && hasFreshWorkspaceKnowledgeSyncStart(syncState.startedAt)
+    ) {
+      execute('ROLLBACK')
+      return null
+    }
+
+    execute(
+      `INSERT INTO WorkspaceKnowledgeSyncState (
+         workspaceStateId,
+         requestedRevision,
+         startedRevision,
+         syncedRevision,
+         requestedSourceUpdatedAt,
+         startedSourceUpdatedAt,
+         startedAt,
+         syncedSourceUpdatedAt,
+         lastError
+       ) VALUES (?, ?, ?, 0, ?, ?, CURRENT_TIMESTAMP, NULL, NULL)
+       ON CONFLICT(workspaceStateId) DO UPDATE SET
+         startedRevision = excluded.startedRevision,
+         startedSourceUpdatedAt = excluded.startedSourceUpdatedAt,
+         startedAt = CURRENT_TIMESTAMP,
+         lastError = NULL,
+         updatedAt = CURRENT_TIMESTAMP`,
+      id,
+      requestedRevision,
+      requestedRevision,
+      requestedSourceUpdatedAt,
+      requestedSourceUpdatedAt
+    )
+
+    execute('COMMIT')
+    return {
+      workspaceStateId: id,
+      revision: requestedRevision,
+      sourceUpdatedAt: requestedSourceUpdatedAt,
+    }
+  } catch (error) {
+    try {
+      execute('ROLLBACK')
+    } catch {
+    }
+    throw error
+  }
+}
+
+export function completeWorkspaceKnowledgeSync(id: string, revision: number, sourceUpdatedAt: string) {
+  execute(
+    `UPDATE WorkspaceKnowledgeSyncState
+     SET syncedRevision = ?,
+         syncedSourceUpdatedAt = ?,
+         startedRevision = NULL,
+         startedSourceUpdatedAt = NULL,
+         startedAt = NULL,
+         lastError = NULL,
+         updatedAt = CURRENT_TIMESTAMP
+     WHERE workspaceStateId = ?`,
+    revision,
+    sourceUpdatedAt,
+    id
+  )
+}
+
+export function failWorkspaceKnowledgeSync(id: string, errorMessage: string) {
+  execute(
+    `UPDATE WorkspaceKnowledgeSyncState
+     SET startedRevision = NULL,
+         startedSourceUpdatedAt = NULL,
+         startedAt = NULL,
+         lastError = ?,
+         updatedAt = CURRENT_TIMESTAMP
+     WHERE workspaceStateId = ?`,
+    errorMessage,
+    id
+  )
+}
+
 export function findAppSettings(keys: readonly string[]) {
   if (!keys.length) return [] as AppSettingRow[]
   const placeholders = keys.map(() => '?').join(', ')
@@ -166,15 +319,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parseJsonBlob(value: string | null) {
-  if (value === null || !value.trim()) {
-    return null
-  }
-
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return null
-  }
+  return safeParseJson(value)
 }
 
 function isPositiveIntegerString(value: string) {

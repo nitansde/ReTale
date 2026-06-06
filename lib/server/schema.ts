@@ -9,7 +9,7 @@ const CHARACTER_IMPORTANCE_TIER_SQL = "'protagonist', 'important', 'arc'"
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS WorkspaceState (
   id TEXT PRIMARY KEY DEFAULT 'singleton',
-  payload TEXT NOT NULL,
+  payload TEXT,
   createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -17,11 +17,107 @@ CREATE TABLE IF NOT EXISTS WorkspaceState (
 CREATE TABLE IF NOT EXISTS WorkspaceStateBackup (
   id TEXT PRIMARY KEY,
   workspaceStateId TEXT NOT NULL,
-  payload TEXT NOT NULL,
+  payload TEXT,
   reason TEXT NOT NULL DEFAULT 'overwrite',
   sourceUpdatedAt TEXT,
   createdAt TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
   FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceState(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS WorkspaceKnowledgeSyncState (
+  workspaceStateId TEXT PRIMARY KEY,
+  requestedRevision INTEGER NOT NULL DEFAULT 0,
+  startedRevision INTEGER,
+  syncedRevision INTEGER NOT NULL DEFAULT 0,
+  requestedSourceUpdatedAt TEXT,
+  startedSourceUpdatedAt TEXT,
+  startedAt TEXT,
+  syncedSourceUpdatedAt TEXT,
+  lastError TEXT,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceState(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS WorkspaceRuntimeState (
+  id TEXT PRIMARY KEY DEFAULT 'singleton',
+  currentNovelId TEXT NOT NULL DEFAULT '',
+  currentChapterId TEXT NOT NULL DEFAULT '',
+  currentTab TEXT NOT NULL DEFAULT 'editor',
+  helperTab TEXT NOT NULL DEFAULT 'ai',
+  expandedVolumeIdsJson TEXT NOT NULL DEFAULT '[]',
+  localOutlinesJson TEXT NOT NULL DEFAULT '[]',
+  localCharactersJson TEXT NOT NULL DEFAULT '[]',
+  localCharacterRelationsJson TEXT NOT NULL DEFAULT '[]',
+  localWorldEntriesJson TEXT NOT NULL DEFAULT '[]',
+  localTimelineEventsJson TEXT NOT NULL DEFAULT '[]',
+  rewriteCandidatesJson TEXT NOT NULL DEFAULT '[]',
+  rewriteHistoryJson TEXT NOT NULL DEFAULT '[]',
+  trajectoriesJson TEXT NOT NULL DEFAULT '[]',
+  rewriteMode TEXT NOT NULL DEFAULT 'medium',
+  rewriteTone TEXT NOT NULL DEFAULT 'keep',
+  rewriteOutput TEXT NOT NULL DEFAULT 'candidate',
+  rewriteScope TEXT NOT NULL DEFAULT 'paragraph',
+  selectionText TEXT NOT NULL DEFAULT '',
+  selectedParagraphIndex INTEGER NOT NULL DEFAULT 0,
+  thinkingLevel TEXT NOT NULL DEFAULT 'medium',
+  autoContinue INTEGER NOT NULL DEFAULT 1,
+  keepCanon INTEGER NOT NULL DEFAULT 1,
+  promptText TEXT NOT NULL DEFAULT '保留世界观与人物关系，仅强化氛围、节奏与张力。',
+  selectedPresetId TEXT NOT NULL DEFAULT '',
+  presetsJson TEXT NOT NULL DEFAULT '[]',
+  constraintsJson TEXT NOT NULL DEFAULT '[]',
+  focusMode INTEGER NOT NULL DEFAULT 0,
+  presetCompatSessionStateJson TEXT NOT NULL DEFAULT '{}',
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS WorkspaceRuntimeNovel (
+  workspaceStateId TEXT NOT NULL DEFAULT 'singleton',
+  id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  tagsJson TEXT NOT NULL DEFAULT '[]',
+  sortOrder INTEGER NOT NULL DEFAULT 0,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (workspaceStateId, id),
+  FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceRuntimeState(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS WorkspaceRuntimeVolume (
+  workspaceStateId TEXT NOT NULL DEFAULT 'singleton',
+  id TEXT NOT NULL,
+  novelId TEXT NOT NULL,
+  title TEXT NOT NULL,
+  sortOrder INTEGER NOT NULL DEFAULT 0,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (workspaceStateId, id),
+  FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceRuntimeState(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS WorkspaceRuntimeChapter (
+  workspaceStateId TEXT NOT NULL DEFAULT 'singleton',
+  id TEXT NOT NULL,
+  novelId TEXT NOT NULL,
+  volumeId TEXT NOT NULL,
+  parentChapterId TEXT,
+  kind TEXT,
+  branchLabel TEXT,
+  title TEXT NOT NULL,
+  sortOrder REAL NOT NULL DEFAULT 0,
+  contentHtml TEXT NOT NULL,
+  originalContentHtml TEXT,
+  status TEXT NOT NULL DEFAULT 'draft',
+  wordCount INTEGER NOT NULL DEFAULT 0,
+  updatedAtLabel TEXT NOT NULL DEFAULT '',
+  trajectoryJson TEXT NOT NULL DEFAULT '[]',
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (workspaceStateId, id),
+  FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceRuntimeState(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS AppSetting (
@@ -854,6 +950,10 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_chapter_branch_no ON KnowledgeChapter(b
 CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_order ON chapter_extraction_candidates(branch_id, chapter_no, status);
 CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_chapter ON chapter_extraction_candidates(branch_id, chapter_id, chapter_source_hash);
 CREATE INDEX IF NOT EXISTS idx_workspace_state_backup_state_created ON WorkspaceStateBackup(workspaceStateId, createdAt);
+CREATE INDEX IF NOT EXISTS idx_workspace_knowledge_sync_requested ON WorkspaceKnowledgeSyncState(requestedSourceUpdatedAt, syncedSourceUpdatedAt);
+CREATE INDEX IF NOT EXISTS idx_workspace_runtime_novel_state_order ON WorkspaceRuntimeNovel(workspaceStateId, sortOrder, id);
+CREATE INDEX IF NOT EXISTS idx_workspace_runtime_volume_state_order ON WorkspaceRuntimeVolume(workspaceStateId, novelId, sortOrder, id);
+CREATE INDEX IF NOT EXISTS idx_workspace_runtime_chapter_state_novel_order ON WorkspaceRuntimeChapter(workspaceStateId, novelId, sortOrder, id);
 CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_last_seen ON hanlp_bootstrap_cache(branch_id, last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_lookup ON hanlp_bootstrap_results(branch_id, chapter_id, chapter_source_hash, result_kind);
 CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_job ON hanlp_bootstrap_results(knowledge_job_id, status);

@@ -20,6 +20,7 @@ type BootMigrationPlan = {
   shouldRebuildActiveRetrievalIndex: boolean
   hasSnapshotTable: boolean
   hasGraphContextCacheTable: boolean
+  shouldRebuildWorkspaceStateArtifactTables: boolean
 }
 
 const globalForSqlite = globalThis as {
@@ -211,6 +212,10 @@ const BOOT_SCHEMA_INDEX_NAMES = [
   'idx_chapter_extraction_candidates_order',
   'idx_chapter_extraction_candidates_chapter',
   'idx_workspace_state_backup_state_created',
+  'idx_workspace_knowledge_sync_requested',
+  'idx_workspace_runtime_novel_state_order',
+  'idx_workspace_runtime_volume_state_order',
+  'idx_workspace_runtime_chapter_state_novel_order',
   'idx_hanlp_bootstrap_cache_lookup',
   'idx_hanlp_bootstrap_cache_last_seen',
   'idx_chapter_extraction_candidates_processing_batch',
@@ -347,6 +352,59 @@ function needsActiveRetrievalIndexRebuild(database: DatabaseSync) {
     || !columnNames.has('scopeEndChapter')
     || branchColumn?.pk !== 1
     || scopeColumn?.pk !== 2
+}
+
+function columnIsNotNull(database: DatabaseSync, tableName: string, columnName: string) {
+  const column = getTableColumns(database, tableName).find((entry) => entry.name === columnName)
+  return column?.notnull === 1
+}
+
+function needsWorkspaceStateArtifactTableRebuild(database: DatabaseSync) {
+  return columnIsNotNull(database, 'WorkspaceState', 'payload')
+    || columnIsNotNull(database, 'WorkspaceStateBackup', 'payload')
+}
+
+function rebuildWorkspaceStateArtifactTables(database: DatabaseSync) {
+  if (tableExists(database, 'WorkspaceState')) {
+    database.exec('DROP TABLE IF EXISTS __WorkspaceState_nullable_payload')
+    database.exec(`
+      CREATE TABLE __WorkspaceState_nullable_payload (
+        id TEXT PRIMARY KEY DEFAULT 'singleton',
+        payload TEXT,
+        createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+    database.exec(`
+      INSERT INTO __WorkspaceState_nullable_payload (id, payload, createdAt, updatedAt)
+      SELECT id, payload, createdAt, updatedAt
+      FROM WorkspaceState
+    `)
+    database.exec('DROP TABLE WorkspaceState')
+    database.exec('ALTER TABLE __WorkspaceState_nullable_payload RENAME TO WorkspaceState')
+  }
+
+  if (tableExists(database, 'WorkspaceStateBackup')) {
+    database.exec('DROP TABLE IF EXISTS __WorkspaceStateBackup_nullable_payload')
+    database.exec(`
+      CREATE TABLE __WorkspaceStateBackup_nullable_payload (
+        id TEXT PRIMARY KEY,
+        workspaceStateId TEXT NOT NULL,
+        payload TEXT,
+        reason TEXT NOT NULL DEFAULT 'overwrite',
+        sourceUpdatedAt TEXT,
+        createdAt TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+        FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceState(id) ON DELETE CASCADE
+      )
+    `)
+    database.exec(`
+      INSERT INTO __WorkspaceStateBackup_nullable_payload (id, workspaceStateId, payload, reason, sourceUpdatedAt, createdAt)
+      SELECT id, workspaceStateId, payload, reason, sourceUpdatedAt, createdAt
+      FROM WorkspaceStateBackup
+    `)
+    database.exec('DROP TABLE WorkspaceStateBackup')
+    database.exec('ALTER TABLE __WorkspaceStateBackup_nullable_payload RENAME TO WorkspaceStateBackup')
+  }
 }
 
 function rebuildActiveRetrievalIndexToScopedSchema(database: DatabaseSync) {
@@ -628,6 +686,7 @@ function getBootMigrationPlan(database: DatabaseSync): BootMigrationPlan {
     shouldRebuildActiveRetrievalIndex: needsActiveRetrievalIndexRebuild(database),
     hasSnapshotTable: tableExists(database, 'ChapterSnapshot'),
     hasGraphContextCacheTable: tableExists(database, 'GraphContextCache'),
+    shouldRebuildWorkspaceStateArtifactTables: needsWorkspaceStateArtifactTableRebuild(database),
   }
 }
 
@@ -637,6 +696,7 @@ function bootMigrationPlanNeedsWork(plan: BootMigrationPlan) {
       || plan.shouldRebuildActiveRetrievalIndex
       || plan.hasSnapshotTable
       || plan.hasGraphContextCacheTable
+      || plan.shouldRebuildWorkspaceStateArtifactTables
   )
 }
 
@@ -668,6 +728,19 @@ function bootSchemaIsCurrent(database: DatabaseSync) {
     && triggerExists(database, 'trg_knowledge_entity_character_tier_insert')
     && triggerExists(database, 'trg_knowledge_entity_character_tier_update')
     && bootSchemaIndexesAreCurrent(database)
+    && tableHasColumns(database, 'WorkspaceKnowledgeSyncState', ['requestedRevision', 'startedRevision', 'syncedRevision'])
+    && tableHasColumns(database, 'WorkspaceRuntimeState', [
+      'localOutlinesJson',
+      'localCharactersJson',
+      'localCharacterRelationsJson',
+      'localWorldEntriesJson',
+      'localTimelineEventsJson',
+    ])
+    && !columnIsNotNull(database, 'WorkspaceState', 'payload')
+    && !columnIsNotNull(database, 'WorkspaceStateBackup', 'payload')
+    && tableExists(database, 'WorkspaceRuntimeNovel')
+    && tableExists(database, 'WorkspaceRuntimeVolume')
+    && tableExists(database, 'WorkspaceRuntimeChapter')
     && tableHasColumns(database, 'EntityAlias', ['createdAt', 'updatedAt'])
     && tableHasColumns(database, 'story_timeline_nodes', [
       'continue_block_id',
@@ -692,13 +765,25 @@ function bootSchemaIsCurrent(database: DatabaseSync) {
 }
 
 function runBootMigrations(database: DatabaseSync, migrationPlan = getBootMigrationPlan(database)) {
-  const { intervalTablesNeedingRebuild, shouldRebuildActiveRetrievalIndex, hasSnapshotTable, hasGraphContextCacheTable } = migrationPlan
+  const {
+    intervalTablesNeedingRebuild,
+    shouldRebuildActiveRetrievalIndex,
+    hasSnapshotTable,
+    hasGraphContextCacheTable,
+    shouldRebuildWorkspaceStateArtifactTables,
+  } = migrationPlan
 
   if (!bootMigrationPlanNeedsWork(migrationPlan) && bootSchemaIsCurrent(database)) {
     return
   }
 
-  if (intervalTablesNeedingRebuild.length || shouldRebuildActiveRetrievalIndex || hasSnapshotTable || hasGraphContextCacheTable) {
+  if (
+    intervalTablesNeedingRebuild.length
+    || shouldRebuildActiveRetrievalIndex
+    || hasSnapshotTable
+    || hasGraphContextCacheTable
+    || shouldRebuildWorkspaceStateArtifactTables
+  ) {
     database.exec('PRAGMA foreign_keys = OFF')
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -713,6 +798,9 @@ function runBootMigrations(database: DatabaseSync, migrationPlan = getBootMigrat
       }
       if (shouldRebuildActiveRetrievalIndex) {
         rebuildActiveRetrievalIndexToScopedSchema(database)
+      }
+      if (shouldRebuildWorkspaceStateArtifactTables) {
+        rebuildWorkspaceStateArtifactTables(database)
       }
       database.exec('COMMIT')
     } catch (error) {
@@ -841,6 +929,16 @@ function runBootMigrations(database: DatabaseSync, migrationPlan = getBootMigrat
   `)
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_lookup ON hanlp_bootstrap_cache(branch_id, chapter_no, chapter_text_hash, hanlp_script_version_hash, hanlp_model_or_config_hash, output_schema_version)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_workspace_state_backup_state_created ON WorkspaceStateBackup(workspaceStateId, createdAt)')
+  database.exec('CREATE TABLE IF NOT EXISTS WorkspaceKnowledgeSyncState (workspaceStateId TEXT PRIMARY KEY, requestedRevision INTEGER NOT NULL DEFAULT 0, startedRevision INTEGER, syncedRevision INTEGER NOT NULL DEFAULT 0, requestedSourceUpdatedAt TEXT, startedSourceUpdatedAt TEXT, startedAt TEXT, syncedSourceUpdatedAt TEXT, lastError TEXT, createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceState(id) ON DELETE CASCADE)')
+  addColumnIfMissing(database, 'WorkspaceKnowledgeSyncState', 'requestedRevision', 'requestedRevision INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(database, 'WorkspaceKnowledgeSyncState', 'startedRevision', 'startedRevision INTEGER')
+  addColumnIfMissing(database, 'WorkspaceKnowledgeSyncState', 'syncedRevision', 'syncedRevision INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(database, 'WorkspaceRuntimeState', 'localOutlinesJson', "localOutlinesJson TEXT NOT NULL DEFAULT '[]'")
+  addColumnIfMissing(database, 'WorkspaceRuntimeState', 'localCharactersJson', "localCharactersJson TEXT NOT NULL DEFAULT '[]'")
+  addColumnIfMissing(database, 'WorkspaceRuntimeState', 'localCharacterRelationsJson', "localCharacterRelationsJson TEXT NOT NULL DEFAULT '[]'")
+  addColumnIfMissing(database, 'WorkspaceRuntimeState', 'localWorldEntriesJson', "localWorldEntriesJson TEXT NOT NULL DEFAULT '[]'")
+  addColumnIfMissing(database, 'WorkspaceRuntimeState', 'localTimelineEventsJson', "localTimelineEventsJson TEXT NOT NULL DEFAULT '[]'")
+  database.exec('CREATE INDEX IF NOT EXISTS idx_workspace_knowledge_sync_requested ON WorkspaceKnowledgeSyncState(requestedSourceUpdatedAt, syncedSourceUpdatedAt)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_last_seen ON hanlp_bootstrap_cache(branch_id, last_seen_at)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_processing_batch ON chapter_extraction_candidates(branch_id, processing_batch_id)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_chapter_extraction_processing_batches_branch ON chapter_extraction_processing_batches(branch_id, updated_at)')
