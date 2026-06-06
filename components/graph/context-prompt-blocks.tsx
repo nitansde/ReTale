@@ -1,26 +1,28 @@
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/lib/i18n/provider'
 import type { GenerationContextPromptBlock } from '@/components/graph/types'
-
-const PRIORITY_LABELS: Record<GenerationContextPromptBlock['priority'], string> = {
-  highest: '最高优先级',
-  high: '高优先级',
-  medium: '补充参考',
-}
 
 export function ContextPromptBlocks(props: {
   blocks: GenerationContextPromptBlock[]
   disabledBlockIds: string[]
   onToggle: (blockId: string, enabled: boolean) => void
 }) {
+  const { t } = useI18n()
+  const priorityLabels: Record<GenerationContextPromptBlock['priority'], string> = {
+    highest: t('graph.priority.highest'),
+    high: t('graph.priority.high'),
+    medium: t('graph.priority.medium'),
+  }
+
   return (
     <section className="rounded-[24px] border border-white/8 bg-black/20 p-4">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Prompt context blocks</p>
-          <p className="mt-1 text-sm text-zinc-300">生成仍会走原来的上下文拼装流程，这里只负责临时启用或停用要送进 prompt 的块。</p>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('graph.promptBlocksEyebrow')}</p>
+          <p className="mt-1 text-sm text-zinc-300">{t('graph.promptBlocksDescription')}</p>
         </div>
         <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-400">
-          {props.blocks.length} blocks
+          {t('graph.blocksCount', { count: props.blocks.length })}
         </span>
       </div>
 
@@ -40,7 +42,7 @@ export function ContextPromptBlocks(props: {
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-sm font-medium text-zinc-100">{block.label}</p>
                     <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-0.5 text-[10px] uppercase tracking-[0.14em] text-zinc-500">
-                      {PRIORITY_LABELS[block.priority]}
+                      {priorityLabels[block.priority]}
                     </span>
                   </div>
                 </div>

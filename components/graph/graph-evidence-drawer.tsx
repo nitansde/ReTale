@@ -1,20 +1,21 @@
 import { ArrowUpRight, Ban, ChevronDown, Quote } from 'lucide-react'
+import { useI18n } from '@/lib/i18n/provider'
 import { cn } from '@/lib/utils'
 import type { GraphEdge } from '@/lib/server/graph-types'
 import type { GenerationContextEvidence } from '@/components/graph/types'
 
-function formatEdgeLocation(edge: GraphEdge) {
+function formatEdgeLocation(edge: GraphEdge, t: ReturnType<typeof useI18n>['t']) {
   const location = edge.evidenceLocation
-  if (!location) return '图谱边未附带定位信息'
-  if (location.lineStart && location.lineEnd) return `第 ${location.chapterNo} 章 · ${location.lineStart}-${location.lineEnd} 行`
-  if (location.lineStart) return `第 ${location.chapterNo} 章 · 第 ${location.lineStart} 行`
-  return `第 ${location.chapterNo} 章`
+  if (!location) return null
+  if (location.lineStart && location.lineEnd) return t('graph.chapterLineRange', { chapterNo: location.chapterNo, start: location.lineStart, end: location.lineEnd })
+  if (location.lineStart) return t('graph.chapterLineSingle', { chapterNo: location.chapterNo, line: location.lineStart })
+  return t('graph.chapterOnly', { chapterNo: location.chapterNo })
 }
 
-function formatEvidenceLocation(item: GenerationContextEvidence) {
-  if (item.lineStart !== null && item.lineEnd !== null) return `第 ${item.chapterNo} 章 · ${item.lineStart}-${item.lineEnd} 行`
-  if (item.lineStart !== null) return `第 ${item.chapterNo} 章 · 第 ${item.lineStart} 行`
-  return `第 ${item.chapterNo} 章`
+function formatEvidenceLocation(item: GenerationContextEvidence, t: ReturnType<typeof useI18n>['t']) {
+  if (item.lineStart !== null && item.lineEnd !== null) return t('graph.chapterLineRange', { chapterNo: item.chapterNo, start: item.lineStart, end: item.lineEnd })
+  if (item.lineStart !== null) return t('graph.chapterLineSingle', { chapterNo: item.chapterNo, line: item.lineStart })
+  return t('graph.chapterOnly', { chapterNo: item.chapterNo })
 }
 
 export function GraphEvidenceDrawer(props: {
@@ -35,10 +36,11 @@ export function GraphEvidenceDrawer(props: {
     empty: string
   }
 }) {
+  const { t } = useI18n()
   const copy = props.copy ?? {
-    eyebrow: 'Evidence drawer',
-    description: '查看 Lance 检索片段，以及当前选中关系边自带的引用位置与引文。',
-    empty: '当前没有检索到额外 Lance 证据。',
+    eyebrow: t('graph.evidenceDrawerEyebrow'),
+    description: t('graph.evidenceDrawerDescription'),
+    empty: t('graph.evidenceDrawerEmpty'),
   }
 
   return (
@@ -65,7 +67,7 @@ export function GraphEvidenceDrawer(props: {
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-sky-100">
                   <Quote className="h-4 w-4" />
-                  <p className="text-sm font-medium">当前选中关系的图谱证据</p>
+                  <p className="text-sm font-medium">{t('graph.selectedEdgeEvidence')}</p>
                 </div>
                 {props.canJumpToEdgeSource && props.selectedEdge ? (
                   <button
@@ -76,11 +78,11 @@ export function GraphEvidenceDrawer(props: {
                     className="inline-flex items-center gap-2 rounded-full border border-sky-300/20 bg-black/20 px-3 py-1 text-[11px] text-sky-50 transition hover:bg-white/[0.06]"
                   >
                     <ArrowUpRight className="h-3.5 w-3.5" />
-                    跳转原文
+                    {t('graph.jumpToSource')}
                   </button>
                 ) : null}
               </div>
-              <p className="text-xs uppercase tracking-[0.14em] text-sky-200/70">{formatEdgeLocation(props.selectedEdge)}</p>
+              <p className="text-xs uppercase tracking-[0.14em] text-sky-200/70">{formatEdgeLocation(props.selectedEdge, t) ?? t('graph.edgeNoLocation')}</p>
               <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-sky-50">{props.selectedEdge.evidenceQuote}</p>
             </div>
           ) : null}
@@ -94,7 +96,7 @@ export function GraphEvidenceDrawer(props: {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">{item.sourceLabel}{item.title ? ` · ${item.title}` : ''}</p>
-                      <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-zinc-500/80">{formatEvidenceLocation(item)}</p>
+                      <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-zinc-500/80">{formatEvidenceLocation(item, t)}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       {canJumpToSource ? (
@@ -104,7 +106,7 @@ export function GraphEvidenceDrawer(props: {
                           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300 transition hover:bg-white/[0.06]"
                         >
                           <ArrowUpRight className="h-3.5 w-3.5" />
-                          跳转原文
+                          {t('graph.jumpToSource')}
                         </button>
                       ) : null}
                       {props.interactive ? (
@@ -114,7 +116,7 @@ export function GraphEvidenceDrawer(props: {
                           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300 transition hover:bg-white/[0.06]"
                         >
                           <Ban className="h-3.5 w-3.5" />
-                          {excluded ? '重新纳入本次生成' : '排除本次生成'}
+                          {excluded ? t('graph.includeThisRun') : t('graph.excludeThisRun')}
                         </button>
                       ) : null}
                     </div>

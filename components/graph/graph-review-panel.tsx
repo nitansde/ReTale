@@ -4,6 +4,7 @@ import { ContextPromptBlocks } from '@/components/graph/context-prompt-blocks'
 import { GraphEvidenceDrawer } from '@/components/graph/graph-evidence-drawer'
 import { GraphFlowCanvas } from '@/components/graph/graph-flow-canvas'
 import { GraphInspector } from '@/components/graph/graph-inspector'
+import { useI18n } from '@/lib/i18n/provider'
 import type { GraphEdge, GraphNode } from '@/lib/server/graph-types'
 
 const HIDDEN_ADVANCED_CONTEXT_BLOCK_IDS = new Set(['output-constraints'])
@@ -44,6 +45,7 @@ export function GraphReviewPanel(props: {
   canJumpToEvidenceSource: (item: GenerationContextEvidence) => boolean
   onRefresh: () => void
 }) {
+  const { t } = useI18n()
   const nodeById = new Map(props.graphNodes.map((node) => [node.id, node] as const))
   const selectedEdge = props.selection?.type === 'edge' ? props.selection.edge : null
   const visiblePromptBlocks = getVisibleAdvancedContextPromptBlocks(props.context.promptBlocks)
@@ -52,8 +54,8 @@ export function GraphReviewPanel(props: {
     <section className="mb-4 rounded-[24px] border border-amber-400/20 bg-amber-500/10 p-4">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] uppercase tracking-[0.18em] text-amber-200/70">Graph review</p>
-          <p className="mt-1 text-sm text-zinc-300">当前面板会先读取生成上下文，再把图谱、证据和 prompt 块拆开给你检查。这里可以只对本次生成临时排除边、节点关联边或证据，也可以直接确认、拒绝或编辑关系边。</p>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-amber-200/70">{t('graph.reviewEyebrow')}</p>
+          <p className="mt-1 text-sm text-zinc-300">{t('graph.reviewDescription')}</p>
         </div>
         <button
           type="button"
@@ -61,19 +63,19 @@ export function GraphReviewPanel(props: {
           className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-white/[0.06]"
         >
           <RefreshCcw className="h-4 w-4" />
-          刷新上下文
+          {t('graph.refreshContext')}
         </button>
       </div>
 
       <div className="mb-4 flex flex-wrap gap-2 text-[11px] text-zinc-400">
-        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">第 {props.context.chapterNo} 章</span>
+        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">{t('graph.chapterOnly', { chapterNo: props.context.chapterNo })}</span>
         {props.context.sourceMeta?.mode === 'inherited-parent' ? (
           <span className="rounded-full border border-fuchsia-300/20 bg-fuchsia-500/10 px-3 py-1 text-fuchsia-100">
-            图谱继承自主线第 {props.context.sourceMeta.chapterNo} 章
+            {t('graph.inheritedFromMainline', { chapterNo: props.context.sourceMeta.chapterNo })}
           </span>
         ) : null}
-        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">选中行：{props.context.selectedLineStart ?? '?'} - {props.context.selectedLineEnd ?? '?'}</span>
-        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">Prompt 约 {props.context.tokenEstimate} tokens</span>
+        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">{t('graph.selectedLines', { start: props.context.selectedLineStart ?? '?', end: props.context.selectedLineEnd ?? '?' })}</span>
+        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">{t('graph.promptApproxTokens', { count: props.context.tokenEstimate })}</span>
       </div>
 
       {props.context.warnings.length ? (
@@ -107,7 +109,7 @@ export function GraphReviewPanel(props: {
           warningCount={props.context.warnings.length}
           graphEdges={props.graphEdges}
           mode="selection"
-          modeLabel="selection-review"
+          modeLabel={t('graph.selectionReviewMode')}
           excludedEdgeIds={props.excludedEdgeIds}
           edgeMutationPending={props.edgeMutationPending}
           edgeMutationError={props.edgeMutationError}
