@@ -473,7 +473,7 @@ describe('workspace selection shell', () => {
       chapterNo: 10,
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Graph' }))
+    fireEvent.click(screen.getByRole('button', { name: '图谱' }))
 
     expect(screen.getByTestId('chapter-body-view')).toBeInTheDocument()
     expect(screen.getByTestId('workspace-chapter-view-toggle')).toBeInTheDocument()
@@ -503,7 +503,7 @@ describe('workspace selection shell', () => {
 
     expect(screen.getByTestId('what-if-slot')).toBeInTheDocument()
     expect(screen.queryByTestId('workspace-chapter-view-toggle')).not.toBeInTheDocument()
-    expect(screen.getByTestId('workspace-center-pane-kind')).toHaveTextContent('What-if session workspace')
+    expect(screen.getByTestId('workspace-center-pane-kind')).toHaveTextContent('What-if 会话工作区')
     expect(whatIf.onCenterPaneViewChange).not.toHaveBeenCalled()
     cleanup()
 
@@ -531,7 +531,7 @@ describe('workspace selection shell', () => {
 
     expect(screen.getByTestId('future-jump-slot')).toBeInTheDocument()
     expect(screen.queryByTestId('workspace-chapter-view-toggle')).not.toBeInTheDocument()
-    expect(screen.getByTestId('workspace-center-pane-kind')).toHaveTextContent('Future jump workspace')
+    expect(screen.getByTestId('workspace-center-pane-kind')).toHaveTextContent('Future Jump 工作区')
   })
 
   it('derives current-node metrics from the visible selection text and version-specific usage', () => {

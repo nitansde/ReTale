@@ -167,13 +167,29 @@ export function resolveWorkspaceSelection(options: {
 
   if (currentSelection.kind === 'chapter') return fallbackSelection
 
+  const resolvedBranchSelection = resolveBranchTimelineSelection(currentSelection, branchNodes)
+  return resolvedBranchSelection === currentSelection ? fallbackSelection : resolvedBranchSelection
+}
+
+export function resolveBranchTimelineSelection<TSelection extends Exclude<TimelineSelection, { kind: 'chapter' }>>(
+  currentSelection: TSelection,
+  branchNodes: StoryTimelineBranchNode[]
+): TSelection {
   const matchingNode = branchNodes.find((node) => node.id === currentSelection.nodeId)
   if (matchingNode && matchesBranchSelectionNode(currentSelection, matchingNode)) {
-    return toBranchTimelineSelection(matchingNode) ?? fallbackSelection
+    const selection = toBranchTimelineSelection(matchingNode)
+    if (selection?.kind === currentSelection.kind) {
+      return selection as TSelection
+    }
   }
 
   const fallbackBranchMatch = branchNodes.find((node) => matchesBranchSelectionNode(currentSelection, node))
-  return fallbackBranchMatch ? (toBranchTimelineSelection(fallbackBranchMatch) ?? fallbackSelection) : fallbackSelection
+  if (!fallbackBranchMatch) {
+    return currentSelection
+  }
+
+  const selection = toBranchTimelineSelection(fallbackBranchMatch)
+  return selection?.kind === currentSelection.kind ? selection as TSelection : currentSelection
 }
 
 export function readWorkspaceSelectionFromSearchParams(searchParams: URLSearchParams): TimelineSelection | null {
