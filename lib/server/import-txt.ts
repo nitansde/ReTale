@@ -27,7 +27,7 @@ function buildImportedChapter(params: {
   }
 }
 
-export function importNovelIntoWorkspace(state: PersistedNovelState, input: { title: string; text: string; summary?: string }) {
+export function importNovelIntoWorkspace(state: PersistedNovelState, input: { title: string; text: string; summary?: string }): PersistedNovelState {
   const volumes = state.localVolumes ?? []
   const cleanTitle = input.title.trim() || `导入小说 ${volumes.length + 1}`
   const cleanText = input.text.replace(/\r\n?/g, '\n').trim()

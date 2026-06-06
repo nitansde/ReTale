@@ -15,8 +15,19 @@ function createTestDatabase(prefix: string) {
 }
 
 function resetWorkspaceState(database: DatabaseSync) {
+  database.prepare('DELETE FROM WorkspaceRuntimeChapter').run()
+  database.prepare('DELETE FROM WorkspaceRuntimeVolume').run()
+  database.prepare('DELETE FROM WorkspaceRuntimeNovel').run()
+  database.prepare('DELETE FROM WorkspaceRuntimeState').run()
   database.prepare('DELETE FROM WorkspaceState').run()
   database.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', '{}')
+}
+
+function readWorkspaceRuntimeCounts(database: DatabaseSync) {
+  return {
+    novels: (database.prepare('SELECT COUNT(*) AS count FROM WorkspaceRuntimeNovel WHERE workspaceStateId = ?').get('singleton') as { count: number }).count,
+    chapters: (database.prepare('SELECT COUNT(*) AS count FROM WorkspaceRuntimeChapter WHERE workspaceStateId = ?').get('singleton') as { count: number }).count,
+  }
 }
 
 function createImportRequest() {
@@ -151,5 +162,30 @@ describe('import-txt route', () => {
     expect(payload.localChapters[1]?.title).toBe('第1章 初遇')
     expect(payload.localChapters[1]?.content).toContain('林澄开始记录这次练习。')
     expect(saved.payload).not.toContain('����')
+    expect(readWorkspaceRuntimeCounts(database)).toEqual({ novels: 1, chapters: 2 })
+  })
+
+  it('keeps imported content available through normalized runtime state after the workspace artifact is blanked', async () => {
+    const database = createTestDatabase('chatbook-import-txt-route-runtime-source-of-truth')
+    resetWorkspaceState(database)
+
+    vi.doMock('@/lib/server/knowledge-rebuild', () => ({
+      syncWorkspacePayloadToKnowledgeStore: vi.fn(async () => {}),
+    }))
+
+    const { POST: importTxt } = await import('@/app/api/import-txt/route')
+    const importResponse = await importTxt(createImportRequest())
+    expect(importResponse.status).toBe(200)
+
+    database.prepare('UPDATE WorkspaceState SET payload = NULL WHERE id = ?').run('singleton')
+
+    const { GET } = await import('@/app/api/workspace/route')
+    const response = await GET()
+    const payload = await response.json() as { localNovels: Array<{ title: string }>; localChapters: Array<{ title: string; content: string }> }
+
+    expect(response.status).toBe(200)
+    expect(payload.localNovels[0]?.title).toBe('合成测试故事-short')
+    expect(payload.localChapters[1]?.title).toBe('第1章 初遇')
+    expect(payload.localChapters[1]?.content).toContain('林澄开始记录这次练习。')
   })
 })

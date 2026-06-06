@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server'
 import { importNovelIntoWorkspace } from '@/lib/server/import-txt'
-import { findWorkspaceState, upsertWorkspaceState } from '@/lib/server/persistence'
+import { upsertWorkspaceState } from '@/lib/server/persistence'
 import { syncWorkspacePayloadToKnowledgeStore } from '@/lib/server/knowledge-rebuild'
-import { createEmptyWorkspaceState, normalizeWorkspaceState } from '@/lib/workspace-state'
+import {
+  backfillWorkspaceRuntimeFromArtifactIfMissing,
+  loadWorkspacePayloadFromRuntimeOrRecovery,
+  persistWorkspaceRuntimeState,
+} from '@/lib/server/workspace-resilience'
+import { normalizeWorkspaceState } from '@/lib/workspace-state'
 
 function countMatches(text: string, pattern: RegExp) {
   return text.match(pattern)?.length ?? 0
@@ -43,12 +48,8 @@ async function decodeTextFile(file: File) {
 }
 
 async function ensureWorkspacePayload() {
-  const existing = findWorkspaceState('singleton')
-  if (existing) {
-    return normalizeWorkspaceState(JSON.parse(existing.payload))
-  }
-
-  return createEmptyWorkspaceState()
+  backfillWorkspaceRuntimeFromArtifactIfMissing('singleton')
+  return loadWorkspacePayloadFromRuntimeOrRecovery('singleton')
 }
 
 export async function POST(request: Request) {
@@ -65,13 +66,14 @@ export async function POST(request: Request) {
     }
 
     const currentState = await ensureWorkspacePayload()
-    const nextState = importNovelIntoWorkspace(currentState, {
+    const nextState = normalizeWorkspaceState(importNovelIntoWorkspace(currentState, {
       title: file.name.replace(/\.[^.]+$/, ''),
       text,
       summary: `从 ${file.name} 导入`,
-    })
+    }))
 
-    upsertWorkspaceState('singleton', JSON.stringify(nextState))
+    persistWorkspaceRuntimeState(nextState)
+    upsertWorkspaceState('singleton', JSON.stringify(nextState), { backupReason: 'import-txt' })
     await syncWorkspacePayloadToKnowledgeStore(nextState)
 
     return NextResponse.json({
