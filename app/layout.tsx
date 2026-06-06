@@ -1,5 +1,7 @@
 import type { Metadata } from 'next'
 import { Geist, Noto_Sans_SC, Noto_Serif_SC } from 'next/font/google'
+import { LanguageSwitcher } from '@/components/i18n/language-switcher'
+import { I18nProvider } from '@/lib/i18n/provider'
 import './globals.css'
 
 const geistSans = Geist({
@@ -34,7 +36,12 @@ export default function RootLayout({
       lang="zh-CN"
       className={`${geistSans.variable} ${notoSansSC.variable} ${notoSerifSC.variable} h-full antialiased`}
     >
-      <body className="min-h-full bg-[#0a0c12] text-zinc-100">{children}</body>
+      <body className="min-h-full bg-[#0a0c12] text-zinc-100">
+        <I18nProvider>
+          <LanguageSwitcher />
+          {children}
+        </I18nProvider>
+      </body>
     </html>
   )
 }
