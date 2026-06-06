@@ -84,7 +84,7 @@ export function listActiveBackgroundTasks() {
   const jobTypePlaceholders = ACTIVE_BACKGROUND_TASK_JOB_TYPES.map(() => '?').join(', ')
   const statusPlaceholders = ACTIVE_BACKGROUND_TASK_STATUSES.map(() => '?').join(', ')
 
-  return queryAll<ActiveBackgroundTaskRow>(
+  const rows = queryAll<ActiveBackgroundTaskRow>(
     `
       SELECT
         job.id AS jobId,
@@ -107,6 +107,20 @@ export function listActiveBackgroundTasks() {
     ...ACTIVE_BACKGROUND_TASK_JOB_TYPES,
     ...ACTIVE_BACKGROUND_TASK_STATUSES,
   )
+
+  return rows.map((row) => ({
+    jobId: String(row.jobId),
+    novelId: String(row.novelId),
+    novelTitle: String(row.novelTitle),
+    branchId: row.branchId == null ? null : String(row.branchId),
+    jobType: row.jobType,
+    status: row.status,
+    progress: Number(row.progress),
+    currentStep: row.currentStep == null ? null : String(row.currentStep),
+    errorMessage: row.errorMessage == null ? null : String(row.errorMessage),
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  }))
 }
 
 export function abortBackgroundTask(jobId: string): AbortBackgroundTaskResult {
