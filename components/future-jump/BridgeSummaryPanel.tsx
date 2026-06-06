@@ -1,6 +1,7 @@
 "use client"
 
 import { ArrowRight, Clock3, GitBranch, Sparkles } from 'lucide-react'
+import { useI18n } from '@/lib/i18n/provider'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import type { FutureJumpRevisionRecord, FutureJumpRunDetail, FutureMapEvent, OutlineNodeChapterRecord, WhatIfSessionDetail } from '@/lib/story-branch-types'
 import { cn } from '@/lib/utils'
@@ -31,6 +32,7 @@ export function BridgeSummaryPanel(props: {
   revisions: FutureJumpRevisionRecord[]
   readableLineageLabel?: string | null
 }) {
+  const { t } = useI18n()
   const instructionPreview = formatStoryBranchInstructionPreview(props.detail.userDirection)
   const historyEntries = props.revisions
     .sort((left, right) => right.revisionNo - left.revisionNo)
@@ -39,11 +41,11 @@ export function BridgeSummaryPanel(props: {
     <section className="rounded-[24px] border border-sky-400/20 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_42%),#0b0d12] p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] uppercase tracking-[0.18em] text-sky-200/70">Bridge summary</p>
-          <h3 className="mt-2 text-lg font-semibold text-zinc-100">最新桥接摘要与修订脉络</h3>
-          {instructionPreview ? <p className="mt-2 text-sm text-sky-100">指令预览 · {instructionPreview}</p> : null}
+          <p className="text-[11px] uppercase tracking-[0.18em] text-sky-200/70">{t('futureJump.bridgeSummaryEyebrow')}</p>
+          <h3 className="mt-2 text-lg font-semibold text-zinc-100">{t('futureJump.bridgeSummaryTitle')}</h3>
+          {instructionPreview ? <p className="mt-2 text-sm text-sky-100">{t('workspace.instructionPreview')} · {instructionPreview}</p> : null}
           <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-300">
-            主面板始终读取当前 run 上镜像出的最新桥接摘要；下方修订记录只负责回顾每一版是怎样演化过来的。
+            {t('futureJump.bridgeSummaryDescription')}
           </p>
         </div>
         <div className="flex flex-wrap gap-2 text-[11px] text-zinc-300">
@@ -57,7 +59,7 @@ export function BridgeSummaryPanel(props: {
         <div className="rounded-[22px] border border-sky-300/18 bg-sky-500/10 p-4" data-testid="future-jump-bridge">
           <div className="flex items-center gap-2 text-sky-100">
             <Sparkles className="h-4 w-4" />
-            <p className="text-[11px] uppercase tracking-[0.16em] text-sky-100/75">Latest mirrored bridge</p>
+            <p className="text-[11px] uppercase tracking-[0.16em] text-sky-100/75">{t('futureJump.latestMirroredBridge')}</p>
           </div>
           <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-sky-50">{props.detail.bridgeSummary}</p>
         </div>
@@ -69,12 +71,12 @@ export function BridgeSummaryPanel(props: {
                 <GitBranch className="h-4 w-4" />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-[11px] uppercase tracking-[0.16em] text-fuchsia-200/70">Parent IF session</p>
-                <h4 className="mt-1 text-sm font-medium text-zinc-100">{props.parentSession?.title || `IF · 第 ${props.detail.sourceChapterNo} 章分支推演`}</h4>
-                <p className="mt-2 text-xs leading-6 text-zinc-300">{props.parentSession?.premise?.trim() || '当前 Future Jump 继承自已持久化的 What-if 分支前提。'}</p>
+                <p className="text-[11px] uppercase tracking-[0.16em] text-fuchsia-200/70">{t('futureJump.parentWhatIfSession')}</p>
+                <h4 className="mt-1 text-sm font-medium text-zinc-100">{props.parentSession?.title || t('whatIf.defaultTitle', { count: props.detail.sourceChapterNo })}</h4>
+                <p className="mt-2 text-xs leading-6 text-zinc-300">{props.parentSession?.premise?.trim() || t('futureJump.parentWhatIfFallback')}</p>
                 <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-zinc-300">
-                  <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">source 第 {props.detail.sourceChapterNo} 章</span>
-                  {props.parentSession?.premise?.trim() ? <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">指令预览 {formatStoryBranchInstructionPreview(props.parentSession.premise)}</span> : null}
+                  <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">{t('futureJump.sourceChapter', { count: props.detail.sourceChapterNo })}</span>
+                  {props.parentSession?.premise?.trim() ? <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">{t('workspace.instructionPreview')} {formatStoryBranchInstructionPreview(props.parentSession.premise)}</span> : null}
                 </div>
               </div>
             </div>
@@ -86,11 +88,11 @@ export function BridgeSummaryPanel(props: {
                 <ArrowRight className="h-4 w-4" />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Target anchor</p>
-                <h4 className="mt-1 text-sm font-medium text-zinc-100">{props.targetEvent?.title || `第 ${props.detail.targetChapterNo} 章未来节点`}</h4>
-                <p className="mt-2 text-xs leading-6 text-zinc-300">{props.targetEvent?.summary || '未来节点元数据会从分支作用域下的 future map 里回填。'}</p>
+                <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('futureJump.targetAnchor')}</p>
+                <h4 className="mt-1 text-sm font-medium text-zinc-100">{props.targetEvent?.title || t('futureJump.defaultNodeTitle', { count: props.detail.targetChapterNo })}</h4>
+                <p className="mt-2 text-xs leading-6 text-zinc-300">{props.targetEvent?.summary || t('futureJump.targetAnchorFallback')}</p>
                 <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-zinc-300">
-                  <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">target 第 {props.targetChapter?.chapterNo ?? props.detail.targetChapterNo} 章</span>
+                  <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">{t('futureJump.targetChapter', { count: props.targetChapter?.chapterNo ?? props.detail.targetChapterNo })}</span>
                   {props.targetChapter?.chapterTitle ? (
                     <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">{props.targetChapter.chapterTitle}</span>
                   ) : null}
@@ -118,10 +120,10 @@ export function BridgeSummaryPanel(props: {
         <div className="mt-4 rounded-[22px] border border-white/8 bg-black/20 p-4" data-testid="future-jump-revision-history">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Revision history</p>
-              <p className="mt-1 text-sm text-zinc-300">当前主面板继续锁定最新镜像；历史区保留修订标签，更早版本继续展示桥接摘要和未来正文。</p>
+              <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('futureJump.revisionHistory')}</p>
+              <p className="mt-1 text-sm text-zinc-300">{t('futureJump.revisionHistoryDescription')}</p>
             </div>
-            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{historyEntries.length} 条历史</span>
+            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{t('futureJump.historyCount', { count: historyEntries.length })}</span>
           </div>
 
           <ul className="mt-4 space-y-3">
@@ -133,9 +135,9 @@ export function BridgeSummaryPanel(props: {
             <li key={`${item.revisionNo}-${item.createdAt}`} className="rounded-[18px] border border-white/8 bg-white/[0.03] p-3" data-testid={`future-jump-history-item-${item.revisionNo}`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="text-sm font-medium text-zinc-100">第 {item.revisionNo} 版 · {item.revisionKind}</p>
-                  <p className="mt-2 text-xs leading-6 text-zinc-300">{item.userFeedback?.trim() || '初始生成版，没有额外反馈。'}</p>
-                  {isCurrentMirror ? <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-sky-100">当前版本已在主面板展示</p> : null}
+                  <p className="text-sm font-medium text-zinc-100">{t('futureJump.historyRevision', { count: item.revisionNo, kind: item.revisionKind })}</p>
+                  <p className="mt-2 text-xs leading-6 text-zinc-300">{item.userFeedback?.trim() || t('futureJump.initialRevisionFeedback')}</p>
+                  {isCurrentMirror ? <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-sky-100">{t('futureJump.currentVersionShown')}</p> : null}
                 </div>
                 <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-400">
                   <Clock3 className="h-3.5 w-3.5" />
@@ -145,11 +147,11 @@ export function BridgeSummaryPanel(props: {
 
               {!isCurrentMirror ? <div className="mt-3 grid gap-3 xl:grid-cols-2">
                 <div className="rounded-[16px] border border-sky-300/18 bg-sky-500/10 p-3">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-sky-100/75">Bridge</p>
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-sky-100/75">{t('futureJump.bridgeLabel')}</p>
                   <p className="mt-2 whitespace-pre-wrap text-xs leading-6 text-sky-50">{item.bridgeSummary}</p>
                 </div>
                 <div className="rounded-[16px] border border-white/8 bg-black/20 p-3">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Future text</p>
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('futureJump.futureTextLabel')}</p>
                   <p className="mt-2 whitespace-pre-wrap text-xs leading-6 text-zinc-200">{item.generatedTargetText}</p>
                 </div>
               </div> : null}
