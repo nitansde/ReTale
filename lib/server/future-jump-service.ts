@@ -24,6 +24,10 @@ import {
   targetRewriteGenerationSchema,
 } from '@/lib/server/story-branch-contracts'
 import {
+  buildChildReadableLineageLabel,
+  requireOptionalTimelineNodeInBranchContext,
+} from '@/lib/server/story-branch-mutation-helpers'
+import {
   createStoryTimelineNode,
   findStoryTimelineNodeById,
   findStoryTimelineNodeByFutureJumpRunId,
@@ -1348,6 +1352,12 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
   if (!outlineNode) {
     throw new Error(`Target outline node not found: ${input.targetOutlineNodeId}`)
   }
+  const parentNode = requireOptionalTimelineNodeInBranchContext({
+    nodeId: input.parentTimelineNodeId,
+    novelId: outlineNode.novelId,
+    branchId: outlineNode.branchId,
+    label: 'Parent timeline node',
+  })
 
   const compatibilityWhatIfSessionId = resolveFutureJumpCompatibilityWhatIfSessionId({
     novelId: outlineNode.novelId,
@@ -1365,7 +1375,7 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
     },
     targetOutlineNodeId: input.targetOutlineNodeId,
     targetOutlineChapterId: input.targetOutlineChapterId,
-    parentTimelineNodeId: input.parentTimelineNodeId,
+    parentTimelineNodeId: parentNode?.id ?? null,
     userDirection: input.userDirection ?? undefined,
   })
 
@@ -1382,17 +1392,16 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
 
     const labelIndex = getNextStoryTimelineLabelIndex(outlineNode.novelId, outlineNode.branchId, 'future_jump')
     const readableLabel = formatStoryBranchReadableLabel('future_jump', labelIndex)
-    const parentNode = generated.run.parentTimelineNodeId ? findStoryTimelineNodeById(generated.run.parentTimelineNodeId) : null
-    const readableLineageLabel = parentNode?.readableLineageLabel ? `${parentNode.readableLineageLabel}, ${readableLabel}` : readableLabel
-      timelineNode = createStoryTimelineNode({
-        id: uid('timeline-node'),
-        novelId: outlineNode.novelId,
-        branchId: outlineNode.branchId,
-        nodeType: 'future_jump',
-        labelIndex,
-        readableLabel,
-        readableLineageLabel,
-        anchorChapterNo: targetAnchor.chapterNo,
+    const readableLineageLabel = buildChildReadableLineageLabel(parentNode, readableLabel)
+    timelineNode = createStoryTimelineNode({
+      id: uid('timeline-node'),
+      novelId: outlineNode.novelId,
+      branchId: outlineNode.branchId,
+      nodeType: 'future_jump',
+      labelIndex,
+      readableLabel,
+      readableLineageLabel,
+      anchorChapterNo: targetAnchor.chapterNo,
       title: buildFutureJumpNodeTitle({
         readableLineageLabel,
         titleHint: generated.titleHint,

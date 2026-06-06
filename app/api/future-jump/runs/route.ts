@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { isNotFoundErrorMessage, jsonError, readJsonObject, toErrorMessage } from '@/lib/server/api-route'
 import { createFutureJumpRun } from '@/lib/server/future-jump-service'
 import type { FutureJumpCreateRequest, FutureJumpSourceContext } from '@/lib/story-branch-types'
 
@@ -55,7 +56,7 @@ function normalizeSourceContext(body: Record<string, unknown>): FutureJumpSource
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as Record<string, unknown>
+    const body = await readJsonObject(request)
     const result = await createFutureJumpRun({
       sourceContext: normalizeSourceContext(body),
       targetOutlineNodeId: String(body.targetOutlineNodeId ?? ''),
@@ -66,7 +67,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to create future jump run'
-    return NextResponse.json({ error: message }, { status: 400 })
+    const message = toErrorMessage(error, 'Failed to create future jump run')
+    return jsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
   }
 }
