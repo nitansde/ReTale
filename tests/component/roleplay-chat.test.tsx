@@ -125,7 +125,8 @@ describe('RoleplaySessionView', () => {
     fireEvent.click(screen.getByTestId('roleplay-message-0'))
 
     expect(screen.getByTestId('roleplay-fork-anchor')).toHaveTextContent('下轮从 #1 分叉')
-    expect(screen.getByTestId('roleplay-fork-point-visual-state')).toHaveTextContent('下一轮会从 #1 分叉')
+    expect(screen.getByTestId('roleplay-fork-point-visual-state')).toHaveTextContent('下轮从 #1 分叉')
+    expect(screen.getByTestId('roleplay-fork-point-visual-state')).toHaveTextContent('你昨晚为什么没有按约定现身？')
   })
 
   it('disables regenerate when the latest persisted message is not an assistant reply', async () => {

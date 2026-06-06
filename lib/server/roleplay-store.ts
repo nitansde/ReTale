@@ -1,5 +1,9 @@
 import { roleplayMessageCreateSchema, roleplaySessionCreateSchema } from '@/lib/server/story-branch-contracts'
-import { createStoryTimelineNode, findStoryTimelineNodeByRoleplaySessionId, findStoryTimelineNodeById, getNextStoryTimelineLabelIndex } from '@/lib/server/story-timeline-store'
+import { createStoryTimelineNode, findStoryTimelineNodeByRoleplaySessionId, getNextStoryTimelineLabelIndex } from '@/lib/server/story-timeline-store'
+import {
+  buildChildReadableLineageLabel,
+  requireOptionalTimelineNodeInBranchContext,
+} from '@/lib/server/story-branch-mutation-helpers'
 import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
 import { formatStoryBranchReadableLabel } from '@/lib/story-branch-labels'
 import type { RoleplayMessageRecord, RoleplaySessionDetail, RoleplaySessionRecord } from '@/lib/roleplay-types'
@@ -154,12 +158,15 @@ export async function createRoleplaySession(
   db: Db = defaultDb
 ) {
   const input = roleplaySessionCreateSchema.parse(rawInput)
+  const parentNode = requireOptionalTimelineNodeInBranchContext({
+    nodeId: input.sourceTimelineNodeId,
+    novelId: input.novelId,
+    branchId: input.branchId,
+    label: 'Source timeline node',
+  })
   const labelIndex = getNextStoryTimelineLabelIndex(input.novelId, input.branchId, 'roleplay_session', db)
   const readableLabel = formatStoryBranchReadableLabel('roleplay_session', labelIndex)
-  const parentNode = input.sourceTimelineNodeId ? findStoryTimelineNodeById(input.sourceTimelineNodeId, db) : null
-  const readableLineageLabel = parentNode?.readableLineageLabel
-    ? `${parentNode.readableLineageLabel}, ${readableLabel}`
-    : readableLabel
+  const readableLineageLabel = buildChildReadableLineageLabel(parentNode, readableLabel)
   const timelineNodeId = uid('timeline-node')
 
   await db.withTransaction(async () => {

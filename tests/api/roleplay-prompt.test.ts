@@ -251,7 +251,6 @@ describe('roleplay prompt contract', () => {
       serializePresetCompatResponseMetadata: () => 'test-header',
     }))
     vi.doMock('@/lib/server/openai-compatible', () => ({
-      buildFallbackRewriteStream: vi.fn(),
       generateRewriteWithOpenAICompatible,
       streamRewriteWithOpenAICompatible: vi.fn(),
     }))

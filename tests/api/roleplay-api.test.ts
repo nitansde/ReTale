@@ -589,6 +589,37 @@ describe('roleplay session API', () => {
       { params: Promise.resolve({ sessionId: 'missing-session' }) }
     )
     expect(appendResponse.status).toBe(404)
-    await expect(appendResponse.json()).resolves.toEqual({ error: 'Roleplay session not found: missing-session' })
+    await expect(appendResponse.json()).resolves.toEqual({ ok: false, error: 'Roleplay session not found: missing-session' })
+  })
+
+  it('rejects invalid source timeline ids without creating a session or orphan timeline node', async () => {
+    const database = createTestDatabase('chatbook-roleplay-api-invalid-source-node')
+    createFixture(database)
+    vi.resetModules()
+
+    const beforeSessionCount = (database.prepare('SELECT COUNT(*) AS count FROM roleplay_sessions').get() as { count: number }).count
+    const beforeTimelineNodeCount = (database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes').get() as { count: number }).count
+
+    const { POST: createSession } = await import('@/app/api/roleplay/sessions/route')
+    const response = await createSession(createSessionRequest({
+      novelId: FIXTURE_IDS.novelId,
+      branchId: FIXTURE_IDS.branchId,
+      title: 'RP-入口 无效父节点',
+      subtitle: '应该返回稳定错误',
+      sourceChapterId: FIXTURE_IDS.chapterId,
+      sourceChapterNo: 12,
+      sourceChapterTitle: '第12章 夜谈',
+      sourceTimelineNodeId: 'missing-timeline-node',
+      sourceTimelineNodeType: 'rewrite',
+      sourceSelectedText: '他在窗边停住，迟迟没有开口。',
+      sourceTextSnapshot: 'rewrite 正文：风吹动了窗纸，他还是没有转身。',
+      sourceSelectedLineStart: 8,
+      sourceSelectedLineEnd: 8,
+    }))
+
+    expect(response.status).toBe(404)
+    await expect(response.json()).resolves.toEqual({ ok: false, error: 'Source timeline node not found: missing-timeline-node' })
+    expect((database.prepare('SELECT COUNT(*) AS count FROM roleplay_sessions').get() as { count: number }).count).toBe(beforeSessionCount)
+    expect((database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes').get() as { count: number }).count).toBe(beforeTimelineNodeCount)
   })
 })
