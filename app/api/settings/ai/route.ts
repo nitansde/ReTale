@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { normalizeAISettings, sanitizeAISettingsForClient } from '@/lib/ai-settings'
+import { jsonError, readJsonObject } from '@/lib/server/api-route'
 import type { AISettings, AIScenarioKey } from '@/lib/types'
 import { loadStoredAISettings, saveStoredAISettings } from '@/lib/server/ai-settings'
 import { normalizeOpenAICompatibleBaseUrl } from '@/lib/server/openai-compatible'
@@ -128,7 +129,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as Record<string, unknown>
+    const body = await readJsonObject(request)
     const current = loadStoredAISettings()
     const next = normalizeAISettings({
       rewrite: normalizeScenarioPayload('rewrite', body.rewrite, current),
@@ -140,12 +141,6 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true })
   } catch (error) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: error instanceof Error ? error.message : 'Failed to save AI settings',
-      },
-      { status: 400 }
-    )
+    return jsonError(error instanceof Error ? error.message : 'Failed to save AI settings', 400)
   }
 }

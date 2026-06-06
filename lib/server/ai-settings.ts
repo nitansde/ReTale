@@ -1,34 +1,13 @@
 import { normalizeAISettings } from '@/lib/ai-settings'
 import type { AISettings } from '@/lib/types'
+import { safeParseJson } from '@/lib/server/json-parse'
 import { findAppSettings, upsertAppSettings } from '@/lib/server/persistence'
 
 export const AI_SETTINGS_V2_KEY = 'AI_SETTINGS_V2'
 export const OLLAMA_TIMEOUT_MS_KEY = 'OLLAMA_TIMEOUT_MS'
 
-const LEGACY_SETTING_KEYS = [
-  AI_SETTINGS_V2_KEY,
-  'OPENAI_COMPATIBLE_BASE_URL',
-  'OPENAI_COMPATIBLE_API_KEY',
-  'OPENAI_COMPATIBLE_MODEL',
-  'AI_REWRITE_PROVIDER',
-  'AI_KNOWLEDGE_PROVIDER',
-  'OLLAMA_BASE_URL',
-  'OLLAMA_REWRITE_MODEL',
-  'OLLAMA_MODEL',
-  'OLLAMA_EMBEDDING_MODEL',
-] as const
-
 function parseStoredSettingsBlob(value: string | null | undefined) {
-  const raw = value?.trim()
-  if (!raw) {
-    return null
-  }
-
-  try {
-    return JSON.parse(raw) as unknown
-  } catch {
-    return null
-  }
+  return safeParseJson(value)
 }
 
 function isPositiveIntegerString(value: string) {
@@ -59,36 +38,79 @@ export function validateProtectedAISettingsResetSnapshot(snapshot: ProtectedAISe
   }
 }
 
-function buildLegacyStoredSettings(map: Partial<Record<(typeof LEGACY_SETTING_KEYS)[number], string>>) {
+function createEnvironmentBackedAISettings(): AISettings {
+  const openAIBaseUrl = process.env.OPENAI_COMPATIBLE_BASE_URL?.trim() || 'https://api.openai.com/v1'
+  const openAIApiKey = process.env.OPENAI_COMPATIBLE_API_KEY?.trim() || ''
+  const openAIModel = process.env.OPENAI_COMPATIBLE_MODEL?.trim() || 'gpt-4.1-mini'
+  const ollamaBaseUrl = process.env.OLLAMA_BASE_URL?.trim() || 'http://127.0.0.1:11434'
+  const ollamaRewriteModel = process.env.OLLAMA_REWRITE_MODEL?.trim() || ''
+  const ollamaKnowledgeModel = process.env.OLLAMA_MODEL?.trim() || ''
+  const ollamaEmbeddingModel = process.env.OLLAMA_EMBEDDING_MODEL?.trim() || ''
+
   return {
-    rewriteProvider: map.AI_REWRITE_PROVIDER ?? 'openai-compatible',
-    knowledgeProvider: map.AI_KNOWLEDGE_PROVIDER ?? 'ollama',
-    baseUrl: map.OPENAI_COMPATIBLE_BASE_URL ?? process.env.OPENAI_COMPATIBLE_BASE_URL ?? 'https://api.openai.com/v1',
-    apiKey: map.OPENAI_COMPATIBLE_API_KEY ?? process.env.OPENAI_COMPATIBLE_API_KEY ?? '',
-    apiKeyConfigured: Boolean((map.OPENAI_COMPATIBLE_API_KEY ?? process.env.OPENAI_COMPATIBLE_API_KEY ?? '').trim()),
-    apiKeyMasked: '',
-    model: map.OPENAI_COMPATIBLE_MODEL ?? process.env.OPENAI_COMPATIBLE_MODEL ?? 'gpt-4.1-mini',
-    configured: Boolean(
-      (map.OPENAI_COMPATIBLE_BASE_URL ?? process.env.OPENAI_COMPATIBLE_BASE_URL ?? '').trim() &&
-      (map.OPENAI_COMPATIBLE_MODEL ?? process.env.OPENAI_COMPATIBLE_MODEL ?? '').trim() &&
-      (map.OPENAI_COMPATIBLE_API_KEY ?? process.env.OPENAI_COMPATIBLE_API_KEY ?? '').trim()
-    ),
-    ollamaBaseUrl: map.OLLAMA_BASE_URL ?? process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434',
-    ollamaRewriteModel: map.OLLAMA_REWRITE_MODEL ?? process.env.OLLAMA_REWRITE_MODEL ?? '',
-    ollamaModel: map.OLLAMA_MODEL ?? process.env.OLLAMA_MODEL ?? '',
-    ollamaEmbeddingModel: map.OLLAMA_EMBEDDING_MODEL ?? process.env.OLLAMA_EMBEDDING_MODEL ?? '',
+    rewrite: {
+      provider: 'openai-compatible',
+      openAICompatible: {
+        baseUrl: openAIBaseUrl,
+        apiKey: openAIApiKey,
+        apiKeyConfigured: Boolean(openAIApiKey),
+        apiKeyMasked: '',
+        model: openAIModel,
+        configured: Boolean(openAIBaseUrl && openAIModel && openAIApiKey),
+      },
+      ollama: {
+        baseUrl: ollamaBaseUrl,
+        model: ollamaRewriteModel,
+        configured: Boolean(ollamaBaseUrl && ollamaRewriteModel),
+      },
+    },
+    knowledgeExtraction: {
+      provider: 'ollama',
+      openAICompatible: {
+        baseUrl: openAIBaseUrl,
+        apiKey: openAIApiKey,
+        apiKeyConfigured: Boolean(openAIApiKey),
+        apiKeyMasked: '',
+        model: openAIModel,
+        configured: Boolean(openAIBaseUrl && openAIModel && openAIApiKey),
+        parallelism: 5,
+      },
+      ollama: {
+        baseUrl: ollamaBaseUrl,
+        model: ollamaKnowledgeModel,
+        configured: Boolean(ollamaBaseUrl && ollamaKnowledgeModel),
+        parallelism: 1,
+      },
+    },
+    embeddings: {
+      provider: 'ollama',
+      openAICompatible: {
+        baseUrl: openAIBaseUrl,
+        apiKey: openAIApiKey,
+        apiKeyConfigured: Boolean(openAIApiKey),
+        apiKeyMasked: '',
+        model: openAIModel,
+        configured: Boolean(openAIBaseUrl && openAIModel && openAIApiKey),
+      },
+      ollama: {
+        baseUrl: ollamaBaseUrl,
+        model: ollamaEmbeddingModel,
+        configured: Boolean(ollamaBaseUrl && ollamaEmbeddingModel),
+      },
+      embeddingBatchSize: 16,
+    },
   }
 }
 
 export function loadStoredAISettings(): AISettings {
-  const entries = findAppSettings([...LEGACY_SETTING_KEYS])
-  const map = Object.fromEntries(entries.map((item) => [item.key, item.value])) as Partial<Record<(typeof LEGACY_SETTING_KEYS)[number], string>>
-  const parsed = parseStoredSettingsBlob(map.AI_SETTINGS_V2)
+  const entries = findAppSettings([AI_SETTINGS_V2_KEY])
+  const map = Object.fromEntries(entries.map((item) => [item.key, item.value])) as Partial<Record<typeof AI_SETTINGS_V2_KEY, string>>
+  const parsed = parseStoredSettingsBlob(map[AI_SETTINGS_V2_KEY])
   if (parsed) {
     return normalizeAISettings(parsed)
   }
 
-  return normalizeAISettings(buildLegacyStoredSettings(map))
+  return normalizeAISettings(createEnvironmentBackedAISettings())
 }
 
 export async function saveStoredAISettings(settings: AISettings) {
