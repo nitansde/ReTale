@@ -253,4 +253,29 @@ describe('future-jump revise API', () => {
       ],
     }))
   }, 30000)
+
+  it('returns stable 404 JSON for missing runs without writing revisions', async () => {
+    const database = createTestDatabase('chatbook-future-jump-revise-missing-run')
+    seedReviseFixture(database)
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings(),
+    }))
+
+    vi.resetModules()
+    const { POST: reviseRun } = await import('@/app/api/future-jump/runs/[runId]/revise/route')
+    const revisionCountBefore = (database.prepare('SELECT COUNT(*) AS count FROM future_jump_revisions').get() as { count: number }).count
+
+    const response = await reviseRun(new Request('http://localhost/api/future-jump/runs/missing/revise', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userFeedback: '补一版' }),
+    }), { params: Promise.resolve({ runId: 'missing-run' }) })
+
+    expect(response.status).toBe(404)
+    await expect(response.json()).resolves.toEqual({ ok: false, error: 'Future jump run not found: missing-run' })
+
+    const revisionCountAfter = (database.prepare('SELECT COUNT(*) AS count FROM future_jump_revisions').get() as { count: number }).count
+    expect(revisionCountAfter).toBe(revisionCountBefore)
+  })
 })

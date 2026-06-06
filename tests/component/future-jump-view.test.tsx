@@ -206,7 +206,7 @@ describe('FutureJumpView', () => {
     expect(screen.getByTestId('future-jump-text')).toHaveTextContent('最新镜像未来正文')
     expect(screen.getByTestId('future-jump-feedback')).toBeInTheDocument()
     expect(screen.getByTestId('future-jump-regenerate')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Continue this Future' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '继续这个 Future' })).toBeInTheDocument()
     expect(screen.getByTestId('future-jump-revision-history')).toHaveTextContent('第二版桥接摘要')
     expect(screen.getByTestId('future-jump-revision-history')).toHaveTextContent('第二版未来正文')
     expect(screen.getByTestId('future-jump-revision-history')).toHaveTextContent('初始桥接摘要')
@@ -233,7 +233,7 @@ describe('FutureJumpView', () => {
       expect(screen.getByTestId('future-jump-revision-history')).not.toHaveTextContent('第三版镜像未来正文')
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Continue this Future' }))
+    fireEvent.click(screen.getByRole('button', { name: '继续这个 Future' }))
 
     expect(onContinueInFuture).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -277,7 +277,7 @@ describe('FutureJumpView', () => {
     fireEvent.change(screen.getByTestId('future-jump-feedback'), {
       target: { value: '把救援推得更晚' },
     })
-    expect(screen.getByRole('button', { name: 'Continue this Future' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '继续这个 Future' })).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('future-jump-regenerate'))
 
     await waitFor(() => {
@@ -327,7 +327,7 @@ describe('FutureJumpView', () => {
     expect(screen.getByTestId('future-jump-bridge')).toHaveTextContent('最新镜像桥接摘要')
     expect(screen.getByTestId('future-jump-text')).toHaveTextContent('最新镜像未来正文')
     expect(screen.getByTestId('future-jump-feedback')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Continue this Future' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '继续这个 Future' })).toBeInTheDocument()
     expect(screen.queryByText('parent failed')).not.toBeInTheDocument()
 
     fireEvent.change(screen.getByTestId('future-jump-feedback'), {

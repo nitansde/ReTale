@@ -324,10 +324,49 @@ describe('future-jump create API', () => {
       }),
     }))
 
-    expect(response.status).toBe(400)
-    await expect(response.json()).resolves.toEqual({ error: 'Target outline node not found: missing-outline' })
+    expect(response.status).toBe(404)
+    await expect(response.json()).resolves.toEqual({ ok: false, error: 'Target outline node not found: missing-outline' })
     const runCount = database.prepare('SELECT COUNT(*) AS count FROM future_jump_runs').get() as { count: number }
     expect(runCount.count).toBe(initialRunCount)
+  })
+
+  it('rejects invalid parent timeline ids before creating future-jump runs or timeline nodes', async () => {
+    const database = createTestDatabase('chatbook-future-jump-create-invalid-parent')
+    seedCreateFixture(database)
+    const initialRunCount = (database.prepare('SELECT COUNT(*) AS count FROM future_jump_runs').get() as { count: number }).count
+    const initialTimelineNodeCount = (database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes').get() as { count: number }).count
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings(),
+    }))
+
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    vi.resetModules()
+    const { POST } = await import('@/app/api/future-jump/runs/route')
+    const response = await POST(new Request('http://localhost/api/future-jump/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceContext: {
+          nodeId: 'continue_fixture_025',
+          nodeType: 'continue_block',
+          chapterId: 'chapter-25',
+          chapterNo: 25,
+          whatIfSessionId: null,
+        },
+        targetOutlineNodeId: 'outline-100',
+        targetOutlineChapterId: 'outline-anchor-100',
+        parentTimelineNodeId: 'missing-parent-node',
+      }),
+    }))
+
+    expect(response.status).toBe(404)
+    await expect(response.json()).resolves.toEqual({ ok: false, error: 'Parent timeline node not found: missing-parent-node' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect((database.prepare('SELECT COUNT(*) AS count FROM future_jump_runs').get() as { count: number }).count).toBe(initialRunCount)
+    expect((database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes').get() as { count: number }).count).toBe(initialTimelineNodeCount)
   })
 
   it('rejects targets that stay on or before the source chapter', async () => {
@@ -358,7 +397,7 @@ describe('future-jump create API', () => {
       }),
     }))
     expect(sameChapter.status).toBe(400)
-    await expect(sameChapter.json()).resolves.toEqual({ error: 'Target chapter must be after the source chapter' })
+    await expect(sameChapter.json()).resolves.toEqual({ ok: false, error: 'Target chapter must be after the source chapter' })
 
     const earlierChapter = await POST(new Request('http://localhost/api/future-jump/runs', {
       method: 'POST',
@@ -376,7 +415,7 @@ describe('future-jump create API', () => {
       }),
     }))
     expect(earlierChapter.status).toBe(400)
-    await expect(earlierChapter.json()).resolves.toEqual({ error: 'Target chapter must not be before the source chapter' })
+    await expect(earlierChapter.json()).resolves.toEqual({ ok: false, error: 'Target chapter must not be before the source chapter' })
 
     const runCount = database.prepare('SELECT COUNT(*) AS count FROM future_jump_runs').get() as { count: number }
     expect(runCount.count).toBe(initialRunCount)
