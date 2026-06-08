@@ -4,6 +4,8 @@ import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-co
 import type { AISettings } from '@/lib/types'
 
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const originalTaskStaleTimeoutMs = process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS
+const originalTaskMaxRetries = process.env.CHATBOOK_TASK_MAX_RETRIES
 
 function createAiSettings(): AISettings {
   return {
@@ -148,6 +150,8 @@ async function importRewriteRoute(options: ImportRewriteRouteOptions = {}) {
 
 afterEach(() => {
   vi.useRealTimers()
+  process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
+  process.env.CHATBOOK_TASK_MAX_RETRIES = originalTaskMaxRetries
   closeTestDatabase()
   vi.restoreAllMocks()
   vi.resetModules()
@@ -472,6 +476,252 @@ describe('recoverable rewrite jobs', () => {
     expect(restored.job.status).toBe('succeeded')
     expect(restored.job.result.content).toBe('fallback scheduled result')
   }, 30000)
+
+  it('requeues stale recoverable rewrite jobs on GET and schedules them again', async () => {
+    process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = '1000'
+    process.env.CHATBOOK_TASK_MAX_RETRIES = '1'
+
+    const { database, queryOne } = await createTestDatabase('chatbook-rewrite-watchdog-get')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ result: 'watchdog resumed result' }) } }],
+    }), { status: 200 })))
+
+    const payloadJson = JSON.stringify({
+      request: {
+        novelId: 'novel-rewrite',
+        branchId: 'novel-rewrite:main',
+        chapterId: 'chapter-rewrite-1',
+        selectedText: '选中文本',
+        sourceText: '原始章节正文。',
+        operationType: 'rewrite',
+        userInstruction: '增强压迫感。',
+        scope: 'chapter',
+        mode: 'heavy',
+        tone: 'dramatic',
+        rewriteLaunchSource: 'chapter',
+      },
+      panel: {
+        novelId: 'novel-rewrite',
+        branchId: 'novel-rewrite:main',
+        chapterId: 'chapter-rewrite-1',
+        selectedText: '选中文本',
+        sourceText: '原始章节正文。',
+        sourceTextOverride: null,
+        userInstruction: '增强压迫感。',
+        rewriteLaunchSource: 'chapter',
+        branchContextNodeId: null,
+        branchContextInclusion: null,
+        continueBlockId: null,
+        createdAt: new Date().toISOString(),
+      },
+    })
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (
+        id, novelId, branchId, jobType, status, progress, currentStep, payloadJson, createdAt, updatedAt
+      ) VALUES (?, ?, ?, 'rewrite_generation', 'running', ?, ?, ?, datetime('now', '-10 seconds'), datetime('now', '-10 seconds'))`
+    ).run('rewrite-watchdog-get', 'novel-rewrite', 'novel-rewrite:main', 0.4, '生成中', payloadJson)
+
+    let scheduledRun: Promise<void> | null = null
+    const { GET } = await importRewriteRoute({
+      afterImpl: (callback) => {
+        scheduledRun = callback()
+      },
+    })
+
+    const response = await GET(new Request('http://localhost/api/rewrite?jobId=rewrite-watchdog-get'))
+    const data = await response.json() as { ok: boolean; job: { jobId: string; status: string; errorMessage: string | null } }
+
+    expect(response.status).toBe(200)
+    expect(data.ok).toBe(true)
+    expect(data.job.jobId).toBe('rewrite-watchdog-get')
+    expect(data.job.status).toBe('queued')
+    expect(data.job.errorMessage).toContain('无进度更新')
+
+    await waitForCondition(() => {
+      const row = queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', 'rewrite-watchdog-get')
+      return row?.status === 'succeeded'
+    })
+    await scheduledRun
+
+    const completedRow = queryOne<{ status: string; payloadJson: string }>(
+      'SELECT status, payloadJson FROM KnowledgeJob WHERE id = ?',
+      'rewrite-watchdog-get',
+    )
+    const completedPayload = JSON.parse(completedRow?.payloadJson ?? '{}') as {
+      taskWatchdog?: { attemptCount?: number; lastAction?: string }
+      result?: { content?: string }
+    }
+
+    expect(completedRow?.status).toBe('succeeded')
+    expect(completedPayload.taskWatchdog).toMatchObject({ attemptCount: 1, lastAction: 'retried' })
+    expect(completedPayload.result?.content).toBe('watchdog resumed result')
+  }, 30000)
+
+  it('requeues stale duplicate recoverable rewrite jobs during creation and reuses the same job', async () => {
+    process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = '1000'
+    process.env.CHATBOOK_TASK_MAX_RETRIES = '1'
+
+    const { database, queryOne } = await createTestDatabase('chatbook-rewrite-watchdog-create')
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ result: 'watchdog reused result' }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const payloadJson = JSON.stringify({
+      request: {
+        novelId: 'novel-rewrite',
+        branchId: 'novel-rewrite:main',
+        chapterId: 'chapter-rewrite-1',
+        selectedText: '选中文本',
+        sourceText: '原始章节正文。',
+        operationType: 'rewrite',
+        userInstruction: '增强压迫感。',
+        scope: 'chapter',
+        mode: 'heavy',
+        tone: 'dramatic',
+        rewriteLaunchSource: 'chapter',
+      },
+      panel: {
+        novelId: 'novel-rewrite',
+        branchId: 'novel-rewrite:main',
+        chapterId: 'chapter-rewrite-1',
+        selectedText: '选中文本',
+        sourceText: '原始章节正文。',
+        sourceTextOverride: null,
+        userInstruction: '增强压迫感。',
+        rewriteLaunchSource: 'chapter',
+        branchContextNodeId: null,
+        branchContextInclusion: null,
+        continueBlockId: null,
+        createdAt: new Date().toISOString(),
+      },
+    })
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (
+        id, novelId, branchId, jobType, status, progress, currentStep, payloadJson, createdAt, updatedAt
+      ) VALUES (?, ?, ?, 'rewrite_generation', 'running', ?, ?, ?, datetime('now', '-10 seconds'), datetime('now', '-10 seconds'))`
+    ).run('rewrite-watchdog-create', 'novel-rewrite', 'novel-rewrite:main', 0.4, '生成中', payloadJson)
+
+    let scheduledRun: Promise<void> | null = null
+    const { POST } = await importRewriteRoute({
+      afterImpl: (callback) => {
+        scheduledRun = callback()
+      },
+    })
+
+    const response = await POST(createRewriteRequest({ recoverableRewriteJob: true }))
+    const data = await response.json() as { ok: boolean; job: { jobId: string; status: string } }
+
+    expect(response.status).toBe(200)
+    expect(data.ok).toBe(true)
+    expect(data.job.jobId).toBe('rewrite-watchdog-create')
+    expect(data.job.status).toBe('queued')
+
+    await waitForCondition(() => {
+      const row = queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', 'rewrite-watchdog-create')
+      return row?.status === 'succeeded'
+    })
+    await scheduledRun
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  }, 30000)
+
+  it('rejects stale rewrite runner final updates after watchdog assigns a newer attempt', async () => {
+    process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = '1000'
+    process.env.CHATBOOK_TASK_MAX_RETRIES = '1'
+
+    const { database, queryOne } = await createTestDatabase('chatbook-rewrite-watchdog-attempt-guard')
+    const basePayload = {
+      request: {
+        novelId: 'novel-rewrite',
+        branchId: 'novel-rewrite:main',
+        chapterId: 'chapter-rewrite-1',
+        selectedText: '选中文本',
+        sourceText: '原始章节正文。',
+        operationType: 'rewrite',
+        userInstruction: '增强压迫感。',
+        scope: 'chapter',
+        mode: 'heavy',
+        tone: 'dramatic',
+        rewriteLaunchSource: 'chapter',
+      },
+      panel: {
+        novelId: 'novel-rewrite',
+        branchId: 'novel-rewrite:main',
+        chapterId: 'chapter-rewrite-1',
+        selectedText: '选中文本',
+        sourceText: '原始章节正文。',
+        sourceTextOverride: null,
+        userInstruction: '增强压迫感。',
+        rewriteLaunchSource: 'chapter',
+        branchContextNodeId: null,
+        branchContextInclusion: null,
+        continueBlockId: null,
+        createdAt: new Date().toISOString(),
+      },
+      taskWatchdog: {
+        attemptId: 'attempt-old',
+      },
+    }
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (
+        id, novelId, branchId, jobType, status, progress, currentStep, payloadJson, createdAt, updatedAt
+      ) VALUES (?, ?, ?, 'rewrite_generation', 'running', ?, ?, ?, datetime('now', '-10 seconds'), datetime('now', '-10 seconds'))`
+    ).run('rewrite-watchdog-guard', 'novel-rewrite', 'novel-rewrite:main', 0.4, '生成中', JSON.stringify(basePayload))
+
+    const { reconcileKnowledgeJobWatchdog } = await import('@/lib/server/knowledge-job-watchdog')
+    const { updateRecoverableRewriteJob } = await import('@/lib/server/recoverable-rewrite-jobs')
+    reconcileKnowledgeJobWatchdog({ jobId: 'rewrite-watchdog-guard', jobTypes: ['rewrite_generation'] })
+
+    const queuedRow = queryOne<{ status: string; payloadJson: string | null }>(
+      'SELECT status, payloadJson FROM KnowledgeJob WHERE id = ?',
+      'rewrite-watchdog-guard',
+    )
+    const queuedPayload = JSON.parse(queuedRow?.payloadJson ?? '{}') as {
+      taskWatchdog?: { attemptId?: string; attemptCount?: number }
+      result?: { content?: string }
+    }
+
+    expect(queuedRow?.status).toBe('queued')
+    expect(queuedPayload.taskWatchdog?.attemptId).not.toBe('attempt-old')
+
+    const staleUpdate = updateRecoverableRewriteJob('rewrite-watchdog-guard', {
+      status: 'succeeded',
+      progress: 1,
+      currentStep: '完成',
+      payload: {
+        ...basePayload,
+        result: {
+          provider: 'openai-compatible',
+          title: '生成版本',
+          summary: 'stale result',
+          content: '旧 runner 的结果',
+          inputTokens: null,
+          outputTokens: null,
+          metadata: null,
+          presetCompat: null,
+        },
+      },
+      expectedAttemptId: 'attempt-old',
+    })
+
+    const finalRow = queryOne<{ status: string; payloadJson: string | null }>(
+      'SELECT status, payloadJson FROM KnowledgeJob WHERE id = ?',
+      'rewrite-watchdog-guard',
+    )
+    const finalPayload = JSON.parse(finalRow?.payloadJson ?? '{}') as {
+      taskWatchdog?: { attemptId?: string; attemptCount?: number }
+      result?: { content?: string }
+    }
+
+    expect(staleUpdate.changes).toBe(0)
+    expect(finalRow?.status).toBe('queued')
+    expect(finalPayload.taskWatchdog?.attemptId).toBe(queuedPayload.taskWatchdog?.attemptId)
+    expect(finalPayload.result).toBeUndefined()
+  })
 
   it('claims a queued job once when multiple runners race', async () => {
     await createTestDatabase('chatbook-rewrite-claim-once')

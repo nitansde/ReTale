@@ -17,14 +17,23 @@ import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
 import { generateRewriteWithOllama, streamRewriteWithOllama } from '@/lib/server/ollama-local'
 import {
   abortRecoverableRewriteJob,
+  claimRecoverableRewriteJob,
   clearRecoverableRewriteAbortController,
   createRecoverableRewriteAbortController,
   isRecoverableRewriteJobAborted,
   isRecoverableRewriteJobRestorable,
+  normalizeRecoverableRewriteJobPayload,
   RECOVERABLE_REWRITE_JOB_TYPE,
+  readRecoverableRewriteJob,
+  runRecoverableRewriteJobWithAttempt,
+  serializeRecoverableRewriteJob,
+  type RecoverableRewriteJobPayload,
+  type RecoverableRewriteJobRow,
+  updateRecoverableRewriteJob,
 } from '@/lib/server/recoverable-rewrite-jobs'
 import { safeParseJsonObject } from '@/lib/server/json-parse'
 import { buildRewriteTaskPromptLines, CONTINUATION_SOURCE_BLOCK_LABEL, isContinuationRewriteTask } from '@/lib/server/rewrite-task-prompt'
+import { reconcileKnowledgeJobWatchdog } from '@/lib/server/knowledge-job-watchdog'
 import { uid } from '@/lib/utils'
 import type { PresetCompatPromptRuleRuntimeContext, PresetCompatRuntimeContextBlock } from '@/lib/preset-compat/types'
 import type { GenerationContextBlock, RoleplayContextMessage } from '@/lib/server/context-builder'
@@ -58,40 +67,6 @@ type RewriteErrorResponseBody = {
   provider: string
   guidance: string
   presetCompat: unknown
-}
-
-type RecoverableRewriteJobPayload = {
-  request: Record<string, unknown>
-  panel: {
-    novelId: string
-    branchId: string
-    chapterId: string
-    selectedText: string
-    sourceText: string
-    sourceTextOverride: string | null
-    userInstruction: string
-    rewriteLaunchSource: string | null
-    branchContextNodeId: string | null
-    branchContextInclusion: string | null
-    continueBlockId: string | null
-    createdAt: string
-  }
-  stream?: boolean
-  result?: RewriteResultPayload
-  error?: string
-}
-
-type RecoverableRewriteJobRow = {
-  id: string
-  novelId: string
-  branchId: string | null
-  status: string
-  progress: number
-  currentStep: string | null
-  payloadJson: string | null
-  errorMessage: string | null
-  createdAt: string
-  updatedAt: string
 }
 
 function mapSurfaceContextBlocks(promptBlocks: readonly GenerationContextBlock[] | null): PresetCompatRuntimeContextBlock[] {
@@ -207,39 +182,6 @@ function normalizeRewriteResultPayload(value: unknown): RewriteResultPayload | n
   }
 }
 
-function normalizeRecoverableRewriteJobPayload(payloadJson: string | null): RecoverableRewriteJobPayload | null {
-  const record = parseJsonRecord(payloadJson)
-  if (!record) return null
-
-  const request = record.request && typeof record.request === 'object' && !Array.isArray(record.request)
-    ? record.request as Record<string, unknown>
-    : null
-  const panelRecord = record.panel && typeof record.panel === 'object' && !Array.isArray(record.panel)
-    ? record.panel as Record<string, unknown>
-    : null
-  if (!request || !panelRecord) return null
-
-  return {
-    request,
-    panel: {
-      novelId: String(panelRecord.novelId ?? ''),
-      branchId: String(panelRecord.branchId ?? ''),
-      chapterId: String(panelRecord.chapterId ?? ''),
-      selectedText: String(panelRecord.selectedText ?? ''),
-      sourceText: String(panelRecord.sourceText ?? ''),
-      sourceTextOverride: typeof panelRecord.sourceTextOverride === 'string' ? panelRecord.sourceTextOverride : null,
-      userInstruction: String(panelRecord.userInstruction ?? ''),
-      rewriteLaunchSource: typeof panelRecord.rewriteLaunchSource === 'string' ? panelRecord.rewriteLaunchSource : null,
-      branchContextNodeId: typeof panelRecord.branchContextNodeId === 'string' ? panelRecord.branchContextNodeId : null,
-      branchContextInclusion: typeof panelRecord.branchContextInclusion === 'string' ? panelRecord.branchContextInclusion : null,
-      continueBlockId: typeof panelRecord.continueBlockId === 'string' ? panelRecord.continueBlockId : null,
-      createdAt: String(panelRecord.createdAt ?? ''),
-    },
-    stream: record.stream === true,
-    result: normalizeRewriteResultPayload(record.result) ?? undefined,
-    error: typeof record.error === 'string' ? record.error : undefined,
-  }
-}
 
 function buildPresetCompatResponseHeaders(serializedMetadata: string): Record<string, string> {
   if (Buffer.byteLength(serializedMetadata, 'utf8') <= MAX_PRESET_COMPAT_RESPONSE_HEADER_BYTES) {
@@ -296,33 +238,6 @@ async function readRewriteErrorResponse(response: Response) {
   return text.trim() || `Rewrite job failed with status ${response.status}`
 }
 
-function readRecoverableRewriteJob(jobId: string) {
-  return queryOne<RecoverableRewriteJobRow>(
-    `SELECT id, novelId, branchId, status, progress, currentStep, payloadJson, errorMessage, createdAt, updatedAt
-     FROM KnowledgeJob
-     WHERE id = ? AND jobType = ?`,
-    jobId,
-    RECOVERABLE_REWRITE_JOB_TYPE,
-  )
-}
-
-function serializeRecoverableRewriteJob(row: RecoverableRewriteJobRow | null) {
-  if (!row) return null
-  const payload = normalizeRecoverableRewriteJobPayload(row.payloadJson)
-  if (!payload) return null
-
-  return {
-    jobId: row.id,
-    status: row.status,
-    progress: row.progress,
-    currentStep: row.currentStep,
-    errorMessage: row.errorMessage,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    panel: payload.panel,
-    result: payload.result ?? null,
-  }
-}
 
 function recoverableRewritePanelScopeExists(panel: RecoverableRewriteJobPayload['panel']) {
   return Boolean(queryOne<{ id: string }>(
@@ -341,26 +256,6 @@ function recoverableRewritePanelScopeExists(panel: RecoverableRewriteJobPayload[
   ))
 }
 
-function updateRecoverableRewriteJob(jobId: string, params: {
-  status: string
-  progress: number
-  currentStep: string | null
-  payload: RecoverableRewriteJobPayload
-  errorMessage?: string | null
-}) {
-  execute(
-    `UPDATE KnowledgeJob
-     SET status = ?, progress = ?, currentStep = ?, payloadJson = ?, errorMessage = ?, updatedAt = CURRENT_TIMESTAMP
-     WHERE id = ? AND jobType = ?`,
-    params.status,
-    params.progress,
-    params.currentStep,
-    JSON.stringify(params.payload),
-    params.errorMessage ?? null,
-    jobId,
-    RECOVERABLE_REWRITE_JOB_TYPE,
-  )
-}
 
 function findLatestRecoverableRewriteJob(params: {
   novelId: string
@@ -554,6 +449,12 @@ function scheduleRecoverableRewriteJob(jobId: string) {
   }
 }
 
+function scheduleRecoverableRewriteJobIfQueued(row: RecoverableRewriteJobRow | null) {
+  if (row?.status === 'queued') {
+    scheduleRecoverableRewriteJob(row.id)
+  }
+}
+
 function parseOperationType(value: unknown): ProductSurfaceId | null {
   const operationType = String(value ?? '').trim()
   return PRODUCT_SURFACE_IDS.includes(operationType as ProductSurfaceId)
@@ -727,11 +628,24 @@ export async function GET(request: Request) {
   const novelId = searchParams.get('novelId')?.trim()
   const branchId = searchParams.get('branchId')?.trim()
   const chapterId = searchParams.get('chapterId')?.trim()
+
+  if (jobId) {
+    reconcileKnowledgeJobWatchdog({ jobId, jobTypes: [RECOVERABLE_REWRITE_JOB_TYPE] })
+  } else if (novelId) {
+    reconcileKnowledgeJobWatchdog({
+      novelId,
+      branchId: branchId ?? undefined,
+      jobTypes: [RECOVERABLE_REWRITE_JOB_TYPE],
+    })
+  }
+
   const row = jobId
     ? readRecoverableRewriteJob(jobId)
     : novelId
       ? findLatestRecoverableRewriteJob({ novelId, branchId, chapterId })
       : null
+
+  scheduleRecoverableRewriteJobIfQueued(row)
 
   return NextResponse.json({ ok: true, job: serializeRecoverableRewriteJob(row) }, {
     headers: { 'Cache-Control': 'no-store' },
@@ -783,6 +697,12 @@ async function createRecoverableRewriteJob(body: Record<string, unknown>) {
     return NextResponse.json({ ok: false, error: 'Recoverable rewrite job scope not found' }, { status: 404 })
   }
 
+  reconcileKnowledgeJobWatchdog({
+    novelId: panel.novelId,
+    branchId: panel.branchId,
+    jobTypes: [RECOVERABLE_REWRITE_JOB_TYPE],
+  })
+
   const activeJob = findLatestRecoverableRewriteJob({
     novelId: panel.novelId,
     branchId: panel.branchId,
@@ -792,6 +712,7 @@ async function createRecoverableRewriteJob(body: Record<string, unknown>) {
     continueBlockId: panel.continueBlockId,
   })
   if (activeJob?.status === 'queued' || activeJob?.status === 'running') {
+    scheduleRecoverableRewriteJobIfQueued(activeJob)
     return NextResponse.json({ ok: true, job: serializeRecoverableRewriteJob(activeJob) }, {
       headers: { 'Cache-Control': 'no-store' },
     })
@@ -877,38 +798,36 @@ async function runRecoverableRewriteJob(jobId: string) {
     return
   }
 
-  const claim = execute(
-    `UPDATE KnowledgeJob
-     SET status = 'running', progress = 0.35, currentStep = ?, updatedAt = CURRENT_TIMESTAMP
-     WHERE id = ? AND jobType = ? AND status = 'queued'`,
-    '正在生成改写版本',
-    jobId,
-    RECOVERABLE_REWRITE_JOB_TYPE,
-  )
-  if (claim.changes !== 1) return
+  const claim = claimRecoverableRewriteJob(jobId, {
+    progress: 0.35,
+    currentStep: '正在生成改写版本',
+  })
+  if (!claim.claimed || !claim.attemptId) return
 
   const controller = createRecoverableRewriteAbortController(jobId)
   try {
-    const response = await handleRewritePost(new Request('http://localhost/api/rewrite', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload.stream ? { ...payload.request, stream: true } : payload.request),
-      signal: controller.signal,
-    }), { allowRecoverable: false, signal: controller.signal })
-    if (isRecoverableRewriteJobAborted(jobId)) return
-    if (!response.ok) {
-      throw new Error(await readRewriteErrorResponse(response))
-    }
+    await runRecoverableRewriteJobWithAttempt(jobId, claim.attemptId, async () => {
+      const response = await handleRewritePost(new Request('http://localhost/api/rewrite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload.stream ? { ...payload.request, stream: true } : payload.request),
+        signal: controller.signal,
+      }), { allowRecoverable: false, signal: controller.signal })
+      if (isRecoverableRewriteJobAborted(jobId)) return
+      if (!response.ok) {
+        throw new Error(await readRewriteErrorResponse(response))
+      }
 
-    const result = payload.stream
-      ? await readRewriteResponseResultWithProgress(jobId, payload, response)
-      : await readRewriteResponseResult(response)
-    if (isRecoverableRewriteJobAborted(jobId)) return
-    updateRecoverableRewriteJob(jobId, {
-      status: 'succeeded',
-      progress: 1,
-      currentStep: '完成',
-      payload: { ...payload, result },
+      const result = payload.stream
+        ? await readRewriteResponseResultWithProgress(jobId, payload, response)
+        : await readRewriteResponseResult(response)
+      if (isRecoverableRewriteJobAborted(jobId)) return
+      updateRecoverableRewriteJob(jobId, {
+        status: 'succeeded',
+        progress: 1,
+        currentStep: '完成',
+        payload: { ...payload, result },
+      })
     })
   } catch (error) {
     if (controller.signal.aborted || isRecoverableRewriteJobAborted(jobId)) {

@@ -1,5 +1,12 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { safeParseJsonObject } from '@/lib/server/json-parse'
 import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
+import {
+  createTaskWatchdogAttemptId,
+  getTaskWatchdogAttemptId,
+  mergeTaskWatchdogState,
+  parseTaskWatchdogPayload,
+} from '@/lib/server/task-watchdog-attempt'
 
 export const RECOVERABLE_REWRITE_JOB_TYPE = 'rewrite_generation'
 
@@ -54,9 +61,28 @@ export type RecoverableRewriteJobRow = {
 }
 
 const activeRewriteJobControllers = new Map<string, AbortController>()
+const recoverableRewriteAttemptContext = new AsyncLocalStorage<Map<string, string>>()
 
 function parseJsonRecord(value: string | null) {
   return safeParseJsonObject(value)
+}
+
+function getCurrentRecoverableRewriteAttemptId(jobId: string) {
+  return recoverableRewriteAttemptContext.getStore()?.get(jobId) ?? null
+}
+
+function getMergedRecoverableRewritePayload(currentPayloadJson: string | null, nextPayload: RecoverableRewriteJobPayload) {
+  return {
+    ...(parseJsonRecord(currentPayloadJson) ?? {}),
+    ...nextPayload,
+  }
+}
+
+function buildRecoverableRewriteAttemptPayload(currentPayloadJson: string | null, attemptId: string, updates: Record<string, unknown> = {}) {
+  return mergeTaskWatchdogState(parseTaskWatchdogPayload(currentPayloadJson), {
+    ...updates,
+    attemptId,
+  })
 }
 
 function normalizeTokenValue(value: unknown) {
@@ -149,19 +175,76 @@ export function updateRecoverableRewriteJob(jobId: string, params: {
   currentStep: string | null
   payload: RecoverableRewriteJobPayload
   errorMessage?: string | null
+  expectedAttemptId?: string | null
 }) {
-  execute(
-    `UPDATE KnowledgeJob
-     SET status = ?, progress = ?, currentStep = ?, payloadJson = ?, errorMessage = ?, updatedAt = CURRENT_TIMESTAMP
-     WHERE id = ? AND jobType = ?`,
-    params.status,
-    params.progress,
-    params.currentStep,
-    JSON.stringify(params.payload),
-    params.errorMessage ?? null,
+  const currentRow = queryOne<{ payloadJson: string | null }>(
+    'SELECT payloadJson FROM KnowledgeJob WHERE id = ? AND jobType = ?',
     jobId,
     RECOVERABLE_REWRITE_JOB_TYPE,
   )
+  const currentPayloadJson = currentRow?.payloadJson ?? null
+  const expectedAttemptId = params.expectedAttemptId ?? getCurrentRecoverableRewriteAttemptId(jobId)
+  const mergedPayload = getMergedRecoverableRewritePayload(currentPayloadJson, params.payload)
+  const nextPayload = expectedAttemptId
+    ? mergeTaskWatchdogState(mergedPayload, { attemptId: expectedAttemptId })
+    : mergedPayload
+
+  const querySuffix = expectedAttemptId
+    ? ` AND json_extract(COALESCE(payloadJson, '{}'), '$.taskWatchdog.attemptId') = ?`
+    : ''
+
+  return execute(
+    `UPDATE KnowledgeJob
+      SET status = ?, progress = ?, currentStep = ?, payloadJson = ?, errorMessage = ?, updatedAt = CURRENT_TIMESTAMP
+      WHERE id = ? AND jobType = ?${querySuffix}`,
+    params.status,
+    params.progress,
+    params.currentStep,
+    JSON.stringify(nextPayload),
+    params.errorMessage ?? null,
+    jobId,
+    RECOVERABLE_REWRITE_JOB_TYPE,
+    ...(expectedAttemptId ? [expectedAttemptId] : []),
+  )
+}
+
+export function claimRecoverableRewriteJob(jobId: string, params: { progress: number; currentStep: string }) {
+  const currentRow = queryOne<{ payloadJson: string | null; status: string }>(
+    'SELECT payloadJson, status FROM KnowledgeJob WHERE id = ? AND jobType = ?',
+    jobId,
+    RECOVERABLE_REWRITE_JOB_TYPE,
+  )
+  if (!currentRow || currentRow.status !== 'queued') {
+    return { claimed: false as const, status: currentRow?.status ?? null, attemptId: null }
+  }
+
+  const attemptId = getTaskWatchdogAttemptId(parseTaskWatchdogPayload(currentRow.payloadJson)) ?? createTaskWatchdogAttemptId()
+  const claimPayload = buildRecoverableRewriteAttemptPayload(currentRow.payloadJson, attemptId, {
+    claimedAt: new Date().toISOString(),
+    claimedBy: 'rewrite_runner',
+  })
+  const result = execute(
+    `UPDATE KnowledgeJob
+       SET status = 'running', progress = ?, currentStep = ?, payloadJson = ?, errorMessage = NULL, updatedAt = CURRENT_TIMESTAMP
+       WHERE id = ? AND jobType = ? AND status = 'queued'`,
+    params.progress,
+    params.currentStep,
+    JSON.stringify(claimPayload),
+    jobId,
+    RECOVERABLE_REWRITE_JOB_TYPE,
+  )
+  if (result.changes !== 1) {
+    const nextRow = readRecoverableRewriteJob(jobId)
+    return { claimed: false as const, status: nextRow?.status ?? null, attemptId: null }
+  }
+
+  return { claimed: true as const, status: 'running' as const, attemptId }
+}
+
+export async function runRecoverableRewriteJobWithAttempt<T>(jobId: string, attemptId: string, callback: () => Promise<T>) {
+  const store = new Map(recoverableRewriteAttemptContext.getStore() ?? [])
+  store.set(jobId, attemptId)
+  return recoverableRewriteAttemptContext.run(store, callback)
 }
 
 export function findLatestRecoverableRewriteJob(params: { novelId: string; branchId?: string | null; chapterId?: string | null }) {
@@ -226,12 +309,21 @@ export function abortRecoverableRewriteJob(jobId: string, message = '已中止�
 
   const payload = normalizeRecoverableRewriteJobPayload(row.payloadJson)
   if (!payload) return serializeRecoverableRewriteJob(row)
+  const invalidatedAttemptId = createTaskWatchdogAttemptId()
+  const payloadWithAttempt = {
+    ...buildRecoverableRewriteAttemptPayload(row.payloadJson, invalidatedAttemptId, {
+      lastActionAt: new Date().toISOString(),
+      lastAction: 'aborted',
+    }),
+    ...payload,
+    error: message,
+  } satisfies RecoverableRewriteJobPayload & Record<string, unknown>
 
   updateRecoverableRewriteJob(jobId, {
     status: RECOVERABLE_REWRITE_ABORTED_STATUS,
     progress: 0,
     currentStep: message,
-    payload: { ...payload, error: message },
+    payload: payloadWithAttempt,
     errorMessage: message,
   })
 
