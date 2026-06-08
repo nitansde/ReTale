@@ -1,20 +1,30 @@
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import type { KnowledgeJobType } from '@/lib/server/knowledge-rebuild'
+import { queryOne } from '@/lib/server/sqlite'
+import { parseTaskWatchdogPayloadAttemptId } from '@/lib/server/task-watchdog-attempt'
 
 type ScheduleKnowledgeWorkerParams = {
   novelId: string
   branchId: string
   jobId: string
   jobType: KnowledgeJobType
+  attemptId?: string | null
+  allowInTests?: boolean
 }
 
 const scheduledWorkerJobs = new Set<string>()
 
+function readKnowledgeWorkerAttemptId(jobId: string) {
+  const row = queryOne<{ payloadJson: string | null }>('SELECT payloadJson FROM KnowledgeJob WHERE id = ?', jobId)
+  return parseTaskWatchdogPayloadAttemptId(row?.payloadJson ?? null)
+}
+
 export function scheduleKnowledgeWorkerProcess(params: ScheduleKnowledgeWorkerParams) {
   const jobId = params.jobId.trim()
-  const workerKey = `${params.jobType}:${jobId}`
-  if (!jobId || scheduledWorkerJobs.has(workerKey) || process.env.NODE_ENV === 'test') {
+  const attemptId = params.attemptId === undefined ? readKnowledgeWorkerAttemptId(jobId) : params.attemptId
+  const workerKey = `${params.jobType}:${jobId}:${attemptId ?? 'no-attempt'}`
+  if (!jobId || scheduledWorkerJobs.has(workerKey) || (process.env.NODE_ENV === 'test' && !params.allowInTests)) {
     return false
   }
 
@@ -41,4 +51,8 @@ export function scheduleKnowledgeWorkerProcess(params: ScheduleKnowledgeWorkerPa
   child.once('error', () => scheduledWorkerJobs.delete(workerKey))
   child.unref()
   return true
+}
+
+export function resetScheduledKnowledgeWorkerJobsForTesting() {
+  scheduledWorkerJobs.clear()
 }
