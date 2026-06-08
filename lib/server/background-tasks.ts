@@ -1,4 +1,5 @@
 import type { KnowledgeJobType } from '@/lib/server/knowledge-rebuild'
+import { reconcileKnowledgeJobWatchdog } from '@/lib/server/knowledge-job-watchdog'
 import { abortRecoverableRewriteJob, RECOVERABLE_REWRITE_JOB_TYPE } from '@/lib/server/recoverable-rewrite-jobs'
 import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
 
@@ -81,6 +82,8 @@ function resolveAbortAfterConcurrentChange(jobId: string): AbortBackgroundTaskRe
 }
 
 export function listActiveBackgroundTasks() {
+  reconcileKnowledgeJobWatchdog()
+
   const jobTypePlaceholders = ACTIVE_BACKGROUND_TASK_JOB_TYPES.map(() => '?').join(', ')
   const statusPlaceholders = ACTIVE_BACKGROUND_TASK_STATUSES.map(() => '?').join(', ')
 

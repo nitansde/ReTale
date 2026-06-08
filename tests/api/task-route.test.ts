@@ -5,6 +5,8 @@ import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
+const originalTaskStaleTimeoutMs = process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS
+const originalTaskMaxRetries = process.env.CHATBOOK_TASK_MAX_RETRIES
 
 async function createTestDatabase(prefix: string) {
   const tempDatabase = createTempDatabaseCopy(prefix)
@@ -90,6 +92,8 @@ function createAbortRequest(body: Record<string, unknown>) {
 
 afterEach(() => {
   process.env.DATABASE_URL = originalDatabaseUrl
+  process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
+  process.env.CHATBOOK_TASK_MAX_RETRIES = originalTaskMaxRetries
 
   for (const cleanup of cleanups.splice(0)) {
     cleanup()
@@ -220,6 +224,95 @@ describe('/api/task', () => {
       'job_retrieval_paused_visible',
       'job_extract_running_visible',
     ])
+  })
+
+  it('reconciles stale supported queued and running jobs before listing tasks', async () => {
+    process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = '1000'
+    process.env.CHATBOOK_TASK_MAX_RETRIES = '1'
+
+    const { database } = await createTestDatabase('chatbook-task-watchdog-list')
+    const { mainBranchId } = seedNovel(database, 'novel-watchdog', 'Watchdog Novel')
+
+    insertJob(database, {
+      id: 'job_stale_retry_extract',
+      novelId: 'novel-watchdog',
+      branchId: mainBranchId,
+      jobType: 'extract_chapter_knowledge',
+      status: 'running',
+      progress: 0.45,
+      currentStep: '抽取中',
+      payloadJson: JSON.stringify({ steps: [] }),
+      updatedAtSql: "datetime('now', '-10 seconds')",
+      createdAtSql: "datetime('now', '-10 seconds')",
+    })
+
+    insertJob(database, {
+      id: 'job_stale_fail_rewrite',
+      novelId: 'novel-watchdog',
+      branchId: mainBranchId,
+      jobType: 'rewrite_generation',
+      status: 'queued',
+      progress: 0.1,
+      currentStep: '等待中',
+      payloadJson: JSON.stringify({
+        request: {},
+        panel: {
+          novelId: 'novel-watchdog',
+          branchId: mainBranchId,
+          chapterId: 'chapter-1',
+          selectedText: '片段',
+          sourceText: '正文',
+          sourceTextOverride: null,
+          userInstruction: '重写',
+          rewriteLaunchSource: 'chapter',
+          branchContextNodeId: null,
+          branchContextInclusion: null,
+          continueBlockId: null,
+          createdAt: new Date().toISOString(),
+        },
+        taskWatchdog: { attemptCount: 1 },
+      }),
+      updatedAtSql: "datetime('now', '-10 seconds')",
+      createdAtSql: "datetime('now', '-10 seconds')",
+    })
+
+    const { GET } = await loadTaskRoute()
+    const response = await GET()
+    const payload = await response.json() as {
+      ok: boolean
+      count: number
+      tasks: Array<{ jobId: string; status: string; currentStep: string | null; errorMessage: string | null }>
+    }
+
+    const retriedRow = database.prepare(
+      'SELECT status, currentStep, errorMessage, payloadJson FROM KnowledgeJob WHERE id = ?'
+    ).get('job_stale_retry_extract') as { status: string; currentStep: string | null; errorMessage: string | null; payloadJson: string | null }
+    const failedRow = database.prepare(
+      'SELECT status, currentStep, errorMessage, payloadJson FROM KnowledgeJob WHERE id = ?'
+    ).get('job_stale_fail_rewrite') as { status: string; currentStep: string | null; errorMessage: string | null; payloadJson: string | null }
+    const retriedPayload = JSON.parse(retriedRow.payloadJson ?? '{}') as { taskWatchdog?: { attemptCount?: number; lastAction?: string } }
+    const failedPayload = JSON.parse(failedRow.payloadJson ?? '{}') as { taskWatchdog?: { attemptCount?: number; lastAction?: string } }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.tasks.map((task) => task.jobId)).toEqual(['job_stale_retry_extract'])
+    expect(payload.tasks[0]).toMatchObject({
+      status: 'queued',
+      currentStep: expect.stringContaining('重新排队重试'),
+      errorMessage: expect.stringContaining('无进度更新'),
+    })
+    expect(retriedRow).toMatchObject({
+      status: 'queued',
+      currentStep: expect.stringContaining('重新排队重试'),
+      errorMessage: expect.stringContaining('无进度更新'),
+    })
+    expect(retriedPayload.taskWatchdog).toMatchObject({ attemptCount: 1, lastAction: 'retried' })
+    expect(failedRow).toMatchObject({
+      status: 'failed',
+      currentStep: expect.stringContaining('最大重试次数'),
+      errorMessage: expect.stringContaining('已标记失败'),
+    })
+    expect(failedPayload.taskWatchdog).toMatchObject({ attemptCount: 2, lastAction: 'failed' })
   })
 
   it('aborts an active knowledge extraction task', async () => {
