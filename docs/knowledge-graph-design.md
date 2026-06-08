@@ -231,9 +231,20 @@ POST /api/knowledge-view?action=rebuild
   -> detached scripts/knowledge-worker.mjs runs targeted worker entrypoints
 ```
 
-这样 HTTP response 可以快速返回。Route 只负责持久化 `KnowledgeJob` 并调度 detached worker 进程；后台 worker 继续运行，并通过 `KnowledgeJob.payloadJson` 更新 progress、steps、ETA、HanLP telemetry 和 stage timings。
+这样 HTTP response 可以快速返回。Route 只负责持久化 `KnowledgeJob` 并调度 detached worker 进程；后台 worker 继续运行，并通过 `KnowledgeJob.payloadJson` 更新 progress、steps、ETA、HanLP telemetry 和 stage timings。知识视图的 GET/status 读取在发现 watchdog 已把 stale job 重新标记为 `queued` 时，也会再次触发调度，避免用户必须手动再点一次 rebuild。
 
 `activeKnowledgeRebuildRuns` / `activeKnowledgeRetrievalRuns` 只是进程内优化，用于减少同一进程里的重复启动。真正的 lifecycle 和跨进程 claim 仍以 SQLite `KnowledgeJob.status` 的条件更新为准。
+
+### 4.1.1 Generic no-progress watchdog
+
+`KnowledgeJob` 上的后台任务会运行一个通用的 no-progress watchdog：
+
+- `CHATBOOK_TASK_STALE_TIMEOUT_MS`：任务在 `queued` / `running` 状态下超过该时长没有 `updatedAt` 进展时，视为 stale。
+- `CHATBOOK_TASK_MAX_RETRIES`：watchdog 最多自动重试多少次；超过上限后直接标记失败。
+- 每次 watchdog retry/terminal fail 都会在 `payloadJson.taskWatchdog` 写入新的 `attemptId`。
+- worker / rewrite runner claim 任务时会读取并持有当前 `attemptId`；后续 progress/success/failure 写入都要求 attempt 仍匹配。
+- 因此旧的超时 worker 即使还活着，也不能覆盖新的 watchdog retry、pause/abort，或最终失败状态。
+- `paused` / `aborted` 任务不会被 watchdog 自动重排。
 
 ### 4.2 HanLP bootstrap phase
 
@@ -513,7 +524,7 @@ do not silently fall back to LLM-only rebuild
 
 ### 9.2 Background worker failure
 
-detached worker 进程中的错误会被调度层捕获并记录。可见状态以 `KnowledgeJob` payload/status 为准。后续 UI 可以继续轮询 projection。
+调度层只负责 detached spawn 和同 attempt 去重；它不会通过 stdio 捕获子进程错误输出。可见状态仍以 worker 自己写回的 `KnowledgeJob` payload/status 为准，后续 UI 可以继续轮询 projection。
 
 ### 9.3 Active rebuild duplicate start
 
