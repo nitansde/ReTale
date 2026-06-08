@@ -24,6 +24,7 @@ import {
 import { getCharacterClassificationMetadata, type CharacterImportanceTier } from '@/lib/server/hanlp-contracts'
 import { buildRawTextRetrievalEmbeddingInput, loadRawTextRetrievalDocs } from '@/lib/server/retrieval-index'
 import { getMainBranchId } from '@/lib/server/knowledge-store'
+import { reconcileKnowledgeJobWatchdog } from '@/lib/server/knowledge-job-watchdog'
 import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
 
 function isGenericRelationLabel(value: string) {
@@ -664,6 +665,12 @@ function buildActiveRebuildBlockedMessage(status: KnowledgeRebuildStatus, cacheL
 }
 
 function getActiveKnowledgeRebuildRow(novelId: string, branchId: string) {
+  reconcileKnowledgeJobWatchdog({
+    novelId,
+    branchId,
+    jobTypes: ['extract_chapter_knowledge', 'rebuild_retrieval_index'],
+  })
+
   return queryOne<Pick<KnowledgeRebuildStatus, 'jobId' | 'novelId' | 'jobType' | 'status'>>(
     `
       SELECT id as jobId, novelId, jobType, status
@@ -810,6 +817,12 @@ function getKnowledgeJobStatusByTypes(params: {
   if (!params.jobTypes.length) {
     return null
   }
+
+  reconcileKnowledgeJobWatchdog({
+    novelId: params.novelId,
+    branchId: params.branchId,
+    jobTypes: params.jobTypes,
+  })
 
   const jobTypePlaceholders = params.jobTypes.map(() => '?').join(', ')
   const activeStatusPlaceholders = ['queued', 'running', 'paused'].map(() => '?').join(', ')

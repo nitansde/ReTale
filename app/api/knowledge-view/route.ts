@@ -33,6 +33,27 @@ function buildSuccessResponse(projection: KnowledgeViewPayload | KnowledgeViewAc
   return NextResponse.json({ ok: true, ...projection })
 }
 
+function scheduleQueuedKnowledgeJobs(novelId: string, projection: KnowledgeViewPayload | KnowledgeViewActionPayload) {
+  const branchId = getMainBranchId(novelId)
+  const activeJobs = [
+    projection.knowledgeRebuildStatus,
+    projection.knowledgeStatusOverview?.retrievalIndex.task,
+  ].filter((job): job is NonNullable<typeof projection.knowledgeRebuildStatus> => Boolean(job?.jobId))
+
+  for (const job of activeJobs) {
+    if (job.status !== 'queued' || (job.jobType !== 'extract_chapter_knowledge' && job.jobType !== 'rebuild_retrieval_index')) {
+      continue
+    }
+
+    scheduleKnowledgeWorkerProcess({
+      novelId,
+      branchId,
+      jobId: job.jobId,
+      jobType: job.jobType,
+    })
+  }
+}
+
 function normalizePostChapterRange(value: unknown): KnowledgeRebuildChapterRange | undefined {
   if (!value || typeof value !== 'object') return undefined
   const candidate = value as KnowledgeRebuildChapterRange
@@ -63,6 +84,9 @@ export async function GET(request: Request) {
       Number.isFinite(asOfChapter) && asOfChapter >= 1 ? asOfChapter : undefined,
       statusOnly ? { includeProjection: false, knowledgeStatusOverviewMode: 'lightweight' } : undefined
     )
+    if (novelId) {
+      scheduleQueuedKnowledgeJobs(novelId, projection)
+    }
     return buildSuccessResponse(projection)
   } catch (error) {
     return NextResponse.json(

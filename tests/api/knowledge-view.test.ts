@@ -5,6 +5,8 @@ import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
+const originalTaskStaleTimeoutMs = process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS
+const originalTaskMaxRetries = process.env.CHATBOOK_TASK_MAX_RETRIES
 const API_TEST_TIMEOUT_MS = 120_000
 
 vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
@@ -305,7 +307,9 @@ function insertExtractionCacheFixture(database: DatabaseSync, params: {
 
 afterEach(() => {
   vi.unmock('@/lib/server/retrieval-index')
+  vi.unmock('@/lib/server/knowledge-worker-scheduler')
   vi.doUnmock('@/lib/server/retrieval-index')
+  vi.doUnmock('@/lib/server/knowledge-worker-scheduler')
   vi.resetModules()
 
   if (globalForSqlite.sqlite) {
@@ -317,6 +321,8 @@ afterEach(() => {
   }
 
   process.env.DATABASE_URL = originalDatabaseUrl
+  process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
+  process.env.CHATBOOK_TASK_MAX_RETRIES = originalTaskMaxRetries
 
   while (cleanups.length) {
     cleanups.pop()?.()
@@ -324,6 +330,70 @@ afterEach(() => {
 })
 
 describe('/api/knowledge-view', () => {
+  it('reconciles stale active jobs during GET and reschedules the queued retry', async () => {
+    process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = '1000'
+    process.env.CHATBOOK_TASK_MAX_RETRIES = '1'
+
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-watchdog-route-get')
+    const novelId = `novel_knowledge_view_watchdog_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-watchdog-1', chapterNo: 1 })
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (
+        id, novelId, branchId, jobType, status, progress, currentStep, payloadJson, createdAt, updatedAt
+      ) VALUES (?, ?, ?, 'extract_chapter_knowledge', 'running', ?, ?, ?, datetime('now', '-10 seconds'), datetime('now', '-10 seconds'))`
+    ).run(
+      'job_knowledge_view_watchdog_get',
+      novelId,
+      mainBranchId,
+      0.42,
+      '抽取中',
+      JSON.stringify({ branchId: mainBranchId, steps: [] }),
+    )
+
+    const scheduleSpy = vi.fn().mockReturnValue(true)
+    vi.doMock('@/lib/server/knowledge-worker-scheduler', () => ({
+      scheduleKnowledgeWorkerProcess: scheduleSpy,
+    }))
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}&statusOnly=1`))
+    const data = await response.json() as {
+      ok: boolean
+      knowledgeRebuildStatus: { jobId: string; status: string; errorMessage: string | null } | null
+    }
+
+    const row = queryOne<{ status: string; errorMessage: string | null; payloadJson: string | null }>(
+      'SELECT status, errorMessage, payloadJson FROM KnowledgeJob WHERE id = ?',
+      'job_knowledge_view_watchdog_get',
+    )
+    const payload = JSON.parse(row?.payloadJson ?? '{}') as { taskWatchdog?: { attemptCount?: number; attemptId?: string; lastAction?: string } }
+
+    expect(response.status).toBe(200)
+    expect(data.ok).toBe(true)
+    expect(data.knowledgeRebuildStatus).toMatchObject({
+      jobId: 'job_knowledge_view_watchdog_get',
+      status: 'queued',
+      errorMessage: expect.stringContaining('无进度更新'),
+    })
+    expect(row).toMatchObject({
+      status: 'queued',
+      errorMessage: expect.stringContaining('无进度更新'),
+    })
+    expect(payload.taskWatchdog).toMatchObject({
+      attemptCount: 1,
+      lastAction: 'retried',
+    })
+    expect(payload.taskWatchdog?.attemptId).toEqual(expect.any(String))
+    expect(scheduleSpy).toHaveBeenCalledWith({
+      novelId,
+      branchId: mainBranchId,
+      jobId: 'job_knowledge_view_watchdog_get',
+      jobType: 'extract_chapter_knowledge',
+    })
+  })
+
   it('projects formal character classifications and aliases while excluding candidates from formal characters', async () => {
     const { database } = await createTestDatabase('chatbook-knowledge-view-character-classification')
     const novelId = `novel_knowledge_view_classification_${Math.random().toString(36).slice(2, 8)}`
