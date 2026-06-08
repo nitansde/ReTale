@@ -7,7 +7,7 @@ import { SCHEMA_SQL } from '@/lib/server/schema'
 
 const SOURCE_DB_PATH = path.resolve(
   process.cwd(),
-  process.env.CHATBOOK_TEST_SOURCE_DB_PATH ?? path.join('tests', '.runtime', 'test-db', 'vitest-source.db')
+  process.env.RETALE_TEST_SOURCE_DB_PATH ?? path.join('tests', '.runtime', 'test-db', 'vitest-source.db')
 )
 
 function ensureSourceDatabase() {

@@ -41,7 +41,7 @@ export function scheduleKnowledgeWorkerProcess(params: ScheduleKnowledgeWorkerPa
     stdio: 'ignore',
     env: {
       ...process.env,
-      CHATBOOK_KNOWLEDGE_WORKER: '1',
+      RETALE_KNOWLEDGE_WORKER: '1',
       DATABASE_URL: process.env.DATABASE_URL ?? 'file:./dev.db',
     },
   })

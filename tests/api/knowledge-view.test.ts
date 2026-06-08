@@ -5,8 +5,8 @@ import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
-const originalTaskStaleTimeoutMs = process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS
-const originalTaskMaxRetries = process.env.CHATBOOK_TASK_MAX_RETRIES
+const originalTaskStaleTimeoutMs = process.env.RETALE_TASK_STALE_TIMEOUT_MS
+const originalTaskMaxRetries = process.env.RETALE_TASK_MAX_RETRIES
 const API_TEST_TIMEOUT_MS = 120_000
 
 vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
@@ -321,8 +321,8 @@ afterEach(() => {
   }
 
   process.env.DATABASE_URL = originalDatabaseUrl
-  process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
-  process.env.CHATBOOK_TASK_MAX_RETRIES = originalTaskMaxRetries
+  process.env.RETALE_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
+  process.env.RETALE_TASK_MAX_RETRIES = originalTaskMaxRetries
 
   while (cleanups.length) {
     cleanups.pop()?.()
@@ -331,10 +331,10 @@ afterEach(() => {
 
 describe('/api/knowledge-view', () => {
   it('reconciles stale active jobs during GET and reschedules the queued retry', async () => {
-    process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = '1000'
-    process.env.CHATBOOK_TASK_MAX_RETRIES = '1'
+    process.env.RETALE_TASK_STALE_TIMEOUT_MS = '1000'
+    process.env.RETALE_TASK_MAX_RETRIES = '1'
 
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-watchdog-route-get')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-view-watchdog-route-get')
     const novelId = `novel_knowledge_view_watchdog_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
     seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-watchdog-1', chapterNo: 1 })
@@ -395,7 +395,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('projects formal character classifications and aliases while excluding candidates from formal characters', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-character-classification')
+    const { database } = await createTestDatabase('retale-knowledge-view-character-classification')
     const novelId = `novel_knowledge_view_classification_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
     const protagonistEntityId = `${novelId}-entity-protagonist`
@@ -477,7 +477,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('projects literal HanLP world categories into workspace world entry types', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-hanlp-world-categories')
+    const { database } = await createTestDatabase('retale-knowledge-view-hanlp-world-categories')
     const novelId = `novel_knowledge_view_world_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -510,7 +510,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('surfaces HanLP telemetry on the knowledge rebuild status payload', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-hanlp-telemetry')
+    const { database } = await createTestDatabase('retale-knowledge-view-hanlp-telemetry')
     const novelId = `novel_knowledge_view_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -607,7 +607,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('surfaces retrieval task status in the overview payload while preserving main rebuild status priority', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-retrieval-overview-task')
+    const { database } = await createTestDatabase('retale-knowledge-view-retrieval-overview-task')
     const novelId = `novel_retrieval_overview_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -703,7 +703,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('reports retrieval jobs through knowledgeRebuildStatus with an explicit retrieval jobType', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-retrieval-jobtype')
+    const { database } = await createTestDatabase('retale-knowledge-view-retrieval-jobtype')
     const novelId = `novel_retrieval_jobtype_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -749,7 +749,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('returns the latest failed rebuild status with errorMessage for the selected novel main branch', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-failed-status')
+    const { database } = await createTestDatabase('retale-knowledge-view-failed-status')
     const novelId = `novel_knowledge_view_failed_${Math.random().toString(36).slice(2, 8)}`
     const otherNovelId = `novel_knowledge_view_failed_other_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId, altBranchId } = seedNovel(database, novelId)
@@ -857,7 +857,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('hides an older failed rebuild when a newer main-branch rebuild succeeded', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-hide-old-failed-after-success')
+    const { database } = await createTestDatabase('retale-knowledge-view-hide-old-failed-after-success')
     const novelId = `novel_knowledge_view_hide_failed_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -923,7 +923,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('prefers an older active rebuild over a newer terminal rebuild row for the main branch', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-prefer-active-over-terminal')
+    const { database } = await createTestDatabase('retale-knowledge-view-prefer-active-over-terminal')
     const novelId = `novel_knowledge_view_prefer_active_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -999,7 +999,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('surfaces the latest retrieval rebuild status through the existing knowledge rebuild payload', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-retrieval-status-surface')
+    const { database } = await createTestDatabase('retale-knowledge-view-retrieval-status-surface')
     const novelId = `novel_knowledge_view_retrieval_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -1068,7 +1068,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('surfaces populated HanLP cache readiness without an active rebuild', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-idle-hanlp-cache')
+    const { database } = await createTestDatabase('retale-knowledge-view-idle-hanlp-cache')
     const novelId = `novel_knowledge_view_idle_hanlp_${Math.random().toString(36).slice(2, 8)}`
     const otherNovelId = `novel_knowledge_view_idle_hanlp_other_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId, altBranchId } = seedNovel(database, novelId)
@@ -1122,7 +1122,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('returns persistent knowledge, embedding, and LanceDB coverage overview for the selected novel', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-status-overview')
+    const { database } = await createTestDatabase('retale-knowledge-view-status-overview')
     const novelId = `novel_knowledge_overview_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId, altBranchId } = seedNovel(database, novelId)
 
@@ -1218,7 +1218,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('returns lightweight status-only payloads without loading retrieval docs', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-status-only-lightweight')
+    const { database } = await createTestDatabase('retale-knowledge-view-status-only-lightweight')
     const novelId = `novel_status_only_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -1287,7 +1287,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('deletes only the target main-branch HanLP cache rows and preserves raw embedding cache', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-delete-hanlp-cache')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-view-delete-hanlp-cache')
     const novelId = `novel_delete_hanlp_${Math.random().toString(36).slice(2, 8)}`
     const otherNovelId = `novel_delete_other_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId, altBranchId } = seedNovel(database, novelId)
@@ -1357,7 +1357,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('blocks HanLP cache deletion with a clear payload when a rebuild is active', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-delete-hanlp-cache-blocked')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-view-delete-hanlp-cache-blocked')
     const novelId = `novel_block_hanlp_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -1429,7 +1429,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('deletes only the target main-branch LLM extraction cache rows', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-delete-extraction-cache')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-view-delete-extraction-cache')
     const novelId = `novel_delete_extraction_${Math.random().toString(36).slice(2, 8)}`
     const otherNovelId = `novel_delete_extraction_other_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId, altBranchId } = seedNovel(database, novelId)
@@ -1462,7 +1462,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('deletes only the target main-branch raw embedding cache rows', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-delete-embedding-cache')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-view-delete-embedding-cache')
     const novelId = `novel_delete_embedding_${Math.random().toString(36).slice(2, 8)}`
     const otherNovelId = `novel_delete_embedding_other_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId, altBranchId } = seedNovel(database, novelId)
@@ -1496,7 +1496,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('blocks LLM extraction and raw embedding cache deletion when a rebuild is active', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-delete-cache-blocked')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-view-delete-cache-blocked')
     const novelId = `novel_block_cache_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -1531,7 +1531,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('blocks raw embedding cache deletion while a retrieval rebuild is active', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-delete-embedding-cache-retrieval-blocked')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-view-delete-embedding-cache-retrieval-blocked')
     const novelId = `novel_block_retrieval_cache_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -1577,7 +1577,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('queues rebuild jobs with a bounded chapter range payload', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-range-rebuild')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-view-range-rebuild')
     const novelId = `novel_range_rebuild_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -1618,7 +1618,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('queues main rebuild jobs with a lightweight POST response that avoids full projections and retrieval doc loading', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-range-rebuild-fast-response')
+    const { database } = await createTestDatabase('retale-knowledge-view-range-rebuild-fast-response')
     const novelId = `novel_range_rebuild_fast_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -1685,7 +1685,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('pauses active rebuild jobs with a lightweight POST response that avoids full projections and retrieval doc loading', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-pause-fast-response')
+    const { database } = await createTestDatabase('retale-knowledge-view-pause-fast-response')
     const novelId = `novel_pause_fast_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -1756,7 +1756,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('aborts active rebuild jobs with a lightweight POST response that avoids full projections and retrieval doc loading', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-abort-fast-response')
+    const { database } = await createTestDatabase('retale-knowledge-view-abort-fast-response')
     const novelId = `novel_abort_fast_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -1829,7 +1829,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('queues dedicated retrieval rebuild jobs with retrieval status payloads', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-retrieval-start')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-view-retrieval-start')
     const novelId = `novel_retrieval_start_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -1890,7 +1890,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('blocks dedicated retrieval rebuild start while a main knowledge rebuild is active', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-retrieval-start-blocked')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-view-retrieval-start-blocked')
     const novelId = `novel_retrieval_start_blocked_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
 
@@ -1954,7 +1954,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('queues a fresh imported novel rebuild without blocking the POST response', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-view-fresh-import-rebuild')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-view-fresh-import-rebuild')
     const novelId = `novel_fresh_import_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
     for (let chapterNo = 1; chapterNo <= 3; chapterNo += 1) {
@@ -1999,7 +1999,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('rejects invalid POST actions with stable 400 JSON and no job rows', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-invalid-action')
+    const { database } = await createTestDatabase('retale-knowledge-view-invalid-action')
     const novelId = 'novel_invalid_action'
     seedNovel(database, novelId)
 
@@ -2019,7 +2019,7 @@ describe('/api/knowledge-view', () => {
   })
 
   it('rejects missing novel ids with stable 400 JSON and no job rows', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-view-missing-novel-id')
+    const { database } = await createTestDatabase('retale-knowledge-view-missing-novel-id')
     const { POST } = await loadKnowledgeViewRoute()
     const jobCountBefore = (database.prepare('SELECT COUNT(*) AS count FROM KnowledgeJob').get() as { count: number }).count
 

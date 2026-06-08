@@ -345,7 +345,7 @@ afterEach(() => {
 
 describe('story branch delete APIs', () => {
   it('deletes a what-if session, its timeline node, and descendant future-jump lineage in branch context', async () => {
-    const database = createTestDatabase('chatbook-story-branch-delete-what-if')
+    const database = createTestDatabase('retale-story-branch-delete-what-if')
     seedDeleteFixture(database)
     vi.resetModules()
 
@@ -370,7 +370,7 @@ describe('story branch delete APIs', () => {
   })
 
   it('deletes a future-jump run and revisions while preserving the parent what-if node', async () => {
-    const database = createTestDatabase('chatbook-story-branch-delete-future-jump')
+    const database = createTestDatabase('retale-story-branch-delete-future-jump')
     seedDeleteFixture(database)
     vi.resetModules()
 
@@ -391,7 +391,7 @@ describe('story branch delete APIs', () => {
   })
 
   it('keeps branch-context validation on deletes', async () => {
-    const database = createTestDatabase('chatbook-story-branch-delete-context')
+    const database = createTestDatabase('retale-story-branch-delete-context')
     seedDeleteFixture(database)
 
     const [{ DELETE: deleteWhatIf }, { DELETE: deleteFutureJump }] = await Promise.all([
@@ -421,7 +421,7 @@ describe('story branch delete APIs', () => {
   })
 
   it('deletes only the current timeline node and promotes its direct children at the deleted index', async () => {
-    const database = createTestDatabase('chatbook-story-branch-delete-promote')
+    const database = createTestDatabase('retale-story-branch-delete-promote')
     seedPromoteFixture(database)
     vi.resetModules()
 
@@ -484,7 +484,7 @@ describe('story branch delete APIs', () => {
   })
 
   it('deletes a leaf timeline node without disturbing surviving sibling order', async () => {
-    const database = createTestDatabase('chatbook-story-branch-delete-leaf')
+    const database = createTestDatabase('retale-story-branch-delete-leaf')
     seedPromoteFixture(database)
     database.prepare(
       `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, progress, currentStep, payloadJson)

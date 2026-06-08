@@ -121,7 +121,7 @@ function buildFallbackDelta(input: WhatIfCreateRequest): ExtractedWhatIfDelta {
 function buildDeltaExtractionMessages(input: WhatIfCreateRequest) {
   return {
     system: [
-      'You extract speculative story deltas for ChatBook.',
+      'You extract speculative story deltas for ReTale.',
       'This is private entertainment-only speculative state, not authoritative canon.',
       'Return JSON only in the exact shape {"deltas":[...]}.',
       'Every delta must use these fields exactly: delta_type | subject_name | target_name | key | old_value | new_value | valid_from_chapter | description | confidence.',

@@ -423,7 +423,7 @@ describe('preset compat prompt rule resolution', () => {
         id: 'unknown-trigger',
         name: 'Unknown Trigger',
         role: 'system',
-        content: 'Still applies in ChatBook.',
+        content: 'Still applies in ReTale.',
         injectionTrigger: ['rewrite'],
       }),
     ])

@@ -256,8 +256,8 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.queryByTestId('preset-compat-binding-continue')).not.toBeInTheDocument()
     expect(screen.getByText('当前创作界面：Rewrite')).toBeInTheDocument()
     expect(screen.getByTestId('preset-compat-preview-surface-select')).toHaveValue('rewrite')
-    expect(screen.getByText('ChatBook 内置 System Prompt')).toBeInTheDocument()
-    expect((screen.getByTestId('preset-compat-builtin-system-content-rewrite') as HTMLTextAreaElement).value).toContain('你是 ChatBook 的小说扩写/魔改写作模型。')
+    expect(screen.getByText('戏说内置 System Prompt')).toBeInTheDocument()
+    expect((screen.getByTestId('preset-compat-builtin-system-content-rewrite') as HTMLTextAreaElement).value).toContain('你是 ReTale 的小说扩写/魔改写作模型。')
     expect(screen.getByTestId('preset-compat-rule-content-preset-1-rule-1')).toBeInTheDocument()
     expect(screen.queryByTestId('preset-compat-preview-surface-rewrite')).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
@@ -313,11 +313,11 @@ describe('PresetCompatLibraryModal', () => {
 
     fireEvent.click(screen.getByTestId('preset-compat-builtin-system-toggle-rewrite'))
     fireEvent.change(screen.getByTestId('preset-compat-builtin-system-content-rewrite'), {
-      target: { value: 'UI edited ChatBook built-in prompt.' },
+      target: { value: 'UI edited ReTale built-in prompt.' },
     })
     expect(useNovelStore.getState().presetCompatLibrary.builtinSystemPrompts.rewrite).toMatchObject({
       enabled: false,
-      content: 'UI edited ChatBook built-in prompt.',
+      content: 'UI edited ReTale built-in prompt.',
     })
 
     fireEvent.click(screen.getByTestId('preset-compat-rule-toggle-preset-1-rule-1'))
@@ -378,14 +378,14 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.getByTestId('preset-compat-session-reset-future_jump')).toBeInTheDocument()
   })
 
-  it('keeps ChatBook built-in system prompts editable before any preset is imported', () => {
+  it('keeps ReTale built-in system prompts editable before any preset is imported', () => {
     useNovelStore.setState({
       presetCompatLibrary: createLibrary({ presets: {} }),
     })
 
     render(<PresetCompatLibraryModal open onClose={vi.fn()} />)
 
-    expect(screen.getByText('ChatBook 内置 System Prompt')).toBeInTheDocument()
+    expect(screen.getByText('戏说内置 System Prompt')).toBeInTheDocument()
     fireEvent.change(screen.getByTestId('preset-compat-builtin-system-content-rewrite'), {
       target: { value: 'No preset built-in edit.' },
     })

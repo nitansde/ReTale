@@ -2,7 +2,7 @@
 
 ## Scope
 
-ChatBook ships a neutral `preset-compat` subsystem for importing, storing, editing, exporting, previewing, and selectively applying preset data. It is a compatibility layer, not a claim of full upstream runtime parity.
+ReTale ships a neutral `preset-compat` subsystem for importing, storing, editing, exporting, previewing, and selectively applying preset data. It is a compatibility layer, not a claim of full upstream runtime parity.
 
 ## Opted-in runtime surfaces
 
@@ -31,7 +31,7 @@ The preset-reset scope is intentionally narrow:
 
 ## Clean-room provenance and attribution
 
-This subsystem is a clean-room compatibility implementation under ChatBook's neutral internal `preset-compat` naming. It does not copy upstream runtime code into the shipped implementation.
+This subsystem is a clean-room compatibility implementation under ReTale's neutral internal `preset-compat` naming. It does not copy upstream runtime code into the shipped implementation.
 
 The team researched the upstream preset shape, example data, and license material from the vendored reference mirror in `external/SillyTavern/` and the fixture in `external/resets_example.json`. That reference mirror is clearly marked as upstream research material, and its package metadata and README both identify it as `AGPL-3.0`.
 
@@ -46,7 +46,7 @@ Research attribution for the upstream source:
 The implementation is split into a few stable layers.
 
 - `lib/preset-compat/normalize.ts` imports preset JSON into structured storage buckets such as `runtimeSampler`, `promptTemplate`, `transport`, `preservedFields`, `promptRules`, `promptOrderLists`, `embeddedRegexes`, and `passthrough`.
-- `lib/preset-compat/surface-contract.ts` owns ChatBook's built-in system prompts for opted-in creative surfaces. These prompts are ChatBook library state, not imported preset data.
+- `lib/preset-compat/surface-contract.ts` owns ReTale's built-in system prompts for opted-in creative surfaces. These prompts are ReTale library state, not imported preset data.
 - `lib/preset-compat/resolve-runtime.ts` resolves the active preset for a surface, filters prompt rules, computes `fieldStatuses`, and records `providerControlIntents`.
 - `lib/preset-compat/prompt-assembly.ts` is the canonical prompt rendering layer. Routes and services feed it runtime data, they do not replace it.
 - `lib/preset-compat/runtime-integration.ts` adds creative-route metadata such as `contextWindow` and `streamPolicy`.
@@ -61,7 +61,7 @@ The prompt assembly stage order is fixed:
 5. `metadata_insertions`
 6. `regex_processing`
 
-`builtin_system_prompt` is the editable ChatBook-owned system prompt for the active creative surface. It is stored on the ChatBook preset compatibility library, defaults to enabled, can be disabled per surface, and is intentionally excluded from imported preset export payloads.
+`builtin_system_prompt` is the editable ReTale-owned system prompt for the active creative surface. It is stored on the ReTale preset compatibility library, defaults to enabled, can be disabled per surface, and is intentionally excluded from imported preset export payloads.
 
 `user_input` regex processing still happens after prompt assembly. `assistant_output` regex processing still happens after model output.
 
@@ -104,7 +104,7 @@ Route-effect intents:
 
 Preserved-only or degraded-without-request-mapping warnings today include fields such as `top_k`, `top_a`, `min_p`, `repetition_penalty`, `send_if_empty`, `assistant_prefill`, `assistant_impersonation`, `continue_prefill`, `continue_postfix`, `use_sysprompt`, `function_calling`, `show_thoughts`, `reasoning_effort`, `verbosity`, and image-request metadata.
 
-The same current `openai-compatible` preserved or degraded contract also covers route and template fields such as `openai_max_context`, `max_context_unlocked`, `names_behavior`, `bias_preset_selected`, `wi_format`, `scenario_format`, `personality_format`, `group_nudge_prompt`, `stream_openai`, and `seed`. SillyTavern-only reset prompt fields such as `impersonation_prompt`, `new_chat_prompt`, `new_group_chat_prompt`, `new_example_chat_prompt`, and `continue_nudge_prompt` are imported and exported, but ChatBook ignores them at runtime.
+The same current `openai-compatible` preserved or degraded contract also covers route and template fields such as `openai_max_context`, `max_context_unlocked`, `names_behavior`, `bias_preset_selected`, `wi_format`, `scenario_format`, `personality_format`, `group_nudge_prompt`, `stream_openai`, and `seed`. SillyTavern-only reset prompt fields such as `impersonation_prompt`, `new_chat_prompt`, `new_group_chat_prompt`, `new_example_chat_prompt`, and `continue_nudge_prompt` are imported and exported, but ReTale ignores them at runtime.
 
 ### `ollama`
 
@@ -128,7 +128,7 @@ Route-effect intents:
 
 Preserved-only or degraded-without-request-mapping warnings today include fields such as `presence_penalty`, `frequency_penalty`, `top_a`, `assistant_prefill`, `assistant_impersonation`, `continue_prefill`, `continue_postfix`, `use_sysprompt`, `function_calling`, `show_thoughts`, `reasoning_effort`, and `verbosity`.
 
-The same current `ollama` preserved or degraded contract also covers route and template fields such as `openai_max_context`, `max_context_unlocked`, `names_behavior`, `send_if_empty`, `bias_preset_selected`, `wi_format`, `scenario_format`, `personality_format`, `group_nudge_prompt`, and `stream_openai`. SillyTavern-only reset prompt fields such as `impersonation_prompt`, `new_chat_prompt`, `new_group_chat_prompt`, `new_example_chat_prompt`, and `continue_nudge_prompt` are imported and exported, but ChatBook ignores them at runtime.
+The same current `ollama` preserved or degraded contract also covers route and template fields such as `openai_max_context`, `max_context_unlocked`, `names_behavior`, `send_if_empty`, `bias_preset_selected`, `wi_format`, `scenario_format`, `personality_format`, `group_nudge_prompt`, and `stream_openai`. SillyTavern-only reset prompt fields such as `impersonation_prompt`, `new_chat_prompt`, `new_group_chat_prompt`, `new_example_chat_prompt`, and `continue_nudge_prompt` are imported and exported, but ReTale ignores them at runtime.
 
 ## Route behavior
 
@@ -139,11 +139,11 @@ The same current `ollama` preserved or degraded contract also covers route and t
 - It resolves preset runtime through `applyPresetCompatCreativeRuntime()` and `resolveCreativeRoutePresetCompatMetadata()`.
 - It supports context-window trimming when `openai_max_context` is present.
 - It supports the stream precedence rule `explicit request override > imported preset value > provider default`.
-- It returns structured preset metadata in JSON responses and in the base64 `X-ChatBook-Preset-Compat` header for streaming responses when the serialized metadata fits normal response-header limits. Oversized streaming metadata is omitted from the header and reported with `X-ChatBook-Preset-Metadata-Omitted: size-limit` so large-context requests do not fail on header limits.
+- It returns structured preset metadata in JSON responses and in the base64 `X-ReTale-Preset-Compat` header for streaming responses when the serialized metadata fits normal response-header limits. Oversized streaming metadata is omitted from the header and reported with `X-ReTale-Preset-Metadata-Omitted: size-limit` so large-context requests do not fail on header limits.
 
 ### `future_jump`
 
-`future_jump` uses the same creative runtime and prompt assembly contract for prompt rules, supported ChatBook template fragments, and regex handling. SillyTavern-only reset prompt fields remain ignored there too.
+`future_jump` uses the same creative runtime and prompt assembly contract for prompt rules, supported ReTale template fragments, and regex handling. SillyTavern-only reset prompt fields remain ignored there too.
 
 It stays honest about route controls it cannot safely enforce:
 
@@ -156,15 +156,15 @@ It stays honest about route controls it cannot safely enforce:
 
 ## Prompt-rule subset
 
-Prompt rules apply a deliberately narrow ChatBook compatibility subset.
+Prompt rules apply a deliberately narrow ReTale compatibility subset.
 
 - `prompt_order.character_id:100001` is the current active order and enabled-state bucket.
 - If the `100001` bucket is absent, import falls back to natural `prompts[]` order and each prompt's own `enabled` value.
-- `role` value `system` routes imported rule content into the system prompt in active order. Imported system-channel content replaces the route-provided base prompt but does not replace the earlier ChatBook-owned `builtin_system_prompt` stage; disable the built-in rule for that surface if the imported preset should be the first system content.
-- `role` value `user` injects imported rule content at the top of the user prompt before native ChatBook context.
-- `system_prompt` is preserved for import/export round-trip only and has no ChatBook runtime effect.
-- `forbid_overrides` locks ChatBook content editing for that imported rule; it does not block same-slot runtime prompt rules.
-- `injectionPosition`, `injectionDepth`, `injectionOrder`, `injectionTrigger`, and `marker` are preserved for export only and have no ChatBook runtime effect.
+- `role` value `system` routes imported rule content into the system prompt in active order. Imported system-channel content replaces the route-provided base prompt but does not replace the earlier ReTale-owned `builtin_system_prompt` stage; disable the built-in rule for that surface if the imported preset should be the first system content.
+- `role` value `user` injects imported rule content at the top of the user prompt before native ReTale context.
+- `system_prompt` is preserved for import/export round-trip only and has no ReTale runtime effect.
+- `forbid_overrides` locks ReTale content editing for that imported rule; it does not block same-slot runtime prompt rules.
+- `injectionPosition`, `injectionDepth`, `injectionOrder`, `injectionTrigger`, and `marker` are preserved for export only and have no ReTale runtime effect.
 - allowlisted `condition` values are evaluated without `eval`.
 - unsupported roles degrade with explicit warnings instead of being silently dropped.
 
@@ -250,6 +250,6 @@ This compatibility layer should be read as an explicit subset.
 Streaming keeps the normal pass-through path unless an active `assistant_output` regex needs post-processing.
 
 - If no active output regex is present, the provider stream is returned directly.
-- If an active output regex is present, ChatBook buffers the full text stream, runs the `assistant_output` regex subset once on the complete text, then re-emits the transformed text as a new stream.
+- If an active output regex is present, ReTale buffers the full text stream, runs the `assistant_output` regex subset once on the complete text, then re-emits the transformed text as a new stream.
 
 That buffering rule exists so cross-chunk replacements still work correctly.

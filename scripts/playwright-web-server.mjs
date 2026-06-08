@@ -48,10 +48,10 @@ const child = spawn('node', ['scripts/next-test-server.mjs'], {
   stdio: 'inherit',
   env: {
     ...process.env,
-    CHATBOOK_INTERNAL_ALLOW_TEST_OVERRIDES: '1',
-    CHATBOOK_SERVER_DIST_DIR: SAFE_QA_NEXT_DIST_DIR,
-    CHATBOOK_SERVER_DATABASE_PATH: tempDbPath,
-    CHATBOOK_SERVER_DATABASE_URL: `file:${tempDbPath}`,
+    RETALE_INTERNAL_ALLOW_TEST_OVERRIDES: '1',
+    RETALE_SERVER_DIST_DIR: SAFE_QA_NEXT_DIST_DIR,
+    RETALE_SERVER_DATABASE_PATH: tempDbPath,
+    RETALE_SERVER_DATABASE_URL: `file:${tempDbPath}`,
   },
 })
 

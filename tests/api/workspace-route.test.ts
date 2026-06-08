@@ -231,7 +231,7 @@ afterEach(() => {
 
 describe('workspace route', () => {
   it('repairs a missing workspace from recoverable knowledge data', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-recover-missing')
+    const database = createTestDatabase('retale-workspace-route-recover-missing')
     clearWorkspaceRecoveryData(database)
     seedRecoverableKnowledge(database)
 
@@ -249,7 +249,7 @@ describe('workspace route', () => {
   })
 
   it('repairs a corrupt workspace by rebuilding normalized runtime state from recoverable knowledge data', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-recover-corrupt')
+    const database = createTestDatabase('retale-workspace-route-recover-corrupt')
     clearWorkspaceRecoveryData(database)
     seedWorkspaceState(database, '{not-json')
     seedRecoverableKnowledge(database)
@@ -267,7 +267,7 @@ describe('workspace route', () => {
   })
 
   it('repairs an empty workspace when knowledge data is still recoverable', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-recover-empty')
+    const database = createTestDatabase('retale-workspace-route-recover-empty')
     clearWorkspaceRecoveryData(database)
     seedWorkspaceState(database, { localNovels: [], localChapters: [] })
     seedRecoverableKnowledge(database)
@@ -284,7 +284,7 @@ describe('workspace route', () => {
   })
 
   it('serves normalized runtime state even when the workspace artifact payload is empty', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-runtime-with-empty-artifact')
+    const database = createTestDatabase('retale-workspace-route-runtime-with-empty-artifact')
     clearWorkspaceRecoveryData(database)
     await seedWorkspaceRuntime(createWorkspacePayload('novel-runtime', 'Runtime Truth'))
     seedWorkspaceState(database, '')
@@ -300,7 +300,7 @@ describe('workspace route', () => {
   })
 
   it('preserves outlines, characters, relations, world entries, and timeline events after the artifact payload is blanked', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-side-data-survives-blanked-blob')
+    const database = createTestDatabase('retale-workspace-route-side-data-survives-blanked-blob')
     clearWorkspaceRecoveryData(database)
     const payloadWithSideData = createWorkspacePayloadWithSideData()
     await seedWorkspaceRuntime(payloadWithSideData)
@@ -320,7 +320,7 @@ describe('workspace route', () => {
   })
 
   it('preserves normalized runtime side/reference data when a real workspace artifact row exists with payload = NULL', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-side-data-survives-null-artifact')
+    const database = createTestDatabase('retale-workspace-route-side-data-survives-null-artifact')
     clearWorkspaceRecoveryData(database)
     const payloadWithSideData = createWorkspacePayloadWithSideData('novel-null-artifact', 'Null Artifact Runtime Truth')
     await seedWorkspaceRuntime(payloadWithSideData)
@@ -341,7 +341,7 @@ describe('workspace route', () => {
   })
 
   it('prefers normalized runtime state over a stale or invalid workspace artifact during normal GET', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-runtime-wins-over-artifact')
+    const database = createTestDatabase('retale-workspace-route-runtime-wins-over-artifact')
     clearWorkspaceRecoveryData(database)
     await seedWorkspaceRuntime(createWorkspacePayloadWithSideData('novel-runtime', 'Runtime Winner'))
     seedWorkspaceState(database, '{not-json')
@@ -357,7 +357,7 @@ describe('workspace route', () => {
   })
 
   it('ignores a corrupt workspace artifact during normal GET when no normalized runtime or recovery source exists', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-corrupt-unrecoverable')
+    const database = createTestDatabase('retale-workspace-route-corrupt-unrecoverable')
     clearWorkspaceRecoveryData(database)
     seedWorkspaceState(database, '{not-json')
 
@@ -374,7 +374,7 @@ describe('workspace route', () => {
   })
 
   it('rejects accidental empty overwrites when the saved workspace has content', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-block-empty-current')
+    const database = createTestDatabase('retale-workspace-route-block-empty-current')
     clearWorkspaceRecoveryData(database)
     const currentPayload = createWorkspacePayload('novel-existing', 'Existing')
     await seedWorkspaceRuntime(currentPayload)
@@ -398,7 +398,7 @@ describe('workspace route', () => {
   })
 
   it('rejects accidental empty overwrites when only knowledge data is recoverable', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-block-empty-knowledge')
+    const database = createTestDatabase('retale-workspace-route-block-empty-knowledge')
     clearWorkspaceRecoveryData(database)
     seedRecoverableKnowledge(database)
     const syncWorkspacePayloadToKnowledgeStore = vi.fn(async () => {})
@@ -418,7 +418,7 @@ describe('workspace route', () => {
   })
 
   it('allows explicit empty reset requests and backs up the previous workspace', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-explicit-reset')
+    const database = createTestDatabase('retale-workspace-route-explicit-reset')
     clearWorkspaceRecoveryData(database)
     const currentPayload = createWorkspacePayload('novel-existing', 'Existing')
     await seedWorkspaceRuntime(currentPayload)
@@ -432,7 +432,7 @@ describe('workspace route', () => {
     const { POST, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
     const response = await POST(createWorkspaceRequest(
       { localNovels: [], localChapters: [] },
-      { 'x-chatbook-workspace-reset': 'true' }
+      { 'x-retale-workspace-reset': 'true' }
     ))
 
     expect(response.status).toBe(200)
@@ -452,7 +452,7 @@ describe('workspace route', () => {
   })
 
   it('returns success without waiting for workspace knowledge sync', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-non-blocking-sync')
+    const database = createTestDatabase('retale-workspace-route-non-blocking-sync')
     clearWorkspaceRecoveryData(database)
 
     const syncControl: { resolve: null | (() => void) } = { resolve: null }
@@ -487,7 +487,7 @@ describe('workspace route', () => {
   })
 
   it('logs workspace knowledge sync failures without failing the save response', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-sync-error')
+    const database = createTestDatabase('retale-workspace-route-sync-error')
     clearWorkspaceRecoveryData(database)
 
     const syncError = new Error('sync failed')
@@ -517,7 +517,7 @@ describe('workspace route', () => {
   })
 
   it('coalesces persisted workspace knowledge syncs to the latest saved payload', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-coalesced-sync')
+    const database = createTestDatabase('retale-workspace-route-coalesced-sync')
     clearWorkspaceRecoveryData(database)
 
     const syncWorkspacePayloadToKnowledgeStore = vi.fn(async () => {})
@@ -550,7 +550,7 @@ describe('workspace route', () => {
   })
 
   it('runs the latest persisted workspace knowledge sync after an active sync finishes', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-running-coalesced-sync')
+    const database = createTestDatabase('retale-workspace-route-running-coalesced-sync')
     clearWorkspaceRecoveryData(database)
 
     const firstSyncControl: { resolve: null | (() => void) } = { resolve: null }
@@ -592,7 +592,7 @@ describe('workspace route', () => {
   })
 
   it('rejects malformed workspace JSON with a stable 400 response', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-invalid-json')
+    const database = createTestDatabase('retale-workspace-route-invalid-json')
 
     const { POST, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
     const response = await POST(new Request('http://localhost/api/workspace', {
@@ -608,7 +608,7 @@ describe('workspace route', () => {
   })
 
   it('backs up normal workspace overwrites and retains only recent snapshots', async () => {
-    const database = createTestDatabase('chatbook-workspace-route-backup-retention')
+    const database = createTestDatabase('retale-workspace-route-backup-retention')
     clearWorkspaceRecoveryData(database)
     seedWorkspaceState(database, createWorkspacePayload('novel-0', 'Initial'))
     const syncWorkspacePayloadToKnowledgeStore = vi.fn(async () => {})

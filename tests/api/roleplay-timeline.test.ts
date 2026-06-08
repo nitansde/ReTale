@@ -128,7 +128,7 @@ afterEach(() => {
 
 describe('roleplay timeline hydration', () => {
   it('hydrates one timeline node per multi-message roleplay session and keeps future-jump nodes intact', async () => {
-    const database = createTestDatabase('chatbook-roleplay-timeline')
+    const database = createTestDatabase('retale-roleplay-timeline')
     seedTimelineFixture(database)
     vi.resetModules()
 

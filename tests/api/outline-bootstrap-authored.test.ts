@@ -20,7 +20,7 @@ afterEach(() => {
 })
 
 function createTestDb() {
-  const tempDatabase = createTempDatabaseCopy('chatbook-outline-bootstrap-authored')
+  const tempDatabase = createTempDatabaseCopy('retale-outline-bootstrap-authored')
   cleanups.push(tempDatabase.cleanup)
 
   const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))

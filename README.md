@@ -1,4 +1,4 @@
-# novel-ui
+# retale
 
 A self-hosted single-user AI novel rewrite workspace built with Next.js.
 
@@ -47,8 +47,8 @@ HANLP_BOOTSTRAP_SCRIPT_PATH=""
 HANLP_BOOTSTRAP_PARALLELISM="1"
 HANLP_BOOTSTRAP_BATCH_SIZE="256"
 HANLP_BOOTSTRAP_TIMEOUT_MS="600000"
-CHATBOOK_TASK_STALE_TIMEOUT_MS="1800000"
-CHATBOOK_TASK_MAX_RETRIES="1"
+RETALE_TASK_STALE_TIMEOUT_MS="1800000"
+RETALE_TASK_MAX_RETRIES="1"
 LLM_DEBUG_LOG="0"
 LLM_DEBUG_LOG_DIR=".sisyphus/llm-debug"
 ```
@@ -59,11 +59,11 @@ Set `LLM_DEBUG_LOG="1"` during local development to write raw server-side LLM pr
 
 ### Knowledge graph runtime
 
-Knowledge graph rebuilds use the server-side `hanlp_bootstrap.py` script before LLM extraction. `npm install` runs `scripts/setup-hanlp-runtime.mjs`, which creates a pinned HanLP virtualenv outside the project root, writes `HANLP_PYTHON_BIN` and `HANLP_BOOTSTRAP_SCRIPT_PATH` to `.env.local`, and avoids Next/Turbopack tracing Python virtualenv symlinks during builds. Run `npm run setup:hanlp` to recreate and smoke-test that runtime. Set `CHATBOOK_SKIP_HANLP_SETUP=1` only when intentionally skipping local knowledge-graph rebuild support. `HANLP_BOOTSTRAP_SCRIPT_PATH` can point at an alternate bootstrap script; when unset, the app uses the repository script. `HANLP_BOOTSTRAP_PARALLELISM` defaults to `1` so rebuilds do not spawn multiple heavyweight HanLP model processes; raise it only after validating local memory. `HANLP_BOOTSTRAP_BATCH_SIZE` defaults to `256` and controls how many sentence/line segments the bootstrap script sends to HanLP per model call. `HANLP_BOOTSTRAP_TIMEOUT_MS` controls the per-chapter HanLP subprocess timeout and defaults to `600000`.
+Knowledge graph rebuilds use the server-side `hanlp_bootstrap.py` script before LLM extraction. `npm install` runs `scripts/setup-hanlp-runtime.mjs`, which creates a pinned HanLP virtualenv outside the project root, writes `HANLP_PYTHON_BIN` and `HANLP_BOOTSTRAP_SCRIPT_PATH` to `.env.local`, and avoids Next/Turbopack tracing Python virtualenv symlinks during builds. Run `npm run setup:hanlp` to recreate and smoke-test that runtime. Set `RETALE_SKIP_HANLP_SETUP=1` only when intentionally skipping local knowledge-graph rebuild support. `HANLP_BOOTSTRAP_SCRIPT_PATH` can point at an alternate bootstrap script; when unset, the app uses the repository script. `HANLP_BOOTSTRAP_PARALLELISM` defaults to `1` so rebuilds do not spawn multiple heavyweight HanLP model processes; raise it only after validating local memory. `HANLP_BOOTSTRAP_BATCH_SIZE` defaults to `256` and controls how many sentence/line segments the bootstrap script sends to HanLP per model call. `HANLP_BOOTSTRAP_TIMEOUT_MS` controls the per-chapter HanLP subprocess timeout and defaults to `600000`.
 
 The rebuild API returns quickly with a queued/running job status. The server continues the rebuild in the background and the workspace polls job state instead of blocking the whole site while HanLP is running.
 
-Background task watchdogs use `CHATBOOK_TASK_STALE_TIMEOUT_MS` to decide when a queued/running knowledge or recoverable rewrite job has stopped making progress, and `CHATBOOK_TASK_MAX_RETRIES` to cap automatic retry attempts. When a job is retried, ChatBook writes a new in-payload attempt token so stale old workers cannot overwrite the newer retry or a terminal watchdog failure. Knowledge-view reads also reschedule queued watchdog retries, so users do not need to press rebuild again after a stale worker is reconciled.
+Background task watchdogs use `RETALE_TASK_STALE_TIMEOUT_MS` to decide when a queued/running knowledge or recoverable rewrite job has stopped making progress, and `RETALE_TASK_MAX_RETRIES` to cap automatic retry attempts. When a job is retried, ReTale writes a new in-payload attempt token so stale old workers cannot overwrite the newer retry or a terminal watchdog failure. Knowledge-view reads also reschedule queued watchdog retries, so users do not need to press rebuild again after a stale worker is reconciled.
 
 ## First-time setup
 
@@ -92,7 +92,7 @@ npm run dev:test
   - Database: `.sisyphus/runtime/test-server/dev-test.db`
   - Next dist dir: `.sisyphus/runtime/next-test-server`
 
-Both wrappers override inherited `DATABASE_URL` and `CHATBOOK_NEXT_DIST_DIR`, so a shell that was previously pointed at a test database cannot accidentally redirect the daily server, and vice versa. The public scripts are fixed-mode wrappers: `--hostname/-H` and `--port/-p` are rejected instead of changing the target server profile. If port `14500` or `3000` is already occupied, the wrapper exits with a clear error instead of killing unknown processes. Internal `.sisyphus` test DB/dist overrides remain reserved for the Playwright web-server helper.
+Both wrappers override inherited `DATABASE_URL` and `RETALE_NEXT_DIST_DIR`, so a shell that was previously pointed at a test database cannot accidentally redirect the daily server, and vice versa. The public scripts are fixed-mode wrappers: `--hostname/-H` and `--port/-p` are rejected instead of changing the target server profile. If port `14500` or `3000` is already occupied, the wrapper exits with a clear error instead of killing unknown processes. Internal `.sisyphus` test DB/dist overrides remain reserved for the Playwright web-server helper.
 
 ## Production check
 

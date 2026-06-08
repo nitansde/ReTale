@@ -86,7 +86,7 @@ afterEach(() => {
 
 describe('import-txt route', () => {
   it('waits for workspace knowledge sync before returning success', async () => {
-    const database = createTestDatabase('chatbook-import-txt-route-awaits-sync')
+    const database = createTestDatabase('retale-import-txt-route-awaits-sync')
     resetWorkspaceState(database)
 
     const syncControl: { resolve: null | (() => void) } = { resolve: null }
@@ -125,7 +125,7 @@ describe('import-txt route', () => {
   })
 
   it('surfaces knowledge sync failures instead of reporting a broken import as success', async () => {
-    const database = createTestDatabase('chatbook-import-txt-route-sync-error')
+    const database = createTestDatabase('retale-import-txt-route-sync-error')
     resetWorkspaceState(database)
 
     vi.doMock('@/lib/server/knowledge-rebuild', () => ({
@@ -142,7 +142,7 @@ describe('import-txt route', () => {
   })
 
   it('selects GB18030 decoding when the UTF-8 candidate is mojibake', async () => {
-    const database = createTestDatabase('chatbook-import-txt-route-gb18030')
+    const database = createTestDatabase('retale-import-txt-route-gb18030')
     resetWorkspaceState(database)
 
     vi.doMock('@/lib/server/knowledge-rebuild', () => ({
@@ -166,7 +166,7 @@ describe('import-txt route', () => {
   })
 
   it('keeps imported content available through normalized runtime state after the workspace artifact is blanked', async () => {
-    const database = createTestDatabase('chatbook-import-txt-route-runtime-source-of-truth')
+    const database = createTestDatabase('retale-import-txt-route-runtime-source-of-truth')
     resetWorkspaceState(database)
 
     vi.doMock('@/lib/server/knowledge-rebuild', () => ({

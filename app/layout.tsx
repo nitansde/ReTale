@@ -22,8 +22,11 @@ const notoSerifSC = Noto_Serif_SC({
 })
 
 export const metadata: Metadata = {
-  title: 'Novel Workspace',
-  description: 'Self-hosted single-user novel writing workspace',
+  title: {
+    default: 'ReTale · 戏说',
+    template: '%s · ReTale · 戏说',
+  },
+  description: 'ReTale 戏说 is a self-hosted, single-user workspace for rewriting and branching fiction.',
 }
 
 export default function RootLayout({

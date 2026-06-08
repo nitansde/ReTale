@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
-const distDir = process.env.CHATBOOK_NEXT_DIST_DIR?.trim() || '.next';
-const tsconfigPath = process.env.CHATBOOK_NEXT_TSCONFIG_PATH?.trim() || 'tsconfig.json';
+const distDir = process.env.RETALE_NEXT_DIST_DIR?.trim() || '.next';
+const tsconfigPath = process.env.RETALE_NEXT_TSCONFIG_PATH?.trim() || 'tsconfig.json';
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ['@lancedb/lancedb'],

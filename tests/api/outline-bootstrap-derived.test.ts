@@ -21,7 +21,7 @@ afterEach(() => {
 })
 
 function createTestDb() {
-  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'chatbook-outline-bootstrap-derived-'))
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-outline-bootstrap-derived-'))
   const database = initializeDatabase(new DatabaseSync(path.join(tempDirectory, 'test.db')))
   return {
     cleanup() {

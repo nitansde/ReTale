@@ -94,8 +94,8 @@ export const PRESET_COMPAT_OPTED_IN_SURFACE_IDS = [...PRESET_COMPAT_CREATIVE_SUR
 export const PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS = [...PRESET_COMPAT_EDITABLE_SURFACE_IDS]
 export const PRESET_COMPAT_FAIL_CLOSED_SURFACE_REGISTRY_IDS = [...PRESET_COMPAT_FAIL_CLOSED_SURFACE_IDS]
 
-export const CHATBOOK_CREATIVE_SYSTEM_PROMPT = [
-  '你是 ChatBook 的小说扩写/魔改写作模型。',
+export const RETALE_CREATIVE_SYSTEM_PROMPT = [
+  '你是 ReTale 的小说扩写/魔改写作模型。',
   '你必须严格遵守给定的小说世界状态、人物关系、事件线和设定。',
   '你只能使用上下文中提供的截至当前章节的信息。',
   '不要引入未来章节事实。',
@@ -105,8 +105,8 @@ export const CHATBOOK_CREATIVE_SYSTEM_PROMPT = [
   '优先输出可直接替换或插入到小说中的正文，不要解释。',
 ].join('\n')
 
-export const CHATBOOK_FUTURE_JUMP_REWRITE_SYSTEM_PROMPT = [
-  '你是 ChatBook 的 Future Jump 目标节点改写生成器。',
+export const RETALE_FUTURE_JUMP_REWRITE_SYSTEM_PROMPT = [
+  '你是 ReTale 的 Future Jump 目标节点改写生成器。',
   '你必须严格依据已给出的 what-if 分歧、桥接摘要、故事状态和目标未来节点上下文。',
   '你只返回一个 JSON 对象，不要解释，不要 markdown，不要额外字段。',
   'generatedTargetText 必须只包含可直接放入小说的正文。',
@@ -129,8 +129,8 @@ export function createDefaultPresetCompatSurfaceBindings(): Record<PresetCompatS
 
 function getDefaultBuiltinSystemPromptContent(surfaceId: PresetCompatCreativeSurfaceId) {
   return surfaceId === 'future_jump'
-    ? CHATBOOK_FUTURE_JUMP_REWRITE_SYSTEM_PROMPT
-    : CHATBOOK_CREATIVE_SYSTEM_PROMPT
+    ? RETALE_FUTURE_JUMP_REWRITE_SYSTEM_PROMPT
+    : RETALE_CREATIVE_SYSTEM_PROMPT
 }
 
 export function createDefaultPresetCompatBuiltinSystemPrompts(): Record<PresetCompatCreativeSurfaceId, PresetCompatBuiltinSystemPrompt> {

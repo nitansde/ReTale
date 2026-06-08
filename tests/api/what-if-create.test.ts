@@ -75,7 +75,7 @@ afterEach(() => {
 
 describe('what-if create API', () => {
   it('persists speculative session, deltas, and timeline node without mutating authoritative storage', async () => {
-    const tempDatabase = createTempDatabaseCopy('chatbook-what-if-create')
+    const tempDatabase = createTempDatabaseCopy('retale-what-if-create')
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))

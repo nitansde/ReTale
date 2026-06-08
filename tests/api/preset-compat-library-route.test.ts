@@ -50,7 +50,7 @@ afterEach(() => {
 
 describe('preset compat library route', () => {
   it('returns the normalized stored library snapshot on GET', async () => {
-    await createTestDatabase('chatbook-preset-compat-route-get')
+    await createTestDatabase('retale-preset-compat-route-get')
     const { saveStoredPresetCompatLibrary } = await import('@/lib/server/preset-compat-library')
 
     const library = createDefaultPresetCompatLibrary()
@@ -131,7 +131,7 @@ describe('preset compat library route', () => {
   })
 
   it('saves a normalized library snapshot and bumps revision on POST', async () => {
-    await createTestDatabase('chatbook-preset-compat-route-post-save')
+    await createTestDatabase('retale-preset-compat-route-post-save')
     const { GET, POST } = await import('@/app/api/settings/preset-compat/route')
     const current = await (await GET()).json() as ReturnType<typeof createDefaultPresetCompatLibrary>
 
@@ -199,7 +199,7 @@ describe('preset compat library route', () => {
   })
 
   it('rejects stale optimistic revisions on POST', async () => {
-    await createTestDatabase('chatbook-preset-compat-route-post-revision-mismatch')
+    await createTestDatabase('retale-preset-compat-route-post-revision-mismatch')
     const { saveStoredPresetCompatLibrary } = await import('@/lib/server/preset-compat-library')
     await saveStoredPresetCompatLibrary(createDefaultPresetCompatLibrary())
 
@@ -221,7 +221,7 @@ describe('preset compat library route', () => {
   })
 
   it('imports presets, preserves passthrough warnings, and defaults display-name conflicts to copy', async () => {
-    await createTestDatabase('chatbook-preset-compat-route-import-preset')
+    await createTestDatabase('retale-preset-compat-route-import-preset')
     const { saveStoredPresetCompatLibrary } = await import('@/lib/server/preset-compat-library')
 
     const library = createDefaultPresetCompatLibrary()
@@ -356,7 +356,7 @@ describe('preset compat library route', () => {
   })
 
   it('rejects malformed import json text and invalid import kinds with 400 responses', async () => {
-    await createTestDatabase('chatbook-preset-compat-route-import-errors')
+    await createTestDatabase('retale-preset-compat-route-import-errors')
     const { POST } = await import('@/app/api/settings/preset-compat/import/route')
 
     const malformedResponse = await POST(createJsonRequest('http://localhost/api/settings/preset-compat/import', {
@@ -375,7 +375,7 @@ describe('preset compat library route', () => {
   })
 
   it('imports standalone regex payloads and supports replace only for resolvable ids', async () => {
-    await createTestDatabase('chatbook-preset-compat-route-import-regex')
+    await createTestDatabase('retale-preset-compat-route-import-regex')
     const { saveStoredPresetCompatLibrary } = await import('@/lib/server/preset-compat-library')
 
     const library = createDefaultPresetCompatLibrary()

@@ -51,7 +51,7 @@ afterEach(() => {
 
 describe('hanlp schema bootstrap', () => {
   it('creates the HanLP foundation tables, required columns, and indexes on a fresh database', () => {
-    const databasePath = makeTempDatabasePath('chatbook-hanlp-schema')
+    const databasePath = makeTempDatabasePath('retale-hanlp-schema')
     const database = initializeDatabase(new DatabaseSync(databasePath))
 
     const tables = new Set(listTableNames(database).map((entry) => entry.name))
@@ -174,7 +174,7 @@ describe('hanlp schema bootstrap', () => {
   })
 
   it('counts duplicate candidate chapter sightings once via chapter-no unique candidate rows', () => {
-    const databasePath = makeTempDatabasePath('chatbook-hanlp-candidates')
+    const databasePath = makeTempDatabasePath('retale-hanlp-candidates')
     const database = initializeDatabase(new DatabaseSync(databasePath))
 
     database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run('novel-1', 'Fixture', 'txt')
@@ -232,7 +232,7 @@ describe('hanlp schema bootstrap', () => {
   })
 
   it('keeps first alias mapping for the same branch alias', () => {
-    const databasePath = makeTempDatabasePath('chatbook-hanlp-alias')
+    const databasePath = makeTempDatabasePath('retale-hanlp-alias')
     const database = initializeDatabase(new DatabaseSync(databasePath))
 
     database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run('novel-2', 'Fixture', 'txt')
@@ -272,7 +272,7 @@ describe('hanlp schema bootstrap', () => {
   })
 
   it('keeps non-character entities un-tiered and rejects non-formal character tiers', () => {
-    const databasePath = makeTempDatabasePath('chatbook-hanlp-tier-guard')
+    const databasePath = makeTempDatabasePath('retale-hanlp-tier-guard')
     const database = initializeDatabase(new DatabaseSync(databasePath))
 
     database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run('novel-3', 'Fixture', 'txt')

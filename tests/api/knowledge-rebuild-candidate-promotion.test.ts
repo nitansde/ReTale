@@ -231,7 +231,7 @@ afterEach(() => {
 
 describe('knowledge rebuild candidate promotion', () => {
   it('refuses to create formal entities for unranked extracted characters and known updates', async () => {
-    const { database, queryOne, queryAll } = await createTestDatabase('chatbook-candidate-formal-tier-gate')
+    const { database, queryOne, queryAll } = await createTestDatabase('retale-candidate-formal-tier-gate')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_candidate_formal_tier_gate', 1)
     const aiSettings = createMockAISettings()
     const summarySpy = vi.fn(async () => ({
@@ -287,7 +287,7 @@ describe('knowledge rebuild candidate promotion', () => {
   })
 
   it('does not promote when a candidate appears in only 9 distinct chapters', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-candidate-promotion-nine-chapters')
+    const { database, queryOne } = await createTestDatabase('retale-candidate-promotion-nine-chapters')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_candidate_nine_chapters', 9)
     const aiSettings = createMockAISettings()
     const summarySpy = vi.fn(async () => ({
@@ -349,7 +349,7 @@ describe('knowledge rebuild candidate promotion', () => {
   })
 
   it('does not promote when 20 mentions happen in the same chapter only', async () => {
-    const { database, queryOne, queryAll } = await createTestDatabase('chatbook-candidate-promotion-single-chapter')
+    const { database, queryOne, queryAll } = await createTestDatabase('retale-candidate-promotion-single-chapter')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_candidate_single_chapter', 1)
     const aiSettings = createMockAISettings()
     const summarySpy = vi.fn(async () => ({
@@ -418,7 +418,7 @@ describe('knowledge rebuild candidate promotion', () => {
   })
 
   it('promotes once at 10 distinct chapters, preserves per-chapter mention counts, and skips summary reruns', async () => {
-    const { database, queryOne, queryAll } = await createTestDatabase('chatbook-candidate-promotion')
+    const { database, queryOne, queryAll } = await createTestDatabase('retale-candidate-promotion')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_candidate_promotion', 10)
     const aiSettings = createMockAISettings()
     const summarySpy = vi.fn(async () => ({
@@ -556,7 +556,7 @@ describe('knowledge rebuild candidate promotion', () => {
   })
 
   it('recovers a promoted pending summary on rerun after the first summary attempt fails', async () => {
-    const { database, queryOne, queryAll } = await createTestDatabase('chatbook-candidate-promotion-recovery')
+    const { database, queryOne, queryAll } = await createTestDatabase('retale-candidate-promotion-recovery')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_candidate_promotion_recovery', 10)
     const aiSettings = createMockAISettings()
     const summarySpy = vi.fn()

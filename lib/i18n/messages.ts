@@ -8,9 +8,9 @@ export const zhMessages = {
   'language.zh': '中文',
   'language.en': 'English',
 
-  'library.eyebrow': 'Selection-first novel workspace',
-  'library.title': '书库',
-  'library.description': '进入小说后，核心流程就是：选章节、选正文、直接从浮动操作气泡触发魔改 / 角色扮演 / 智能扩写。',
+  'library.eyebrow': 'ReTale · 戏说',
+  'library.title': '戏说书库',
+  'library.description': '在戏说里选择章节与正文，再从浮动操作气泡触发魔改、角色扮演或智能扩写，让每一次改写都保留故事来处。',
   'library.importButton': '导入 TXT 小说',
   'library.uploading': '上传中…',
   'library.processing': '解析中…',
@@ -39,14 +39,14 @@ export const zhMessages = {
   'library.cardWordCount': '{{count}} 字',
 
   'task.title': '任务',
-  'task.eyebrow': 'Persisted backend task panel',
-  'task.description': 'Active tasks include queued, running, and paused persisted jobs. This page reads directly from the server task source.',
+  'task.eyebrow': '戏说后台任务',
+  'task.description': '这里展示戏说后台正在排队、运行或暂停的持久化任务，数据直接来自服务器任务源。',
   'task.jsonEndpoint': 'JSON endpoint',
   'task.activeTasks': '活跃任务',
-  'task.activeTasksHelp': 'Use this page to quickly check backend tasks, or open the JSON endpoint to inspect the raw task payload.',
+  'task.activeTasksHelp': '你可以在这里快速检查后台任务，也可以打开 JSON endpoint 查看原始任务载荷。',
   'task.allQuiet': '当前空闲',
   'task.noActiveTasks': '当前没有活跃任务',
-  'task.noActiveTasksDescription': 'There are no queued, running, or paused persisted backend jobs right now.',
+  'task.noActiveTasksDescription': '当前没有排队、运行或暂停中的持久化后台任务。',
   'task.progress': '进度',
   'task.novel': '小说',
   'task.branch': '分支',
@@ -67,7 +67,7 @@ export const zhMessages = {
   'task.job.rewrite_generation': '可恢复改写生成',
 
   'workspace.mobileChapters': '章节',
-  'workspace.headerEyebrow': 'Selection-first writing flow',
+  'workspace.headerEyebrow': '戏说选区写作流',
   'workspace.deleteNovel': '删除小说',
   'workspace.preset': '预设',
   'workspace.wordCount': '{{count}} 字',
@@ -90,15 +90,15 @@ export const zhMessages = {
   'workspace.repairTitle': '正在修复章节选择',
   'workspace.repairDescription': '检测到当前章节指向不可用，系统正在回退到一个有效章节。这个过程不会清空你的工作区内容，只会重新对齐当前选择。',
   'workspace.backToLibrary': '返回书库',
-  'workspace.statusEyebrow': 'Workspace',
+  'workspace.statusEyebrow': '戏说工作区',
 
-  'chapterNav.novel': 'Novel',
+  'chapterNav.novel': '小说',
   'chapterNav.title': '章节导航',
   'chapterNav.newChapter': '+ 新建章节',
   'chapterNav.volumeChapters': '{{count}} 章',
   'chapterNav.showMore': '显示更多章节，剩余 {{count}} 章',
 
-  'aiSettings.eyebrow': 'AI settings',
+  'aiSettings.eyebrow': 'AI 设置',
   'aiSettings.title': '模型服务配置',
   'aiSettings.description': '这里会分别配置改写、知识抽取和 embeddings 三个场景，各自保存 provider、连接信息与模型。',
   'aiSettings.scenarioConfigDescription': '当前场景会保存独立的 Base URL、API Key 与模型名。',
@@ -160,9 +160,9 @@ export const zhMessages = {
   'preset.librarySummary': '版本 {{revision}} · {{presets}} 个预设 · {{regexes}} 条独立正则',
   'preset.ruleCount': '{{count}} 条规则',
   'preset.regexSummary': '{{embedded}} 条内嵌正则 · {{attached}} 条已附加独立正则',
-  'preset.builtin.systemPrompt': 'ChatBook 内置 System Prompt',
-  'preset.builtin.description': '这些规则由 ChatBook 存储并默认启用，会以第一顺序插入 system prompt；导出预设 JSON 时不会写入预设文件。',
-  'preset.builtin.ownedNoExport': 'ChatBook-owned · 不随预设导出',
+  'preset.builtin.systemPrompt': '戏说内置 System Prompt',
+  'preset.builtin.description': '这些规则由戏说存储并默认启用，会以第一顺序插入 system prompt；导出预设 JSON 时不会写入预设文件。',
+  'preset.builtin.ownedNoExport': '戏说内置 · 不随预设导出',
   'preset.enabled': '启用',
   'preset.importFirstDescription': '先导入一个预设，这里才会显示界面绑定、提示词规则编辑、正则开关、独立正则附加与导出操作。',
   'preset.details': '预设详情',
@@ -934,9 +934,9 @@ export const enMessages: MessageDictionary = {
   'language.zh': '中文',
   'language.en': 'English',
 
-  'library.eyebrow': 'Selection-first novel workspace',
-  'library.title': 'Library',
-  'library.description': 'Once you enter a novel, the core flow is simple: choose a chapter, select text, then trigger rewrite, roleplay, or guided expansion from the floating action bubble.',
+  'library.eyebrow': 'ReTale · 戏说',
+  'library.title': 'ReTale Library',
+  'library.description': 'ReTale turns chapter selection into a story-first writing flow: pick text, then branch into rewrite, roleplay, or guided expansion without losing the narrative thread.',
   'library.importButton': 'Import TXT Novel',
   'library.uploading': 'Uploading…',
   'library.processing': 'Processing…',
@@ -965,8 +965,8 @@ export const enMessages: MessageDictionary = {
   'library.cardWordCount': '{{count}} words',
 
   'task.title': 'Tasks',
-  'task.eyebrow': 'Persisted backend task panel',
-  'task.description': 'Active tasks include queued, running, and paused persisted jobs. This page reads directly from the server task source.',
+  'task.eyebrow': 'ReTale backend tasks',
+  'task.description': 'This page shows ReTale backend jobs that are queued, running, or paused, reading directly from the server task source.',
   'task.jsonEndpoint': 'JSON endpoint',
   'task.activeTasks': 'Active tasks',
   'task.activeTasksHelp': 'Use this page to quickly check backend tasks, or open the JSON endpoint to inspect the raw task payload.',
@@ -993,7 +993,7 @@ export const enMessages: MessageDictionary = {
   'task.job.rewrite_generation': 'Recoverable rewrite generation',
 
   'workspace.mobileChapters': 'Chapters',
-  'workspace.headerEyebrow': 'Selection-first writing flow',
+  'workspace.headerEyebrow': 'ReTale selection-first writing flow',
   'workspace.deleteNovel': 'Delete novel',
   'workspace.preset': 'Presets',
   'workspace.wordCount': '{{count}} words',
@@ -1016,7 +1016,7 @@ export const enMessages: MessageDictionary = {
   'workspace.repairTitle': 'Repairing chapter selection',
   'workspace.repairDescription': 'The current chapter points to unavailable content, so the app is falling back to a valid chapter. This will not clear your workspace. It only realigns the current selection.',
   'workspace.backToLibrary': 'Back to library',
-  'workspace.statusEyebrow': 'Workspace',
+  'workspace.statusEyebrow': 'ReTale Workspace',
 
   'chapterNav.novel': 'Novel',
   'chapterNav.title': 'Chapters',
@@ -1086,9 +1086,9 @@ export const enMessages: MessageDictionary = {
   'preset.librarySummary': 'Revision {{revision}} · {{presets}} presets · {{regexes}} standalone regexes',
   'preset.ruleCount': '{{count}} rules',
   'preset.regexSummary': '{{embedded}} embedded regexes · {{attached}} attached standalone regexes',
-  'preset.builtin.systemPrompt': 'ChatBook built-in system prompt',
-  'preset.builtin.description': 'These rules are stored by ChatBook and enabled by default. They are inserted first into the system prompt and are not written into exported preset JSON files.',
-  'preset.builtin.ownedNoExport': 'ChatBook-owned · not exported with presets',
+  'preset.builtin.systemPrompt': 'ReTale built-in system prompt',
+  'preset.builtin.description': 'These rules are stored by ReTale and enabled by default. They are inserted first into the system prompt and are not written into exported preset JSON files.',
+  'preset.builtin.ownedNoExport': 'ReTale-owned · not exported with presets',
   'preset.enabled': 'Enabled',
   'preset.importFirstDescription': 'Import a preset first to show surface bindings, prompt-rule editing, regex toggles, standalone regex attachments, and export actions.',
   'preset.details': 'Preset details',
@@ -1871,7 +1871,7 @@ export function getClientLocale(): Locale {
 
   if (typeof window !== 'undefined') {
     try {
-      const stored = window.localStorage.getItem('chatbook.locale')
+      const stored = window.localStorage.getItem('retale.locale')
       if (stored && isLocale(stored)) {
         return stored
       }

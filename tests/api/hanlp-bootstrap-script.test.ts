@@ -55,7 +55,7 @@ def load(_model_name):
 
 describe('hanlp_bootstrap.py batching', () => {
   it('passes sentence batches to HanLP with the default batch size of 256', () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatbook-fake-hanlp-'))
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-fake-hanlp-'))
 
     try {
       writeFakeHanlpPackage(tempDir)
@@ -68,7 +68,7 @@ describe('hanlp_bootstrap.py batching', () => {
         chapterText: '阿离走来。\n去北京。阿离回头。',
         outputSchemaVersion: 'v1',
       }
-      const result = spawnSync(process.env.CHATBOOK_TEST_PYTHON_BIN || 'python3', [scriptPath], {
+      const result = spawnSync(process.env.RETALE_TEST_PYTHON_BIN || 'python3', [scriptPath], {
         cwd: process.cwd(),
         input: `${JSON.stringify(request)}\n`,
         encoding: 'utf8',

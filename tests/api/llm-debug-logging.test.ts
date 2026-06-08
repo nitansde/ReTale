@@ -53,7 +53,7 @@ function createAiSettings(provider: 'openai-compatible' | 'ollama' = 'openai-com
 }
 
 async function createTempRoot() {
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'chatbook-llm-debug-'))
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'retale-llm-debug-'))
   process.env.LLM_DEBUG_LOG_DIR = tempRoot
   return tempRoot
 }

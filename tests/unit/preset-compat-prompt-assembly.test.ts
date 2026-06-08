@@ -158,9 +158,9 @@ describe('preset compat prompt assembly', () => {
     ])
   })
 
-  it('prepends ChatBook built-in system prompt before imported system rules', () => {
+  it('prepends ReTale built-in system prompt before imported system rules', () => {
     const assembled = assemblePresetCompatPrompts({
-      builtinSystemPrompt: 'ChatBook built-in system.',
+      builtinSystemPrompt: 'ReTale built-in system.',
       baseSystemPrompt: 'Base system prompt.',
       baseUserPrompt: 'Base user prompt.',
       importedPromptRules: [
@@ -169,7 +169,7 @@ describe('preset compat prompt assembly', () => {
     })
 
     expect(assembled.systemPrompt).toBe([
-      'ChatBook built-in system.',
+      'ReTale built-in system.',
       'Imported system rule.',
     ].join('\n\n'))
     expect(assembled.metadata.system.stages[0]).toEqual({
@@ -183,7 +183,7 @@ describe('preset compat prompt assembly', () => {
     const library = createDefaultPresetCompatLibrary()
     library.builtinSystemPrompts.rewrite = {
       ...library.builtinSystemPrompts.rewrite,
-      content: 'ChatBook builtin system',
+      content: 'ReTale builtin system',
     }
     library.presets['rewrite-preset'] = {
       id: 'rewrite-preset',
@@ -326,7 +326,7 @@ describe('preset compat prompt assembly', () => {
     })
 
     expect(assembled.systemPrompt).toBe([
-      'ChatBook builtin system',
+      'ReTale builtin system',
       'System topic ALPHA',
       'System echo ALPHA',
     ].join('\n\n'))
@@ -339,7 +339,7 @@ describe('preset compat prompt assembly', () => {
     expect(assembled.metadata.macroDiagnostics).toEqual([])
   })
 
-  it('omits disabled ChatBook built-in prompts from runtime assembly without leaving blank wrappers', () => {
+  it('omits disabled ReTale built-in prompts from runtime assembly without leaving blank wrappers', () => {
     const library = createDefaultPresetCompatLibrary()
     library.builtinSystemPrompts.rewrite = {
       ...library.builtinSystemPrompts.rewrite,

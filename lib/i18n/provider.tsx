@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { getMessage, isLocale, type Locale, type TranslationKey, type TranslationValues } from '@/lib/i18n/messages'
 
-const STORAGE_KEY = 'chatbook.locale'
+const STORAGE_KEY = 'retale.locale'
 
 const defaultContextValue: I18nContextValue = {
   locale: 'zh',
@@ -20,22 +20,18 @@ type I18nContextValue = {
 const I18nContext = createContext<I18nContextValue>(defaultContextValue)
 
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>('zh')
-
-  useEffect(() => {
+  const [locale, setLocaleState] = useState<Locale>(() => {
     if (typeof window === 'undefined') {
-      return
+      return 'zh'
     }
 
     try {
       const stored = window.localStorage.getItem(STORAGE_KEY)
-      if (stored && isLocale(stored)) {
-        setLocaleState(stored)
-      }
+      return stored && isLocale(stored) ? stored : 'zh'
     } catch {
-      // Ignore storage access failures in restricted or test environments.
+      return 'zh'
     }
-  }, [])
+  })
 
   useEffect(() => {
     if (typeof document === 'undefined') {

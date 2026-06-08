@@ -1,10 +1,10 @@
-# ChatBook Knowledge Graph Design
+# ReTale Knowledge Graph Design
 
-本文档记录 ChatBook 当前知识图谱系统的设计、技术栈、边界和实现约束。文档以当前仓库已经落地的 HanLP bootstrap、SQLite 权威知识库、LanceDB retrieval index、Graph-aware RAG、Next.js API 和 Workspace UX 为准。
+本文档记录 ReTale 当前知识图谱系统的设计、技术栈、边界和实现约束。文档以当前仓库已经落地的 HanLP bootstrap、SQLite 权威知识库、LanceDB retrieval index、Graph-aware RAG、Next.js API 和 Workspace UX 为准。
 
 ## 0. 设计目标
 
-ChatBook 的知识图谱不是一个独立数据库产品，而是小说改写工作流里的本地上下文系统。它要解决三件事：
+ReTale 的知识图谱不是一个独立数据库产品，而是小说改写工作流里的本地上下文系统。它要解决三件事：
 
 1. 离线把百万字小说变成可查询的结构化世界状态。
 2. 在线根据当前章节和选中文本快速组装不剧透的写作上下文。
@@ -239,8 +239,8 @@ POST /api/knowledge-view?action=rebuild
 
 `KnowledgeJob` 上的后台任务会运行一个通用的 no-progress watchdog：
 
-- `CHATBOOK_TASK_STALE_TIMEOUT_MS`：任务在 `queued` / `running` 状态下超过该时长没有 `updatedAt` 进展时，视为 stale。
-- `CHATBOOK_TASK_MAX_RETRIES`：watchdog 最多自动重试多少次；超过上限后直接标记失败。
+- `RETALE_TASK_STALE_TIMEOUT_MS`：任务在 `queued` / `running` 状态下超过该时长没有 `updatedAt` 进展时，视为 stale。
+- `RETALE_TASK_MAX_RETRIES`：watchdog 最多自动重试多少次；超过上限后直接标记失败。
 - 每次 watchdog retry/terminal fail 都会在 `payloadJson.taskWatchdog` 写入新的 `attemptId`。
 - worker / rewrite runner claim 任务时会读取并持有当前 `attemptId`；后续 progress/success/failure 写入都要求 attempt 仍匹配。
 - 因此旧的超时 worker 即使还活着，也不能覆盖新的 watchdog retry、pause/abort，或最终失败状态。

@@ -119,7 +119,7 @@ afterEach(() => {
 
 describe('branch-isolation-mainline', () => {
   it('keeps default context and retrieval speculation-free', async () => {
-    const tempDatabase = createTempDatabaseCopy('chatbook-branch-isolation-mainline')
+    const tempDatabase = createTempDatabaseCopy('retale-branch-isolation-mainline')
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))

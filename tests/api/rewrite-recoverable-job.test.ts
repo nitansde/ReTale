@@ -4,8 +4,8 @@ import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-co
 import type { AISettings } from '@/lib/types'
 
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
-const originalTaskStaleTimeoutMs = process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS
-const originalTaskMaxRetries = process.env.CHATBOOK_TASK_MAX_RETRIES
+const originalTaskStaleTimeoutMs = process.env.RETALE_TASK_STALE_TIMEOUT_MS
+const originalTaskMaxRetries = process.env.RETALE_TASK_MAX_RETRIES
 
 function createAiSettings(): AISettings {
   return {
@@ -150,8 +150,8 @@ async function importRewriteRoute(options: ImportRewriteRouteOptions = {}) {
 
 afterEach(() => {
   vi.useRealTimers()
-  process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
-  process.env.CHATBOOK_TASK_MAX_RETRIES = originalTaskMaxRetries
+  process.env.RETALE_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
+  process.env.RETALE_TASK_MAX_RETRIES = originalTaskMaxRetries
   closeTestDatabase()
   vi.restoreAllMocks()
   vi.resetModules()
@@ -159,7 +159,7 @@ afterEach(() => {
 
 describe('recoverable rewrite jobs', () => {
   it('stores and restores one completed rewrite result', async () => {
-    const { queryOne } = await createTestDatabase('chatbook-rewrite-recoverable')
+    const { queryOne } = await createTestDatabase('retale-rewrite-recoverable')
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       choices: [
         {
@@ -213,7 +213,7 @@ describe('recoverable rewrite jobs', () => {
   }, 30000)
 
   it('exposes partial streamed output while a recoverable rewrite job is running', async () => {
-    const { queryOne } = await createTestDatabase('chatbook-rewrite-recoverable-streaming')
+    const { queryOne } = await createTestDatabase('retale-rewrite-recoverable-streaming')
     const encoder = new TextEncoder()
     let upstreamController: ReadableStreamDefaultController<Uint8Array> | null = null
     const upstream = new ReadableStream<Uint8Array>({
@@ -267,7 +267,7 @@ describe('recoverable rewrite jobs', () => {
   }, 30000)
 
   it('aborts an on-the-fly recoverable rewrite job and excludes it from latest restore', async () => {
-    await createTestDatabase('chatbook-rewrite-recoverable-abort')
+    await createTestDatabase('retale-rewrite-recoverable-abort')
     let capturedSignal: AbortSignal | null = null
     const fetchMock = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
       capturedSignal = init?.signal ?? null
@@ -310,7 +310,7 @@ describe('recoverable rewrite jobs', () => {
   }, 30000)
 
   it('rejects abort requests outside the recoverable rewrite job scope', async () => {
-    await createTestDatabase('chatbook-rewrite-recoverable-abort-scope')
+    await createTestDatabase('retale-rewrite-recoverable-abort-scope')
     let capturedSignal: AbortSignal | null = null
     const fetchMock = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
       capturedSignal = init?.signal ?? null
@@ -345,7 +345,7 @@ describe('recoverable rewrite jobs', () => {
   }, 30000)
 
   it('rejects recoverable rewrite job creation when the requested scope is missing', async () => {
-    await createTestDatabase('chatbook-rewrite-recoverable-missing-scope')
+    await createTestDatabase('retale-rewrite-recoverable-missing-scope')
     vi.stubGlobal('fetch', vi.fn())
 
     const { POST } = await importRewriteRoute()
@@ -361,7 +361,7 @@ describe('recoverable rewrite jobs', () => {
   }, 30000)
 
   it('fails recoverable rewrite jobs when the rewrite provider is not configured instead of fabricating a result', async () => {
-    await createTestDatabase('chatbook-rewrite-recoverable-missing-provider')
+    await createTestDatabase('retale-rewrite-recoverable-missing-provider')
     vi.stubGlobal('fetch', vi.fn())
 
     const aiSettings = createAiSettings()
@@ -398,7 +398,7 @@ describe('recoverable rewrite jobs', () => {
   }, 30000)
 
   it('throttles tiny streamed partial updates before final completion', async () => {
-    await createTestDatabase('chatbook-rewrite-recoverable-streaming-throttle')
+    await createTestDatabase('retale-rewrite-recoverable-streaming-throttle')
     const encoder = new TextEncoder()
     let upstreamController: ReadableStreamDefaultController<Uint8Array> | null = null
     const upstream = new ReadableStream<Uint8Array>({
@@ -449,7 +449,7 @@ describe('recoverable rewrite jobs', () => {
   }, 30000)
 
   it('falls back to timer scheduling when after is unavailable', async () => {
-    await createTestDatabase('chatbook-rewrite-after-fallback')
+    await createTestDatabase('retale-rewrite-after-fallback')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       choices: [{ message: { content: JSON.stringify({ result: 'fallback scheduled result' }) } }],
     }), { status: 200 })))
@@ -478,10 +478,10 @@ describe('recoverable rewrite jobs', () => {
   }, 30000)
 
   it('requeues stale recoverable rewrite jobs on GET and schedules them again', async () => {
-    process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = '1000'
-    process.env.CHATBOOK_TASK_MAX_RETRIES = '1'
+    process.env.RETALE_TASK_STALE_TIMEOUT_MS = '1000'
+    process.env.RETALE_TASK_MAX_RETRIES = '1'
 
-    const { database, queryOne } = await createTestDatabase('chatbook-rewrite-watchdog-get')
+    const { database, queryOne } = await createTestDatabase('retale-rewrite-watchdog-get')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       choices: [{ message: { content: JSON.stringify({ result: 'watchdog resumed result' }) } }],
     }), { status: 200 })))
@@ -559,10 +559,10 @@ describe('recoverable rewrite jobs', () => {
   }, 30000)
 
   it('requeues stale duplicate recoverable rewrite jobs during creation and reuses the same job', async () => {
-    process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = '1000'
-    process.env.CHATBOOK_TASK_MAX_RETRIES = '1'
+    process.env.RETALE_TASK_STALE_TIMEOUT_MS = '1000'
+    process.env.RETALE_TASK_MAX_RETRIES = '1'
 
-    const { database, queryOne } = await createTestDatabase('chatbook-rewrite-watchdog-create')
+    const { database, queryOne } = await createTestDatabase('retale-rewrite-watchdog-create')
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       choices: [{ message: { content: JSON.stringify({ result: 'watchdog reused result' }) } }],
     }), { status: 200 }))
@@ -629,10 +629,10 @@ describe('recoverable rewrite jobs', () => {
   }, 30000)
 
   it('rejects stale rewrite runner final updates after watchdog assigns a newer attempt', async () => {
-    process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = '1000'
-    process.env.CHATBOOK_TASK_MAX_RETRIES = '1'
+    process.env.RETALE_TASK_STALE_TIMEOUT_MS = '1000'
+    process.env.RETALE_TASK_MAX_RETRIES = '1'
 
-    const { database, queryOne } = await createTestDatabase('chatbook-rewrite-watchdog-attempt-guard')
+    const { database, queryOne } = await createTestDatabase('retale-rewrite-watchdog-attempt-guard')
     const basePayload = {
       request: {
         novelId: 'novel-rewrite',
@@ -724,7 +724,7 @@ describe('recoverable rewrite jobs', () => {
   })
 
   it('claims a queued job once when multiple runners race', async () => {
-    await createTestDatabase('chatbook-rewrite-claim-once')
+    await createTestDatabase('retale-rewrite-claim-once')
     let resolveFetch: ((response: Response) => void) | null = null
     const fetchMock = vi.fn(() => new Promise<Response>((resolve) => {
       resolveFetch = resolve

@@ -43,7 +43,7 @@ const FORBIDDEN_NEXT_FLAGS = [
 function getModeConfig(mode) {
   const config = SERVER_MODES[mode]
   if (!config) {
-    throw new Error(`[chatbook-server] Unsupported mode "${mode}". Expected one of: ${Object.keys(SERVER_MODES).join(', ')}`)
+    throw new Error(`[retale-server] Unsupported mode "${mode}". Expected one of: ${Object.keys(SERVER_MODES).join(', ')}`)
   }
   return config
 }
@@ -69,10 +69,10 @@ function isSubPathOf(parentPath, childPath) {
 
 function resolveModeConfig(mode) {
   const baseConfig = getModeConfig(mode)
-  const allowInternalTestOverrides = mode === 'test' && process.env.CHATBOOK_INTERNAL_ALLOW_TEST_OVERRIDES === '1'
-  const overrideDatabaseUrl = allowInternalTestOverrides ? process.env.CHATBOOK_SERVER_DATABASE_URL?.trim() : undefined
-  const overrideDatabasePath = allowInternalTestOverrides ? process.env.CHATBOOK_SERVER_DATABASE_PATH?.trim() : undefined
-  const overrideDistDir = allowInternalTestOverrides ? process.env.CHATBOOK_SERVER_DIST_DIR?.trim() : undefined
+  const allowInternalTestOverrides = mode === 'test' && process.env.RETALE_INTERNAL_ALLOW_TEST_OVERRIDES === '1'
+  const overrideDatabaseUrl = allowInternalTestOverrides ? process.env.RETALE_SERVER_DATABASE_URL?.trim() : undefined
+  const overrideDatabasePath = allowInternalTestOverrides ? process.env.RETALE_SERVER_DATABASE_PATH?.trim() : undefined
+  const overrideDistDir = allowInternalTestOverrides ? process.env.RETALE_SERVER_DIST_DIR?.trim() : undefined
 
   const config = {
     ...baseConfig,
@@ -83,12 +83,12 @@ function resolveModeConfig(mode) {
 
   if (mode === 'test') {
     if (!isSubPathOf(SISYPHUS_ROOT, config.databasePath)) {
-      throw new Error(`[chatbook-server] Test mode database must stay under .sisyphus: ${config.databasePath}`)
+      throw new Error(`[retale-server] Test mode database must stay under .sisyphus: ${config.databasePath}`)
     }
 
     const resolvedDistDir = path.join(ROOT, config.distDir)
     if (!isSubPathOf(SISYPHUS_ROOT, resolvedDistDir)) {
-      throw new Error(`[chatbook-server] Test mode dist dir must stay under .sisyphus: ${config.distDir}`)
+      throw new Error(`[retale-server] Test mode dist dir must stay under .sisyphus: ${config.distDir}`)
     }
   }
 
@@ -107,11 +107,11 @@ function ensurePortAvailable(host, port) {
 
     const pids = output.split(/\s+/).filter(Boolean)
     throw new Error(
-      `[chatbook-server] Refusing to start because ${host}:${port} is already in use by PID(s): ${pids.join(', ')}. `
+      `[retale-server] Refusing to start because ${host}:${port} is already in use by PID(s): ${pids.join(', ')}. `
       + 'Stop that listener manually before starting this server.'
     )
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith('[chatbook-server]')) {
+    if (error instanceof Error && error.message.startsWith('[retale-server]')) {
       throw error
     }
 
@@ -153,7 +153,7 @@ function ensureIsolatedTestTsconfig(config) {
 
 function printHelp(invokedAs) {
   console.log(`Usage: node ${invokedAs} [-- --next-cli-args]\n`)
-  console.log('This wrapper starts a ChatBook Next dev server with an isolated runtime profile.')
+  console.log('This wrapper starts a ReTale Next dev server with an isolated runtime profile.')
   console.log('Host and port are fixed per profile; --hostname/-H and --port/-p are rejected.')
   console.log('')
   console.log('Profiles:')
@@ -174,7 +174,7 @@ export function runNextServer(mode, invokedAs) {
   const forbiddenOption = findForbiddenOption()
   if (forbiddenOption) {
     throw new Error(
-      `[chatbook-server] ${invokedAs} uses a fixed ${mode} profile and does not accept ${forbiddenOption.longName}`
+      `[retale-server] ${invokedAs} uses a fixed ${mode} profile and does not accept ${forbiddenOption.longName}`
       + `/${forbiddenOption.shortName}. Use the script without host/port overrides.`
     )
   }
@@ -203,17 +203,17 @@ export function runNextServer(mode, invokedAs) {
 
   const nextArgs = ['dev', '--hostname', config.host, '--port', String(config.port), ...args]
 
-  console.log(`[chatbook-server] Starting ${config.label} at http://${config.host}:${config.port}`)
-  console.log(`[chatbook-server] Forcing DATABASE_URL=${config.databaseUrl}`)
-  console.log(`[chatbook-server] Using Next dist dir ${runtimeConfig.distDir}`)
+  console.log(`[retale-server] Starting ${config.label} at http://${config.host}:${config.port}`)
+  console.log(`[retale-server] Forcing DATABASE_URL=${config.databaseUrl}`)
+  console.log(`[retale-server] Using Next dist dir ${runtimeConfig.distDir}`)
 
   const child = spawn(process.execPath, [NEXT_CLI_ENTRYPOINT, ...nextArgs], {
     stdio: 'inherit',
     env: {
       ...process.env,
       DATABASE_URL: config.databaseUrl,
-      CHATBOOK_NEXT_DIST_DIR: config.distDir,
-      CHATBOOK_NEXT_TSCONFIG_PATH: config.tsconfigPath,
+      RETALE_NEXT_DIST_DIR: config.distDir,
+      RETALE_NEXT_TSCONFIG_PATH: config.tsconfigPath,
     },
   })
 

@@ -872,7 +872,7 @@ async function runValidatedStage<T>(params: {
 
 function buildBridgeSystemPrompt() {
   return [
-    '你是 ChatBook 的 Future Jump 桥接生成器。',
+    '你是 ReTale 的 Future Jump 桥接生成器。',
     '你必须严格依据已给出的 what-if 分歧、故事状态和目标未来节点。',
     '你只返回一个 JSON 对象，不要解释，不要 markdown，不要额外字段。',
     'bridgeSummary 必须是 300-600 个中文字符，聚焦关系、动机、误会、阵营变化与情绪后果。',

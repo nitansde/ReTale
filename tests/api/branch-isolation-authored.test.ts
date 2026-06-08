@@ -162,7 +162,7 @@ afterEach(() => {
 
 describe('branch-isolation-authored', () => {
   it('merges speculative authored deltas and latest future jump revision only for explicit requests', async () => {
-    const tempDatabase = createTempDatabaseCopy('chatbook-branch-isolation-authored')
+    const tempDatabase = createTempDatabaseCopy('retale-branch-isolation-authored')
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
@@ -256,7 +256,7 @@ describe('branch-isolation-authored', () => {
   })
 
   it('assembles full chapter text plus rewrite/continue lineage in chronological order for continue flows', async () => {
-    const tempDatabase = createTempDatabaseCopy('chatbook-branch-lineage-context')
+    const tempDatabase = createTempDatabaseCopy('retale-branch-lineage-context')
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))

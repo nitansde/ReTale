@@ -16,7 +16,7 @@ import type {
 } from '@/lib/types'
 
 const WORKSPACE_ID = 'singleton'
-export const WORKSPACE_RESET_HEADER = 'x-chatbook-workspace-reset'
+export const WORKSPACE_RESET_HEADER = 'x-retale-workspace-reset'
 
 type SqlParam = string | number | bigint | Uint8Array | null
 

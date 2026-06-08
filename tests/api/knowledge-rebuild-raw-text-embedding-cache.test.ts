@@ -127,7 +127,7 @@ describe('raw-text embedding cache repository', () => {
       deleteRawTextEmbeddingCacheEntries,
       garbageCollectRawTextEmbeddingCacheEntries,
       lookupRawTextEmbeddingCacheEntries,
-    } = await createTestDatabase('chatbook-raw-text-embedding-cache-large-hash-list')
+    } = await createTestDatabase('retale-raw-text-embedding-cache-large-hash-list')
     seedBranch(database, 'novel_large_cache', 'main')
     const scope = {
       novelId: 'novel_large_cache',
@@ -162,7 +162,7 @@ describe('raw-text embedding cache repository', () => {
       garbageCollectRawTextEmbeddingCacheEntries,
       lookupRawTextEmbeddingCacheEntries,
       upsertRawTextEmbeddingCacheEntries,
-    } = await createTestDatabase('chatbook-raw-text-embedding-cache-round-trip')
+    } = await createTestDatabase('retale-raw-text-embedding-cache-round-trip')
     seedBranch(database, 'novel_cache', 'main')
     seedBranch(database, 'novel_cache', 'draft')
 
@@ -319,7 +319,7 @@ describe('raw-text embedding cache repository', () => {
       buildEmbeddingInputHash,
       lookupRawTextEmbeddingCacheEntries,
       upsertRawTextEmbeddingCacheEntries,
-    } = await createTestDatabase('chatbook-raw-text-embedding-cache-invalid-vectors')
+    } = await createTestDatabase('retale-raw-text-embedding-cache-invalid-vectors')
     seedBranch(database, 'novel_invalid', 'main')
 
     const scope = {
@@ -398,7 +398,7 @@ describe('raw-text embedding cache repository', () => {
       buildEmbeddingInputHash,
       lookupRawTextEmbeddingCacheEntries,
       upsertRawTextEmbeddingCacheEntries,
-    } = await createTestDatabase('chatbook-raw-text-embedding-cache-hit-miss-matrix')
+    } = await createTestDatabase('retale-raw-text-embedding-cache-hit-miss-matrix')
     seedBranch(database, 'novel_matrix', 'main')
 
     const scope = {
@@ -502,7 +502,7 @@ describe('raw-text embedding cache repository', () => {
       garbageCollectRawTextEmbeddingCacheEntries,
       lookupRawTextEmbeddingCacheEntries,
       upsertRawTextEmbeddingCacheEntries,
-    } = await createTestDatabase('chatbook-raw-text-embedding-cache-gc-and-move')
+    } = await createTestDatabase('retale-raw-text-embedding-cache-gc-and-move')
     seedBranch(database, 'novel_gc_move', 'main')
 
     const scope = {

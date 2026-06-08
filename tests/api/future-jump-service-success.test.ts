@@ -115,7 +115,7 @@ describe('future-jump-service success', () => {
       loadStoredAISettings: () => createAiSettings(),
     }))
 
-    const tempDatabase = createTempDatabaseCopy('chatbook-future-jump-service-success')
+    const tempDatabase = createTempDatabaseCopy('retale-future-jump-service-success')
     cleanups.push(tempDatabase.cleanup)
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
     globalForSqlite.sqlite = database

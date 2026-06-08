@@ -301,7 +301,7 @@ afterEach(() => {
 
 describe('roleplay session API', () => {
   it('creates a session, appends ordered messages, preserves variant and fork metadata, and keeps non-roleplay tables untouched', async () => {
-    const database = createTestDatabase('chatbook-roleplay-api-success')
+    const database = createTestDatabase('retale-roleplay-api-success')
     createFixture(database)
     vi.resetModules()
 
@@ -569,7 +569,7 @@ describe('roleplay session API', () => {
   })
 
   it('returns 404 for invalid roleplay session ids on load and append', async () => {
-    createTestDatabase('chatbook-roleplay-api-not-found')
+    createTestDatabase('retale-roleplay-api-not-found')
     vi.resetModules()
 
     const { GET } = await import('@/app/api/roleplay/sessions/[sessionId]/route')
@@ -593,7 +593,7 @@ describe('roleplay session API', () => {
   })
 
   it('rejects invalid source timeline ids without creating a session or orphan timeline node', async () => {
-    const database = createTestDatabase('chatbook-roleplay-api-invalid-source-node')
+    const database = createTestDatabase('retale-roleplay-api-invalid-source-node')
     createFixture(database)
     vi.resetModules()
 

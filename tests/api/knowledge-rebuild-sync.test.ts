@@ -33,7 +33,7 @@ afterEach(() => {
 
 describe('syncWorkspacePayloadToKnowledgeStore', () => {
   it('aborts stale running rebuild jobs before removing stale novels', async () => {
-    createTestDatabase('chatbook-knowledge-sync-stale-job-cleanup')
+    createTestDatabase('retale-knowledge-sync-stale-job-cleanup')
 
     globalForSqlite.sqlite?.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run('novel_stale', 'Stale Novel', 'txt')
     globalForSqlite.sqlite?.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run('novel_stale:main', 'novel_stale', 'main')
@@ -53,7 +53,7 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
   })
 
   it('syncs workspace chapters without enqueuing a rebuild job', async () => {
-    createTestDatabase('chatbook-knowledge-sync-without-rebuild-job')
+    createTestDatabase('retale-knowledge-sync-without-rebuild-job')
 
     await syncWorkspacePayloadToKnowledgeStore({
       currentNovelId: 'novel_imported',
@@ -87,7 +87,7 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
   })
 
   it('repairs missing derived line and span artifacts for unchanged chapters', async () => {
-    createTestDatabase('chatbook-knowledge-sync-repairs-derived-artifacts')
+    createTestDatabase('retale-knowledge-sync-repairs-derived-artifacts')
     const chapterContent = '<p>林澄开始记录这次练习。</p>'
     const rawText = htmlToPlainText(chapterContent)
 
@@ -145,7 +145,7 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
   })
 
   it('syncs a large workspace payload without queuing rebuild jobs', async () => {
-    createTestDatabase('chatbook-knowledge-sync-large-workspace')
+    createTestDatabase('retale-knowledge-sync-large-workspace')
 
     const localChapters = Array.from({ length: 64 }, (_, index) => ({
       id: `large_ch_${index + 1}`,

@@ -190,7 +190,7 @@ afterEach(() => {
 
 describe('story-timeline-read', () => {
   it('returns chapters, authored branch nodes, derived edges, and rehydrates what-if detail records', async () => {
-    const database = createTestDatabase('chatbook-story-timeline-read')
+    const database = createTestDatabase('retale-story-timeline-read')
     seedTimelineFixture(database)
     vi.resetModules()
 
@@ -295,7 +295,7 @@ describe('story-timeline-read', () => {
   })
 
   it('returns validation and branch-isolation errors for timeline and what-if detail reads', async () => {
-    const database = createTestDatabase('chatbook-story-timeline-read-errors')
+    const database = createTestDatabase('retale-story-timeline-read-errors')
     seedTimelineFixture(database)
     vi.resetModules()
 

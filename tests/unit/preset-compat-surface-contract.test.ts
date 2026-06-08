@@ -96,7 +96,7 @@ describe('preset compat surface contract', () => {
       surfaceId: 'rewrite',
       enabled: true,
     })
-    expect(library.builtinSystemPrompts.rewrite.content).toContain('你是 ChatBook 的小说扩写/魔改写作模型。')
+    expect(library.builtinSystemPrompts.rewrite.content).toContain('你是 ReTale 的小说扩写/魔改写作模型。')
     expect(library.builtinSystemPrompts.future_jump.content).toContain('Future Jump 目标节点改写生成器')
   })
 })

@@ -112,7 +112,7 @@ function createCreativeLibrary(mode: 'default' | 'stream' = 'default'): PresetCo
     const presetId = `${surfaceId}-preset`
     library.builtinSystemPrompts[surfaceId] = {
       ...library.builtinSystemPrompts[surfaceId],
-      content: `${surfaceId.toUpperCase()} CHATBOOK BUILTIN SYSTEM`,
+      content: `${surfaceId.toUpperCase()} RETALE BUILTIN SYSTEM`,
     }
     library.presets[presetId] = {
       id: presetId,
@@ -431,7 +431,7 @@ function createRequest(operationType: string, body: Record<string, unknown>) {
 }
 
 function readPresetCompatHeader(response: Response) {
-  const raw = response.headers.get('X-ChatBook-Preset-Compat')
+  const raw = response.headers.get('X-ReTale-Preset-Compat')
   expect(raw).toBeTruthy()
   return JSON.parse(Buffer.from(String(raw), 'base64').toString('utf8')) as {
     macroDiagnostics: PresetCompatMacroDiagnostic[]
@@ -524,7 +524,7 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.max_tokens).toBe(2222)
     expect(requestBody.seed).toBeUndefined()
     expect(requestBody.messages[0]?.content).toBe([
-      `${surfaceId.toUpperCase()} CHATBOOK BUILTIN SYSTEM`,
+      `${surfaceId.toUpperCase()} RETALE BUILTIN SYSTEM`,
       `${surfaceId.toUpperCase()} SYSTEM RULE`,
       `${surfaceId.toUpperCase()} SECOND SYSTEM RULE`,
     ].join('\n\n'))
@@ -710,7 +710,7 @@ describe('preset compat rewrite route runtime', () => {
       messages: Array<{ role: string; content: string }>
     }
     expect(requestBody.messages[0]?.content).toBe([
-      'REWRITE CHATBOOK BUILTIN SYSTEM',
+      'REWRITE RETALE BUILTIN SYSTEM',
       'REWRITE SYSTEM RULE',
       'REWRITE SECOND SYSTEM RULE',
     ].join('\n\n'))
@@ -744,7 +744,7 @@ describe('preset compat rewrite route runtime', () => {
     const response = await POST(createRequest('rewrite', { stream: true }))
 
     expect(response.status).toBe(200)
-    expect(deserializePresetCompatResponseMetadata(String(response.headers.get('X-ChatBook-Preset-Compat'))).streamPolicy).toMatchObject({
+    expect(deserializePresetCompatResponseMetadata(String(response.headers.get('X-ReTale-Preset-Compat'))).streamPolicy).toMatchObject({
       supported: true,
       effective: true,
       source: 'explicit_request',
@@ -811,7 +811,7 @@ describe('preset compat rewrite route runtime', () => {
     const presetDrivenResponse = await POST(createRequest('rewrite', {}))
     expect(presetDrivenResponse.status).toBe(200)
     expect(await presetDrivenResponse.text()).toBe('流式结果一')
-    expect(deserializePresetCompatResponseMetadata(String(presetDrivenResponse.headers.get('X-ChatBook-Preset-Compat'))).streamPolicy).toMatchObject({
+    expect(deserializePresetCompatResponseMetadata(String(presetDrivenResponse.headers.get('X-ReTale-Preset-Compat'))).streamPolicy).toMatchObject({
       supported: true,
       requested: true,
       effective: true,
@@ -839,7 +839,7 @@ describe('preset compat rewrite route runtime', () => {
     const explicitOnResponse = await POSTWithDisabledPreset(createRequest('rewrite', { stream: true }))
     expect(explicitOnResponse.status).toBe(200)
     expect(await explicitOnResponse.text()).toBe('流式结果二')
-    expect(deserializePresetCompatResponseMetadata(String(explicitOnResponse.headers.get('X-ChatBook-Preset-Compat'))).streamPolicy).toMatchObject({
+    expect(deserializePresetCompatResponseMetadata(String(explicitOnResponse.headers.get('X-ReTale-Preset-Compat'))).streamPolicy).toMatchObject({
       supported: true,
       requested: false,
       effective: true,
@@ -879,8 +879,8 @@ describe('preset compat rewrite route runtime', () => {
     const response = await POST(createRequest('rewrite', { stream: false }))
 
     expect(response.status).toBe(200)
-    expect(response.headers.get('X-ChatBook-Preset-Compat')).toBeNull()
-    expect(response.headers.get('X-ChatBook-Preset-Metadata-Omitted')).toBe('size-limit')
+    expect(response.headers.get('X-ReTale-Preset-Compat')).toBeNull()
+    expect(response.headers.get('X-ReTale-Preset-Metadata-Omitted')).toBe('size-limit')
     await expect(response.json()).resolves.toMatchObject({
       result: { content: 'CLEAN OUTPUT' },
     })
@@ -913,7 +913,7 @@ describe('preset compat rewrite route runtime', () => {
 
     expect(response.status).toBe(200)
     await expect(response.text()).resolves.toBe('完整响应正文')
-    expect(deserializePresetCompatResponseMetadata(String(response.headers.get('X-ChatBook-Preset-Compat'))).streamPolicy).toMatchObject({
+    expect(deserializePresetCompatResponseMetadata(String(response.headers.get('X-ReTale-Preset-Compat'))).streamPolicy).toMatchObject({
       effective: true,
       source: 'explicit_request',
     })

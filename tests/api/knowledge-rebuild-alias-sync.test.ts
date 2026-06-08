@@ -155,7 +155,7 @@ afterEach(() => {
 
 describe('knowledge rebuild alias sync', () => {
   it('migrates EntityAlias timestamps used by alias resync updates', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-rebuild-alias-timestamps')
+    const { database } = await createTestDatabase('retale-knowledge-rebuild-alias-timestamps')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_alias_timestamp_migration', 1)
     const columns = database.prepare('PRAGMA table_info(EntityAlias)').all() as Array<{ name: string }>
     const columnNames = columns.map((column) => column.name)
@@ -178,7 +178,7 @@ describe('knowledge rebuild alias sync', () => {
   })
 
   it('keeps first alias ownership in chapter order and logs later conflicts', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-alias-first-wins')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-alias-first-wins')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_alias_first_wins', 2)
     const aiSettings = createMockAISettings(2)
     const gates = new Map([
@@ -298,7 +298,7 @@ describe('knowledge rebuild alias sync', () => {
   })
 
   it('merges one-way canonical alias variants for formal characters', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-rebuild-one-way-canonical-alias-merge')
+    const { database } = await createTestDatabase('retale-knowledge-rebuild-one-way-canonical-alias-merge')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_one_way_canonical_alias_merge', 1)
     const aiSettings = createMockAISettings(1)
 
@@ -414,7 +414,7 @@ describe('knowledge rebuild alias sync', () => {
   })
 
   it('merges safe canonical character variants and repoints mentions, aliases, and event participants to one entity', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-safe-canonical-merge')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-safe-canonical-merge')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_safe_canonical_merge', 1)
     const aiSettings = createMockAISettings(1)
 
@@ -671,7 +671,7 @@ describe('knowledge rebuild alias sync', () => {
   })
 
   it('applies later same-batch aliases before ordered writes so earlier unknown observations do not create candidates', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-alias-hit-no-candidate')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-alias-hit-no-candidate')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_alias_hit_no_candidate', 7)
     const aiSettings = createMockAISettings(7)
 
@@ -787,7 +787,7 @@ describe('knowledge rebuild alias sync', () => {
   })
 
   it('skips unresolved alias targets without creating formal entities', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-alias-skip-unresolved-target')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-alias-skip-unresolved-target')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_alias_skip_unresolved_target', 1)
     const aiSettings = createMockAISettings(1)
 
@@ -878,7 +878,7 @@ describe('knowledge rebuild alias sync', () => {
   })
 
   it('persists known updates on the canonical entity, preserves alias surface text, and keeps 没有变化 as a no-op', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-known-update-canonical-profile')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-known-update-canonical-profile')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_known_update_alias_profile', 1)
     const aiSettings = createMockAISettings(1)
 

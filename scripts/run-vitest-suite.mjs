@@ -52,7 +52,7 @@ if (!selectedTests.length) {
 fs.mkdirSync(EVIDENCE_ROOT, { recursive: true })
 fs.mkdirSync(TEST_DB_ROOT, { recursive: true })
 
-const sourceDbRelativePath = process.env.CHATBOOK_TEST_SOURCE_DB_PATH ?? path.join(TEST_DB_ROOT_RELATIVE, 'vitest-source.db')
+const sourceDbRelativePath = process.env.RETALE_TEST_SOURCE_DB_PATH ?? path.join(TEST_DB_ROOT_RELATIVE, 'vitest-source.db')
 const sourceDbPath = path.isAbsolute(sourceDbRelativePath)
   ? sourceDbRelativePath
   : path.join(ROOT, sourceDbRelativePath)
@@ -64,8 +64,8 @@ fs.rmSync(runtimeDbPath, { force: true })
 
 const outputFile = path.join(EVIDENCE_ROOT, `${suite}-report.json`)
 
-console.log(`[chatbook-vitest] Dedicated source test DB ${sourceDbRelativePath}`)
-console.log(`[chatbook-vitest] Runtime DATABASE_URL=file:${runtimeDbRelativePath}`)
+console.log(`[retale-vitest] Dedicated source test DB ${sourceDbRelativePath}`)
+console.log(`[retale-vitest] Runtime DATABASE_URL=file:${runtimeDbRelativePath}`)
 
 const result = spawnSync(
   'npx',
@@ -75,7 +75,7 @@ const result = spawnSync(
     stdio: 'inherit',
     env: {
       ...process.env,
-      CHATBOOK_TEST_SOURCE_DB_PATH: sourceDbRelativePath,
+      RETALE_TEST_SOURCE_DB_PATH: sourceDbRelativePath,
       DATABASE_URL: `file:${runtimeDbRelativePath}`,
       TASK_EVIDENCE_DIR: EVIDENCE_ROOT,
     },

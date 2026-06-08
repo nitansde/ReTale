@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL
-const LOCAL_HANLP_SMOKE_ENABLED = process.env.CHATBOOK_RUN_LOCAL_HANLP_SMOKE === '1'
+const LOCAL_HANLP_SMOKE_ENABLED = process.env.RETALE_RUN_LOCAL_HANLP_SMOKE === '1'
 
 function resetGlobalSqlite() {
   const globalForSqlite = globalThis as { sqlite?: { close?: () => void } }

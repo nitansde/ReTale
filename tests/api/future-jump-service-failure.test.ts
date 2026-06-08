@@ -90,7 +90,7 @@ describe('future-jump-service failure', () => {
       }),
     }))
 
-    const tempDatabase = createTempDatabaseCopy('chatbook-future-jump-service-failure')
+    const tempDatabase = createTempDatabaseCopy('retale-future-jump-service-failure')
     cleanups.push(tempDatabase.cleanup)
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
     globalForSqlite.sqlite = database

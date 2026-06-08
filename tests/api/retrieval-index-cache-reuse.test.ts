@@ -311,7 +311,7 @@ afterEach(() => {
 
 describe('retrieval-index cache reuse helpers', () => {
   it('includes tier labels and merged aliases in entity retrieval docs without duplicate character docs', async () => {
-    const tempDatabase = createTempDatabaseCopy('chatbook-retrieval-index-character-doc-tier-aliases')
+    const tempDatabase = createTempDatabaseCopy('retale-retrieval-index-character-doc-tier-aliases')
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
@@ -408,7 +408,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('partitions raw-text and knowledge-derived retrieval docs', async () => {
-    const tempDatabase = createTempDatabaseCopy('chatbook-retrieval-index-cache-reuse-partition')
+    const tempDatabase = createTempDatabaseCopy('retale-retrieval-index-cache-reuse-partition')
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
@@ -437,7 +437,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('can scope raw-text retrieval docs to a rebuild chapter range', async () => {
-    const tempDatabase = createTempDatabaseCopy('chatbook-retrieval-index-cache-reuse-range-docs')
+    const tempDatabase = createTempDatabaseCopy('retale-retrieval-index-cache-reuse-range-docs')
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
@@ -470,7 +470,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('treats a default full-equivalent chapter range as the full retrieval scope', async () => {
-    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-full-equivalent-range-scope')
+    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-full-equivalent-range-scope')
 
     await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
       chapterRange: { startChapter: 1 },
@@ -491,7 +491,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('reuses embeddingInputHash when packed text is unchanged', async () => {
-    const tempDatabase = createTempDatabaseCopy('chatbook-retrieval-index-cache-reuse-hash')
+    const tempDatabase = createTempDatabaseCopy('retale-retrieval-index-cache-reuse-hash')
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
@@ -528,7 +528,7 @@ describe('retrieval-index cache reuse helpers', () => {
       mockLanceDb,
       retrievalCache,
       retrievalIndex,
-    } = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-final-rebuild-hit')
+    } = await createRetrievalIndexHarness('retale-retrieval-index-cache-reuse-final-rebuild-hit')
 
     const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
     const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
@@ -573,7 +573,7 @@ describe('retrieval-index cache reuse helpers', () => {
       mockLanceDb,
       retrievalCache,
       retrievalIndex,
-    } = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-broader-final-rebuild')
+    } = await createRetrievalIndexHarness('retale-retrieval-index-cache-reuse-broader-final-rebuild')
 
     const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
     const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
@@ -673,7 +673,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('rebuilds correctly with empty or partial raw-text cache', async () => {
-    const emptyHarness = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-empty-cache')
+    const emptyHarness = await createRetrievalIndexHarness('retale-retrieval-index-cache-reuse-empty-cache')
     const emptyRawTextDocs = emptyHarness.retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
 
     await expect(emptyHarness.retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
@@ -694,7 +694,7 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(emptyCacheRows).toHaveLength(emptyHarness.retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length)
     expect(emptyCacheRows.every((row) => row.vectorDimension === 3)).toBe(true)
 
-    const degradedHarness = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-partial-cache')
+    const degradedHarness = await createRetrievalIndexHarness('retale-retrieval-index-cache-reuse-partial-cache')
     const degradedRawTextDocs = degradedHarness.retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
     const packedDoc = degradedRawTextDocs.find((row) => row.id.startsWith('packed-span:'))
     const sceneDoc = degradedRawTextDocs.find((row) => row.id === 'span-3')
@@ -743,7 +743,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('garbage collects unreachable raw-text cache rows during precompute', async () => {
-    const { database, retrievalCache, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-precompute-gc')
+    const { database, retrievalCache, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-cache-reuse-precompute-gc')
 
     const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
     const packedDoc = rawTextDocs.find((row) => row.id.startsWith('packed-span:'))
@@ -791,7 +791,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('repairs missing raw-text line and span artifacts before precompute', async () => {
-    const { database, embedTextsWithOllama, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-precompute-artifact-repair')
+    const { database, embedTextsWithOllama, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-cache-reuse-precompute-artifact-repair')
 
     database.prepare('DELETE FROM TextSpan WHERE chapterId = ?').run('chapter-1')
     database.prepare('DELETE FROM ChapterLine WHERE chapterId = ?').run('chapter-1')
@@ -816,7 +816,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('does not garbage collect out-of-range raw-text cache rows during ranged precompute', async () => {
-    const { database, retrievalCache, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-cache-reuse-precompute-range-gc')
+    const { database, retrievalCache, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-cache-reuse-precompute-range-gc')
 
     const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
     const retainedDoc = rawTextDocs.find((row) => row.id.startsWith('packed-span:'))
@@ -863,7 +863,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('scoped rebuild materializes rows for the requested chapter range', async () => {
-    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-preserve-outside-range')
+    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-scoped-preserve-outside-range')
 
     database.prepare(
       `INSERT INTO KnowledgeWorld (
@@ -921,7 +921,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('scoped rebuild materializes validity-overlapping rows even when chapterNo is below the range start', async () => {
-    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-validity-overlap')
+    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-scoped-validity-overlap')
 
     database.prepare(
       `INSERT INTO KnowledgeWorld (
@@ -950,7 +950,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('creates a scoped retrieval table when ranged rebuild has no existing branch table', async () => {
-    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-missing-table-materialize')
+    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-scoped-missing-table-materialize')
 
     database.prepare(
       `INSERT INTO KnowledgeChapter (
@@ -999,7 +999,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('creates scoped retrieval table rows with the current embedding model without replacing the full table', async () => {
-    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-model-replacement')
+    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-scoped-model-replacement')
 
     database.prepare(
       `INSERT INTO KnowledgeChapter (
@@ -1054,7 +1054,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('ignores legacy Lance metadata while materializing scoped rows from source truth', async () => {
-    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-legacy-metadata-materialize')
+    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-scoped-legacy-metadata-materialize')
 
     database.prepare(
       `INSERT INTO KnowledgeChapter (
@@ -1109,7 +1109,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('preserves the existing full retrieval table when a replacement rebuild fails during embedding', async () => {
-    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-full-rebuild-failure-preserves-table')
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-full-rebuild-failure-preserves-table')
 
     await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
 
@@ -1140,7 +1140,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('retries a transient final rebuild embedding failure and still writes cache and table rows', async () => {
-    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-transient-final-rebuild-embedding-retry')
+    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-transient-final-rebuild-embedding-retry')
 
     const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
     const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
@@ -1166,7 +1166,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('splits long Ollama final embedding batches by input size', async () => {
-    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-long-ollama-embedding-batches')
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-long-ollama-embedding-batches')
     aiSettings.embeddings.embeddingBatchSize = 32
 
     const insertWorld = database.prepare(
@@ -1210,7 +1210,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('surfaces batch context after retryable retrieval embedding failures exhaust retries', async () => {
-    const { embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-final-rebuild-retry-context')
+    const { embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-final-rebuild-retry-context')
 
     const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
     embedTextsWithOllama.mockRejectedValue(new Error(
@@ -1227,7 +1227,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('preserves the existing retrieval table when scoped materialization fails during embedding', async () => {
-    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-scoped-materialization-failure-preserves-table')
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-scoped-materialization-failure-preserves-table')
 
     database.prepare(
       `INSERT INTO KnowledgeChapter (
@@ -1284,7 +1284,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('preserves the existing retrieval table when final table replacement fails', async () => {
-    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-final-replacement-failure-preserves-table')
+    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-final-replacement-failure-preserves-table')
 
     database.prepare(
       `INSERT INTO KnowledgeChapter (
@@ -1324,7 +1324,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('keeps the previous table active when a new versioned table write fails after creation', async () => {
-    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-partial-write-failure-preserves-active-table')
+    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-partial-write-failure-preserves-active-table')
 
     database.prepare(
       `INSERT INTO KnowledgeChapter (
@@ -1381,7 +1381,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('preserves a pending replacement table when full index creation fails and resumes it on the next rebuild', async () => {
-    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-index-failure-preserves-active-table')
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-index-failure-preserves-active-table')
 
     database.prepare(
       `INSERT INTO KnowledgeChapter (
@@ -1476,7 +1476,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('discards a stale pending table when the embedding model changes after an index failure', async () => {
-    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-stale-pending-model-change')
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-stale-pending-model-change')
 
     await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
     const originalTable = getActiveMockTable(database, mockLanceDb)
@@ -1535,7 +1535,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('discards a stale pending table when source docs change after an index failure', async () => {
-    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-stale-pending-doc-change')
+    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-stale-pending-doc-change')
 
     await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
     const originalTable = getActiveMockTable(database, mockLanceDb)
@@ -1593,7 +1593,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('resumes from building_vector_index without recreating the pending table', async () => {
-    const { aiSettings, database, embedTextsWithOllama, ivfFlat, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-resume-vector-stage')
+    const { aiSettings, database, embedTextsWithOllama, ivfFlat, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-resume-vector-stage')
 
     await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
     const originalTable = getActiveMockTable(database, mockLanceDb)
@@ -1680,7 +1680,7 @@ describe('retrieval-index cache reuse helpers', () => {
 
 
   it('writes materialized rows in one final table replacement without append batches', async () => {
-    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-single-final-write')
+    const { aiSettings, database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-single-final-write')
     aiSettings.embeddings.embeddingBatchSize = 2000
 
     const insertWorld = database.prepare(
@@ -1718,7 +1718,7 @@ describe('retrieval-index cache reuse helpers', () => {
   }, 120000)
 
   it('deleteBranchRetrievalIndexFromChapter drops the disposable Lance table', async () => {
-    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('chatbook-retrieval-index-delete-from-chapter-safe-scope')
+    const { database, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-delete-from-chapter-safe-scope')
 
     database.prepare(
       `INSERT INTO KnowledgeWorld (

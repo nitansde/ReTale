@@ -22,7 +22,7 @@ afterEach(() => {
 
 describe('story branch stores', () => {
   it('round-trips authored speculative records across the new store modules', async () => {
-    const tempDatabase = createTempDatabaseCopy('chatbook-story-branch-store')
+    const tempDatabase = createTempDatabaseCopy('retale-story-branch-store')
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))

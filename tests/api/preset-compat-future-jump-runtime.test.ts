@@ -68,7 +68,7 @@ function createRuntimeLibrary() {
   const library = createDefaultPresetCompatLibrary()
   library.builtinSystemPrompts.future_jump = {
     ...library.builtinSystemPrompts.future_jump,
-    content: 'FUTURE JUMP CHATBOOK BUILTIN SYSTEM',
+    content: 'FUTURE JUMP RETALE BUILTIN SYSTEM',
   }
 
   library.standaloneRegexes['regex-input'] = {
@@ -458,7 +458,7 @@ describe('preset compat future jump runtime', () => {
       loadStoredPresetCompatLibrary: () => createRuntimeLibrary(),
     }))
 
-    const database = await createTestDatabase('chatbook-preset-compat-future-jump')
+    const database = await createTestDatabase('retale-preset-compat-future-jump')
     seedFutureJumpFixture(database)
 
     const bridgeSummary = '桥'.repeat(350)
@@ -547,7 +547,7 @@ describe('preset compat future jump runtime', () => {
     expect(rewriteBody.messages[0]?.content).not.toContain('FUTURE JUMP CONTINUE TEMPLATE')
     expect(rewriteBody.messages[0]?.content).not.toContain('## Imported Preset System Rules')
     expect(rewriteBody.messages[0]?.content).toBe([
-      'FUTURE JUMP CHATBOOK BUILTIN SYSTEM',
+      'FUTURE JUMP RETALE BUILTIN SYSTEM',
       'FUTURE JUMP SYSTEM RULE',
       'FUTURE JUMP SECOND SYSTEM RULE',
     ].join('\n\n'))
@@ -565,7 +565,7 @@ describe('preset compat future jump runtime', () => {
       loadStoredPresetCompatLibrary: () => createRuntimeLibrary(),
     }))
 
-    const database = await createTestDatabase('chatbook-preset-compat-fail-closed')
+    const database = await createTestDatabase('retale-preset-compat-fail-closed')
     seedWhatIfFixture(database)
 
     const fetchMock = vi.fn()
@@ -691,7 +691,7 @@ describe('preset compat future jump runtime', () => {
       loadStoredPresetCompatLibrary: () => createMacroRuntimeLibrary(),
     }))
 
-    const database = await createTestDatabase('chatbook-preset-compat-future-jump-macro-runtime')
+    const database = await createTestDatabase('retale-preset-compat-future-jump-macro-runtime')
     seedFutureJumpFixture(database)
 
     const bridgeSummary = '桥'.repeat(350)

@@ -142,7 +142,7 @@ function seedNovel(database: DatabaseSync) {
 
 describe('continue-block service', () => {
   it('persists continue children under saved nodes, keeps future-jump continues as child blocks, and regenerates in place with history', async () => {
-    const tempDatabase = createTempDatabaseCopy('chatbook-continue-block-service')
+    const tempDatabase = createTempDatabaseCopy('retale-continue-block-service')
     cleanups.push(tempDatabase.cleanup)
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
     globalForSqlite.sqlite = database
@@ -369,7 +369,7 @@ describe('continue-block service', () => {
   })
 
   it('returns a stable 404 for invalid parent timeline ids without leaving continue-block rows behind', async () => {
-    const tempDatabase = createTempDatabaseCopy('chatbook-continue-block-invalid-parent')
+    const tempDatabase = createTempDatabaseCopy('retale-continue-block-invalid-parent')
     cleanups.push(tempDatabase.cleanup)
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
     globalForSqlite.sqlite = database
@@ -404,7 +404,7 @@ describe('continue-block service', () => {
   })
 
   it('rejects regenerate for a missing continue block', async () => {
-    const tempDatabase = createTempDatabaseCopy('chatbook-continue-block-missing')
+    const tempDatabase = createTempDatabaseCopy('retale-continue-block-missing')
     cleanups.push(tempDatabase.cleanup)
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
     globalForSqlite.sqlite = database
@@ -423,7 +423,7 @@ describe('continue-block service', () => {
   })
 
   it('returns stable 404 JSON for missing continue blocks on the route boundary', async () => {
-    const tempDatabase = createTempDatabaseCopy('chatbook-continue-block-route-missing')
+    const tempDatabase = createTempDatabaseCopy('retale-continue-block-route-missing')
     cleanups.push(tempDatabase.cleanup)
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
     globalForSqlite.sqlite = database

@@ -58,7 +58,7 @@ afterEach(() => {
 
 describe('authored branching schema migrations', () => {
   it('creates the authored tables and indexes on a fresh database', () => {
-    const databasePath = makeTempDatabasePath('chatbook-authored-schema')
+    const databasePath = makeTempDatabasePath('retale-authored-schema')
     const database = initializeDatabase(new DatabaseSync(databasePath))
 
     const tables = new Set(listTableNames(database).map((entry) => entry.name))
@@ -125,7 +125,7 @@ describe('authored branching schema migrations', () => {
   })
 
   it('is idempotent across repeated initialization and preserves an existing copied database', () => {
-    const databasePath = makeTempDatabasePath('chatbook-authored-idempotence')
+    const databasePath = makeTempDatabasePath('retale-authored-idempotence')
     fs.copyFileSync(getSourceDbPath(), databasePath)
 
     const firstOpen = initializeDatabase(new DatabaseSync(databasePath))
@@ -149,7 +149,7 @@ describe('authored branching schema migrations', () => {
   })
 
   it('skips boot schema writes when an existing database is current and another writer is active', () => {
-    const databasePath = makeTempDatabasePath('chatbook-authored-current-locked')
+    const databasePath = makeTempDatabasePath('retale-authored-current-locked')
     fs.copyFileSync(getSourceDbPath(), databasePath)
 
     const currentSchema = initializeDatabase(new DatabaseSync(databasePath))
@@ -186,7 +186,7 @@ describe('authored branching schema migrations', () => {
   })
 
   it('does not fast-skip legacy continue and what-if token column migrations', () => {
-    const databasePath = makeTempDatabasePath('chatbook-token-column-migration')
+    const databasePath = makeTempDatabasePath('retale-token-column-migration')
     const currentDatabase = initializeDatabase(new DatabaseSync(databasePath))
 
     currentDatabase.exec('ALTER TABLE continue_blocks DROP COLUMN latest_input_tokens')
@@ -216,7 +216,7 @@ describe('authored branching schema migrations', () => {
   })
 
   it('does not fast-skip missing boot schema indexes', () => {
-    const databasePath = makeTempDatabasePath('chatbook-index-current-gate')
+    const databasePath = makeTempDatabasePath('retale-index-current-gate')
     const currentDatabase = initializeDatabase(new DatabaseSync(databasePath))
     currentDatabase.exec('DROP INDEX idx_continue_blocks_parent_node')
     ;(currentDatabase as DatabaseSync & { close?: () => void }).close?.()
@@ -230,7 +230,7 @@ describe('authored branching schema migrations', () => {
   })
 
   it('migrates legacy active retrieval pointers to scoped rows', () => {
-    const databasePath = makeTempDatabasePath('chatbook-active-retrieval-index-scope')
+    const databasePath = makeTempDatabasePath('retale-active-retrieval-index-scope')
     const legacyDatabase = new DatabaseSync(databasePath)
     legacyDatabase.exec(`
       CREATE TABLE ActiveRetrievalIndex (
@@ -275,7 +275,7 @@ describe('authored branching schema migrations', () => {
   })
 
   it('adds shared extraction batch storage to a legacy extraction-cache schema and stays idempotent', () => {
-    const databasePath = makeTempDatabasePath('chatbook-extraction-batch-migration')
+    const databasePath = makeTempDatabasePath('retale-extraction-batch-migration')
     const legacyDatabase = new DatabaseSync(databasePath)
     legacyDatabase.exec(`
       CREATE TABLE NovelRecord (id TEXT PRIMARY KEY, title TEXT NOT NULL, sourceType TEXT NOT NULL DEFAULT 'txt');
@@ -330,7 +330,7 @@ describe('authored branching schema migrations', () => {
   })
 
   it('creates pending retrieval index state storage during initialization', () => {
-    const databasePath = makeTempDatabasePath('chatbook-pending-retrieval-index-table')
+    const databasePath = makeTempDatabasePath('retale-pending-retrieval-index-table')
     const database = initializeDatabase(new DatabaseSync(databasePath))
 
     const columns = listTableColumns(database, 'PendingRetrievalIndex')

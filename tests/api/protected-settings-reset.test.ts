@@ -215,7 +215,7 @@ afterEach(() => {
 
 describe('protected settings reset utility', () => {
   it('preserves only the protected app-setting blobs across a destructive reset', async () => {
-    const database = await createTestDatabase('chatbook-protected-settings-reset-success')
+    const database = await createTestDatabase('retale-protected-settings-reset-success')
     const { resetBusinessDataPreservingProtectedSettings } = await import('@/lib/server/persistence')
     const { loadStoredAISettings } = await import('@/lib/server/ai-settings')
     const { loadStoredPresetCompatLibrary } = await import('@/lib/server/preset-compat-library')
@@ -281,7 +281,7 @@ describe('protected settings reset utility', () => {
   })
 
   it('aborts before destructive cleanup when protected snapshot validation fails', async () => {
-    const database = await createTestDatabase('chatbook-protected-settings-reset-invalid-snapshot')
+    const database = await createTestDatabase('retale-protected-settings-reset-invalid-snapshot')
     const { resetBusinessDataPreservingProtectedSettings } = await import('@/lib/server/persistence')
     const { queryOne } = await import('@/lib/server/sqlite')
     seedBusinessData(database)

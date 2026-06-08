@@ -5,8 +5,8 @@ import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
-const originalTaskStaleTimeoutMs = process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS
-const originalTaskMaxRetries = process.env.CHATBOOK_TASK_MAX_RETRIES
+const originalTaskStaleTimeoutMs = process.env.RETALE_TASK_STALE_TIMEOUT_MS
+const originalTaskMaxRetries = process.env.RETALE_TASK_MAX_RETRIES
 
 async function createTestDatabase(prefix: string) {
   const tempDatabase = createTempDatabaseCopy(prefix)
@@ -92,8 +92,8 @@ function createAbortRequest(body: Record<string, unknown>) {
 
 afterEach(() => {
   process.env.DATABASE_URL = originalDatabaseUrl
-  process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
-  process.env.CHATBOOK_TASK_MAX_RETRIES = originalTaskMaxRetries
+  process.env.RETALE_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
+  process.env.RETALE_TASK_MAX_RETRIES = originalTaskMaxRetries
 
   for (const cleanup of cleanups.splice(0)) {
     cleanup()
@@ -111,7 +111,7 @@ afterEach(() => {
 
 describe('/api/task', () => {
   it('returns only supported active persisted jobs ordered by recency', async () => {
-    const { database } = await createTestDatabase('chatbook-task-route')
+    const { database } = await createTestDatabase('retale-task-route')
     const { mainBranchId: novelOneBranchId } = seedNovel(database, 'novel-background-one', 'Background One')
     const { mainBranchId: novelTwoBranchId } = seedNovel(database, 'novel-background-two', 'Background Two')
 
@@ -227,10 +227,10 @@ describe('/api/task', () => {
   })
 
   it('reconciles stale supported queued and running jobs before listing tasks', async () => {
-    process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = '1000'
-    process.env.CHATBOOK_TASK_MAX_RETRIES = '1'
+    process.env.RETALE_TASK_STALE_TIMEOUT_MS = '1000'
+    process.env.RETALE_TASK_MAX_RETRIES = '1'
 
-    const { database } = await createTestDatabase('chatbook-task-watchdog-list')
+    const { database } = await createTestDatabase('retale-task-watchdog-list')
     const { mainBranchId } = seedNovel(database, 'novel-watchdog', 'Watchdog Novel')
 
     insertJob(database, {
@@ -316,7 +316,7 @@ describe('/api/task', () => {
   })
 
   it('aborts an active knowledge extraction task', async () => {
-    const { database } = await createTestDatabase('chatbook-task-abort-knowledge')
+    const { database } = await createTestDatabase('retale-task-abort-knowledge')
     const { mainBranchId } = seedNovel(database, 'novel-knowledge', 'Knowledge Novel')
     insertJob(database, {
       id: 'job_extract_abort',
@@ -345,7 +345,7 @@ describe('/api/task', () => {
   })
 
   it('does not overwrite a task that becomes terminal during abort', async () => {
-    const { database } = await createTestDatabase('chatbook-task-abort-race')
+    const { database } = await createTestDatabase('retale-task-abort-race')
     const { mainBranchId } = seedNovel(database, 'novel-abort-race', 'Abort Race Novel')
     insertJob(database, {
       id: 'job_abort_race',
@@ -387,7 +387,7 @@ describe('/api/task', () => {
   })
 
   it('aborts an active retrieval rebuild task', async () => {
-    const { database } = await createTestDatabase('chatbook-task-abort-retrieval')
+    const { database } = await createTestDatabase('retale-task-abort-retrieval')
     const { mainBranchId } = seedNovel(database, 'novel-retrieval', 'Retrieval Novel')
     insertJob(database, {
       id: 'job_retrieval_abort',
@@ -415,7 +415,7 @@ describe('/api/task', () => {
   })
 
   it('aborts a rewrite task even when the recoverable helper returns null', async () => {
-    const { database } = await createTestDatabase('chatbook-task-abort-rewrite')
+    const { database } = await createTestDatabase('retale-task-abort-rewrite')
     const { mainBranchId } = seedNovel(database, 'novel-rewrite', 'Rewrite Novel')
     insertJob(database, {
       id: 'job_rewrite_abort',
@@ -453,7 +453,7 @@ describe('/api/task', () => {
   })
 
   it('rejects missing, unknown, unsupported, and terminal abort requests while keeping aborted idempotent', async () => {
-    const { database } = await createTestDatabase('chatbook-task-abort-errors')
+    const { database } = await createTestDatabase('retale-task-abort-errors')
     const { mainBranchId } = seedNovel(database, 'novel-errors', 'Error Novel')
     insertJob(database, {
       id: 'job_unsupported_abort',

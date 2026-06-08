@@ -4,7 +4,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const ROOT = process.cwd()
-const DEFAULT_VENV_DIR = path.resolve(ROOT, '..', '.chatbook-hanlp-venv')
+const DEFAULT_VENV_DIR = path.resolve(ROOT, '..', '.retale-hanlp-venv')
 const PYTHON_CANDIDATES = ['python3.13', 'python3.12', 'python3.11', 'python3']
 const REQUIRED_PACKAGES = ['hanlp==2.1.3', 'transformers==4.57.6']
 
@@ -47,10 +47,10 @@ function commandWorks(command, commandArgs) {
 }
 
 function selectPython() {
-  const explicit = process.env.CHATBOOK_HANLP_BOOTSTRAP_PYTHON?.trim()
+  const explicit = process.env.RETALE_HANLP_BOOTSTRAP_PYTHON?.trim()
   if (explicit) {
     if (!commandWorks(explicit, ['-c', 'import venv'])) {
-      fail(`CHATBOOK_HANLP_BOOTSTRAP_PYTHON is not usable for venv: ${explicit}`)
+      fail(`RETALE_HANLP_BOOTSTRAP_PYTHON is not usable for venv: ${explicit}`)
     }
     return explicit
   }
@@ -136,13 +136,13 @@ function smokeTest(pythonPath) {
   })
 }
 
-if (process.env.CHATBOOK_SKIP_HANLP_SETUP === '1') {
-  log('skipped because CHATBOOK_SKIP_HANLP_SETUP=1')
+if (process.env.RETALE_SKIP_HANLP_SETUP === '1') {
+  log('skipped because RETALE_SKIP_HANLP_SETUP=1')
   process.exit(0)
 }
 
 try {
-  const venvDir = path.resolve(process.env.CHATBOOK_HANLP_VENV_DIR?.trim() || DEFAULT_VENV_DIR)
+  const venvDir = path.resolve(process.env.RETALE_HANLP_VENV_DIR?.trim() || DEFAULT_VENV_DIR)
   const pythonPath = ensureVenv(venvDir)
   ensurePackages(pythonPath)
   ensureLocalEnv(pythonPath)
@@ -151,6 +151,6 @@ try {
   }
   log('HanLP runtime is ready')
 } catch (error) {
-  const suffix = postinstall ? ' Set CHATBOOK_SKIP_HANLP_SETUP=1 to skip this postinstall step.' : ''
+  const suffix = postinstall ? ' Set RETALE_SKIP_HANLP_SETUP=1 to skip this postinstall step.' : ''
   fail(`${error instanceof Error ? error.message : String(error)}.${suffix}`)
 }

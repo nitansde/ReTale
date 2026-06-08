@@ -185,10 +185,10 @@ function normalizeRewriteResultPayload(value: unknown): RewriteResultPayload | n
 
 function buildPresetCompatResponseHeaders(serializedMetadata: string): Record<string, string> {
   if (Buffer.byteLength(serializedMetadata, 'utf8') <= MAX_PRESET_COMPAT_RESPONSE_HEADER_BYTES) {
-    return { 'X-ChatBook-Preset-Compat': serializedMetadata }
+    return { 'X-ReTale-Preset-Compat': serializedMetadata }
   }
 
-  return { 'X-ChatBook-Preset-Metadata-Omitted': 'size-limit' }
+  return { 'X-ReTale-Preset-Metadata-Omitted': 'size-limit' }
 }
 
 function buildRewriteSetupGuidance(provider: string) {
@@ -333,7 +333,7 @@ function createResultPayload(params: {
 }
 
 function readStreamResponseMetadata(response: Response) {
-  const presetCompatHeader = response.headers.get('x-chatbook-preset-compat')
+  const presetCompatHeader = response.headers.get('x-retale-preset-compat')
   if (!presetCompatHeader) return null
 
   try {
@@ -365,7 +365,7 @@ async function readRewriteResponseResultWithProgress(
   const fallbackResponse = response.clone()
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
-  const provider = response.headers.get('x-chatbook-provider') ?? 'context-stream'
+  const provider = response.headers.get('x-retale-provider') ?? 'context-stream'
   const presetCompat = readStreamResponseMetadata(response)
   let content = ''
   let lastPersistedLength = 0
@@ -1007,7 +1007,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
           headers: {
             'Content-Type': 'text/plain; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
-            'X-ChatBook-Provider': runtime.resolvedRuntime.providerRuntime.provider,
+            'X-ReTale-Provider': runtime.resolvedRuntime.providerRuntime.provider,
             ...buildPresetCompatResponseHeaders(presetCompatHeader),
           },
         })
@@ -1017,7 +1017,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
         headers: {
           'Content-Type': 'text/plain; charset=utf-8',
           'Cache-Control': 'no-cache, no-transform',
-          'X-ChatBook-Provider': runtime.resolvedRuntime.providerRuntime.provider,
+          'X-ReTale-Provider': runtime.resolvedRuntime.providerRuntime.provider,
           ...buildPresetCompatResponseHeaders(presetCompatHeader),
         },
       })

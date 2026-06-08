@@ -195,7 +195,7 @@ afterEach(() => {
 
 describe('future-jump create API', () => {
   it('uses the selected source node context instead of the ancestor what-if root and creates exactly one timeline node', async () => {
-    const database = createTestDatabase('chatbook-future-jump-create')
+    const database = createTestDatabase('retale-future-jump-create')
     seedCreateFixture(database)
 
     vi.doMock('@/lib/server/ai-settings', () => ({
@@ -298,7 +298,7 @@ describe('future-jump create API', () => {
   }, 30000)
 
   it('rejects missing outline nodes before any run is persisted', async () => {
-    const database = createTestDatabase('chatbook-future-jump-create-missing-outline')
+    const database = createTestDatabase('retale-future-jump-create-missing-outline')
     seedCreateFixture(database)
     const initialRunCount = (database.prepare('SELECT COUNT(*) AS count FROM future_jump_runs').get() as { count: number }).count
 
@@ -331,7 +331,7 @@ describe('future-jump create API', () => {
   })
 
   it('rejects invalid parent timeline ids before creating future-jump runs or timeline nodes', async () => {
-    const database = createTestDatabase('chatbook-future-jump-create-invalid-parent')
+    const database = createTestDatabase('retale-future-jump-create-invalid-parent')
     seedCreateFixture(database)
     const initialRunCount = (database.prepare('SELECT COUNT(*) AS count FROM future_jump_runs').get() as { count: number }).count
     const initialTimelineNodeCount = (database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes').get() as { count: number }).count
@@ -370,7 +370,7 @@ describe('future-jump create API', () => {
   })
 
   it('rejects targets that stay on or before the source chapter', async () => {
-    const database = createTestDatabase('chatbook-future-jump-create-invalid-targets')
+    const database = createTestDatabase('retale-future-jump-create-invalid-targets')
     seedCreateFixture(database)
     const initialRunCount = (database.prepare('SELECT COUNT(*) AS count FROM future_jump_runs').get() as { count: number }).count
 

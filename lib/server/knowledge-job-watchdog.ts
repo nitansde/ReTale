@@ -148,8 +148,8 @@ function isStaleRow(updatedAt: string, staleTimeoutMs: number, nowMs: number) {
 
 export function getKnowledgeJobWatchdogConfig() {
   return {
-    staleTimeoutMs: parsePositiveIntegerEnv('CHATBOOK_TASK_STALE_TIMEOUT_MS', DEFAULT_TASK_STALE_TIMEOUT_MS),
-    maxRetries: parsePositiveIntegerEnv('CHATBOOK_TASK_MAX_RETRIES', DEFAULT_TASK_MAX_RETRIES),
+    staleTimeoutMs: parsePositiveIntegerEnv('RETALE_TASK_STALE_TIMEOUT_MS', DEFAULT_TASK_STALE_TIMEOUT_MS),
+    maxRetries: parsePositiveIntegerEnv('RETALE_TASK_MAX_RETRIES', DEFAULT_TASK_MAX_RETRIES),
   }
 }
 

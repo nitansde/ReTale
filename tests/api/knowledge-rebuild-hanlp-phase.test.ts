@@ -200,7 +200,7 @@ afterEach(() => {
 describe('knowledge rebuild HanLP orchestration', () => {
   it('runs HanLP first, then writes each extraction batch before starting the next batch', async () => {
     process.env.HANLP_BOOTSTRAP_PARALLELISM = '3'
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-phase-order')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-hanlp-phase-order')
     const { novelId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_phase_order', 3)
     const aiSettings = createMockAISettings(2)
     const events: string[] = []
@@ -366,7 +366,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
 
   it('runs HanLP for every chapter while limiting extraction, progress, and cleanup to the requested chapter range', async () => {
     process.env.HANLP_BOOTSTRAP_PARALLELISM = '4'
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-range')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-range')
     const { novelId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_range', 5)
     const aiSettings = createMockAISettings(4)
     const hanlpCalls: number[] = []
@@ -549,7 +549,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
 
   it('skips per-chapter HanLP checks when the book coverage marker is complete', async () => {
     process.env.HANLP_BOOTSTRAP_PARALLELISM = '4'
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-marker-full')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-hanlp-marker-full')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_marker_full', 3)
     const aiSettings = createMockAISettings(3)
     const hanlpCalls: number[] = []
@@ -638,7 +638,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
 
   it('resumes HanLP from the first chapter after partial book coverage', async () => {
     process.env.HANLP_BOOTSTRAP_PARALLELISM = '4'
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-marker-partial')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-hanlp-marker-partial')
     const { novelId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_marker_partial', 5)
     const aiSettings = createMockAISettings(5)
     const hanlpCalls: number[] = []
@@ -722,7 +722,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
 
   it('rebuilds the first 50 chapters from existing extraction cache without stack overflow', async () => {
     process.env.HANLP_BOOTSTRAP_PARALLELISM = '25'
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-first-50-cache')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-first-50-cache')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_first_50_cache', 50)
     const aiSettings = createMockAISettings(10)
 
@@ -830,7 +830,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
   })
 
   it('clears stale batch processing cache when a candidate is re-extracted', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-processing-cache-invalidation')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-processing-cache-invalidation')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_processing_cache_invalidation', 1)
     const aiSettings = createMockAISettings(1)
     const chapterSourceHash = buildTestExtractionCandidateSourceHash({
@@ -934,7 +934,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
   })
 
   it('can pause during HanLP before any extraction starts', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-pause')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-hanlp-pause')
     const { novelId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_pause', 1)
     const aiSettings = createMockAISettings(1)
     const hanlpGate = createDeferred<void>()
@@ -1011,7 +1011,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
   })
 
   it('can abort during HanLP before any extraction starts', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-abort')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-hanlp-abort')
     const { novelId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_abort', 1)
     const aiSettings = createMockAISettings(1)
     const hanlpGate = createDeferred<void>()
@@ -1088,7 +1088,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
   })
 
   it('recreates bootstrapped formal characters with their HanLP tier and projected classification after cleanup', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-tier-preservation')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-hanlp-tier-preservation')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_tier_preservation', 1)
     const aiSettings = createMockAISettings(1)
 
@@ -1213,7 +1213,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
   })
 
   it('passes combined story-state and HanLP chapter context into extraction calls', async () => {
-    const { database, queryAll } = await createTestDatabase('chatbook-knowledge-rebuild-hanlp-prompt-context')
+    const { database, queryAll } = await createTestDatabase('retale-knowledge-rebuild-hanlp-prompt-context')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_prompt_context', 2)
     const aiSettings = createMockAISettings(1)
     const extractionSpy = vi.fn(async (params: { chapterNo: number }) => ({

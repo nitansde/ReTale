@@ -6,8 +6,8 @@ import type { AISettings } from '@/lib/types'
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
-const originalTaskStaleTimeoutMs = process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS
-const originalTaskMaxRetries = process.env.CHATBOOK_TASK_MAX_RETRIES
+const originalTaskStaleTimeoutMs = process.env.RETALE_TASK_STALE_TIMEOUT_MS
+const originalTaskMaxRetries = process.env.RETALE_TASK_MAX_RETRIES
 const API_TEST_TIMEOUT_MS = 30_000
 
 vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
@@ -174,8 +174,8 @@ afterEach(() => {
   }
 
   process.env.DATABASE_URL = originalDatabaseUrl
-  process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
-  process.env.CHATBOOK_TASK_MAX_RETRIES = originalTaskMaxRetries
+  process.env.RETALE_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
+  process.env.RETALE_TASK_MAX_RETRIES = originalTaskMaxRetries
 
   while (cleanups.length) {
     cleanups.pop()?.()
@@ -184,10 +184,10 @@ afterEach(() => {
 
 describe('knowledge rebuild raw-text precompute overlap', () => {
   it('requeues a stale running knowledge rebuild instead of keeping it stuck as running', async () => {
-    process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = '1000'
-    process.env.CHATBOOK_TASK_MAX_RETRIES = '1'
+    process.env.RETALE_TASK_STALE_TIMEOUT_MS = '1000'
+    process.env.RETALE_TASK_MAX_RETRIES = '1'
 
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-watchdog-start')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-watchdog-start')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_rebuild_watchdog_start', 1)
 
     database.prepare(
@@ -214,7 +214,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
   })
 
   it('keeps dedicated retrieval rebuild visible while raw embedding is running, then builds LanceDB', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-retrieval-dedicated-worker')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-retrieval-dedicated-worker')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_dedicated_retrieval_worker', 2)
     const aiSettings = createMockAISettings()
     const precomputeGate = createDeferred()
@@ -310,7 +310,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
   })
 
   it('no-ops duplicate targeted retrieval workers once the job is already running', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-retrieval-targeted-duplicate-worker')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-retrieval-targeted-duplicate-worker')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_targeted_duplicate_retrieval_worker', 2)
     const aiSettings = createMockAISettings()
     const precomputeGate = createDeferred<void>()
@@ -383,7 +383,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
   })
 
   it('exposes raw-text telemetry through rebuild status', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-rebuild-status-telemetry-surface')
+    const { database } = await createTestDatabase('retale-knowledge-rebuild-status-telemetry-surface')
     const novelId = `novel_status_${Math.random().toString(36).slice(2, 8)}`
     const branchId = `${novelId}:main`
 
@@ -447,7 +447,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
   })
 
   it('skips duplicate detached retrieval workers once another process claimed the job', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-retrieval-detached-claim')
+    const { database } = await createTestDatabase('retale-knowledge-retrieval-detached-claim')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_detached_retrieval_claim', 2)
     const aiSettings = createMockAISettings()
     const precomputeGate = createDeferred<void>()
@@ -504,7 +504,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
   })
 
   it('skips duplicate detached main rebuild workers once another process claimed the job', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-main-detached-claim')
+    const { database } = await createTestDatabase('retale-knowledge-main-detached-claim')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_detached_main_claim', 1)
     const aiSettings = createMockAISettings()
     const extractionGate = createDeferred<void>()
@@ -571,7 +571,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
   })
 
   it('keeps raw-text precompute off the main SQLite rebuild path', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-overlap-starts-early')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-overlap-starts-early')
     const { novelId } = seedKnowledgeRebuildFixture(database)
     const aiSettings = createMockAISettings()
     const extractionGate = createDeferred<void>()
@@ -656,7 +656,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
   })
 
   it('no-ops duplicate targeted main rebuild workers once the job is already running', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-main-targeted-duplicate-worker')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-main-targeted-duplicate-worker')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_targeted_duplicate_main_worker')
     const aiSettings = createMockAISettings()
     const extractionGate = createDeferred<void>()
@@ -727,7 +727,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
   })
 
   it('stops a stale main rebuild worker after watchdog rotates the attempt id', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-main-stale-attempt-rotation')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-main-stale-attempt-rotation')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_stale_attempt_rotation')
     const aiSettings = createMockAISettings()
     const extractionGate = createDeferred<void>()
@@ -845,7 +845,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
   })
 
   it('finishes ranged SQLite rebuilds without waiting for retrieval phases', async () => {
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-overlap-final-correctness')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-overlap-final-correctness')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_overlap_final_correctness')
     const aiSettings = createMockAISettings()
     const extractionGate = createDeferred<void>()
@@ -982,7 +982,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
   })
 
   it('treats a resumed raw-embedding main job as already complete for SQLite purposes', async () => {
-    const { database } = await createTestDatabase('chatbook-knowledge-rebuild-raw-embedding-resume')
+    const { database } = await createTestDatabase('retale-knowledge-rebuild-raw-embedding-resume')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_raw_embedding_resume')
     const aiSettings = createMockAISettings()
     const events: string[] = []
@@ -1069,7 +1069,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
   it('degrades gracefully after raw-text precompute retries are exhausted', async () => {
     vi.useFakeTimers()
 
-    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-overlap-degraded')
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-overlap-degraded')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_degraded')
     const aiSettings = createMockAISettings()
 

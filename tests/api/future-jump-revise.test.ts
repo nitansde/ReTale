@@ -127,7 +127,7 @@ afterEach(() => {
 
 describe('future-jump revise API', () => {
   it('appends immutable revisions, updates mirrored latest fields, and keeps one timeline node', async () => {
-    const database = createTestDatabase('chatbook-future-jump-revise')
+    const database = createTestDatabase('retale-future-jump-revise')
     seedReviseFixture(database)
 
     vi.doMock('@/lib/server/ai-settings', () => ({
@@ -255,7 +255,7 @@ describe('future-jump revise API', () => {
   }, 30000)
 
   it('returns stable 404 JSON for missing runs without writing revisions', async () => {
-    const database = createTestDatabase('chatbook-future-jump-revise-missing-run')
+    const database = createTestDatabase('retale-future-jump-revise-missing-run')
     seedReviseFixture(database)
 
     vi.doMock('@/lib/server/ai-settings', () => ({

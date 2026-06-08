@@ -59,7 +59,7 @@ afterEach(() => {
 
 describe('preset compat library app-setting store', () => {
   it('loads deterministic empty defaults when the stored blob is missing or corrupt', async () => {
-    const database = await createTestDatabase('chatbook-preset-compat-library-defaults')
+    const database = await createTestDatabase('retale-preset-compat-library-defaults')
     deleteAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1')
     vi.resetModules()
     const { loadStoredPresetCompatLibrary } = await import('@/lib/server/preset-compat-library')
@@ -129,7 +129,7 @@ describe('preset compat library app-setting store', () => {
   })
 
   it('stores under PRESET_COMPAT_LIBRARY_V1, keeps AI settings isolated, and bumps revision on every write', async () => {
-    const database = await createTestDatabase('chatbook-preset-compat-library-key-isolation')
+    const database = await createTestDatabase('retale-preset-compat-library-key-isolation')
     deleteAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1')
     writeAppSetting(database, 'AI_SETTINGS_V2', JSON.stringify({ rewriteProvider: 'ollama' }))
     vi.resetModules()
@@ -158,7 +158,7 @@ describe('preset compat library app-setting store', () => {
   })
 
   it('persists a full library blob that remains parseable after raw app-setting reloads', async () => {
-    const database = await createTestDatabase('chatbook-preset-compat-library-parseable-blob')
+    const database = await createTestDatabase('retale-preset-compat-library-parseable-blob')
     deleteAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1')
     vi.resetModules()
 
@@ -291,7 +291,7 @@ describe('preset compat library app-setting store', () => {
   })
 
   it('round-trips preserved passthrough payloads unchanged after json persistence', async () => {
-    const database = await createTestDatabase('chatbook-preset-compat-library-passthrough')
+    const database = await createTestDatabase('retale-preset-compat-library-passthrough')
     deleteAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1')
     vi.resetModules()
     const {
@@ -568,7 +568,7 @@ describe('preset compat library app-setting store', () => {
   })
 
   it('uses preset-level passthrough normalization only for presets and keeps prompt-rule passthrough plain', async () => {
-    const database = await createTestDatabase('chatbook-preset-compat-library-normalizer-split')
+    const database = await createTestDatabase('retale-preset-compat-library-normalizer-split')
     deleteAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1')
     writeAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1', JSON.stringify({
       revision: 0,

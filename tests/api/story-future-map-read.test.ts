@@ -237,7 +237,7 @@ afterEach(() => {
 
 describe('story-future-map-read', () => {
   it('bootstraps future-map reads from outline sources and rehydrates future-jump detail records', async () => {
-    const database = createTestDatabase('chatbook-story-future-map-read')
+    const database = createTestDatabase('retale-story-future-map-read')
     seedFutureMapFixture(database)
     seedFutureJumpDetailFixture(database)
     vi.resetModules()
@@ -301,7 +301,7 @@ describe('story-future-map-read', () => {
   })
 
   it('returns validation and branch-isolation errors for future-map and future-jump detail reads', async () => {
-    const database = createTestDatabase('chatbook-story-future-map-read-errors')
+    const database = createTestDatabase('retale-story-future-map-read-errors')
     seedFutureMapFixture(database)
     vi.resetModules()
 
@@ -376,7 +376,7 @@ describe('story-future-map-read', () => {
   })
 
   it('keeps direct-chapter options available from workspace chapters even when persisted summaries and anchors are missing', async () => {
-    const database = createTestDatabase('chatbook-story-future-map-workspace-fallback')
+    const database = createTestDatabase('retale-story-future-map-workspace-fallback')
     seedWorkspaceDirectChapterFallbackFixture(database)
     vi.resetModules()
 

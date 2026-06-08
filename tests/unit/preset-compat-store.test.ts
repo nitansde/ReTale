@@ -327,7 +327,7 @@ describe('preset compat store lifecycle', () => {
     useNovelStore.getState().updatePresetCompatTransport('preset-2', { streamOpenAI: true })
     useNovelStore.getState().updatePresetCompatBuiltinSystemPrompt('rewrite', {
       enabled: false,
-      content: 'Edited ChatBook built-in prompt',
+      content: 'Edited ReTale built-in prompt',
     })
     useNovelStore.getState().updatePresetCompatStandaloneRegex('regex-3', { replacement: 'updated replacement' })
     useNovelStore.getState().detachPresetCompatStandaloneRegex('preset-2', 'regex-3')
@@ -344,7 +344,7 @@ describe('preset compat store lifecycle', () => {
     expect(state.presetCompatLibrary.presets['preset-2']?.transport.streamOpenAI).toBe(true)
     expect(state.presetCompatLibrary.builtinSystemPrompts.rewrite).toMatchObject({
       enabled: false,
-      content: 'Edited ChatBook built-in prompt',
+      content: 'Edited ReTale built-in prompt',
     })
     expect(state.presetCompatLibrary.presets['preset-2']?.attachedStandaloneRegexIds).toEqual([])
     expect(state.presetCompatLibrary.standaloneRegexes['regex-3']?.replacement).toBe('updated replacement')
@@ -357,7 +357,7 @@ describe('preset compat store lifecycle', () => {
     expect(exportedPreset).toContain('0.45')
     expect(exportedPreset).toContain('0.8')
     expect(exportedPreset).toContain('true')
-    expect(exportedPreset).not.toContain('Edited ChatBook built-in prompt')
+    expect(exportedPreset).not.toContain('Edited ReTale built-in prompt')
     expect(exportedRegexBundle).toContain('regex_scripts')
   })
 

@@ -14,7 +14,7 @@ afterEach(() => {
 describe('api harness temp database isolation', () => {
   it('operates on a temp database without mutating the source test database', () => {
     const sourceDbPath = getSourceDbPath()
-    const tempDatabase = createTempDatabaseCopy('chatbook-api-harness')
+    const tempDatabase = createTempDatabaseCopy('retale-api-harness')
     cleanups.push(tempDatabase.cleanup)
 
     const copyHash = hashFile(tempDatabase.dbPath)

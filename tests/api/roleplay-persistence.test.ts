@@ -388,7 +388,7 @@ afterEach(() => {
 
 describe('roleplay persistence schema', () => {
   it('creates dedicated roleplay tables and preserves ordered fork and variant invariants without mutating non-roleplay state', async () => {
-    const databasePath = makeTempDatabasePath('chatbook-roleplay-persistence-contract')
+    const databasePath = makeTempDatabasePath('retale-roleplay-persistence-contract')
     const database = initializeDatabase(new DatabaseSync(databasePath))
     globalForSqlite.sqlite = database
     seedPersistenceFixture(database)
@@ -538,7 +538,7 @@ describe('roleplay persistence schema', () => {
   })
 
   it('creates dedicated roleplay tables and timeline support on a fresh database', () => {
-    const databasePath = makeTempDatabasePath('chatbook-roleplay-schema')
+    const databasePath = makeTempDatabasePath('retale-roleplay-schema')
     const database = initializeDatabase(new DatabaseSync(databasePath))
 
     const tables = new Set(listTableNames(database).map((entry) => entry.name))
@@ -579,7 +579,7 @@ describe('roleplay persistence schema', () => {
   })
 
   it('forward-migrates legacy branch tables without changing branch-table definitions or writing roleplay rows into them', () => {
-    const databasePath = makeTempDatabasePath('chatbook-roleplay-branch-guard')
+    const databasePath = makeTempDatabasePath('retale-roleplay-branch-guard')
     createLegacyDatabaseWithoutRoleplay(databasePath)
 
     const beforeDatabase = new DatabaseSync(databasePath)

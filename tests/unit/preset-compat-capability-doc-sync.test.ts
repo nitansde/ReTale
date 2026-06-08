@@ -111,7 +111,7 @@ describe('preset compat capability doc sync', () => {
 
   it('documents every field family in the detailed mapping doc', () => {
     expect(MAPPING_DOC_TEXT).toContain('# Preset compatibility field mapping')
-    expect(MAPPING_DOC_TEXT).toContain('actual ChatBook implementation')
+    expect(MAPPING_DOC_TEXT).toContain('actual ReTale implementation')
     expect(MAPPING_DOC_TEXT).toContain('prompt-assembly.ts')
     expect(MAPPING_DOC_TEXT).toContain('passthrough.root')
     expect(MAPPING_DOC_TEXT).toContain('passthrough.extensions')

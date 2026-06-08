@@ -120,7 +120,7 @@ const UNSUPPORTED_RUNTIME_SURFACE_CONTRACT: PresetCompatMacroSurfaceContract = {
   status: 'unsupported',
   reason: 'UNSUPPORTED_RUNTIME_SURFACE',
   diagnostics: ['UNSUPPORTED_MACRO', 'UNSUPPORTED_RUNTIME_SURFACE'],
-  notes: 'This family is explicitly out of scope for ChatBook preset-compat runtime execution.',
+  notes: 'This family is explicitly out of scope for ReTale preset-compat runtime execution.',
 }
 
 const RAW_MACRO_TEXT_STORAGE_CONTRACT: PresetCompatMacroStorageContract = {
@@ -200,7 +200,7 @@ export const PRESET_COMPAT_MACRO_CAPABILITY_MATRIX = {
     nameMatching: 'case-insensitive',
     storage: RAW_MACRO_TEXT_STORAGE_CONTRACT,
     surfaces: createSurfaceContractMap({ creative: UNSUPPORTED_RUNTIME_SURFACE_CONTRACT }),
-    notes: 'Interactive UI/runtime macros are explicitly unsupported in ChatBook preset-compat.',
+    notes: 'Interactive UI/runtime macros are explicitly unsupported in ReTale preset-compat.',
   },
   outlet: {
     canonicalName: 'outlet',
@@ -209,7 +209,7 @@ export const PRESET_COMPAT_MACRO_CAPABILITY_MATRIX = {
     nameMatching: 'case-insensitive',
     storage: RAW_MACRO_TEXT_STORAGE_CONTRACT,
     surfaces: createSurfaceContractMap({ creative: UNSUPPORTED_RUNTIME_SURFACE_CONTRACT }),
-    notes: 'Extension outlet macros are explicitly unsupported in ChatBook preset-compat.',
+    notes: 'Extension outlet macros are explicitly unsupported in ReTale preset-compat.',
   },
   banned: {
     canonicalName: 'banned',
@@ -218,7 +218,7 @@ export const PRESET_COMPAT_MACRO_CAPABILITY_MATRIX = {
     nameMatching: 'case-insensitive',
     storage: RAW_MACRO_TEXT_STORAGE_CONTRACT,
     surfaces: createSurfaceContractMap({ creative: UNSUPPORTED_RUNTIME_SURFACE_CONTRACT }),
-    notes: 'Live UI state macros are explicitly unsupported in ChatBook preset-compat.',
+    notes: 'Live UI state macros are explicitly unsupported in ReTale preset-compat.',
   },
   summary: {
     canonicalName: 'summary',
@@ -227,7 +227,7 @@ export const PRESET_COMPAT_MACRO_CAPABILITY_MATRIX = {
     nameMatching: 'case-insensitive',
     storage: RAW_MACRO_TEXT_STORAGE_CONTRACT,
     surfaces: createSurfaceContractMap({ creative: UNSUPPORTED_RUNTIME_SURFACE_CONTRACT }),
-    notes: 'Summary/runtime-history macros are explicitly unsupported in ChatBook preset-compat.',
+    notes: 'Summary/runtime-history macros are explicitly unsupported in ReTale preset-compat.',
   },
   hasExtension: {
     canonicalName: 'hasExtension',
@@ -236,7 +236,7 @@ export const PRESET_COMPAT_MACRO_CAPABILITY_MATRIX = {
     nameMatching: 'case-insensitive',
     storage: RAW_MACRO_TEXT_STORAGE_CONTRACT,
     surfaces: createSurfaceContractMap({ creative: UNSUPPORTED_RUNTIME_SURFACE_CONTRACT }),
-    notes: 'Extension presence macros are explicitly unsupported in ChatBook preset-compat.',
+    notes: 'Extension presence macros are explicitly unsupported in ReTale preset-compat.',
   },
   lastGenerationType: {
     canonicalName: 'lastGenerationType',
@@ -245,7 +245,7 @@ export const PRESET_COMPAT_MACRO_CAPABILITY_MATRIX = {
     nameMatching: 'case-insensitive',
     storage: RAW_MACRO_TEXT_STORAGE_CONTRACT,
     surfaces: createSurfaceContractMap({ creative: UNSUPPORTED_RUNTIME_SURFACE_CONTRACT }),
-    notes: 'Live generation-state macros are explicitly unsupported in ChatBook preset-compat.',
+    notes: 'Live generation-state macros are explicitly unsupported in ReTale preset-compat.',
   },
   var: {
     canonicalName: 'var',
@@ -254,7 +254,7 @@ export const PRESET_COMPAT_MACRO_CAPABILITY_MATRIX = {
     nameMatching: 'case-insensitive',
     storage: RAW_MACRO_TEXT_STORAGE_CONTRACT,
     surfaces: createSurfaceContractMap({ creative: UNSUPPORTED_RUNTIME_SURFACE_CONTRACT }),
-    notes: 'STscript execution-context macros are explicitly unsupported in ChatBook preset-compat.',
+    notes: 'STscript execution-context macros are explicitly unsupported in ReTale preset-compat.',
   },
   pipe: {
     canonicalName: 'pipe',
@@ -263,7 +263,7 @@ export const PRESET_COMPAT_MACRO_CAPABILITY_MATRIX = {
     nameMatching: 'case-insensitive',
     storage: RAW_MACRO_TEXT_STORAGE_CONTRACT,
     surfaces: createSurfaceContractMap({ creative: UNSUPPORTED_RUNTIME_SURFACE_CONTRACT }),
-    notes: 'STscript execution-context macros are explicitly unsupported in ChatBook preset-compat.',
+    notes: 'STscript execution-context macros are explicitly unsupported in ReTale preset-compat.',
   },
   timesIndex: {
     canonicalName: 'timesIndex',
@@ -272,7 +272,7 @@ export const PRESET_COMPAT_MACRO_CAPABILITY_MATRIX = {
     nameMatching: 'case-insensitive',
     storage: RAW_MACRO_TEXT_STORAGE_CONTRACT,
     surfaces: createSurfaceContractMap({ creative: UNSUPPORTED_RUNTIME_SURFACE_CONTRACT }),
-    notes: 'STscript loop-context macros are explicitly unsupported in ChatBook preset-compat.',
+    notes: 'STscript loop-context macros are explicitly unsupported in ReTale preset-compat.',
   },
 } as const satisfies Record<string, PresetCompatMacroContract>
 

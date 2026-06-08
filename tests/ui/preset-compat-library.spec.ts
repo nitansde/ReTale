@@ -111,7 +111,7 @@ function buildRewriteProviderPayload(library: PresetCompatLibrary, userInstructi
   const preview = buildPresetCompatCreativeRuntimePreview({
     surfaceId: 'rewrite',
     resolvedRuntime,
-    systemPrompt: '你是 ChatBook 的小说扩写/魔改写作模型。',
+    systemPrompt: '你是 ReTale 的小说扩写/魔改写作模型。',
     userPrompt: userInstruction,
     standalone,
     embedded,

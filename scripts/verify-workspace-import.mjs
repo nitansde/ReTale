@@ -58,7 +58,7 @@ async function main() {
     throw new Error(`Missing source database: ${SOURCE_DB_PATH}`)
   }
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatbook-workspace-import-'))
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-workspace-import-'))
   const tempDbPath = path.join(tempDir, 'verify.db')
   fs.copyFileSync(SOURCE_DB_PATH, tempDbPath)
 
