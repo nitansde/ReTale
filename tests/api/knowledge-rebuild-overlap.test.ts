@@ -6,6 +6,8 @@ import type { AISettings } from '@/lib/types'
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
+const originalTaskStaleTimeoutMs = process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS
+const originalTaskMaxRetries = process.env.CHATBOOK_TASK_MAX_RETRIES
 const API_TEST_TIMEOUT_MS = 30_000
 
 vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
@@ -172,6 +174,8 @@ afterEach(() => {
   }
 
   process.env.DATABASE_URL = originalDatabaseUrl
+  process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
+  process.env.CHATBOOK_TASK_MAX_RETRIES = originalTaskMaxRetries
 
   while (cleanups.length) {
     cleanups.pop()?.()
@@ -179,6 +183,36 @@ afterEach(() => {
 })
 
 describe('knowledge rebuild raw-text precompute overlap', () => {
+  it('requeues a stale running knowledge rebuild instead of keeping it stuck as running', async () => {
+    process.env.CHATBOOK_TASK_STALE_TIMEOUT_MS = '1000'
+    process.env.CHATBOOK_TASK_MAX_RETRIES = '1'
+
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-rebuild-watchdog-start')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_rebuild_watchdog_start', 1)
+
+    database.prepare(
+      `INSERT INTO KnowledgeJob (
+        id, novelId, branchId, jobType, status, progress, currentStep, payloadJson, createdAt, updatedAt
+      ) VALUES (?, ?, ?, 'extract_chapter_knowledge', 'running', ?, ?, ?, datetime('now', '-10 seconds'), datetime('now', '-10 seconds'))`
+    ).run('job_stale_running_rebuild', novelId, branchId, 0.35, '抽取中', JSON.stringify({ branchId }))
+
+    const { startKnowledgeRebuildForNovel } = await import('@/lib/server/knowledge-rebuild')
+    const result = await startKnowledgeRebuildForNovel({ novelId, branchId })
+    const jobRow = queryOne<{ status: string; currentStep: string | null; errorMessage: string | null; payloadJson: string | null }>(
+      'SELECT status, currentStep, errorMessage, payloadJson FROM KnowledgeJob WHERE id = ?',
+      'job_stale_running_rebuild',
+    )
+    const payload = JSON.parse(jobRow?.payloadJson ?? '{}') as { taskWatchdog?: { attemptCount?: number; lastAction?: string } }
+
+    expect(result).toEqual({ jobId: 'job_stale_running_rebuild', outcome: 'queued' })
+    expect(jobRow).toMatchObject({
+      status: 'queued',
+      currentStep: expect.stringContaining('重新排队重试'),
+      errorMessage: expect.stringContaining('无进度更新'),
+    })
+    expect(payload.taskWatchdog).toMatchObject({ attemptCount: 1, lastAction: 'retried' })
+  })
+
   it('keeps dedicated retrieval rebuild visible while raw embedding is running, then builds LanceDB', async () => {
     const { database, queryOne } = await createTestDatabase('chatbook-knowledge-retrieval-dedicated-worker')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_dedicated_retrieval_worker', 2)
@@ -690,6 +724,124 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
 
     expect(extractionCalls).toBe(1)
     expect(queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', started.jobId)?.status).toBe('succeeded')
+  })
+
+  it('stops a stale main rebuild worker after watchdog rotates the attempt id', async () => {
+    const { database, queryOne } = await createTestDatabase('chatbook-knowledge-main-stale-attempt-rotation')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_stale_attempt_rotation')
+    const aiSettings = createMockAISettings()
+    const extractionGate = createDeferred<void>()
+    let extractionStarted = false
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { rawText: string }) => ({
+        source: 'cache' as const,
+        cache: {} as never,
+        result: {} as never,
+        output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+        cacheKey: {} as never,
+        scriptPath: '/tmp/mock-hanlp.py',
+        normalizedChapterText: input.rawText,
+      })),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
+    vi.doMock('@/lib/server/knowledge-extraction', () => ({
+      extractChapterKnowledgeOffline: vi.fn(async () => {
+        extractionStarted = true
+        await extractionGate.promise
+        return {
+          extraction: createMockExtraction(1),
+          provider: 'ollama',
+          model: aiSettings.knowledgeExtraction.ollama.model,
+        }
+      }),
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
+      }
+    })
+
+    const worker = await import('@/lib/server/knowledge-rebuild')
+    const started = await worker.startKnowledgeRebuildForNovel({ novelId, branchId })
+    expect(started.outcome).toBe('queued')
+
+    const staleRun = worker.runStartedKnowledgeRebuildForNovel({ novelId, branchId, jobId: started.jobId })
+    await waitForCondition(() => extractionStarted, 'stale main worker extraction start')
+
+    const runningJob = queryOne<{ payloadJson: string | null }>('SELECT payloadJson FROM KnowledgeJob WHERE id = ?', started.jobId)
+    const runningPayload = JSON.parse(runningJob?.payloadJson ?? '{}') as {
+      branchId?: string
+      taskWatchdog?: { attemptId?: string; attemptCount?: number; lastAction?: string; lastActionAt?: string }
+    }
+    const originalAttemptId = runningPayload.taskWatchdog?.attemptId
+    expect(originalAttemptId).toEqual(expect.any(String))
+
+    const rotatedAttemptId = `${originalAttemptId}-rotated`
+    const rotatedPayload = {
+      ...runningPayload,
+      taskWatchdog: {
+        ...(runningPayload.taskWatchdog ?? {}),
+        attemptId: rotatedAttemptId,
+        attemptCount: 1,
+        lastAction: 'retried',
+        lastActionAt: new Date().toISOString(),
+      },
+    }
+
+    database.prepare(
+      `UPDATE KnowledgeJob
+         SET status = 'queued', currentStep = ?, progress = ?, errorMessage = ?, payloadJson = ?, updatedAt = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).run(
+      '重新排队重试',
+      0.05,
+      'Knowledge rebuild watchdog retried stale worker',
+      JSON.stringify(rotatedPayload),
+      started.jobId,
+    )
+
+    extractionGate.resolve()
+    await expect(staleRun).rejects.toThrow('Knowledge rebuild aborted')
+
+    const finalJob = queryOne<{
+      status: string
+      currentStep: string | null
+      progress: number
+      payloadJson: string | null
+      errorMessage: string | null
+    }>('SELECT status, currentStep, progress, payloadJson, errorMessage FROM KnowledgeJob WHERE id = ?', started.jobId)
+    const finalPayload = JSON.parse(finalJob?.payloadJson ?? '{}') as { taskWatchdog?: { attemptId?: string; attemptCount?: number; lastAction?: string } }
+    const extractionCandidate = queryOne<{ status: string }>(
+      'SELECT status FROM chapter_extraction_candidates WHERE branch_id = ? AND chapter_id = ?',
+      branchId,
+      'chapter-1',
+    )
+
+    expect(finalJob).toMatchObject({
+      status: 'queued',
+      currentStep: '重新排队重试',
+      errorMessage: 'Knowledge rebuild watchdog retried stale worker',
+    })
+    expect(finalJob?.progress).toBe(0.05)
+    expect(finalPayload.taskWatchdog).toMatchObject({
+      attemptId: rotatedAttemptId,
+      attemptCount: 1,
+      lastAction: 'retried',
+    })
+    expect(extractionCandidate?.status).toBe('extracting')
+    expect(queryOne<{ summary: string | null }>('SELECT summary FROM KnowledgeChapter WHERE id = ?', 'chapter-1')?.summary).toBeNull()
   })
 
   it('finishes ranged SQLite rebuilds without waiting for retrieval phases', async () => {

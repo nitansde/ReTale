@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { AIProvider, Chapter, KnowledgeExtractionScenarioSettings, KnowledgeRebuildChapterRange, PersistedNovelState } from '@/lib/types'
 import {
   CHARACTER_ROLE_CARD_KEYS,
@@ -37,6 +38,13 @@ import { generateCandidatePromotionSummary } from '@/lib/server/candidate-promot
 import { classifyHanlpBootstrapCharacters } from '@/lib/server/character-tier'
 import { abortKnowledgeRebuildUntilIdle, waitForKnowledgeJobCompletionStatus } from '@/lib/server/knowledge-job-status'
 import { createWorkspaceKnowledgeSync, type WorkspaceKnowledgeSyncPayload } from '@/lib/server/knowledge-workspace-sync'
+import { reconcileKnowledgeJobWatchdog } from '@/lib/server/knowledge-job-watchdog'
+import {
+  createTaskWatchdogAttemptId,
+  getTaskWatchdogAttemptId,
+  mergeTaskWatchdogState,
+  parseTaskWatchdogPayload,
+} from '@/lib/server/task-watchdog-attempt'
 
 export type { WorkspaceKnowledgeSyncPayload } from '@/lib/server/knowledge-workspace-sync'
 
@@ -252,6 +260,7 @@ const RETRIEVAL_REBUILD_JOB_TYPE: KnowledgeJobType = 'rebuild_retrieval_index'
 const rawTextEmbeddingPrecomputeRuns = new Map<string, RawTextEmbeddingPrecomputeRun>()
 const activeKnowledgeRebuildRuns = new Set<string>()
 const activeKnowledgeRetrievalRuns = new Set<string>()
+const knowledgeJobAttemptContext = new AsyncLocalStorage<Map<string, string>>()
 
 const KNOWLEDGE_REBUILD_STEP_LABELS: Record<KnowledgeRebuildStepKey, string> = {
   'hanlp-bootstrap': 'HanLP 引导扫描',
@@ -495,8 +504,12 @@ function updateKnowledgeJob(
     progress?: number
     payload?: unknown
     errorMessage?: string | null
+  },
+  options?: {
+    expectedAttemptId?: string | null
   }
 ) {
+  const expectedAttemptId = options?.expectedAttemptId ?? knowledgeJobAttemptContext.getStore()?.get(jobId) ?? null
   let nextPayloadJson: string | null | undefined
   if (fields.status !== undefined || fields.currentStep !== undefined || fields.progress !== undefined || fields.payload !== undefined) {
     const currentRow = queryOne<{ status: string; currentStep: string | null; progress: number; payloadJson: string | null }>(
@@ -508,11 +521,14 @@ function updateKnowledgeJob(
       : normalizeKnowledgeRebuildJobPayload(fields.payload)
 
     if (basePayload) {
-      nextPayloadJson = JSON.stringify(syncKnowledgeRebuildPayload(basePayload, {
+      const syncedPayload = syncKnowledgeRebuildPayload(basePayload, {
         status: fields.status ?? currentRow?.status ?? 'queued',
         currentStep: fields.currentStep ?? currentRow?.currentStep ?? null,
         progress: fields.progress ?? currentRow?.progress ?? 0,
-      }))
+      })
+      nextPayloadJson = JSON.stringify(expectedAttemptId
+        ? mergeTaskWatchdogState(syncedPayload, { attemptId: expectedAttemptId })
+        : syncedPayload)
     } else if (fields.payload === null) {
       nextPayloadJson = null
     }
@@ -527,11 +543,21 @@ function updateKnowledgeJob(
     entries.push(['payloadJson', nextPayloadJson])
   }
   if (!entries.length) return
-  execute(
-    `UPDATE KnowledgeJob SET ${entries.map(([key]) => `${key} = ?`).join(', ')}, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+  const attemptGuardSql = expectedAttemptId
+    ? ` AND json_extract(COALESCE(payloadJson, '{}'), '$.taskWatchdog.attemptId') = ?`
+    : ''
+  return execute(
+    `UPDATE KnowledgeJob SET ${entries.map(([key]) => `${key} = ?`).join(', ')}, updatedAt = CURRENT_TIMESTAMP WHERE id = ?${attemptGuardSql}`,
     ...entries.map(([, value]) => value ?? null),
-    jobId
+    jobId,
+    ...(expectedAttemptId ? [expectedAttemptId] : [])
   )
+}
+
+async function runKnowledgeJobWithAttempt<T>(jobId: string, attemptId: string, callback: () => Promise<T>) {
+  const store = new Map(knowledgeJobAttemptContext.getStore() ?? [])
+  store.set(jobId, attemptId)
+  return knowledgeJobAttemptContext.run(store, callback)
 }
 
 async function claimQueuedKnowledgeJob(params: {
@@ -541,29 +567,47 @@ async function claimQueuedKnowledgeJob(params: {
   payload?: unknown
 }) {
   return withTransaction(() => {
-    const currentJob = queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', params.jobId)
+    const currentJob = queryOne<{ status: string; currentStep: string | null; progress: number; payloadJson: string | null }>(
+      'SELECT status, currentStep, progress, payloadJson FROM KnowledgeJob WHERE id = ?',
+      params.jobId,
+    )
     if (!currentJob?.status || currentJob.status !== 'queued') {
-      return { claimed: false as const, status: currentJob?.status ?? null }
+      return { claimed: false as const, status: currentJob?.status ?? null, attemptId: null }
     }
 
+    const attemptId = getTaskWatchdogAttemptId(parseTaskWatchdogPayload(currentJob.payloadJson)) ?? createTaskWatchdogAttemptId()
+    const basePayload = params.payload === undefined
+      ? parseKnowledgeRebuildJobPayload(currentJob.payloadJson)
+      : normalizeKnowledgeRebuildJobPayload(params.payload)
+    const nextPayload = basePayload
+      ? mergeTaskWatchdogState(syncKnowledgeRebuildPayload(basePayload, {
+          status: 'running',
+          currentStep: params.currentStep,
+          progress: params.progress,
+        }), {
+          attemptId,
+          claimedAt: new Date().toISOString(),
+          claimedBy: 'knowledge_worker',
+        })
+      : mergeTaskWatchdogState({}, {
+          attemptId,
+          claimedAt: new Date().toISOString(),
+          claimedBy: 'knowledge_worker',
+        })
+
     const claimResult = execute(
-      "UPDATE KnowledgeJob SET status = 'running', errorMessage = NULL, updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued'",
+      "UPDATE KnowledgeJob SET status = 'running', progress = ?, currentStep = ?, payloadJson = ?, errorMessage = NULL, updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued'",
+      params.progress,
+      params.currentStep,
+      JSON.stringify(nextPayload),
       params.jobId,
     )
     if (claimResult.changes !== 1) {
       const nextJob = queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', params.jobId)
-      return { claimed: false as const, status: nextJob?.status ?? null }
+      return { claimed: false as const, status: nextJob?.status ?? null, attemptId: null }
     }
 
-    updateKnowledgeJob(params.jobId, {
-      status: 'running',
-      errorMessage: null,
-      currentStep: params.currentStep,
-      progress: params.progress,
-      ...(params.payload !== undefined ? { payload: params.payload } : {}),
-    })
-
-    return { claimed: true as const, status: 'running' as const }
+    return { claimed: true as const, status: 'running' as const, attemptId }
   })
 }
 
@@ -1526,10 +1570,18 @@ function removeExtractedChapterFromKnowledgeJob(jobId: string, chapterId: string
 }
 
 function getKnowledgeJobRow(jobId: string) {
-  return queryOne<{ status: string; errorMessage: string | null }>(
-    'SELECT status, errorMessage FROM KnowledgeJob WHERE id = ?',
+  return queryOne<{ status: string; errorMessage: string | null; payloadJson: string | null }>(
+    'SELECT status, errorMessage, payloadJson FROM KnowledgeJob WHERE id = ?',
     jobId
   )
+}
+
+function invalidateKnowledgeJobAttempt(jobId: string, updates: Record<string, unknown> = {}) {
+  const row = queryOne<{ payloadJson: string | null }>('SELECT payloadJson FROM KnowledgeJob WHERE id = ?', jobId)
+  return mergeTaskWatchdogState(parseTaskWatchdogPayload(row?.payloadJson ?? null), {
+    ...updates,
+    attemptId: createTaskWatchdogAttemptId(),
+  })
 }
 
 function assertKnowledgeRebuildContinues(jobId: string) {
@@ -1538,11 +1590,18 @@ function assertKnowledgeRebuildContinues(jobId: string) {
     throw new KnowledgeRebuildAbortedError()
   }
 
+  const expectedAttemptId = knowledgeJobAttemptContext.getStore()?.get(jobId) ?? null
+  const currentAttemptId = getTaskWatchdogAttemptId(parseTaskWatchdogPayload(job.payloadJson ?? null))
+
   if (job.status === 'paused') {
     throw new KnowledgeRebuildPausedError()
   }
 
   if (job.status !== 'queued' && job.status !== 'running') {
+    throw new KnowledgeRebuildAbortedError()
+  }
+
+  if (expectedAttemptId && currentAttemptId && currentAttemptId !== expectedAttemptId) {
     throw new KnowledgeRebuildAbortedError()
   }
 }
@@ -1561,6 +1620,10 @@ async function waitForKnowledgeJobCompletion(jobId: string, options?: { timeoutM
         status: 'failed',
         currentStep: '超时',
         errorMessage: 'Knowledge rebuild timed out',
+        payload: invalidateKnowledgeJobAttempt(timedOutJobId, {
+          lastAction: 'timed_out',
+          lastActionAt: new Date().toISOString(),
+        }),
       })
     },
   })
@@ -1579,6 +1642,14 @@ function findKnowledgeJobByTypes(params: {
   jobTypes: KnowledgeJobType[]
   statuses: string[]
 }) {
+  if (params.statuses.includes('queued') || params.statuses.includes('running')) {
+    reconcileKnowledgeJobWatchdog({
+      novelId: params.novelId,
+      branchId: params.branchId,
+      jobTypes: params.jobTypes,
+    })
+  }
+
   const jobTypePlaceholders = params.jobTypes.map(() => '?').join(', ')
   const statusPlaceholders = params.statuses.map(() => '?').join(', ')
   return queryOne<{ id: string; status: string; jobType: KnowledgeJobType }>(
@@ -1600,16 +1671,36 @@ function findKnowledgeJobByTypes(params: {
 }
 
 function abortKnowledgeJob(jobId: string) {
-  updateKnowledgeJob(jobId, { status: 'aborted', currentStep: null, progress: 0 })
+  updateKnowledgeJob(jobId, {
+    status: 'aborted',
+    currentStep: null,
+    progress: 0,
+    payload: invalidateKnowledgeJobAttempt(jobId, {
+      lastAction: 'aborted',
+      lastActionAt: new Date().toISOString(),
+    }),
+  })
 }
 
 function pauseKnowledgeJob(jobId: string) {
-  updateKnowledgeJob(jobId, { status: 'paused', currentStep: '已暂停' })
+  updateKnowledgeJob(jobId, {
+    status: 'paused',
+    currentStep: '已暂停',
+    payload: invalidateKnowledgeJobAttempt(jobId, {
+      lastAction: 'paused',
+      lastActionAt: new Date().toISOString(),
+    }),
+  })
 }
 
 export async function startKnowledgeRetrievalRebuildForNovel(params: { novelId: string; branchId?: string; chapterRange?: KnowledgeRebuildChapterRange }) {
   const branchId = params.branchId ?? getMainBranchId(params.novelId)
   const chapterRange = normalizeKnowledgeRebuildChapterRange(params.chapterRange)
+  reconcileKnowledgeJobWatchdog({
+    novelId: params.novelId,
+    branchId,
+    jobTypes: [RETRIEVAL_REBUILD_JOB_TYPE],
+  })
   const activeJob = queryOne<{ id: string; status: string }>(
     `SELECT id, status FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = ? AND status IN ('queued', 'running', 'paused') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1`,
     params.novelId,
@@ -1681,6 +1772,11 @@ export async function runStartedKnowledgeRetrievalRebuildForNovel(params: { nove
 
 async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNovelParams) {
   const branchId = params.branchId ?? getMainBranchId(params.novelId)
+  reconcileKnowledgeJobWatchdog({
+    novelId: params.novelId,
+    branchId,
+    jobTypes: [RETRIEVAL_REBUILD_JOB_TYPE],
+  })
   const targetedJob = params.jobId
     ? queryOne<{ id: string; status: string }>(
         'SELECT id, status FROM KnowledgeJob WHERE id = ? AND novelId = ? AND branchId = ? AND jobType = ?',
@@ -1774,83 +1870,89 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
       return { jobId: job.id, outcome: getKnowledgeJobOutcome(job.id) }
     }
 
-    const initialState = getKnowledgeRebuildJobState(job.id)
-    const defaultChapterRange = resolveKnowledgeRebuildChapterRange({
-      payload: {
-        rebuildStartChapter: initialState?.payload.rebuildStartChapter ?? 1,
-        chapterRange: initialState?.payload.chapterRange ?? normalizeKnowledgeRebuildChapterRange(params.chapterRange),
-      },
-      defaultStartChapter: 1,
-    })
+    if (!claimedJob.attemptId) {
+      throw new Error('Claimed retrieval rebuild job is missing an attempt id')
+    }
 
-    updateKnowledgeJob(job.id, {
-      currentStep: '等待原文 Embedding 预计算完成',
-      progress: claimedProgress,
-      payload: {
-        ...(initialState?.payload ?? {}),
-        branchId,
-        chapterRange: initialState?.payload.chapterRange ?? normalizeKnowledgeRebuildChapterRange(params.chapterRange),
-        rebuildStartChapter: initialState?.payload.rebuildStartChapter ?? defaultChapterRange.startChapter,
-        phase: initialState?.payload.phase ?? 'raw-embedding',
-        inlineCleanupCompleted: true,
-        pendingChapterIds: [],
-        chapterWeightsById: {},
-        totalChapterWeight: 0,
-        processedChapterWeight: 0,
-        extractedChapters: [],
-        currentBatchChapters: [],
-        totalChapterCount: 0,
-        extractionSettings: initialState?.payload.extractionSettings ?? loadStoredAISettings().knowledgeExtraction,
-        embeddingSettingsSnapshot: initialState?.payload.embeddingSettingsSnapshot ?? buildEmbeddingSettingsSnapshot(),
-        hanlpBootstrap: initialState?.payload.hanlpBootstrap ?? createEmptyHanlpBootstrapState(0),
-        orderedAliasDiscoveries: [],
-        appliedAliasDiscoveryCount: 0,
-        stageStartedAtByKey: {
-          ...(initialState?.payload.stageStartedAtByKey ?? {}),
-          'raw-embedding': (initialState?.payload.stageStartedAtByKey ?? {})['raw-embedding'] ?? new Date().toISOString(),
+    return runKnowledgeJobWithAttempt(job.id, claimedJob.attemptId, async () => {
+      const initialState = getKnowledgeRebuildJobState(job.id)
+      const defaultChapterRange = resolveKnowledgeRebuildChapterRange({
+        payload: {
+          rebuildStartChapter: initialState?.payload.rebuildStartChapter ?? 1,
+          chapterRange: initialState?.payload.chapterRange ?? normalizeKnowledgeRebuildChapterRange(params.chapterRange),
         },
-      },
-    })
+        defaultStartChapter: 1,
+      })
 
-    const rawTextEmbeddingState = setKnowledgeRebuildJobPhase(job.id, 'raw-embedding') ?? getKnowledgeRebuildJobState(job.id)
-    const rawTextEmbeddingProgress = typeof rawTextEmbeddingState?.payload.rawTextEmbeddingProgress === 'number'
-      ? clampProgress(rawTextEmbeddingState.payload.rawTextEmbeddingProgress)
-      : 0
-    updateKnowledgeJob(job.id, {
-      currentStep: rawTextEmbeddingProgress >= 1 ? '确认原文 Embedding 预计算完成' : '等待原文 Embedding 预计算完成',
-      progress: 0.94 + rawTextEmbeddingProgress * 0.02,
-    })
-    ensureRawTextEmbeddingPrecomputeStarted({
-      jobId: job.id,
-      novelId: params.novelId,
-      branchId,
-      chapterRange: rawTextEmbeddingState?.payload.chapterRange ?? defaultChapterRange,
-      embeddingSettingsSnapshot: getOrCreateEmbeddingSettingsSnapshot(rawTextEmbeddingState?.payload ?? { branchId }),
-    })
-    await waitForRawTextEmbeddingPrecompute(job.id)
-    assertKnowledgeRebuildContinues(job.id)
+      updateKnowledgeJob(job.id, {
+        currentStep: '等待原文 Embedding 预计算完成',
+        progress: claimedProgress,
+        payload: {
+          ...(initialState?.payload ?? {}),
+          branchId,
+          chapterRange: initialState?.payload.chapterRange ?? normalizeKnowledgeRebuildChapterRange(params.chapterRange),
+          rebuildStartChapter: initialState?.payload.rebuildStartChapter ?? defaultChapterRange.startChapter,
+          phase: initialState?.payload.phase ?? 'raw-embedding',
+          inlineCleanupCompleted: true,
+          pendingChapterIds: [],
+          chapterWeightsById: {},
+          totalChapterWeight: 0,
+          processedChapterWeight: 0,
+          extractedChapters: [],
+          currentBatchChapters: [],
+          totalChapterCount: 0,
+          extractionSettings: initialState?.payload.extractionSettings ?? loadStoredAISettings().knowledgeExtraction,
+          embeddingSettingsSnapshot: initialState?.payload.embeddingSettingsSnapshot ?? buildEmbeddingSettingsSnapshot(),
+          hanlpBootstrap: initialState?.payload.hanlpBootstrap ?? createEmptyHanlpBootstrapState(0),
+          orderedAliasDiscoveries: [],
+          appliedAliasDiscoveryCount: 0,
+          stageStartedAtByKey: {
+            ...(initialState?.payload.stageStartedAtByKey ?? {}),
+            'raw-embedding': (initialState?.payload.stageStartedAtByKey ?? {})['raw-embedding'] ?? new Date().toISOString(),
+          },
+        },
+      })
 
-    setKnowledgeRebuildJobPhase(job.id, 'index')
-    setKnowledgeRebuildJobIndexProgress(job.id, {
-      phase: 'loading',
-      totalRows: 0,
-      embeddedRows: 0,
-      totalBatches: 0,
-      completedBatches: 0,
-    })
-    await rebuildDerivedIndexes({
-      novelId: params.novelId,
-      branchId,
-      chapterRange: rawTextEmbeddingState?.payload.chapterRange ?? defaultChapterRange,
-      onProgress: async (indexProgress) => {
-        assertKnowledgeRebuildContinues(job.id)
-        setKnowledgeRebuildJobIndexProgress(job.id, indexProgress)
-      },
-    })
+      const rawTextEmbeddingState = setKnowledgeRebuildJobPhase(job.id, 'raw-embedding') ?? getKnowledgeRebuildJobState(job.id)
+      const rawTextEmbeddingProgress = typeof rawTextEmbeddingState?.payload.rawTextEmbeddingProgress === 'number'
+        ? clampProgress(rawTextEmbeddingState.payload.rawTextEmbeddingProgress)
+        : 0
+      updateKnowledgeJob(job.id, {
+        currentStep: rawTextEmbeddingProgress >= 1 ? '确认原文 Embedding 预计算完成' : '等待原文 Embedding 预计算完成',
+        progress: 0.94 + rawTextEmbeddingProgress * 0.02,
+      })
+      ensureRawTextEmbeddingPrecomputeStarted({
+        jobId: job.id,
+        novelId: params.novelId,
+        branchId,
+        chapterRange: rawTextEmbeddingState?.payload.chapterRange ?? defaultChapterRange,
+        embeddingSettingsSnapshot: getOrCreateEmbeddingSettingsSnapshot(rawTextEmbeddingState?.payload ?? { branchId }),
+      })
+      await waitForRawTextEmbeddingPrecompute(job.id)
+      assertKnowledgeRebuildContinues(job.id)
 
-    updateKnowledgeJob(job.id, { status: 'succeeded', currentStep: '完成', progress: 1 })
+      setKnowledgeRebuildJobPhase(job.id, 'index')
+      setKnowledgeRebuildJobIndexProgress(job.id, {
+        phase: 'loading',
+        totalRows: 0,
+        embeddedRows: 0,
+        totalBatches: 0,
+        completedBatches: 0,
+      })
+      await rebuildDerivedIndexes({
+        novelId: params.novelId,
+        branchId,
+        chapterRange: rawTextEmbeddingState?.payload.chapterRange ?? defaultChapterRange,
+        onProgress: async (indexProgress) => {
+          assertKnowledgeRebuildContinues(job.id)
+          setKnowledgeRebuildJobIndexProgress(job.id, indexProgress)
+        },
+      })
 
-    return { jobId: job.id, outcome: 'completed' as const }
+      updateKnowledgeJob(job.id, { status: 'succeeded', currentStep: '完成', progress: 1 })
+
+      return { jobId: job.id, outcome: 'completed' as const }
+    })
   } catch (error) {
     if (error instanceof KnowledgeRebuildPausedError) {
       updateKnowledgeJob(job.id, { status: 'paused', currentStep: '已暂停' })
@@ -2841,6 +2943,8 @@ async function extractChapterCandidates(params: {
     settings: params.settings,
     assertCanContinue: params.assertCanContinue,
   })
+
+  await params.assertCanContinue?.()
 
   upsertChapterExtractionCandidate({
     novelId: params.novelId,
@@ -5791,6 +5895,11 @@ type RebuildKnowledgeForNovelParams = {
 export async function startKnowledgeRebuildForNovel(params: { novelId: string; branchId?: string; chapterRange?: KnowledgeRebuildChapterRange }) {
   const branchId = params.branchId ?? getMainBranchId(params.novelId)
   const chapterRange = normalizeKnowledgeRebuildChapterRange(params.chapterRange)
+  reconcileKnowledgeJobWatchdog({
+    novelId: params.novelId,
+    branchId,
+    jobTypes: [MAIN_KNOWLEDGE_JOB_TYPE, RETRIEVAL_REBUILD_JOB_TYPE],
+  })
   const activeRetrievalJob = queryOne<{ id: string }>(
     'SELECT id FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = ? AND status IN (\'queued\', \'running\', \'paused\') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1',
     params.novelId,
@@ -5866,6 +5975,11 @@ export async function runStartedKnowledgeRebuildForNovel(params: { novelId: stri
 
 export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelParams) {
   const branchId = params.branchId ?? getMainBranchId(params.novelId)
+  reconcileKnowledgeJobWatchdog({
+    novelId: params.novelId,
+    branchId,
+    jobTypes: [MAIN_KNOWLEDGE_JOB_TYPE],
+  })
   const targetedJob = params.jobId
     ? queryOne<{ id: string; status: string }>(
         'SELECT id, status FROM KnowledgeJob WHERE id = ? AND novelId = ? AND branchId = ? AND jobType = ?',
@@ -5938,63 +6052,68 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
       return { jobId: job.id, outcome: getKnowledgeJobOutcome(job.id) }
     }
 
-    const chapters = queryAll<KnowledgeChapterRow>(
-      'SELECT id, novelId, branchId, chapterNo, title, rawText, summary, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? ORDER BY chapterNo ASC',
-      params.novelId,
-      branchId
-    )
-    const defaultRebuildStartChapter = getRebuildStartChapter(chapters)
-    const requestedChapterRange = normalizeKnowledgeRebuildChapterRange(params.chapterRange)
-    const defaultChapterRange = resolveKnowledgeRebuildChapterRange({
-      payload: {
-        rebuildStartChapter: jobState?.payload.rebuildStartChapter ?? defaultRebuildStartChapter,
-        chapterRange: jobState?.payload.chapterRange ?? requestedChapterRange,
-      },
-      defaultStartChapter: defaultRebuildStartChapter,
-    })
-    const defaultRebuildChapters = getRebuildChapters(chapters, defaultChapterRange)
-    const hanlpBootstrapChapters = chapters.slice().sort((left, right) => left.chapterNo - right.chapterNo)
-    if (!isKnowledgeRebuildJobStateInitialized(jobState)) {
-      const chapterWeightsById = Object.fromEntries(defaultRebuildChapters.map((chapter) => [chapter.id, getChapterProgressWeight(chapter.rawText)]))
-      const totalChapterWeight = defaultRebuildChapters.reduce((sum, chapter) => sum + (chapterWeightsById[chapter.id] ?? 0), 0)
-
-        initializeKnowledgeRebuildJobState(job.id, {
-          branchId,
-          rebuildStartChapter: defaultChapterRange.startChapter,
-          chapterRange: defaultChapterRange,
-          phase: 'hanlp-bootstrap',
-          inlineCleanupCompleted: false,
-          pendingChapterIds: defaultRebuildChapters.map((chapter) => chapter.id),
-          chapterWeightsById,
-          totalChapterWeight,
-          totalChapterCount: defaultRebuildChapters.length,
-          processedChapterWeight: 0,
-          extractedChapters: [],
-          currentBatchChapters: [],
-          extractionSettings: loadStoredAISettings().knowledgeExtraction,
-          embeddingSettingsSnapshot: buildEmbeddingSettingsSnapshot(),
-          indexProgress: undefined,
-           hanlpBootstrap: createEmptyHanlpBootstrapState(hanlpBootstrapChapters.length),
-           orderedAliasDiscoveries: [],
-           appliedAliasDiscoveryCount: 0,
-           stageStartedAtByKey: {
-             'hanlp-bootstrap': new Date().toISOString(),
-           },
-        })
-      jobState = getKnowledgeRebuildJobState(job.id)
+    if (!claimedJob.attemptId) {
+      throw new Error('Claimed knowledge rebuild job is missing an attempt id')
     }
 
-    updateKnowledgeJob(job.id, {
-      currentStep: jobState?.phase === 'extract' ? '抽取章节知识' : '继续知识重建',
-      progress: claimedProgress,
-    })
+    return runKnowledgeJobWithAttempt(job.id, claimedJob.attemptId, async () => {
+      const chapters = queryAll<KnowledgeChapterRow>(
+        'SELECT id, novelId, branchId, chapterNo, title, rawText, summary, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? ORDER BY chapterNo ASC',
+        params.novelId,
+        branchId
+      )
+      const defaultRebuildStartChapter = getRebuildStartChapter(chapters)
+      const requestedChapterRange = normalizeKnowledgeRebuildChapterRange(params.chapterRange)
+      const defaultChapterRange = resolveKnowledgeRebuildChapterRange({
+        payload: {
+          rebuildStartChapter: jobState?.payload.rebuildStartChapter ?? defaultRebuildStartChapter,
+          chapterRange: jobState?.payload.chapterRange ?? requestedChapterRange,
+        },
+        defaultStartChapter: defaultRebuildStartChapter,
+      })
+      const defaultRebuildChapters = getRebuildChapters(chapters, defaultChapterRange)
+      const hanlpBootstrapChapters = chapters.slice().sort((left, right) => left.chapterNo - right.chapterNo)
+      if (!isKnowledgeRebuildJobStateInitialized(jobState)) {
+        const chapterWeightsById = Object.fromEntries(defaultRebuildChapters.map((chapter) => [chapter.id, getChapterProgressWeight(chapter.rawText)]))
+        const totalChapterWeight = defaultRebuildChapters.reduce((sum, chapter) => sum + (chapterWeightsById[chapter.id] ?? 0), 0)
 
-    while (true) {
-      assertKnowledgeRebuildContinues(job.id)
-      jobState = getKnowledgeRebuildJobState(job.id)
-      if (!jobState) {
-        throw new Error('Knowledge rebuild job state is missing')
+          initializeKnowledgeRebuildJobState(job.id, {
+            branchId,
+            rebuildStartChapter: defaultChapterRange.startChapter,
+            chapterRange: defaultChapterRange,
+            phase: 'hanlp-bootstrap',
+            inlineCleanupCompleted: false,
+            pendingChapterIds: defaultRebuildChapters.map((chapter) => chapter.id),
+            chapterWeightsById,
+            totalChapterWeight,
+            totalChapterCount: defaultRebuildChapters.length,
+            processedChapterWeight: 0,
+            extractedChapters: [],
+            currentBatchChapters: [],
+            extractionSettings: loadStoredAISettings().knowledgeExtraction,
+            embeddingSettingsSnapshot: buildEmbeddingSettingsSnapshot(),
+            indexProgress: undefined,
+             hanlpBootstrap: createEmptyHanlpBootstrapState(hanlpBootstrapChapters.length),
+             orderedAliasDiscoveries: [],
+             appliedAliasDiscoveryCount: 0,
+             stageStartedAtByKey: {
+               'hanlp-bootstrap': new Date().toISOString(),
+             },
+          })
+        jobState = getKnowledgeRebuildJobState(job.id)
       }
+
+      updateKnowledgeJob(job.id, {
+        currentStep: jobState?.phase === 'extract' ? '抽取章节知识' : '继续知识重建',
+        progress: claimedProgress,
+      })
+
+      while (true) {
+        assertKnowledgeRebuildContinues(job.id)
+        jobState = getKnowledgeRebuildJobState(job.id)
+        if (!jobState) {
+          throw new Error('Knowledge rebuild job state is missing')
+        }
 
         const currentJobState = jobState
         const rebuildChapterRange = resolveKnowledgeRebuildChapterRange({
@@ -6416,17 +6535,18 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
           continue
         }
 
-    }
+      }
 
-    assertKnowledgeRebuildContinues(job.id)
-    const finalState = getKnowledgeRebuildJobState(job.id)
-    if (finalState?.payload.phase === 'raw-embedding' || finalState?.payload.phase === 'index') {
-      setKnowledgeRebuildJobPhase(job.id, 'write')
-    }
+      assertKnowledgeRebuildContinues(job.id)
+      const finalState = getKnowledgeRebuildJobState(job.id)
+      if (finalState?.payload.phase === 'raw-embedding' || finalState?.payload.phase === 'index') {
+        setKnowledgeRebuildJobPhase(job.id, 'write')
+      }
 
-    updateKnowledgeJob(job.id, { status: 'succeeded', currentStep: '完成', progress: 1 })
+      updateKnowledgeJob(job.id, { status: 'succeeded', currentStep: '完成', progress: 1 })
 
-    return { jobId: job.id, outcome: 'completed' as const }
+      return { jobId: job.id, outcome: 'completed' as const }
+    })
   } catch (error) {
     if (error instanceof KnowledgeRebuildPausedError) {
       updateKnowledgeJob(job.id, { status: 'paused', currentStep: '已暂停' })
