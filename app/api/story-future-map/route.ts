@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
+import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { findStoryBranch, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { loadFutureMapSourceData } from '@/lib/server/outline-bootstrap'
-import { queryOne } from '@/lib/server/sqlite'
 import { findWhatIfSessionById } from '@/lib/server/what-if-store'
 
 function parsePositiveSourceChapterNo(value: string | null) {
@@ -27,7 +27,8 @@ export async function GET(request: Request) {
     }
 
     const branchId = normalizeBranchId(novelId, rawBranchId)
-    const branch = findStoryBranch(branchId)
+    const db = createNovelDatabaseAccess(novelId)
+    const branch = findStoryBranch(branchId, db)
     if (!branch || branch.novelId !== novelId) {
       return NextResponse.json({ ok: false, error: 'branchId does not belong to the requested novel' }, { status: 404 })
     }
@@ -39,7 +40,7 @@ export async function GET(request: Request) {
 
     const sourceChapterId = searchParams.get('sourceChapterId')?.trim() ?? ''
     if (sourceChapterId) {
-      const sourceChapter = queryOne<{ id: string; chapterNo: number }>(
+      const sourceChapter = db.queryOne<{ id: string; chapterNo: number }>(
         `SELECT id, chapterNo
            FROM KnowledgeChapter
           WHERE id = ? AND novelId = ? AND branchId = ?
@@ -57,7 +58,7 @@ export async function GET(request: Request) {
     }
 
     if (parentSessionId) {
-      const session = findWhatIfSessionById(parentSessionId)
+      const session = findWhatIfSessionById(parentSessionId, db)
       if (!session || session.novelId !== novelId || session.baseBranchId !== branchId) {
         return NextResponse.json({ ok: false, error: 'parentSessionId not found for the requested branch context' }, { status: 404 })
       }
@@ -66,6 +67,7 @@ export async function GET(request: Request) {
     const payload = await loadFutureMapSourceData({
       novelId,
       branchId,
+      db,
     })
 
     const chaptersByEvent = Object.fromEntries(

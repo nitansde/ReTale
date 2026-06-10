@@ -1,4 +1,4 @@
-import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne } from '@/lib/server/database-access'
 import {
   buildStoryBranchReadableLineageLabel,
   formatStoryBranchReadableLabel,

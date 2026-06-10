@@ -206,7 +206,7 @@ function seedWorkspaceDirectChapterFallbackFixture(database: DatabaseSync) {
     trajectories: [],
   }
 
-  persistWorkspaceRuntimeState(normalizeWorkspaceState(workspaceState), 'singleton', {
+  await persistWorkspaceRuntimeState(normalizeWorkspaceState(workspaceState), 'singleton', {
     execute: (sql, ...params) => database.prepare(sql).run(...params),
     queryAll: <T>(sql: string, ...params: Array<string | number | bigint | Uint8Array | null>) => database.prepare(sql).all(...params) as T[],
     queryOne: <T>(sql: string, ...params: Array<string | number | bigint | Uint8Array | null>) => (database.prepare(sql).get(...params) ?? null) as T | null,

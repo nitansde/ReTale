@@ -9,6 +9,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ runId: str
     const body = await readJsonObject(request)
     const result = await reviseFutureJumpRun({
       runId,
+      novelId: String(body.novelId ?? ''),
       userFeedback: String(body.userFeedback ?? ''),
     })
 

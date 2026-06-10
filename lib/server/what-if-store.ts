@@ -1,4 +1,4 @@
-import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/database-access'
 import {
   deleteStoryTimelineNodesByIds,
   findStoryTimelineNodeByWhatIfSessionId,

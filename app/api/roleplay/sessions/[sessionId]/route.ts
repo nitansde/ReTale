@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
+import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { jsonError, requireNonEmptyId } from '@/lib/server/api-route'
-import { queryAll, queryOne } from '@/lib/server/sqlite'
 import type { RoleplayMessageRecord, RoleplaySessionDetail } from '@/lib/roleplay-types'
 
 type RoleplaySessionRow = {
@@ -122,7 +122,9 @@ export async function GET(request: Request, ctx: RouteContext<'/api/roleplay/ses
       return jsonError('branchId is required', 400)
     }
 
-    const session = queryOne<RoleplaySessionRow>(
+    const db = createNovelDatabaseAccess(novelId)
+
+    const session = db.queryOne<RoleplaySessionRow>(
       `SELECT
          roleplay_sessions.*,
          (
@@ -141,7 +143,7 @@ export async function GET(request: Request, ctx: RouteContext<'/api/roleplay/ses
       return NextResponse.json({ ok: false, error: 'Roleplay session not found for the requested branch context' }, { status: 404 })
     }
 
-    const messages = queryAll<RoleplayMessageRow>(
+    const messages = db.queryAll<RoleplayMessageRow>(
       `SELECT *
        FROM roleplay_messages
        WHERE session_id = ?

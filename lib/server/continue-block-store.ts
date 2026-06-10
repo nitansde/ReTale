@@ -1,5 +1,5 @@
 import { uid } from '@/lib/utils'
-import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/database-access'
 import { findStoryTimelineNodeByContinueBlockId } from '@/lib/server/story-timeline-store'
 import type {
   ContinueBlockDetail,

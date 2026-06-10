@@ -1,10 +1,13 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
-import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync; fetch?: typeof fetch }
+const originalDataDir = process.env.RETALE_DATA_DIR
 
 function createAiSettings() {
   return {
@@ -24,9 +27,12 @@ function createAiSettings() {
 }
 
 function createTestDatabase(prefix: string) {
-  const tempDatabase = createTempDatabaseCopy(prefix)
-  cleanups.push(tempDatabase.cleanup)
-  const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
+  cleanups.push(() => fs.rmSync(tempDirectory, { recursive: true, force: true }))
+  process.env.RETALE_DATA_DIR = path.join(tempDirectory, 'data')
+  const dbPath = path.join(process.env.RETALE_DATA_DIR, 'novels', 'novel-001', 'novel.db')
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true })
+  const database = initializeDatabase(new DatabaseSync(dbPath))
   globalForSqlite.sqlite = database
   return database
 }
@@ -108,9 +114,13 @@ function seedReviseFixture(database: DatabaseSync) {
   ).run('jump_fixture_001', 'novel-001', 'novel-001:main', 'future_jump', 1, 100, 'JUMP-01 被绑走之夜', '迟来的真相', 'if_fixture_001', 10, 100, 'chapter-100', null, 'jump-run-001', 0, 'violet', 'generated')
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks()
   vi.resetModules()
+  process.env.RETALE_DATA_DIR = originalDataDir
+
+  const resolverModule = await import('@/lib/server/db-resolver')
+  resolverModule.resetResolvedDatabasesForTests()
 
   if (globalForSqlite.sqlite) {
     try {
@@ -152,6 +162,7 @@ describe('future-jump revise API', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        novelId: 'novel-001',
         userFeedback: '把男主的愧疚写得更明显，但不要立刻和好。',
       }),
     }), { params: Promise.resolve({ runId: 'jump-run-001' }) })
@@ -269,7 +280,7 @@ describe('future-jump revise API', () => {
     const response = await reviseRun(new Request('http://localhost/api/future-jump/runs/missing/revise', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userFeedback: '补一版' }),
+      body: JSON.stringify({ novelId: 'novel-001', userFeedback: '补一版' }),
     }), { params: Promise.resolve({ runId: 'missing-run' }) })
 
     expect(response.status).toBe(404)

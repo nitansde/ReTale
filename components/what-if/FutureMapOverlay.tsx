@@ -84,6 +84,7 @@ async function loadFutureMap(input: Pick<FutureMapOverlayProps, 'novelId' | 'bra
 }
 
 async function createFutureJump(input: {
+  novelId: string
   sourceContext: FutureJumpSourceContext
   targetOutlineNodeId: string
   targetOutlineChapterId: string
@@ -268,6 +269,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
 
     try {
         const result = await createFutureJump({
+          novelId,
           sourceContext,
           targetOutlineNodeId: selectedEvent.id,
           targetOutlineChapterId: selectedChapter.id,

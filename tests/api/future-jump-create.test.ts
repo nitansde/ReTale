@@ -1,10 +1,13 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
-import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync; fetch?: typeof fetch }
+const originalDataDir = process.env.RETALE_DATA_DIR
 
 function createAiSettings() {
   return {
@@ -24,9 +27,12 @@ function createAiSettings() {
 }
 
 function createTestDatabase(prefix: string) {
-  const tempDatabase = createTempDatabaseCopy(prefix)
-  cleanups.push(tempDatabase.cleanup)
-  const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
+  cleanups.push(() => fs.rmSync(tempDirectory, { recursive: true, force: true }))
+  process.env.RETALE_DATA_DIR = path.join(tempDirectory, 'data')
+  const dbPath = path.join(process.env.RETALE_DATA_DIR, 'novels', 'novel-001', 'novel.db')
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true })
+  const database = initializeDatabase(new DatabaseSync(dbPath))
   globalForSqlite.sqlite = database
   return database
 }
@@ -176,9 +182,13 @@ function seedCreateFixture(database: DatabaseSync) {
   ).run('continue_fixture_025', 'novel-001', 'novel-001:main', 'continue_block', 2, 25, 'CONT-02 深入误判', null, 'rewrite_fixture_025', 25, null, 'chapter-25', null, null, 0, 'sky', 'active', 'continue-block-025')
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks()
   vi.resetModules()
+  process.env.RETALE_DATA_DIR = originalDataDir
+
+  const resolverModule = await import('@/lib/server/db-resolver')
+  resolverModule.resetResolvedDatabasesForTests()
 
   if (globalForSqlite.sqlite) {
     try {
@@ -216,6 +226,7 @@ describe('future-jump create API', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        novelId: 'novel-001',
         sourceContext: {
           nodeId: 'continue_fixture_025',
           nodeType: 'continue_block',
@@ -312,6 +323,7 @@ describe('future-jump create API', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        novelId: 'novel-001',
         sourceContext: {
           nodeId: 'if_fixture_001',
           nodeType: 'what_if',
@@ -349,6 +361,7 @@ describe('future-jump create API', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        novelId: 'novel-001',
         sourceContext: {
           nodeId: 'continue_fixture_025',
           nodeType: 'continue_block',
@@ -385,6 +398,7 @@ describe('future-jump create API', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        novelId: 'novel-001',
         sourceContext: {
           nodeId: 'if_fixture_001',
           nodeType: 'what_if',
@@ -403,6 +417,7 @@ describe('future-jump create API', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        novelId: 'novel-001',
         sourceContext: {
           nodeId: 'if_fixture_001',
           nodeType: 'what_if',

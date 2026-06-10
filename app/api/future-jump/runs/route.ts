@@ -58,6 +58,7 @@ export async function POST(request: Request) {
   try {
     const body = await readJsonObject(request)
     const result = await createFutureJumpRun({
+      novelId: String(body.novelId ?? ''),
       sourceContext: normalizeSourceContext(body),
       targetOutlineNodeId: String(body.targetOutlineNodeId ?? ''),
       targetOutlineChapterId: String(body.targetOutlineChapterId ?? ''),

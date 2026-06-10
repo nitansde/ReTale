@@ -175,6 +175,7 @@ describe('FutureJumpView', () => {
         return new Response(JSON.stringify(futureMapPayload), { status: 200 })
       }
       if (url === '/api/future-jump/runs/jump-run-001/revise' && init?.method === 'POST') {
+        expect(JSON.parse(String(init.body))).toEqual({ novelId: 'novel-001', userFeedback: '把救援推得更晚' })
         currentDetail = buildRunDetail(3, '第三版镜像桥接摘要', '第三版镜像未来正文')
         return new Response(JSON.stringify({
           runId: 'jump-run-001',
@@ -255,6 +256,7 @@ describe('FutureJumpView', () => {
         return new Response(JSON.stringify(futureMapPayload), { status: 200 })
       }
       if (url === '/api/future-jump/runs/jump-run-001/revise' && init?.method === 'POST') {
+        expect(JSON.parse(String(init.body))).toEqual({ novelId: 'novel-001', userFeedback: '把救援推得更晚' })
         return new Response(JSON.stringify({ error: '修订失败' }), { status: 500 })
       }
       throw new Error(`Unhandled fetch: ${url}`)
@@ -299,6 +301,7 @@ describe('FutureJumpView', () => {
         return new Response(JSON.stringify(futureMapPayload), { status: 200 })
       }
       if (url === '/api/future-jump/runs/jump-run-001/revise' && init?.method === 'POST') {
+        expect(JSON.parse(String(init.body))).toEqual({ novelId: 'novel-001', userFeedback: '把救援推得更晚' })
         currentDetail = buildRunDetail(3, '第三版镜像桥接摘要', '第三版镜像未来正文')
         return new Response(JSON.stringify({
           runId: 'jump-run-001',

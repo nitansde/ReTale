@@ -155,6 +155,7 @@ describe('FutureMapOverlay', () => {
 
     const requestBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1] && (fetchMock.mock.calls[1][1] as RequestInit).body))
     expect(requestBody).toEqual({
+      novelId: 'novel-001',
       sourceContext: {
         nodeId: 'continue-node-025',
         nodeType: 'continue_block',
@@ -224,6 +225,7 @@ describe('FutureMapOverlay', () => {
 
     const requestBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1] && (fetchMock.mock.calls[1][1] as RequestInit).body))
     expect(requestBody).toEqual({
+      novelId: 'novel-001',
       sourceContext: {
         nodeId: 'rewrite-node-001',
         nodeType: 'rewrite',

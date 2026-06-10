@@ -34,9 +34,10 @@ import {
   getNextStoryTimelineLabelIndex,
 } from '@/lib/server/story-timeline-store'
 import { formatStoryBranchReadableLabel, prefixStoryBranchTitle } from '@/lib/story-branch-labels'
-import { queryOne } from '@/lib/server/sqlite'
+import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { findWhatIfSessionById } from '@/lib/server/what-if-store'
 import { createWhatIfSession } from '@/lib/server/what-if-store'
+import type { DatabaseAccess } from '@/lib/server/database-access'
 import type {
   FutureJumpCreateRequest,
   FutureJumpMutationResponse,
@@ -56,6 +57,8 @@ import { uid } from '@/lib/utils'
 const BRIDGE_SUMMARY_MIN_LENGTH = 300
 const BRIDGE_SUMMARY_MAX_LENGTH = 600
 const FUTURE_JUMP_RUNTIME_SURFACE_ID = 'future_jump' as const
+
+type Db = DatabaseAccess
 
 type StageKey = 'bridge' | 'rewrite'
 
@@ -406,7 +409,11 @@ function buildSourceNodeAuthoredExcerpt(sourceNodeContext: LoadedFutureJumpGener
     .join('\n') || '（当前节点没有可用的已保存正文）'
 }
 
-function resolveSourceNodeContext(sourceNode: ReturnType<typeof findStoryTimelineNodeById>, session: WhatIfSessionDetail | null) {
+function resolveSourceNodeContext(
+  sourceNode: ReturnType<typeof findStoryTimelineNodeById>,
+  session: WhatIfSessionDetail | null,
+  db: Db,
+) {
   if (!sourceNode) return null
 
   let authoredText: string | null = null
@@ -415,7 +422,7 @@ function resolveSourceNodeContext(sourceNode: ReturnType<typeof findStoryTimelin
   } else if (sourceNode.nodeType === 'what_if') {
     authoredText = session?.generatedText?.trim() || null
   } else if (sourceNode.nodeType === 'future_jump') {
-    const sourceRun = sourceNode.futureJumpRunId ? findFutureJumpRunById(sourceNode.futureJumpRunId) : null
+    const sourceRun = sourceNode.futureJumpRunId ? findFutureJumpRunById(sourceNode.futureJumpRunId, db) : null
     authoredText = sourceRun?.revisions.at(-1)?.generatedTargetText?.trim()
       || sourceRun?.generatedTargetText?.trim()
       || null
@@ -428,13 +435,13 @@ function resolveSourceNodeContext(sourceNode: ReturnType<typeof findStoryTimelin
   }
 }
 
-function resolveCompatibilityWhatIfSessionIdFromSourceNode(sourceNode: ReturnType<typeof findStoryTimelineNodeById>) {
+function resolveCompatibilityWhatIfSessionIdFromSourceNode(sourceNode: ReturnType<typeof findStoryTimelineNodeById>, db: Db) {
   let cursor = sourceNode
   while (cursor) {
     if (cursor.whatIfSessionId?.trim()) {
       return cursor.whatIfSessionId.trim()
     }
-    cursor = cursor.parentNodeId ? findStoryTimelineNodeById(cursor.parentNodeId) : null
+    cursor = cursor.parentNodeId ? findStoryTimelineNodeById(cursor.parentNodeId, db) : null
   }
 
   return null
@@ -445,8 +452,9 @@ function ensureStandaloneWhatIfSession(params: {
   branchId: string
   sourceContext: FutureJumpSourceContext
   sourceNode: ReturnType<typeof findStoryTimelineNodeById>
+  db: Db
 }) {
-  const sourceNodeContext = resolveSourceNodeContext(params.sourceNode, null)
+  const sourceNodeContext = resolveSourceNodeContext(params.sourceNode, null, params.db)
   const standaloneSession = buildStandaloneWhatIfSession({
     novelId: params.novelId,
     branchId: params.branchId,
@@ -457,7 +465,7 @@ function ensureStandaloneWhatIfSession(params: {
     sourceNodeText: sourceNodeContext?.authoredText,
   })
 
-  const existing = findWhatIfSessionById(standaloneSession.id)
+  const existing = findWhatIfSessionById(standaloneSession.id, params.db)
   if (existing) {
     return existing.id
   }
@@ -473,7 +481,7 @@ function ensureStandaloneWhatIfSession(params: {
     originalText: standaloneSession.originalText,
     generatedText: standaloneSession.generatedText,
     status: standaloneSession.status,
-  })
+  }, params.db)
 
   return standaloneSession.id
 }
@@ -482,18 +490,19 @@ function resolveFutureJumpCompatibilityWhatIfSessionId(params: {
   novelId: string
   branchId: string
   sourceContext: FutureJumpSourceContext
+  db: Db
 }) {
   const explicitWhatIfSessionId = params.sourceContext.whatIfSessionId?.trim()
   if (explicitWhatIfSessionId) {
-    const session = findWhatIfSessionById(explicitWhatIfSessionId)
+    const session = findWhatIfSessionById(explicitWhatIfSessionId, params.db)
     if (!session) {
       throw new Error(`What-if session not found: ${explicitWhatIfSessionId}`)
     }
     return session.id
   }
 
-  const sourceNode = params.sourceContext.nodeId ? findStoryTimelineNodeById(params.sourceContext.nodeId) : null
-  const compatibilityFromLineage = resolveCompatibilityWhatIfSessionIdFromSourceNode(sourceNode)
+  const sourceNode = params.sourceContext.nodeId ? findStoryTimelineNodeById(params.sourceContext.nodeId, params.db) : null
+  const compatibilityFromLineage = resolveCompatibilityWhatIfSessionIdFromSourceNode(sourceNode, params.db)
   if (compatibilityFromLineage) {
     return compatibilityFromLineage
   }
@@ -503,6 +512,7 @@ function resolveFutureJumpCompatibilityWhatIfSessionId(params: {
     branchId: params.branchId,
     sourceContext: params.sourceContext,
     sourceNode,
+    db: params.db,
   })
 }
 
@@ -972,9 +982,10 @@ async function loadGenerationContext(params: {
   targetOutlineNodeId: string
   targetOutlineChapterId: string
   futureJumpRunId?: string
+  db: Db
 }) {
   const session = params.whatIfSessionId
-    ? findWhatIfSessionById(params.whatIfSessionId)
+    ? findWhatIfSessionById(params.whatIfSessionId, params.db)
     : buildStandaloneWhatIfSession({
         novelId: params.novelId,
         branchId: params.branchId,
@@ -989,7 +1000,7 @@ async function loadGenerationContext(params: {
     throw new Error('What-if session does not belong to the requested novel/branch')
   }
 
-  const outlineNode = findOutlineNodeById(params.targetOutlineNodeId)
+  const outlineNode = findOutlineNodeById(params.targetOutlineNodeId, params.db)
   if (!outlineNode) {
     throw new Error(`Target outline node not found: ${params.targetOutlineNodeId}`)
   }
@@ -997,7 +1008,7 @@ async function loadGenerationContext(params: {
     throw new Error('Target outline node does not belong to the requested novel/branch')
   }
 
-  const targetAnchor = listOutlineNodeChapters(params.targetOutlineNodeId).find((chapter) => chapter.id === params.targetOutlineChapterId) ?? null
+  const targetAnchor = listOutlineNodeChapters(params.targetOutlineNodeId, params.db).find((chapter) => chapter.id === params.targetOutlineChapterId) ?? null
   if (!targetAnchor) {
     throw new Error(`Target outline chapter anchor not found: ${params.targetOutlineChapterId}`)
   }
@@ -1010,7 +1021,7 @@ async function loadGenerationContext(params: {
   }
 
   const sourceNode = params.sourceContext.nodeId
-    ? findStoryTimelineNodeById(params.sourceContext.nodeId)
+    ? findStoryTimelineNodeById(params.sourceContext.nodeId, params.db)
     : null
 
   if (params.sourceContext.nodeId) {
@@ -1020,7 +1031,7 @@ async function loadGenerationContext(params: {
   }
 
   const sourceChapter = params.sourceContext.chapterId
-    ? queryOne<LoadedFutureJumpGenerationContext['sourceChapter']>(
+    ? params.db.queryOne<LoadedFutureJumpGenerationContext['sourceChapter']>(
         `SELECT id, chapterNo, title, summary, rawText
            FROM KnowledgeChapter
           WHERE id = ? AND novelId = ? AND branchId = ?
@@ -1029,7 +1040,7 @@ async function loadGenerationContext(params: {
         params.novelId,
         params.branchId,
       )
-    : queryOne<LoadedFutureJumpGenerationContext['sourceChapter']>(
+    : params.db.queryOne<LoadedFutureJumpGenerationContext['sourceChapter']>(
         `SELECT id, chapterNo, title, summary, rawText
            FROM KnowledgeChapter
           WHERE novelId = ? AND branchId = ? AND chapterNo = ?
@@ -1046,7 +1057,7 @@ async function loadGenerationContext(params: {
   }
 
   const targetChapter = targetAnchor.chapterId
-    ? queryOne<LoadedFutureJumpGenerationContext['targetChapter']>(
+    ? params.db.queryOne<LoadedFutureJumpGenerationContext['targetChapter']>(
         `SELECT id, chapterNo, title, summary, rawText
            FROM KnowledgeChapter
           WHERE id = ? AND novelId = ? AND branchId = ?
@@ -1055,7 +1066,7 @@ async function loadGenerationContext(params: {
         params.novelId,
         params.branchId,
       )
-    : queryOne<LoadedFutureJumpGenerationContext['targetChapter']>(
+    : params.db.queryOne<LoadedFutureJumpGenerationContext['targetChapter']>(
         `SELECT id, chapterNo, title, summary, rawText
            FROM KnowledgeChapter
           WHERE novelId = ? AND branchId = ? AND chapterNo = ?
@@ -1070,6 +1081,7 @@ async function loadGenerationContext(params: {
         novelId: params.novelId,
         branchId: params.branchId,
         futureJumpRunId: params.futureJumpRunId,
+        db: params.db,
       })
     : null
 
@@ -1082,7 +1094,7 @@ async function loadGenerationContext(params: {
       chapterId: sourceChapter.id,
       chapterNo: sourceChapter.chapterNo,
     },
-    sourceNodeContext: resolveSourceNodeContext(sourceNode, session),
+    sourceNodeContext: resolveSourceNodeContext(sourceNode, session, params.db),
     outlineNode,
     targetAnchor,
     sourceChapter,
@@ -1098,6 +1110,7 @@ async function loadGenerationContext(params: {
       branchId: params.branchId,
       asOfChapter: sourceChapter.chapterNo,
       currentChapterText: sourceChapter.rawText,
+      db: params.db,
     }),
     deltaSummary: buildDeltaSummary(session),
     latestRevisionContext: latestRevision
@@ -1192,15 +1205,19 @@ export async function generateTargetNodeRewrite(params: {
 }
 
 export async function generateFutureJump(input: GenerateFutureJumpInput): Promise<FutureJumpMutationResult> {
+  const novelId = getRequiredString(input.novelId, 'novelId')
+  const branchId = getRequiredString(input.branchId, 'branchId')
+  const db = createNovelDatabaseAccess(novelId)
   const targetOutlineNodeId = getRequiredString(input.targetOutlineNodeId, 'targetOutlineNodeId')
   const targetOutlineChapterId = getRequiredString(input.targetOutlineChapterId, 'targetOutlineChapterId')
   const context = await loadGenerationContext({
-    novelId: getRequiredString(input.novelId, 'novelId'),
-    branchId: getRequiredString(input.branchId, 'branchId'),
+    novelId,
+    branchId,
     whatIfSessionId: input.whatIfSessionId?.trim() || null,
     sourceContext: input.sourceContext,
     targetOutlineNodeId,
     targetOutlineChapterId,
+    db,
   })
 
   const pendingRun = createFutureJumpRunRecord({
@@ -1219,7 +1236,7 @@ export async function generateFutureJump(input: GenerateFutureJumpInput): Promis
     latestRevisionNo: 1,
     errorMessage: null,
     status: 'pending',
-  })
+  }, db)
 
   if (!pendingRun) {
     throw new Error('Failed to create pending future jump run')
@@ -1249,7 +1266,7 @@ export async function generateFutureJump(input: GenerateFutureJumpInput): Promis
       generatedTargetText: rewrite.generatedTargetText,
       ...addTokenUsage(bridgeUsage, rewrite.usage),
       status: 'generated',
-    })
+    }, db)
 
     if (!run) {
       throw new Error('Failed to finalize future jump run')
@@ -1269,30 +1286,34 @@ export async function generateFutureJump(input: GenerateFutureJumpInput): Promis
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Future jump generation failed'
-    markFutureJumpRunFailed(pendingRun.id, message)
+    markFutureJumpRunFailed(pendingRun.id, message, db)
     throw new Error(`Future jump generation failed: ${message}`)
   }
 }
 
 export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<FutureJumpMutationResult> {
+  const novelId = getRequiredString(input.novelId, 'novelId')
+  const branchId = getRequiredString(input.branchId, 'branchId')
+  const db = createNovelDatabaseAccess(novelId)
   const runId = getRequiredString(input.runId, 'runId')
   const userFeedback = getRequiredString(input.userFeedback, 'userFeedback')
-  const run = findFutureJumpRunById(runId)
+  const run = findFutureJumpRunById(runId, db)
   if (!run) {
     throw new Error(`Future jump run not found: ${runId}`)
   }
-  if (run.baseBranchId !== input.branchId) {
+  if (run.baseBranchId !== branchId) {
     throw new Error('Future jump run does not belong to the requested branch')
   }
 
   const context = await loadGenerationContext({
-    novelId: getRequiredString(input.novelId, 'novelId'),
-    branchId: getRequiredString(input.branchId, 'branchId'),
+    novelId,
+    branchId,
     whatIfSessionId: run.sourceContext.whatIfSessionId,
     sourceContext: run.sourceContext,
     targetOutlineNodeId: run.targetOutlineNodeId,
     targetOutlineChapterId: run.targetOutlineChapterId,
     futureJumpRunId: run.id,
+    db,
   })
 
   try {
@@ -1321,7 +1342,7 @@ export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<Fu
       generatedTargetText: rewrite.generatedTargetText,
       ...addTokenUsage(bridgeUsage, rewrite.usage),
       status: 'revised',
-    })
+    }, db)
 
     if (!nextRun) {
       throw new Error('Failed to append future jump revision')
@@ -1341,14 +1362,15 @@ export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<Fu
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Future jump revision failed'
-    markFutureJumpRunFailed(run.id, message)
+    markFutureJumpRunFailed(run.id, message, db)
     throw new Error(`Future jump revision failed: ${message}`)
   }
 }
 
 export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Promise<FutureJumpMutationResponse> {
   const input = futureJumpCreateRequestSchema.parse(rawInput)
-  const outlineNode = findOutlineNodeById(input.targetOutlineNodeId)
+  const db = createNovelDatabaseAccess(input.novelId)
+  const outlineNode = findOutlineNodeById(input.targetOutlineNodeId, db)
   if (!outlineNode) {
     throw new Error(`Target outline node not found: ${input.targetOutlineNodeId}`)
   }
@@ -1357,12 +1379,14 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
     novelId: outlineNode.novelId,
     branchId: outlineNode.branchId,
     label: 'Parent timeline node',
+    db,
   })
 
   const compatibilityWhatIfSessionId = resolveFutureJumpCompatibilityWhatIfSessionId({
     novelId: outlineNode.novelId,
     branchId: outlineNode.branchId,
     sourceContext: input.sourceContext,
+    db,
   })
 
   const generated = await generateFutureJump({
@@ -1379,18 +1403,18 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
     userDirection: input.userDirection ?? undefined,
   })
 
-  const existingNode = findStoryTimelineNodeByFutureJumpRunId(generated.run.id)
+  const existingNode = findStoryTimelineNodeByFutureJumpRunId(generated.run.id, db)
   let timelineNode = existingNode
 
   if (!timelineNode) {
-    const targetAnchor = listOutlineNodeChapters(generated.run.targetOutlineNodeId).find(
+    const targetAnchor = listOutlineNodeChapters(generated.run.targetOutlineNodeId, db).find(
       (chapter) => chapter.id === generated.run.targetOutlineChapterId
     )
     if (!targetAnchor) {
       throw new Error(`Target outline chapter anchor not found: ${generated.run.targetOutlineChapterId}`)
     }
 
-    const labelIndex = getNextStoryTimelineLabelIndex(outlineNode.novelId, outlineNode.branchId, 'future_jump')
+    const labelIndex = getNextStoryTimelineLabelIndex(outlineNode.novelId, outlineNode.branchId, 'future_jump', db)
     const readableLabel = formatStoryBranchReadableLabel('future_jump', labelIndex)
     const readableLineageLabel = buildChildReadableLineageLabel(parentNode, readableLabel)
     timelineNode = createStoryTimelineNode({
@@ -1423,7 +1447,7 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
       laneIndex: 0,
       colorToken: 'violet',
       status: generated.run.status,
-    })
+    }, db)
   }
 
   return futureJumpMutationResponseSchema.parse({
@@ -1437,12 +1461,13 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
 
 export async function reviseFutureJumpRun(rawInput: Pick<ReviseFutureJumpInput, 'runId'> & FutureJumpReviseRequest): Promise<FutureJumpMutationResponse> {
   const input = futureJumpReviseRequestSchema.parse(rawInput)
-  const run = findFutureJumpRunById(rawInput.runId)
+  const db = createNovelDatabaseAccess(input.novelId)
+  const run = findFutureJumpRunById(rawInput.runId, db)
   if (!run) {
     throw new Error(`Future jump run not found: ${rawInput.runId}`)
   }
 
-  const outlineNode = findOutlineNodeById(run.targetOutlineNodeId)
+  const outlineNode = findOutlineNodeById(run.targetOutlineNodeId, db)
   if (!outlineNode) {
     throw new Error(`Target outline node not found: ${run.targetOutlineNodeId}`)
   }
@@ -1453,7 +1478,7 @@ export async function reviseFutureJumpRun(rawInput: Pick<ReviseFutureJumpInput, 
     branchId: outlineNode.branchId,
     userFeedback: input.userFeedback,
   })
-  const timelineNode = findStoryTimelineNodeByFutureJumpRunId(revised.run.id)
+  const timelineNode = findStoryTimelineNodeByFutureJumpRunId(revised.run.id, db)
 
   return futureJumpMutationResponseSchema.parse({
     runId: revised.run.id,

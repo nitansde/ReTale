@@ -74,11 +74,11 @@ async function loadFutureMap(input: { novelId: string; branchId: string; session
   return data
 }
 
-async function reviseFutureJumpRun(input: { runId: string; userFeedback: string }) {
+async function reviseFutureJumpRun(input: { runId: string; novelId: string; userFeedback: string }) {
   const response = await fetch(`/api/future-jump/runs/${input.runId}/revise`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userFeedback: input.userFeedback }),
+    body: JSON.stringify({ novelId: input.novelId, userFeedback: input.userFeedback }),
   })
   const data = await response.json() as FutureJumpMutationResponse & { error?: string }
   if (!response.ok) {
@@ -191,6 +191,7 @@ export function FutureJumpView(props: {
     try {
       await reviseFutureJumpRun({
         runId: bundle.detail.id,
+        novelId: props.novelId,
         userFeedback: feedback.trim(),
       })
       const nextBundle = await loadFutureJumpBundle({

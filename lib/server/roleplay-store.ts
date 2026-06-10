@@ -4,7 +4,7 @@ import {
   buildChildReadableLineageLabel,
   requireOptionalTimelineNodeInBranchContext,
 } from '@/lib/server/story-branch-mutation-helpers'
-import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/database-access'
 import { formatStoryBranchReadableLabel } from '@/lib/story-branch-labels'
 import type { RoleplayMessageRecord, RoleplaySessionDetail, RoleplaySessionRecord } from '@/lib/roleplay-types'
 import { uid } from '@/lib/utils'
@@ -163,6 +163,7 @@ export async function createRoleplaySession(
     novelId: input.novelId,
     branchId: input.branchId,
     label: 'Source timeline node',
+    db,
   })
   const labelIndex = getNextStoryTimelineLabelIndex(input.novelId, input.branchId, 'roleplay_session', db)
   const readableLabel = formatStoryBranchReadableLabel('roleplay_session', labelIndex)

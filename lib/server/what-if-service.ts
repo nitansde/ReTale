@@ -1,9 +1,10 @@
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
+import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
+import { NON_STREAM_PROVIDER_TIMEOUT_MS } from '@/lib/server/provider-request'
 import { whatIfCreateRequestSchema, whatIfCreateResponseSchema, whatIfDeltaExtractionSchema } from '@/lib/server/story-branch-contracts'
 import { createStoryTimelineNode, getNextStoryTimelineLabelIndex } from '@/lib/server/story-timeline-store'
 import { formatStoryBranchReadableLabel, prefixStoryBranchTitle } from '@/lib/story-branch-labels'
-import { withTransaction } from '@/lib/server/sqlite'
 import { addWhatIfDelta, createWhatIfSession, findWhatIfSessionById } from '@/lib/server/what-if-store'
 import type { OllamaProviderSettings, OpenAICompatibleProviderSettings } from '@/lib/types'
 import type { WhatIfCreateRequest, WhatIfCreateResponse } from '@/lib/story-branch-types'
@@ -156,7 +157,7 @@ async function requestOpenAICompatibleJson(config: OpenAICompatibleProviderSetti
   if (!config.baseUrl.trim() || !config.apiKey.trim() || !config.model.trim()) return null
   const messages = buildDeltaExtractionMessages(input)
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 20000)
+  const timeout = setTimeout(() => controller.abort(), NON_STREAM_PROVIDER_TIMEOUT_MS)
   const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`
   const requestMessages = [
     { role: 'system', content: messages.system },
@@ -225,7 +226,7 @@ async function requestOllamaJson(config: OllamaProviderSettings, input: WhatIfCr
   if (!config.baseUrl.trim() || !config.model.trim()) return null
   const messages = buildDeltaExtractionMessages(input)
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 20000)
+  const timeout = setTimeout(() => controller.abort(), NON_STREAM_PROVIDER_TIMEOUT_MS)
   const url = `${config.baseUrl.replace(/\/$/, '')}/api/chat`
   const requestMessages = [
     { role: 'system', content: messages.system },
@@ -373,8 +374,9 @@ function buildSubtitle(input: WhatIfCreateRequest, topDelta: ExtractedWhatIfDelt
 
 export async function createWhatIfSessionFromRewrite(rawInput: WhatIfCreateRequest): Promise<WhatIfCreateResponse> {
   const input = whatIfCreateRequestSchema.parse(rawInput)
+  const db = createNovelDatabaseAccess(input.novelId)
   const deltas = await extractWhatIfDeltas(input)
-  const labelIndex = getNextStoryTimelineLabelIndex(input.novelId, input.branchId, 'what_if')
+  const labelIndex = getNextStoryTimelineLabelIndex(input.novelId, input.branchId, 'what_if', db)
   const readableLabel = formatStoryBranchReadableLabel('what_if', labelIndex)
   const readableLineageLabel = readableLabel
   const topDelta = deltas[0] ?? buildFallbackDelta(input)
@@ -383,7 +385,7 @@ export async function createWhatIfSessionFromRewrite(rawInput: WhatIfCreateReque
   const sessionId = uid('what-if-session')
   const timelineNodeId = uid('timeline-node')
 
-  await withTransaction(async () => {
+  await db.withTransaction(async () => {
     createWhatIfSession({
       id: sessionId,
       novelId: input.novelId,
@@ -397,7 +399,7 @@ export async function createWhatIfSessionFromRewrite(rawInput: WhatIfCreateReque
       inputTokens: input.inputTokens ?? null,
       outputTokens: input.outputTokens ?? null,
       status: 'active',
-    })
+    }, db)
 
     for (const delta of deltas) {
       addWhatIfDelta({
@@ -414,7 +416,7 @@ export async function createWhatIfSessionFromRewrite(rawInput: WhatIfCreateReque
         validFromChapter: delta.validFromChapter,
         description: delta.description,
         confidence: delta.confidence,
-      })
+      }, db)
     }
 
     createStoryTimelineNode({
@@ -438,10 +440,10 @@ export async function createWhatIfSessionFromRewrite(rawInput: WhatIfCreateReque
       laneIndex: 0,
       colorToken: 'violet',
       status: 'active',
-    })
+    }, db)
   })
 
-  const persistedSession = findWhatIfSessionById(sessionId)
+  const persistedSession = findWhatIfSessionById(sessionId, db)
   const response = {
     sessionId,
     timelineNodeId,
