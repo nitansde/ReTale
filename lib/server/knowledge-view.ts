@@ -25,7 +25,7 @@ import { getCharacterClassificationMetadata, type CharacterImportanceTier } from
 import { buildRawTextRetrievalEmbeddingInput, loadRawTextRetrievalDocs } from '@/lib/server/retrieval-index'
 import { getMainBranchId } from '@/lib/server/knowledge-store'
 import { reconcileKnowledgeJobWatchdog } from '@/lib/server/knowledge-job-watchdog'
-import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne } from '@/lib/server/database-access'
 
 function isGenericRelationLabel(value: string) {
   const normalized = value.trim().toLocaleLowerCase('en-US')
@@ -91,6 +91,7 @@ export type HanlpCacheSnapshot = {
 }
 
 export type KnowledgeCoverageStatus = 'missing' | 'partial' | 'full'
+export type RetrievalIndexCoverageStatus = KnowledgeCoverageStatus | 'pending'
 
 export type KnowledgeChapterCoverageOverview = {
   status: KnowledgeCoverageStatus
@@ -100,7 +101,7 @@ export type KnowledgeChapterCoverageOverview = {
 }
 
 export type RetrievalIndexCoverageOverview = {
-  status: KnowledgeCoverageStatus
+  status: RetrievalIndexCoverageStatus
   indexedScopeCount: number
   chapterRange?: KnowledgeRebuildChapterRange
   task: KnowledgeRebuildStatus | null
@@ -113,6 +114,31 @@ export type KnowledgeStatusOverview = {
     model: string | null
   }
   retrievalIndex: RetrievalIndexCoverageOverview
+}
+
+function getPendingRetrievalChapterRange(scopeKey: string | null | undefined) {
+  const normalizedScopeKey = scopeKey?.trim()
+  if (!normalizedScopeKey || normalizedScopeKey === 'full') {
+    return undefined
+  }
+
+  const match = /^chapter-range:(\d+):(\d+|open)$/u.exec(normalizedScopeKey)
+  if (!match) {
+    return undefined
+  }
+
+  const startChapter = Number(match[1])
+  const endToken = match[2]
+  if (!Number.isFinite(startChapter) || startChapter < 1) {
+    return undefined
+  }
+
+  return {
+    startChapter,
+    ...(endToken !== 'open' && Number.isFinite(Number(endToken))
+      ? { endChapter: Number(endToken) }
+      : {}),
+  }
 }
 
 export type KnowledgeViewPayload = KnowledgeProjectionPayload & {
@@ -470,14 +496,14 @@ function buildProgressCoverageOverview(chapters: Array<{ chapterNo: number }>, p
   }
 }
 
-function getKnowledgeStatusOverview(novelId: string, branchId: string): KnowledgeStatusOverview {
+async function getKnowledgeStatusOverview(novelId: string, branchId: string): Promise<KnowledgeStatusOverview> {
   const chapters = loadKnowledgeChapterStatusRows(novelId, branchId)
   const knowledgeGraph = getKnowledgeGraphCoverageOverview(chapters)
 
   const embeddingSettings = getCurrentEmbeddingModel()
   const chapterHashesByNo = new Map<number, Set<string>>()
   const uniqueHashes = new Set<string>()
-  for (const row of loadRawTextRetrievalDocs(novelId, branchId)) {
+  for (const row of await loadRawTextRetrievalDocs(novelId, branchId)) {
     const { embeddingInputHash } = buildRawTextRetrievalEmbeddingInput(row)
     uniqueHashes.add(embeddingInputHash)
     const current = chapterHashesByNo.get(row.chapterNo) ?? new Set<string>()
@@ -540,6 +566,16 @@ function getKnowledgeStatusOverview(novelId: string, branchId: string): Knowledg
   )
   const fullRetrievalRow = retrievalIndexRows.find((row) => row.scopeKey === 'full') ?? null
   const primaryPartialRetrievalRow = retrievalIndexRows[0] ?? null
+  const pendingRetrievalRow = queryOne<{ scopeKey: string }>(
+    `
+      SELECT scopeKey
+      FROM PendingRetrievalIndex
+      WHERE branchId = ?
+      ORDER BY scopeKey ASC
+      LIMIT 1
+    `,
+    branchId,
+  )
   const retrievalTask = getKnowledgeJobStatusByTypes({
     novelId,
     branchId,
@@ -573,6 +609,13 @@ function getKnowledgeStatusOverview(novelId: string, branchId: string): Knowledg
             },
             task: retrievalTask,
           }
+        : pendingRetrievalRow
+          ? {
+              status: 'pending',
+              indexedScopeCount: 0,
+              chapterRange: getPendingRetrievalChapterRange(pendingRetrievalRow.scopeKey),
+              task: retrievalTask,
+            }
         : {
             status: 'missing',
             indexedScopeCount: 0,
@@ -605,6 +648,16 @@ function getLightweightKnowledgeStatusOverview(novelId: string, branchId: string
   )
   const fullRetrievalRow = retrievalIndexRows.find((row) => row.scopeKey === 'full') ?? null
   const primaryPartialRetrievalRow = retrievalIndexRows[0] ?? null
+  const pendingRetrievalRow = queryOne<{ scopeKey: string }>(
+    `
+      SELECT scopeKey
+      FROM PendingRetrievalIndex
+      WHERE branchId = ?
+      ORDER BY scopeKey ASC
+      LIMIT 1
+    `,
+    branchId,
+  )
   const hasEmbeddingRows = Boolean(queryOne<{ value: number }>(
     `
       SELECT 1 AS value
@@ -652,6 +705,13 @@ function getLightweightKnowledgeStatusOverview(novelId: string, branchId: string
             },
             task: retrievalTask,
           }
+        : pendingRetrievalRow
+          ? {
+              status: 'pending',
+              indexedScopeCount: 0,
+              chapterRange: getPendingRetrievalChapterRange(pendingRetrievalRow.scopeKey),
+              task: retrievalTask,
+            }
         : {
             status: 'missing',
             indexedScopeCount: 0,
@@ -1099,7 +1159,7 @@ export async function buildKnowledgeProjection(
     : novelIds?.length === 1
     ? options?.knowledgeStatusOverviewMode === 'lightweight'
       ? getLightweightKnowledgeStatusOverview(novelIds[0], getMainBranchId(novelIds[0]))
-      : getKnowledgeStatusOverview(novelIds[0], getMainBranchId(novelIds[0]))
+        : await getKnowledgeStatusOverview(novelIds[0], getMainBranchId(novelIds[0]))
     : null
 
   if (options?.includeProjection === false) {

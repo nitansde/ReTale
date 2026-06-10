@@ -748,6 +748,43 @@ describe('/api/knowledge-view', () => {
     })
   })
 
+  it('reports retrieval index status as pending when only pending metadata exists for the branch', async () => {
+    const { database } = await createTestDatabase('retale-knowledge-view-retrieval-pending-status')
+    const novelId = `novel_retrieval_pending_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-retrieval-pending-1', chapterNo: 1 })
+    database.prepare(
+      `INSERT INTO PendingRetrievalIndex (
+        branchId, scopeKey, tableName, phase, rowCount, textIndexCompleted, vectorIndexCompleted, rebuildFingerprint
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(mainBranchId, 'chapter-range:1:3', 'pending_retrieval_table', 'creating_table', 12, 0, 0, 'pending-fingerprint')
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      ok: boolean
+      knowledgeStatusOverview: {
+        retrievalIndex: {
+          status: string
+          indexedScopeCount: number
+          chapterRange?: { startChapter?: number; endChapter?: number }
+        }
+      } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.knowledgeStatusOverview?.retrievalIndex).toMatchObject({
+      status: 'pending',
+      indexedScopeCount: 0,
+      chapterRange: {
+        startChapter: 1,
+        endChapter: 3,
+      },
+    })
+  })
+
   it('returns the latest failed rebuild status with errorMessage for the selected novel main branch', async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-failed-status')
     const novelId = `novel_knowledge_view_failed_${Math.random().toString(36).slice(2, 8)}`

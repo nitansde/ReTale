@@ -1,4 +1,5 @@
 import type { Chapter, PersistedNovelState } from '@/lib/types'
+import type { DatabaseAccess } from '@/lib/server/database-access'
 import { bootstrapOutlineNodesForFutureMap } from '@/lib/server/outline-bootstrap'
 import {
   ensureKnowledgeChapterDerivedArtifacts,
@@ -8,7 +9,7 @@ import {
   replaceKnowledgeChapterDerivedArtifacts,
 } from '@/lib/server/knowledge-store'
 import { deleteBranchRetrievalIndex } from '@/lib/server/retrieval-index'
-import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/database-access'
 import { htmlToPlainText } from '@/lib/utils'
 
 type KnowledgeChapterRow = {
@@ -28,14 +29,19 @@ export type WorkspaceKnowledgeSyncPayload = {
   localOutlines?: PersistedNovelState['localOutlines']
   localTimelineEvents?: PersistedNovelState['localTimelineEvents']
   currentNovelId?: string
+  syncScope?: 'workspace' | 'target-novel'
 }
 
 type WorkspaceKnowledgeSyncDependencies = {
   abortKnowledgeRebuildUntilIdle: (params: { novelId: string; branchId: string }) => Promise<void>
 }
 
-function upsertNovelRecord(params: { novelId: string; title: string }) {
-  execute(
+type WorkspaceKnowledgeSyncContext = {
+  db?: Pick<DatabaseAccess, 'execute' | 'queryAll' | 'queryOne' | 'withTransaction'>
+}
+
+function upsertNovelRecord(params: { novelId: string; title: string }, db: NonNullable<WorkspaceKnowledgeSyncContext['db']>) {
+  db.execute(
     `
       INSERT INTO NovelRecord (id, title, sourceType)
       VALUES (?, ?, 'workspace')
@@ -49,8 +55,8 @@ function upsertNovelRecord(params: { novelId: string; title: string }) {
   )
 }
 
-function upsertStoryBranch(novelId: string, branchId: string, name: string) {
-  execute(
+function upsertStoryBranch(novelId: string, branchId: string, name: string, db: NonNullable<WorkspaceKnowledgeSyncContext['db']>) {
+  db.execute(
     `
       INSERT INTO StoryBranch (id, novelId, name)
       VALUES (?, ?, ?)
@@ -65,9 +71,9 @@ function upsertStoryBranch(novelId: string, branchId: string, name: string) {
   )
 }
 
-async function deleteNovelProjectionArtifacts(novelId: string, branchId: string) {
-  await withTransaction(async () => {
-    execute(
+async function deleteNovelProjectionArtifacts(novelId: string, branchId: string, db: NonNullable<WorkspaceKnowledgeSyncContext['db']>) {
+  await db.withTransaction(async () => {
+    db.execute(
       `
         DELETE FROM future_jump_revisions
         WHERE run_id IN (
@@ -79,7 +85,7 @@ async function deleteNovelProjectionArtifacts(novelId: string, branchId: string)
       branchId,
       novelId,
     )
-    execute(
+    db.execute(
       `
         DELETE FROM future_jump_runs
         WHERE base_branch_id = ?
@@ -88,12 +94,12 @@ async function deleteNovelProjectionArtifacts(novelId: string, branchId: string)
       branchId,
       novelId,
     )
-    execute('DELETE FROM story_timeline_nodes WHERE novel_id = ?', novelId)
-    execute('DELETE FROM what_if_sessions WHERE novel_id = ?', novelId)
-    execute('DELETE FROM outline_node_chapters WHERE outline_node_id IN (SELECT id FROM outline_nodes WHERE novel_id = ?)', novelId)
-    execute('DELETE FROM outline_nodes WHERE novel_id = ?', novelId)
-    execute('DELETE FROM chapter_extraction_candidates WHERE novel_id = ?', novelId)
-    execute(
+    db.execute('DELETE FROM story_timeline_nodes WHERE novel_id = ?', novelId)
+    db.execute('DELETE FROM what_if_sessions WHERE novel_id = ?', novelId)
+    db.execute('DELETE FROM outline_node_chapters WHERE outline_node_id IN (SELECT id FROM outline_nodes WHERE novel_id = ?)', novelId)
+    db.execute('DELETE FROM outline_nodes WHERE novel_id = ?', novelId)
+    db.execute('DELETE FROM chapter_extraction_candidates WHERE novel_id = ?', novelId)
+    db.execute(
       `
         DELETE FROM chapter_extraction_processing_batches
         WHERE novel_id = ?
@@ -105,13 +111,13 @@ async function deleteNovelProjectionArtifacts(novelId: string, branchId: string)
       `,
       novelId,
     )
-    execute('DELETE FROM KnowledgeJob WHERE novelId = ?', novelId)
-    execute('DELETE FROM NovelRecord WHERE id = ?', novelId)
+    db.execute('DELETE FROM KnowledgeJob WHERE novelId = ?', novelId)
+    db.execute('DELETE FROM NovelRecord WHERE id = ?', novelId)
   })
 }
 
-function countStructuredKnowledgeRows(novelId: string, branchId: string) {
-  return queryOne<{ count: number }>(
+function countStructuredKnowledgeRows(novelId: string, branchId: string, db: NonNullable<WorkspaceKnowledgeSyncContext['db']>) {
+  return db.queryOne<{ count: number }>(
     `
       SELECT (
         (SELECT COUNT(*) FROM KnowledgeEntity WHERE novelId = ? AND branchId = ?)
@@ -143,7 +149,9 @@ function countStructuredKnowledgeRows(novelId: string, branchId: string) {
 async function performWorkspacePayloadToKnowledgeStoreSync(
   payload: WorkspaceKnowledgeSyncPayload,
   dependencies: WorkspaceKnowledgeSyncDependencies,
+  context: WorkspaceKnowledgeSyncContext = {},
 ) {
+  const db = context.db ?? { execute, queryAll, queryOne, withTransaction }
   const novelMetaById = new Map((payload.localNovels ?? []).map((item) => [item.id, item]))
   const chapters = (payload.localChapters ?? [])
     .filter((chapter) => !chapter.parentChapterId)
@@ -158,14 +166,16 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
   }
 
   const desiredNovelIds = new Set(groupedByNovel.keys())
-  const staleNovelIds = queryAll<{ id: string }>('SELECT id FROM NovelRecord').filter((row) => !desiredNovelIds.has(row.id))
+  const staleNovelIds = payload.syncScope === 'target-novel'
+    ? []
+    : db.queryAll<{ id: string }>('SELECT id FROM NovelRecord').filter((row) => !desiredNovelIds.has(row.id))
 
   if (staleNovelIds.length) {
     for (const novel of staleNovelIds) {
       const branchId = getMainBranchId(novel.id)
       await dependencies.abortKnowledgeRebuildUntilIdle({ novelId: novel.id, branchId })
-      await deleteBranchRetrievalIndex(branchId)
-      await deleteNovelProjectionArtifacts(novel.id, branchId)
+      await deleteBranchRetrievalIndex(novel.id, branchId)
+      await deleteNovelProjectionArtifacts(novel.id, branchId, db)
     }
   }
 
@@ -186,17 +196,17 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
     upsertNovelRecord({
       novelId,
       title: novelMeta?.title?.trim() || novelChapters[0]?.title?.replace(/^第\s*[0-9一二三四五六七八九十百千零两]+\s*章\s*/, '') || novelId,
-    })
-    upsertStoryBranch(novelId, branchId, 'main')
+    }, db)
+    upsertStoryBranch(novelId, branchId, 'main', db)
 
-    const existing = queryAll<KnowledgeChapterRow>(
+    const existing = db.queryAll<KnowledgeChapterRow>(
       'SELECT id, novelId, branchId, chapterNo, title, rawText, revision, sourceHash FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? ORDER BY chapterNo ASC',
       novelId,
       branchId,
     )
     const desiredChapterIds = new Set(novelChapters.map((chapter) => chapter.id))
     const staleChapters = existing.filter((chapter) => !desiredChapterIds.has(chapter.id))
-    const activeJob = queryOne<{ id: string; status: string }>(
+    const activeJob = db.queryOne<{ id: string; status: string }>(
       'SELECT id, status FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = ? AND status IN (\'queued\', \'running\', \'paused\') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1',
       novelId,
       branchId,
@@ -204,15 +214,15 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
     )
 
     if (staleChapters.length) {
-      await withTransaction(async () => {
+      await db.withTransaction(async () => {
         for (const chapter of staleChapters) {
-          execute('DELETE FROM KnowledgeChapter WHERE id = ?', chapter.id)
+          db.execute('DELETE FROM KnowledgeChapter WHERE id = ?', chapter.id)
         }
       })
     }
 
     const existingById = new Map(existing.map((item) => [item.id, item]))
-    const existingStructuredKnowledgeCount = countStructuredKnowledgeRows(novelId, branchId)
+    const existingStructuredKnowledgeCount = countStructuredKnowledgeRows(novelId, branchId, db)
     const shouldBootstrapKnowledge = novelChapters.length > 0 && (existing.length === 0 || existingStructuredKnowledgeCount === 0)
 
     let firstChangedChapterNo: number | null = null
@@ -225,8 +235,8 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
       const current = existingById.get(chapter.id)
 
       if (!current) {
-        await withTransaction(() => {
-          execute(
+        await db.withTransaction(() => {
+          db.execute(
             `
               INSERT INTO KnowledgeChapter (
                 id, novelId, branchId, chapterNo, title, rawText, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
@@ -247,27 +257,27 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
             branchId,
             chapterNo,
             rawText,
-          })
+          }, db)
         })
         firstChangedChapterNo = firstChangedChapterNo === null ? chapterNo : Math.min(firstChangedChapterNo, chapterNo)
         continue
       }
 
       if (current.sourceHash === sourceHash && current.chapterNo === chapterNo && current.title === chapter.title) {
-        await withTransaction(() => {
+        await db.withTransaction(() => {
           ensureKnowledgeChapterDerivedArtifacts({
             id: current.id,
             novelId,
             branchId,
             chapterNo,
             rawText,
-          })
+          }, db)
         })
         continue
       }
 
-      await withTransaction(() => {
-        execute(
+      await db.withTransaction(() => {
+        db.execute(
           `
             UPDATE KnowledgeChapter
             SET chapterNo = ?, title = ?, rawText = ?, sourceHash = ?, revision = ?, isDirty = 1,
@@ -287,7 +297,7 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
           branchId,
           chapterNo,
           rawText,
-        })
+        }, db)
       })
       firstChangedChapterNo = firstChangedChapterNo === null ? chapterNo : Math.min(firstChangedChapterNo, chapterNo)
     }
@@ -307,6 +317,7 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
           novelId,
           branchId,
           fromChapterNo: invalidationFromChapterNo,
+          db,
         })
       }
 
@@ -319,6 +330,7 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
       novelId,
       branchId,
       workspaceState: payload,
+      db,
     })
   }
 }
@@ -326,8 +338,8 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
 export function createWorkspaceKnowledgeSync(dependencies: WorkspaceKnowledgeSyncDependencies) {
   let workspaceKnowledgeSyncQueue: Promise<void> = Promise.resolve()
 
-  return async function syncWorkspacePayloadToKnowledgeStore(payload: WorkspaceKnowledgeSyncPayload) {
-    const run = workspaceKnowledgeSyncQueue.then(() => performWorkspacePayloadToKnowledgeStoreSync(payload, dependencies))
+  return async function syncWorkspacePayloadToKnowledgeStore(payload: WorkspaceKnowledgeSyncPayload, context: WorkspaceKnowledgeSyncContext = {}) {
+    const run = workspaceKnowledgeSyncQueue.then(() => performWorkspacePayloadToKnowledgeStoreSync(payload, dependencies, context))
     workspaceKnowledgeSyncQueue = run.catch(() => undefined)
     return run
   }

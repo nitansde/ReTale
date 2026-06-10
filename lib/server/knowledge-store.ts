@@ -1,8 +1,19 @@
 import { createHash } from 'node:crypto'
-import { execute, queryAll, queryOne, type SqlParam, withTransaction } from '@/lib/server/sqlite'
+import {
+  execute,
+  queryAll,
+  queryOne,
+  type DatabaseAccess,
+  type SqlParam,
+  withTransaction,
+} from '@/lib/server/database-access'
 import { uid } from '@/lib/utils'
 
 export const MAIN_BRANCH_NAME = 'main'
+
+type KnowledgeStoreDb = Pick<DatabaseAccess, 'execute' | 'queryAll' | 'queryOne' | 'withTransaction'>
+
+const defaultDb: KnowledgeStoreDb = { execute, queryAll, queryOne, withTransaction }
 
 export function getMainBranchId(novelId: string) {
   return `${novelId}:main`
@@ -212,9 +223,9 @@ function buildDerivedArtifacts(chapter: KnowledgeChapterDerivedArtifactSource) {
   return { lines, spans }
 }
 
-function insertChapterLines(chapterId: string, lines: ReturnType<typeof splitChapterLines>) {
+function insertChapterLines(chapterId: string, lines: ReturnType<typeof splitChapterLines>, db: KnowledgeStoreDb = defaultDb) {
   for (const line of lines) {
-    execute(
+    db.execute(
       'INSERT INTO ChapterLine (id, chapterId, lineNo, text, charStart, charEnd) VALUES (?, ?, ?, ?, ?, ?)',
       uid('line'),
       chapterId,
@@ -226,9 +237,9 @@ function insertChapterLines(chapterId: string, lines: ReturnType<typeof splitCha
   }
 }
 
-function insertTextSpans(spans: ReturnType<typeof buildTextSpansFromLines>) {
+function insertTextSpans(spans: ReturnType<typeof buildTextSpansFromLines>, db: KnowledgeStoreDb = defaultDb) {
   for (const span of spans) {
-    execute(
+    db.execute(
       `
         INSERT INTO TextSpan (
           id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd, charStart, charEnd, text, spanType, tokenEstimate
@@ -251,8 +262,8 @@ function insertTextSpans(spans: ReturnType<typeof buildTextSpansFromLines>) {
   }
 }
 
-function getDerivedArtifactCounts(chapterId: string) {
-  return queryOne<{ lineCount: number; spanCount: number }>(
+function getDerivedArtifactCounts(chapterId: string, db: KnowledgeStoreDb = defaultDb) {
+  return db.queryOne<{ lineCount: number; spanCount: number }>(
     `
       SELECT
         (SELECT COUNT(*) FROM ChapterLine WHERE chapterId = ?) AS lineCount,
@@ -263,19 +274,19 @@ function getDerivedArtifactCounts(chapterId: string) {
   ) ?? { lineCount: 0, spanCount: 0 }
 }
 
-function chapterHasMissingDerivedArtifacts(chapter: KnowledgeChapterDerivedArtifactSource) {
+function chapterHasMissingDerivedArtifacts(chapter: KnowledgeChapterDerivedArtifactSource, db: KnowledgeStoreDb = defaultDb) {
   const expected = buildDerivedArtifacts(chapter)
-  const counts = getDerivedArtifactCounts(chapter.id)
+  const counts = getDerivedArtifactCounts(chapter.id, db)
   return counts.lineCount <= 0 || (expected.spans.length > 0 && counts.spanCount <= 0)
 }
 
-export function replaceKnowledgeChapterDerivedArtifacts(chapter: KnowledgeChapterDerivedArtifactSource) {
+export function replaceKnowledgeChapterDerivedArtifacts(chapter: KnowledgeChapterDerivedArtifactSource, db: KnowledgeStoreDb = defaultDb) {
   const artifacts = buildDerivedArtifacts(chapter)
 
-  execute('DELETE FROM TextSpan WHERE chapterId = ?', chapter.id)
-  execute('DELETE FROM ChapterLine WHERE chapterId = ?', chapter.id)
-  insertChapterLines(chapter.id, artifacts.lines)
-  insertTextSpans(artifacts.spans)
+  db.execute('DELETE FROM TextSpan WHERE chapterId = ?', chapter.id)
+  db.execute('DELETE FROM ChapterLine WHERE chapterId = ?', chapter.id)
+  insertChapterLines(chapter.id, artifacts.lines, db)
+  insertTextSpans(artifacts.spans, db)
 
   return {
     lineCount: artifacts.lines.length,
@@ -283,20 +294,20 @@ export function replaceKnowledgeChapterDerivedArtifacts(chapter: KnowledgeChapte
   }
 }
 
-export function ensureKnowledgeChapterDerivedArtifacts(chapter: KnowledgeChapterDerivedArtifactSource) {
+export function ensureKnowledgeChapterDerivedArtifacts(chapter: KnowledgeChapterDerivedArtifactSource, db: KnowledgeStoreDb = defaultDb) {
   const artifacts = buildDerivedArtifacts(chapter)
-  const counts = getDerivedArtifactCounts(chapter.id)
+  const counts = getDerivedArtifactCounts(chapter.id, db)
   let repaired = false
 
   if (counts.lineCount <= 0) {
-    execute('DELETE FROM ChapterLine WHERE chapterId = ?', chapter.id)
-    insertChapterLines(chapter.id, artifacts.lines)
+    db.execute('DELETE FROM ChapterLine WHERE chapterId = ?', chapter.id)
+    insertChapterLines(chapter.id, artifacts.lines, db)
     repaired = true
   }
 
   if (artifacts.spans.length > 0 && counts.spanCount <= 0) {
-    execute('DELETE FROM TextSpan WHERE chapterId = ?', chapter.id)
-    insertTextSpans(artifacts.spans)
+    db.execute('DELETE FROM TextSpan WHERE chapterId = ?', chapter.id)
+    insertTextSpans(artifacts.spans, db)
     repaired = true
   }
 
@@ -311,7 +322,9 @@ export async function healMissingKnowledgeChapterDerivedArtifacts(params: {
   novelId: string
   branchId: string
   chapterRange?: { startChapter?: number; endChapter?: number }
+  db?: KnowledgeStoreDb
 }): Promise<KnowledgeChapterDerivedArtifactRepairResult> {
+  const db = params.db ?? defaultDb
   const queryParams: SqlParam[] = [params.novelId, params.branchId]
   const rangeFilters: string[] = []
   if (typeof params.chapterRange?.startChapter === 'number') {
@@ -323,7 +336,7 @@ export async function healMissingKnowledgeChapterDerivedArtifacts(params: {
     queryParams.push(Math.max(1, Math.floor(params.chapterRange.endChapter)))
   }
 
-  const chapters = queryAll<KnowledgeChapterDerivedArtifactSource>(
+  const chapters = db.queryAll<KnowledgeChapterDerivedArtifactSource>(
     `
       SELECT id, novelId, branchId, chapterNo, rawText
       FROM KnowledgeChapter
@@ -333,14 +346,14 @@ export async function healMissingKnowledgeChapterDerivedArtifacts(params: {
     `,
     ...queryParams
   )
-  const chaptersToRepair = chapters.filter(chapterHasMissingDerivedArtifacts)
+  const chaptersToRepair = chapters.filter((chapter) => chapterHasMissingDerivedArtifacts(chapter, db))
   if (!chaptersToRepair.length) {
     return { repairedChapterNos: [] }
   }
 
-  await withTransaction(() => {
+  await db.withTransaction(() => {
     for (const chapter of chaptersToRepair) {
-      ensureKnowledgeChapterDerivedArtifacts(chapter)
+      ensureKnowledgeChapterDerivedArtifacts(chapter, db)
     }
   })
 
@@ -349,9 +362,9 @@ export async function healMissingKnowledgeChapterDerivedArtifacts(params: {
   }
 }
 
-export async function ensureMainBranch(novelId: string) {
+export async function ensureMainBranch(novelId: string, db: KnowledgeStoreDb = defaultDb) {
   const branchId = getMainBranchId(novelId)
-  execute(
+  db.execute(
     `
       INSERT INTO StoryBranch (id, novelId, name)
       VALUES (?, ?, ?)
@@ -365,14 +378,14 @@ export async function ensureMainBranch(novelId: string) {
     MAIN_BRANCH_NAME
   )
 
-  return queryOne<{ id: string; novelId: string; name: string }>(
+  return db.queryOne<{ id: string; novelId: string; name: string }>(
     'SELECT id, novelId, name FROM StoryBranch WHERE id = ?',
     branchId
   )
 }
 
-export function findStoryBranch(id: string) {
-  return queryOne<{ id: string; novelId: string; name: string }>(
+export function findStoryBranch(id: string, db: KnowledgeStoreDb = defaultDb) {
+  return db.queryOne<{ id: string; novelId: string; name: string }>(
     'SELECT id, novelId, name FROM StoryBranch WHERE id = ?',
     id
   )
@@ -384,9 +397,11 @@ export async function enqueueKnowledgeJob(params: {
   jobType: string
   payload?: unknown
   currentStep?: string
+  db?: KnowledgeStoreDb
 }) {
+  const db = params.db ?? defaultDb
   const id = uid('job')
-  execute(
+  db.execute(
     `
       INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, payloadJson)
       VALUES (?, ?, ?, ?, 'queued', ?, ?)
@@ -399,7 +414,7 @@ export async function enqueueKnowledgeJob(params: {
     params.payload ? JSON.stringify(params.payload) : null
   )
 
-  return queryOne<{ id: string; novelId: string; branchId: string | null; jobType: string }>(
+  return db.queryOne<{ id: string; novelId: string; branchId: string | null; jobType: string }>(
     'SELECT id, novelId, branchId, jobType FROM KnowledgeJob WHERE id = ?',
     id
   )
@@ -409,9 +424,11 @@ export async function markKnowledgeStaleFromChapter(params: {
   novelId: string
   branchId: string
   fromChapterNo: number
+  db?: KnowledgeStoreDb
 }) {
-  await withTransaction(async () => {
-    execute(
+  const db = params.db ?? defaultDb
+  await db.withTransaction(async () => {
+    db.execute(
       `
         UPDATE KnowledgeChapter
         SET isDirty = 1,
@@ -426,7 +443,7 @@ export async function markKnowledgeStaleFromChapter(params: {
       params.fromChapterNo
     )
 
-    execute(
+    db.execute(
       `
         UPDATE KnowledgeFact
         SET status = 'outdated', updatedAt = CURRENT_TIMESTAMP
@@ -439,7 +456,7 @@ export async function markKnowledgeStaleFromChapter(params: {
       params.fromChapterNo
     )
 
-    execute(
+    db.execute(
       `
         UPDATE KnowledgeRelation
         SET status = 'outdated', updatedAt = CURRENT_TIMESTAMP
@@ -452,7 +469,7 @@ export async function markKnowledgeStaleFromChapter(params: {
       params.fromChapterNo
     )
 
-    execute(
+    db.execute(
       `
         UPDATE EntityLink
         SET status = 'potentially_stale', updatedAt = CURRENT_TIMESTAMP
@@ -465,7 +482,7 @@ export async function markKnowledgeStaleFromChapter(params: {
       params.fromChapterNo
     )
 
-    execute(
+    db.execute(
       `
         UPDATE EntityState
         SET status = 'potentially_stale', updatedAt = CURRENT_TIMESTAMP
@@ -478,7 +495,7 @@ export async function markKnowledgeStaleFromChapter(params: {
       params.fromChapterNo
     )
 
-    execute(
+    db.execute(
       `
         UPDATE KnowledgeEvent
         SET status = 'outdated', updatedAt = CURRENT_TIMESTAMP
@@ -489,7 +506,7 @@ export async function markKnowledgeStaleFromChapter(params: {
       params.fromChapterNo
     )
 
-    execute(
+    db.execute(
       `
         UPDATE EventLink
         SET status = 'potentially_stale', updatedAt = CURRENT_TIMESTAMP
@@ -503,7 +520,7 @@ export async function markKnowledgeStaleFromChapter(params: {
       params.fromChapterNo
     )
 
-    execute(
+    db.execute(
       `
         UPDATE KnowledgeWorld
         SET status = 'outdated', updatedAt = CURRENT_TIMESTAMP
@@ -519,6 +536,6 @@ export async function markKnowledgeStaleFromChapter(params: {
   })
 
   const { deleteBranchRetrievalIndexFromChapter } = await import('@/lib/server/retrieval-index')
-  await deleteBranchRetrievalIndexFromChapter(params.branchId, params.fromChapterNo)
+  await deleteBranchRetrievalIndexFromChapter(params.novelId, params.branchId, params.fromChapterNo)
 
 }

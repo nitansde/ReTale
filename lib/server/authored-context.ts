@@ -1,6 +1,9 @@
+import type { DatabaseAccess } from '@/lib/server/database-access'
 import { findFutureJumpRunById } from '@/lib/server/future-jump-store'
 import { findWhatIfSessionById } from '@/lib/server/what-if-store'
 import type { FutureJumpRunDetail, WhatIfDeltaRecord, WhatIfSessionDetail } from '@/lib/story-branch-types'
+
+type Db = DatabaseAccess
 
 export type AuthoredRetrievalSourceType = 'authored_delta' | 'future_jump_bridge' | 'future_jump_revision'
 
@@ -9,6 +12,7 @@ export type ExplicitAuthoredContextRequest = {
   branchId: string
   whatIfSessionId?: string
   futureJumpRunId?: string
+  db?: Db
 }
 
 export type AuthoredRetrievalSeed = {
@@ -88,12 +92,13 @@ export function hasExplicitAuthoredContextSelection(request: Pick<ExplicitAuthor
 export function loadExplicitAuthoredContext(request: ExplicitAuthoredContextRequest): ExplicitAuthoredContext {
   const futureJumpRunId = request.futureJumpRunId?.trim() || undefined
   const requestedWhatIfSessionId = request.whatIfSessionId?.trim() || undefined
+  const db = request.db
 
-  const futureJumpRun = futureJumpRunId ? findFutureJumpRunById(futureJumpRunId) : null
+  const futureJumpRun = futureJumpRunId ? findFutureJumpRunById(futureJumpRunId, db) : null
   validateFutureJumpRun(request, futureJumpRun, futureJumpRunId)
 
   const resolvedWhatIfSessionId = requestedWhatIfSessionId ?? resolveFutureJumpWhatIfSessionId(futureJumpRun)
-  const whatIfSession = resolvedWhatIfSessionId ? findWhatIfSessionById(resolvedWhatIfSessionId) : null
+  const whatIfSession = resolvedWhatIfSessionId ? findWhatIfSessionById(resolvedWhatIfSessionId, db) : null
   validateWhatIfSession(request, whatIfSession, resolvedWhatIfSessionId)
 
   if (futureJumpRun && whatIfSession && resolveFutureJumpWhatIfSessionId(futureJumpRun) !== whatIfSession.id) {

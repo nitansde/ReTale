@@ -1,6 +1,7 @@
 import { normalizeCharacterRoleCardProfile, type CharacterRoleCardProfile } from '@/lib/story-knowledge'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
+import { NON_STREAM_PROVIDER_TIMEOUT_MS } from '@/lib/server/provider-request'
 
 type CandidatePromotionObservation = {
   chapterNo: number
@@ -156,7 +157,7 @@ async function requestOpenAICompatiblePromotionSummary(params: {
   model: string
 }) {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 120000)
+  const timeout = setTimeout(() => controller.abort(), NON_STREAM_PROVIDER_TIMEOUT_MS)
   const url = `${params.baseUrl.replace(/\/$/, '')}/chat/completions`
   const requestBody = {
     model: params.model,
@@ -212,7 +213,7 @@ async function requestOllamaPromotionSummary(params: {
   model: string
 }) {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 120000)
+  const timeout = setTimeout(() => controller.abort(), NON_STREAM_PROVIDER_TIMEOUT_MS)
   const url = `${params.baseUrl.replace(/\/$/, '')}/api/chat`
   const requestBody = {
     model: params.model,

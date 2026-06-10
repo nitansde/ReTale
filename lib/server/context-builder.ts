@@ -6,7 +6,8 @@ import type { GraphAwareResult } from '@/lib/server/graph-types'
 import { estimateTokenCount, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { searchLanceEvidence, type RetrievalDocSourceType } from '@/lib/server/retrieval-index'
 import { buildRewriteTaskPromptLines, isContinuationRewriteTask } from '@/lib/server/rewrite-task-prompt'
-import { queryAll, queryOne } from '@/lib/server/sqlite'
+import { queryAll, queryOne } from '@/lib/server/database-access'
+import type { DatabaseAccess } from '@/lib/server/database-access'
 import {
   buildCharacterDescriptionDelta,
   buildCharacterRoleCardLines,
@@ -189,7 +190,10 @@ export type KnowledgeExtractionStoryStateRequest = {
   currentChapterText?: string
   maxCharacters?: number
   recentEventLimit?: number
+  db?: Pick<DatabaseAccess, 'queryAll'>
 }
+
+type KnowledgeExtractionStoryStateDb = Pick<DatabaseAccess, 'queryAll'>
 
 export function formatOutputConstraints(operationType: GenerationContextRequest['operationType']) {
   if (operationType === 'roleplay') {
@@ -478,9 +482,11 @@ function loadCharacterProfilesByEntityId(params: {
   branchId: string
   entityIds: string[]
   chapterNo: number
+  db?: KnowledgeExtractionStoryStateDb
 }) {
   if (!params.entityIds.length) return new Map<string, CharacterRoleCardProfile>()
-  const rows = queryAll<{ subjectEntityId: string | null; valueJson: string | null; sourceChapter: number }>(
+  const db = params.db ?? { queryAll }
+  const rows = db.queryAll<{ subjectEntityId: string | null; valueJson: string | null; sourceChapter: number }>(
     `
       SELECT subjectEntityId, valueJson, sourceChapter
         FROM KnowledgeFact
@@ -689,10 +695,11 @@ function loadEntitiesWithAliases(
   novelId: string,
   branchId: string,
   chapterNo: number,
-  options?: { entityLimit?: number }
+  options?: { entityLimit?: number },
+  db: KnowledgeExtractionStoryStateDb = { queryAll }
 ) {
   const entityLimit = Math.max(1, Math.min(options?.entityLimit ?? 24, 64))
-  const entities = queryAll<{
+  const entities = db.queryAll<{
     id: string
     canonicalName: string
     lastSeenChapter: number | null
@@ -713,7 +720,7 @@ function loadEntitiesWithAliases(
   if (!entities.length) return [] as EntityRow[]
 
   const entityIds = entities.map((entity) => entity.id)
-  const aliases = queryAll<{ entityId: string; alias: string }>(
+  const aliases = db.queryAll<{ entityId: string; alias: string }>(
     `
       SELECT entityId, alias
       FROM EntityAlias
@@ -735,6 +742,7 @@ function loadEntitiesWithAliases(
     branchId,
     entityIds,
     chapterNo,
+    db,
   })
 
   return entities.map((entity) => ({
@@ -782,9 +790,16 @@ export function buildKnowledgeExtractionStoryState(request: KnowledgeExtractionS
 
   const maxCharacters = Math.max(4, Math.min(request.maxCharacters ?? 10, 16))
   const recentEventLimit = Math.max(1, Math.min(request.recentEventLimit ?? 6, 12))
-  const candidateEntities = loadEntitiesWithAliases(request.novelId, request.branchId, request.asOfChapter, {
-    entityLimit: Math.max(maxCharacters * 2, 24),
-  })
+  const db = request.db ?? { queryAll }
+  const candidateEntities = loadEntitiesWithAliases(
+    request.novelId,
+    request.branchId,
+    request.asOfChapter,
+    {
+      entityLimit: Math.max(maxCharacters * 2, 24),
+    },
+    db,
+  )
   const selectedEntities = selectStoryStateEntities({
     entities: candidateEntities,
     currentChapterText: request.currentChapterText ?? '',
@@ -801,6 +816,7 @@ export function buildKnowledgeExtractionStoryState(request: KnowledgeExtractionS
       includeLowConfidence: false,
       entityIds,
       limit: Math.max(entityIds.length * 2, 12),
+      db,
     })
     for (const state of activeStates) {
       if (latestStateByEntityId.has(state.entityId)) continue
@@ -809,7 +825,7 @@ export function buildKnowledgeExtractionStoryState(request: KnowledgeExtractionS
   }
 
   const activeRelationships = entityIds.length
-    ? queryAll<ChapterStateRelationship>(
+    ? db.queryAll<ChapterStateRelationship>(
         `
           SELECT se.canonicalName AS source,
                  te.canonicalName AS target,
@@ -836,7 +852,7 @@ export function buildKnowledgeExtractionStoryState(request: KnowledgeExtractionS
       )
     : []
 
-  const recentEvents = queryAll<ChapterStateEvent>(
+  const recentEvents = db.queryAll<ChapterStateEvent>(
     `
       SELECT chapterNo AS chapter, name, summary
       FROM KnowledgeEvent
@@ -851,7 +867,7 @@ export function buildKnowledgeExtractionStoryState(request: KnowledgeExtractionS
     recentEventLimit,
   )
 
-  const worldRules = queryAll<ChapterStateRule>(
+  const worldRules = db.queryAll<ChapterStateRule>(
     `
       SELECT term, definition, firstSeenChapter
       FROM KnowledgeWorld
@@ -868,7 +884,7 @@ export function buildKnowledgeExtractionStoryState(request: KnowledgeExtractionS
     request.asOfChapter,
   )
 
-  const openThreads = queryAll<{ name: string; valueJson: string | null }>(
+  const openThreads = db.queryAll<{ name: string; valueJson: string | null }>(
     `
       SELECT predicate AS name, valueJson
       FROM KnowledgeFact

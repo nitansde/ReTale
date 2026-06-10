@@ -3,7 +3,7 @@ import { FUTURE_MAP_MISSING_SUMMARY_FALLBACK, type FutureMapResponse, type Outli
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
 import { createOutlineNode, createOutlineNodeChapter, listOutlineNodeChapters, listOutlineNodes } from '@/lib/server/outline-node-store'
 import { getMainBranchId } from '@/lib/server/knowledge-store'
-import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/database-access'
 import { loadWorkspacePayloadFromRuntimeOrRecovery } from '@/lib/server/workspace-resilience'
 
 type Db = {
@@ -280,7 +280,7 @@ function choosePreferredNodes(nodes: OutlineNodeRecord[]) {
   return Array.from(preferredByKey.values()).sort((left, right) => left.sortOrder - right.sortOrder || (left.chapterNo ?? Number.MAX_SAFE_INTEGER) - (right.chapterNo ?? Number.MAX_SAFE_INTEGER) || left.id.localeCompare(right.id))
 }
 
-function loadWorkspaceStatePayload(workspaceState: Partial<PersistedNovelState> | null | undefined, db: Db) {
+async function loadWorkspaceStatePayload(workspaceState: Partial<PersistedNovelState> | null | undefined, db: Db) {
   if (workspaceState) {
     return normalizeWorkspaceState(workspaceState)
   }
@@ -565,7 +565,7 @@ async function ensureCandidatePersisted(candidate: OutlineBootstrapCandidate, pa
 export async function bootstrapOutlineNodesForFutureMap(params: BootstrapParams): Promise<BootstrapResult> {
   const db = params.db ?? defaultDb
   const branchId = params.branchId ?? getMainBranchId(params.novelId)
-  const workspaceState = loadWorkspaceStatePayload(params.workspaceState, db)
+  const workspaceState = await loadWorkspaceStatePayload(params.workspaceState, db)
   const chapterRows = loadKnowledgeChapters(params.novelId, branchId, db)
   const workspaceChapterRows = buildWorkspaceChapterRows(workspaceState, params.novelId)
   const chapterAnchorRows = mergeChapterRows(chapterRows, workspaceChapterRows)

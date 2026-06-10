@@ -1,4 +1,4 @@
-import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne } from '@/lib/server/database-access'
 import type { OutlineNodeChapterRecord, OutlineNodeRecord } from '@/lib/story-branch-types'
 
 type Db = {

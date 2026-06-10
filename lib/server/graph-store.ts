@@ -1,4 +1,5 @@
-import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/database-access'
+import type { DatabaseAccess } from '@/lib/server/database-access'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 import { deleteBranchRetrievalIndexFromChapter } from '@/lib/server/retrieval-index'
 import type {
@@ -197,7 +198,7 @@ function loadMatchingKnowledgeRelationIds(link: EntityLinkRow) {
 }
 
 async function markDownstreamGraphArtifactsStale(params: { novelId: string; branchId: string; fromChapterNo: number }) {
-  await deleteBranchRetrievalIndexFromChapter(params.branchId, params.fromChapterNo)
+  await deleteBranchRetrievalIndexFromChapter(params.novelId, params.branchId, params.fromChapterNo)
 }
 
 function requireSingleKnowledgeRelationId(link: EntityLinkRow) {
@@ -402,8 +403,11 @@ export function loadEntityLinksByEntityIds(params: ActiveGraphQueryParams & { en
   )
 }
 
-export function loadEntityStatesByEntityIds(params: ActiveGraphQueryParams & { entityIds: string[]; limit?: number }) {
+export function loadEntityStatesByEntityIds(
+  params: ActiveGraphQueryParams & { entityIds: string[]; limit?: number; db?: Pick<DatabaseAccess, 'queryAll'> }
+) {
   const limit = params.limit ?? 40
+  const db = params.db ?? { queryAll }
   const entityFilter = params.entityIds.length
     ? `AND entityId IN (${params.entityIds.map(() => '?').join(', ')})`
     : ''
@@ -413,7 +417,7 @@ export function loadEntityStatesByEntityIds(params: ActiveGraphQueryParams & { e
   const confidenceFilter = params.includeLowConfidence ?? false ? '' : 'AND confidence >= 0.4'
   const confirmedOnlyFilter = params.confirmedOnly ? "AND status = 'user_confirmed'" : ''
 
-  return queryAll<EntityStateRow>(
+  return db.queryAll<EntityStateRow>(
     `
       SELECT id, novelId, branchId, entityId, stateType, stateValue, description, sourceChapter,
              validFromChapter, evidenceSpanId, evidenceQuote, confidence, status, includeByDefault,
