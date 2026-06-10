@@ -39,6 +39,27 @@ async function createTestDatabase(prefix: string, activeNovelId = 'workspace-tes
   return database
 }
 
+async function createTestDataRoot(prefix: string, activeNovelId?: string | null) {
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
+  cleanups.push(() => fs.rmSync(tempDirectory, { recursive: true, force: true }))
+  process.env.RETALE_DATA_DIR = path.join(tempDirectory, 'data')
+  vi.resetModules()
+
+  const { getControlDb, getNovelDb } = await import('@/lib/server/db-resolver')
+  const controlDb = getControlDb()
+  if (activeNovelId) {
+    controlDb.prepare(
+      `INSERT INTO AppSetting (id, key, value)
+       VALUES (lower(hex(randomblob(16))), ?, ?)
+       ON CONFLICT(key) DO UPDATE SET
+         value = excluded.value,
+         updatedAt = CURRENT_TIMESTAMP`
+    ).run('WORKSPACE_ACTIVE_NOVEL_ID', activeNovelId)
+  }
+
+  return { controlDb, getNovelDb }
+}
+
 function createWorkspaceRequest(payload: Record<string, unknown>, headers: Record<string, string> = {}) {
   return new Request('http://localhost/api/workspace', {
     method: 'POST',
@@ -147,6 +168,28 @@ async function seedWorkspaceRuntime(payload: Record<string, unknown>) {
   await persistWorkspaceRuntimeState(normalizeWorkspaceState(payload))
 }
 
+async function seedWorkspaceRuntimeForNovel(novelId: string, payload: Record<string, unknown>) {
+  const { normalizeWorkspaceState } = await import('@/lib/workspace-state')
+  const { createNovelDatabaseAccess } = await import('@/lib/server/database-access')
+  const { persistWorkspaceRuntimeState } = await import('@/lib/server/workspace-resilience')
+  await persistWorkspaceRuntimeState(normalizeWorkspaceState(payload), 'singleton', createNovelDatabaseAccess(novelId))
+}
+
+function seedNovelRegistryRow(database: DatabaseSync, novelId: string, title: string) {
+  const novelRoot = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', novelId)
+  database.prepare(
+    `INSERT INTO NovelRegistry (
+       novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus
+     ) VALUES (?, ?, ?, ?, ?, '1', 'ready')`
+  ).run(
+    novelId,
+    novelId,
+    title,
+    path.join(novelRoot, 'novel.db'),
+    path.join(novelRoot, 'lancedb'),
+  )
+}
+
 function seedWorkspaceState(database: DatabaseSync, payload: Record<string, unknown> | string | null) {
   const serialized = payload === null ? null : typeof payload === 'string' ? payload : JSON.stringify(payload)
   database.prepare('DELETE FROM WorkspaceState WHERE id = ?').run('singleton')
@@ -246,6 +289,35 @@ afterEach(() => {
 })
 
 describe('workspace route', () => {
+  it('restores registered per-novel runtime libraries when no active novel setting exists', async () => {
+    const { controlDb } = await createTestDataRoot('retale-workspace-route-registry-fallback', null)
+
+    await seedWorkspaceRuntimeForNovel('novel-alpha', createWorkspacePayloadWithSideData('novel-alpha', 'Alpha Library'))
+    await seedWorkspaceRuntimeForNovel('novel-beta', createWorkspacePayloadWithSideData('novel-beta', 'Beta Library'))
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha Library')
+    seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta Library')
+
+    const { GET } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await GET()
+    const payload = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(payload.localNovels).toMatchObject([
+      { id: 'novel-alpha', title: 'Alpha Library' },
+      { id: 'novel-beta', title: 'Beta Library' },
+    ])
+    expect(payload.localVolumes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'novel-alpha-volume-1', novelId: 'novel-alpha' }),
+      expect.objectContaining({ id: 'novel-beta-volume-1', novelId: 'novel-beta' }),
+    ]))
+    expect(payload.localChapters).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'novel-alpha-chapter-1', novelId: 'novel-alpha' }),
+      expect.objectContaining({ id: 'novel-beta-chapter-1', novelId: 'novel-beta' }),
+    ]))
+    expect(payload.currentNovelId).toBe('novel-alpha')
+    expect(payload.currentChapterId).toBe('novel-alpha-chapter-1')
+  })
+
   it('repairs a missing workspace from recoverable knowledge data', async () => {
     const database = await createTestDatabase('retale-workspace-route-recover-missing', 'novel-recover')
     clearWorkspaceRecoveryData(database)

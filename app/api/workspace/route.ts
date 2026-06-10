@@ -3,6 +3,7 @@ import {
   claimPendingWorkspaceKnowledgeSync,
   completeWorkspaceKnowledgeSync,
   failWorkspaceKnowledgeSync,
+  listReadyWorkspaceNovelRegistry,
   markWorkspaceKnowledgeSyncRequested,
   readActiveWorkspaceNovelId,
   upsertWorkspaceState,
@@ -18,7 +19,7 @@ import {
   shouldBlockEmptyWorkspaceOverwrite,
 } from '@/lib/server/workspace-resilience'
 import { resolveWorkspaceNovelId } from '@/lib/server/workspace-novel-scope'
-import { normalizeWorkspaceState } from '@/lib/workspace-state'
+import { createEmptyWorkspaceState, normalizeWorkspaceState } from '@/lib/workspace-state'
 
 export const maxDuration = 3600
 
@@ -49,6 +50,57 @@ function scheduleAfterResponse(callback: () => Promise<void>) {
 
 function getNovelWorkspaceDb(novelId: string) {
   return createNovelDatabaseAccess(novelId)
+}
+
+async function loadWorkspacePayloadFromNovelRegistryFallback() {
+  const registryRows = listReadyWorkspaceNovelRegistry()
+  if (!registryRows.length) {
+    return null
+  }
+
+  const settledPayloads = await Promise.allSettled(
+    registryRows.map((row) => loadWorkspacePayloadFromRuntimeOrRecovery('singleton', getNovelWorkspaceDb(row.novelId)))
+  )
+
+  const localNovels = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localNovels'][number]>()
+  const localVolumes = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localVolumes'][number]>()
+  const localChapters = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localChapters'][number]>()
+
+  for (const [index, result] of settledPayloads.entries()) {
+    if (result.status === 'rejected') {
+      console.warn('Skipping registry workspace restore for novel', registryRows[index]?.novelId, result.reason)
+      continue
+    }
+
+    for (const novel of result.value.localNovels) {
+      if (!localNovels.has(novel.id)) {
+        localNovels.set(novel.id, novel)
+      }
+    }
+
+    for (const volume of result.value.localVolumes) {
+      if (!localVolumes.has(volume.id)) {
+        localVolumes.set(volume.id, volume)
+      }
+    }
+
+    for (const chapter of result.value.localChapters) {
+      if (!localChapters.has(chapter.id)) {
+        localChapters.set(chapter.id, chapter)
+      }
+    }
+  }
+
+  if (!localNovels.size && !localChapters.size) {
+    return null
+  }
+
+  return normalizeWorkspaceState({
+    ...createEmptyWorkspaceState(),
+    localNovels: [...localNovels.values()],
+    localVolumes: [...localVolumes.values()],
+    localChapters: [...localChapters.values()],
+  })
 }
 
 async function runPendingWorkspaceKnowledgeSync(novelId: string) {
@@ -85,10 +137,23 @@ async function runPendingWorkspaceKnowledgeSync(novelId: string) {
 export async function GET(request: Request = new Request('http://localhost/api/workspace')) {
   try {
     const requestedNovelId = new URL(request.url).searchParams.get('novelId')?.trim() || null
-    const activeNovelId = requestedNovelId || readActiveWorkspaceNovelId()
-    const payload = activeNovelId
-      ? await loadWorkspacePayloadFromRuntimeOrRecovery('singleton', getNovelWorkspaceDb(activeNovelId))
-      : await loadWorkspacePayloadFromRuntimeOrRecovery()
+    if (requestedNovelId) {
+      const payload = await loadWorkspacePayloadFromRuntimeOrRecovery('singleton', getNovelWorkspaceDb(requestedNovelId))
+      return NextResponse.json(payload)
+    }
+
+    const activeNovelId = readActiveWorkspaceNovelId()
+    if (activeNovelId) {
+      const payload = await loadWorkspacePayloadFromRuntimeOrRecovery('singleton', getNovelWorkspaceDb(activeNovelId))
+      return NextResponse.json(payload)
+    }
+
+    const registryPayload = await loadWorkspacePayloadFromNovelRegistryFallback()
+    if (registryPayload) {
+      return NextResponse.json(registryPayload)
+    }
+
+    const payload = await loadWorkspacePayloadFromRuntimeOrRecovery()
     return NextResponse.json(payload)
   } catch (error) {
     console.error('Failed to restore workspace payload:', error)
