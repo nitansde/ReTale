@@ -37,12 +37,14 @@ export function normalizeKnowledgeProjectionResult(data: Partial<KnowledgeProjec
 export async function fetchKnowledgeProjection(options?: {
   novelId?: string
   asOfChapter?: number
+  statusOnly?: boolean
   method?: 'GET' | 'POST'
   action?: 'rebuild' | 'rebuild-retrieval-index' | 'pause' | 'abort' | 'delete-knowledge' | 'delete-hanlp-cache' | 'delete-extraction-cache' | 'delete-embedding-cache'
   chapterRange?: NovelStore['rebuildStoryKnowledge'] extends (novelId?: string, options?: infer T) => Promise<unknown> ? T extends { chapterRange?: infer U } ? U : never : never
 }): Promise<KnowledgeProjectionResult> {
   const novelId = options?.novelId
   const asOfChapter = options?.asOfChapter
+  const statusOnly = options?.statusOnly === true
   const method = options?.method ?? 'GET'
   const action = options?.action ?? 'rebuild'
   const chapterRange = options?.chapterRange
@@ -66,6 +68,7 @@ export async function fetchKnowledgeProjection(options?: {
   if (typeof asOfChapter === 'number' && Number.isFinite(asOfChapter) && asOfChapter >= 1) {
     searchParams.set('asOfChapter', String(asOfChapter))
   }
+  if (statusOnly) searchParams.set('statusOnly', '1')
   const search = searchParams.size ? `?${searchParams.toString()}` : ''
   const response = await fetch(`/api/knowledge-view${search}`, { cache: 'no-store' })
   const data = (await response.json()) as Partial<KnowledgeProjectionResult> & { ok?: boolean; error?: string }

@@ -191,7 +191,7 @@ describe('preset compat store lifecycle', () => {
       if (url === '/api/settings/preset-compat') {
         return new Response(JSON.stringify(presetCompatLibrary), { status: 200 })
       }
-      if (url === '/api/knowledge-view?novelId=novel-1&asOfChapter=1') {
+      if (url === '/api/knowledge-view?novelId=novel-1&asOfChapter=1&statusOnly=1') {
         return new Response(JSON.stringify({
           ok: true,
           localOutlines: [],

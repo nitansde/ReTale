@@ -175,6 +175,7 @@ export function createPersistenceActions(
         fetchKnowledgeProjection({
           novelId: restoredWorkspace.currentNovelId || undefined,
           asOfChapter: resolveCurrentChapterOrder(restoredWorkspace, restoredWorkspace.currentNovelId || undefined),
+          statusOnly: true,
         }),
       ])
 

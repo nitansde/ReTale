@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useNovelStore } from '@/store/novel-store'
+import { fetchKnowledgeProjection } from '@/store/novel-store-knowledge'
 
 function resetStore() {
   useNovelStore.getState().resetWorkspace()
@@ -109,5 +110,55 @@ describe('knowledge view store lightweight action responses', () => {
     expect(state.localWorldEntries.filter((item) => item.novelId === 'novel-1')).toEqual([])
     expect(state.localTimelineEvents.filter((item) => item.novelId === 'novel-1')).toEqual([])
     expect(state.localOutlines.filter((item) => item.novelId === 'novel-1')).toEqual([])
+  })
+
+  it('appends statusOnly=1 only for GET status checks', async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(JSON.stringify({
+        ok: true,
+        localOutlines: [],
+        localCharacters: [],
+        localCharacterRelations: [],
+        localWorldEntries: [],
+        localTimelineEvents: [],
+        knowledgeRebuildStatus: null,
+        hanlpCacheSnapshot: null,
+        knowledgeStatusOverview: null,
+        jobOutcome: null,
+        actionError: null,
+      }), { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchKnowledgeProjection({ novelId: 'novel-1', asOfChapter: 2, statusOnly: true })
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/knowledge-view?novelId=novel-1&asOfChapter=2&statusOnly=1', { cache: 'no-store' })
+  })
+
+  it('keeps POST knowledge actions unchanged when statusOnly is provided', async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(JSON.stringify({
+        ok: true,
+        localOutlines: [],
+        localCharacters: [],
+        localCharacterRelations: [],
+        localWorldEntries: [],
+        localTimelineEvents: [],
+        knowledgeRebuildStatus: null,
+        hanlpCacheSnapshot: null,
+        knowledgeStatusOverview: null,
+        jobOutcome: 'queued',
+        actionError: null,
+      }), { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchKnowledgeProjection({ novelId: 'novel-1', method: 'POST', action: 'pause', statusOnly: true })
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/knowledge-view', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ novelId: 'novel-1', action: 'pause' }),
+    })
   })
 })
