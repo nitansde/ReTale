@@ -1,6 +1,7 @@
 import type { KnowledgeJobType } from '@/lib/server/knowledge-rebuild'
+import type { DatabaseAccess } from '@/lib/server/database-access'
 import { RECOVERABLE_REWRITE_JOB_TYPE } from '@/lib/server/recoverable-rewrite-jobs'
-import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne } from '@/lib/server/database-access'
 import {
   createTaskWatchdogAttemptId,
   mergeTaskWatchdogState,
@@ -49,7 +50,10 @@ export type ReconcileKnowledgeJobWatchdogParams = {
   novelId?: string
   branchId?: string
   jobTypes?: readonly KnowledgeJobWatchdogSupportedJobType[]
+  db?: Pick<DatabaseAccess, 'execute' | 'queryAll' | 'queryOne'>
 }
+
+const defaultDb: Pick<DatabaseAccess, 'execute' | 'queryAll' | 'queryOne'> = { execute, queryAll, queryOne }
 
 function parsePositiveIntegerEnv(name: string, fallback: number) {
   const raw = process.env[name]?.trim()
@@ -154,9 +158,10 @@ export function getKnowledgeJobWatchdogConfig() {
 }
 
 export function reconcileKnowledgeJobWatchdog(params: ReconcileKnowledgeJobWatchdogParams = {}) {
+  const db = params.db ?? defaultDb
   const config = getKnowledgeJobWatchdogConfig()
   const query = buildScopedKnowledgeJobWatchdogQuery(params)
-  const rows = queryAll<KnowledgeJobWatchdogRow>(query.sql, ...query.values)
+  const rows = db.queryAll<KnowledgeJobWatchdogRow>(query.sql, ...query.values)
   const actions: KnowledgeJobWatchdogAction[] = []
   const nowMs = Date.now()
 
@@ -168,7 +173,7 @@ export function reconcileKnowledgeJobWatchdog(params: ReconcileKnowledgeJobWatch
       continue
     }
 
-    const currentRow = queryOne<KnowledgeJobWatchdogRow>(
+    const currentRow = db.queryOne<KnowledgeJobWatchdogRow>(
       `
         SELECT id, novelId, branchId, jobType, status, payloadJson, updatedAt
         FROM KnowledgeJob
@@ -208,7 +213,7 @@ export function reconcileKnowledgeJobWatchdog(params: ReconcileKnowledgeJobWatch
       failureReason: 'timeout_no_progress',
     })
 
-    const updateResult = execute(
+    const updateResult = db.execute(
       `UPDATE KnowledgeJob
        SET status = ?, currentStep = ?, errorMessage = ?, payloadJson = ?, updatedAt = CURRENT_TIMESTAMP
        WHERE id = ? AND status = ? AND updatedAt = ?`,

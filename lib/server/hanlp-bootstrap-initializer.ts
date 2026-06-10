@@ -5,7 +5,7 @@ import {
   type HanlpBootstrapCharacterDecision,
 } from '@/lib/server/character-tier'
 import { upsertHanlpBootstrapCharacterEntity } from '@/lib/server/knowledge-rebuild'
-import { queryAll, queryOne } from '@/lib/server/sqlite'
+import { queryAll, queryOne } from '@/lib/server/database-access'
 
 type HanlpBootstrapEntityAggregateRow = {
   entityText: string

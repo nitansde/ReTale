@@ -28,7 +28,15 @@ import {
   type RawTextEmbeddingPrecomputeResult,
   type RetrievalIndexBuildProgress,
 } from '@/lib/server/retrieval-index'
-import { execute, queryAll, queryOne, type SqlParam, withTransaction } from '@/lib/server/sqlite'
+import {
+  execute,
+  queryAll,
+  queryOne,
+  runWithNovelDatabaseAccess,
+  type SqlParam,
+  withPerNovelWriteTransaction,
+  withTransaction,
+} from '@/lib/server/database-access'
 import { htmlToPlainText, plainTextToHtml, uid } from '@/lib/utils'
 import { bootstrapOutlineNodesForFutureMap } from '@/lib/server/outline-bootstrap'
 import type { CharacterImportanceTier } from '@/lib/server/hanlp-contracts'
@@ -1694,80 +1702,84 @@ function pauseKnowledgeJob(jobId: string) {
 }
 
 export async function startKnowledgeRetrievalRebuildForNovel(params: { novelId: string; branchId?: string; chapterRange?: KnowledgeRebuildChapterRange }) {
-  const branchId = params.branchId ?? getMainBranchId(params.novelId)
-  const chapterRange = normalizeKnowledgeRebuildChapterRange(params.chapterRange)
-  reconcileKnowledgeJobWatchdog({
-    novelId: params.novelId,
-    branchId,
-    jobTypes: [RETRIEVAL_REBUILD_JOB_TYPE],
-  })
-  const activeJob = queryOne<{ id: string; status: string }>(
-    `SELECT id, status FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = ? AND status IN ('queued', 'running', 'paused') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1`,
-    params.novelId,
-    branchId,
-    RETRIEVAL_REBUILD_JOB_TYPE,
-  )
-
-  if (activeJob?.id) {
-    if (activeJob.status === 'paused') {
-      updateKnowledgeJob(activeJob.id, { status: 'queued', currentStep: '准备继续构建 Lance 检索索引' })
-      return { jobId: activeJob.id, outcome: 'queued' as KnowledgeRebuildStartOutcome }
-    }
-
-    return {
-      jobId: activeJob.id,
-      outcome: activeJob.status === 'running' ? 'running' as const : 'queued' as const,
-    }
-  }
-
-  const job = await enqueueKnowledgeJob({
-    novelId: params.novelId,
-    branchId,
-    jobType: RETRIEVAL_REBUILD_JOB_TYPE,
-    currentStep: '准备构建 Lance 检索索引',
-    payload: {
+  return runWithNovelDatabaseAccess(params.novelId, async () => {
+    const branchId = params.branchId ?? getMainBranchId(params.novelId)
+    const chapterRange = normalizeKnowledgeRebuildChapterRange(params.chapterRange)
+    reconcileKnowledgeJobWatchdog({
+      novelId: params.novelId,
       branchId,
-      chapterRange,
-      rebuildStartChapter: chapterRange?.startChapter,
-      phase: 'raw-embedding',
-      inlineCleanupCompleted: true,
-      pendingChapterIds: [],
-      chapterWeightsById: {},
-      totalChapterWeight: 0,
-      processedChapterWeight: 0,
-      extractedChapters: [],
-      currentBatchChapters: [],
-      totalChapterCount: 0,
-      extractionSettings: loadStoredAISettings().knowledgeExtraction,
-      embeddingSettingsSnapshot: buildEmbeddingSettingsSnapshot(),
-      indexProgress: undefined,
-      hanlpBootstrap: createEmptyHanlpBootstrapState(0),
-      orderedAliasDiscoveries: [],
-      appliedAliasDiscoveryCount: 0,
-      stageStartedAtByKey: {
-        'raw-embedding': new Date().toISOString(),
+      jobTypes: [RETRIEVAL_REBUILD_JOB_TYPE],
+    })
+    const activeJob = queryOne<{ id: string; status: string }>(
+      `SELECT id, status FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = ? AND status IN ('queued', 'running', 'paused') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1`,
+      params.novelId,
+      branchId,
+      RETRIEVAL_REBUILD_JOB_TYPE,
+    )
+
+    if (activeJob?.id) {
+      if (activeJob.status === 'paused') {
+        updateKnowledgeJob(activeJob.id, { status: 'queued', currentStep: '准备继续构建 Lance 检索索引' })
+        return { jobId: activeJob.id, outcome: 'queued' as KnowledgeRebuildStartOutcome }
+      }
+
+      return {
+        jobId: activeJob.id,
+        outcome: activeJob.status === 'running' ? 'running' as const : 'queued' as const,
+      }
+    }
+
+    const job = await enqueueKnowledgeJob({
+      novelId: params.novelId,
+      branchId,
+      jobType: RETRIEVAL_REBUILD_JOB_TYPE,
+      currentStep: '准备构建 Lance 检索索引',
+      payload: {
+        branchId,
+        chapterRange,
+        rebuildStartChapter: chapterRange?.startChapter,
+        phase: 'raw-embedding',
+        inlineCleanupCompleted: true,
+        pendingChapterIds: [],
+        chapterWeightsById: {},
+        totalChapterWeight: 0,
+        processedChapterWeight: 0,
+        extractedChapters: [],
+        currentBatchChapters: [],
+        totalChapterCount: 0,
+        extractionSettings: loadStoredAISettings().knowledgeExtraction,
+        embeddingSettingsSnapshot: buildEmbeddingSettingsSnapshot(),
+        indexProgress: undefined,
+        hanlpBootstrap: createEmptyHanlpBootstrapState(0),
+        orderedAliasDiscoveries: [],
+        appliedAliasDiscoveryCount: 0,
+        stageStartedAtByKey: {
+          'raw-embedding': new Date().toISOString(),
+        },
       },
-    },
+    })
+
+    if (!job?.id) {
+      throw new Error('Failed to create retrieval rebuild job')
+    }
+
+    return { jobId: job.id, outcome: 'queued' as const }
   })
-
-  if (!job?.id) {
-    throw new Error('Failed to create retrieval rebuild job')
-  }
-
-  return { jobId: job.id, outcome: 'queued' as const }
 }
 
 export async function runStartedKnowledgeRetrievalRebuildForNovel(params: { novelId: string; branchId?: string; jobId: string }) {
-  if (activeKnowledgeRetrievalRuns.has(params.jobId)) {
-    return
-  }
+  return runWithNovelDatabaseAccess(params.novelId, async () => {
+    if (activeKnowledgeRetrievalRuns.has(params.jobId)) {
+      return
+    }
 
-  activeKnowledgeRetrievalRuns.add(params.jobId)
-  try {
-    await rebuildKnowledgeRetrievalForNovel(params)
-  } finally {
-    activeKnowledgeRetrievalRuns.delete(params.jobId)
-  }
+    activeKnowledgeRetrievalRuns.add(params.jobId)
+    try {
+      await rebuildKnowledgeRetrievalForNovel(params)
+    } finally {
+      activeKnowledgeRetrievalRuns.delete(params.jobId)
+    }
+  })
 }
 
 async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNovelParams) {
@@ -2029,8 +2041,12 @@ function upsertStoryBranch(novelId: string, branchId: string, name: string) {
   )
 }
 
+async function withKnowledgeWriteTransaction<T>(novelId: string, callback: () => T | Promise<T>) {
+  return withPerNovelWriteTransaction({ novelId, execute, callback })
+}
+
 async function deleteNovelProjectionArtifacts(novelId: string, branchId: string) {
-  await withTransaction(async () => {
+  await withKnowledgeWriteTransaction(novelId, async () => {
     execute(
       `
         DELETE FROM future_jump_revisions
@@ -2064,7 +2080,7 @@ async function deleteNovelProjectionArtifacts(novelId: string, branchId: string)
 }
 
 async function clearKnowledgeGraphData(novelId: string, branchId: string) {
-  await withTransaction(async () => {
+  await withKnowledgeWriteTransaction(novelId, async () => {
     execute('DELETE FROM EntityMention WHERE novelId = ? AND branchId = ?', novelId, branchId)
     execute(
       'DELETE FROM FactEvidence WHERE factId IN (SELECT id FROM KnowledgeFact WHERE novelId = ? AND branchId = ?)',
@@ -2113,8 +2129,11 @@ async function clearExtractionCandidatesInChapterRange(branchId: string, chapter
   cleanupOrphanedChapterExtractionProcessingBatches({ branchId })
 }
 
-async function clearDerivedKnowledgeInChapterRange(novelId: string, branchId: string, chapterRange: Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'>) {
-  await withTransaction(async () => {
+function clearDerivedKnowledgeInChapterRangeWithinTransaction(
+  novelId: string,
+  branchId: string,
+  chapterRange: Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'>
+) {
     const candidateChapterRange = appendChapterRangeSql('chapter_no', chapterRange)
     const mentionRange = appendChapterRangeSql('chapterNo', chapterRange)
     const sourceChapterRange = appendChapterRangeSql('sourceChapter', chapterRange)
@@ -2298,6 +2317,11 @@ async function clearDerivedKnowledgeInChapterRange(novelId: string, branchId: st
       branchId,
       ...appendChapterRangeSql('chapterNo', chapterRange).params
     )
+}
+
+async function clearDerivedKnowledgeInChapterRange(novelId: string, branchId: string, chapterRange: Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'>) {
+  await withKnowledgeWriteTransaction(novelId, async () => {
+    clearDerivedKnowledgeInChapterRangeWithinTransaction(novelId, branchId, chapterRange)
   })
 }
 
@@ -3356,7 +3380,11 @@ async function persistResolvedChapterKnowledge(params: {
   candidateId: string
   resolved: ResolvedChapterKnowledge
 }) {
-  await withTransaction(async () => {
+  await withKnowledgeWriteTransaction(params.novelId, async () => {
+    clearDerivedKnowledgeInChapterRangeWithinTransaction(params.novelId, params.branchId, {
+      startChapter: params.chapterNo,
+      endChapter: params.chapterNo,
+    })
     const persisted = await persistChapterExtraction({
       novelId: params.novelId,
       branchId: params.branchId,
@@ -4957,7 +4985,7 @@ async function finalizeCharacterCandidatePromotion(params: {
     observations,
   })
 
-  await withTransaction(async () => {
+  await withKnowledgeWriteTransaction(params.novelId, async () => {
     const latest = queryOne<{ promotedEntityId: string | null; promotionSummaryStatus: CandidatePromotionSummaryStatus }>(
       `
         SELECT promoted_entity_id AS promotedEntityId,
@@ -5893,87 +5921,92 @@ type RebuildKnowledgeForNovelParams = {
 }
 
 export async function startKnowledgeRebuildForNovel(params: { novelId: string; branchId?: string; chapterRange?: KnowledgeRebuildChapterRange }) {
-  const branchId = params.branchId ?? getMainBranchId(params.novelId)
-  const chapterRange = normalizeKnowledgeRebuildChapterRange(params.chapterRange)
-  reconcileKnowledgeJobWatchdog({
-    novelId: params.novelId,
-    branchId,
-    jobTypes: [MAIN_KNOWLEDGE_JOB_TYPE, RETRIEVAL_REBUILD_JOB_TYPE],
-  })
-  const activeRetrievalJob = queryOne<{ id: string }>(
-    'SELECT id FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = ? AND status IN (\'queued\', \'running\', \'paused\') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1',
-    params.novelId,
-    branchId,
-    RETRIEVAL_REBUILD_JOB_TYPE,
-  )
-  if (activeRetrievalJob?.id) {
-    abortKnowledgeJob(activeRetrievalJob.id)
-  }
-  const activeJob = queryOne<{ id: string; status: string }>(
-    'SELECT id, status FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = ? AND status IN (\'queued\', \'running\', \'paused\') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1',
-    params.novelId,
-    branchId,
-    MAIN_KNOWLEDGE_JOB_TYPE,
-  )
+  return runWithNovelDatabaseAccess(params.novelId, async () => {
+    const branchId = params.branchId ?? getMainBranchId(params.novelId)
+    const chapterRange = normalizeKnowledgeRebuildChapterRange(params.chapterRange)
+    reconcileKnowledgeJobWatchdog({
+      novelId: params.novelId,
+      branchId,
+      jobTypes: [MAIN_KNOWLEDGE_JOB_TYPE, RETRIEVAL_REBUILD_JOB_TYPE],
+    })
+    const activeRetrievalJob = queryOne<{ id: string }>(
+      'SELECT id FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = ? AND status IN (\'queued\', \'running\', \'paused\') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1',
+      params.novelId,
+      branchId,
+      RETRIEVAL_REBUILD_JOB_TYPE,
+    )
+    if (activeRetrievalJob?.id) {
+      abortKnowledgeJob(activeRetrievalJob.id)
+    }
+    const activeJob = queryOne<{ id: string; status: string }>(
+      'SELECT id, status FROM KnowledgeJob WHERE novelId = ? AND branchId = ? AND jobType = ? AND status IN (\'queued\', \'running\', \'paused\') ORDER BY updatedAt DESC, createdAt DESC LIMIT 1',
+      params.novelId,
+      branchId,
+      MAIN_KNOWLEDGE_JOB_TYPE,
+    )
 
-  if (activeJob?.id) {
-    if (activeJob.status === 'paused') {
-      updateKnowledgeJob(activeJob.id, { status: 'queued', currentStep: '准备继续知识重建' })
-      return { jobId: activeJob.id, outcome: 'queued' as KnowledgeRebuildStartOutcome }
+    if (activeJob?.id) {
+      if (activeJob.status === 'paused') {
+        updateKnowledgeJob(activeJob.id, { status: 'queued', currentStep: '准备继续知识重建' })
+        return { jobId: activeJob.id, outcome: 'queued' as KnowledgeRebuildStartOutcome }
+      }
+
+      return {
+        jobId: activeJob.id,
+        outcome: activeJob.status === 'running' ? 'running' as const : 'queued' as const,
+      }
     }
 
-    return {
-      jobId: activeJob.id,
-      outcome: activeJob.status === 'running' ? 'running' as const : 'queued' as const,
+    const job = await enqueueKnowledgeJob({
+      novelId: params.novelId,
+      branchId,
+      jobType: MAIN_KNOWLEDGE_JOB_TYPE,
+      currentStep: '准备重建',
+      payload: { branchId, chapterRange, rebuildStartChapter: chapterRange?.startChapter },
+    })
+
+    if (!job?.id) {
+      throw new Error('Failed to create knowledge job')
     }
-  }
 
-  const job = await enqueueKnowledgeJob({
-    novelId: params.novelId,
-    branchId,
-    jobType: MAIN_KNOWLEDGE_JOB_TYPE,
-    currentStep: '准备重建',
-    payload: { branchId, chapterRange, rebuildStartChapter: chapterRange?.startChapter },
+    return { jobId: job.id, outcome: 'queued' as const }
   })
-
-  if (!job?.id) {
-    throw new Error('Failed to create knowledge job')
-  }
-
-  return { jobId: job.id, outcome: 'queued' as const }
 }
 
 export async function runStartedKnowledgeRebuildForNovel(params: { novelId: string; branchId?: string; jobId: string }) {
-  if (activeKnowledgeRebuildRuns.has(params.jobId)) {
-    return
-  }
+  return runWithNovelDatabaseAccess(params.novelId, async () => {
+    if (activeKnowledgeRebuildRuns.has(params.jobId)) {
+      return
+    }
 
-  let result: Awaited<ReturnType<typeof rebuildKnowledgeForNovel>> | null = null
-  activeKnowledgeRebuildRuns.add(params.jobId)
-  try {
-    result = await rebuildKnowledgeForNovel(params)
-  } finally {
-    activeKnowledgeRebuildRuns.delete(params.jobId)
-  }
+    let result: Awaited<ReturnType<typeof rebuildKnowledgeForNovel>> | null = null
+    activeKnowledgeRebuildRuns.add(params.jobId)
+    try {
+      result = await rebuildKnowledgeForNovel(params)
+    } finally {
+      activeKnowledgeRebuildRuns.delete(params.jobId)
+    }
 
-  if (result?.outcome !== 'completed') {
-    return
-  }
+    if (result?.outcome !== 'completed') {
+      return
+    }
 
-  const state = getKnowledgeRebuildJobState(params.jobId)
-  const retrievalJob = await startKnowledgeRetrievalRebuildForNovel({
-    novelId: params.novelId,
-    branchId: params.branchId,
-    chapterRange: state?.payload.chapterRange,
-  })
-  await runStartedKnowledgeRetrievalRebuildForNovel({
-    novelId: params.novelId,
-    branchId: params.branchId,
-    jobId: retrievalJob.jobId,
+    const state = getKnowledgeRebuildJobState(params.jobId)
+    const retrievalJob = await startKnowledgeRetrievalRebuildForNovel({
+      novelId: params.novelId,
+      branchId: params.branchId,
+      chapterRange: state?.payload.chapterRange,
+    })
+    await runStartedKnowledgeRetrievalRebuildForNovel({
+      novelId: params.novelId,
+      branchId: params.branchId,
+      jobId: retrievalJob.jobId,
+    })
   })
 }
 
 export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelParams) {
+  return runWithNovelDatabaseAccess(params.novelId, async () => {
   const branchId = params.branchId ?? getMainBranchId(params.novelId)
   reconcileKnowledgeJobWatchdog({
     novelId: params.novelId,
@@ -6219,11 +6252,9 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
         if (currentJobState.phase === 'extract') {
           if (!currentJobState.payload.inlineCleanupCompleted) {
             updateKnowledgeJob(job.id, {
-              currentStep: '清理旧知识',
+              currentStep: '准备按章节发布知识',
               progress: 0.02,
             })
-            assertKnowledgeRebuildContinues(job.id)
-            await clearDerivedKnowledgeInChapterRange(params.novelId, branchId, rebuildChapterRange)
             markInlineKnowledgeCleanupCompleted(job.id)
             continue
           }
@@ -6472,11 +6503,21 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
               continue
             }
 
-            if (!candidate || candidate.status === 'failed' || candidate.status === 'stale') {
+            if (!candidate || candidate.status === 'stale') {
+              updateChapterKnowledgeStatus({
+                chapterId: chapter.id,
+                knowledgeStatus: 'stale',
+                dirtyReason: candidate?.errorMessage ?? 'Chapter changed during rebuild before publish',
+              })
+              removeExtractedChapterFromKnowledgeJob(job.id, chapter.id)
+              continue
+            }
+
+            if (candidate.status === 'failed') {
               updateChapterKnowledgeStatus({
                 chapterId: chapter.id,
                 knowledgeStatus: 'degraded',
-                dirtyReason: candidate?.errorMessage ?? 'Candidate missing or unavailable for ordered apply',
+                dirtyReason: candidate.errorMessage ?? 'Candidate unavailable for ordered apply',
               })
               removeExtractedChapterFromKnowledgeJob(job.id, chapter.id)
               continue
@@ -6587,40 +6628,45 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
     })
     throw error
   }
+  })
 }
 
 export async function pauseKnowledgeRebuildForNovel(params: { novelId: string; branchId?: string }) {
-  const branchId = params.branchId ?? getMainBranchId(params.novelId)
-  const activeJob = findKnowledgeJobByTypes({
-    novelId: params.novelId,
-    branchId,
-    jobTypes: [MAIN_KNOWLEDGE_JOB_TYPE, RETRIEVAL_REBUILD_JOB_TYPE],
-    statuses: ['queued', 'running'],
+  return runWithNovelDatabaseAccess(params.novelId, async () => {
+    const branchId = params.branchId ?? getMainBranchId(params.novelId)
+    const activeJob = findKnowledgeJobByTypes({
+      novelId: params.novelId,
+      branchId,
+      jobTypes: [MAIN_KNOWLEDGE_JOB_TYPE, RETRIEVAL_REBUILD_JOB_TYPE],
+      statuses: ['queued', 'running'],
+    })
+
+    if (!activeJob?.id) {
+      return 'idle' as const
+    }
+
+    pauseKnowledgeJob(activeJob.id)
+    return 'paused' as const
   })
-
-  if (!activeJob?.id) {
-    return 'idle' as const
-  }
-
-  pauseKnowledgeJob(activeJob.id)
-  return 'paused' as const
 }
 
 export async function abortKnowledgeRebuildForNovel(params: { novelId: string; branchId?: string }) {
-  const branchId = params.branchId ?? getMainBranchId(params.novelId)
-  const activeJob = findKnowledgeJobByTypes({
-    novelId: params.novelId,
-    branchId,
-    jobTypes: [MAIN_KNOWLEDGE_JOB_TYPE, RETRIEVAL_REBUILD_JOB_TYPE],
-    statuses: ['queued', 'running', 'paused'],
+  return runWithNovelDatabaseAccess(params.novelId, async () => {
+    const branchId = params.branchId ?? getMainBranchId(params.novelId)
+    const activeJob = findKnowledgeJobByTypes({
+      novelId: params.novelId,
+      branchId,
+      jobTypes: [MAIN_KNOWLEDGE_JOB_TYPE, RETRIEVAL_REBUILD_JOB_TYPE],
+      statuses: ['queued', 'running', 'paused'],
+    })
+
+    if (!activeJob?.id) {
+      return 'idle' as const
+    }
+
+    abortKnowledgeJob(activeJob.id)
+    return 'aborted' as const
   })
-
-  if (!activeJob?.id) {
-    return 'idle' as const
-  }
-
-  abortKnowledgeJob(activeJob.id)
-  return 'aborted' as const
 }
 
 async function abortKnowledgeRebuildForNovelUntilIdle(params: { novelId: string; branchId: string }) {
@@ -6632,14 +6678,17 @@ async function abortKnowledgeRebuildForNovelUntilIdle(params: { novelId: string;
 }
 
 export async function deleteKnowledgeGraphForNovel(params: { novelId: string; branchId?: string }) {
-  const branchId = params.branchId ?? getMainBranchId(params.novelId)
-  await abortKnowledgeRebuildForNovelUntilIdle({ novelId: params.novelId, branchId })
-  await deleteBranchRetrievalIndex(branchId)
-  await clearKnowledgeGraphData(params.novelId, branchId)
-  return 'deleted' as const
+  return runWithNovelDatabaseAccess(params.novelId, async () => {
+    const branchId = params.branchId ?? getMainBranchId(params.novelId)
+    await abortKnowledgeRebuildForNovelUntilIdle({ novelId: params.novelId, branchId })
+    await deleteBranchRetrievalIndex(params.novelId, branchId)
+    await clearKnowledgeGraphData(params.novelId, branchId)
+    return 'deleted' as const
+  })
 }
 
 export async function persistImportedNovelToKnowledgeStore(params: PersistImportedNovelParams) {
+  return runWithNovelDatabaseAccess(params.novelId, async () => {
   const branchId = getMainBranchId(params.novelId)
   upsertNovelRecord({
     novelId: params.novelId,
@@ -6671,7 +6720,7 @@ export async function persistImportedNovelToKnowledgeStore(params: PersistImport
       }
     })
 
-  await withTransaction(async () => {
+  await withKnowledgeWriteTransaction(params.novelId, async () => {
     for (const row of chapterRows) {
       execute(
         `
@@ -6714,6 +6763,7 @@ export async function persistImportedNovelToKnowledgeStore(params: PersistImport
     branchId,
     chapterCount: chapterRows.length,
   }
+  })
 }
 
 export const syncWorkspacePayloadToKnowledgeStore = createWorkspaceKnowledgeSync({

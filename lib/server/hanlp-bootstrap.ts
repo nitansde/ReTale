@@ -8,7 +8,7 @@ import {
   type HanlpBootstrapResultRecord,
 } from '@/lib/server/hanlp-contracts'
 import { hashContent, normalizeBranchId, splitChapterLines } from '@/lib/server/knowledge-store'
-import { execute, queryOne, withTransaction } from '@/lib/server/sqlite'
+import { execute, queryOne, withTransaction } from '@/lib/server/database-access'
 import { uid } from '@/lib/utils'
 
 export const HANLP_BOOTSTRAP_PIPELINE_VERSION = 'hanlp-bootstrap:v1'

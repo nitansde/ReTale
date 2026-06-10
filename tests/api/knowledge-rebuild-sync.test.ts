@@ -1,6 +1,10 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { syncWorkspacePayloadToKnowledgeStore } from '@/lib/server/knowledge-rebuild'
+import { createDatabaseAccess } from '@/lib/server/database-access'
 import { hashContent } from '@/lib/server/knowledge-store'
 import { execute, initializeDatabase, queryOne } from '@/lib/server/sqlite'
 import { htmlToPlainText } from '@/lib/utils'
@@ -8,16 +12,28 @@ import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const originalDataDir = process.env.RETALE_DATA_DIR
+const cleanupDirectories: string[] = []
+
+function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
+  if (originalValue === undefined) {
+    delete process.env[name]
+    return
+  }
+
+  process.env[name] = originalValue
+}
 
 function createTestDatabase(prefix: string) {
   const tempDatabase = createTempDatabaseCopy(prefix)
   cleanups.push(tempDatabase.cleanup)
+  process.env.RETALE_DATA_DIR = path.join(tempDatabase.directory, 'data')
   const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
   globalForSqlite.sqlite = database
   return database
 }
 
-afterEach(() => {
+afterEach(async () => {
   if (globalForSqlite.sqlite) {
     try {
       ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
@@ -29,7 +45,23 @@ afterEach(() => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
+
+  const resolverModule = await import('@/lib/server/db-resolver')
+  resolverModule.resetResolvedDatabasesForTests()
+  restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
+  while (cleanupDirectories.length) {
+    fs.rmSync(cleanupDirectories.pop()!, { recursive: true, force: true })
+  }
 })
+
+async function createPerNovelResolverFixture(prefix: string) {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
+  cleanupDirectories.push(tempRoot)
+  process.env.RETALE_DATA_DIR = path.join(tempRoot, 'data')
+  const resolver = await import('@/lib/server/db-resolver')
+  resolver.resetResolvedDatabasesForTests()
+  return resolver
+}
 
 describe('syncWorkspacePayloadToKnowledgeStore', () => {
   it('aborts stale running rebuild jobs before removing stale novels', async () => {
@@ -176,5 +208,57 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM ChapterLine WHERE chapterId = ?', 'large_ch_64')?.count).toBeGreaterThan(0)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM TextSpan WHERE chapterId = ?', 'large_ch_64')?.count).toBeGreaterThan(0)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeJob WHERE novelId = ?', 'novel_large_workspace')).toMatchObject({ count: 0 })
+  })
+
+  it('scopes target-novel sync writes and stale cleanup to the requested novel database only', async () => {
+    const resolver = await createPerNovelResolverFixture('retale-knowledge-sync-per-novel')
+    const alphaDb = resolver.getNovelDb('novel-alpha')
+    const betaDb = resolver.getNovelDb('novel-beta')
+    const alphaAccess = createDatabaseAccess(alphaDb)
+    globalForSqlite.sqlite = alphaDb
+
+    alphaDb.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run('novel-alpha', 'Alpha', 'workspace')
+    alphaDb.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run('novel-alpha:main', 'novel-alpha', 'main')
+    alphaDb.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run('alpha-ch-1', 'novel-alpha', 'novel-alpha:main', 1, 'Alpha Chapter 1', 'Alpha body', 1, 0, null, hashContent('Alpha body'), 'ready')
+    alphaDb.prepare('INSERT INTO ChapterLine (id, chapterId, lineNo, text, charStart, charEnd) VALUES (?, ?, ?, ?, ?, ?)').run('alpha-line-1', 'alpha-ch-1', 1, 'Alpha body', 0, 10)
+    alphaDb.prepare(
+      `INSERT INTO TextSpan (
+        id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd, charStart, charEnd, text, spanType, tokenEstimate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run('alpha-span-1', 'novel-alpha', 'novel-alpha:main', 'alpha-ch-1', 1, 1, 1, 0, 10, 'Alpha body', 'evidence', 2)
+    betaDb.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run('novel-beta', 'Beta', 'workspace')
+    betaDb.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run('novel-beta:main', 'novel-beta', 'main')
+    betaDb.prepare('INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status) VALUES (?, ?, ?, ?, ?)').run(
+      'beta-job-1',
+      'novel-beta',
+      'novel-beta:main',
+      'extract_chapter_knowledge',
+      'queued',
+    )
+
+    await syncWorkspacePayloadToKnowledgeStore({
+      currentNovelId: 'novel-alpha',
+      syncScope: 'target-novel',
+      localNovels: [{ id: 'novel-alpha', title: 'Alpha Updated', summary: '', tags: [] }],
+      localChapters: [{
+        id: 'alpha-ch-1',
+        novelId: 'novel-alpha',
+        volumeId: 'alpha-vol-1',
+        title: 'Alpha Chapter 1',
+        content: '<p>Alpha body</p>',
+        order: 1,
+        status: 'draft',
+        wordCount: 2,
+        updatedAt: '2026-05-16T00:00:00.000Z',
+      }],
+    }, { db: alphaAccess })
+
+    expect(alphaDb.prepare('SELECT COUNT(*) AS count FROM KnowledgeChapter WHERE novelId = ?').get('novel-alpha')).toMatchObject({ count: 1 })
+    expect(betaDb.prepare('SELECT COUNT(*) AS count FROM KnowledgeChapter WHERE novelId = ?').get('novel-beta')).toMatchObject({ count: 0 })
+    expect(betaDb.prepare('SELECT COUNT(*) AS count FROM KnowledgeJob WHERE novelId = ?').get('novel-beta')).toMatchObject({ count: 1 })
   })
 })

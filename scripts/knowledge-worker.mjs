@@ -34,6 +34,8 @@ function parseArgs(argv) {
     jobId: '',
     jobType: '',
     novelId: '',
+    novelDbPath: '',
+    lanceDbPath: '',
     branchId: '',
   }
 
@@ -54,6 +56,12 @@ function parseArgs(argv) {
       case '--novel-id':
         options.novelId = nextValue
         break
+      case '--novel-db-path':
+        options.novelDbPath = nextValue
+        break
+      case '--lance-db-path':
+        options.lanceDbPath = nextValue
+        break
       case '--branch-id':
         options.branchId = nextValue
         break
@@ -64,8 +72,8 @@ function parseArgs(argv) {
     index += 1
   }
 
-  if (!options.jobId || !options.jobType || !options.novelId || !options.branchId) {
-    throw new Error('Usage: node scripts/knowledge-worker.mjs --job-id ID --job-type TYPE --novel-id ID --branch-id ID')
+  if (!options.jobId || !options.jobType || !options.novelId || !options.novelDbPath || !options.lanceDbPath || !options.branchId) {
+    throw new Error('Usage: node scripts/knowledge-worker.mjs --job-id ID --job-type TYPE --novel-id ID --novel-db-path PATH --lance-db-path PATH --branch-id ID')
   }
   if (!SUPPORTED_JOB_TYPES.has(options.jobType)) {
     throw new Error(`Unsupported knowledge job type: ${options.jobType}`)
@@ -76,6 +84,11 @@ function parseArgs(argv) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2))
+  process.env.RETALE_KNOWLEDGE_WORKER_NOVEL_ID = options.novelId
+  process.env.RETALE_KNOWLEDGE_WORKER_NOVEL_DB_PATH = options.novelDbPath
+  process.env.RETALE_KNOWLEDGE_WORKER_LANCEDB_DIR = options.lanceDbPath
+  process.env.DATABASE_URL = `file:${options.novelDbPath}`
+  process.env.LANCEDB_DIR = options.lanceDbPath
   const knowledgeRebuild = await import('@/lib/server/knowledge-rebuild')
 
   if (options.jobType === 'extract_chapter_knowledge') {

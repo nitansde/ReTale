@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
@@ -6,6 +7,7 @@ import type { AISettings } from '@/lib/types'
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
+const originalDataDir = process.env.RETALE_DATA_DIR
 const originalTaskStaleTimeoutMs = process.env.RETALE_TASK_STALE_TIMEOUT_MS
 const originalTaskMaxRetries = process.env.RETALE_TASK_MAX_RETRIES
 const API_TEST_TIMEOUT_MS = 30_000
@@ -83,9 +85,19 @@ async function createTestDatabase(prefix: string) {
   cleanups.push(tempDatabase.cleanup)
 
   process.env.DATABASE_URL = tempDatabase.dbPath
+  process.env.RETALE_DATA_DIR = path.join(tempDatabase.directory, 'data')
   vi.resetModules()
 
   const sqliteModule = await import('@/lib/server/sqlite')
+  vi.doMock('@/lib/server/db-resolver', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/server/db-resolver')>('@/lib/server/db-resolver')
+    return {
+      ...actual,
+      getNovelDb: () => sqliteModule.sqlite,
+      getNovelLanceDbPath: (novelId: string) => path.join(tempDatabase.directory, `${novelId}.lancedb`),
+      resetResolvedDatabasesForTests: () => undefined,
+    }
+  })
   globalForSqlite.sqlite = sqliteModule.sqlite
 
   return {
@@ -168,12 +180,15 @@ afterEach(() => {
   if (globalForSqlite.sqlite) {
     try {
       ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
-    } catch {
+    } catch (_closeError) {
+      void _closeError
+      // Ignore sqlite close cleanup failures so temp fixture teardown can continue.
     }
     delete globalForSqlite.sqlite
   }
 
   process.env.DATABASE_URL = originalDatabaseUrl
+  process.env.RETALE_DATA_DIR = originalDataDir
   process.env.RETALE_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
   process.env.RETALE_TASK_MAX_RETRIES = originalTaskMaxRetries
 
@@ -387,6 +402,8 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     const novelId = `novel_status_${Math.random().toString(36).slice(2, 8)}`
     const branchId = `${novelId}:main`
 
+    vi.doMock('@/lib/server/retrieval-index', async () => await vi.importActual<typeof import('@/lib/server/retrieval-index')>('@/lib/server/retrieval-index'))
+
     database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(novelId, 'Status Novel', 'workspace')
     database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run(branchId, novelId, 'main')
     database.prepare(
@@ -444,6 +461,105 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
         embeddingBatchSize: 16,
       },
     })
+  })
+
+  it('keeps the active graph queryable and preserves chapter saves while rebuild compute is running', async () => {
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-main-overlap-preserves-save')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_main_overlap_preserves_save', 1)
+    const aiSettings = createMockAISettings()
+    const extractionGate = createDeferred<void>()
+    let extractionStarted = false
+
+    database.prepare(
+      `INSERT INTO KnowledgeEntity (id, novelId, branchId, canonicalName, entityType, firstSeenChapter, lastSeenChapter, importanceTier, userConfirmed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('entity-main-overlap', novelId, branchId, '主角', 'character', 1, 1, 'protagonist', 0)
+    database.prepare(
+      `INSERT INTO EntityState (
+        id, novelId, branchId, entityId, stateType, stateValue, description,
+        sourceChapter, validFromChapter, validUntilChapter, confidence, status, includeByDefault
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('state-main-overlap', novelId, branchId, 'entity-main-overlap', 'location', '城门', '旧图谱状态', 1, 1, 999999, 0.9, 'ai_generated', 1)
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { rawText: string }) => ({
+        source: 'cache' as const,
+        cache: {} as never,
+        result: {} as never,
+        output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+        cacheKey: {} as never,
+        scriptPath: '/tmp/mock-hanlp.py',
+        normalizedChapterText: input.rawText,
+      })),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
+    vi.doMock('@/lib/server/knowledge-extraction', () => ({
+      extractChapterKnowledgeOffline: vi.fn(async () => {
+        extractionStarted = true
+        await extractionGate.promise
+        return {
+          extraction: createMockExtraction(1),
+          provider: 'ollama',
+          model: aiSettings.knowledgeExtraction.ollama.model,
+        }
+      }),
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
+      }
+    })
+
+    const { startKnowledgeRebuildForNovel, runStartedKnowledgeRebuildForNovel } = await import('@/lib/server/knowledge-rebuild')
+    const started = await startKnowledgeRebuildForNovel({ novelId, branchId })
+    const runPromise = runStartedKnowledgeRebuildForNovel({ novelId, branchId, jobId: started.jobId })
+
+    await waitForCondition(() => extractionStarted, 'main rebuild extraction start')
+
+    expect(queryOne<{ count: number }>(
+      `SELECT COUNT(*) AS count
+       FROM EntityState
+       WHERE novelId = ? AND branchId = ? AND status NOT IN ('rejected', 'outdated', 'potentially_stale')`,
+      novelId,
+      branchId,
+    )?.count).toBe(1)
+
+    const updatedRawText = '重建期间保存的新章节正文。'
+    database.prepare(
+      `UPDATE KnowledgeChapter
+       SET rawText = ?, sourceHash = ?, revision = revision + 1, isDirty = 1, dirtyReason = 'Saved during rebuild', updatedAt = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).run(updatedRawText, 'hash-saved-during-rebuild', 'chapter-1')
+
+    extractionGate.resolve()
+    await expect(runPromise).resolves.toBeUndefined()
+
+    expect(queryOne<{ rawText: string; knowledgeStatus: string }>(
+      'SELECT rawText, knowledgeStatus FROM KnowledgeChapter WHERE id = ?',
+      'chapter-1',
+    )).toMatchObject({
+      rawText: updatedRawText,
+      knowledgeStatus: 'stale',
+    })
+    expect(queryOne<{ count: number }>(
+      `SELECT COUNT(*) AS count
+       FROM EntityState
+       WHERE novelId = ? AND branchId = ? AND status NOT IN ('rejected', 'outdated', 'potentially_stale')`,
+      novelId,
+      branchId,
+    )?.count).toBe(1)
+    expect(queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', started.jobId)?.status).toBe('succeeded')
   })
 
   it('skips duplicate detached retrieval workers once another process claimed the job', async () => {

@@ -1,7 +1,8 @@
 import type { KnowledgeJobType } from '@/lib/server/knowledge-rebuild'
+import type { DatabaseAccess } from '@/lib/server/database-access'
 import { reconcileKnowledgeJobWatchdog } from '@/lib/server/knowledge-job-watchdog'
 import { abortRecoverableRewriteJob, RECOVERABLE_REWRITE_JOB_TYPE } from '@/lib/server/recoverable-rewrite-jobs'
-import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne } from '@/lib/server/database-access'
 
 const ACTIVE_BACKGROUND_TASK_STATUSES = ['queued', 'running', 'paused'] as const
 const ACTIVE_BACKGROUND_TASK_JOB_TYPES = [
@@ -37,6 +38,10 @@ type BackgroundTaskRow = {
   status: SupportedBackgroundTaskStatus | string
 }
 
+type BackgroundTaskDb = Pick<DatabaseAccess, 'execute' | 'queryAll' | 'queryOne'>
+
+const defaultDb: BackgroundTaskDb = { execute, queryAll, queryOne }
+
 export type AbortBackgroundTaskResult =
   | { ok: true; jobId: string; status: 'aborted'; outcome: 'aborted' }
   | { ok: false; statusCode: 400 | 404 | 409; error: string }
@@ -49,8 +54,8 @@ function isSupportedBackgroundTaskJobType(jobType: string): jobType is Backgroun
   return ACTIVE_BACKGROUND_TASK_JOB_TYPES.includes(jobType as BackgroundTaskJobType)
 }
 
-function persistAbortedBackgroundTask(jobId: string) {
-  const result = execute(
+function persistAbortedBackgroundTask(jobId: string, db: BackgroundTaskDb = defaultDb) {
+  const result = db.execute(
     `UPDATE KnowledgeJob
      SET status = 'aborted', progress = 0, currentStep = ?, errorMessage = ?, updatedAt = CURRENT_TIMESTAMP
      WHERE id = ? AND status IN (?, ?, ?)`,
@@ -62,8 +67,8 @@ function persistAbortedBackgroundTask(jobId: string) {
   return result.changes === 1
 }
 
-function resolveAbortAfterConcurrentChange(jobId: string): AbortBackgroundTaskResult {
-  const row = queryOne<BackgroundTaskRow>(
+function resolveAbortAfterConcurrentChange(jobId: string, db: BackgroundTaskDb = defaultDb): AbortBackgroundTaskResult {
+  const row = db.queryOne<BackgroundTaskRow>(
     `SELECT id AS jobId, jobType, status
      FROM KnowledgeJob
      WHERE id = ?`,
@@ -81,18 +86,19 @@ function resolveAbortAfterConcurrentChange(jobId: string): AbortBackgroundTaskRe
   return { ok: false, statusCode: 409, error: `Background task in status ${row.status} cannot be aborted` }
 }
 
-export function listActiveBackgroundTasks() {
-  reconcileKnowledgeJobWatchdog()
+export function listActiveBackgroundTasks(params: { novelId: string; db?: BackgroundTaskDb }) {
+  const db = params.db ?? defaultDb
+  reconcileKnowledgeJobWatchdog({ novelId: params.novelId, db })
 
   const jobTypePlaceholders = ACTIVE_BACKGROUND_TASK_JOB_TYPES.map(() => '?').join(', ')
   const statusPlaceholders = ACTIVE_BACKGROUND_TASK_STATUSES.map(() => '?').join(', ')
 
-  const rows = queryAll<ActiveBackgroundTaskRow>(
+  const rows = db.queryAll<ActiveBackgroundTaskRow>(
     `
       SELECT
         job.id AS jobId,
         job.novelId AS novelId,
-        novel.title AS novelTitle,
+        COALESCE((SELECT title FROM NovelRecord WHERE id = job.novelId), job.novelId) AS novelTitle,
         job.branchId AS branchId,
         job.jobType AS jobType,
         job.status AS status,
@@ -102,11 +108,12 @@ export function listActiveBackgroundTasks() {
         job.createdAt AS createdAt,
         job.updatedAt AS updatedAt
       FROM KnowledgeJob job
-      INNER JOIN NovelRecord novel ON novel.id = job.novelId
-      WHERE job.jobType IN (${jobTypePlaceholders})
+      WHERE job.novelId = ?
+        AND job.jobType IN (${jobTypePlaceholders})
         AND job.status IN (${statusPlaceholders})
       ORDER BY job.updatedAt DESC, job.createdAt DESC
     `,
+    params.novelId,
     ...ACTIVE_BACKGROUND_TASK_JOB_TYPES,
     ...ACTIVE_BACKGROUND_TASK_STATUSES,
   )
@@ -126,17 +133,19 @@ export function listActiveBackgroundTasks() {
   }))
 }
 
-export function abortBackgroundTask(jobId: string): AbortBackgroundTaskResult {
-  const normalizedJobId = jobId.trim()
+export function abortBackgroundTask(params: { jobId: string; novelId: string; db?: BackgroundTaskDb }): AbortBackgroundTaskResult {
+  const db = params.db ?? defaultDb
+  const normalizedJobId = params.jobId.trim()
   if (!normalizedJobId) {
     return { ok: false, statusCode: 400, error: 'jobId is required' }
   }
 
-  const row = queryOne<BackgroundTaskRow>(
+  const row = db.queryOne<BackgroundTaskRow>(
     `SELECT id AS jobId, jobType, status
      FROM KnowledgeJob
-     WHERE id = ?`,
+     WHERE id = ? AND novelId = ?`,
     normalizedJobId,
+    params.novelId,
   )
   if (!row) {
     return { ok: false, statusCode: 404, error: 'Background task not found' }
@@ -155,21 +164,22 @@ export function abortBackgroundTask(jobId: string): AbortBackgroundTaskResult {
   }
 
   if (row.jobType === RECOVERABLE_REWRITE_JOB_TYPE) {
-    abortRecoverableRewriteJob(normalizedJobId, '已中止')
-    const rewrittenRow = queryOne<BackgroundTaskRow>(
+    abortRecoverableRewriteJob(normalizedJobId, '已中止', db)
+    const rewrittenRow = db.queryOne<BackgroundTaskRow>(
       `SELECT id AS jobId, jobType, status
        FROM KnowledgeJob
-       WHERE id = ?`,
-      normalizedJobId,
-    )
-    if (rewrittenRow?.status !== 'aborted') {
-      if (!persistAbortedBackgroundTask(normalizedJobId)) {
-        return resolveAbortAfterConcurrentChange(normalizedJobId)
-      }
-    }
+       WHERE id = ? AND novelId = ?`,
+       normalizedJobId,
+       params.novelId,
+     )
+     if (rewrittenRow?.status !== 'aborted') {
+       if (!persistAbortedBackgroundTask(normalizedJobId, db)) {
+         return resolveAbortAfterConcurrentChange(normalizedJobId, db)
+       }
+     }
   } else {
-    if (!persistAbortedBackgroundTask(normalizedJobId)) {
-      return resolveAbortAfterConcurrentChange(normalizedJobId)
+    if (!persistAbortedBackgroundTask(normalizedJobId, db)) {
+      return resolveAbortAfterConcurrentChange(normalizedJobId, db)
     }
   }
 
