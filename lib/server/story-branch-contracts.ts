@@ -269,6 +269,7 @@ export const futureJumpRunDetailSchema = futureJumpRunCreateSchema.extend({
 })
 
 export const futureJumpCreateRequestSchema = z.object({
+  novelId: z.string().min(1),
   sourceContext: z.object({
     nodeId: z.string().min(1).nullable(),
     nodeType: z.enum(['chapter', 'rewrite', 'continue_block', 'what_if', 'future_jump', 'roleplay_session']),
@@ -298,6 +299,7 @@ export const futureJumpMutationResponseSchema = z.object({
 })
 
 export const futureJumpReviseRequestSchema = z.object({
+  novelId: z.string().min(1),
   userFeedback: z.string().min(1),
 })
 

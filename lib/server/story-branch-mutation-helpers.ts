@@ -1,3 +1,4 @@
+import type { DatabaseAccess } from '@/lib/server/database-access'
 import type { StoryTimelineNodeRecord } from '@/lib/story-branch-types'
 import { findStoryTimelineNodeById } from '@/lib/server/story-timeline-store'
 
@@ -5,6 +6,7 @@ type TimelineNodeContextParams = {
   nodeId: string | null | undefined
   novelId: string
   branchId: string
+  db?: Pick<DatabaseAccess, 'execute' | 'queryAll' | 'queryOne'>
 }
 
 function normalizeNodeId(nodeId: string | null | undefined) {
@@ -15,7 +17,7 @@ export function findTimelineNodeInBranchContext(params: TimelineNodeContextParam
   const nodeId = normalizeNodeId(params.nodeId)
   if (!nodeId) return null
 
-  const node = findStoryTimelineNodeById(nodeId)
+  const node = findStoryTimelineNodeById(nodeId, params.db)
   if (!node || node.novelId !== params.novelId || node.branchId !== params.branchId) {
     return null
   }

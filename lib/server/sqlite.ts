@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import type * as NodeSqlite from 'node:sqlite'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
@@ -25,6 +26,13 @@ type BootMigrationPlan = {
 
 const globalForSqlite = globalThis as {
   sqlite?: DatabaseSync
+}
+
+type InitializeDatabaseMode = 'full' | 'control'
+
+type InitializeDatabaseOptions = {
+  schemaSql?: string
+  mode?: InitializeDatabaseMode
 }
 
 const processWithBuiltins = process as typeof process & {
@@ -122,19 +130,36 @@ function resolveDatabasePath(databaseUrl: string) {
 }
 
 function createDatabase() {
-  const filename = resolveDatabasePath(process.env.DATABASE_URL ?? 'file:./dev.db')
-  const database = new DatabaseSync(filename)
+  const database = openSqliteDatabase(process.env.DATABASE_URL ?? 'file:./dev.db')
   return initializeDatabase(database)
 }
 
-export function initializeDatabase(database: DatabaseSync) {
+export function openSqliteDatabase(filename: string) {
+  const resolvedFilename = resolveDatabasePath(filename)
+  if (resolvedFilename !== ':memory:') {
+    fs.mkdirSync(path.dirname(resolvedFilename), { recursive: true })
+  }
+
+  return new DatabaseSync(resolvedFilename)
+}
+
+export function initializeDatabase(database: DatabaseSync, options: InitializeDatabaseOptions = {}) {
+  const mode = options.mode ?? 'full'
+  const schemaSql = options.schemaSql ?? SCHEMA_SQL
+
   applyConnectionPragmas(database)
+
+  if (mode === 'control') {
+    execWithBusyRetry(database, schemaSql)
+    return database
+  }
+
   const migrationPlan = getBootMigrationPlan(database)
   if (!bootMigrationPlanNeedsWork(migrationPlan) && bootSchemaIsCurrent(database)) {
     return database
   }
 
-  execWithBusyRetry(database, SCHEMA_SQL)
+  execWithBusyRetry(database, schemaSql)
   runBootMigrations(database, migrationPlan)
   return database
 }
@@ -165,7 +190,7 @@ function tryEnableWal(database: DatabaseSync) {
   }
 }
 
-function applyConnectionPragmas(database: DatabaseSync) {
+export function applyConnectionPragmas(database: DatabaseSync) {
   database.exec('PRAGMA foreign_keys = ON')
   database.exec(`PRAGMA busy_timeout = ${SQLITE_WAL_ATTEMPT_BUSY_TIMEOUT_MS}`)
   tryEnableWal(database)
@@ -1028,11 +1053,48 @@ function runBootMigrations(database: DatabaseSync, migrationPlan = getBootMigrat
   database.exec('CREATE INDEX IF NOT EXISTS idx_future_jump_revisions_run ON future_jump_revisions(run_id)')
 }
 
-export const sqlite = globalForSqlite.sqlite ?? createDatabase()
+let sqliteSingleton: DatabaseSync | undefined
 
-if (process.env.NODE_ENV !== 'production') {
-  globalForSqlite.sqlite = sqlite
+function getSingletonDatabase(): DatabaseSync {
+  if (globalForSqlite.sqlite && globalForSqlite.sqlite !== sqlite) {
+    sqliteSingleton = globalForSqlite.sqlite
+    return globalForSqlite.sqlite
+  }
+
+  if (!sqliteSingleton) {
+    sqliteSingleton = createDatabase()
+    if (process.env.NODE_ENV !== 'production') {
+      globalForSqlite.sqlite = sqliteSingleton
+    }
+  }
+
+  return sqliteSingleton
 }
+
+function createLazyDatabaseProxy(): DatabaseSync {
+  return new Proxy({} as DatabaseSync, {
+    get(_target, property, receiver) {
+      const database = getSingletonDatabase()
+      const value = Reflect.get(database as object, property, receiver)
+      return typeof value === 'function' ? value.bind(database) : value
+    },
+    set(_target, property, value, receiver) {
+      const database = getSingletonDatabase()
+      return Reflect.set(database as object, property, value, receiver)
+    },
+    has(_target, property) {
+      return property in getSingletonDatabase()
+    },
+    ownKeys() {
+      return Reflect.ownKeys(getSingletonDatabase() as object)
+    },
+    getOwnPropertyDescriptor(_target, property) {
+      return Object.getOwnPropertyDescriptor(getSingletonDatabase() as object, property)
+    },
+  })
+}
+
+export const sqlite = createLazyDatabaseProxy()
 
 export function execute(sql: string, ...params: SqlParam[]) {
   return runWithSqliteBusyRetry(() => sqlite.prepare(sql).run(...params))

@@ -4,9 +4,54 @@ export const PROTECTED_RESET_APP_SETTING_KEYS = [
   'OLLAMA_TIMEOUT_MS',
 ] as const
 
+export const CONTROL_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS AppSetting (
+  id TEXT PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE,
+  value TEXT NOT NULL,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS NovelRegistry (
+  novelId TEXT PRIMARY KEY,
+  safeNovelId TEXT NOT NULL UNIQUE,
+  title TEXT,
+  dbFilePath TEXT NOT NULL UNIQUE,
+  lanceDbPath TEXT NOT NULL UNIQUE,
+  schemaVersion TEXT NOT NULL DEFAULT '1',
+  migrationStatus TEXT NOT NULL DEFAULT 'pending',
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS MigrationManifest (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  version TEXT NOT NULL,
+  checksum TEXT,
+  appliedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (scope, version)
+);
+
+CREATE TABLE IF NOT EXISTS MigrationAudit (
+  id TEXT PRIMARY KEY,
+  manifestId TEXT,
+  scope TEXT NOT NULL,
+  action TEXT NOT NULL,
+  detailsJson TEXT,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (manifestId) REFERENCES MigrationManifest(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_novel_registry_status ON NovelRegistry(migrationStatus, updatedAt);
+CREATE INDEX IF NOT EXISTS idx_migration_manifest_scope_version ON MigrationManifest(scope, version);
+CREATE INDEX IF NOT EXISTS idx_migration_audit_scope_created ON MigrationAudit(scope, createdAt);
+`
+
 const CHARACTER_IMPORTANCE_TIER_SQL = "'protagonist', 'important', 'arc'"
 
-export const SCHEMA_SQL = `
+export const FULL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS WorkspaceState (
   id TEXT PRIMARY KEY DEFAULT 'singleton',
   payload TEXT,
@@ -1010,3 +1055,5 @@ CREATE INDEX IF NOT EXISTS idx_future_jump_runs_target_outline_chapter ON future
 CREATE INDEX IF NOT EXISTS idx_future_jump_runs_branch_target_chapter ON future_jump_runs(base_branch_id, target_chapter_no);
 CREATE INDEX IF NOT EXISTS idx_future_jump_revisions_run ON future_jump_revisions(run_id);
 `
+
+export const SCHEMA_SQL = FULL_SCHEMA_SQL

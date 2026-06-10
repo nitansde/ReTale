@@ -407,6 +407,7 @@ export type FutureJumpRunRecord = {
 }
 
 export type FutureJumpCreateRequest = {
+  novelId: string
   sourceContext: FutureJumpSourceContext
   targetOutlineNodeId: string
   targetOutlineChapterId: string
@@ -423,6 +424,7 @@ export type FutureJumpMutationResponse = {
 }
 
 export type FutureJumpReviseRequest = {
+  novelId: string
   userFeedback: string
 }
 
