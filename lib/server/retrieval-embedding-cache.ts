@@ -1,5 +1,5 @@
 import { hashContent, normalizeBranchId } from '@/lib/server/knowledge-store'
-import { execute, queryAll, withTransaction } from '@/lib/server/sqlite'
+import { execute, queryAll, withTransaction } from '@/lib/server/database-access'
 
 export type RawTextEmbeddingCacheScope = {
   novelId: string

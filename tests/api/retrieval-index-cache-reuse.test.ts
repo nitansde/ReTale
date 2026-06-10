@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
@@ -5,6 +6,7 @@ import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const originalDataDir = process.env.RETALE_DATA_DIR
 
 function seedRetrievalFixture(database: DatabaseSync) {
   database.prepare(
@@ -245,6 +247,7 @@ function getPendingRetrievalIndexRows(database: DatabaseSync) {
 async function createRetrievalIndexHarness(testName: string) {
   const tempDatabase = createTempDatabaseCopy(testName)
   cleanups.push(tempDatabase.cleanup)
+  process.env.RETALE_DATA_DIR = path.join(tempDatabase.directory, 'data')
 
   const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
   globalForSqlite.sqlite = database
@@ -292,6 +295,7 @@ async function createRetrievalIndexHarness(testName: string) {
     mockLanceDb,
     retrievalIndex,
     retrievalCache,
+    tempDataDir: process.env.RETALE_DATA_DIR,
   }
 }
 
@@ -304,12 +308,25 @@ afterEach(() => {
     delete globalForSqlite.sqlite
   }
 
+  process.env.RETALE_DATA_DIR = originalDataDir
+
   while (cleanups.length) {
     cleanups.pop()?.()
   }
 })
 
 describe('retrieval-index cache reuse helpers', () => {
+  it('routes LanceDB writes into the per-novel data directory instead of the global .lancedb root', async () => {
+    const { mockLanceDb, retrievalIndex, tempDataDir } = await createRetrievalIndexHarness('retale-retrieval-index-per-novel-lancedb-path')
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: expect.any(Number),
+    })
+
+    expect(mockLanceDb.connect).toHaveBeenCalledWith(path.join(tempDataDir!, 'novels', 'novel-001', 'lancedb'))
+    expect(mockLanceDb.connect).not.toHaveBeenCalledWith(path.join(process.cwd(), '.lancedb'))
+  })
+
   it('includes tier labels and merged aliases in entity retrieval docs without duplicate character docs', async () => {
     const tempDatabase = createTempDatabaseCopy('retale-retrieval-index-character-doc-tier-aliases')
     cleanups.push(tempDatabase.cleanup)
@@ -992,7 +1009,7 @@ describe('retrieval-index cache reuse helpers', () => {
     ])
     const table = getScopedMockTable(database, mockLanceDb, 2)
     expect(table?.delete).not.toHaveBeenCalled()
-    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(false)
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toBe(false)
     expect(getActiveRetrievalIndexRows(database)).toEqual([
       expect.objectContaining({ scopeKey: 'chapter-range:2:2', scopeStartChapter: 2, scopeEndChapter: 2 }),
     ])
@@ -1131,12 +1148,12 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(mockLanceDb.database.dropTable).not.toHaveBeenCalled()
     expect(Array.from(mockLanceDb.tables.values())).toHaveLength(1)
     expect(Array.from(mockLanceDb.tables.values())[0]).toBe(originalTable)
-    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toBe(true)
 
     await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
       rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
     })
-    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toBe(true)
   }, 120000)
 
   it('retries a transient final rebuild embedding failure and still writes cache and table rows', async () => {
@@ -1265,7 +1282,7 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(Array.from(mockLanceDb.tables.values())).toHaveLength(1)
     expect(Array.from(mockLanceDb.tables.values())[0]).toBe(originalTable)
     expect(originalTable?.delete).not.toHaveBeenCalled()
-    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toBe(true)
 
     const scopedDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main', { startChapter: 2, endChapter: 2 })
     const progressEvents: Array<{ totalRows: number }> = []
@@ -1280,7 +1297,7 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(progressEvents).toContainEqual(expect.objectContaining({
       totalRows: scopedDocs.length + 2,
     }))
-    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toBe(true)
   }, 120000)
 
   it('preserves the existing retrieval table when final table replacement fails', async () => {
@@ -1320,7 +1337,7 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(Array.from(mockLanceDb.tables.values())[0]).toBe(originalTable)
     expect(getActiveMockTable(database, mockLanceDb)).toBe(originalTable)
     expect(originalTable?.delete).not.toHaveBeenCalled()
-    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toBe(true)
   }, 120000)
 
   it('keeps the previous table active when a new versioned table write fails after creation', async () => {
@@ -1377,7 +1394,7 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(getLatestMockTable(mockLanceDb)).toBe(originalTable)
     expect(originalTable?.delete).not.toHaveBeenCalled()
     expect(originalTable?.add).not.toHaveBeenCalled()
-    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toBe(true)
   }, 120000)
 
   it('preserves a pending replacement table when full index creation fails and resumes it on the next rebuild', async () => {
@@ -1452,7 +1469,7 @@ describe('retrieval-index cache reuse helpers', () => {
         rebuildFingerprint: expect.any(String),
       }),
     ])
-    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(true)
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toBe(true)
 
     const pendingTableName = pendingRows[0]!.tableName
     const pendingTable = mockLanceDb.tables.get(pendingTableName)
@@ -1740,10 +1757,10 @@ describe('retrieval-index cache reuse helpers', () => {
     ).run('span-4', 'novel-001', 'novel-001:main', 'chapter-2', 2, 1, 1, 0, 9, '第二章原文内容。', 'paragraph', 8)
 
     await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
-    await retrievalIndex.deleteBranchRetrievalIndexFromChapter('novel-001:main', 2)
+    await retrievalIndex.deleteBranchRetrievalIndexFromChapter('novel-001', 'novel-001:main', 2)
 
     expect(mockLanceDb.database.dropTable).toHaveBeenCalledTimes(1)
     expect(Array.from(mockLanceDb.tables.values())).toHaveLength(0)
-    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001:main')).resolves.toBe(false)
+    await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toBe(false)
   }, 120000)
 })

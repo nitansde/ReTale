@@ -20,7 +20,7 @@ import {
   hasExplicitAuthoredContextSelection,
   type AuthoredRetrievalSeed,
 } from '@/lib/server/authored-context'
-import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne, runWithNovelDatabaseAccess } from '@/lib/server/database-access'
 import {
   buildCharacterDescriptionDelta,
   buildCharacterRoleCardLines,
@@ -30,7 +30,7 @@ import {
   type CharacterRoleCardProfile,
 } from '@/lib/story-knowledge'
 import { getCharacterClassificationMetadata, type CharacterImportanceTier } from '@/lib/server/hanlp-contracts'
-import { connectRetrievalDatabase, getRetrievalDatabaseDir } from '@/lib/server/retrieval-runtime'
+import { connectRetrievalDatabase } from '@/lib/server/retrieval-runtime'
 import {
   precomputeRawTextEmbeddingCache as precomputeRawTextEmbeddingCacheImpl,
   type RawTextEmbeddingPrecomputeProgress,
@@ -168,7 +168,6 @@ export type RetrievalIndexBuildResult = {
   embeddingBatchCount: number
 }
 
-const LANCEDB_DIR = getRetrievalDatabaseDir()
 const TABLE_PREFIX = 'retrieval_docs_'
 const DEFAULT_EMBEDDING_BATCH_SIZE = 16
 const RETRIEVAL_EMBEDDING_RETRY_DELAYS_MS = [500, 1500] as const
@@ -642,12 +641,12 @@ export async function precomputeRawTextEmbeddingCache(params: {
   shouldContinue?: () => boolean | Promise<boolean>
   onProgress?: (progress: RawTextEmbeddingPrecomputeProgress) => void | Promise<void>
 }): Promise<RawTextEmbeddingPrecomputeResult> {
-  return precomputeRawTextEmbeddingCacheImpl({
+  return runWithNovelDatabaseAccess(params.novelId, () => precomputeRawTextEmbeddingCacheImpl({
     ...params,
     healMissingKnowledgeChapterDerivedArtifacts,
     loadRawTextRetrievalDocs,
     buildRawTextRetrievalEmbeddingInput,
-  })
+  }))
 }
 
 function formatElapsed(elapsedMs: number) {
@@ -936,8 +935,8 @@ function toRetrievalDocRow(span: TextSpanInput): RetrievalDocSeedRow {
   }
 }
 
-async function getDatabase() {
-  return connectRetrievalDatabase()
+async function getDatabase(novelId: string) {
+  return connectRetrievalDatabase(novelId)
 }
 
 async function resolveBranchTableName(branchId: string, database: Awaited<ReturnType<typeof getDatabase>>) {
@@ -952,13 +951,13 @@ async function resolveBranchTableName(branchId: string, database: Awaited<Return
   return null
 }
 
-async function hasBranchTable(branchId: string) {
-  const database = await getDatabase()
+async function hasBranchTable(novelId: string, branchId: string) {
+  const database = await getDatabase(novelId)
   return Boolean(await resolveBranchTableName(branchId, database))
 }
 
-async function openBranchTable(branchId: string) {
-  const database = await getDatabase()
+async function openBranchTable(novelId: string, branchId: string) {
+  const database = await getDatabase(novelId)
   const tableName = await resolveBranchTableName(branchId, database)
   if (!tableName) {
     return null
@@ -1134,8 +1133,8 @@ async function resumePendingBranchTable(params: {
   return true
 }
 
-export async function hasBranchRetrievalIndex(branchId: string) {
-  return hasBranchTable(branchId)
+export async function hasBranchRetrievalIndex(novelId: string, branchId: string) {
+  return runWithNovelDatabaseAccess(novelId, () => hasBranchTable(novelId, branchId))
 }
 
 async function ensureTextIndex(table: Awaited<ReturnType<typeof openBranchTable>> extends infer T ? Exclude<T, null> : never) {
@@ -1236,7 +1235,7 @@ async function writeBranchTableRows(params: {
     onProgress,
   } = params
 
-  const database = await getDatabase()
+  const database = await getDatabase(novelId)
   const retrievalEmbeddingCacheScope = buildRawTextEmbeddingCacheScope(novelId, branchId, embeddingSettings)
   const liveRows = rows.filter((item) => !item.cachedVector)
   const liveBatches = buildRetrievalEmbeddingBatches(liveRows, embeddingSettings, embeddingBatchSize)
@@ -2090,18 +2089,18 @@ function loadBranchOpenThreadDocs(novelId: string, branchId: string) {
 }
 
 export function loadRawTextRetrievalDocs(novelId: string, branchId: string, chapterRange?: KnowledgeRebuildChapterRange) {
-  return loadPackedBranchTextSpans(novelId, branchId, chapterRange).map(toRetrievalDocRow)
+  return runWithNovelDatabaseAccess(novelId, () => loadPackedBranchTextSpans(novelId, branchId, chapterRange).map(toRetrievalDocRow))
 }
 
 export function loadKnowledgeDerivedRetrievalDocs(novelId: string, branchId: string) {
-  return mergeRetrievalDocGroups(
+  return runWithNovelDatabaseAccess(novelId, () => mergeRetrievalDocGroups(
     loadBranchChapterSummaryDocs(novelId, branchId),
     loadBranchEntityProfileDocs(novelId, branchId),
     loadBranchEventSummaryDocs(novelId, branchId),
     loadBranchWorldbuildingDocs(novelId, branchId),
     loadBranchRelationshipDocs(novelId, branchId),
     loadBranchOpenThreadDocs(novelId, branchId),
-  )
+  ))
 }
 
 function loadScopedKnowledgeDerivedRetrievalDocs(novelId: string, branchId: string, chapterRange: KnowledgeRebuildChapterRange) {
@@ -2124,14 +2123,14 @@ function loadRetrievalDocsForRebuild(params: {
 }
 
 export function loadBranchRetrievalDocs(novelId: string, branchId: string) {
-  return mergeRetrievalDocGroups(
+  return runWithNovelDatabaseAccess(novelId, () => mergeRetrievalDocGroups(
     loadRawTextRetrievalDocs(novelId, branchId),
     loadKnowledgeDerivedRetrievalDocs(novelId, branchId),
-  )
+  ))
 }
 
-async function openBranchSearchTable(branchId: string) {
-  const existingTable = await openBranchTable(branchId)
+async function openBranchSearchTable(novelId: string, branchId: string) {
+  const existingTable = await openBranchTable(novelId, branchId)
   if (existingTable) {
     if (await hasUsableVectorColumn(existingTable)) {
       return {
@@ -2405,7 +2404,7 @@ export async function rebuildBranchRetrievalIndex(
     onProgress?: (progress: RetrievalIndexBuildProgress) => void | Promise<void>
   }
 ): Promise<RetrievalIndexBuildResult> {
-  return withBranchRetrievalIndexLock(branchId, () => rebuildBranchRetrievalIndexUnlocked(novelId, branchId, options))
+  return runWithNovelDatabaseAccess(novelId, () => withBranchRetrievalIndexLock(branchId, () => rebuildBranchRetrievalIndexUnlocked(novelId, branchId, options)))
 }
 
 async function rebuildBranchRetrievalIndexUnlocked(
@@ -2418,7 +2417,7 @@ async function rebuildBranchRetrievalIndexUnlocked(
 ): Promise<RetrievalIndexBuildResult> {
   const scope = getRetrievalIndexScope(options?.chapterRange)
   const totalStartedAt = Date.now()
-  const database = await getDatabase()
+  const database = await getDatabase(novelId)
   await options?.onProgress?.({
     phase: 'loading',
     totalRows: 0,
@@ -2490,9 +2489,9 @@ async function rebuildBranchRetrievalIndexUnlocked(
 
   if (!rows.length) {
     if (scope.scopeKey === FULL_RETRIEVAL_INDEX_SCOPE_KEY) {
-      await deleteBranchRetrievalIndexUnlocked(branchId)
+      await deleteBranchRetrievalIndexUnlocked(novelId, branchId)
     } else {
-      await deleteBranchRetrievalIndexScopeUnlocked(branchId, scope.scopeKey)
+      await deleteBranchRetrievalIndexScopeUnlocked(novelId, branchId, scope.scopeKey)
     }
     logLanceIndex(`rebuild done: totalElapsed=${formatElapsed(Date.now() - totalStartedAt)}`)
     return {
@@ -2516,8 +2515,8 @@ async function rebuildBranchRetrievalIndexUnlocked(
   }
 }
 
-async function deleteBranchRetrievalIndexScopeUnlocked(branchId: string, scopeKey: string) {
-  const database = await getDatabase()
+async function deleteBranchRetrievalIndexScopeUnlocked(novelId: string, branchId: string, scopeKey: string) {
+  const database = await getDatabase(novelId)
   const tableNames = await database.tableNames()
   const activeTableName = getActiveBranchTableName(branchId, scopeKey)
 
@@ -2531,8 +2530,8 @@ async function deleteBranchRetrievalIndexScopeUnlocked(branchId: string, scopeKe
   }
 }
 
-async function deleteBranchRetrievalIndexUnlocked(branchId: string) {
-  const database = await getDatabase()
+async function deleteBranchRetrievalIndexUnlocked(novelId: string, branchId: string) {
+  const database = await getDatabase(novelId)
   const tableNames = await database.tableNames()
   const branchTableNames = tableNames.filter((tableName) => branchTableNameBelongsToBranch(branchId, tableName))
   try {
@@ -2543,12 +2542,12 @@ async function deleteBranchRetrievalIndexUnlocked(branchId: string) {
   }
 }
 
-export async function deleteBranchRetrievalIndex(branchId: string) {
-  await withBranchRetrievalIndexLock(branchId, () => deleteBranchRetrievalIndexUnlocked(branchId))
+export async function deleteBranchRetrievalIndex(novelId: string, branchId: string) {
+  await runWithNovelDatabaseAccess(novelId, () => withBranchRetrievalIndexLock(branchId, () => deleteBranchRetrievalIndexUnlocked(novelId, branchId)))
 }
 
-export async function deleteBranchRetrievalIndexFromChapter(branchId: string, _fromChapterNo: number) {
-  await deleteBranchRetrievalIndex(branchId)
+export async function deleteBranchRetrievalIndexFromChapter(novelId: string, branchId: string, _fromChapterNo: number) {
+  await runWithNovelDatabaseAccess(novelId, () => deleteBranchRetrievalIndex(novelId, branchId))
 }
 
 export async function searchLanceEvidence(params: {
@@ -2562,137 +2561,139 @@ export async function searchLanceEvidence(params: {
   whatIfSessionId?: string
   futureJumpRunId?: string
 }): Promise<LanceEvidenceSearchResult> {
-  const query = params.query.trim()
-  if (!query) {
-    return {
-      matches: [],
-    }
-  }
-
-  const queryTerms = extractQueryTerms(query, params.queryTerms ?? [])
-  const graphTerms = extractQueryTerms((params.graphTerms ?? []).join('\n'), params.graphTerms ?? [])
-  const searchLimit = Math.max((params.limit ?? 10) * 6, 40)
-  const explicitAuthoredMatches = buildExplicitAuthoredMatches({
-    novelId: params.novelId,
-    branchId: params.branchId,
-    queryTerms,
-    graphTerms,
-    whatIfSessionId: params.whatIfSessionId,
-    futureJumpRunId: params.futureJumpRunId,
-  })
-
-  const runSearch = async () => {
-    const { table, warning } = await openBranchSearchTable(params.branchId)
-    if (!table) {
+  return runWithNovelDatabaseAccess(params.novelId, async () => {
+    const query = params.query.trim()
+    if (!query) {
       return {
-        ftsRows: [] as RetrievalDocSearchRow[],
-        vectorRows: [] as RetrievalDocSearchRow[],
-        warning: warning ?? LANCE_INDEX_UNAVAILABLE_WARNING,
+        matches: [],
       }
     }
 
-    const predicate = buildLancePredicate(params.maxChapterNo)
-    const queryVector = await embedRetrievalQuery(query)
+    const queryTerms = extractQueryTerms(query, params.queryTerms ?? [])
+    const graphTerms = extractQueryTerms((params.graphTerms ?? []).join('\n'), params.graphTerms ?? [])
+    const searchLimit = Math.max((params.limit ?? 10) * 6, 40)
+    const explicitAuthoredMatches = buildExplicitAuthoredMatches({
+      novelId: params.novelId,
+      branchId: params.branchId,
+      queryTerms,
+      graphTerms,
+      whatIfSessionId: params.whatIfSessionId,
+      futureJumpRunId: params.futureJumpRunId,
+    })
 
-    const [ftsRows, vectorRows] = await Promise.all([
-      table
-        .query()
-        .where(predicate)
-        .fullTextSearch(query)
-        .withRowId()
-        .limit(searchLimit)
-        .toArray() as Promise<RetrievalDocSearchRow[]>,
-      table
-        .query()
-        .where(predicate)
-        .nearestTo(queryVector)
-        .nprobes(LANCEDB_VECTOR_INDEX_NPROBES)
-        .column('vector')
-        .withRowId()
-        .limit(searchLimit)
-        .toArray() as Promise<RetrievalDocSearchRow[]>,
-    ])
+    const runSearch = async () => {
+      const { table, warning } = await openBranchSearchTable(params.novelId, params.branchId)
+      if (!table) {
+        return {
+          ftsRows: [] as RetrievalDocSearchRow[],
+          vectorRows: [] as RetrievalDocSearchRow[],
+          warning: warning ?? LANCE_INDEX_UNAVAILABLE_WARNING,
+        }
+      }
 
-    return { ftsRows, vectorRows }
-  }
+      const predicate = buildLancePredicate(params.maxChapterNo)
+      const queryVector = await embedRetrievalQuery(query)
 
-  let searchRows: { ftsRows: RetrievalDocSearchRow[]; vectorRows: RetrievalDocSearchRow[]; warning?: string }
-  try {
-    searchRows = await runSearch()
-  } catch (error) {
-    if (!shouldRebuildTable(error)) {
-      throw error
+      const [ftsRows, vectorRows] = await Promise.all([
+        table
+          .query()
+          .where(predicate)
+          .fullTextSearch(query)
+          .withRowId()
+          .limit(searchLimit)
+          .toArray() as Promise<RetrievalDocSearchRow[]>,
+        table
+          .query()
+          .where(predicate)
+          .nearestTo(queryVector)
+          .nprobes(LANCEDB_VECTOR_INDEX_NPROBES)
+          .column('vector')
+          .withRowId()
+          .limit(searchLimit)
+          .toArray() as Promise<RetrievalDocSearchRow[]>,
+      ])
+
+      return { ftsRows, vectorRows }
     }
 
-    return {
-      matches: [],
-      warning: LANCE_INDEX_UNAVAILABLE_WARNING,
+    let searchRows: { ftsRows: RetrievalDocSearchRow[]; vectorRows: RetrievalDocSearchRow[]; warning?: string }
+    try {
+      searchRows = await runSearch()
+    } catch (error) {
+      if (!shouldRebuildTable(error)) {
+        throw error
+      }
+
+      return {
+        matches: [],
+        warning: LANCE_INDEX_UNAVAILABLE_WARNING,
+      }
     }
-  }
 
-  if (searchRows.warning) {
-    return {
-      matches: pickDiverseEvidenceRows(explicitAuthoredMatches, params.limit ?? 10),
-      warning: searchRows.warning,
+    if (searchRows.warning) {
+      return {
+        matches: pickDiverseEvidenceRows(explicitAuthoredMatches, params.limit ?? 10),
+        warning: searchRows.warning,
+      }
     }
-  }
 
-  const rows = mergeHybridCandidateRows(searchRows.ftsRows, searchRows.vectorRows)
+    const rows = mergeHybridCandidateRows(searchRows.ftsRows, searchRows.vectorRows)
 
-  if (!rows.length) {
-    return {
-      matches: [],
+    if (!rows.length) {
+      return {
+        matches: [],
+      }
     }
-  }
 
-  const sourceTruth = await loadSourceTruthRows(rows)
-  const filtered = rows.filter((row) => matchesSourceTruth(row, params.maxChapterNo, sourceTruth))
-  if (!filtered.length) {
-    return {
-      matches: [],
+    const sourceTruth = await loadSourceTruthRows(rows)
+    const filtered = rows.filter((row) => matchesSourceTruth(row, params.maxChapterNo, sourceTruth))
+    if (!filtered.length) {
+      return {
+        matches: [],
+      }
     }
-  }
 
-  const maxFtsScore = Math.max(...filtered.map((row) => row.rawFtsScore), 0)
-  const maxVectorScore = Math.max(
-    ...filtered.map((row) => (row.rawVectorDistance === null ? 0 : 1 / (1 + Math.max(row.rawVectorDistance, 0)))),
-    0
-  )
-
-  const reranked = filtered
-    .map((row) => ({
-      id: row.id,
-      sourceType: row.sourceType,
-      sourceId: row.sourceId,
-      chapterId: row.chapterId || null,
-      chapterNo: row.chapterNo,
-      lineStart: row.lineStart >= 0 ? row.lineStart : null,
-      lineEnd: row.lineEnd >= 0 ? row.lineEnd : null,
-      title: row.title || null,
-      sourceLabel: row.sourceLabel,
-      text: row.text,
-      score: scoreRetrievalRow({
-        row,
-        maxChapterNo: params.maxChapterNo,
-        graphTerms: graphTerms.length ? graphTerms : queryTerms,
-        maxFtsScore,
-        maxVectorScore,
-      }),
-    }))
-    .sort(
-      (left, right) => right.score - left.score
-        || SOURCE_TYPE_PRIORITY[right.sourceType] - SOURCE_TYPE_PRIORITY[left.sourceType]
-        || right.chapterNo - left.chapterNo
+    const maxFtsScore = Math.max(...filtered.map((row) => row.rawFtsScore), 0)
+    const maxVectorScore = Math.max(
+      ...filtered.map((row) => (row.rawVectorDistance === null ? 0 : 1 / (1 + Math.max(row.rawVectorDistance, 0)))),
+      0
     )
 
-  return {
-    matches: pickDiverseEvidenceRows(
-      [...reranked, ...explicitAuthoredMatches].sort(
+    const reranked = filtered
+      .map((row) => ({
+        id: row.id,
+        sourceType: row.sourceType,
+        sourceId: row.sourceId,
+        chapterId: row.chapterId || null,
+        chapterNo: row.chapterNo,
+        lineStart: row.lineStart >= 0 ? row.lineStart : null,
+        lineEnd: row.lineEnd >= 0 ? row.lineEnd : null,
+        title: row.title || null,
+        sourceLabel: row.sourceLabel,
+        text: row.text,
+        score: scoreRetrievalRow({
+          row,
+          maxChapterNo: params.maxChapterNo,
+          graphTerms: graphTerms.length ? graphTerms : queryTerms,
+          maxFtsScore,
+          maxVectorScore,
+        }),
+      }))
+      .sort(
         (left, right) => right.score - left.score
           || SOURCE_TYPE_PRIORITY[right.sourceType] - SOURCE_TYPE_PRIORITY[left.sourceType]
           || right.chapterNo - left.chapterNo
+      )
+
+    return {
+      matches: pickDiverseEvidenceRows(
+        [...reranked, ...explicitAuthoredMatches].sort(
+          (left, right) => right.score - left.score
+            || SOURCE_TYPE_PRIORITY[right.sourceType] - SOURCE_TYPE_PRIORITY[left.sourceType]
+            || right.chapterNo - left.chapterNo
+        ),
+        params.limit ?? 10
       ),
-      params.limit ?? 10
-    ),
-  }
+    }
+  })
 }
