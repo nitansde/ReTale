@@ -49,6 +49,7 @@ HANLP_BOOTSTRAP_BATCH_SIZE="256"
 HANLP_BOOTSTRAP_TIMEOUT_MS="600000"
 RETALE_TASK_STALE_TIMEOUT_MS="1800000"
 RETALE_TASK_MAX_RETRIES="1"
+RETALE_DATA_DIR="data"
 LLM_DEBUG_LOG="0"
 LLM_DEBUG_LOG_DIR=".sisyphus/llm-debug"
 ```
@@ -85,11 +86,13 @@ npm run dev:test
 
 - `npm run dev` / `npm run dev:prod` / `npm run server:prod`
   - URL: `http://0.0.0.0:14500`
-  - Database: root `dev.db` via `DATABASE_URL=file:./dev.db`
+  - Legacy-source env: root `dev.db` via `DATABASE_URL=file:./dev.db`
+  - Migrated runtime storage: `RETALE_DATA_DIR` (default `data/`)
   - Next dist dir: default `.next`
 - `npm run dev:test` / `npm run server:test`
   - URL: `http://127.0.0.1:3000`
-  - Database: `.sisyphus/runtime/test-server/dev-test.db`
+  - Legacy-source env: `.sisyphus/runtime/test-server/dev-test.db`
+  - Migrated runtime storage: `.sisyphus/runtime/test-server/data/`
   - Next dist dir: `.sisyphus/runtime/next-test-server`
 
 Both wrappers override inherited `DATABASE_URL` and `RETALE_NEXT_DIST_DIR`, so a shell that was previously pointed at a test database cannot accidentally redirect the daily server, and vice versa. The public scripts are fixed-mode wrappers: `--hostname/-H` and `--port/-p` are rejected instead of changing the target server profile. If port `14500` or `3000` is already occupied, the wrapper exits with a clear error instead of killing unknown processes. Internal `.sisyphus` test DB/dist overrides remain reserved for the Playwright web-server helper.
@@ -101,16 +104,30 @@ npm run build
 npm run start
 ```
 
+## Per-novel storage
+
+Runtime data lives under `RETALE_DATA_DIR` (default: `data/`) with this layout:
+
+- `data/control.db`
+- `data/novels/<safeNovelId>/novel.db`
+- `data/novels/<safeNovelId>/lancedb/`
+
+The app reads and writes only this migrated per-novel layout at runtime. The old repository-root `dev.db` is no longer a runtime database source.
+
+Per-novel `lancedb/` directories are part of the runtime layout, so LanceDB-backed knowledge retrieval artifacts are stored and rebuilt per novel instead of through a single global `.lancedb/` directory.
+
 ## Persistence
 
-- SQLite database: `dev.db` in the project root
+- Migrated runtime storage: `data/control.db` plus `data/novels/<safeNovelId>/novel.db`
+- Per-novel LanceDB storage: `data/novels/<safeNovelId>/lancedb/`
+- Old monolithic `dev.db`: no longer used at runtime
 - Workspace state is saved through `POST /api/workspace`
 - AI settings are saved through `POST /api/settings/ai`
 
 ## Notes
 
 - No auth, collaboration, or cloud sync: intentionally single-user.
-- The current persistence layer stores the full workspace state JSON in SQLite for simplicity.
+- Runtime storage is the per-novel `data/` layout; the old monolithic `dev.db` is not read by the app.
 - OpenAI-compatible rewrite calls expect a server implementing `POST /chat/completions`.
 - If AI config is missing or the upstream request fails, `/api/rewrite` returns a structured provider error so you can configure or fix the selected OpenAI-compatible or Ollama settings.
 - Import currently assumes valid exported JSON.

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import path from 'node:path'
 import {
   ROOT,
   SAFE_QA_BASE_URL,
@@ -26,6 +27,7 @@ if (!tempDbPath) {
 
 const preserveExistingDatabase = shouldPreserveExistingDatabaseFile(tempDbPath)
 prepareRoleplaySafeDatabaseFile(tempDbPath, { preserveExisting: preserveExistingDatabase })
+const tempDataDir = path.join(path.dirname(tempDbPath), 'data')
 
 const manifest = writeRoleplaySafeQaManifest({
   databaseUrl: `file:${tempDbPath}`,
@@ -49,6 +51,7 @@ const child = spawn('node', ['scripts/next-test-server.mjs'], {
   env: {
     ...process.env,
     RETALE_INTERNAL_ALLOW_TEST_OVERRIDES: '1',
+    RETALE_DATA_DIR: tempDataDir,
     RETALE_SERVER_DIST_DIR: SAFE_QA_NEXT_DIST_DIR,
     RETALE_SERVER_DATABASE_PATH: tempDbPath,
     RETALE_SERVER_DATABASE_URL: `file:${tempDbPath}`,
