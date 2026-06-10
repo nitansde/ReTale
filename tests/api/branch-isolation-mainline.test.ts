@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
@@ -142,6 +143,15 @@ describe('branch-isolation-mainline', () => {
     vi.doMock('@/lib/server/ollama-local', () => ({
       embedTextsWithOllama,
     }))
+    vi.doMock('@/lib/server/db-resolver', async () => {
+      const actual = await vi.importActual<typeof import('@/lib/server/db-resolver')>('@/lib/server/db-resolver')
+      return {
+        ...actual,
+        getNovelDb: () => database,
+        getNovelLanceDbPath: (novelId: string) => path.join(tempDatabase.directory, `${novelId}.lancedb`),
+        resetResolvedDatabasesForTests: () => undefined,
+      }
+    })
 
     const { loadRawTextRetrievalDocs, precomputeRawTextEmbeddingCache } = await import('@/lib/server/retrieval-index')
     const firstPrecompute = await precomputeRawTextEmbeddingCache({

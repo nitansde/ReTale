@@ -4,8 +4,10 @@ import {
   completeWorkspaceKnowledgeSync,
   failWorkspaceKnowledgeSync,
   markWorkspaceKnowledgeSyncRequested,
+  readActiveWorkspaceNovelId,
   upsertWorkspaceState,
 } from '@/lib/server/persistence'
+import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { syncWorkspacePayloadToKnowledgeStore } from '@/lib/server/knowledge-rebuild'
 import type { WorkspaceKnowledgeSyncPayload } from '@/lib/server/knowledge-rebuild'
 import {
@@ -15,6 +17,7 @@ import {
   persistWorkspaceRuntimeState,
   shouldBlockEmptyWorkspaceOverwrite,
 } from '@/lib/server/workspace-resilience'
+import { resolveWorkspaceNovelId } from '@/lib/server/workspace-novel-scope'
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
 
 export const maxDuration = 3600
@@ -44,23 +47,34 @@ function scheduleAfterResponse(callback: () => Promise<void>) {
   }
 }
 
-async function runPendingWorkspaceKnowledgeSync() {
+function getNovelWorkspaceDb(novelId: string) {
+  return createNovelDatabaseAccess(novelId)
+}
+
+async function runPendingWorkspaceKnowledgeSync(novelId: string) {
+  const workspaceDb = getNovelWorkspaceDb(novelId)
+
   while (true) {
-    const claimed = claimPendingWorkspaceKnowledgeSync('singleton')
+    const claimed = claimPendingWorkspaceKnowledgeSync('singleton', { db: workspaceDb })
     if (!claimed) return
 
     try {
-      const payload = loadWorkspaceKnowledgeSyncPayload(claimed.workspaceStateId) ?? {
+      const payload = loadWorkspaceKnowledgeSyncPayload(claimed.workspaceStateId, workspaceDb)
+      const scopedPayload = payload
+        ? { ...payload, syncScope: 'target-novel' as const }
+        : {
         localNovels: [],
         localChapters: [],
         currentNovelId: '',
+        syncScope: 'target-novel' as const,
       } satisfies WorkspaceKnowledgeSyncPayload
-      await syncWorkspacePayloadToKnowledgeStore(payload)
-      completeWorkspaceKnowledgeSync(claimed.workspaceStateId, claimed.revision, claimed.sourceUpdatedAt)
+        await syncWorkspacePayloadToKnowledgeStore(scopedPayload, { db: workspaceDb })
+      completeWorkspaceKnowledgeSync(claimed.workspaceStateId, claimed.revision, claimed.sourceUpdatedAt, { db: workspaceDb })
     } catch (error) {
       failWorkspaceKnowledgeSync(
         claimed.workspaceStateId,
-        error instanceof Error ? error.message : 'Unknown workspace knowledge sync failure'
+        error instanceof Error ? error.message : 'Unknown workspace knowledge sync failure',
+        { db: workspaceDb },
       )
       console.error('Workspace knowledge sync failed after save:', error)
       return
@@ -68,9 +82,13 @@ async function runPendingWorkspaceKnowledgeSync() {
   }
 }
 
-export async function GET() {
+export async function GET(request: Request = new Request('http://localhost/api/workspace')) {
   try {
-    const payload = loadWorkspacePayloadFromRuntimeOrRecovery()
+    const requestedNovelId = new URL(request.url).searchParams.get('novelId')?.trim() || null
+    const activeNovelId = requestedNovelId || readActiveWorkspaceNovelId()
+    const payload = activeNovelId
+      ? await loadWorkspacePayloadFromRuntimeOrRecovery('singleton', getNovelWorkspaceDb(activeNovelId))
+      : await loadWorkspacePayloadFromRuntimeOrRecovery()
     return NextResponse.json(payload)
   } catch (error) {
     console.error('Failed to restore workspace payload:', error)
@@ -94,15 +112,20 @@ export async function POST(request: Request) {
     }
 
     const normalizedPayload = normalizeWorkspaceState(payload)
-    const savedRuntime = persistWorkspaceRuntimeState(normalizedPayload)
+    const targetNovelId = resolveWorkspaceNovelId(normalizedPayload) ?? readActiveWorkspaceNovelId()
+    if (!targetNovelId) {
+      throw new Error('Unable to determine which novel workspace should be persisted')
+    }
+
+    const savedRuntime = await persistWorkspaceRuntimeState(normalizedPayload)
     const saved = upsertWorkspaceState(
       'singleton',
       JSON.stringify(normalizedPayload),
       { backupReason: allowReset ? 'explicit-reset' : 'workspace-save' }
     )
 
-    markWorkspaceKnowledgeSyncRequested('singleton', savedRuntime.updatedAt)
-    scheduleAfterResponse(runPendingWorkspaceKnowledgeSync)
+    markWorkspaceKnowledgeSyncRequested('singleton', savedRuntime.updatedAt, { novelId: targetNovelId })
+    scheduleAfterResponse(() => runPendingWorkspaceKnowledgeSync(targetNovelId))
 
     return NextResponse.json({ ok: true, updatedAt: savedRuntime.updatedAt ?? saved?.updatedAt ?? null })
   } catch (error) {

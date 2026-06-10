@@ -1,6 +1,15 @@
 import { safeParseJson } from '@/lib/server/json-parse'
 import { PROTECTED_RESET_APP_SETTING_KEYS } from '@/lib/server/schema'
-import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/sqlite'
+import {
+  createDatabaseAccess,
+  createNovelDatabaseAccess,
+  execute,
+  queryAll,
+  type DatabaseAccess,
+  withTransaction,
+} from '@/lib/server/database-access'
+import { getControlDb, getNovelDb, getNovelLanceDbPath } from '@/lib/server/db-resolver'
+import { parseScopedWorkspacePayload } from '@/lib/server/workspace-novel-scope'
 
 type WorkspaceStateRow = {
   id: string
@@ -20,6 +29,13 @@ type WorkspaceStateBackupRow = {
 
 type WorkspaceStateWriteOptions = {
   backupReason?: string
+  novelId?: string
+  db?: DatabaseAccess
+}
+
+type WorkspaceDbContext = {
+  novelId?: string
+  db?: DatabaseAccess
 }
 
 type WorkspaceKnowledgeSyncStateRow = {
@@ -55,6 +71,7 @@ type SqliteTableRow = {
 const [PRESET_COMPAT_LIBRARY_V1_KEY, AI_SETTINGS_V2_KEY, OLLAMA_TIMEOUT_MS_KEY] = PROTECTED_RESET_APP_SETTING_KEYS
 const WORKSPACE_BACKUP_RETENTION = 20
 const WORKSPACE_KNOWLEDGE_SYNC_STALE_MS = 5 * 60 * 1000
+const ACTIVE_WORKSPACE_NOVEL_ID_KEY = 'WORKSPACE_ACTIVE_NOVEL_ID'
 
 export type ProtectedAppSettingsResetSnapshot = {
   presetCompatLibraryV1: string | null
@@ -62,12 +79,78 @@ export type ProtectedAppSettingsResetSnapshot = {
   ollamaTimeoutMs: string | null
 }
 
-export function findWorkspaceState(id = 'singleton') {
-  return queryOne<WorkspaceStateRow>('SELECT id, payload, createdAt, updatedAt FROM WorkspaceState WHERE id = ?', id)
+function getControlDatabaseAccess() {
+  return createDatabaseAccess(getControlDb())
 }
 
-export function findWorkspaceStateBackups(id = 'singleton') {
-  return queryAll<WorkspaceStateBackupRow>(
+function getNovelDatabaseAccess(novelId: string) {
+  return createNovelDatabaseAccess(novelId)
+}
+
+function getNovelDbFilePath(novelId: string) {
+  return (getNovelDb(novelId).prepare('PRAGMA database_list').get() as { file: string }).file
+}
+
+function resolveWorkspaceDbContext(context: WorkspaceDbContext = {}) {
+  if (context.db) {
+    return context.db
+  }
+
+  const novelId = context.novelId ?? readActiveWorkspaceNovelId()
+  if (!novelId) {
+    return null
+  }
+
+  return getNovelDatabaseAccess(novelId)
+}
+
+export function readActiveWorkspaceNovelId() {
+  return getControlDatabaseAccess().queryOne<{ value: string }>('SELECT value FROM AppSetting WHERE key = ?', ACTIVE_WORKSPACE_NOVEL_ID_KEY)?.value ?? null
+}
+
+export function writeActiveWorkspaceNovelId(novelId: string) {
+  getControlDatabaseAccess().execute(
+    `INSERT INTO AppSetting (id, key, value)
+     VALUES (lower(hex(randomblob(16))), ?, ?)
+     ON CONFLICT(key) DO UPDATE SET
+       value = excluded.value,
+       updatedAt = CURRENT_TIMESTAMP`,
+    ACTIVE_WORKSPACE_NOVEL_ID_KEY,
+    novelId,
+  )
+}
+
+export function upsertWorkspaceNovelRegistry(params: { novelId: string; title?: string | null }) {
+  const controlDb = getControlDatabaseAccess()
+  controlDb.execute(
+    `INSERT INTO NovelRegistry (
+       novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus
+     ) VALUES (?, ?, ?, ?, ?, '1', 'ready')
+     ON CONFLICT(novelId) DO UPDATE SET
+       title = COALESCE(excluded.title, NovelRegistry.title),
+       dbFilePath = excluded.dbFilePath,
+       lanceDbPath = excluded.lanceDbPath,
+       schemaVersion = excluded.schemaVersion,
+       migrationStatus = excluded.migrationStatus,
+       updatedAt = CURRENT_TIMESTAMP`,
+    params.novelId,
+    params.novelId,
+    params.title?.trim() || null,
+    getNovelDbFilePath(params.novelId),
+    getNovelLanceDbPath(params.novelId),
+  )
+}
+
+export function findWorkspaceState(id = 'singleton', context: WorkspaceDbContext = {}) {
+  const db = resolveWorkspaceDbContext(context)
+  if (!db) return null
+  return db.queryOne<WorkspaceStateRow>('SELECT id, payload, createdAt, updatedAt FROM WorkspaceState WHERE id = ?', id)
+}
+
+export function findWorkspaceStateBackups(id = 'singleton', context: WorkspaceDbContext = {}) {
+  const db = resolveWorkspaceDbContext(context)
+  if (!db) return [] as WorkspaceStateBackupRow[]
+  return db.queryAll<WorkspaceStateBackupRow>(
     `SELECT id, workspaceStateId, payload, reason, sourceUpdatedAt, createdAt
      FROM WorkspaceStateBackup
      WHERE workspaceStateId = ?
@@ -76,17 +159,22 @@ export function findWorkspaceStateBackups(id = 'singleton') {
   )
 }
 
-export function createWorkspaceState(id: string, payload: string) {
-  execute('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)', id, payload)
-  const created = findWorkspaceState(id)
+export function createWorkspaceState(id: string, payload: string, context: WorkspaceDbContext = {}) {
+  const db = resolveWorkspaceDbContext(context)
+  if (!db) {
+    throw new Error('Cannot create workspace state without a target novel database')
+  }
+
+  db.execute('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)', id, payload)
+  const created = findWorkspaceState(id, { db })
   if (!created) {
     throw new Error('Failed to create workspace state')
   }
   return created
 }
 
-function createWorkspaceStateBackup(row: WorkspaceStateRow, reason: string) {
-  execute(
+function createWorkspaceStateBackup(db: DatabaseAccess, row: WorkspaceStateRow, reason: string) {
+  db.execute(
     `INSERT INTO WorkspaceStateBackup (id, workspaceStateId, payload, reason, sourceUpdatedAt)
      VALUES (lower(hex(randomblob(16))), ?, ?, ?, ?)`,
     row.id,
@@ -96,8 +184,8 @@ function createWorkspaceStateBackup(row: WorkspaceStateRow, reason: string) {
   )
 }
 
-function pruneWorkspaceStateBackups(id: string) {
-  execute(
+function pruneWorkspaceStateBackups(db: DatabaseAccess, id: string) {
+  db.execute(
     `DELETE FROM WorkspaceStateBackup
      WHERE workspaceStateId = ?
        AND id NOT IN (
@@ -114,14 +202,40 @@ function pruneWorkspaceStateBackups(id: string) {
 }
 
 export function upsertWorkspaceState(id: string, payload: string, options: WorkspaceStateWriteOptions = {}) {
-  execute('BEGIN IMMEDIATE')
+  const scopedPayload = options.db || options.novelId
+    ? { serializedPayload: payload, novelId: options.novelId ?? null, title: null as string | null }
+    : (() => {
+        const parsed = parseScopedWorkspacePayload(payload)
+        return {
+          serializedPayload: JSON.stringify(parsed.scoped),
+          novelId: parsed.novelId,
+          title: parsed.scoped.localNovels[0]?.title ?? null,
+        }
+      })()
+
+  const novelId = options.novelId ?? scopedPayload.novelId ?? readActiveWorkspaceNovelId()
+  if (!novelId && !options.db) {
+    throw new Error('Cannot save workspace payload without a target novel')
+  }
+
+  if (novelId) {
+    writeActiveWorkspaceNovelId(novelId)
+    upsertWorkspaceNovelRegistry({ novelId, title: scopedPayload.title })
+  }
+
+  const db = options.db ?? (novelId ? getNovelDatabaseAccess(novelId) : null)
+  if (!db) {
+    throw new Error('Cannot save workspace payload without a novel database')
+  }
+
+  db.execute('BEGIN IMMEDIATE')
   try {
-    const existing = findWorkspaceState(id)
-    if (existing && existing.payload !== payload) {
-      createWorkspaceStateBackup(existing, options.backupReason ?? 'overwrite')
+    const existing = findWorkspaceState(id, { db })
+    if (existing && existing.payload !== scopedPayload.serializedPayload) {
+      createWorkspaceStateBackup(db, existing, options.backupReason ?? 'overwrite')
     }
 
-    execute(
+    db.execute(
       `
         INSERT INTO WorkspaceState (id, payload)
         VALUES (?, ?)
@@ -130,28 +244,30 @@ export function upsertWorkspaceState(id: string, payload: string, options: Works
           updatedAt = CURRENT_TIMESTAMP
       `,
       id,
-      payload
+      scopedPayload.serializedPayload
     )
 
-    pruneWorkspaceStateBackups(id)
-    execute('COMMIT')
+    pruneWorkspaceStateBackups(db, id)
+    db.execute('COMMIT')
   } catch (error) {
     try {
-      execute('ROLLBACK')
-    } catch {
+      db.execute('ROLLBACK')
+    } catch (_rollbackError) {
+      void _rollbackError
+      // Ignore rollback cleanup failures so the original transaction error is rethrown.
     }
     throw error
   }
 
-  const saved = findWorkspaceState(id)
+  const saved = findWorkspaceState(id, { db })
   if (!saved) {
     throw new Error('Failed to save workspace state')
   }
   return saved
 }
 
-function findWorkspaceKnowledgeSyncState(id: string) {
-  return queryOne<WorkspaceKnowledgeSyncStateRow>(
+function findWorkspaceKnowledgeSyncState(id: string, db: DatabaseAccess) {
+  return db.queryOne<WorkspaceKnowledgeSyncStateRow>(
     `SELECT workspaceStateId, requestedRevision, startedRevision, syncedRevision,
             requestedSourceUpdatedAt, startedSourceUpdatedAt, startedAt, syncedSourceUpdatedAt, lastError
      FROM WorkspaceKnowledgeSyncState
@@ -172,8 +288,13 @@ function hasFreshWorkspaceKnowledgeSyncStart(startedAt: string | null) {
   return Date.now() - startedAtMs < WORKSPACE_KNOWLEDGE_SYNC_STALE_MS
 }
 
-export function markWorkspaceKnowledgeSyncRequested(id: string, sourceUpdatedAt: string) {
-  execute(
+export function markWorkspaceKnowledgeSyncRequested(id: string, sourceUpdatedAt: string, context: WorkspaceDbContext = {}) {
+  const db = resolveWorkspaceDbContext(context)
+  if (!db) {
+    throw new Error('Cannot queue workspace knowledge sync without a target novel database')
+  }
+
+  db.execute(
     `INSERT INTO WorkspaceKnowledgeSyncState (
        workspaceStateId,
        requestedRevision,
@@ -187,20 +308,23 @@ export function markWorkspaceKnowledgeSyncRequested(id: string, sourceUpdatedAt:
        requestedRevision = WorkspaceKnowledgeSyncState.requestedRevision + 1,
        requestedSourceUpdatedAt = excluded.requestedSourceUpdatedAt,
        updatedAt = CURRENT_TIMESTAMP`,
-    id,
-    sourceUpdatedAt
-  )
+     id,
+     sourceUpdatedAt
+   )
 }
 
-export function claimPendingWorkspaceKnowledgeSync(id = 'singleton'): WorkspaceKnowledgeSyncClaim | null {
-  execute('BEGIN IMMEDIATE')
+export function claimPendingWorkspaceKnowledgeSync(id = 'singleton', context: WorkspaceDbContext = {}): WorkspaceKnowledgeSyncClaim | null {
+  const db = resolveWorkspaceDbContext(context)
+  if (!db) return null
+
+  db.execute('BEGIN IMMEDIATE')
   try {
-    const syncState = findWorkspaceKnowledgeSyncState(id)
+    const syncState = findWorkspaceKnowledgeSyncState(id, db)
     const requestedSourceUpdatedAt = syncState?.requestedSourceUpdatedAt ?? null
     const requestedRevision = syncState?.requestedRevision ?? 0
 
     if (!requestedSourceUpdatedAt || requestedRevision <= (syncState?.syncedRevision ?? 0)) {
-      execute('ROLLBACK')
+      db.execute('ROLLBACK')
       return null
     }
 
@@ -208,11 +332,11 @@ export function claimPendingWorkspaceKnowledgeSync(id = 'singleton'): WorkspaceK
       syncState?.startedRevision === requestedRevision
       && hasFreshWorkspaceKnowledgeSyncStart(syncState.startedAt)
     ) {
-      execute('ROLLBACK')
+      db.execute('ROLLBACK')
       return null
     }
 
-    execute(
+    db.execute(
       `INSERT INTO WorkspaceKnowledgeSyncState (
          workspaceStateId,
          requestedRevision,
@@ -237,7 +361,7 @@ export function claimPendingWorkspaceKnowledgeSync(id = 'singleton'): WorkspaceK
       requestedSourceUpdatedAt
     )
 
-    execute('COMMIT')
+    db.execute('COMMIT')
     return {
       workspaceStateId: id,
       revision: requestedRevision,
@@ -245,15 +369,22 @@ export function claimPendingWorkspaceKnowledgeSync(id = 'singleton'): WorkspaceK
     }
   } catch (error) {
     try {
-      execute('ROLLBACK')
-    } catch {
+      db.execute('ROLLBACK')
+    } catch (_rollbackError) {
+      void _rollbackError
+      // Ignore rollback cleanup failures so the original transaction error is rethrown.
     }
     throw error
   }
 }
 
-export function completeWorkspaceKnowledgeSync(id: string, revision: number, sourceUpdatedAt: string) {
-  execute(
+export function completeWorkspaceKnowledgeSync(id: string, revision: number, sourceUpdatedAt: string, context: WorkspaceDbContext = {}) {
+  const db = resolveWorkspaceDbContext(context)
+  if (!db) {
+    throw new Error('Cannot complete workspace knowledge sync without a target novel database')
+  }
+
+  db.execute(
     `UPDATE WorkspaceKnowledgeSyncState
      SET syncedRevision = ?,
          syncedSourceUpdatedAt = ?,
@@ -269,8 +400,13 @@ export function completeWorkspaceKnowledgeSync(id: string, revision: number, sou
   )
 }
 
-export function failWorkspaceKnowledgeSync(id: string, errorMessage: string) {
-  execute(
+export function failWorkspaceKnowledgeSync(id: string, errorMessage: string, context: WorkspaceDbContext = {}) {
+  const db = resolveWorkspaceDbContext(context)
+  if (!db) {
+    throw new Error('Cannot fail workspace knowledge sync without a target novel database')
+  }
+
+  db.execute(
     `UPDATE WorkspaceKnowledgeSyncState
      SET startedRevision = NULL,
          startedSourceUpdatedAt = NULL,

@@ -1,22 +1,41 @@
-import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { initializeDatabase } from '@/lib/server/sqlite'
+import type { DatabaseSync } from 'node:sqlite'
 
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const API_TEST_TIMEOUT_MS = 30_000
+const originalDataDir = process.env.RETALE_DATA_DIR
+
+function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
+  if (originalValue === undefined) {
+    delete process.env[name]
+    return
+  }
+
+  process.env[name] = originalValue
+}
 
 vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
 
-function createTestDatabase(prefix: string) {
+async function createTestDatabase(prefix: string, activeNovelId = 'workspace-test') {
   const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
   cleanups.push(() => fs.rmSync(tempDirectory, { recursive: true, force: true }))
-  const database = initializeDatabase(new DatabaseSync(path.join(tempDirectory, 'test.db')))
-  globalForSqlite.sqlite = database
+  process.env.RETALE_DATA_DIR = path.join(tempDirectory, 'data')
   vi.resetModules()
+
+  const { getControlDb, getNovelDb } = await import('@/lib/server/db-resolver')
+  const controlDb = getControlDb()
+  controlDb.prepare(
+    `INSERT INTO AppSetting (id, key, value)
+     VALUES (lower(hex(randomblob(16))), ?, ?)
+     ON CONFLICT(key) DO UPDATE SET
+       value = excluded.value,
+       updatedAt = CURRENT_TIMESTAMP`
+  ).run('WORKSPACE_ACTIVE_NOVEL_ID', activeNovelId)
+
+  const database = getNovelDb(activeNovelId)
   return database
 }
 
@@ -125,7 +144,7 @@ function clearWorkspaceRecoveryData(database: DatabaseSync) {
 async function seedWorkspaceRuntime(payload: Record<string, unknown>) {
   const { normalizeWorkspaceState } = await import('@/lib/workspace-state')
   const { persistWorkspaceRuntimeState } = await import('@/lib/server/workspace-resilience')
-  persistWorkspaceRuntimeState(normalizeWorkspaceState(payload))
+  await persistWorkspaceRuntimeState(normalizeWorkspaceState(payload))
 }
 
 function seedWorkspaceState(database: DatabaseSync, payload: Record<string, unknown> | string | null) {
@@ -214,24 +233,21 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
   vi.doUnmock('next/server')
-  vi.resetModules()
+  restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
 
-  if (globalForSqlite.sqlite) {
-    try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
-    } catch {
+  return import('@/lib/server/db-resolver').then((resolverModule) => {
+    resolverModule.resetResolvedDatabasesForTests()
+    vi.resetModules()
+
+    while (cleanups.length) {
+      cleanups.pop()?.()
     }
-    delete globalForSqlite.sqlite
-  }
-
-  while (cleanups.length) {
-    cleanups.pop()?.()
-  }
+  })
 })
 
 describe('workspace route', () => {
   it('repairs a missing workspace from recoverable knowledge data', async () => {
-    const database = createTestDatabase('retale-workspace-route-recover-missing')
+    const database = await createTestDatabase('retale-workspace-route-recover-missing', 'novel-recover')
     clearWorkspaceRecoveryData(database)
     seedRecoverableKnowledge(database)
 
@@ -249,7 +265,7 @@ describe('workspace route', () => {
   })
 
   it('repairs a corrupt workspace by rebuilding normalized runtime state from recoverable knowledge data', async () => {
-    const database = createTestDatabase('retale-workspace-route-recover-corrupt')
+    const database = await createTestDatabase('retale-workspace-route-recover-corrupt', 'novel-recover')
     clearWorkspaceRecoveryData(database)
     seedWorkspaceState(database, '{not-json')
     seedRecoverableKnowledge(database)
@@ -267,7 +283,7 @@ describe('workspace route', () => {
   })
 
   it('repairs an empty workspace when knowledge data is still recoverable', async () => {
-    const database = createTestDatabase('retale-workspace-route-recover-empty')
+    const database = await createTestDatabase('retale-workspace-route-recover-empty', 'novel-recover')
     clearWorkspaceRecoveryData(database)
     seedWorkspaceState(database, { localNovels: [], localChapters: [] })
     seedRecoverableKnowledge(database)
@@ -284,7 +300,7 @@ describe('workspace route', () => {
   })
 
   it('serves normalized runtime state even when the workspace artifact payload is empty', async () => {
-    const database = createTestDatabase('retale-workspace-route-runtime-with-empty-artifact')
+    const database = await createTestDatabase('retale-workspace-route-runtime-with-empty-artifact', 'novel-runtime')
     clearWorkspaceRecoveryData(database)
     await seedWorkspaceRuntime(createWorkspacePayload('novel-runtime', 'Runtime Truth'))
     seedWorkspaceState(database, '')
@@ -300,7 +316,7 @@ describe('workspace route', () => {
   })
 
   it('preserves outlines, characters, relations, world entries, and timeline events after the artifact payload is blanked', async () => {
-    const database = createTestDatabase('retale-workspace-route-side-data-survives-blanked-blob')
+    const database = await createTestDatabase('retale-workspace-route-side-data-survives-blanked-blob', 'novel-side')
     clearWorkspaceRecoveryData(database)
     const payloadWithSideData = createWorkspacePayloadWithSideData()
     await seedWorkspaceRuntime(payloadWithSideData)
@@ -320,7 +336,7 @@ describe('workspace route', () => {
   })
 
   it('preserves normalized runtime side/reference data when a real workspace artifact row exists with payload = NULL', async () => {
-    const database = createTestDatabase('retale-workspace-route-side-data-survives-null-artifact')
+    const database = await createTestDatabase('retale-workspace-route-side-data-survives-null-artifact', 'novel-null-artifact')
     clearWorkspaceRecoveryData(database)
     const payloadWithSideData = createWorkspacePayloadWithSideData('novel-null-artifact', 'Null Artifact Runtime Truth')
     await seedWorkspaceRuntime(payloadWithSideData)
@@ -341,7 +357,7 @@ describe('workspace route', () => {
   })
 
   it('prefers normalized runtime state over a stale or invalid workspace artifact during normal GET', async () => {
-    const database = createTestDatabase('retale-workspace-route-runtime-wins-over-artifact')
+    const database = await createTestDatabase('retale-workspace-route-runtime-wins-over-artifact', 'novel-runtime')
     clearWorkspaceRecoveryData(database)
     await seedWorkspaceRuntime(createWorkspacePayloadWithSideData('novel-runtime', 'Runtime Winner'))
     seedWorkspaceState(database, '{not-json')
@@ -357,7 +373,7 @@ describe('workspace route', () => {
   })
 
   it('ignores a corrupt workspace artifact during normal GET when no normalized runtime or recovery source exists', async () => {
-    const database = createTestDatabase('retale-workspace-route-corrupt-unrecoverable')
+    const database = await createTestDatabase('retale-workspace-route-corrupt-unrecoverable', 'novel-corrupt')
     clearWorkspaceRecoveryData(database)
     seedWorkspaceState(database, '{not-json')
 
@@ -374,7 +390,7 @@ describe('workspace route', () => {
   })
 
   it('rejects accidental empty overwrites when the saved workspace has content', async () => {
-    const database = createTestDatabase('retale-workspace-route-block-empty-current')
+    const database = await createTestDatabase('retale-workspace-route-block-empty-current', 'novel-existing')
     clearWorkspaceRecoveryData(database)
     const currentPayload = createWorkspacePayload('novel-existing', 'Existing')
     await seedWorkspaceRuntime(currentPayload)
@@ -398,7 +414,7 @@ describe('workspace route', () => {
   })
 
   it('rejects accidental empty overwrites when only knowledge data is recoverable', async () => {
-    const database = createTestDatabase('retale-workspace-route-block-empty-knowledge')
+    const database = await createTestDatabase('retale-workspace-route-block-empty-knowledge', 'novel-recover')
     clearWorkspaceRecoveryData(database)
     seedRecoverableKnowledge(database)
     const syncWorkspacePayloadToKnowledgeStore = vi.fn(async () => {})
@@ -418,7 +434,7 @@ describe('workspace route', () => {
   })
 
   it('allows explicit empty reset requests and backs up the previous workspace', async () => {
-    const database = createTestDatabase('retale-workspace-route-explicit-reset')
+    const database = await createTestDatabase('retale-workspace-route-explicit-reset', 'novel-existing')
     clearWorkspaceRecoveryData(database)
     const currentPayload = createWorkspacePayload('novel-existing', 'Existing')
     await seedWorkspaceRuntime(currentPayload)
@@ -444,7 +460,16 @@ describe('workspace route', () => {
     expect(afterCallbacks).toHaveLength(1)
 
     await afterCallbacks[0]()
-    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith(expect.objectContaining({ localNovels: [], localChapters: [] }))
+    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localNovels: [],
+        localChapters: [],
+        syncScope: 'target-novel',
+      }),
+      expect.objectContaining({
+        db: expect.any(Object),
+      }),
+    )
     expect(readWorkspaceKnowledgeSyncState(database)).toMatchObject({
       startedSourceUpdatedAt: null,
       lastError: null,
@@ -452,7 +477,7 @@ describe('workspace route', () => {
   })
 
   it('returns success without waiting for workspace knowledge sync', async () => {
-    const database = createTestDatabase('retale-workspace-route-non-blocking-sync')
+    const database = await createTestDatabase('retale-workspace-route-non-blocking-sync', 'novel-1')
     clearWorkspaceRecoveryData(database)
 
     const syncControl: { resolve: null | (() => void) } = { resolve: null }
@@ -487,7 +512,7 @@ describe('workspace route', () => {
   })
 
   it('logs workspace knowledge sync failures without failing the save response', async () => {
-    const database = createTestDatabase('retale-workspace-route-sync-error')
+    const database = await createTestDatabase('retale-workspace-route-sync-error', 'novel-1')
     clearWorkspaceRecoveryData(database)
 
     const syncError = new Error('sync failed')
@@ -517,7 +542,7 @@ describe('workspace route', () => {
   })
 
   it('coalesces persisted workspace knowledge syncs to the latest saved payload', async () => {
-    const database = createTestDatabase('retale-workspace-route-coalesced-sync')
+    const database = await createTestDatabase('retale-workspace-route-coalesced-sync', 'novel-1')
     clearWorkspaceRecoveryData(database)
 
     const syncWorkspacePayloadToKnowledgeStore = vi.fn(async () => {})
@@ -541,7 +566,15 @@ describe('workspace route', () => {
 
     await runAfterCallbacks(afterCallbacks)
     expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledTimes(1)
-    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith(expect.objectContaining(thirdPayload))
+    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...thirdPayload,
+        syncScope: 'target-novel',
+      }),
+      expect.objectContaining({
+        db: expect.any(Object),
+      }),
+    )
     expect(readWorkspaceKnowledgeSyncState(database)).toMatchObject({
       startedSourceUpdatedAt: null,
       syncedSourceUpdatedAt: expect.any(String),
@@ -550,7 +583,7 @@ describe('workspace route', () => {
   })
 
   it('runs the latest persisted workspace knowledge sync after an active sync finishes', async () => {
-    const database = createTestDatabase('retale-workspace-route-running-coalesced-sync')
+    const database = await createTestDatabase('retale-workspace-route-running-coalesced-sync', 'novel-1')
     clearWorkspaceRecoveryData(database)
 
     const firstSyncControl: { resolve: null | (() => void) } = { resolve: null }
@@ -576,7 +609,15 @@ describe('workspace route', () => {
 
     const backgroundSync = afterCallbacks[0]()
     expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledTimes(1)
-    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith(expect.objectContaining(firstPayload))
+    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...firstPayload,
+        syncScope: 'target-novel',
+      }),
+      expect.objectContaining({
+        db: expect.any(Object),
+      }),
+    )
 
     await expect(POST(createWorkspaceRequest(secondPayload))).resolves.toMatchObject({ status: 200 })
     await expect(POST(createWorkspaceRequest(thirdPayload))).resolves.toMatchObject({ status: 200 })
@@ -588,11 +629,19 @@ describe('workspace route', () => {
     await runAfterCallbacks(afterCallbacks.slice(1))
 
     expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledTimes(2)
-    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenLastCalledWith(expect.objectContaining(thirdPayload))
+    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        ...thirdPayload,
+        syncScope: 'target-novel',
+      }),
+      expect.objectContaining({
+        db: expect.any(Object),
+      }),
+    )
   })
 
   it('rejects malformed workspace JSON with a stable 400 response', async () => {
-    const database = createTestDatabase('retale-workspace-route-invalid-json')
+    const database = await createTestDatabase('retale-workspace-route-invalid-json', 'novel-1')
 
     const { POST, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
     const response = await POST(new Request('http://localhost/api/workspace', {
@@ -608,9 +657,9 @@ describe('workspace route', () => {
   })
 
   it('backs up normal workspace overwrites and retains only recent snapshots', async () => {
-    const database = createTestDatabase('retale-workspace-route-backup-retention')
+    const database = await createTestDatabase('retale-workspace-route-backup-retention', 'novel-1')
     clearWorkspaceRecoveryData(database)
-    seedWorkspaceState(database, createWorkspacePayload('novel-0', 'Initial'))
+    seedWorkspaceState(database, createWorkspacePayload('novel-1', 'Initial'))
     const syncWorkspacePayloadToKnowledgeStore = vi.fn(async () => {})
 
     vi.doMock('@/lib/server/knowledge-rebuild', () => ({
@@ -619,14 +668,14 @@ describe('workspace route', () => {
 
     const { POST } = await importWorkspaceRouteWithAfterCallbacks()
     for (let index = 1; index <= 25; index += 1) {
-      const response = await POST(createWorkspaceRequest(createWorkspacePayload(`novel-${index}`, `Novel ${index}`)))
+      const response = await POST(createWorkspaceRequest(createWorkspacePayload('novel-1', `Novel ${index}`)))
       expect(response.status).toBe(200)
     }
 
     const backups = readWorkspaceBackups(database)
     expect(backups).toHaveLength(20)
     expect(backups.every((backup) => backup.reason === 'workspace-save')).toBe(true)
-    expect(JSON.parse(backups[0].payload)).toMatchObject(createWorkspacePayload('novel-24', 'Novel 24'))
-    expect(JSON.parse(backups.at(-1)?.payload ?? '{}')).toMatchObject(createWorkspacePayload('novel-5', 'Novel 5'))
+    expect(JSON.parse(backups[0].payload)).toMatchObject(createWorkspacePayload('novel-1', 'Novel 24'))
+    expect(JSON.parse(backups.at(-1)?.payload ?? '{}')).toMatchObject(createWorkspacePayload('novel-1', 'Novel 5'))
   })
 })

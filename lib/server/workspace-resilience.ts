@@ -1,6 +1,14 @@
-import { findWorkspaceState } from '@/lib/server/persistence'
+import {
+  readActiveWorkspaceNovelId,
+  upsertWorkspaceNovelRegistry,
+  writeActiveWorkspaceNovelId,
+} from '@/lib/server/persistence'
 import { safeParseJson as safeParseJsonValue, safeParseJsonObject } from '@/lib/server/json-parse'
-import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
+import {
+  createNovelDatabaseAccess,
+  type SqlParam,
+} from '@/lib/server/database-access'
+import { resolveWorkspaceNovelId, scopeWorkspaceStateToNovel } from '@/lib/server/workspace-novel-scope'
 import { createEmptyWorkspaceState, normalizeWorkspaceState } from '@/lib/workspace-state'
 import { countChineseFriendlyWords, plainTextLinesToHtml } from '@/lib/utils'
 import type {
@@ -18,12 +26,15 @@ import type {
 const WORKSPACE_ID = 'singleton'
 export const WORKSPACE_RESET_HEADER = 'x-retale-workspace-reset'
 
-type SqlParam = string | number | bigint | Uint8Array | null
-
 type WorkspaceRecoveryDb = {
   execute: (sql: string, ...params: SqlParam[]) => unknown
   queryAll: <T>(sql: string, ...params: SqlParam[]) => T[]
   queryOne: <T>(sql: string, ...params: SqlParam[]) => T | null
+  withTransaction?: <T>(callback: () => T | Promise<T>) => Promise<T>
+}
+
+function hasTransactionWrapper(db: WorkspaceRecoveryDb): db is WorkspaceRecoveryDb & { withTransaction: <T>(callback: () => T | Promise<T>) => Promise<T> } {
+  return typeof db.withTransaction === 'function'
 }
 
 type WorkspaceRuntimeStateRow = {
@@ -158,22 +169,44 @@ function readJsonObject(value: string | null) {
   return safeParseJsonObject(value) ?? {}
 }
 
+function getCurrentWorkspaceDb(db?: WorkspaceRecoveryDb) {
+  if (db) return db
+
+  const activeNovelId = readActiveWorkspaceNovelId()
+  if (!activeNovelId) {
+    return null
+  }
+
+  return createNovelDatabaseAccess(activeNovelId)
+}
+
 function queryOneFromDb<T>(db: WorkspaceRecoveryDb | undefined, sql: string, ...params: SqlParam[]) {
-  return db ? db.queryOne<T>(sql, ...params) : queryOne<T>(sql, ...params)
+  const targetDb = getCurrentWorkspaceDb(db)
+  return targetDb ? targetDb.queryOne<T>(sql, ...params) : null
 }
 
 function queryAllFromDb<T>(db: WorkspaceRecoveryDb | undefined, sql: string, ...params: SqlParam[]) {
-  return db ? db.queryAll<T>(sql, ...params) : queryAll<T>(sql, ...params)
+  const targetDb = getCurrentWorkspaceDb(db)
+  return targetDb ? targetDb.queryAll<T>(sql, ...params) : [] as T[]
 }
 
 function executeOnDb(db: WorkspaceRecoveryDb | undefined, sql: string, ...params: SqlParam[]) {
-  return db ? db.execute(sql, ...params) : execute(sql, ...params)
+  const targetDb = getCurrentWorkspaceDb(db)
+  if (!targetDb) {
+    throw new Error('No active novel database is available for workspace persistence')
+  }
+
+  return targetDb.execute(sql, ...params)
 }
 
 function findWorkspaceStateForRecovery(id: string, db?: WorkspaceRecoveryDb) {
-  return db
-    ? db.queryOne<WorkspaceStateRow>('SELECT id, payload, createdAt, updatedAt FROM WorkspaceState WHERE id = ?', id)
-    : findWorkspaceState(id)
+  const targetDb = getCurrentWorkspaceDb(db)
+  if (!targetDb) return null
+
+  return targetDb.queryOne<WorkspaceStateRow>(
+    'SELECT id, payload, createdAt, updatedAt FROM WorkspaceState WHERE id = ?',
+    id,
+  )
 }
 
 function readWorkspaceRuntimeState(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
@@ -293,17 +326,170 @@ export function loadWorkspaceKnowledgeSyncPayload(id = WORKSPACE_ID, db?: Worksp
   }
 }
 
-export function persistWorkspaceRuntimeState(
+export async function persistWorkspaceRuntimeState(
   payload: PersistedNovelState,
   id = WORKSPACE_ID,
   db?: WorkspaceRecoveryDb,
-): WorkspaceRuntimeSaveResult {
+): Promise<WorkspaceRuntimeSaveResult> {
   const normalized = normalizeWorkspaceState(payload)
+  if (!db) {
+    const targetNovelId = resolveWorkspaceNovelId(normalized) ?? readActiveWorkspaceNovelId()
+    if (!targetNovelId) {
+      throw new Error('Cannot persist workspace runtime state without a target novel')
+    }
+
+    const scopedPayload = scopeWorkspaceStateToNovel(normalized, targetNovelId)
+    const targetDb = createNovelDatabaseAccess(targetNovelId)
+
+    writeActiveWorkspaceNovelId(targetNovelId)
+    upsertWorkspaceNovelRegistry({ novelId: targetNovelId, title: scopedPayload.localNovels[0]?.title ?? null })
+
+    return persistWorkspaceRuntimeState(scopedPayload, id, targetDb)
+  }
+
+  if (hasTransactionWrapper(db)) {
+    await db.withTransaction(() => {
+      executeOnDb(
+        db,
+         `INSERT INTO WorkspaceRuntimeState (
+           id, currentNovelId, currentChapterId, currentTab, helperTab,
+          expandedVolumeIdsJson, localOutlinesJson, localCharactersJson, localCharacterRelationsJson,
+          localWorldEntriesJson, localTimelineEventsJson, rewriteCandidatesJson, rewriteHistoryJson, trajectoriesJson,
+          rewriteMode, rewriteTone, rewriteOutput, rewriteScope, selectionText,
+          selectedParagraphIndex, thinkingLevel, autoContinue, keepCanon, promptText,
+          selectedPresetId, presetsJson, constraintsJson, focusMode, presetCompatSessionStateJson
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          currentNovelId = excluded.currentNovelId,
+          currentChapterId = excluded.currentChapterId,
+          currentTab = excluded.currentTab,
+          helperTab = excluded.helperTab,
+          expandedVolumeIdsJson = excluded.expandedVolumeIdsJson,
+          localOutlinesJson = excluded.localOutlinesJson,
+          localCharactersJson = excluded.localCharactersJson,
+          localCharacterRelationsJson = excluded.localCharacterRelationsJson,
+          localWorldEntriesJson = excluded.localWorldEntriesJson,
+          localTimelineEventsJson = excluded.localTimelineEventsJson,
+          rewriteCandidatesJson = excluded.rewriteCandidatesJson,
+          rewriteHistoryJson = excluded.rewriteHistoryJson,
+          trajectoriesJson = excluded.trajectoriesJson,
+          rewriteMode = excluded.rewriteMode,
+          rewriteTone = excluded.rewriteTone,
+          rewriteOutput = excluded.rewriteOutput,
+          rewriteScope = excluded.rewriteScope,
+          selectionText = excluded.selectionText,
+          selectedParagraphIndex = excluded.selectedParagraphIndex,
+          thinkingLevel = excluded.thinkingLevel,
+          autoContinue = excluded.autoContinue,
+          keepCanon = excluded.keepCanon,
+          promptText = excluded.promptText,
+          selectedPresetId = excluded.selectedPresetId,
+          presetsJson = excluded.presetsJson,
+          constraintsJson = excluded.constraintsJson,
+          focusMode = excluded.focusMode,
+          presetCompatSessionStateJson = excluded.presetCompatSessionStateJson,
+          updatedAt = CURRENT_TIMESTAMP`,
+        id,
+        normalized.currentNovelId,
+        normalized.currentChapterId,
+        normalized.currentTab,
+        normalized.helperTab,
+        JSON.stringify(normalized.expandedVolumeIds),
+        JSON.stringify(normalized.localOutlines),
+        JSON.stringify(normalized.localCharacters),
+        JSON.stringify(normalized.localCharacterRelations),
+        JSON.stringify(normalized.localWorldEntries),
+        JSON.stringify(normalized.localTimelineEvents),
+        JSON.stringify(normalized.rewriteCandidates),
+        JSON.stringify(normalized.rewriteHistory),
+        JSON.stringify(normalized.trajectories),
+        normalized.rewriteMode,
+        normalized.rewriteTone,
+        normalized.rewriteOutput,
+        normalized.rewriteScope,
+        normalized.selectionText,
+        normalized.selectedParagraphIndex,
+        normalized.thinkingLevel,
+        normalized.autoContinue ? 1 : 0,
+        normalized.keepCanon ? 1 : 0,
+        normalized.promptText,
+        normalized.selectedPresetId,
+        JSON.stringify(normalized.presets),
+        JSON.stringify(normalized.constraints),
+        normalized.focusMode ? 1 : 0,
+        JSON.stringify(normalized.presetCompatSessionState),
+      )
+
+      executeOnDb(db, 'DELETE FROM WorkspaceRuntimeChapter WHERE workspaceStateId = ?', id)
+      executeOnDb(db, 'DELETE FROM WorkspaceRuntimeVolume WHERE workspaceStateId = ?', id)
+      executeOnDb(db, 'DELETE FROM WorkspaceRuntimeNovel WHERE workspaceStateId = ?', id)
+
+      normalized.localNovels.forEach((novel, index) => {
+        executeOnDb(
+          db,
+          `INSERT INTO WorkspaceRuntimeNovel (workspaceStateId, id, title, summary, tagsJson, sortOrder)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          id,
+          novel.id,
+          novel.title,
+          novel.summary,
+          JSON.stringify(novel.tags ?? []),
+          index,
+        )
+      })
+
+      normalized.localVolumes.forEach((volume, index) => {
+        executeOnDb(
+          db,
+          `INSERT INTO WorkspaceRuntimeVolume (workspaceStateId, id, novelId, title, sortOrder)
+           VALUES (?, ?, ?, ?, ?)`,
+          id,
+          volume.id,
+          volume.novelId,
+          volume.title,
+          Number.isFinite(volume.order) ? volume.order : index + 1,
+        )
+      })
+
+      normalized.localChapters.forEach((chapter, index) => {
+        executeOnDb(
+          db,
+          `INSERT INTO WorkspaceRuntimeChapter (
+             workspaceStateId, id, novelId, volumeId, parentChapterId, kind, branchLabel, title,
+             sortOrder, contentHtml, originalContentHtml, status, wordCount, updatedAtLabel, trajectoryJson
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id,
+          chapter.id,
+          chapter.novelId,
+          chapter.volumeId,
+          chapter.parentChapterId ?? null,
+          chapter.kind ?? null,
+          chapter.branchLabel ?? null,
+          chapter.title,
+          Number.isFinite(chapter.order) ? chapter.order : index + 1,
+          chapter.content,
+          chapter.originalContent ?? null,
+          chapter.status,
+          chapter.wordCount,
+          chapter.updatedAt,
+          JSON.stringify(chapter.trajectory ?? []),
+        )
+      })
+    })
+
+    const saved = queryOneFromDb<{ updatedAt: string }>(db, 'SELECT updatedAt FROM WorkspaceRuntimeState WHERE id = ?', id)
+    if (!saved) {
+      throw new Error('Failed to save workspace runtime state')
+    }
+
+    return saved
+  }
+
   executeOnDb(db, 'BEGIN IMMEDIATE')
   try {
     executeOnDb(
       db,
-       `INSERT INTO WorkspaceRuntimeState (
+        `INSERT INTO WorkspaceRuntimeState (
           id, currentNovelId, currentChapterId, currentTab, helperTab,
          expandedVolumeIdsJson, localOutlinesJson, localCharactersJson, localCharacterRelationsJson,
          localWorldEntriesJson, localTimelineEventsJson, rewriteCandidatesJson, rewriteHistoryJson, trajectoriesJson,
@@ -432,7 +618,9 @@ export function persistWorkspaceRuntimeState(
   } catch (error) {
     try {
       executeOnDb(db, 'ROLLBACK')
-    } catch {
+    } catch (_rollbackError) {
+      void _rollbackError
+      // Ignore rollback cleanup failures so the original transaction error is rethrown.
     }
     throw error
   }
@@ -550,7 +738,7 @@ function readWorkspaceArtifactPayload(id = WORKSPACE_ID, db?: WorkspaceRecoveryD
   return { ok: true as const, payload: parsed.payload }
 }
 
-export function backfillWorkspaceRuntimeFromArtifactIfMissing(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
+export async function backfillWorkspaceRuntimeFromArtifactIfMissing(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
   const runtimeState = readWorkspaceRuntimeState(id, db)
   if (runtimeState) return runtimeState
 
@@ -562,11 +750,11 @@ export function backfillWorkspaceRuntimeFromArtifactIfMissing(id = WORKSPACE_ID,
     return null
   }
 
-  persistWorkspaceRuntimeState(artifact.payload, id, db)
+  await persistWorkspaceRuntimeState(artifact.payload, id, db)
   return artifact.payload
 }
 
-export function loadWorkspacePayloadFromRuntimeOrRecovery(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
+export async function loadWorkspacePayloadFromRuntimeOrRecovery(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
   const runtimeState = readWorkspaceRuntimeState(id, db)
   if (runtimeState) {
     return runtimeState
@@ -574,7 +762,7 @@ export function loadWorkspacePayloadFromRuntimeOrRecovery(id = WORKSPACE_ID, db?
 
   const recovered = recoverWorkspaceStateFromKnowledgeStore(db)
   if (recovered) {
-    persistWorkspaceRuntimeState(recovered, id, db)
+    await persistWorkspaceRuntimeState(recovered, id, db)
     return recovered
   }
 

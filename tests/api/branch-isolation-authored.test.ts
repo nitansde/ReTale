@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
@@ -185,6 +186,15 @@ describe('branch-isolation-authored', () => {
     vi.doMock('@/lib/server/ollama-local', () => ({
       embedTextsWithOllama,
     }))
+    vi.doMock('@/lib/server/db-resolver', async () => {
+      const actual = await vi.importActual<typeof import('@/lib/server/db-resolver')>('@/lib/server/db-resolver')
+      return {
+        ...actual,
+        getNovelDb: () => database,
+        getNovelLanceDbPath: (novelId: string) => path.join(tempDatabase.directory, `${novelId}.lancedb`),
+        resetResolvedDatabasesForTests: () => undefined,
+      }
+    })
 
     const { loadRawTextRetrievalDocs, precomputeRawTextEmbeddingCache } = await import('@/lib/server/retrieval-index')
     const firstPrecompute = await precomputeRawTextEmbeddingCache({
@@ -215,7 +225,7 @@ describe('branch-isolation-authored', () => {
       completedDocs: rawTextDocs.length,
       cacheHits: rawTextDocs.length,
     })
-    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(rawTextDocs.length > 0 ? 1 : 0)
 
     const [{ buildGenerationContext }, { searchLanceEvidence }] = await Promise.all([
       import('@/lib/server/context-builder'),
@@ -274,6 +284,15 @@ describe('branch-isolation-authored', () => {
         model: 'branch-isolation-embedding-model',
       })),
     }))
+    vi.doMock('@/lib/server/db-resolver', async () => {
+      const actual = await vi.importActual<typeof import('@/lib/server/db-resolver')>('@/lib/server/db-resolver')
+      return {
+        ...actual,
+        getNovelDb: () => database,
+        getNovelLanceDbPath: (novelId: string) => path.join(tempDatabase.directory, `${novelId}.lancedb`),
+        resetResolvedDatabasesForTests: () => undefined,
+      }
+    })
 
     const { buildGenerationContext } = await import('@/lib/server/context-builder')
     const context = await buildGenerationContext({

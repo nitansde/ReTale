@@ -48,7 +48,7 @@ async function decodeTextFile(file: File) {
 }
 
 async function ensureWorkspacePayload() {
-  backfillWorkspaceRuntimeFromArtifactIfMissing('singleton')
+  await backfillWorkspaceRuntimeFromArtifactIfMissing('singleton')
   return loadWorkspacePayloadFromRuntimeOrRecovery('singleton')
 }
 
@@ -72,7 +72,7 @@ export async function POST(request: Request) {
       summary: `从 ${file.name} 导入`,
     }))
 
-    persistWorkspaceRuntimeState(nextState)
+    await persistWorkspaceRuntimeState(nextState)
     upsertWorkspaceState('singleton', JSON.stringify(nextState), { backupReason: 'import-txt' })
     await syncWorkspacePayloadToKnowledgeStore(nextState)
 
