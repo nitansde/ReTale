@@ -64,6 +64,18 @@ type AppSettingRow = {
   updatedAt: string
 }
 
+export type WorkspaceNovelRegistryRow = {
+  novelId: string
+  safeNovelId: string
+  title: string | null
+  dbFilePath: string
+  lanceDbPath: string
+  schemaVersion: string
+  migrationStatus: string
+  createdAt: string
+  updatedAt: string
+}
+
 type SqliteTableRow = {
   name: string
 }
@@ -138,6 +150,15 @@ export function upsertWorkspaceNovelRegistry(params: { novelId: string; title?: 
     params.title?.trim() || null,
     getNovelDbFilePath(params.novelId),
     getNovelLanceDbPath(params.novelId),
+  )
+}
+
+export function listReadyWorkspaceNovelRegistry() {
+  return getControlDatabaseAccess().queryAll<WorkspaceNovelRegistryRow>(
+    `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus, createdAt, updatedAt
+     FROM NovelRegistry
+     WHERE migrationStatus = 'ready'
+     ORDER BY createdAt ASC, novelId ASC`
   )
 }
 
