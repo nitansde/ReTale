@@ -4,6 +4,8 @@ type ProviderName = 'openai-compatible' | 'ollama'
 
 type ProviderRequestDebug = Pick<LlmDebugLogParams, 'folder' | 'stage' | 'attempt' | 'presetCompat'>
 
+type ProviderRequestTimeoutPhase = 'request' | 'stream-idle'
+
 type ProviderRequestContext = {
   response: Response
   cleanup: () => void
@@ -30,6 +32,9 @@ export class ProviderRequestError extends Error {
   }
 }
 
+export const STREAM_PROVIDER_IDLE_TIMEOUT_MS = 180000
+export const NON_STREAM_PROVIDER_TIMEOUT_MS = 300000
+
 function isAbortError(error: unknown) {
   return error instanceof Error && error.name === 'AbortError'
 }
@@ -53,11 +58,18 @@ function buildRequestError(params: {
   timeoutMs: number
   error: unknown
   inputSignal?: AbortSignal
+  timeoutPhase?: ProviderRequestTimeoutPhase | null
 }) {
   if (isAbortError(params.error)) {
-    return params.inputSignal?.aborted
-      ? new ProviderRequestError('aborted', `${params.action} aborted`)
-      : new ProviderRequestError('timeout', `${params.action} timed out after ${params.timeoutMs}ms`)
+    if (params.inputSignal?.aborted) {
+      return new ProviderRequestError('aborted', `${params.action} aborted`)
+    }
+
+    if (params.timeoutPhase === 'stream-idle') {
+      return new ProviderRequestError('timeout', `${params.action} stream timed out after ${params.timeoutMs}ms of inactivity`)
+    }
+
+    return new ProviderRequestError('timeout', `${params.action} timed out after ${params.timeoutMs}ms`)
   }
 
   return new ProviderRequestError('network', `${params.action} failed`)
@@ -77,9 +89,29 @@ export async function requestProviderEndpoint(params: {
   requestMessages?: ProviderRequestMessage[]
   noBodyMessage?: string
 }): Promise<ProviderRequestContext> {
+  const effectiveTimeoutMs = params.streamed
+    ? params.timeoutMs
+    : Math.max(params.timeoutMs, NON_STREAM_PROVIDER_TIMEOUT_MS)
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), params.timeoutMs)
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  let timeoutPhase: ProviderRequestTimeoutPhase | null = 'request'
+  let cleanedUp = false
   const abortFromInputSignal = () => controller.abort()
+
+  const clearRequestTimeout = () => {
+    if (timeout !== null) {
+      clearTimeout(timeout)
+      timeout = null
+    }
+  }
+
+  const scheduleTimeout = (phase: ProviderRequestTimeoutPhase) => {
+    timeoutPhase = phase
+    clearRequestTimeout()
+    timeout = setTimeout(() => controller.abort(), effectiveTimeoutMs)
+  }
+
+  scheduleTimeout('request')
 
   if (params.inputSignal?.aborted) {
     controller.abort()
@@ -88,7 +120,10 @@ export async function requestProviderEndpoint(params: {
   }
 
   const cleanup = () => {
-    clearTimeout(timeout)
+    if (cleanedUp) return
+    cleanedUp = true
+    timeoutPhase = null
+    clearRequestTimeout()
     params.inputSignal?.removeEventListener('abort', abortFromInputSignal)
   }
 
@@ -131,7 +166,52 @@ export async function requestProviderEndpoint(params: {
       throw error
     }
 
-    return { response, cleanup }
+    if (!params.streamed || !response.body) {
+      return { response, cleanup }
+    }
+
+    scheduleTimeout('stream-idle')
+
+    const reader = response.body.getReader()
+    const wrappedBody = new ReadableStream<Uint8Array>({
+      async pull(streamController) {
+        try {
+          const { done, value } = await reader.read()
+          if (done) {
+            cleanup()
+            streamController.close()
+            return
+          }
+
+          scheduleTimeout('stream-idle')
+          streamController.enqueue(value)
+        } catch (error) {
+          const normalizedError = buildRequestError({
+            provider: params.provider,
+            action: params.action,
+            timeoutMs: effectiveTimeoutMs,
+            error,
+            inputSignal: params.inputSignal,
+            timeoutPhase,
+          })
+          cleanup()
+          streamController.error(normalizedError)
+        }
+      },
+      async cancel(reason) {
+        cleanup()
+        await reader.cancel(reason)
+      },
+    })
+
+    return {
+      response: new Response(wrappedBody, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      }),
+      cleanup,
+    }
   } catch (error) {
     if (error instanceof ProviderRequestError) {
       cleanup()
@@ -141,9 +221,10 @@ export async function requestProviderEndpoint(params: {
     const normalizedError = buildRequestError({
       provider: params.provider,
       action: params.action,
-      timeoutMs: params.timeoutMs,
+      timeoutMs: effectiveTimeoutMs,
       error,
       inputSignal: params.inputSignal,
+      timeoutPhase,
     })
     await writeLlmDebugLog({
       folder: params.debug?.folder ?? params.provider,

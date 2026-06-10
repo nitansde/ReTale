@@ -140,7 +140,7 @@ describe('/api/rewrite provider error contract', () => {
       ok: false,
       code: 'provider_request_failed',
       provider: 'openai-compatible',
-      error: 'Provider request timed out after 20000ms',
+      error: 'Provider request timed out after 300000ms',
     })
   })
 

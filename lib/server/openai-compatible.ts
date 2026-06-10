@@ -3,7 +3,12 @@ import type { ChapterKnowledgeExtraction } from '@/lib/story-knowledge'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { safeParseJson } from '@/lib/server/json-parse'
 import { writeLlmDebugLog, type LlmDebugLogParams } from '@/lib/server/llm-debug-log'
-import { parseProviderJsonResponse, requestProviderEndpoint } from '@/lib/server/provider-request'
+import {
+  NON_STREAM_PROVIDER_TIMEOUT_MS,
+  parseProviderJsonResponse,
+  requestProviderEndpoint,
+  STREAM_PROVIDER_IDLE_TIMEOUT_MS,
+} from '@/lib/server/provider-request'
 import {
   buildKnowledgeExtractionPrompt,
   hasUsableKnowledgeExtraction,
@@ -533,7 +538,7 @@ export async function generateRewriteWithOpenAICompatible(
     },
   }
 
-  const timeoutMs = 20000
+  const timeoutMs = NON_STREAM_PROVIDER_TIMEOUT_MS
   const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`
   const messages: OpenAICompatibleChatMessage[] = [
     {
@@ -678,7 +683,7 @@ export async function streamRewriteWithOpenAICompatible(
     return { enabled: false, error: 'OpenAI-compatible config not set' }
   }
 
-  const timeoutMs = 30000
+  const timeoutMs = STREAM_PROVIDER_IDLE_TIMEOUT_MS
   const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`
   const messages: OpenAICompatibleChatMessage[] = [
     { role: 'system', content: input.systemPrompt },
@@ -844,7 +849,7 @@ export async function embedTextsWithOpenAICompatible(
   }
 
   const controller = new AbortController()
-  const timeoutMs = 30000
+  const timeoutMs = NON_STREAM_PROVIDER_TIMEOUT_MS
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
   try {

@@ -1,11 +1,17 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import type { AISettings } from '@/lib/types'
 
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalTaskStaleTimeoutMs = process.env.RETALE_TASK_STALE_TIMEOUT_MS
 const originalTaskMaxRetries = process.env.RETALE_TASK_MAX_RETRIES
+const originalDataDir = process.env.RETALE_DATA_DIR
+const originalDatabaseUrl = process.env.DATABASE_URL
+
+const cleanupDirectories: string[] = []
 
 function createAiSettings(): AISettings {
   return {
@@ -52,36 +58,25 @@ function createAiSettings(): AISettings {
 }
 
 async function createTestDatabase(prefix: string) {
-  const database = new DatabaseSync(`file:${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}?mode=memory&cache=shared`)
-  globalForSqlite.sqlite = database
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
+  cleanupDirectories.push(tempRoot)
+  process.env.RETALE_DATA_DIR = path.join(tempRoot, 'data')
+  process.env.DATABASE_URL = path.join(process.env.RETALE_DATA_DIR, 'novels', 'novel-rewrite', 'novel.db')
   vi.resetModules()
 
-  const { initializeDatabase, execute, queryOne } = await import('@/lib/server/sqlite')
-  initializeDatabase(database)
-  execute('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)', 'novel-rewrite', 'Rewrite Fixture', 'txt')
-  execute('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)', 'novel-rewrite:main', 'novel-rewrite', 'main')
-  execute(
+  const { getNovelDb, resetResolvedDatabasesForTests } = await import('@/lib/server/db-resolver')
+  const database = getNovelDb('novel-rewrite')
+  database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run('novel-rewrite', 'Rewrite Fixture', 'txt')
+  database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run('novel-rewrite:main', 'novel-rewrite', 'main')
+  database.prepare(
     `INSERT INTO KnowledgeChapter (id, novelId, branchId, chapterNo, title, rawText, sourceHash)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    'chapter-rewrite-1',
-    'novel-rewrite',
-    'novel-rewrite:main',
-    1,
-    '第一章',
-    '原始章节正文。',
-    'hash-rewrite-1',
-  )
+  ).run('chapter-rewrite-1', 'novel-rewrite', 'novel-rewrite:main', 1, '第一章', '原始章节正文。', 'hash-rewrite-1')
 
-  return { database, queryOne }
-}
-
-function closeTestDatabase() {
-  if (globalForSqlite.sqlite) {
-    try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
-    } catch {
-    }
-    delete globalForSqlite.sqlite
+  return {
+    database,
+    queryOne: <T>(sql: string, ...params: unknown[]) => (database.prepare(sql).get(...params) as T | undefined) ?? null,
+    resetResolvedDatabasesForTests,
   }
 }
 
@@ -148,13 +143,24 @@ async function importRewriteRoute(options: ImportRewriteRouteOptions = {}) {
   return import('@/app/api/rewrite/route')
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers()
   process.env.RETALE_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
   process.env.RETALE_TASK_MAX_RETRIES = originalTaskMaxRetries
-  closeTestDatabase()
+  process.env.RETALE_DATA_DIR = originalDataDir
+  process.env.DATABASE_URL = originalDatabaseUrl
+  const resolverModule = await import('@/lib/server/db-resolver')
+  resolverModule.resetResolvedDatabasesForTests()
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
   vi.resetModules()
+
+  while (cleanupDirectories.length > 0) {
+    const directory = cleanupDirectories.pop()
+    if (directory) {
+      fs.rmSync(directory, { recursive: true, force: true })
+    }
+  }
 })
 
 describe('recoverable rewrite jobs', () => {
@@ -192,9 +198,9 @@ describe('recoverable rewrite jobs', () => {
     expect(duplicate.job.jobId).toBe(created.job.jobId)
     expect(duplicate.job.status).toBe('queued')
 
-    await runRecoverableRewriteJobForTesting(created.job.jobId)
+    await runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
 
-    const restoredByIdResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const restoredByIdResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
     const restoredById = await restoredByIdResponse.json() as {
       ok: boolean
       job: { status: string; result: { content: string; provider: string; inputTokens: number | null; outputTokens: number | null } }
@@ -232,7 +238,7 @@ describe('recoverable rewrite jobs', () => {
     const created = await createdResponse.json() as { ok: boolean; job: { jobId: string; status: string; result: null } }
     expect(created.ok).toBe(true)
 
-    const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId)
+    const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
     await waitForCondition(() => fetchMock.mock.calls.length === 1 && upstreamController !== null)
     const controller = upstreamController
     if (!controller) {
@@ -241,7 +247,7 @@ describe('recoverable rewrite jobs', () => {
 
     controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"第一段"}}]}\n\n'))
     await waitForCondition(async () => {
-      const response = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+      const response = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
       const data = await response.json() as { job: { status: string; result: { content: string } | null } }
       return data.job.status === 'running' && data.job.result?.content === '第一段'
     })
@@ -259,7 +265,7 @@ describe('recoverable rewrite jobs', () => {
     controller.close()
     await runPromise
 
-    const restoredResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const restoredResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
     const restored = await restoredResponse.json() as { job: { status: string; result: { content: string; provider: string } } }
     expect(restored.job.status).toBe('succeeded')
     expect(restored.job.result.content).toBe('第一段第二段')
@@ -284,7 +290,7 @@ describe('recoverable rewrite jobs', () => {
     const created = await createdResponse.json() as { job: { jobId: string; status: string } }
     expect(created.job.status).toBe('queued')
 
-    const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId)
+    const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
     await waitForCondition(() => capturedSignal !== null)
 
     const abortResponse = await DELETE(createAbortRequest(created.job.jobId))
@@ -295,7 +301,7 @@ describe('recoverable rewrite jobs', () => {
     expect(capturedSignal?.aborted).toBe(true)
     await runPromise
 
-    const restoredByIdResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const restoredByIdResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
     const restoredById = await restoredByIdResponse.json() as { job: { status: string; errorMessage: string | null } }
     expect(restoredById.job.status).toBe('aborted')
 
@@ -325,7 +331,7 @@ describe('recoverable rewrite jobs', () => {
     const { DELETE, GET, POST, runRecoverableRewriteJobForTesting } = await importRewriteRoute()
     const createdResponse = await POST(createRewriteRequest({ recoverableRewriteJob: true, stream: true }))
     const created = await createdResponse.json() as { job: { jobId: string; status: string } }
-    const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId)
+    const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
     await waitForCondition(() => capturedSignal !== null)
 
     const wrongScopeResponse = await DELETE(createAbortRequest(created.job.jobId, { branchId: 'novel-rewrite:other' }))
@@ -334,7 +340,7 @@ describe('recoverable rewrite jobs', () => {
     expect(wrongScope.ok).toBe(false)
     expect(capturedSignal?.aborted).toBe(false)
 
-    const runningResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const runningResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
     const running = await runningResponse.json() as { job: { status: string } }
     expect(running.job.status).toBe('running')
 
@@ -342,6 +348,33 @@ describe('recoverable rewrite jobs', () => {
     expect(abortResponse.status).toBe(200)
     expect(capturedSignal?.aborted).toBe(true)
     await runPromise
+  }, 30000)
+
+  it('stores recoverable rewrite jobs only in the target novel database', async () => {
+    const { database } = await createTestDatabase('retale-rewrite-per-novel-isolation')
+    const resolver = await import('@/lib/server/db-resolver')
+    const betaDb = resolver.getNovelDb('novel-beta')
+    betaDb.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run('novel-beta', 'Beta Fixture', 'txt')
+    betaDb.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run('novel-beta:main', 'novel-beta', 'main')
+    betaDb.prepare(
+      `INSERT INTO KnowledgeChapter (id, novelId, branchId, chapterNo, title, rawText, sourceHash)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('chapter-beta-1', 'novel-beta', 'novel-beta:main', 1, 'Beta 第一章', 'Beta 原文。', 'hash-beta-1')
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ result: '完成后的单个改写版本。' }) } }],
+      usage: { prompt_tokens: 11, completion_tokens: 22 },
+    }), { status: 200 })))
+
+    const { GET, POST } = await importRewriteRoute()
+    const createdResponse = await POST(createRewriteRequest({ recoverableRewriteJob: true }))
+    const created = await createdResponse.json() as { job: { jobId: string } }
+
+    expect(database.prepare('SELECT COUNT(*) AS count FROM KnowledgeJob WHERE id = ?').get(created.job.jobId)).toMatchObject({ count: 1 })
+    expect(betaDb.prepare('SELECT COUNT(*) AS count FROM KnowledgeJob WHERE id = ?').get(created.job.jobId)).toMatchObject({ count: 0 })
+
+    const betaScopedResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-beta`))
+    await expect(betaScopedResponse.json()).resolves.toMatchObject({ ok: true, job: null })
   }, 30000)
 
   it('rejects recoverable rewrite job creation when the requested scope is missing', async () => {
@@ -379,9 +412,9 @@ describe('recoverable rewrite jobs', () => {
     expect(created.ok).toBe(true)
     expect(created.job.status).toBe('queued')
 
-    await runRecoverableRewriteJobForTesting(created.job.jobId)
+    await runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
 
-    const restoredResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const restoredResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
     const restored = await restoredResponse.json() as {
       ok: boolean
       job: {
@@ -415,7 +448,7 @@ describe('recoverable rewrite jobs', () => {
     const createdResponse = await POST(createRewriteRequest({ recoverableRewriteJob: true, stream: true }))
     const created = await createdResponse.json() as { job: { jobId: string } }
 
-    const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId)
+    const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
     await waitForCondition(() => upstreamController !== null)
     const controller = upstreamController
     if (!controller) {
@@ -424,7 +457,7 @@ describe('recoverable rewrite jobs', () => {
 
     controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"一"}}]}\n\n'))
     await waitForCondition(async () => {
-      const response = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const response = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
       const data = await response.json() as { job: { result: { content: string } | null } }
       return data.job.result?.content === '一'
     })
@@ -433,7 +466,7 @@ describe('recoverable rewrite jobs', () => {
       controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"一"}}]}\n\n'))
     }
 
-    const throttledResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const throttledResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
     const throttled = await throttledResponse.json() as { job: { status: string; result: { content: string } | null } }
     expect(throttled.job.status).toBe('running')
     expect(throttled.job.result?.content).toBe('一')
@@ -442,7 +475,7 @@ describe('recoverable rewrite jobs', () => {
     controller.close()
     await runPromise
 
-    const restoredResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const restoredResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
     const restored = await restoredResponse.json() as { job: { status: string; result: { content: string } } }
     expect(restored.job.status).toBe('succeeded')
     expect(restored.job.result.content).toBe('一'.repeat(51))
@@ -466,12 +499,12 @@ describe('recoverable rewrite jobs', () => {
     expect(setTimeoutSpy).toHaveBeenCalled()
 
     await waitForCondition(async () => {
-      const response = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const response = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
       const data = await response.json() as { job: { status: string } }
       return data.job.status === 'succeeded'
     })
 
-    const restoredResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const restoredResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
     const restored = await restoredResponse.json() as { job: { status: string; result: { content: string } } }
     expect(restored.job.status).toBe('succeeded')
     expect(restored.job.result.content).toBe('fallback scheduled result')
@@ -529,7 +562,7 @@ describe('recoverable rewrite jobs', () => {
       },
     })
 
-    const response = await GET(new Request('http://localhost/api/rewrite?jobId=rewrite-watchdog-get'))
+    const response = await GET(new Request('http://localhost/api/rewrite?jobId=rewrite-watchdog-get&novelId=novel-rewrite'))
     const data = await response.json() as { ok: boolean; job: { jobId: string; status: string; errorMessage: string | null } }
 
     expect(response.status).toBe(200)
@@ -672,9 +705,16 @@ describe('recoverable rewrite jobs', () => {
       ) VALUES (?, ?, ?, 'rewrite_generation', 'running', ?, ?, ?, datetime('now', '-10 seconds'), datetime('now', '-10 seconds'))`
     ).run('rewrite-watchdog-guard', 'novel-rewrite', 'novel-rewrite:main', 0.4, '生成中', JSON.stringify(basePayload))
 
+    const { createNovelDatabaseAccess } = await import('@/lib/server/database-access')
+    const scopedDb = createNovelDatabaseAccess('novel-rewrite')
     const { reconcileKnowledgeJobWatchdog } = await import('@/lib/server/knowledge-job-watchdog')
     const { updateRecoverableRewriteJob } = await import('@/lib/server/recoverable-rewrite-jobs')
-    reconcileKnowledgeJobWatchdog({ jobId: 'rewrite-watchdog-guard', jobTypes: ['rewrite_generation'] })
+    reconcileKnowledgeJobWatchdog({
+      jobId: 'rewrite-watchdog-guard',
+      novelId: 'novel-rewrite',
+      jobTypes: ['rewrite_generation'],
+      db: scopedDb,
+    })
 
     const queuedRow = queryOne<{ status: string; payloadJson: string | null }>(
       'SELECT status, payloadJson FROM KnowledgeJob WHERE id = ?',
@@ -706,6 +746,7 @@ describe('recoverable rewrite jobs', () => {
         },
       },
       expectedAttemptId: 'attempt-old',
+      db: scopedDb,
     })
 
     const finalRow = queryOne<{ status: string; payloadJson: string | null }>(
@@ -735,8 +776,8 @@ describe('recoverable rewrite jobs', () => {
     const createdResponse = await POST(createRewriteRequest({ recoverableRewriteJob: true }))
     const created = await createdResponse.json() as { job: { jobId: string; status: string } }
     expect(created.job.status).toBe('queued')
-    const firstRun = runRecoverableRewriteJobForTesting(created.job.jobId)
-    const secondRun = runRecoverableRewriteJobForTesting(created.job.jobId)
+    const firstRun = runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
+    const secondRun = runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
 
     await waitForCondition(() => fetchMock.mock.calls.length === 1)
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -745,7 +786,7 @@ describe('recoverable rewrite jobs', () => {
     }), { status: 200 }))
     await Promise.all([firstRun, secondRun])
 
-    const restoredResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}`))
+    const restoredResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
     const restored = await restoredResponse.json() as { job: { status: string; result: { content: string } } }
     expect(restored.job.status).toBe('succeeded')
     expect(restored.job.result.content).toBe('claimed once result')

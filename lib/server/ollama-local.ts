@@ -11,7 +11,12 @@ import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { safeParseJson } from '@/lib/server/json-parse'
 import { writeLlmDebugLog, type LlmDebugLogParams } from '@/lib/server/llm-debug-log'
 import { findAppSettings } from '@/lib/server/persistence'
-import { parseProviderJsonResponse, requestProviderEndpoint } from '@/lib/server/provider-request'
+import {
+  NON_STREAM_PROVIDER_TIMEOUT_MS,
+  parseProviderJsonResponse,
+  requestProviderEndpoint,
+  STREAM_PROVIDER_IDLE_TIMEOUT_MS,
+} from '@/lib/server/provider-request'
 
 type OllamaTagsResponse = {
   models?: Array<{
@@ -1461,7 +1466,8 @@ export async function embedTextsWithOllama(
   }
 
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), config.timeoutMs)
+  const effectiveTimeoutMs = Math.max(config.timeoutMs, NON_STREAM_PROVIDER_TIMEOUT_MS)
+  const timeout = setTimeout(() => controller.abort(), effectiveTimeoutMs)
   const requestBaseUrl = config.baseUrl.replace(/\/$/, '')
   let requestUrl = `${requestBaseUrl}/api/embed`
   const requestBody = {
@@ -1527,7 +1533,7 @@ export async function embedTextsWithOllama(
     const topLevelDetails = readErrorLikeDetails(error)
     const nestedCause = error instanceof Error ? (error as ErrorWithCause).cause : undefined
     const causeDetails = readErrorLikeDetails(nestedCause)
-    const requestSummary = `endpoint=${requestUrl}, baseUrl=${requestBaseUrl}, model=${config.model}, inputCount=${normalizedInput.length}, timeoutMs=${config.timeoutMs}`
+    const requestSummary = `endpoint=${requestUrl}, baseUrl=${requestBaseUrl}, model=${config.model}, inputCount=${normalizedInput.length}, timeoutMs=${effectiveTimeoutMs}`
     const errorSummary = [
       topLevelDetails.name ? `errorName=${topLevelDetails.name}` : null,
       topLevelDetails.code ? `errorCode=${topLevelDetails.code}` : null,
@@ -1543,7 +1549,7 @@ export async function embedTextsWithOllama(
       model: config.model,
       error: error instanceof Error
         ? isAbort
-          ? `Ollama embedding request timed out or was aborted (${requestSummary}${errorSummary ? `, ${errorSummary}` : ''}): request timed out after ${config.timeoutMs}ms`
+          ? `Ollama embedding request timed out or was aborted (${requestSummary}${errorSummary ? `, ${errorSummary}` : ''}): request timed out after ${effectiveTimeoutMs}ms`
           : `Ollama embedding fetch failed (${requestSummary}${errorSummary ? `, ${errorSummary}` : ''}): ${topLevelDetails.message ?? 'unknown fetch error'}`
         : `Ollama embedding fetch failed (${requestSummary}): ${String(error)}`,
     }
@@ -1982,7 +1988,8 @@ async function requestStructuredExtraction(params: {
   debug?: Pick<LlmDebugLogParams, 'folder' | 'stage' | 'attempt'>
 }) {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), params.timeoutMs)
+  const effectiveTimeoutMs = Math.max(params.timeoutMs, NON_STREAM_PROVIDER_TIMEOUT_MS)
+  const timeout = setTimeout(() => controller.abort(), effectiveTimeoutMs)
   const url = `${params.baseUrl.replace(/\/$/, '')}/api/chat`
   const messages: Array<{ role: 'system' | 'user'; content: string }> = [
     {
@@ -2070,7 +2077,8 @@ async function requestStructuredRepair(params: {
   debug?: Pick<LlmDebugLogParams, 'folder' | 'stage' | 'attempt'>
 }) {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), params.timeoutMs)
+  const effectiveTimeoutMs = Math.max(params.timeoutMs, NON_STREAM_PROVIDER_TIMEOUT_MS)
+  const timeout = setTimeout(() => controller.abort(), effectiveTimeoutMs)
   const url = `${params.baseUrl.replace(/\/$/, '')}/api/chat`
   const messages: Array<{ role: 'system' | 'user'; content: string }> = [
     {
@@ -2438,7 +2446,7 @@ export async function generateRewriteWithOllama(
     const response = await requestOllamaChat({
       baseUrl: config.baseUrl,
       model: config.model,
-      timeoutMs: Math.min(config.timeoutMs, 30000),
+      timeoutMs: NON_STREAM_PROVIDER_TIMEOUT_MS,
       temperature: input.tone === 'keep' ? 0.7 : 0.9,
       format: {
         type: 'object',
@@ -2519,7 +2527,7 @@ export async function streamRewriteWithOllama(
     const upstream = await requestOllamaChatStream({
       baseUrl: config.baseUrl,
       model,
-      timeoutMs: config.timeoutMs,
+      timeoutMs: Math.max(config.timeoutMs, STREAM_PROVIDER_IDLE_TIMEOUT_MS),
       temperature: input.temperature ?? 0.7,
       messages,
       requestOptions: input.requestOptions,

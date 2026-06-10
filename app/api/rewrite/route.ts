@@ -1,7 +1,7 @@
 import { after, NextResponse } from 'next/server'
 import { buildGenerationContext } from '@/lib/server/context-builder'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
-import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
+import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { applyPresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runtime'
 import {
   deserializePresetCompatResponseMetadata,
@@ -46,6 +46,10 @@ const PARTIAL_REWRITE_PERSIST_MIN_CHARS = 120
 const PARTIAL_REWRITE_PERSIST_MIN_MS = 500
 const MAX_PARTIAL_REWRITE_RESULT_CHARS = 200_000
 const MAX_PRESET_COMPAT_RESPONSE_HEADER_BYTES = 16_000
+
+function getNovelRouteDb(novelId: string) {
+  return createNovelDatabaseAccess(novelId)
+}
 
 type RewriteResultPayload = {
   provider: string
@@ -240,7 +244,8 @@ async function readRewriteErrorResponse(response: Response) {
 
 
 function recoverableRewritePanelScopeExists(panel: RecoverableRewriteJobPayload['panel']) {
-  return Boolean(queryOne<{ id: string }>(
+  const db = getNovelRouteDb(panel.novelId)
+  return Boolean(db.queryOne<{ id: string }>(
     `SELECT KnowledgeChapter.id
      FROM KnowledgeChapter
      INNER JOIN StoryBranch ON StoryBranch.id = KnowledgeChapter.branchId
@@ -265,7 +270,8 @@ function findLatestRecoverableRewriteJob(params: {
   branchContextNodeId?: string | null
   continueBlockId?: string | null
 }) {
-  const rows = queryAll<RecoverableRewriteJobRow>(
+  const db = getNovelRouteDb(params.novelId)
+  const rows = db.queryAll<RecoverableRewriteJobRow>(
     `SELECT id, novelId, branchId, status, progress, currentStep, payloadJson, errorMessage, createdAt, updatedAt
      FROM KnowledgeJob
      WHERE novelId = ? AND jobType = ?
@@ -356,7 +362,9 @@ async function readRewriteResponseResultWithProgress(
   jobId: string,
   payload: RecoverableRewriteJobPayload,
   response: Response,
+  novelId: string,
 ): Promise<RewriteResultPayload> {
+  const db = getNovelRouteDb(novelId)
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('application/json') || !response.body || !contentType.includes('text/plain')) {
     return readRewriteResponseResult(response)
@@ -400,6 +408,7 @@ async function readRewriteResponseResultWithProgress(
           presetCompat,
         }),
       },
+      db,
     })
     lastPersistedLength = visibleContent.length
     lastPersistedAt = now
@@ -434,24 +443,24 @@ async function readRewriteResponseResultWithProgress(
   })
 }
 
-function scheduleRecoverableRewriteJob(jobId: string) {
+function scheduleRecoverableRewriteJob(jobId: string, novelId: string) {
   try {
     after(async () => {
-      await runRecoverableRewriteJob(jobId)
+      await runRecoverableRewriteJobInNovel(jobId, novelId)
     })
   } catch (error) {
     if (error instanceof Error && !error.message.includes('outside a request scope')) {
       console.warn('Falling back to timer-based rewrite job scheduling', error)
     }
     setTimeout(() => {
-      void runRecoverableRewriteJob(jobId)
+      void runRecoverableRewriteJobInNovel(jobId, novelId)
     }, 0)
   }
 }
 
 function scheduleRecoverableRewriteJobIfQueued(row: RecoverableRewriteJobRow | null) {
   if (row?.status === 'queued') {
-    scheduleRecoverableRewriteJob(row.id)
+    scheduleRecoverableRewriteJob(row.id, row.novelId)
   }
 }
 
@@ -628,19 +637,24 @@ export async function GET(request: Request) {
   const novelId = searchParams.get('novelId')?.trim()
   const branchId = searchParams.get('branchId')?.trim()
   const chapterId = searchParams.get('chapterId')?.trim()
+  const novelDb = novelId ? getNovelRouteDb(novelId) : null
 
   if (jobId) {
-    reconcileKnowledgeJobWatchdog({ jobId, jobTypes: [RECOVERABLE_REWRITE_JOB_TYPE] })
+    if (!novelId) {
+      return NextResponse.json({ ok: false, error: 'novelId is required when jobId is provided' }, { status: 400 })
+    }
+    reconcileKnowledgeJobWatchdog({ jobId, novelId, jobTypes: [RECOVERABLE_REWRITE_JOB_TYPE], db: novelDb ?? undefined })
   } else if (novelId) {
     reconcileKnowledgeJobWatchdog({
       novelId,
       branchId: branchId ?? undefined,
       jobTypes: [RECOVERABLE_REWRITE_JOB_TYPE],
+      db: novelDb ?? undefined,
     })
   }
 
   const row = jobId
-    ? readRecoverableRewriteJob(jobId)
+    ? readRecoverableRewriteJob(jobId, getNovelRouteDb(novelId!))
     : novelId
       ? findLatestRecoverableRewriteJob({ novelId, branchId, chapterId })
       : null
@@ -665,7 +679,8 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ ok: false, error: 'novelId and branchId are required' }, { status: 400 })
   }
 
-  const row = readRecoverableRewriteJob(jobId)
+  const db = getNovelRouteDb(novelId)
+  const row = readRecoverableRewriteJob(jobId, db)
   const payload = normalizeRecoverableRewriteJobPayload(row?.payloadJson ?? null)
   const inScope = row
     && payload
@@ -678,7 +693,7 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ ok: false, error: 'Recoverable rewrite job not found' }, { status: 404 })
   }
 
-  const job = abortRecoverableRewriteJob(jobId)
+  const job = abortRecoverableRewriteJob(jobId, '已中止生成', db)
   if (!job) {
     return NextResponse.json({ ok: false, error: 'Recoverable rewrite job not found' }, { status: 404 })
   }
@@ -696,11 +711,13 @@ async function createRecoverableRewriteJob(body: Record<string, unknown>) {
   if (!recoverableRewritePanelScopeExists(panel)) {
     return NextResponse.json({ ok: false, error: 'Recoverable rewrite job scope not found' }, { status: 404 })
   }
+  const db = getNovelRouteDb(panel.novelId)
 
   reconcileKnowledgeJobWatchdog({
     novelId: panel.novelId,
     branchId: panel.branchId,
     jobTypes: [RECOVERABLE_REWRITE_JOB_TYPE],
+    db,
   })
 
   const activeJob = findLatestRecoverableRewriteJob({
@@ -729,7 +746,7 @@ async function createRecoverableRewriteJob(body: Record<string, unknown>) {
     stream: body.stream === true,
   } satisfies RecoverableRewriteJobPayload
   try {
-    execute(
+    db.execute(
       `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, progress, currentStep, payloadJson)
        VALUES (?, ?, ?, ?, 'queued', 0.1, ?, ?)`,
       jobId,
@@ -748,9 +765,9 @@ async function createRecoverableRewriteJob(body: Record<string, unknown>) {
     )
   }
 
-  scheduleRecoverableRewriteJob(jobId)
+  scheduleRecoverableRewriteJob(jobId, panel.novelId)
 
-  return NextResponse.json({ ok: true, job: serializeRecoverableRewriteJob(readRecoverableRewriteJob(jobId)) }, {
+  return NextResponse.json({ ok: true, job: serializeRecoverableRewriteJob(readRecoverableRewriteJob(jobId, db)) }, {
     headers: { 'Cache-Control': 'no-store' },
   })
 }
@@ -783,12 +800,17 @@ async function readRewriteResponseResult(response: Response): Promise<RewriteRes
 }
 
 async function runRecoverableRewriteJob(jobId: string) {
-  const row = readRecoverableRewriteJob(jobId)
+  throw new Error('runRecoverableRewriteJob requires novel-scoped routing')
+}
+
+async function runRecoverableRewriteJobInNovel(jobId: string, novelId: string) {
+  const db = getNovelRouteDb(novelId)
+  const row = readRecoverableRewriteJob(jobId, db)
   if (!row || row.status !== 'queued') return
 
   const payload = normalizeRecoverableRewriteJobPayload(row.payloadJson)
   if (!payload) {
-    execute(
+    db.execute(
       `UPDATE KnowledgeJob SET status = 'failed', progress = 0, currentStep = ?, errorMessage = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND jobType = ?`,
       '魔改任务恢复数据损坏',
       'Recoverable rewrite job payload is invalid',
@@ -801,6 +823,7 @@ async function runRecoverableRewriteJob(jobId: string) {
   const claim = claimRecoverableRewriteJob(jobId, {
     progress: 0.35,
     currentStep: '正在生成改写版本',
+    db,
   })
   if (!claim.claimed || !claim.attemptId) return
 
@@ -813,25 +836,26 @@ async function runRecoverableRewriteJob(jobId: string) {
         body: JSON.stringify(payload.stream ? { ...payload.request, stream: true } : payload.request),
         signal: controller.signal,
       }), { allowRecoverable: false, signal: controller.signal })
-      if (isRecoverableRewriteJobAborted(jobId)) return
+      if (isRecoverableRewriteJobAborted(jobId, db)) return
       if (!response.ok) {
         throw new Error(await readRewriteErrorResponse(response))
       }
 
       const result = payload.stream
-        ? await readRewriteResponseResultWithProgress(jobId, payload, response)
+        ? await readRewriteResponseResultWithProgress(jobId, payload, response, novelId)
         : await readRewriteResponseResult(response)
-      if (isRecoverableRewriteJobAborted(jobId)) return
+      if (isRecoverableRewriteJobAborted(jobId, db)) return
       updateRecoverableRewriteJob(jobId, {
         status: 'succeeded',
         progress: 1,
         currentStep: '完成',
         payload: { ...payload, result },
+        db,
       })
     })
   } catch (error) {
-    if (controller.signal.aborted || isRecoverableRewriteJobAborted(jobId)) {
-      abortRecoverableRewriteJob(jobId)
+    if (controller.signal.aborted || isRecoverableRewriteJobAborted(jobId, db)) {
+      abortRecoverableRewriteJob(jobId, '已中止生成', db)
       return
     }
     const message = error instanceof Error ? error.message : 'Rewrite failed.'
@@ -841,14 +865,15 @@ async function runRecoverableRewriteJob(jobId: string) {
       currentStep: '生成失败',
       payload: { ...payload, error: message },
       errorMessage: message,
+      db,
     })
   } finally {
     clearRecoverableRewriteAbortController(jobId, controller)
   }
 }
 
-export async function runRecoverableRewriteJobForTesting(jobId: string) {
-  await runRecoverableRewriteJob(jobId)
+export async function runRecoverableRewriteJobForTesting(jobId: string, novelId: string) {
+  await runRecoverableRewriteJobInNovel(jobId, novelId)
 }
 
 export async function POST(request: Request) {

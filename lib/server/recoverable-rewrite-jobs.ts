@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import type { DatabaseAccess } from '@/lib/server/database-access'
 import { safeParseJsonObject } from '@/lib/server/json-parse'
-import { execute, queryAll, queryOne } from '@/lib/server/sqlite'
+import { execute, queryAll, queryOne } from '@/lib/server/database-access'
 import {
   createTaskWatchdogAttemptId,
   getTaskWatchdogAttemptId,
@@ -62,6 +63,10 @@ export type RecoverableRewriteJobRow = {
 
 const activeRewriteJobControllers = new Map<string, AbortController>()
 const recoverableRewriteAttemptContext = new AsyncLocalStorage<Map<string, string>>()
+
+type RecoverableRewriteDb = Pick<DatabaseAccess, 'execute' | 'queryAll' | 'queryOne'>
+
+const defaultDb: RecoverableRewriteDb = { execute, queryAll, queryOne }
 
 function parseJsonRecord(value: string | null) {
   return safeParseJsonObject(value)
@@ -141,8 +146,8 @@ export function normalizeRecoverableRewriteJobPayload(payloadJson: string | null
   }
 }
 
-export function readRecoverableRewriteJob(jobId: string) {
-  return queryOne<RecoverableRewriteJobRow>(
+export function readRecoverableRewriteJob(jobId: string, db: RecoverableRewriteDb = defaultDb) {
+  return db.queryOne<RecoverableRewriteJobRow>(
     `SELECT id, novelId, branchId, status, progress, currentStep, payloadJson, errorMessage, createdAt, updatedAt
      FROM KnowledgeJob
      WHERE id = ? AND jobType = ?`,
@@ -176,8 +181,10 @@ export function updateRecoverableRewriteJob(jobId: string, params: {
   payload: RecoverableRewriteJobPayload
   errorMessage?: string | null
   expectedAttemptId?: string | null
+  db?: RecoverableRewriteDb
 }) {
-  const currentRow = queryOne<{ payloadJson: string | null }>(
+  const db = params.db ?? defaultDb
+  const currentRow = db.queryOne<{ payloadJson: string | null }>(
     'SELECT payloadJson FROM KnowledgeJob WHERE id = ? AND jobType = ?',
     jobId,
     RECOVERABLE_REWRITE_JOB_TYPE,
@@ -193,7 +200,7 @@ export function updateRecoverableRewriteJob(jobId: string, params: {
     ? ` AND json_extract(COALESCE(payloadJson, '{}'), '$.taskWatchdog.attemptId') = ?`
     : ''
 
-  return execute(
+  return db.execute(
     `UPDATE KnowledgeJob
       SET status = ?, progress = ?, currentStep = ?, payloadJson = ?, errorMessage = ?, updatedAt = CURRENT_TIMESTAMP
       WHERE id = ? AND jobType = ?${querySuffix}`,
@@ -208,8 +215,9 @@ export function updateRecoverableRewriteJob(jobId: string, params: {
   )
 }
 
-export function claimRecoverableRewriteJob(jobId: string, params: { progress: number; currentStep: string }) {
-  const currentRow = queryOne<{ payloadJson: string | null; status: string }>(
+export function claimRecoverableRewriteJob(jobId: string, params: { progress: number; currentStep: string; db?: RecoverableRewriteDb }) {
+  const db = params.db ?? defaultDb
+  const currentRow = db.queryOne<{ payloadJson: string | null; status: string }>(
     'SELECT payloadJson, status FROM KnowledgeJob WHERE id = ? AND jobType = ?',
     jobId,
     RECOVERABLE_REWRITE_JOB_TYPE,
@@ -223,7 +231,7 @@ export function claimRecoverableRewriteJob(jobId: string, params: { progress: nu
     claimedAt: new Date().toISOString(),
     claimedBy: 'rewrite_runner',
   })
-  const result = execute(
+  const result = db.execute(
     `UPDATE KnowledgeJob
        SET status = 'running', progress = ?, currentStep = ?, payloadJson = ?, errorMessage = NULL, updatedAt = CURRENT_TIMESTAMP
        WHERE id = ? AND jobType = ? AND status = 'queued'`,
@@ -234,7 +242,7 @@ export function claimRecoverableRewriteJob(jobId: string, params: { progress: nu
     RECOVERABLE_REWRITE_JOB_TYPE,
   )
   if (result.changes !== 1) {
-    const nextRow = readRecoverableRewriteJob(jobId)
+    const nextRow = readRecoverableRewriteJob(jobId, db)
     return { claimed: false as const, status: nextRow?.status ?? null, attemptId: null }
   }
 
@@ -247,8 +255,9 @@ export async function runRecoverableRewriteJobWithAttempt<T>(jobId: string, atte
   return recoverableRewriteAttemptContext.run(store, callback)
 }
 
-export function findLatestRecoverableRewriteJob(params: { novelId: string; branchId?: string | null; chapterId?: string | null }) {
-  const rows = queryAll<RecoverableRewriteJobRow>(
+export function findLatestRecoverableRewriteJob(params: { novelId: string; branchId?: string | null; chapterId?: string | null; db?: RecoverableRewriteDb }) {
+  const db = params.db ?? defaultDb
+  const rows = db.queryAll<RecoverableRewriteJobRow>(
     `SELECT id, novelId, branchId, status, progress, currentStep, payloadJson, errorMessage, createdAt, updatedAt
      FROM KnowledgeJob
      WHERE novelId = ? AND jobType = ? AND status != ?
@@ -276,8 +285,8 @@ export function isRecoverableRewriteJobRestorable(status: string) {
   return status !== RECOVERABLE_REWRITE_ABORTED_STATUS && status !== 'failed'
 }
 
-export function isRecoverableRewriteJobAborted(jobId: string) {
-  return readRecoverableRewriteJob(jobId)?.status === RECOVERABLE_REWRITE_ABORTED_STATUS
+export function isRecoverableRewriteJobAborted(jobId: string, db: RecoverableRewriteDb = defaultDb) {
+  return readRecoverableRewriteJob(jobId, db)?.status === RECOVERABLE_REWRITE_ABORTED_STATUS
 }
 
 export function isRecoverableRewriteJobTerminal(status: string) {
@@ -296,8 +305,8 @@ export function clearRecoverableRewriteAbortController(jobId: string, controller
   }
 }
 
-export function abortRecoverableRewriteJob(jobId: string, message = '已中止生成') {
-  const row = readRecoverableRewriteJob(jobId)
+export function abortRecoverableRewriteJob(jobId: string, message = '已中止生成', db: RecoverableRewriteDb = defaultDb) {
+  const row = readRecoverableRewriteJob(jobId, db)
   if (!row) return null
 
   const controller = activeRewriteJobControllers.get(jobId)
@@ -325,9 +334,10 @@ export function abortRecoverableRewriteJob(jobId: string, message = '已中止�
     currentStep: message,
     payload: payloadWithAttempt,
     errorMessage: message,
+    db,
   })
 
-  return serializeRecoverableRewriteJob(readRecoverableRewriteJob(jobId))
+  return serializeRecoverableRewriteJob(readRecoverableRewriteJob(jobId, db))
 }
 
 function valueMatches(value: unknown, candidates: Set<string>) {
@@ -357,8 +367,10 @@ export function abortRecoverableRewriteJobsForDeletedTimelineNode(params: {
   branchId: string
   nodeId: string
   continueBlockId?: string | null
+  db?: RecoverableRewriteDb
 }) {
-  const rows = queryAll<RecoverableRewriteJobRow>(
+  const db = params.db ?? defaultDb
+  const rows = db.queryAll<RecoverableRewriteJobRow>(
     `SELECT id, novelId, branchId, status, progress, currentStep, payloadJson, errorMessage, createdAt, updatedAt
      FROM KnowledgeJob
      WHERE novelId = ? AND branchId = ? AND jobType = ? AND status IN ('queued', 'running')
@@ -373,7 +385,7 @@ export function abortRecoverableRewriteJobsForDeletedTimelineNode(params: {
   for (const row of rows) {
     const payload = normalizeRecoverableRewriteJobPayload(row.payloadJson)
     if (!payload || !recoverableRewriteJobMatchesDeletedSource(payload, params)) continue
-    abortRecoverableRewriteJob(row.id, '源续写块已删除，已自动清理孤儿生成任务')
+    abortRecoverableRewriteJob(row.id, '源续写块已删除，已自动清理孤儿生成任务', db)
     abortedJobIds.push(row.id)
   }
 
