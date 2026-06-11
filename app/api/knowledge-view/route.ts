@@ -14,6 +14,7 @@ import {
   rebuildAuthoritativeKnowledgeView,
 } from '@/lib/server/knowledge-view'
 import { getMainBranchId } from '@/lib/server/knowledge-store'
+import { runWithNovelDatabaseAccess } from '@/lib/server/database-access'
 import { scheduleKnowledgeWorkerProcess } from '@/lib/server/knowledge-worker-scheduler'
 import type { KnowledgeRebuildChapterRange } from '@/lib/types'
 
@@ -79,14 +80,21 @@ export async function GET(request: Request) {
     const novelId = searchParams.get('novelId')?.trim()
     const asOfChapter = Number(searchParams.get('asOfChapter'))
     const statusOnly = searchParams.get('statusOnly') === '1'
-    const projection = await buildKnowledgeProjection(
-      novelId ? [novelId] : undefined,
-      Number.isFinite(asOfChapter) && asOfChapter >= 1 ? asOfChapter : undefined,
-      statusOnly ? { includeProjection: false, knowledgeStatusOverviewMode: 'lightweight' } : undefined
-    )
-    if (novelId) {
-      scheduleQueuedKnowledgeJobs(novelId, projection)
+    const buildProjection = async () => {
+      const projection = await buildKnowledgeProjection(
+        novelId ? [novelId] : undefined,
+        Number.isFinite(asOfChapter) && asOfChapter >= 1 ? asOfChapter : undefined,
+        statusOnly ? { includeProjection: false, knowledgeStatusOverviewMode: 'lightweight' } : undefined
+      )
+      if (novelId) {
+        scheduleQueuedKnowledgeJobs(novelId, projection)
+      }
+      return projection
     }
+
+    const projection = novelId
+      ? await runWithNovelDatabaseAccess(novelId, buildProjection)
+      : await buildProjection()
     return buildSuccessResponse(projection)
   } catch (error) {
     return NextResponse.json(
@@ -109,41 +117,45 @@ export async function POST(request: Request) {
       return jsonError('action is invalid', 400)
     }
 
-    const projection = action === 'pause'
-      ? await pauseAuthoritativeKnowledgeRebuild(novelId)
-      : action === 'abort'
-        ? await abortAuthoritativeKnowledgeRebuild(novelId)
-        : action === 'delete-hanlp-cache'
-          ? await deleteAuthoritativeHanlpCache(novelId)
-        : action === 'delete-extraction-cache'
-          ? await deleteAuthoritativeExtractionCache(novelId)
-        : action === 'delete-embedding-cache'
-          ? await deleteAuthoritativeEmbeddingCache(novelId)
-        : action === 'delete-knowledge'
-          ? await deleteAuthoritativeKnowledgeGraph(novelId)
-          : action === 'rebuild-retrieval-index'
-            ? await rebuildAuthoritativeRetrievalIndex(novelId, chapterRange)
-          : await rebuildAuthoritativeKnowledgeView(novelId, chapterRange)
+    const projection = await runWithNovelDatabaseAccess(novelId, async () => {
+      const nextProjection = action === 'pause'
+        ? await pauseAuthoritativeKnowledgeRebuild(novelId)
+        : action === 'abort'
+          ? await abortAuthoritativeKnowledgeRebuild(novelId)
+          : action === 'delete-hanlp-cache'
+            ? await deleteAuthoritativeHanlpCache(novelId)
+          : action === 'delete-extraction-cache'
+            ? await deleteAuthoritativeExtractionCache(novelId)
+            : action === 'delete-embedding-cache'
+              ? await deleteAuthoritativeEmbeddingCache(novelId)
+              : action === 'delete-knowledge'
+                ? await deleteAuthoritativeKnowledgeGraph(novelId)
+                : action === 'rebuild-retrieval-index'
+                  ? await rebuildAuthoritativeRetrievalIndex(novelId, chapterRange)
+                  : await rebuildAuthoritativeKnowledgeView(novelId, chapterRange)
 
-    const scheduledJobId = action === 'rebuild-retrieval-index'
-      ? projection.knowledgeStatusOverview?.retrievalIndex.task?.jobId
-      : projection.knowledgeRebuildStatus?.jobId
-    const scheduledJobType = action === 'rebuild-retrieval-index'
-      ? 'rebuild_retrieval_index'
-      : 'extract_chapter_knowledge'
+      const scheduledJobId = action === 'rebuild-retrieval-index'
+        ? nextProjection.knowledgeStatusOverview?.retrievalIndex.task?.jobId
+        : nextProjection.knowledgeRebuildStatus?.jobId
+      const scheduledJobType = action === 'rebuild-retrieval-index'
+        ? 'rebuild_retrieval_index'
+        : 'extract_chapter_knowledge'
 
-    if (
-      (action === 'rebuild' || action === 'rebuild-retrieval-index')
-      && (projection.jobOutcome === 'queued' || projection.jobOutcome === 'running')
-      && scheduledJobId
-    ) {
-      scheduleKnowledgeWorkerProcess({
-        novelId,
-        branchId: getMainBranchId(novelId),
-        jobId: scheduledJobId,
-        jobType: scheduledJobType,
-      })
-    }
+      if (
+        (action === 'rebuild' || action === 'rebuild-retrieval-index')
+        && (nextProjection.jobOutcome === 'queued' || nextProjection.jobOutcome === 'running')
+        && scheduledJobId
+      ) {
+        scheduleKnowledgeWorkerProcess({
+          novelId,
+          branchId: getMainBranchId(novelId),
+          jobId: scheduledJobId,
+          jobType: scheduledJobType,
+        })
+      }
+
+      return nextProjection
+    })
 
     return buildSuccessResponse(projection)
   } catch (error) {

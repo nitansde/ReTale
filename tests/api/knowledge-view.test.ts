@@ -1,29 +1,77 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
+import { createTempDatabaseCopy, getSourceDbPath } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
+const originalDataDir = process.env.RETALE_DATA_DIR
 const originalTaskStaleTimeoutMs = process.env.RETALE_TASK_STALE_TIMEOUT_MS
 const originalTaskMaxRetries = process.env.RETALE_TASK_MAX_RETRIES
 const API_TEST_TIMEOUT_MS = 120_000
 
 vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
 
+function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
+  if (originalValue === undefined) {
+    delete process.env[name]
+    return
+  }
+
+  process.env[name] = originalValue
+}
+
 async function createTestDatabase(prefix: string) {
   const tempDatabase = createTempDatabaseCopy(prefix)
   cleanups.push(tempDatabase.cleanup)
 
   process.env.DATABASE_URL = tempDatabase.dbPath
+  delete process.env.RETALE_DATA_DIR
   vi.resetModules()
 
   const sqliteModule = await import('@/lib/server/sqlite')
+  vi.doMock('@/lib/server/db-resolver', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/lib/server/db-resolver')>()
+    return {
+      ...actual,
+      getNovelDb: vi.fn(() => sqliteModule.sqlite),
+    }
+  })
   globalForSqlite.sqlite = sqliteModule.sqlite
 
   return {
     database: sqliteModule.sqlite,
     queryOne: sqliteModule.queryOne,
+  }
+}
+
+async function createSplitBrainKnowledgeViewDatabases(prefix: string, novelId: string) {
+  vi.doUnmock('@/lib/server/db-resolver')
+  const singletonDatabase = createTempDatabaseCopy(`${prefix}-singleton`)
+  cleanups.push(singletonDatabase.cleanup)
+
+  const tempDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-data-`))
+  cleanups.push(() => fs.rmSync(tempDataRoot, { recursive: true, force: true }))
+
+  const runtimeDataRoot = path.join(tempDataRoot, 'data')
+  const novelDbPath = path.join(runtimeDataRoot, 'novels', novelId, 'novel.db')
+  fs.mkdirSync(path.dirname(novelDbPath), { recursive: true })
+  fs.copyFileSync(getSourceDbPath(), novelDbPath)
+
+  process.env.DATABASE_URL = singletonDatabase.dbPath
+  process.env.RETALE_DATA_DIR = runtimeDataRoot
+  vi.resetModules()
+
+  const sqliteModule = await import('@/lib/server/sqlite')
+  globalForSqlite.sqlite = sqliteModule.sqlite
+  const resolverModule = await import('@/lib/server/db-resolver')
+
+  return {
+    singletonDatabase: sqliteModule.sqlite,
+    novelDatabase: resolverModule.getNovelDb(novelId),
   }
 }
 
@@ -305,11 +353,13 @@ function insertExtractionCacheFixture(database: DatabaseSync, params: {
   )
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.unmock('@/lib/server/retrieval-index')
   vi.unmock('@/lib/server/knowledge-worker-scheduler')
+  vi.unmock('@/lib/server/db-resolver')
   vi.doUnmock('@/lib/server/retrieval-index')
   vi.doUnmock('@/lib/server/knowledge-worker-scheduler')
+  vi.doUnmock('@/lib/server/db-resolver')
   vi.resetModules()
 
   if (globalForSqlite.sqlite) {
@@ -321,8 +371,15 @@ afterEach(() => {
   }
 
   process.env.DATABASE_URL = originalDatabaseUrl
+  restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
   process.env.RETALE_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
   process.env.RETALE_TASK_MAX_RETRIES = originalTaskMaxRetries
+
+  try {
+    const resolverModule = await import('@/lib/server/db-resolver')
+    resolverModule.resetResolvedDatabasesForTests()
+  } catch {
+  }
 
   while (cleanups.length) {
     cleanups.pop()?.()
@@ -330,6 +387,68 @@ afterEach(() => {
 })
 
 describe('/api/knowledge-view', () => {
+  it('reads single-novel statusOnly job state from the per-novel database when singleton data is stale', async () => {
+    const novelId = `novel_knowledge_view_scoped_${Math.random().toString(36).slice(2, 8)}`
+    const { singletonDatabase, novelDatabase } = await createSplitBrainKnowledgeViewDatabases('retale-knowledge-view-scoped-status-only', novelId)
+
+    const { mainBranchId: staleBranchId } = seedNovel(singletonDatabase, novelId)
+    const { mainBranchId: liveBranchId } = seedNovel(novelDatabase, novelId)
+    seedKnowledgeChapter(singletonDatabase, {
+      novelId,
+      branchId: staleBranchId,
+      chapterId: 'chapter-split-brain-singleton-1',
+      chapterNo: 1,
+    })
+    seedKnowledgeChapter(novelDatabase, {
+      novelId,
+      branchId: liveBranchId,
+      chapterId: 'chapter-split-brain-per-novel-1',
+      chapterNo: 1,
+    })
+
+    singletonDatabase.prepare(
+      `INSERT INTO KnowledgeJob (
+        id, novelId, branchId, jobType, status, progress, currentStep, payloadJson, createdAt, updatedAt
+      ) VALUES (?, ?, ?, 'extract_chapter_knowledge', 'paused', ?, ?, ?, datetime('now', '-2 days'), datetime('now', '-2 days'))`
+    ).run(
+      'job_split_brain_status_only',
+      novelId,
+      staleBranchId,
+      0.21,
+      '已暂停',
+      JSON.stringify({ branchId: staleBranchId, steps: [] }),
+    )
+
+    novelDatabase.prepare(
+      `INSERT INTO KnowledgeJob (
+        id, novelId, branchId, jobType, status, progress, currentStep, payloadJson, createdAt, updatedAt
+      ) VALUES (?, ?, ?, 'extract_chapter_knowledge', 'running', ?, ?, ?, datetime('now', '-1 minute'), datetime('now', '-1 minute'))`
+    ).run(
+      'job_split_brain_status_only',
+      novelId,
+      liveBranchId,
+      0.22,
+      '并行抽取候选知识（已完成第 702 章）',
+      JSON.stringify({ branchId: liveBranchId, steps: [] }),
+    )
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}&statusOnly=1`))
+    const payload = await response.json() as {
+      ok: boolean
+      knowledgeRebuildStatus: { jobId?: string; status?: string; currentStep?: string | null; progress?: number | null } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.knowledgeRebuildStatus).toMatchObject({
+      jobId: 'job_split_brain_status_only',
+      status: 'running',
+      currentStep: '并行抽取候选知识（已完成第 702 章）',
+      progress: 0.22,
+    })
+  })
+
   it('reconciles stale active jobs during GET and reschedules the queued retry', async () => {
     process.env.RETALE_TASK_STALE_TIMEOUT_MS = '1000'
     process.env.RETALE_TASK_MAX_RETRIES = '1'
