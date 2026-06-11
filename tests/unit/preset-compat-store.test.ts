@@ -251,6 +251,133 @@ describe('preset compat store lifecycle', () => {
     expect(state.backendLoadError).toBe('Workspace restore timed out')
   })
 
+  it('preserves status-only knowledge restore fields during loadFromBackend', async () => {
+    const workspacePayload = {
+      currentNovelId: 'novel-1',
+      currentChapterId: 'chapter-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel', summary: 'Summary', tags: [] }],
+      localVolumes: [{ id: 'volume-1', novelId: 'novel-1', title: 'Volume', order: 1 }],
+      localChapters: [{
+        id: 'chapter-1',
+        novelId: 'novel-1',
+        volumeId: 'volume-1',
+        title: 'Chapter 1',
+        order: 1,
+        content: '<p>Body</p>',
+        originalContent: '<p>Body</p>',
+        status: 'draft',
+        wordCount: 1,
+        updatedAt: 'now',
+        trajectory: [],
+      }],
+    }
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace') {
+        return new Response(JSON.stringify(workspacePayload), { status: 200 })
+      }
+      if (url === '/api/settings/ai') {
+        return new Response(JSON.stringify({ provider: 'openai-compatible', model: 'gpt-4.1-mini' }), { status: 200 })
+      }
+      if (url === '/api/settings/preset-compat') {
+        return new Response(JSON.stringify(createLibrary()), { status: 200 })
+      }
+      if (url === '/api/knowledge-view?novelId=novel-1&asOfChapter=1&statusOnly=1') {
+        return new Response(JSON.stringify({
+          ok: true,
+          localOutlines: [],
+          localCharacters: [],
+          localCharacterRelations: [],
+          localWorldEntries: [],
+          localTimelineEvents: [],
+          knowledgeRebuildStatus: {
+            jobId: 'job-restore-1',
+            novelId: 'novel-1',
+            jobType: 'extract_chapter_knowledge',
+            status: 'running',
+            progress: 0.2234,
+            currentStep: '并行抽取候选知识（已完成第 702 章）',
+            createdAt: '2026-06-10T23:20:00.000Z',
+            updatedAt: '2026-06-10T23:29:11.000Z',
+            etaMinutes: null,
+            steps: [],
+          },
+          hanlpCacheSnapshot: {
+            status: 'ready',
+          },
+          knowledgeStatusOverview: {
+            knowledgeGraph: {
+              status: 'full',
+              coveredChapterCount: 702,
+              totalChapterCount: 702,
+              validThroughChapterNo: 702,
+            },
+            embeddingCache: {
+              status: 'full',
+              coveredChapterCount: 702,
+              totalChapterCount: 702,
+              validThroughChapterNo: 702,
+              provider: 'openai-compatible',
+              model: 'text-embedding-3-small',
+            },
+            retrievalIndex: {
+              status: 'full',
+              task: {
+                jobId: 'retrieval-job-1',
+                novelId: 'novel-1',
+                jobType: 'rebuild_retrieval_index',
+                status: 'queued',
+                progress: 0,
+                currentStep: '等待索引重建',
+                createdAt: '2026-06-10T23:30:00.000Z',
+                updatedAt: '2026-06-10T23:30:00.000Z',
+                etaMinutes: null,
+                steps: [],
+              },
+              indexedScopeCount: 702,
+            },
+          },
+          jobOutcome: 'running',
+          actionError: {
+            code: 'active-rebuild',
+            message: '恢复了后台任务状态',
+          },
+        }), { status: 200 })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await useNovelStore.getState().loadFromBackend()
+
+    const state = useNovelStore.getState() as typeof useNovelStore.getState extends () => infer T ? T : never
+      & {
+        knowledgeRebuildStatus?: unknown
+        hanlpCacheSnapshot?: unknown
+        knowledgeStatusOverview?: { retrievalIndex?: { task?: unknown } } | null
+        jobOutcome?: unknown
+        actionError?: unknown
+      }
+    expect(state.knowledgeRebuildStatus).toMatchObject({
+      jobId: 'job-restore-1',
+      status: 'running',
+      currentStep: '并行抽取候选知识（已完成第 702 章）',
+      progress: 0.2234,
+    })
+    expect(state.hanlpCacheSnapshot).toMatchObject({
+      status: 'ready',
+    })
+    expect(state.knowledgeStatusOverview?.retrievalIndex.task).toMatchObject({
+      jobId: 'retrieval-job-1',
+      status: 'queued',
+    })
+    expect(state.jobOutcome).toBe('running')
+    expect(state.actionError).toMatchObject({
+      code: 'active-rebuild',
+      message: '恢复了后台任务状态',
+    })
+  })
+
   it('loads, saves, imports, binds, edits, and exports through the dedicated preset compat slice', async () => {
     const savedLibrary = createLibrary({
       revision: 3,

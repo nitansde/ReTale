@@ -7,7 +7,7 @@ import {
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
 import type { PersistedNovelState } from '@/lib/types'
 import type { NovelStore, NovelStoreGet, NovelStoreSet, PresetCompatImportResult } from '@/store/novel-store-types'
-import { fetchKnowledgeProjection, normalizeKnowledgeProjection, resolveCurrentChapterOrder } from '@/store/novel-store-knowledge'
+import { fetchKnowledgeProjection, normalizeKnowledgeProjectionResult, resolveCurrentChapterOrder } from '@/store/novel-store-knowledge'
 
 const WORKSPACE_RESTORE_TIMEOUT_MS = 15_000
 
@@ -201,7 +201,7 @@ export function createPersistenceActions(
       nextState.presetCompatLibraryLoading = false
 
       if (projectionResult.status === 'fulfilled') {
-        Object.assign(nextState, normalizeKnowledgeProjection(projectionResult.value))
+        Object.assign(nextState, normalizeKnowledgeProjectionResult(projectionResult.value))
       } else {
         console.error('Knowledge projection restore failed:', projectionResult.reason)
       }
