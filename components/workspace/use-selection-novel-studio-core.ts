@@ -127,6 +127,35 @@ type SelectionNovelStudioCoreParams = {
   autosaveSignature: string
 }
 
+export function resolveSelectedKnowledgeProjectionChapterOrder(params: {
+  currentChapterId: string
+  localChapters: Chapter[]
+  workspaceSelection: TimelineSelection | null
+  timelineNodeById: Map<string, StoryTimelineResponse['branchNodes'][number]>
+}): number | undefined {
+  const { currentChapterId, localChapters, workspaceSelection, timelineNodeById } = params
+
+  if (workspaceSelection?.kind === 'chapter') {
+    return localChapters.find((chapter) => chapter.id === workspaceSelection.chapterId)?.order ?? workspaceSelection.chapterNo
+  }
+
+  if (workspaceSelection) {
+    const selectedTimelineNode = timelineNodeById.get(workspaceSelection.nodeId)
+    const sourceChapterNo = selectedTimelineNode?.sourceChapterNo ?? selectedTimelineNode?.anchorChapterNo
+    if (typeof sourceChapterNo === 'number' && Number.isFinite(sourceChapterNo)) {
+      return sourceChapterNo
+    }
+
+    if (workspaceSelection.kind === 'future_jump') {
+      return workspaceSelection.sourceChapterNo
+    }
+
+    return workspaceSelection.anchorChapterNo
+  }
+
+  return localChapters.find((chapter) => chapter.id === currentChapterId)?.order
+}
+
 export function useSelectionNovelStudioCore(params: SelectionNovelStudioCoreParams) {
   const { locale, t } = useI18n()
   const scenarioMeta = getAIScenarioMeta(locale)
@@ -352,10 +381,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     }
   }, [params.backendLoaded, params.localChapters.length, router])
 
-  const selectedKnowledgeStatusChapterOrder = useMemo(() => {
-    return params.localChapters.find((chapter) => chapter.id === params.currentChapterId)?.order
-  }, [params.currentChapterId, params.localChapters])
-
   useEffect(() => {
     if (!params.backendLoaded) return
     if (!hydratedRef.current) {
@@ -406,110 +431,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     if (status?.status === 'paused') return 3_500
     return null
   }, [])
-
-  useEffect(() => {
-    if (!params.currentNovelId) {
-      setConfirmDeleteKnowledge(false)
-      setConfirmDeleteHanlpCache(false)
-      setConfirmDeleteExtractionCache(false)
-      setConfirmDeleteEmbeddingCache(false)
-      const resetTimer = window.setTimeout(() => {
-        setKnowledgeRebuildStatus(null)
-        setHanlpCacheSnapshot(null)
-        setKnowledgeStatusOverview(null)
-      }, 0)
-      lastActiveKnowledgeJobIdRef.current = null
-      return () => {
-        window.clearTimeout(resetTimer)
-      }
-    }
-
-    const confirmResetTimer = window.setTimeout(() => {
-      setConfirmDeleteKnowledge(false)
-      setConfirmDeleteHanlpCache(false)
-      setConfirmDeleteExtractionCache(false)
-      setConfirmDeleteEmbeddingCache(false)
-    }, 0)
-
-    let cancelled = false
-    let pollTimerId: number | null = null
-
-    const scheduleNextPoll = (delay: number | null) => {
-      if (cancelled || delay === null) return
-      pollTimerId = window.setTimeout(() => {
-        void syncRebuildStatus()
-      }, delay)
-    }
-
-    const syncRebuildStatus = async () => {
-      try {
-        const searchParams = new URLSearchParams({ novelId: params.currentNovelId })
-        searchParams.set('statusOnly', '1')
-        const selectedChapterOrder = selectedKnowledgeStatusChapterOrder
-        if (typeof selectedChapterOrder === 'number' && Number.isFinite(selectedChapterOrder) && selectedChapterOrder >= 1) {
-          searchParams.set('asOfChapter', String(selectedChapterOrder))
-        }
-
-        const response = await fetch(`/api/knowledge-view?${searchParams.toString()}`, { cache: 'no-store' })
-        const data = (await response.json()) as {
-          ok?: boolean
-          knowledgeRebuildStatus?: KnowledgeRebuildStatus | null
-          hanlpCacheSnapshot?: HanlpCacheSnapshot | null
-          knowledgeStatusOverview?: KnowledgeStatusOverview | null
-        }
-
-        if (cancelled || !response.ok || !data.ok) return
-
-        const nextStatus = data.knowledgeRebuildStatus ?? null
-        setHanlpCacheSnapshot(data.hanlpCacheSnapshot ?? null)
-        setKnowledgeStatusOverview(data.knowledgeStatusOverview ?? null)
-        const hadActiveJob = Boolean(lastActiveKnowledgeJobIdRef.current)
-        const failureMessage = resolveKnowledgeRebuildFailureMessage(nextStatus)
-
-        setKnowledgeRebuildStatus(nextStatus)
-
-        if (nextStatus?.jobId && (nextStatus.status === 'queued' || nextStatus.status === 'running' || nextStatus.status === 'paused')) {
-          lastActiveKnowledgeJobIdRef.current = nextStatus.jobId
-          scheduleNextPoll(getKnowledgePollDelay(nextStatus, knowledgeActionLoading))
-          return
-        }
-
-        if (nextStatus?.status === 'failed') {
-          lastActiveKnowledgeJobIdRef.current = null
-          if (hadActiveJob && !cancelled) {
-      showKnowledgeToast(failureMessage ?? t('workspace.knowledge.failedDefault'), 2600)
-          }
-          return
-        }
-
-        if (hadActiveJob) {
-          lastActiveKnowledgeJobIdRef.current = null
-          await params.refreshKnowledgeProjection(params.currentNovelId, selectedChapterOrder)
-          if (!cancelled && !knowledgeRebuilding && !knowledgeActionLoading) {
-    showKnowledgeToast(t('workspace.knowledge.updated'))
-          }
-          return
-        }
-
-        const idleDelay = getKnowledgePollDelay(nextStatus, knowledgeActionLoading)
-        if (idleDelay !== null) {
-          scheduleNextPoll(idleDelay)
-        }
-      } catch {
-        scheduleNextPoll(getKnowledgePollDelay(knowledgeRebuildStatus, knowledgeActionLoading))
-      }
-    }
-
-    void syncRebuildStatus()
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(confirmResetTimer)
-      if (pollTimerId !== null) {
-        window.clearTimeout(pollTimerId)
-      }
-    }
-  }, [getKnowledgePollDelay, params.currentNovelId, knowledgeActionLoading, knowledgeRebuildStatus, knowledgeRebuilding, params.refreshKnowledgeProjection, selectedKnowledgeStatusChapterOrder, setConfirmDeleteKnowledge, showKnowledgeToast])
 
   const novelVolumes = useMemo(() => params.localVolumes.filter((volume) => volume.novelId === params.currentNovelId).slice().sort((a, b) => a.order - b.order), [params.localVolumes, params.currentNovelId])
   const currentNovelMeta = useMemo(() => params.localNovels.find((novel) => novel.id === params.currentNovelId) ?? null, [params.localNovels, params.currentNovelId])
@@ -583,6 +504,116 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const resolvedStoryTimeline = storyTimelineData?.novelId === params.currentNovelId ? storyTimelineData : fallbackStoryTimeline
   const timelineChapterById = useMemo(() => new Map(resolvedStoryTimeline.chapters.map((chapter) => [chapter.chapterId, chapter] as const)), [resolvedStoryTimeline.chapters])
   const timelineNodeById = useMemo(() => new Map(resolvedStoryTimeline.branchNodes.map((node) => [node.id, node] as const)), [resolvedStoryTimeline.branchNodes])
+  const selectedKnowledgeStatusChapterOrder = useMemo(() => resolveSelectedKnowledgeProjectionChapterOrder({
+    currentChapterId: params.currentChapterId,
+    localChapters: params.localChapters,
+    workspaceSelection,
+    timelineNodeById,
+  }), [params.currentChapterId, params.localChapters, timelineNodeById, workspaceSelection])
+
+  useEffect(() => {
+    if (!params.currentNovelId) {
+      setConfirmDeleteKnowledge(false)
+      setConfirmDeleteHanlpCache(false)
+      setConfirmDeleteExtractionCache(false)
+      setConfirmDeleteEmbeddingCache(false)
+      const resetTimer = window.setTimeout(() => {
+        setKnowledgeRebuildStatus(null)
+        setHanlpCacheSnapshot(null)
+        setKnowledgeStatusOverview(null)
+      }, 0)
+      lastActiveKnowledgeJobIdRef.current = null
+      return () => {
+        window.clearTimeout(resetTimer)
+      }
+    }
+
+    const confirmResetTimer = window.setTimeout(() => {
+      setConfirmDeleteKnowledge(false)
+      setConfirmDeleteHanlpCache(false)
+      setConfirmDeleteExtractionCache(false)
+      setConfirmDeleteEmbeddingCache(false)
+    }, 0)
+
+    let cancelled = false
+    let pollTimerId: number | null = null
+
+    const scheduleNextPoll = (delay: number | null) => {
+      if (cancelled || delay === null) return
+      pollTimerId = window.setTimeout(() => {
+        void syncRebuildStatus()
+      }, delay)
+    }
+
+    const syncRebuildStatus = async () => {
+      try {
+        const searchParams = new URLSearchParams({ novelId: params.currentNovelId })
+        searchParams.set('statusOnly', '1')
+        const selectedChapterOrder = selectedKnowledgeStatusChapterOrder
+        if (typeof selectedChapterOrder === 'number' && Number.isFinite(selectedChapterOrder) && selectedChapterOrder >= 1) {
+          searchParams.set('asOfChapter', String(selectedChapterOrder))
+        }
+
+        const response = await fetch(`/api/knowledge-view?${searchParams.toString()}`, { cache: 'no-store' })
+        const data = (await response.json()) as {
+          ok?: boolean
+          knowledgeRebuildStatus?: KnowledgeRebuildStatus | null
+          hanlpCacheSnapshot?: HanlpCacheSnapshot | null
+          knowledgeStatusOverview?: KnowledgeStatusOverview | null
+        }
+
+        if (cancelled || !response.ok || !data.ok) return
+
+        const nextStatus = data.knowledgeRebuildStatus ?? null
+        setHanlpCacheSnapshot(data.hanlpCacheSnapshot ?? null)
+        setKnowledgeStatusOverview(data.knowledgeStatusOverview ?? null)
+        const hadActiveJob = Boolean(lastActiveKnowledgeJobIdRef.current)
+        const failureMessage = resolveKnowledgeRebuildFailureMessage(nextStatus)
+
+        setKnowledgeRebuildStatus(nextStatus)
+
+        if (nextStatus?.jobId && (nextStatus.status === 'queued' || nextStatus.status === 'running' || nextStatus.status === 'paused')) {
+          lastActiveKnowledgeJobIdRef.current = nextStatus.jobId
+          scheduleNextPoll(getKnowledgePollDelay(nextStatus, knowledgeActionLoading))
+          return
+        }
+
+        if (nextStatus?.status === 'failed') {
+          lastActiveKnowledgeJobIdRef.current = null
+          if (hadActiveJob && !cancelled) {
+            showKnowledgeToast(failureMessage ?? t('workspace.knowledge.failedDefault'), 2600)
+          }
+          return
+        }
+
+        if (hadActiveJob) {
+          lastActiveKnowledgeJobIdRef.current = null
+          await params.refreshKnowledgeProjection(params.currentNovelId, selectedChapterOrder)
+          if (!cancelled && !knowledgeRebuilding && !knowledgeActionLoading) {
+            showKnowledgeToast(t('workspace.knowledge.updated'))
+          }
+          return
+        }
+
+        const idleDelay = getKnowledgePollDelay(nextStatus, knowledgeActionLoading)
+        if (idleDelay !== null) {
+          scheduleNextPoll(idleDelay)
+        }
+      } catch {
+        scheduleNextPoll(getKnowledgePollDelay(knowledgeRebuildStatus, knowledgeActionLoading))
+      }
+    }
+
+    void syncRebuildStatus()
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(confirmResetTimer)
+      if (pollTimerId !== null) {
+        window.clearTimeout(pollTimerId)
+      }
+    }
+  }, [getKnowledgePollDelay, params.currentNovelId, knowledgeActionLoading, knowledgeRebuildStatus, knowledgeRebuilding, params.refreshKnowledgeProjection, selectedKnowledgeStatusChapterOrder, setConfirmDeleteKnowledge, showKnowledgeToast, t])
 
   const handleTimelineSelection = useCallback((selection: TimelineSelection) => {
     if (currentChapter) {
@@ -602,14 +633,14 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   }, [currentChapter, params.clearPresetCompatSessionStateForSelection, selectChapter, sortedChapters, workspaceSelection])
 
   useEffect(() => {
-    if (!params.backendLoaded || !params.currentNovelId || !currentChapter) return
+    if (!params.backendLoaded || !params.currentNovelId || typeof selectedKnowledgeStatusChapterOrder !== 'number' || !Number.isFinite(selectedKnowledgeStatusChapterOrder)) return
     const timer = window.setTimeout(() => {
-      void params.refreshKnowledgeProjection(params.currentNovelId, currentChapter.order).catch(() => undefined)
+      void params.refreshKnowledgeProjection(params.currentNovelId, selectedKnowledgeStatusChapterOrder).catch(() => undefined)
     }, 0)
     return () => {
       window.clearTimeout(timer)
     }
-  }, [params.backendLoaded, currentChapter, params.currentNovelId, params.refreshKnowledgeProjection])
+  }, [params.backendLoaded, params.currentNovelId, params.refreshKnowledgeProjection, selectedKnowledgeStatusChapterOrder])
 
   useEffect(() => {
     workspaceSelectionHydratedRef.current = false
