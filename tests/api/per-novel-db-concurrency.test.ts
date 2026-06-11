@@ -13,6 +13,15 @@ const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 
 vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
 
+function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
+  if (originalValue === undefined) {
+    delete process.env[name]
+    return
+  }
+
+  process.env[name] = originalValue
+}
+
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void
   let reject!: (reason?: unknown) => void
@@ -446,7 +455,7 @@ async function createNovelDatabases(prefix: string) {
 }
 
 afterEach(async () => {
-  process.env.RETALE_DATA_DIR = originalDataDir
+  restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()

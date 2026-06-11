@@ -12,6 +12,15 @@ class MockChildProcess extends EventEmitter {
 const originalDataDir = process.env.RETALE_DATA_DIR
 const cleanupDirectories: string[] = []
 
+function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
+  if (originalValue === undefined) {
+    delete process.env[name]
+    return
+  }
+
+  process.env[name] = originalValue
+}
+
 function canonicalizePath(targetPath: string) {
   if (!fs.existsSync(targetPath)) {
     return path.resolve(targetPath)
@@ -23,7 +32,7 @@ function canonicalizePath(targetPath: string) {
 afterEach(() => {
   vi.restoreAllMocks()
   vi.resetModules()
-  process.env.RETALE_DATA_DIR = originalDataDir
+  restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
   delete process.env.DATABASE_URL
   while (cleanupDirectories.length) {
     fs.rmSync(cleanupDirectories.pop()!, { recursive: true, force: true })

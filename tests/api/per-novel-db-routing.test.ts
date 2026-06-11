@@ -18,6 +18,15 @@ const RAW_SQLITE_IMPORT_ALLOWED_FILES = new Set([
   'lib/server/db-resolver.ts',
 ])
 
+function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
+  if (originalValue === undefined) {
+    delete process.env[name]
+    return
+  }
+
+  process.env[name] = originalValue
+}
+
 function listTypeScriptFiles(rootPath: string): string[] {
   const entries = fs.readdirSync(rootPath, { withFileTypes: true })
   const results: string[] = []
@@ -176,7 +185,7 @@ afterEach(async () => {
   }
   const resolverModule = await import('@/lib/server/db-resolver')
   resolverModule.resetResolvedDatabasesForTests()
-  process.env.RETALE_DATA_DIR = originalDataDir
+  restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
   vi.resetModules()
 
   while (cleanupDirectories.length > 0) {

@@ -14,6 +14,15 @@ const API_TEST_TIMEOUT_MS = 30_000
 
 vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
 
+function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
+  if (originalValue === undefined) {
+    delete process.env[name]
+    return
+  }
+
+  process.env[name] = originalValue
+}
+
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void
   let reject!: (reason?: unknown) => void
@@ -188,7 +197,7 @@ afterEach(() => {
   }
 
   process.env.DATABASE_URL = originalDatabaseUrl
-  process.env.RETALE_DATA_DIR = originalDataDir
+  restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
   process.env.RETALE_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
   process.env.RETALE_TASK_MAX_RETRIES = originalTaskMaxRetries
 
