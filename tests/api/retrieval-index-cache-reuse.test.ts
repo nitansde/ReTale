@@ -8,6 +8,15 @@ const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDataDir = process.env.RETALE_DATA_DIR
 
+function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
+  if (originalValue === undefined) {
+    delete process.env[name]
+    return
+  }
+
+  process.env[name] = originalValue
+}
+
 function seedRetrievalFixture(database: DatabaseSync) {
   database.prepare(
     `INSERT INTO NovelRecord (id, title, author, sourceType)
@@ -308,7 +317,7 @@ afterEach(() => {
     delete globalForSqlite.sqlite
   }
 
-  process.env.RETALE_DATA_DIR = originalDataDir
+  restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
 
   while (cleanups.length) {
     cleanups.pop()?.()

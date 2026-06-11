@@ -13,6 +13,15 @@ const originalDatabaseUrl = process.env.DATABASE_URL
 
 const cleanupDirectories: string[] = []
 
+function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
+  if (originalValue === undefined) {
+    delete process.env[name]
+    return
+  }
+
+  process.env[name] = originalValue
+}
+
 function createAiSettings(): AISettings {
   return {
     rewrite: {
@@ -147,7 +156,7 @@ afterEach(async () => {
   vi.useRealTimers()
   process.env.RETALE_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
   process.env.RETALE_TASK_MAX_RETRIES = originalTaskMaxRetries
-  process.env.RETALE_DATA_DIR = originalDataDir
+  restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
   process.env.DATABASE_URL = originalDatabaseUrl
   const resolverModule = await import('@/lib/server/db-resolver')
   resolverModule.resetResolvedDatabasesForTests()
