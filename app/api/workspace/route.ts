@@ -52,7 +52,7 @@ function getNovelWorkspaceDb(novelId: string) {
   return createNovelDatabaseAccess(novelId)
 }
 
-async function loadWorkspacePayloadFromNovelRegistryFallback() {
+async function loadWorkspacePayloadFromNovelRegistryFallback(activeNovelId?: string | null) {
   const registryRows = listReadyWorkspaceNovelRegistry()
   if (!registryRows.length) {
     return null
@@ -65,12 +65,25 @@ async function loadWorkspacePayloadFromNovelRegistryFallback() {
   const localNovels = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localNovels'][number]>()
   const localVolumes = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localVolumes'][number]>()
   const localChapters = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localChapters'][number]>()
+  const localOutlines = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localOutlines'][number]>()
+  const localCharacters = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localCharacters'][number]>()
+  const localCharacterRelations = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localCharacterRelations'][number]>()
+  const localWorldEntries = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localWorldEntries'][number]>()
+  const localTimelineEvents = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localTimelineEvents'][number]>()
+  let fallbackPayload: Awaited<ReturnType<typeof loadWorkspacePayloadFromRuntimeOrRecovery>> | null = null
+  let activePayload: Awaited<ReturnType<typeof loadWorkspacePayloadFromRuntimeOrRecovery>> | null = null
 
   for (const [index, result] of settledPayloads.entries()) {
     if (result.status === 'rejected') {
       console.warn('Skipping registry workspace restore for novel', registryRows[index]?.novelId, result.reason)
       continue
     }
+
+    if (registryRows[index]?.novelId === activeNovelId) {
+      activePayload = result.value
+    }
+
+    fallbackPayload ??= result.value
 
     for (const novel of result.value.localNovels) {
       if (!localNovels.has(novel.id)) {
@@ -89,17 +102,65 @@ async function loadWorkspacePayloadFromNovelRegistryFallback() {
         localChapters.set(chapter.id, chapter)
       }
     }
+
+    for (const outline of result.value.localOutlines) {
+      if (!localOutlines.has(outline.id)) {
+        localOutlines.set(outline.id, outline)
+      }
+    }
+
+    for (const character of result.value.localCharacters) {
+      if (!localCharacters.has(character.id)) {
+        localCharacters.set(character.id, character)
+      }
+    }
+
+    for (const relation of result.value.localCharacterRelations) {
+      if (!localCharacterRelations.has(relation.id)) {
+        localCharacterRelations.set(relation.id, relation)
+      }
+    }
+
+    for (const worldEntry of result.value.localWorldEntries) {
+      if (!localWorldEntries.has(worldEntry.id)) {
+        localWorldEntries.set(worldEntry.id, worldEntry)
+      }
+    }
+
+    for (const timelineEvent of result.value.localTimelineEvents) {
+      if (!localTimelineEvents.has(timelineEvent.id)) {
+        localTimelineEvents.set(timelineEvent.id, timelineEvent)
+      }
+    }
   }
 
   if (!localNovels.size && !localChapters.size) {
     return null
   }
 
+  const orderedLocalNovels = [...localNovels.values()]
+  if (activeNovelId && localNovels.has(activeNovelId)) {
+    orderedLocalNovels.sort((left, right) => {
+      const activeDiff = Number(right.id === activeNovelId) - Number(left.id === activeNovelId)
+      if (activeDiff !== 0) return activeDiff
+      return 0
+    })
+  }
+
+  const basePayload = activePayload ?? fallbackPayload ?? createEmptyWorkspaceState()
+
   return normalizeWorkspaceState({
-    ...createEmptyWorkspaceState(),
-    localNovels: [...localNovels.values()],
+    ...basePayload,
+    currentNovelId: activePayload?.currentNovelId || activeNovelId || '',
+    currentChapterId: activePayload?.currentChapterId || '',
+    localNovels: orderedLocalNovels,
     localVolumes: [...localVolumes.values()],
     localChapters: [...localChapters.values()],
+    localOutlines: [...localOutlines.values()],
+    localCharacters: [...localCharacters.values()],
+    localCharacterRelations: [...localCharacterRelations.values()],
+    localWorldEntries: [...localWorldEntries.values()],
+    localTimelineEvents: [...localTimelineEvents.values()],
   })
 }
 
@@ -143,14 +204,14 @@ export async function GET(request: Request = new Request('http://localhost/api/w
     }
 
     const activeNovelId = readActiveWorkspaceNovelId()
+    const registryPayload = await loadWorkspacePayloadFromNovelRegistryFallback(activeNovelId)
+    if (registryPayload) {
+      return NextResponse.json(registryPayload)
+    }
+
     if (activeNovelId) {
       const payload = await loadWorkspacePayloadFromRuntimeOrRecovery('singleton', getNovelWorkspaceDb(activeNovelId))
       return NextResponse.json(payload)
-    }
-
-    const registryPayload = await loadWorkspacePayloadFromNovelRegistryFallback()
-    if (registryPayload) {
-      return NextResponse.json(registryPayload)
     }
 
     const payload = await loadWorkspacePayloadFromRuntimeOrRecovery()

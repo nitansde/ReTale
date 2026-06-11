@@ -318,6 +318,35 @@ describe('workspace route', () => {
     expect(payload.currentChapterId).toBe('novel-alpha-chapter-1')
   })
 
+  it('restores all registered per-novel runtime libraries even when an active novel setting exists', async () => {
+    const { controlDb } = await createTestDataRoot('retale-workspace-route-registry-with-active', 'novel-beta')
+
+    await seedWorkspaceRuntimeForNovel('novel-alpha', createWorkspacePayloadWithSideData('novel-alpha', 'Alpha Library'))
+    await seedWorkspaceRuntimeForNovel('novel-beta', createWorkspacePayloadWithSideData('novel-beta', 'Beta Library'))
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha Library')
+    seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta Library')
+
+    const { GET } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await GET()
+    const payload = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(payload.localNovels).toMatchObject([
+      { id: 'novel-beta', title: 'Beta Library' },
+      { id: 'novel-alpha', title: 'Alpha Library' },
+    ])
+    expect(payload.localVolumes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'novel-alpha-volume-1', novelId: 'novel-alpha' }),
+      expect.objectContaining({ id: 'novel-beta-volume-1', novelId: 'novel-beta' }),
+    ]))
+    expect(payload.localChapters).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'novel-alpha-chapter-1', novelId: 'novel-alpha' }),
+      expect.objectContaining({ id: 'novel-beta-chapter-1', novelId: 'novel-beta' }),
+    ]))
+    expect(payload.currentNovelId).toBe('novel-beta')
+    expect(payload.currentChapterId).toBe('novel-beta-chapter-1')
+  })
+
   it('repairs a missing workspace from recoverable knowledge data', async () => {
     const database = await createTestDatabase('retale-workspace-route-recover-missing', 'novel-recover')
     clearWorkspaceRecoveryData(database)
