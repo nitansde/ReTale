@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { jsonError, requireNonEmptyId } from '@/lib/server/api-route'
+import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { findContinueBlockById } from '@/lib/server/continue-block-store'
 
 export async function GET(request: Request, ctx: RouteContext<'/api/continue-blocks/[continueBlockId]'>) {
@@ -17,7 +18,7 @@ export async function GET(request: Request, ctx: RouteContext<'/api/continue-blo
       return jsonError('branchId is required', 400)
     }
 
-    const detail = findContinueBlockById(continueBlockId)
+    const detail = findContinueBlockById(continueBlockId, createNovelDatabaseAccess(novelId))
     if (!detail || detail.novelId !== novelId || detail.branchId !== branchId) {
       return jsonError('Continue block not found for the requested branch context', 404)
     }
