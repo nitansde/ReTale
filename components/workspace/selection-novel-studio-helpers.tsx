@@ -1079,6 +1079,21 @@ export function WorkspaceCharacterReferenceCard({
 
 export const CHAPTER_PAGE_SIZE = 80
 
+export function resolveChapterListTargetForAnchorVisibility(params: {
+  anchorChapterNo: number
+  currentTarget: number
+  sortedChapters: Array<Pick<Chapter, 'id' | 'order' | 'volumeId' | 'parentChapterId'>>
+}) {
+  const anchorChapter = params.sortedChapters.find((chapter) => !chapter.parentChapterId && chapter.order === params.anchorChapterNo)
+  if (!anchorChapter) return params.currentTarget
+
+  const chaptersInVolume = params.sortedChapters.filter((chapter) => chapter.volumeId === anchorChapter.volumeId && !chapter.parentChapterId)
+  const anchorIndex = chaptersInVolume.findIndex((chapter) => chapter.id === anchorChapter.id)
+  if (anchorIndex < 0) return params.currentTarget
+
+  return Math.max(params.currentTarget, anchorIndex + 1)
+}
+
 export const DEFAULT_GRAPH_REVIEW_CONTROLS: GraphReviewControls = {
   maxHops: 1,
   hideLowConfidence: true,
@@ -1233,13 +1248,10 @@ export async function callGetRecoverableRewriteJobApi(params: {
   chapterId?: string
 }) {
   const searchParams = new URLSearchParams()
-  if (params.jobId) {
-    searchParams.set('jobId', params.jobId)
-  } else {
-    if (params.novelId) searchParams.set('novelId', params.novelId)
-    if (params.branchId) searchParams.set('branchId', params.branchId)
-    if (params.chapterId) searchParams.set('chapterId', params.chapterId)
-  }
+  if (params.jobId) searchParams.set('jobId', params.jobId)
+  if (params.novelId) searchParams.set('novelId', params.novelId)
+  if (params.branchId) searchParams.set('branchId', params.branchId)
+  if (params.chapterId) searchParams.set('chapterId', params.chapterId)
 
   const response = await fetch(`/api/rewrite?${searchParams.toString()}`, {
     cache: 'no-store',
@@ -1525,18 +1537,22 @@ export function createOptimisticContinueBlockTimelineNode(params: {
   } satisfies StoryTimelineBranchNode
 }
 
-export function upsertOptimisticContinueBlockTimelineNode(current: StoryTimelineResponse | null, nextNode: StoryTimelineBranchNode) {
-  if (!current) return null
-
+export function upsertOptimisticContinueBlockTimelineNode(
+  current: StoryTimelineResponse | null,
+  nextNode: StoryTimelineBranchNode,
+  fallbackTimeline?: Pick<StoryTimelineResponse, 'novelId' | 'branchId' | 'chapters'>,
+) {
   const branchNodes = [
-    ...current.branchNodes.filter((node) => node.id !== nextNode.id),
+    ...(current?.branchNodes ?? []).filter((node) => node.id !== nextNode.id && (nextNode.continueBlockId == null || node.continueBlockId !== nextNode.continueBlockId)),
     nextNode,
   ]
-  const edges = nextNode.parentNodeId && !current.edges.some((edge) => edge.fromNodeId === nextNode.parentNodeId && edge.toNodeId === nextNode.id)
-    ? [...current.edges, { fromNodeId: nextNode.parentNodeId, toNodeId: nextNode.id }]
-    : current.edges
+  const edges = branchNodes
+    .filter((node) => node.parentNodeId)
+    .map((node) => ({ fromNodeId: node.parentNodeId!, toNodeId: node.id }))
 
-  return { ...current, branchNodes, edges }
+  if (current) return { ...current, branchNodes, edges }
+  if (!fallbackTimeline) return null
+  return { ...fallbackTimeline, branchNodes, edges }
 }
 
 export function removeDeletedStoryTimelineNode(current: StoryTimelineResponse, deletedNode: StoryTimelineBranchNode) {

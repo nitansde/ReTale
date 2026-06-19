@@ -10,6 +10,7 @@ export {
   hasCharacterProfile,
   isWorkspaceCharacterVisible,
   normalizeKnowledgeRebuildChapterRangeInput,
+  resolveChapterListTargetForAnchorVisibility,
   resolveCacheDeleteState,
   resolveContinueBlockSelectionAfterSave,
   resolveCurrentNodeMetrics,
