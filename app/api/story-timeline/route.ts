@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { findStoryBranch, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { abortRecoverableRewriteJobsForDeletedTimelineNode } from '@/lib/server/recoverable-rewrite-jobs'
 import { deleteStoryTimelineNode, findStoryTimelineNodeById, loadStoryTimeline } from '@/lib/server/story-timeline-store'
@@ -17,12 +18,13 @@ export async function GET(request: Request) {
     }
 
     const branchId = normalizeBranchId(novelId, rawBranchId)
-    const branch = findStoryBranch(branchId)
+    const db = createNovelDatabaseAccess(novelId)
+    const branch = findStoryBranch(branchId, db)
     if (!branch || branch.novelId !== novelId) {
       return NextResponse.json({ ok: false, error: 'branchId does not belong to the requested novel' }, { status: 404 })
     }
 
-    const payload = loadStoryTimeline(novelId, branchId)
+    const payload = loadStoryTimeline(novelId, branchId, db)
     return NextResponse.json(payload)
   } catch (error) {
     return NextResponse.json(
@@ -52,12 +54,13 @@ export async function DELETE(request: Request) {
     }
 
     const branchId = normalizeBranchId(novelId, rawBranchId)
-    const branch = findStoryBranch(branchId)
+    const db = createNovelDatabaseAccess(novelId)
+    const branch = findStoryBranch(branchId, db)
     if (!branch || branch.novelId !== novelId) {
       return NextResponse.json({ ok: false, error: 'branchId does not belong to the requested novel' }, { status: 404 })
     }
 
-    const node = findStoryTimelineNodeById(nodeId)
+    const node = findStoryTimelineNodeById(nodeId, db)
     if (!node || node.novelId !== novelId || node.branchId !== branchId) {
       return NextResponse.json({ ok: false, error: 'Story timeline node not found for the requested branch context' }, { status: 404 })
     }
@@ -68,7 +71,7 @@ export async function DELETE(request: Request) {
       nodeId,
       continueBlockId: node.continueBlockId,
     })
-    deleteStoryTimelineNode(nodeId)
+    deleteStoryTimelineNode(nodeId, db)
     return NextResponse.json({ ok: true, nodeId })
   } catch (error) {
     return NextResponse.json(
