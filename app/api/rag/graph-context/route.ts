@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { buildChapterGraphContext } from '@/lib/server/context-builder'
 import { buildGraphAwareContext } from '@/lib/server/graph-context'
-import { normalizeBranchId } from '@/lib/server/knowledge-store'
+import { findStoryBranch, normalizeBranchId } from '@/lib/server/knowledge-store'
+import { runWithNovelDatabaseAccess } from '@/lib/server/database-access'
 import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
 
 const INVALID_OPERATION_TYPE_ERROR = `Invalid operationType. Expected one of: ${PRODUCT_SURFACE_IDS.join(', ')}`
@@ -42,13 +43,13 @@ export async function POST(request: Request) {
     }
 
     if (chapterId) {
-      const result = await buildChapterGraphContext({
+      const result = await runWithNovelDatabaseAccess(novelId, () => buildChapterGraphContext({
         novelId,
         chapterId,
         maxHops: normalizeMaxHops(body.maxHops),
         includeLowConfidence: Boolean(body.includeLowConfidence),
         confirmedOnly: Boolean(body.confirmedOnly),
-      })
+      }))
 
       return NextResponse.json({ ok: true, ...result })
     }
@@ -60,23 +61,30 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: INVALID_OPERATION_TYPE_ERROR }, { status: 400 })
     }
 
-    const result = await buildGraphAwareContext({
-      novelId,
-      branchId: normalizeBranchId(novelId, rawBranchId || undefined),
-      chapterNo,
-      selectedText,
-      nearbyText,
-      operationType,
-      maxHops: normalizeMaxHops(body.maxHops),
-      includeLowConfidence: Boolean(body.includeLowConfidence),
-      confirmedOnly: Boolean(body.confirmedOnly),
+    const result = await runWithNovelDatabaseAccess(novelId, async () => {
+      const branchId = normalizeBranchId(novelId, rawBranchId || undefined)
+      const branch = findStoryBranch(branchId)
+      if (!branch || branch.novelId !== novelId) {
+        throw new Error('branchId does not belong to the requested novel')
+      }
+      return buildGraphAwareContext({
+        novelId,
+        branchId,
+        chapterNo,
+        selectedText,
+        nearbyText,
+        operationType,
+        maxHops: normalizeMaxHops(body.maxHops),
+        includeLowConfidence: Boolean(body.includeLowConfidence),
+        confirmedOnly: Boolean(body.confirmedOnly),
+      })
     })
 
     return NextResponse.json({ ok: true, ...result })
   } catch (error) {
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to build graph context' },
-      { status: 500 }
+      { status: error instanceof Error && error.message.includes('Invalid novel ID') ? 400 : error instanceof Error && (error.message.includes('not found') || error.message.includes('does not belong')) ? 404 : 500 }
     )
   }
 }
@@ -94,19 +102,19 @@ export async function GET(request: Request) {
       return NextResponse.json({ ok: false, error: 'chapterId is required' }, { status: 400 })
     }
 
-    const result = await buildChapterGraphContext({
+    const result = await runWithNovelDatabaseAccess(novelId, () => buildChapterGraphContext({
       novelId,
       chapterId,
       maxHops: normalizeMaxHops(searchParams.get('hops')),
       includeLowConfidence: searchParams.get('includeLowConfidence') === 'true',
       confirmedOnly: searchParams.get('confirmedOnly') === 'true',
-    })
+    }))
 
     return NextResponse.json({ ok: true, ...result })
   } catch (error) {
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to load chapter graph context' },
-      { status: 500 }
+      { status: error instanceof Error && error.message.includes('Invalid novel ID') ? 400 : error instanceof Error && error.message.includes('not found') ? 404 : 500 }
     )
   }
 }

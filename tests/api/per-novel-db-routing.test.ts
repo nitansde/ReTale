@@ -153,6 +153,80 @@ function createNovelWorkspacePayload(novelId: string, title = novelId) {
   }
 }
 
+function seedCollidingNovelRouteFixture(database: DatabaseSync, novelId: string, marker: string) {
+  const branchId = `${novelId}:main`
+  database.prepare('INSERT INTO NovelRecord (id, title, author, sourceType) VALUES (?, ?, ?, ?)').run(novelId, `${marker} novel`, `${marker} author`, 'txt')
+  database.prepare('INSERT INTO StoryBranch (id, novelId, name, baseBranchId) VALUES (?, ?, ?, ?)').run(branchId, novelId, 'main', null)
+  database.prepare(
+    `INSERT INTO KnowledgeChapter (
+      id, novelId, branchId, chapterNo, title, rawText, summary,
+      revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('shared-chapter', novelId, branchId, 1, `${marker} chapter`, `${marker} chapter body`, `${marker} chapter summary`, 1, 0, null, `${marker}-hash`, 'ready')
+  database.prepare('INSERT INTO ChapterLine (id, chapterId, lineNo, text, charStart, charEnd) VALUES (?, ?, ?, ?, ?, ?)')
+    .run('shared-line', 'shared-chapter', 1, `${marker} chapter body`, 0, `${marker} chapter body`.length)
+
+  database.prepare(
+    `INSERT INTO KnowledgeEntity (
+      id, novelId, branchId, entityType, canonicalName, description,
+      firstSeenChapter, lastSeenChapter, importanceTier, status, importance, userConfirmed
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('shared-hero', novelId, branchId, 'character', `${marker} Hero`, `${marker} hero`, 1, 1, 'protagonist', 'user_confirmed', 5, 1)
+  database.prepare(
+    `INSERT INTO KnowledgeEntity (
+      id, novelId, branchId, entityType, canonicalName, description,
+      firstSeenChapter, lastSeenChapter, importanceTier, status, importance, userConfirmed
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('shared-rival', novelId, branchId, 'character', `${marker} Rival`, `${marker} rival`, 1, 1, 'important', 'user_confirmed', 4, 1)
+  database.prepare('INSERT INTO EntityAppearance (id, entityId, chapterId, chapterNo, lineStart, lineEnd) VALUES (?, ?, ?, ?, ?, ?)')
+    .run('shared-appearance', 'shared-hero', 'shared-chapter', 1, 1, 1)
+  database.prepare(
+    `INSERT INTO EntityLink (
+      id, novelId, branchId, sourceEntityId, targetEntityId, linkType, label, description,
+      polarity, strength, sourceChapter, validFromChapter, validUntilChapter, confidence, status, includeByDefault
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('shared-edge', novelId, branchId, 'shared-hero', 'shared-rival', `${marker}-alliance`, `${marker} edge`, `${marker} description`, 'positive', 4, 1, 1, 999999, 0.9, 'ai_generated', 1)
+  database.prepare(
+    `INSERT INTO KnowledgeRelation (
+      id, novelId, branchId, sourceEntityId, targetEntityId, relationType, polarity,
+      strength, sourceChapter, validFromChapter, validUntilChapter, confidence, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('shared-relation', novelId, branchId, 'shared-hero', 'shared-rival', `${marker}-alliance`, 'positive', 4, 1, 1, 999999, 0.9, 'ai_generated')
+
+  database.prepare(
+    `INSERT INTO roleplay_sessions (
+      id, novel_id, branch_id, title, source_chapter_id, source_chapter_no,
+      source_selected_text, source_text_snapshot, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('shared-roleplay', novelId, branchId, `${marker} roleplay`, 'shared-chapter', 1, `${marker} selected`, `${marker} snapshot`, 'active')
+
+  database.prepare(
+    `INSERT INTO what_if_sessions (
+      id, novel_id, base_branch_id, source_chapter_no, title, premise,
+      selected_text, original_text, generated_text, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('shared-what-if', novelId, branchId, 1, `${marker} what-if`, `${marker} premise`, `${marker} selected`, `${marker} original`, `${marker} generated`, 'active')
+
+  database.prepare(
+    `INSERT INTO continue_blocks (
+      id, novel_id, branch_id, source_chapter_no, title, user_instruction,
+      selected_text, original_text, latest_text, latest_revision_no, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('shared-continue', novelId, branchId, 1, `${marker} continue`, `${marker} instruction`, `${marker} selected`, `${marker} original`, `${marker} latest`, 1, 'active')
+  database.prepare(
+    `INSERT INTO continue_block_revisions (
+      id, continue_block_id, revision_no, revision_kind, user_instruction,
+      selected_text, original_text, generated_text, title
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('shared-continue-revision', 'shared-continue', 1, 'initial', `${marker} instruction`, `${marker} selected`, `${marker} original`, `${marker} latest`, `${marker} continue`)
+  database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title,
+      source_chapter_no, continue_block_id, readable_label, readable_lineage_label, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('shared-continue-node', novelId, branchId, 'rewrite', 1, 1, `${marker} continue`, 1, 'shared-continue', 'RE-01', 'RE-01', 'active')
+}
+
 async function importWorkspaceRouteWithAfterCallbacks() {
   const afterCallbacks: Array<() => Promise<void>> = []
 
@@ -497,5 +571,197 @@ describe('per-novel database resolver', () => {
       latest_revision_no: 1,
       generated_target_text: 'Beta initial text',
     })
+  })
+
+  it('routes colliding rewrite, RAG, graph, roleplay, what-if, and continue resources only through the requested novel DB', async () => {
+    const dataRootPath = createTempDataRoot()
+    const resolver = await loadResolverModule(dataRootPath)
+    const alphaDb = resolver.getNovelDb('novel-alpha')
+    const betaDb = resolver.getNovelDb('novel-beta')
+    seedCollidingNovelRouteFixture(alphaDb, 'novel-alpha', 'Alpha')
+    seedCollidingNovelRouteFixture(betaDb, 'novel-beta', 'Beta')
+
+    const generatedPrompts: string[] = []
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => ({
+        rewrite: {
+          provider: 'openai-compatible',
+          openAICompatible: { baseUrl: 'https://example.test/v1', apiKey: 'test-key', model: 'test-model' },
+          ollama: { baseUrl: 'http://127.0.0.1:11434', model: 'ignored' },
+        },
+      }),
+    }))
+    vi.doMock('@/lib/server/openai-compatible', () => ({
+      generateRewriteWithOpenAICompatible: vi.fn(async (input: { userPrompt: string }) => {
+        generatedPrompts.push(input.userPrompt)
+        return { enabled: true, content: ['Alpha rewrite result'], usage: { inputTokens: 1, outputTokens: 2 } }
+      }),
+      streamRewriteWithOpenAICompatible: vi.fn(),
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        searchLanceEvidence: vi.fn(async () => ({ matches: [] })),
+        deleteBranchRetrievalIndexFromChapter: vi.fn(async () => {}),
+      }
+    })
+
+    vi.resetModules()
+    const [rewriteRoute, contextPreviewRoute, generationContextRoute, graphContextRoute, subgraphRoute, graphEditRoute, graphConfirmRoute, graphRejectRoute, roleplayMessageRoute, whatIfRoute, continueRoute] = await Promise.all([
+      import('@/app/api/rewrite/route'),
+      import('@/app/api/context-preview/route'),
+      import('@/app/api/rag/build-generation-context/route'),
+      import('@/app/api/rag/graph-context/route'),
+      import('@/app/api/graph/subgraph/route'),
+      import('@/app/api/graph/edge/[edgeId]/route'),
+      import('@/app/api/graph/edge/[edgeId]/confirm/route'),
+      import('@/app/api/graph/edge/[edgeId]/reject/route'),
+      import('@/app/api/roleplay/sessions/[sessionId]/messages/route'),
+      import('@/app/api/what-if/sessions/[sessionId]/route'),
+      import('@/app/api/continue-blocks/route'),
+    ])
+
+    const contextBody = {
+      novelId: 'novel-alpha',
+      branchId: 'novel-alpha:main',
+      chapterId: 'shared-chapter',
+      selectedText: 'Alpha Hero',
+      userInstruction: 'Use only alpha context',
+      operationType: 'rewrite',
+    }
+    const createJsonRequest = (url: string, body: Record<string, unknown>, method = 'POST') => new Request(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    const previewResponse = await contextPreviewRoute.POST(createJsonRequest('http://localhost/api/context-preview', contextBody))
+    expect(previewResponse.status).toBe(200)
+    const preview = await previewResponse.json() as { preview: { assembledContext: string } }
+    expect(preview.preview.assembledContext).toContain('Alpha')
+    expect(preview.preview.assembledContext).not.toContain('Beta')
+
+    const generationResponse = await generationContextRoute.POST(createJsonRequest('http://localhost/api/rag/build-generation-context', contextBody))
+    expect(generationResponse.status).toBe(200)
+    const generation = await generationResponse.json() as { assembledContext: string }
+    expect(generation.assembledContext).toContain('Alpha')
+    expect(generation.assembledContext).not.toContain('Beta')
+
+    const rewriteResponse = await rewriteRoute.POST(createJsonRequest('http://localhost/api/rewrite', {
+      ...contextBody,
+      sourceText: 'Alpha source',
+      prompt: 'Rewrite alpha',
+      stream: false,
+    }))
+    expect(rewriteResponse.status).toBe(200)
+    expect(generatedPrompts).toHaveLength(1)
+    expect(generatedPrompts[0]).toContain('Alpha')
+    expect(generatedPrompts[0]).not.toContain('Beta')
+
+    const graphResponse = await graphContextRoute.POST(createJsonRequest('http://localhost/api/rag/graph-context', {
+      novelId: 'novel-alpha',
+      branchId: 'novel-alpha:main',
+      chapterNo: 1,
+      selectedText: 'Alpha Hero',
+      nearbyText: '',
+      operationType: 'rewrite',
+      includeLowConfidence: true,
+    }))
+    expect(graphResponse.status).toBe(200)
+    const graph = await graphResponse.json() as { contextText: string }
+    expect(graph.contextText).toContain('Alpha')
+    expect(graph.contextText).not.toContain('Beta')
+
+    const subgraphResponse = await subgraphRoute.GET(new Request('http://localhost/api/graph/subgraph?novelId=novel-alpha&branchId=novel-alpha%3Amain&chapterNo=1&includeLowConfidence=true&entityId=shared-hero'))
+    expect(subgraphResponse.status).toBe(200)
+    const subgraph = await subgraphResponse.json() as { nodes: Array<{ label: string }> }
+    expect(subgraph.nodes.map((node) => node.label)).toContain('Alpha Hero')
+    expect(subgraph.nodes.map((node) => node.label)).not.toContain('Beta Hero')
+
+    const editResponse = await graphEditRoute.PATCH(
+      createJsonRequest('http://localhost/api/graph/edge/shared-edge', { novelId: 'novel-alpha', linkType: 'Alpha-edited' }, 'PATCH'),
+      { params: Promise.resolve({ edgeId: 'shared-edge' }) },
+    )
+    expect(editResponse.status).toBe(200)
+    expect(alphaDb.prepare('SELECT linkType FROM EntityLink WHERE id = ?').get('shared-edge')).toMatchObject({ linkType: 'Alpha-edited' })
+    expect(betaDb.prepare('SELECT linkType FROM EntityLink WHERE id = ?').get('shared-edge')).toMatchObject({ linkType: 'Beta-alliance' })
+
+    const rejectResponse = await graphRejectRoute.POST(
+      createJsonRequest('http://localhost/api/graph/edge/shared-edge/reject', { novelId: 'novel-alpha' }),
+      { params: Promise.resolve({ edgeId: 'shared-edge' }) },
+    )
+    expect(rejectResponse.status).toBe(200)
+    expect(alphaDb.prepare('SELECT status FROM EntityLink WHERE id = ?').get('shared-edge')).toMatchObject({ status: 'rejected' })
+    expect(betaDb.prepare('SELECT status FROM EntityLink WHERE id = ?').get('shared-edge')).toMatchObject({ status: 'ai_generated' })
+
+    const confirmResponse = await graphConfirmRoute.POST(
+      createJsonRequest('http://localhost/api/graph/edge/shared-edge/confirm', { novelId: 'novel-alpha' }),
+      { params: Promise.resolve({ edgeId: 'shared-edge' }) },
+    )
+    expect(confirmResponse.status).toBe(200)
+    expect(alphaDb.prepare('SELECT status FROM EntityLink WHERE id = ?').get('shared-edge')).toMatchObject({ status: 'user_confirmed' })
+    expect(betaDb.prepare('SELECT status FROM EntityLink WHERE id = ?').get('shared-edge')).toMatchObject({ status: 'ai_generated' })
+
+    const messageResponse = await roleplayMessageRoute.POST(
+      createJsonRequest('http://localhost/api/roleplay/sessions/shared-roleplay/messages', {
+        novelId: 'novel-alpha',
+        branchId: 'novel-alpha:main',
+        id: 'alpha-message',
+        role: 'user',
+        content: 'Alpha only message',
+      }),
+      { params: Promise.resolve({ sessionId: 'shared-roleplay' }) },
+    )
+    expect(messageResponse.status).toBe(201)
+    expect(alphaDb.prepare('SELECT content FROM roleplay_messages WHERE id = ?').get('alpha-message')).toMatchObject({ content: 'Alpha only message' })
+    expect(betaDb.prepare('SELECT content FROM roleplay_messages WHERE id = ?').get('alpha-message')).toBeUndefined()
+
+    const whatIfGetResponse = await whatIfRoute.GET(
+      new Request('http://localhost/api/what-if/sessions/shared-what-if?novelId=novel-alpha&branchId=novel-alpha%3Amain'),
+      { params: Promise.resolve({ sessionId: 'shared-what-if' }) },
+    )
+    expect(whatIfGetResponse.status).toBe(200)
+    await expect(whatIfGetResponse.json()).resolves.toMatchObject({ generatedText: 'Alpha generated' })
+
+    const continueResponse = await continueRoute.PUT(createJsonRequest('http://localhost/api/continue-blocks', {
+      novelId: 'novel-alpha',
+      branchId: 'novel-alpha:main',
+      continueBlockId: 'shared-continue',
+      generatedText: 'Alpha regenerated',
+      userInstruction: 'Regenerate alpha only',
+      selectedText: 'Alpha selected',
+      originalText: 'Alpha original',
+    }, 'PUT'))
+    expect(continueResponse.status).toBe(200)
+    expect(alphaDb.prepare('SELECT latest_text, latest_revision_no FROM continue_blocks WHERE id = ?').get('shared-continue')).toMatchObject({ latest_text: 'Alpha regenerated', latest_revision_no: 2 })
+    expect(betaDb.prepare('SELECT latest_text, latest_revision_no FROM continue_blocks WHERE id = ?').get('shared-continue')).toMatchObject({ latest_text: 'Beta latest', latest_revision_no: 1 })
+
+    const whatIfDeleteResponse = await whatIfRoute.DELETE(
+      new Request('http://localhost/api/what-if/sessions/shared-what-if?novelId=novel-alpha&branchId=novel-alpha%3Amain', { method: 'DELETE' }),
+      { params: Promise.resolve({ sessionId: 'shared-what-if' }) },
+    )
+    expect(whatIfDeleteResponse.status).toBe(200)
+    expect(alphaDb.prepare('SELECT id FROM what_if_sessions WHERE id = ?').get('shared-what-if')).toBeUndefined()
+    expect(betaDb.prepare('SELECT id FROM what_if_sessions WHERE id = ?').get('shared-what-if')).toMatchObject({ id: 'shared-what-if' })
+
+    const missingNovelResponses = await Promise.all([
+      contextPreviewRoute.POST(createJsonRequest('http://localhost/api/context-preview', { ...contextBody, novelId: '' })),
+      rewriteRoute.POST(createJsonRequest('http://localhost/api/rewrite', { ...contextBody, novelId: '', sourceText: 'x', prompt: 'x' })),
+      graphConfirmRoute.POST(createJsonRequest('http://localhost/api/graph/edge/shared-edge/confirm', {}), { params: Promise.resolve({ edgeId: 'shared-edge' }) }),
+      roleplayMessageRoute.POST(createJsonRequest('http://localhost/api/roleplay/sessions/shared-roleplay/messages', { branchId: 'novel-alpha:main', role: 'user', content: 'missing novel' }), { params: Promise.resolve({ sessionId: 'shared-roleplay' }) }),
+      whatIfRoute.GET(new Request('http://localhost/api/what-if/sessions/shared-what-if?branchId=novel-alpha%3Amain'), { params: Promise.resolve({ sessionId: 'shared-what-if' }) }),
+      continueRoute.PUT(createJsonRequest('http://localhost/api/continue-blocks', { branchId: 'novel-alpha:main', continueBlockId: 'shared-continue', generatedText: 'x', userInstruction: 'x', selectedText: '', originalText: '' }, 'PUT')),
+    ])
+    expect(missingNovelResponses.map((response) => response.status)).toEqual([400, 400, 400, 400, 400, 400])
+
+    const malformedNovelResponse = await subgraphRoute.GET(new Request('http://localhost/api/graph/subgraph?novelId=..%2Fescape&branchId=novel-alpha%3Amain&chapterNo=1&entityId=shared-hero'))
+    expect(malformedNovelResponse.status).toBe(400)
+
+    const wrongOwnerResponse = await roleplayMessageRoute.POST(
+      createJsonRequest('http://localhost/api/roleplay/sessions/shared-roleplay/messages', { novelId: 'novel-alpha', branchId: 'novel-alpha:other', role: 'user', content: 'wrong branch' }),
+      { params: Promise.resolve({ sessionId: 'shared-roleplay' }) },
+    )
+    expect(wrongOwnerResponse.status).toBe(404)
   })
 })

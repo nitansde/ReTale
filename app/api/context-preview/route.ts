@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { buildGenerationContextPreview } from '@/lib/server/context-builder'
+import { runWithNovelDatabaseAccess } from '@/lib/server/database-access'
 import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
 
 const INVALID_OPERATION_TYPE_ERROR = `Invalid operationType. Expected one of: ${PRODUCT_SURFACE_IDS.join(', ')}`
@@ -25,8 +26,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: INVALID_OPERATION_TYPE_ERROR }, { status: 400 })
     }
 
-    const preview = await buildGenerationContextPreview({
-      novelId: String(body.novelId ?? ''),
+    const novelId = String(body.novelId ?? '').trim()
+    if (!novelId) {
+      return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+    }
+
+    const preview = await runWithNovelDatabaseAccess(novelId, () => buildGenerationContextPreview({
+      novelId,
       branchId: body.branchId ? String(body.branchId) : undefined,
       chapterId: String(body.chapterId ?? ''),
       selectedText: String(body.selectedText ?? ''),
@@ -37,7 +43,7 @@ export async function POST(request: Request) {
       futureJumpRunId: body.futureJumpRunId ? String(body.futureJumpRunId) : undefined,
       branchContextNodeId: body.branchContextNodeId ? String(body.branchContextNodeId) : undefined,
       branchContextInclusion: normalizeBranchContextInclusion(body.branchContextInclusion),
-    })
+    }))
 
     return NextResponse.json({ ok: true, preview })
   } catch (error) {
@@ -46,7 +52,7 @@ export async function POST(request: Request) {
         ok: false,
         error: error instanceof Error ? error.message : 'Failed to build generation context',
       },
-      { status: 500 }
+      { status: error instanceof Error && (error.message.includes('Invalid novel ID') || error.message.includes('required')) ? 400 : error instanceof Error && error.message.includes('not found') ? 404 : 500 }
     )
   }
 }

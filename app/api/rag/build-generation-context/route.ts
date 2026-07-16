@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { buildGenerationContext } from '@/lib/server/context-builder'
+import { runWithNovelDatabaseAccess } from '@/lib/server/database-access'
 import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
 
 const INVALID_OPERATION_TYPE_ERROR = `Invalid operationType. Expected one of: ${PRODUCT_SURFACE_IDS.join(', ')}`
@@ -45,7 +46,7 @@ export async function POST(request: Request) {
     }
     const effectiveOperationType = resolveGenerationRouteOperationType(operationType)
 
-    const result = await buildGenerationContext({
+    const result = await runWithNovelDatabaseAccess(novelId, () => buildGenerationContext({
       novelId,
       branchId: body.branchId ? String(body.branchId) : undefined,
       chapterId,
@@ -59,13 +60,13 @@ export async function POST(request: Request) {
       futureJumpRunId: body.futureJumpRunId ? String(body.futureJumpRunId) : undefined,
       branchContextNodeId: body.branchContextNodeId ? String(body.branchContextNodeId) : undefined,
       branchContextInclusion: normalizeBranchContextInclusion(body.branchContextInclusion),
-    })
+    }))
 
     return NextResponse.json({ ok: true, ...result })
   } catch (error) {
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to build generation context' },
-      { status: 500 }
+      { status: error instanceof Error && error.message.includes('Invalid novel ID') ? 400 : error instanceof Error && error.message.includes('not found') ? 404 : 500 }
     )
   }
 }
