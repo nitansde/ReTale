@@ -3,6 +3,7 @@ import type { ChapterKnowledgeExtraction } from '@/lib/story-knowledge'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { safeParseJson } from '@/lib/server/json-parse'
 import { writeLlmDebugLog, type LlmDebugLogParams } from '@/lib/server/llm-debug-log'
+import { withProviderModelDiscoveryDeadline } from '@/lib/server/provider-model-discovery'
 import {
   NON_STREAM_PROVIDER_TIMEOUT_MS,
   parseProviderJsonResponse,
@@ -220,38 +221,42 @@ export async function listAvailableOpenAICompatibleModels(
   baseUrlOverride?: string,
   apiKeyOverride?: string,
   scenario: AIScenarioKey = 'rewrite',
+  inputSignal?: AbortSignal,
 ): Promise<{ baseUrl: string; models: OpenAICompatibleModelOption[] }> {
-  const stored = getConfig(scenario)
-  const rawBaseUrl = baseUrlOverride?.trim() || stored.baseUrl
-  if (!rawBaseUrl) {
-    return { baseUrl: '', models: [] }
-  }
+  return withProviderModelDiscoveryDeadline(async (signal) => {
+    const stored = getConfig(scenario)
+    const rawBaseUrl = baseUrlOverride?.trim() || stored.baseUrl
+    if (!rawBaseUrl) {
+      return { baseUrl: '', models: [] }
+    }
 
-  const baseUrl = normalizeOpenAICompatibleBaseUrl(rawBaseUrl)
-  const apiKey = apiKeyOverride?.trim() || stored.apiKey
+    const baseUrl = normalizeOpenAICompatibleBaseUrl(rawBaseUrl)
+    const apiKey = apiKeyOverride?.trim() || stored.apiKey
 
-  const headers: HeadersInit = {}
-  if (apiKey) {
-    headers.Authorization = `Bearer ${apiKey}`
-  }
+    const headers: HeadersInit = {}
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`
+    }
 
-  const response = await fetch(`${baseUrl}/models`, {
-    cache: 'no-store',
-    headers,
-  })
+    const response = await fetch(`${baseUrl}/models`, {
+      cache: 'no-store',
+      headers,
+      signal,
+    })
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
-  }
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
 
-  const data = await response.json() as OpenAICompatibleModelsResponse
-  const rawItems = Array.isArray(data.data) ? data.data : []
-  const models = rawItems
-    .map(normalizeOpenAICompatibleModelItem)
-    .filter((item): item is OpenAICompatibleModelOption => Boolean(item))
-    .sort((left, right) => left.id.localeCompare(right.id))
+    const data = await response.json() as OpenAICompatibleModelsResponse
+    const rawItems = Array.isArray(data.data) ? data.data : []
+    const models = rawItems
+      .map(normalizeOpenAICompatibleModelItem)
+      .filter((item): item is OpenAICompatibleModelOption => Boolean(item))
+      .sort((left, right) => left.id.localeCompare(right.id))
 
-  return { baseUrl, models }
+    return { baseUrl, models }
+  }, inputSignal)
 }
 
 function collectChatCompletionText(content: unknown): string {

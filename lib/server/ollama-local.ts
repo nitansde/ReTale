@@ -11,6 +11,7 @@ import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { safeParseJson } from '@/lib/server/json-parse'
 import { writeLlmDebugLog, type LlmDebugLogParams } from '@/lib/server/llm-debug-log'
 import { findAppSettings } from '@/lib/server/persistence'
+import { withProviderModelDiscoveryDeadline } from '@/lib/server/provider-model-discovery'
 import {
   NON_STREAM_PROVIDER_TIMEOUT_MS,
   parseProviderJsonResponse,
@@ -1251,8 +1252,17 @@ function getStoredOllamaSettings(scenario: AIScenarioKey = 'knowledgeExtraction'
   }
 }
 
-async function fetchOllamaTags(baseUrl: string) {
-  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/tags`, { cache: 'no-store' })
+const OLLAMA_CAPABILITY_PROBE_CONCURRENCY = 4
+
+function isAbortOrTimeoutError(error: unknown) {
+  return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
+}
+
+async function fetchOllamaTags(baseUrl: string, signal?: AbortSignal) {
+  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/tags`, {
+    cache: 'no-store',
+    signal,
+  })
   if (!response.ok) {
     const text = await response.text()
     throw new Error(`Ollama HTTP ${response.status}: ${text.slice(0, 200)}`)
@@ -1260,29 +1270,41 @@ async function fetchOllamaTags(baseUrl: string) {
   return await response.json() as OllamaTagsResponse
 }
 
-async function fetchOllamaCapabilities(baseUrl: string, model: string) {
-  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/show`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model }),
-    cache: 'no-store',
-  })
+async function fetchOllamaCapabilities(baseUrl: string, model: string, signal?: AbortSignal) {
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/show`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+      cache: 'no-store',
+      signal,
+    })
 
-  if (!response.ok) {
+    if (!response.ok) {
+      return [] as string[]
+    }
+
+    const data = await response.json() as OllamaShowResponse
+    return data.capabilities ?? []
+  } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason ?? error
+    }
+    if (isAbortOrTimeoutError(error)) {
+      throw error
+    }
     return [] as string[]
   }
-
-  const data = await response.json() as OllamaShowResponse
-  return data.capabilities ?? []
 }
 
 async function listAvailableOllamaModels(
   baseUrlOverride?: string,
-  purpose: 'text' | 'embedding' = 'text'
+  purpose: 'text' | 'embedding' = 'text',
+  signal?: AbortSignal,
 ): Promise<{ baseUrl: string; models: OllamaModelOption[] }> {
   const stored = getStoredOllamaSettings(purpose === 'embedding' ? 'embeddings' : 'knowledgeExtraction')
   const baseUrl = (baseUrlOverride?.trim() || stored.baseUrl).replace(/\/$/, '')
-  const tags = await fetchOllamaTags(baseUrl)
+  const tags = await fetchOllamaTags(baseUrl, signal)
   const candidates = (tags.models ?? [])
     .map((item) => ({
       id: (item.model ?? item.name ?? '').trim(),
@@ -1295,12 +1317,30 @@ async function listAvailableOllamaModels(
     }))
     .filter((item) => item.id)
 
-  const capabilityResults = await Promise.all(
-    candidates.map(async (item) => ({
-      item,
-      capabilities: await fetchOllamaCapabilities(baseUrl, item.id),
-    }))
-  )
+  const capabilityResults = new Array<{
+    item: typeof candidates[number]
+    capabilities: string[]
+  }>(candidates.length)
+  let nextCandidateIndex = 0
+
+  const probeCapabilities = async () => {
+    while (nextCandidateIndex < candidates.length) {
+      signal?.throwIfAborted()
+      const candidateIndex = nextCandidateIndex
+      nextCandidateIndex += 1
+      const item = candidates[candidateIndex]
+      capabilityResults[candidateIndex] = {
+        item,
+        capabilities: await fetchOllamaCapabilities(baseUrl, item.id, signal),
+      }
+    }
+  }
+
+  await Promise.all(Array.from(
+    { length: Math.min(OLLAMA_CAPABILITY_PROBE_CONCURRENCY, candidates.length) },
+    () => probeCapabilities(),
+  ))
+  signal?.throwIfAborted()
 
   const models = capabilityResults
     .filter(({ item, capabilities }) => {
@@ -1324,12 +1364,24 @@ async function listAvailableOllamaModels(
   return { baseUrl, models }
 }
 
-export async function listAvailableOllamaTextModels(baseUrlOverride?: string): Promise<{ baseUrl: string; models: OllamaModelOption[] }> {
-  return listAvailableOllamaModels(baseUrlOverride, 'text')
+export async function listAvailableOllamaTextModels(
+  baseUrlOverride?: string,
+  inputSignal?: AbortSignal,
+): Promise<{ baseUrl: string; models: OllamaModelOption[] }> {
+  return withProviderModelDiscoveryDeadline(
+    (signal) => listAvailableOllamaModels(baseUrlOverride, 'text', signal),
+    inputSignal,
+  )
 }
 
-export async function listAvailableOllamaEmbeddingModels(baseUrlOverride?: string): Promise<{ baseUrl: string; models: OllamaModelOption[] }> {
-  return listAvailableOllamaModels(baseUrlOverride, 'embedding')
+export async function listAvailableOllamaEmbeddingModels(
+  baseUrlOverride?: string,
+  inputSignal?: AbortSignal,
+): Promise<{ baseUrl: string; models: OllamaModelOption[] }> {
+  return withProviderModelDiscoveryDeadline(
+    (signal) => listAvailableOllamaModels(baseUrlOverride, 'embedding', signal),
+    inputSignal,
+  )
 }
 
 async function resolveOllamaTextConfig(
@@ -1409,7 +1461,7 @@ async function getOllamaEmbeddingConfig(configOverride?: Partial<OllamaProviderS
 
   let detectedModels: OllamaModelOption[] = []
   try {
-    const available = await listAvailableOllamaEmbeddingModels(baseUrl)
+    const available = await listAvailableOllamaModels(baseUrl, 'embedding')
     detectedModels = available.models
   } catch {
     return {
