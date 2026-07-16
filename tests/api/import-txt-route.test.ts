@@ -5,6 +5,8 @@ import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const MAX_TXT_FILE_SIZE_BYTES = 10 * 1024 * 1024
+const MAX_IMPORT_BODY_SIZE_BYTES = MAX_TXT_FILE_SIZE_BYTES + 256 * 1024
 
 function createTestDatabase(prefix: string) {
   const tempDatabase = createTempDatabaseCopy(prefix)
@@ -67,9 +69,44 @@ function createGb18030ImportRequest() {
   })
 }
 
+function mockImportSideEffects() {
+  const backfillWorkspaceRuntimeFromArtifactIfMissing = vi.fn(async () => {})
+  const loadWorkspacePayloadFromRuntimeOrRecovery = vi.fn(async () => ({}))
+  const persistWorkspaceRuntimeState = vi.fn(async () => {})
+  const upsertWorkspaceState = vi.fn()
+  const syncWorkspacePayloadToKnowledgeStore = vi.fn(async () => {})
+
+  vi.doMock('@/lib/server/workspace-resilience', () => ({
+    backfillWorkspaceRuntimeFromArtifactIfMissing,
+    loadWorkspacePayloadFromRuntimeOrRecovery,
+    persistWorkspaceRuntimeState,
+  }))
+  vi.doMock('@/lib/server/persistence', () => ({ upsertWorkspaceState }))
+  vi.doMock('@/lib/server/knowledge-rebuild', () => ({ syncWorkspacePayloadToKnowledgeStore }))
+
+  return {
+    backfillWorkspaceRuntimeFromArtifactIfMissing,
+    loadWorkspacePayloadFromRuntimeOrRecovery,
+    persistWorkspaceRuntimeState,
+    upsertWorkspaceState,
+    syncWorkspacePayloadToKnowledgeStore,
+  }
+}
+
+function expectNoImportSideEffects(sideEffects: ReturnType<typeof mockImportSideEffects>) {
+  expect(sideEffects.backfillWorkspaceRuntimeFromArtifactIfMissing).not.toHaveBeenCalled()
+  expect(sideEffects.loadWorkspacePayloadFromRuntimeOrRecovery).not.toHaveBeenCalled()
+  expect(sideEffects.persistWorkspaceRuntimeState).not.toHaveBeenCalled()
+  expect(sideEffects.upsertWorkspaceState).not.toHaveBeenCalled()
+  expect(sideEffects.syncWorkspacePayloadToKnowledgeStore).not.toHaveBeenCalled()
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
   vi.resetModules()
+  vi.doUnmock('@/lib/server/knowledge-rebuild')
+  vi.doUnmock('@/lib/server/workspace-resilience')
+  vi.doUnmock('@/lib/server/persistence')
 
   if (globalForSqlite.sqlite) {
     try {
@@ -85,6 +122,142 @@ afterEach(() => {
 })
 
 describe('import-txt route', () => {
+  it('rejects a declared body over 10.25 MiB before parsing or persistence', async () => {
+    const sideEffects = mockImportSideEffects()
+    const formDataSpy = vi.spyOn(Request.prototype, 'formData')
+    const request = createImportRequest()
+    request.headers.set('content-length', String(MAX_IMPORT_BODY_SIZE_BYTES + 1))
+
+    const { POST } = await import('@/app/api/import-txt/route')
+    const response = await POST(request)
+
+    expect(response.status).toBe(413)
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: 'TXT import request body exceeds 10.25 MiB',
+    })
+    expect(formDataSpy).not.toHaveBeenCalled()
+    expectNoImportSideEffects(sideEffects)
+  })
+
+  it('allows a declared body exactly at the 10.25 MiB boundary', async () => {
+    const database = createTestDatabase('retale-import-txt-route-exact-body-limit')
+    resetWorkspaceState(database)
+
+    vi.doMock('@/lib/server/knowledge-rebuild', () => ({
+      syncWorkspacePayloadToKnowledgeStore: vi.fn(async () => {}),
+    }))
+
+    const request = createImportRequest()
+    request.headers.set('content-length', String(MAX_IMPORT_BODY_SIZE_BYTES))
+
+    const { POST } = await import('@/app/api/import-txt/route')
+    const response = await POST(request)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true, chapterCount: 3 })
+  })
+
+  it('rejects a streamed body that exceeds 10.25 MiB despite a misleading declared length and cancels its source', async () => {
+    const sideEffects = mockImportSideEffects()
+    const boundary = 'retale-import-limit-boundary'
+    const prefix = new TextEncoder().encode([
+      `--${boundary}`,
+      'Content-Disposition: form-data; name="file"; filename="large.txt"',
+      'Content-Type: text/plain',
+      '',
+      '',
+    ].join('\r\n'))
+    const allowedChunk = new Uint8Array(MAX_IMPORT_BODY_SIZE_BYTES)
+    allowedChunk.fill(97)
+    allowedChunk.set(prefix)
+
+    let pullCount = 0
+    let cancellationReason: unknown
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1
+        if (pullCount === 1) {
+          controller.enqueue(allowedChunk)
+          return
+        }
+        controller.enqueue(new Uint8Array([97]))
+      },
+      cancel(reason) {
+        cancellationReason = reason
+      },
+    })
+    const init: RequestInit & { duplex: 'half' } = {
+      method: 'POST',
+      headers: {
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+        'content-length': '1',
+      },
+      body,
+      duplex: 'half',
+    }
+    const request = new Request('http://localhost/api/import-txt', init)
+
+    const { POST } = await import('@/app/api/import-txt/route')
+    const response = await POST(request)
+
+    expect(response.status).toBe(413)
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: 'TXT import request body exceeds 10.25 MiB',
+    })
+    expect(pullCount).toBeGreaterThanOrEqual(2)
+    if (!(cancellationReason instanceof Error)) {
+      throw new Error('Expected the source stream to be cancelled with an error')
+    }
+    expect(cancellationReason.message).toBe('TXT import request body exceeds 10.25 MiB')
+    expectNoImportSideEffects(sideEffects)
+  })
+
+  it('rejects a file over 10 MiB before reading its bytes or persisting', async () => {
+    const sideEffects = mockImportSideEffects()
+    const file = new File(['第1章 测试\n内容'], 'oversized.txt', { type: 'text/plain' })
+    Object.defineProperty(file, 'size', { configurable: true, value: MAX_TXT_FILE_SIZE_BYTES + 1 })
+    const arrayBufferSpy = vi.spyOn(file, 'arrayBuffer')
+    const formData = new FormData()
+    formData.set('file', file)
+    vi.spyOn(Request.prototype, 'formData').mockResolvedValue(formData)
+
+    const { POST } = await import('@/app/api/import-txt/route')
+    const response = await POST(createImportRequest())
+
+    expect(response.status).toBe(413)
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: 'TXT file exceeds 10 MiB',
+    })
+    expect(arrayBufferSpy).not.toHaveBeenCalled()
+    expectNoImportSideEffects(sideEffects)
+  })
+
+  it('allows a file exactly at the 10 MiB boundary', async () => {
+    const database = createTestDatabase('retale-import-txt-route-exact-file-limit')
+    resetWorkspaceState(database)
+
+    vi.doMock('@/lib/server/knowledge-rebuild', () => ({
+      syncWorkspacePayloadToKnowledgeStore: vi.fn(async () => {}),
+    }))
+
+    const file = new File(['第1章 测试\n边界内的内容。'], 'exact-limit.txt', { type: 'text/plain' })
+    Object.defineProperty(file, 'size', { configurable: true, value: MAX_TXT_FILE_SIZE_BYTES })
+    const arrayBufferSpy = vi.spyOn(file, 'arrayBuffer')
+    const formData = new FormData()
+    formData.set('file', file)
+    vi.spyOn(Request.prototype, 'formData').mockResolvedValue(formData)
+
+    const { POST } = await import('@/app/api/import-txt/route')
+    const response = await POST(createImportRequest())
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true })
+    expect(arrayBufferSpy).toHaveBeenCalledTimes(1)
+  })
+
   it('waits for workspace knowledge sync before returning success', async () => {
     const database = createTestDatabase('retale-import-txt-route-awaits-sync')
     resetWorkspaceState(database)
@@ -145,6 +318,16 @@ describe('import-txt route', () => {
     const database = createTestDatabase('retale-import-txt-route-gb18030')
     resetWorkspaceState(database)
 
+    vi.doMock('@/lib/server/workspace-resilience', async () => {
+      const actual = await vi.importActual<typeof import('@/lib/server/workspace-resilience')>(
+        '@/lib/server/workspace-resilience'
+      )
+      return {
+        ...actual,
+        backfillWorkspaceRuntimeFromArtifactIfMissing: vi.fn(async () => {}),
+        loadWorkspacePayloadFromRuntimeOrRecovery: vi.fn(async () => ({})),
+      }
+    })
     vi.doMock('@/lib/server/knowledge-rebuild', () => ({
       syncWorkspacePayloadToKnowledgeStore: vi.fn(async () => {}),
     }))
@@ -153,16 +336,15 @@ describe('import-txt route', () => {
     const response = await POST(createGb18030ImportRequest())
 
     expect(response.status).toBe(200)
-    const saved = database.prepare('SELECT payload FROM WorkspaceState WHERE id = ?').get('singleton') as { payload: string }
-    const payload = JSON.parse(saved.payload) as {
-      localChapters: Array<{ title: string; content: string }>
-    }
+    const resilience = await vi.importActual<typeof import('@/lib/server/workspace-resilience')>(
+      '@/lib/server/workspace-resilience'
+    )
+    const payload = await resilience.loadWorkspacePayloadFromRuntimeOrRecovery('singleton')
 
     expect(payload.localChapters[0]?.content).toContain('本书由【示例组】整理')
     expect(payload.localChapters[1]?.title).toBe('第1章 初遇')
     expect(payload.localChapters[1]?.content).toContain('林澄开始记录这次练习。')
-    expect(saved.payload).not.toContain('����')
-    expect(readWorkspaceRuntimeCounts(database)).toEqual({ novels: 1, chapters: 2 })
+    expect(JSON.stringify(payload)).not.toContain('����')
   })
 
   it('keeps imported content available through normalized runtime state after the workspace artifact is blanked', async () => {

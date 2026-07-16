@@ -9,6 +9,77 @@ import {
 } from '@/lib/server/workspace-resilience'
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
 
+const MAX_TXT_FILE_SIZE_BYTES = 10 * 1024 * 1024
+const MAX_IMPORT_BODY_SIZE_BYTES = MAX_TXT_FILE_SIZE_BYTES + 256 * 1024
+
+class ImportRequestBodySizeLimitError extends Error {
+  constructor() {
+    super('TXT import request body exceeds 10.25 MiB')
+    this.name = 'ImportRequestBodySizeLimitError'
+  }
+}
+
+class TxtFileSizeLimitError extends Error {
+  constructor() {
+    super('TXT file exceeds 10 MiB')
+    this.name = 'TxtFileSizeLimitError'
+  }
+}
+
+function importTooLargeResponse(error: ImportRequestBodySizeLimitError | TxtFileSizeLimitError) {
+  return NextResponse.json(
+    { ok: false, error: error.message },
+    { status: 413 }
+  )
+}
+
+function createSizeLimitedBody(source: ReadableStream<Uint8Array>) {
+  const reader = source.getReader()
+  let bytesRead = 0
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read()
+        if (done) {
+          controller.close()
+          return
+        }
+
+        if (bytesRead + value.byteLength > MAX_IMPORT_BODY_SIZE_BYTES) {
+          const error = new ImportRequestBodySizeLimitError()
+          await reader.cancel(error).catch(() => undefined)
+          controller.error(error)
+          return
+        }
+
+        bytesRead += value.byteLength
+        controller.enqueue(value)
+      } catch (error) {
+        controller.error(error)
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason)
+    },
+  })
+}
+
+function createSizeLimitedRequest(request: Request) {
+  const headers = new Headers(request.headers)
+  headers.delete('content-length')
+
+  const init: RequestInit & { duplex: 'half' } = {
+    method: request.method,
+    headers,
+    body: request.body ? createSizeLimitedBody(request.body) : null,
+    signal: request.signal,
+    duplex: 'half',
+  }
+
+  return new Request(request.url, init)
+}
+
 function countMatches(text: string, pattern: RegExp) {
   return text.match(pattern)?.length ?? 0
 }
@@ -54,10 +125,18 @@ async function ensureWorkspacePayload() {
 
 export async function POST(request: Request) {
   try {
-    const formData = await request.formData()
+    const declaredBodySize = Number(request.headers.get('content-length'))
+    if (Number.isFinite(declaredBodySize) && declaredBodySize > MAX_IMPORT_BODY_SIZE_BYTES) {
+      return importTooLargeResponse(new ImportRequestBodySizeLimitError())
+    }
+
+    const formData = await createSizeLimitedRequest(request).formData()
     const file = formData.get('file')
     if (!(file instanceof File)) {
       return NextResponse.json({ ok: false, error: 'Missing file' }, { status: 400 })
+    }
+    if (file.size > MAX_TXT_FILE_SIZE_BYTES) {
+      throw new TxtFileSizeLimitError()
     }
 
     const text = await decodeTextFile(file)
@@ -83,6 +162,10 @@ export async function POST(request: Request) {
       chapterCount: nextState.localChapters.filter((item: { novelId: string; parentChapterId?: string }) => item.novelId === nextState.currentNovelId && !item.parentChapterId).length,
     })
   } catch (error) {
+    if (error instanceof ImportRequestBodySizeLimitError || error instanceof TxtFileSizeLimitError) {
+      return importTooLargeResponse(error)
+    }
+
     console.error('Import error:', error)
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : 'Unknown error' },
