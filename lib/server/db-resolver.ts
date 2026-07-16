@@ -3,11 +3,21 @@ import path from 'node:path'
 import type * as NodeSqlite from 'node:sqlite'
 import { CONTROL_SCHEMA_SQL } from '@/lib/server/schema'
 import { initializeDatabase, openSqliteDatabase } from '@/lib/server/sqlite'
+import { assertOwnedTestPath } from '../../scripts/test-path-safety.mjs'
 
 type DatabaseSync = NodeSqlite.DatabaseSync
 
 const globalForDbResolver = globalThis as {
+  __retaleNovelDatabaseOverrides?: Map<string, DatabaseSync>
   __retaleResolvedDbs?: Map<string, DatabaseSync>
+}
+
+function getNovelDatabaseOverrides() {
+  if (!globalForDbResolver.__retaleNovelDatabaseOverrides) {
+    globalForDbResolver.__retaleNovelDatabaseOverrides = new Map<string, DatabaseSync>()
+  }
+
+  return globalForDbResolver.__retaleNovelDatabaseOverrides
 }
 
 function getResolverCache() {
@@ -105,7 +115,69 @@ export function getNovelLanceDbPath(novelId: string) {
 }
 
 export function getNovelDb(novelId: string) {
-  return openResolvedDatabase(path.join(getNovelDirectory(novelId), 'novel.db'))
+  const stableNovelId = validateNovelId(novelId)
+  const override = globalForDbResolver.__retaleNovelDatabaseOverrides?.get(stableNovelId)
+  if (override) {
+    return override
+  }
+
+  return openResolvedDatabase(path.join(getNovelDirectory(stableNovelId), 'novel.db'))
+}
+
+export function setNovelDatabaseOverrideForTests(novelId: string, database: DatabaseSync) {
+  const stableNovelId = validateNovelId(novelId)
+  if (process.env.VITEST !== 'true') {
+    throw new Error('Novel database overrides are only available when VITEST is true')
+  }
+
+  const testRoot = process.env.RETALE_TEST_ROOT
+  if (!testRoot) {
+    throw new Error('Novel database overrides require RETALE_TEST_ROOT')
+  }
+
+  const databaseRows = database.prepare('PRAGMA database_list').all() as Array<{ name: string; file: string }>
+  const mainDatabasePath = databaseRows.find((row) => row.name === 'main')?.file
+  if (!mainDatabasePath) {
+    throw new Error('Novel database overrides require a file-backed database')
+  }
+
+  const ownedDatabasePath = assertOwnedTestPath(testRoot, mainDatabasePath, {
+    repoRoot: process.cwd(),
+    label: `Novel database override for "${stableNovelId}"`,
+  })
+  const databaseStats = fs.statSync(ownedDatabasePath)
+  if (!databaseStats.isFile()) {
+    throw new Error(`Novel database override is not a file: ${ownedDatabasePath}`)
+  }
+
+  const overrides = getNovelDatabaseOverrides()
+  const existingDatabase = overrides.get(stableNovelId)
+  if (existingDatabase && existingDatabase !== database) {
+    throw new Error(`Novel database override already registered for "${stableNovelId}"`)
+  }
+  overrides.set(stableNovelId, database)
+
+  let disposed = false
+  return () => {
+    if (disposed) {
+      return
+    }
+    disposed = true
+
+    if (overrides.get(stableNovelId) === database) {
+      overrides.delete(stableNovelId)
+    }
+  }
+}
+
+export function resetNovelDatabaseOverridesForTests() {
+  const overrides = globalForDbResolver.__retaleNovelDatabaseOverrides
+  if (!overrides) {
+    return
+  }
+
+  overrides.clear()
+  delete globalForDbResolver.__retaleNovelDatabaseOverrides
 }
 
 export function getControlDb() {

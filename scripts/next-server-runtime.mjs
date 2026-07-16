@@ -2,6 +2,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { spawn, execFileSync } from 'node:child_process'
+import {
+  assertOwnedTestDatabaseUrl,
+  assertOwnedTestPath,
+  markOwnedTestRoot,
+} from './test-path-safety.mjs'
 
 const ROOT = process.cwd()
 const args = process.argv.slice(2)
@@ -24,12 +29,13 @@ const SERVER_MODES = {
     port: 3000,
     databaseUrl: 'file:.sisyphus/runtime/test-server/dev-test.db',
     databasePath: path.join(ROOT, '.sisyphus', 'runtime', 'test-server', 'dev-test.db'),
-    distDir: path.join('.sisyphus', 'runtime', 'next-test-server'),
+    dataDir: path.join(ROOT, '.sisyphus', 'runtime', 'test-server', 'data'),
+    distDir: path.join('.sisyphus', 'runtime', 'test-server', 'next-dist'),
     tsconfigPath: path.join('.sisyphus', 'runtime', 'test-server', 'tsconfig.json'),
+    testRoot: path.join(ROOT, '.sisyphus', 'runtime', 'test-server'),
   },
 }
 
-const SISYPHUS_ROOT = path.join(ROOT, '.sisyphus')
 const SIGNAL_EXIT_CODES = {
   SIGINT: 130,
   SIGTERM: 143,
@@ -62,34 +68,51 @@ function findForbiddenOption() {
   return null
 }
 
-function isSubPathOf(parentPath, childPath) {
-  const relativePath = path.relative(parentPath, childPath)
-  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))
-}
-
 function resolveModeConfig(mode) {
   const baseConfig = getModeConfig(mode)
   const allowInternalTestOverrides = mode === 'test' && process.env.RETALE_INTERNAL_ALLOW_TEST_OVERRIDES === '1'
   const overrideDatabaseUrl = allowInternalTestOverrides ? process.env.RETALE_SERVER_DATABASE_URL?.trim() : undefined
   const overrideDatabasePath = allowInternalTestOverrides ? process.env.RETALE_SERVER_DATABASE_PATH?.trim() : undefined
+  const overrideDataDir = allowInternalTestOverrides ? process.env.RETALE_SERVER_DATA_DIR?.trim() : undefined
   const overrideDistDir = allowInternalTestOverrides ? process.env.RETALE_SERVER_DIST_DIR?.trim() : undefined
+  const overrideTestRoot = allowInternalTestOverrides ? process.env.RETALE_SERVER_TEST_ROOT?.trim() : undefined
+  const overrideTsconfigPath = allowInternalTestOverrides ? process.env.RETALE_SERVER_TSCONFIG_PATH?.trim() : undefined
 
   const config = {
     ...baseConfig,
     databaseUrl: overrideDatabaseUrl || baseConfig.databaseUrl,
     databasePath: overrideDatabasePath || baseConfig.databasePath,
+    dataDir: overrideDataDir || baseConfig.dataDir,
     distDir: overrideDistDir ?? baseConfig.distDir,
+    testRoot: overrideTestRoot || baseConfig.testRoot,
+    tsconfigPath: overrideTsconfigPath || baseConfig.tsconfigPath,
   }
 
   if (mode === 'test') {
-    if (!isSubPathOf(SISYPHUS_ROOT, config.databasePath)) {
-      throw new Error(`[retale-server] Test mode database must stay under .sisyphus: ${config.databasePath}`)
+    const resolvedDatabasePath = assertOwnedTestPath(config.testRoot, config.databasePath, {
+      repoRoot: ROOT,
+      label: 'test server database',
+    })
+    const databaseUrlPath = assertOwnedTestDatabaseUrl(config.testRoot, config.databaseUrl, {
+      repoRoot: ROOT,
+      label: 'test server DATABASE_URL',
+    })
+    if (resolvedDatabasePath !== databaseUrlPath) {
+      throw new Error('[retale-server] Test mode DATABASE_URL and database path must resolve to the same owned file')
     }
-
+    assertOwnedTestPath(config.testRoot, config.dataDir, {
+      repoRoot: ROOT,
+      label: 'test server data directory',
+    })
     const resolvedDistDir = path.join(ROOT, config.distDir)
-    if (!isSubPathOf(SISYPHUS_ROOT, resolvedDistDir)) {
-      throw new Error(`[retale-server] Test mode dist dir must stay under .sisyphus: ${config.distDir}`)
-    }
+    assertOwnedTestPath(config.testRoot, resolvedDistDir, {
+      repoRoot: ROOT,
+      label: 'test server dist directory',
+    })
+    assertOwnedTestPath(config.testRoot, path.join(ROOT, config.tsconfigPath), {
+      repoRoot: ROOT,
+      label: 'test server tsconfig',
+    })
   }
 
   return config
@@ -130,6 +153,10 @@ function ensurePortAvailable(host, port) {
 function ensureModeFilesystem(config) {
   fs.mkdirSync(path.dirname(config.databasePath), { recursive: true })
 
+  if (config.dataDir) {
+    fs.mkdirSync(config.dataDir, { recursive: true })
+  }
+
   if (config.distDir) {
     fs.mkdirSync(path.join(ROOT, config.distDir), { recursive: true })
   }
@@ -158,7 +185,7 @@ function printHelp(invokedAs) {
   console.log('')
   console.log('Profiles:')
   console.log('  next-dev.mjs        0.0.0.0:14500 + file:./dev.db + default .next')
-  console.log('  next-test-server.mjs 127.0.0.1:3000 + file:.sisyphus/runtime/test-server/dev-test.db + .sisyphus/runtime/next-test-server')
+  console.log('  next-test-server.mjs 127.0.0.1:3000 + owned .sisyphus/runtime/test-server runtime')
   console.log('')
   console.log('Flags:')
   console.log('  --help           Show this help message')
@@ -179,6 +206,10 @@ export function runNextServer(mode, invokedAs) {
     )
   }
 
+  if (mode === 'test' && process.env.RETALE_INTERNAL_ALLOW_TEST_OVERRIDES !== '1') {
+    markOwnedTestRoot(SERVER_MODES.test.testRoot, { repoRoot: ROOT })
+  }
+
   const config = resolveModeConfig(mode)
 
   const runtimeConfig = {
@@ -188,6 +219,7 @@ export function runNextServer(mode, invokedAs) {
     port: config.port,
     databaseUrl: config.databaseUrl,
     databasePath: config.databasePath,
+    dataDir: config.dataDir,
     distDir: config.distDir || '.next',
     tsconfigPath: config.tsconfigPath,
   }
@@ -205,6 +237,9 @@ export function runNextServer(mode, invokedAs) {
 
   console.log(`[retale-server] Starting ${config.label} at http://${config.host}:${config.port}`)
   console.log(`[retale-server] Forcing DATABASE_URL=${config.databaseUrl}`)
+  if (config.dataDir) {
+    console.log(`[retale-server] Forcing RETALE_DATA_DIR=${config.dataDir}`)
+  }
   console.log(`[retale-server] Using Next dist dir ${runtimeConfig.distDir}`)
 
   const child = spawn(process.execPath, [NEXT_CLI_ENTRYPOINT, ...nextArgs], {
@@ -212,6 +247,7 @@ export function runNextServer(mode, invokedAs) {
     env: {
       ...process.env,
       DATABASE_URL: config.databaseUrl,
+      ...(config.dataDir ? { RETALE_DATA_DIR: config.dataDir } : {}),
       RETALE_NEXT_DIST_DIR: config.distDir,
       RETALE_NEXT_TSCONFIG_PATH: config.tsconfigPath,
     },

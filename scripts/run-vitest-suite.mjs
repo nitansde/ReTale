@@ -1,11 +1,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { assertOwnedTestPath, createOwnedTestRoot } from './test-path-safety.mjs'
 
 const ROOT = process.cwd()
 const EVIDENCE_ROOT = path.join(ROOT, '.sisyphus/evidence/task-1-test-harness')
-const TEST_DB_ROOT_RELATIVE = path.join('tests', '.runtime', 'test-db')
-const TEST_DB_ROOT = path.join(ROOT, TEST_DB_ROOT_RELATIVE)
+const TEST_RUNS_ROOT = path.join(ROOT, 'tests', '.runtime', 'test-runs')
 
 const suite = process.argv[2]
 const selector = process.argv[3] ?? 'all'
@@ -50,22 +50,28 @@ if (!selectedTests.length) {
 }
 
 fs.mkdirSync(EVIDENCE_ROOT, { recursive: true })
-fs.mkdirSync(TEST_DB_ROOT, { recursive: true })
+const testRoot = createOwnedTestRoot(TEST_RUNS_ROOT, `${suite}-${Date.now()}-${process.pid}-`, { repoRoot: ROOT })
+const sourceDbPath = assertOwnedTestPath(testRoot, path.join(testRoot, 'source.db'), {
+  repoRoot: ROOT,
+  label: 'Vitest source database',
+})
+const runtimeDbPath = assertOwnedTestPath(testRoot, path.join(testRoot, 'runtime.db'), {
+  repoRoot: ROOT,
+  label: 'Vitest runtime database',
+})
+const dataDir = assertOwnedTestPath(testRoot, path.join(testRoot, 'data'), {
+  repoRoot: ROOT,
+  label: 'Vitest data directory',
+})
 
-const sourceDbRelativePath = process.env.RETALE_TEST_SOURCE_DB_PATH ?? path.join(TEST_DB_ROOT_RELATIVE, 'vitest-source.db')
-const sourceDbPath = path.isAbsolute(sourceDbRelativePath)
-  ? sourceDbRelativePath
-  : path.join(ROOT, sourceDbRelativePath)
-const runtimeDbRelativePath = path.join(TEST_DB_ROOT_RELATIVE, `${suite}-runtime-${Date.now()}-${process.pid}.db`)
-const runtimeDbPath = path.join(ROOT, runtimeDbRelativePath)
-
-fs.closeSync(fs.openSync(sourceDbPath, 'a'))
-fs.rmSync(runtimeDbPath, { force: true })
+fs.closeSync(fs.openSync(sourceDbPath, 'wx'))
 
 const outputFile = path.join(EVIDENCE_ROOT, `${suite}-report.json`)
 
-console.log(`[retale-vitest] Dedicated source test DB ${sourceDbRelativePath}`)
-console.log(`[retale-vitest] Runtime DATABASE_URL=file:${runtimeDbRelativePath}`)
+console.log(`[retale-vitest] Owned test root ${testRoot}`)
+console.log(`[retale-vitest] Dedicated source test DB ${sourceDbPath}`)
+console.log(`[retale-vitest] Runtime DATABASE_URL=file:${runtimeDbPath}`)
+console.log(`[retale-vitest] Runtime RETALE_DATA_DIR=${dataDir}`)
 
 const result = spawnSync(
   'npx',
@@ -75,8 +81,10 @@ const result = spawnSync(
     stdio: 'inherit',
     env: {
       ...process.env,
-      RETALE_TEST_SOURCE_DB_PATH: sourceDbRelativePath,
-      DATABASE_URL: `file:${runtimeDbRelativePath}`,
+      RETALE_TEST_ROOT: testRoot,
+      RETALE_TEST_SOURCE_DB_PATH: sourceDbPath,
+      DATABASE_URL: `file:${runtimeDbPath}`,
+      RETALE_DATA_DIR: dataDir,
       TASK_EVIDENCE_DIR: EVIDENCE_ROOT,
     },
   }

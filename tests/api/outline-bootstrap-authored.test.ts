@@ -21,12 +21,11 @@ afterEach(() => {
 
 function createTestDb() {
   const tempDatabase = createTempDatabaseCopy('retale-outline-bootstrap-authored')
-  cleanups.push(tempDatabase.cleanup)
 
   const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
   return {
     cleanup() {
-  ;(database as DatabaseSync & { close?: () => void }).close?.()
+      ;(database as DatabaseSync & { close?: () => void }).close?.()
       tempDatabase.cleanup()
     },
     db: {
@@ -48,7 +47,9 @@ function createTestDb() {
         } catch (error) {
           try {
             database.exec('ROLLBACK')
-          } catch {
+          } catch (rollbackError) {
+            // Rollback failure must not replace the original transaction error.
+            void rollbackError
           }
           throw error
         }

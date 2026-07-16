@@ -1,27 +1,35 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { SCHEMA_SQL } from '@/lib/server/schema'
+import { initializeDatabase } from '@/lib/server/sqlite'
+import {
+  assertOwnedTestPath,
+  createOwnedTestRoot,
+  removeOwnedTestTree,
+} from '../../scripts/test-path-safety.mjs'
 
-const SOURCE_DB_PATH = path.resolve(
-  process.cwd(),
-  process.env.RETALE_TEST_SOURCE_DB_PATH ?? path.join('tests', '.runtime', 'test-db', 'vitest-source.db')
-)
+function resolveOwnedSourceDatabase() {
+  const testRoot = process.env.RETALE_TEST_ROOT
+  const configuredSourcePath = process.env.RETALE_TEST_SOURCE_DB_PATH
+  if (!testRoot || !configuredSourcePath) {
+    throw new Error('Missing owned Vitest source database environment')
+  }
 
-function ensureSourceDatabase() {
-  fs.mkdirSync(path.dirname(SOURCE_DB_PATH), { recursive: true })
-  const database = new DatabaseSync(SOURCE_DB_PATH)
-  database.exec('PRAGMA foreign_keys = ON')
-  database.exec('PRAGMA busy_timeout = 5000')
-  database.exec(SCHEMA_SQL)
-  ;(database as DatabaseSync & { close?: () => void }).close?.()
+  const sourceDbPath = assertOwnedTestPath(testRoot, path.resolve(process.cwd(), configuredSourcePath), {
+    repoRoot: process.cwd(),
+    label: 'Vitest source database',
+  })
+  const sourceStats = fs.statSync(sourceDbPath)
+  if (!sourceStats.isFile()) {
+    throw new Error(`Vitest source database is not a file: ${sourceDbPath}`)
+  }
+
+  return sourceDbPath
 }
 
 export function getSourceDbPath() {
-  ensureSourceDatabase()
-  return SOURCE_DB_PATH
+  return resolveOwnedSourceDatabase()
 }
 
 export function hashFile(filePath: string) {
@@ -31,21 +39,32 @@ export function hashFile(filePath: string) {
 }
 
 export function createTempDatabaseCopy(prefix: string) {
-  ensureSourceDatabase()
-
-  if (!fs.existsSync(SOURCE_DB_PATH)) {
-    throw new Error(`Missing source database: ${SOURCE_DB_PATH}`)
+  const sourceDbPath = resolveOwnedSourceDatabase()
+  const sourceHashBefore = hashFile(sourceDbPath)
+  const testRoot = process.env.RETALE_TEST_ROOT
+  if (!testRoot) {
+    throw new Error('Missing RETALE_TEST_ROOT')
   }
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
+  const tempDir = createOwnedTestRoot(testRoot, `${prefix}-`, { repoRoot: process.cwd() })
   const dbPath = path.join(tempDir, 'test.db')
-  fs.copyFileSync(SOURCE_DB_PATH, dbPath)
+  fs.copyFileSync(sourceDbPath, dbPath)
+
+  const database = initializeDatabase(new DatabaseSync(dbPath))
+  ;(database as DatabaseSync & { close?: () => void }).close?.()
+
+  if (hashFile(sourceDbPath) !== sourceHashBefore) {
+    throw new Error(`Source database changed while creating test copy: ${sourceDbPath}`)
+  }
 
   return {
     directory: tempDir,
     dbPath,
     cleanup() {
-      fs.rmSync(tempDir, { recursive: true, force: true })
+      removeOwnedTestTree(tempDir, testRoot, {
+        repoRoot: process.cwd(),
+        label: 'temporary test database directory',
+      })
     },
   }
 }
