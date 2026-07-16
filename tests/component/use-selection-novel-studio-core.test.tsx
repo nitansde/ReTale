@@ -106,6 +106,225 @@ async function flushEffects() {
   })
 }
 
+type CoreParams = Parameters<typeof useSelectionNovelStudioCore>[0]
+
+type Deferred = {
+  promise: Promise<unknown>
+  resolve: (value: unknown) => void
+  reject: (reason?: unknown) => void
+}
+
+function createDeferred(): Deferred {
+  let resolvePromise: Deferred['resolve'] = () => undefined
+  let rejectPromise: Deferred['reject'] = () => undefined
+  const promise = new Promise<unknown>((resolve, reject) => {
+    resolvePromise = resolve
+    rejectPromise = reject
+  })
+  return { promise, resolve: resolvePromise, reject: rejectPromise }
+}
+
+function buildCoreParams(overrides: Partial<CoreParams> = {}): CoreParams {
+  return {
+    loadFromBackend: vi.fn().mockResolvedValue(undefined),
+    saveToBackend: vi.fn().mockResolvedValue(undefined),
+    backendLoaded: true,
+    currentNovelId: '',
+    localNovels: [],
+    localVolumes: [],
+    localChapters: [buildChapter({})],
+    currentChapterId: 'chapter-1',
+    setCurrentChapterId: vi.fn(),
+    updateChapterContent: vi.fn(),
+    aiSettings: undefined,
+    setAISettings: vi.fn(),
+    refreshKnowledgeProjection: vi.fn().mockResolvedValue(undefined),
+    clearPresetCompatSessionStateForSelection: vi.fn(),
+    resetPresetCompatSessionStateForSelection: vi.fn(),
+    presetCompatSessionState: {},
+    localCharacters: [],
+    localWorldEntries: [],
+    localTimelineEvents: [],
+    localOutlines: [],
+    autosaveSignature: 'sig-0',
+    ...overrides,
+  }
+}
+
+function renderAutosaveHook(saveToBackend: CoreParams['saveToBackend']) {
+  const baseParams = buildCoreParams({ saveToBackend })
+  return renderHook(
+    ({ signature }) => useSelectionNovelStudioCore({ ...baseParams, autosaveSignature: signature }),
+    { initialProps: { signature: 'sig-0' } },
+  )
+}
+
+async function advanceTimers(milliseconds: number) {
+  await act(async () => {
+    vi.advanceTimersByTime(milliseconds)
+    await Promise.resolve()
+  })
+}
+
+async function resolveDeferred(deferred: Deferred) {
+  await act(async () => {
+    deferred.resolve(undefined)
+    await deferred.promise
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+async function rejectDeferred(deferred: Deferred) {
+  await act(async () => {
+    deferred.reject(new Error('save failed'))
+    await deferred.promise.catch(() => undefined)
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+describe('useSelectionNovelStudioCore autosave drain', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.clearAllTimers()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('keeps draining edits made during every in-flight save', async () => {
+    const pendingSaves: Deferred[] = []
+    const saveToBackend = vi.fn(() => {
+      const deferred = createDeferred()
+      pendingSaves.push(deferred)
+      return deferred.promise
+    })
+    const { rerender } = renderAutosaveHook(saveToBackend)
+
+    rerender({ signature: 'sig-1' })
+    await advanceTimers(1200)
+    expect(saveToBackend).toHaveBeenCalledTimes(1)
+
+    rerender({ signature: 'sig-2' })
+    await resolveDeferred(pendingSaves[0])
+    await advanceTimers(400)
+    expect(saveToBackend).toHaveBeenCalledTimes(2)
+
+    rerender({ signature: 'sig-3' })
+    await resolveDeferred(pendingSaves[1])
+    await advanceTimers(400)
+    expect(saveToBackend).toHaveBeenCalledTimes(3)
+
+    await resolveDeferred(pendingSaves[2])
+    await advanceTimers(1000)
+    expect(saveToBackend).toHaveBeenCalledTimes(3)
+  })
+
+  it('coalesces intermediate signatures while keeping saves single-flight', async () => {
+    const pendingSaves: Deferred[] = []
+    let activeSaves = 0
+    let maximumActiveSaves = 0
+    const saveToBackend = vi.fn(() => {
+      const deferred = createDeferred()
+      pendingSaves.push(deferred)
+      activeSaves += 1
+      maximumActiveSaves = Math.max(maximumActiveSaves, activeSaves)
+      return deferred.promise.finally(() => {
+        activeSaves -= 1
+      })
+    })
+    const { rerender } = renderAutosaveHook(saveToBackend)
+
+    rerender({ signature: 'sig-1' })
+    await advanceTimers(1200)
+    rerender({ signature: 'sig-2' })
+    rerender({ signature: 'sig-3' })
+    await advanceTimers(1200)
+
+    expect(saveToBackend).toHaveBeenCalledTimes(1)
+    expect(maximumActiveSaves).toBe(1)
+
+    await resolveDeferred(pendingSaves[0])
+    await advanceTimers(399)
+    expect(saveToBackend).toHaveBeenCalledTimes(1)
+    await advanceTimers(1)
+    expect(saveToBackend).toHaveBeenCalledTimes(2)
+    expect(maximumActiveSaves).toBe(1)
+
+    await resolveDeferred(pendingSaves[1])
+    await advanceTimers(1000)
+    expect(saveToBackend).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not retry an unchanged failed target and saves a later edit', async () => {
+    const pendingSaves: Deferred[] = []
+    const saveToBackend = vi.fn(() => {
+      const deferred = createDeferred()
+      pendingSaves.push(deferred)
+      return deferred.promise
+    })
+    const { rerender } = renderAutosaveHook(saveToBackend)
+
+    rerender({ signature: 'sig-1' })
+    await advanceTimers(1200)
+    await rejectDeferred(pendingSaves[0])
+    await advanceTimers(10_000)
+    expect(saveToBackend).toHaveBeenCalledTimes(1)
+
+    rerender({ signature: 'sig-2' })
+    await advanceTimers(1200)
+    expect(saveToBackend).toHaveBeenCalledTimes(2)
+
+    await resolveDeferred(pendingSaves[1])
+    await advanceTimers(1000)
+    expect(saveToBackend).toHaveBeenCalledTimes(2)
+  })
+
+  it('saves a failed signature again after changing away and returning', async () => {
+    const pendingSaves: Deferred[] = []
+    const saveToBackend = vi.fn(() => {
+      const deferred = createDeferred()
+      pendingSaves.push(deferred)
+      return deferred.promise
+    })
+    const { rerender } = renderAutosaveHook(saveToBackend)
+
+    rerender({ signature: 'sig-1' })
+    await advanceTimers(1200)
+    await rejectDeferred(pendingSaves[0])
+
+    rerender({ signature: 'sig-2' })
+    await advanceTimers(1200)
+    expect(saveToBackend).toHaveBeenCalledTimes(2)
+    await resolveDeferred(pendingSaves[1])
+
+    rerender({ signature: 'sig-1' })
+    await advanceTimers(1200)
+    expect(saveToBackend).toHaveBeenCalledTimes(3)
+    await resolveDeferred(pendingSaves[2])
+  })
+
+  it('does not schedule a drain after unmounting during a save', async () => {
+    const pendingSave = createDeferred()
+    const saveToBackend = vi.fn(() => pendingSave.promise)
+    const { rerender, unmount } = renderAutosaveHook(saveToBackend)
+
+    rerender({ signature: 'sig-1' })
+    await advanceTimers(1200)
+    rerender({ signature: 'sig-2' })
+    unmount()
+
+    await resolveDeferred(pendingSave)
+    await advanceTimers(10_000)
+    expect(saveToBackend).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
 describe('useSelectionNovelStudioCore knowledge projection selection', () => {
   afterEach(() => {
     vi.unstubAllGlobals()

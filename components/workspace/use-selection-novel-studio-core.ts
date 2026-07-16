@@ -295,7 +295,11 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autosaveLatestSignatureRef = useRef(params.autosaveSignature)
   const autosaveLastSavedSignatureRef = useRef<string | null>(null)
+  const autosaveFailedSignatureRef = useRef<string | null>(null)
   const autosaveInFlightRef = useRef(false)
+  const autosaveMountedRef = useRef(false)
+  const autosaveDrainRef = useRef<() => void>(() => undefined)
+  const autosaveSaveToBackendRef = useRef(params.saveToBackend)
   const hydratedRef = useRef(false)
   const workspaceSelectionHydratedRef = useRef(false)
   const lastActiveKnowledgeJobIdRef = useRef<string | null>(null)
@@ -368,7 +372,63 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
 
   useEffect(() => {
     autosaveLatestSignatureRef.current = params.autosaveSignature
-  }, [params.autosaveSignature])
+    autosaveSaveToBackendRef.current = params.saveToBackend
+  }, [params.autosaveSignature, params.saveToBackend])
+
+  const scheduleAutosaveDrain = useCallback((delay: number) => {
+    if (!autosaveMountedRef.current) return
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+    autosaveTimerRef.current = setTimeout(() => {
+      autosaveTimerRef.current = null
+      autosaveDrainRef.current()
+    }, delay)
+  }, [])
+
+  const drainAutosave = useCallback(() => {
+    if (!autosaveMountedRef.current || autosaveInFlightRef.current) return
+    const targetSignature = autosaveLatestSignatureRef.current
+    if (
+      targetSignature === autosaveLastSavedSignatureRef.current
+      || targetSignature === autosaveFailedSignatureRef.current
+    ) return
+
+    autosaveInFlightRef.current = true
+    autosaveSaveToBackendRef.current()
+      .then(() => {
+        autosaveLastSavedSignatureRef.current = targetSignature
+        if (autosaveFailedSignatureRef.current === targetSignature) {
+          autosaveFailedSignatureRef.current = null
+        }
+      })
+      .catch(() => {
+        if (autosaveLatestSignatureRef.current === targetSignature) {
+          autosaveFailedSignatureRef.current = targetSignature
+        }
+      })
+      .finally(() => {
+        autosaveInFlightRef.current = false
+        if (!autosaveMountedRef.current) return
+        const latestSignature = autosaveLatestSignatureRef.current
+        if (
+          latestSignature === autosaveLastSavedSignatureRef.current
+          || latestSignature === autosaveFailedSignatureRef.current
+        ) return
+        scheduleAutosaveDrain(400)
+      })
+  }, [scheduleAutosaveDrain])
+
+  useEffect(() => {
+    autosaveDrainRef.current = drainAutosave
+  }, [drainAutosave])
+
+  useEffect(() => {
+    autosaveMountedRef.current = true
+    return () => {
+      autosaveMountedRef.current = false
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+      autosaveTimerRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
     if (!shouldLoadWorkspaceFromBackendOnMount(params.backendLoaded)) return
@@ -388,42 +448,22 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
       autosaveLastSavedSignatureRef.current = params.autosaveSignature
       return
     }
-    if (params.autosaveSignature === autosaveLastSavedSignatureRef.current) return
-    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
-    autosaveTimerRef.current = setTimeout(() => {
-      if (autosaveInFlightRef.current) return
-      const targetSignature = autosaveLatestSignatureRef.current
-      if (targetSignature === autosaveLastSavedSignatureRef.current) return
-      autosaveInFlightRef.current = true
-      params.saveToBackend()
-        .then(() => {
-          autosaveLastSavedSignatureRef.current = targetSignature
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          autosaveInFlightRef.current = false
-          const latestSignature = autosaveLatestSignatureRef.current
-          if (latestSignature === autosaveLastSavedSignatureRef.current) return
-          if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
-          autosaveTimerRef.current = setTimeout(() => {
-            const followUpSignature = autosaveLatestSignatureRef.current
-            if (autosaveInFlightRef.current || followUpSignature === autosaveLastSavedSignatureRef.current) return
-            autosaveInFlightRef.current = true
-            params.saveToBackend()
-              .then(() => {
-                autosaveLastSavedSignatureRef.current = followUpSignature
-              })
-              .catch(() => undefined)
-              .finally(() => {
-                autosaveInFlightRef.current = false
-              })
-          }, 400)
-        })
-    }, 1200)
+    if (
+      autosaveFailedSignatureRef.current !== null
+      && params.autosaveSignature !== autosaveFailedSignatureRef.current
+    ) {
+      autosaveFailedSignatureRef.current = null
+    }
+    if (
+      params.autosaveSignature === autosaveLastSavedSignatureRef.current
+      || params.autosaveSignature === autosaveFailedSignatureRef.current
+    ) return
+    scheduleAutosaveDrain(1200)
     return () => {
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+      autosaveTimerRef.current = null
     }
-  }, [params.autosaveSignature, params.backendLoaded, params.saveToBackend])
+  }, [params.autosaveSignature, params.backendLoaded, scheduleAutosaveDrain])
 
   const getKnowledgePollDelay = useCallback((status: KnowledgeRebuildStatus | null, actionLoading: KnowledgeActionLoading) => {
     if (actionLoading) return 1_200
