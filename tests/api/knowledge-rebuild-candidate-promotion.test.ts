@@ -1,8 +1,10 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
+const novelDatabaseOverrideDisposers: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
 let fixtureSequence = 0
@@ -84,6 +86,7 @@ function seedKnowledgeRebuildFixture(database: DatabaseSync, novelKey: string, c
   fixtureSequence += 1
   const novelId = `${novelKey}_${String(fixtureSequence).padStart(3, '0')}`
   const branchId = `${novelId}:main`
+  novelDatabaseOverrideDisposers.push(registerLegacyNovelDatabase(database, [novelId]))
   database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(novelId, 'Fixture Novel', 'txt')
   database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run(branchId, novelId, 'main')
   const insertChapter = database.prepare(
@@ -214,10 +217,17 @@ afterEach(() => {
   vi.unmock('@/lib/server/retrieval-index')
   vi.unmock('@/lib/server/candidate-promotion-summary')
 
+  while (novelDatabaseOverrideDisposers.length) {
+    novelDatabaseOverrideDisposers.pop()?.()
+  }
+  resetNovelDatabaseTestState()
+
   if (globalForSqlite.sqlite) {
     try {
       ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
-    } catch {
+    } catch (ignoredError) {
+      void ignoredError
+      // The shared fixture database may already be closed.
     }
     delete globalForSqlite.sqlite
   }

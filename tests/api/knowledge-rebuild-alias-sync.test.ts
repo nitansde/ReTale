@@ -1,7 +1,9 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
+const databaseOverrideDisposers: Array<() => void> = []
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
@@ -93,6 +95,7 @@ function seedKnowledgeRebuildFixture(database: DatabaseSync, novelKey: string, c
   fixtureSequence += 1
   const novelId = `${novelKey}_${String(fixtureSequence).padStart(3, '0')}`
   const branchId = `${novelId}:main`
+  databaseOverrideDisposers.push(registerLegacyNovelDatabase(database, [novelId]))
   database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(novelId, 'Fixture Novel', 'txt')
   database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run(branchId, novelId, 'main')
   const insertChapter = database.prepare(
@@ -138,10 +141,17 @@ afterEach(() => {
   vi.unmock('@/lib/server/knowledge-extraction')
   vi.unmock('@/lib/server/retrieval-index')
 
+  while (databaseOverrideDisposers.length) {
+    databaseOverrideDisposers.pop()?.()
+  }
+  resetNovelDatabaseTestState()
+
   if (globalForSqlite.sqlite) {
     try {
       ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
-    } catch {
+    } catch (ignoredError) {
+      void ignoredError
+      // Ignore secondary SQLite close failures so teardown can continue.
     }
     delete globalForSqlite.sqlite
   }
@@ -1009,7 +1019,8 @@ describe('knowledge rebuild alias sync', () => {
     )
 
     const { buildKnowledgeProjection } = await import('@/lib/server/knowledge-view')
-    const projection = await buildKnowledgeProjection([novelId], 1)
+    const { runWithNovelDatabaseAccess } = await import('@/lib/server/database-access')
+    const projection = await runWithNovelDatabaseAccess(novelId, () => buildKnowledgeProjection([novelId], 1))
     const projectedCharacter = projection.localCharacters.find((character) => character.id === 'entity-a')
     const parsedValue = profileFact?.valueJson ? JSON.parse(profileFact.valueJson) as Record<string, unknown> : null
 

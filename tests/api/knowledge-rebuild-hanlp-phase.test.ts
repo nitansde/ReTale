@@ -1,11 +1,13 @@
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { initializeDatabase, type SqlParam } from '@/lib/server/sqlite'
+import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
-const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
-const originalDatabaseUrl = process.env.DATABASE_URL
+const databaseOverrideDisposers: Array<() => void> = []
+const databases: DatabaseSync[] = []
+const fileCleanups: Array<() => void> = []
 const originalHanlpBootstrapParallelism = process.env.HANLP_BOOTSTRAP_PARALLELISM
 const API_TEST_TIMEOUT_MS = 30_000
 
@@ -79,18 +81,19 @@ function createMockAISettings(parallelism = 3) {
 
 async function createTestDatabase(prefix: string) {
   const tempDatabase = createTempDatabaseCopy(prefix)
-  cleanups.push(tempDatabase.cleanup)
-
-  process.env.DATABASE_URL = tempDatabase.dbPath
+  fileCleanups.push(tempDatabase.cleanup)
+  const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+  databases.push(database)
   vi.resetModules()
 
-  const sqliteModule = await import('@/lib/server/sqlite')
-  globalForSqlite.sqlite = sqliteModule.sqlite
-
   return {
-    database: sqliteModule.sqlite,
-    queryOne: sqliteModule.queryOne,
-    queryAll: sqliteModule.queryAll,
+    database,
+    queryOne<T>(sql: string, ...params: SqlParam[]) {
+      return (database.prepare(sql).get(...params) ?? null) as T | null
+    },
+    queryAll<T>(sql: string, ...params: SqlParam[]) {
+      return database.prepare(sql).all(...params) as T[]
+    },
   }
 }
 
@@ -157,6 +160,8 @@ function seedKnowledgeRebuildFixture(database: DatabaseSync, novelKey = 'novel_h
     insertSpan.run(`span-${chapterNo}`, novelId, branchId, chapterId, chapterNo, 1, 1, 0, rawText.length, rawText, 'paragraph', rawText.length)
   }
 
+  databaseOverrideDisposers.push(registerLegacyNovelDatabase(database, [novelId]))
+
   return { novelId, branchId }
 }
 
@@ -181,19 +186,24 @@ afterEach(() => {
   vi.unmock('@/lib/server/retrieval-index')
   vi.doUnmock('@/lib/server/context-builder')
 
-  if (globalForSqlite.sqlite) {
+  while (databaseOverrideDisposers.length) {
+    databaseOverrideDisposers.pop()?.()
+  }
+  resetNovelDatabaseTestState()
+
+  while (databases.length) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
-    } catch {
+      databases.pop()?.close()
+    } catch (_error) {
+      void _error
+      // Ignore secondary SQLite close failures so teardown can continue.
     }
-    delete globalForSqlite.sqlite
   }
 
-  process.env.DATABASE_URL = originalDatabaseUrl
   process.env.HANLP_BOOTSTRAP_PARALLELISM = originalHanlpBootstrapParallelism
 
-  while (cleanups.length) {
-    cleanups.pop()?.()
+  while (fileCleanups.length) {
+    fileCleanups.pop()?.()
   }
 })
 
@@ -1087,7 +1097,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
     expect(queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE novelId = ?', novelId)?.status).toBe('aborted')
   })
 
-  it('recreates bootstrapped formal characters with their HanLP tier and projected classification after cleanup', async () => {
+  it('preserves bootstrapped formal characters with their HanLP tier and projected classification after cleanup', async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-hanlp-tier-preservation')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_tier_preservation', 1)
     const aiSettings = createMockAISettings(1)
@@ -1192,14 +1202,13 @@ describe('knowledge rebuild HanLP orchestration', () => {
       branchId,
       '林砚',
     )
-    const oldEntity = queryOne<{ id: string }>('SELECT id FROM KnowledgeEntity WHERE id = ?', 'entity-linyan-bootstrap')
-
     const { buildKnowledgeProjection } = await import('@/lib/server/knowledge-view')
-    const projection = await buildKnowledgeProjection([novelId], 1)
+    const { runWithNovelDatabaseAccess } = await import('@/lib/server/database-access')
+    const projection = await runWithNovelDatabaseAccess(novelId, () => buildKnowledgeProjection([novelId], 1))
     const projectedCharacter = projection.localCharacters.find((character) => character.id === rebuiltEntity?.id)
 
-    expect(oldEntity).toBeNull()
     expect(rebuiltEntity).toMatchObject({
+      id: 'entity-linyan-bootstrap',
       canonicalName: '林砚',
       importanceTier: 'protagonist',
       status: '活跃',
