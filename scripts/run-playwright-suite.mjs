@@ -13,25 +13,35 @@ import {
   assertSafeQaUrls,
   cleanupLegacySafeQaArtifacts,
   createRoleplaySafeDatabasePath,
+  createRoleplaySafeDataPath,
   writeRoleplaySafeQaManifest,
 } from './roleplay-safe-qa.mjs'
+import { assertOwnedTestPath, markOwnedTestRoot } from './test-path-safety.mjs'
 
 const selector = process.argv[2] ?? ''
 
 assertSafeQaUrls()
+markOwnedTestRoot(SAFE_QA_EVIDENCE_ROOT, { repoRoot: ROOT })
 fs.mkdirSync(SAFE_QA_UI_EVIDENCE_DIR, { recursive: true })
 cleanupLegacySafeQaArtifacts()
 assertPort3000Available()
 
 const testDbPath = process.env.PLAYWRIGHT_TEST_DB_PATH ?? createRoleplaySafeDatabasePath()
+assertOwnedTestPath(SAFE_QA_EVIDENCE_ROOT, testDbPath, {
+  repoRoot: ROOT,
+  label: 'Playwright database',
+})
+const testDataDir = createRoleplaySafeDataPath(testDbPath)
 const manifest = writeRoleplaySafeQaManifest({
   baseUrl: SAFE_QA_BASE_URL,
+  dataDir: testDataDir,
   databasePath: testDbPath,
   databaseUrl: `file:${testDbPath}`,
   grep: selector || null,
   mode: 'roleplay-safe-playwright',
   playwrightConfig: 'playwright.config.mjs',
   sourceDatabase: null,
+  testRoot: SAFE_QA_EVIDENCE_ROOT,
 })
 
 console.log(`[roleplay-safe-qa] Running browser suite against ${SAFE_QA_HOST}:${SAFE_QA_PORT}`)

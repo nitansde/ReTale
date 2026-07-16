@@ -1,6 +1,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execSync } from 'node:child_process'
+import {
+  assertOwnedTestPath,
+  markOwnedTestRoot,
+  removeOwnedTestTreeIfMarked,
+} from './test-path-safety.mjs'
 
 export const ROOT = process.cwd()
 export const SAFE_QA_HOST = '127.0.0.1'
@@ -10,6 +15,7 @@ export const SAFE_QA_LIBRARY_URL = `${SAFE_QA_BASE_URL}/library`
 export const SAFE_QA_EVIDENCE_ROOT = path.join(ROOT, '.sisyphus/evidence/task-1-test-harness')
 export const SAFE_QA_UI_EVIDENCE_DIR = path.join(SAFE_QA_EVIDENCE_ROOT, 'ui')
 export const SAFE_QA_DB_DIR = path.join(SAFE_QA_EVIDENCE_ROOT, 'roleplay-safe-db')
+export const SAFE_QA_DATA_DIR = path.join(SAFE_QA_EVIDENCE_ROOT, 'roleplay-safe-data')
 export const SAFE_QA_NEXT_DIST_DIR = path.join('.sisyphus', 'evidence', 'task-1-test-harness', 'next-playwright-safe')
 export const SAFE_QA_LEGACY_NEXT_DIST_PATH = path.join(ROOT, '.next-playwright-safe')
 export const SAFE_QA_MANIFEST_PATH = path.join(SAFE_QA_UI_EVIDENCE_DIR, 'roleplay-safe-qa.json')
@@ -48,21 +54,43 @@ export function assertPort3000Available() {
 }
 
 export function createRoleplaySafeDatabasePath() {
+  markOwnedTestRoot(SAFE_QA_EVIDENCE_ROOT, { repoRoot: ROOT })
   fs.mkdirSync(SAFE_QA_DB_DIR, { recursive: true })
   const dbPath = path.join(SAFE_QA_DB_DIR, `playwright-${Date.now()}-${process.pid}.sqlite`)
   assertDoesNotTargetUnsafePort(dbPath, 'database path')
-  return dbPath
+  return assertOwnedTestPath(SAFE_QA_EVIDENCE_ROOT, dbPath, {
+    repoRoot: ROOT,
+    label: 'Playwright database',
+  })
+}
+
+export function createRoleplaySafeDataPath(dbPath) {
+  const resolvedDbPath = assertOwnedTestPath(SAFE_QA_EVIDENCE_ROOT, dbPath, {
+    repoRoot: ROOT,
+    label: 'Playwright database',
+  })
+  const databaseName = path.basename(resolvedDbPath, path.extname(resolvedDbPath))
+  return assertOwnedTestPath(SAFE_QA_EVIDENCE_ROOT, path.join(SAFE_QA_DATA_DIR, databaseName), {
+    repoRoot: ROOT,
+    label: 'Playwright data directory',
+  })
 }
 
 export function shouldPreserveExistingDatabaseFile(dbPath) {
   assertDoesNotTargetUnsafePort(dbPath, 'database path')
-  const resolvedDbPath = path.resolve(dbPath)
-  const resolvedSafeQaDbDir = path.resolve(SAFE_QA_DB_DIR)
-  return !resolvedDbPath.startsWith(`${resolvedSafeQaDbDir}${path.sep}`)
+  assertOwnedTestPath(SAFE_QA_EVIDENCE_ROOT, dbPath, {
+    repoRoot: ROOT,
+    label: 'Playwright database',
+  })
+  return fs.existsSync(dbPath)
 }
 
 export function prepareRoleplaySafeDatabaseFile(dbPath, options = {}) {
   assertDoesNotTargetUnsafePort(dbPath, 'database path')
+  assertOwnedTestPath(SAFE_QA_EVIDENCE_ROOT, dbPath, {
+    repoRoot: ROOT,
+    label: 'Playwright database',
+  })
   fs.mkdirSync(path.dirname(dbPath), { recursive: true })
   if (options.preserveExisting && fs.existsSync(dbPath)) {
     return
@@ -71,10 +99,14 @@ export function prepareRoleplaySafeDatabaseFile(dbPath, options = {}) {
 }
 
 export function cleanupLegacySafeQaArtifacts() {
-  fs.rmSync(SAFE_QA_LEGACY_NEXT_DIST_PATH, { recursive: true, force: true })
+  removeOwnedTestTreeIfMarked(SAFE_QA_LEGACY_NEXT_DIST_PATH, ROOT, {
+    repoRoot: ROOT,
+    label: 'legacy Playwright dist directory',
+  })
 }
 
 export function writeRoleplaySafeQaManifest(fields) {
+  markOwnedTestRoot(SAFE_QA_EVIDENCE_ROOT, { repoRoot: ROOT })
   fs.mkdirSync(SAFE_QA_UI_EVIDENCE_DIR, { recursive: true })
   const manifest = {
     host: SAFE_QA_HOST,

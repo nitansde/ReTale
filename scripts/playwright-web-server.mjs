@@ -3,20 +3,22 @@ import path from 'node:path'
 import {
   ROOT,
   SAFE_QA_BASE_URL,
-  SAFE_QA_HOST,
+  SAFE_QA_EVIDENCE_ROOT,
   SAFE_QA_LIBRARY_URL,
   SAFE_QA_NEXT_DIST_DIR,
-  SAFE_QA_PORT,
   assertPort3000Available,
   assertSafeQaUrls,
   cleanupLegacySafeQaArtifacts,
+  createRoleplaySafeDataPath,
   prepareRoleplaySafeDatabaseFile,
   shouldPreserveExistingDatabaseFile,
   writeRoleplaySafeQaManifest,
 } from './roleplay-safe-qa.mjs'
+import { assertOwnedTestPath, markOwnedTestRoot } from './test-path-safety.mjs'
 
 assertSafeQaUrls()
 assertPort3000Available()
+markOwnedTestRoot(SAFE_QA_EVIDENCE_ROOT, { repoRoot: ROOT })
 cleanupLegacySafeQaArtifacts()
 
 const tempDbPath = process.env.PLAYWRIGHT_TEST_DB_PATH
@@ -27,13 +29,19 @@ if (!tempDbPath) {
 
 const preserveExistingDatabase = shouldPreserveExistingDatabaseFile(tempDbPath)
 prepareRoleplaySafeDatabaseFile(tempDbPath, { preserveExisting: preserveExistingDatabase })
-const tempDataDir = path.join(path.dirname(tempDbPath), 'data')
+const tempDataDir = createRoleplaySafeDataPath(tempDbPath)
+assertOwnedTestPath(SAFE_QA_EVIDENCE_ROOT, path.resolve(ROOT, SAFE_QA_NEXT_DIST_DIR), {
+  repoRoot: ROOT,
+  label: 'Playwright Next dist directory',
+})
 
 const manifest = writeRoleplaySafeQaManifest({
+  dataDir: tempDataDir,
   databaseUrl: `file:${tempDbPath}`,
   databasePath: tempDbPath,
   mode: 'roleplay-safe-playwright',
   sourceDatabase: null,
+  testRoot: SAFE_QA_EVIDENCE_ROOT,
   nextDistDir: SAFE_QA_NEXT_DIST_DIR,
   preserveExistingDatabase,
   webServerCommand: 'node scripts/next-test-server.mjs',
@@ -52,9 +60,12 @@ const child = spawn('node', ['scripts/next-test-server.mjs'], {
     ...process.env,
     RETALE_INTERNAL_ALLOW_TEST_OVERRIDES: '1',
     RETALE_DATA_DIR: tempDataDir,
+    RETALE_SERVER_DATA_DIR: tempDataDir,
     RETALE_SERVER_DIST_DIR: SAFE_QA_NEXT_DIST_DIR,
     RETALE_SERVER_DATABASE_PATH: tempDbPath,
     RETALE_SERVER_DATABASE_URL: `file:${tempDbPath}`,
+    RETALE_SERVER_TEST_ROOT: SAFE_QA_EVIDENCE_ROOT,
+    RETALE_SERVER_TSCONFIG_PATH: path.join('.sisyphus', 'evidence', 'task-1-test-harness', 'next-test-tsconfig.json'),
   },
 })
 
