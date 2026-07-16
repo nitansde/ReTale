@@ -1,12 +1,15 @@
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { resetResolvedDatabasesForTests } from '@/lib/server/db-resolver'
 import { initializeDatabase } from '@/lib/server/sqlite'
+import { registerLegacyNovelDatabase } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const databases: DatabaseSync[] = []
 const originalDataDir = process.env.RETALE_DATA_DIR
+let disposeNovelDatabaseOverride: (() => void) | undefined
 
 function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
   if (originalValue === undefined) {
@@ -45,6 +48,14 @@ function seedRetrievalFixture(database: DatabaseSync) {
   insertTextSpan.run('span-1', 'novel-001', 'novel-001:main', 'chapter-1', 1, 1, 1, 0, 9, '第一段原文内容。', 'paragraph', 8)
   insertTextSpan.run('span-2', 'novel-001', 'novel-001:main', 'chapter-1', 1, 2, 2, 10, 19, '第二段原文内容。', 'paragraph', 8)
   insertTextSpan.run('span-3', 'novel-001', 'novel-001:main', 'chapter-1', 1, 3, 4, 20, 39, '场景证据原文内容。', 'scene', 12)
+}
+
+function registerSeededDatabase(database: DatabaseSync) {
+  databases.push(database)
+  disposeNovelDatabaseOverride?.()
+  disposeNovelDatabaseOverride = undefined
+  resetResolvedDatabasesForTests()
+  disposeNovelDatabaseOverride = registerLegacyNovelDatabase(database, ['novel-001'])
 }
 
 function createMockAISettings() {
@@ -259,8 +270,8 @@ async function createRetrievalIndexHarness(testName: string) {
   process.env.RETALE_DATA_DIR = path.join(tempDatabase.directory, 'data')
 
   const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-  globalForSqlite.sqlite = database
   seedRetrievalFixture(database)
+  registerSeededDatabase(database)
 
   const aiSettings = createMockAISettings()
   const mockLanceDb = createMockLanceDb()
@@ -295,6 +306,7 @@ async function createRetrievalIndexHarness(testName: string) {
 
   const retrievalIndex = await import('@/lib/server/retrieval-index')
   const retrievalCache = await import('@/lib/server/retrieval-embedding-cache')
+  const { runWithNovelDatabaseAccess } = await import('@/lib/server/database-access')
 
   return {
     aiSettings,
@@ -305,16 +317,22 @@ async function createRetrievalIndexHarness(testName: string) {
     retrievalIndex,
     retrievalCache,
     tempDataDir: process.env.RETALE_DATA_DIR,
+    withNovelDatabase: <T>(callback: () => T | Promise<T>) => runWithNovelDatabaseAccess('novel-001', callback),
   }
 }
 
 afterEach(() => {
-  if (globalForSqlite.sqlite) {
+  disposeNovelDatabaseOverride?.()
+  disposeNovelDatabaseOverride = undefined
+  resetResolvedDatabasesForTests()
+
+  while (databases.length) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
-    } catch {
+      databases.pop()?.close()
+    } catch (_closeError) {
+      void _closeError
+      // Ignore secondary SQLite close failures so teardown can continue.
     }
-    delete globalForSqlite.sqlite
   }
 
   restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
@@ -341,8 +359,8 @@ describe('retrieval-index cache reuse helpers', () => {
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-    globalForSqlite.sqlite = database
     seedRetrievalFixture(database)
+    registerSeededDatabase(database)
 
     database.prepare(
       `INSERT INTO KnowledgeEntity (
@@ -438,8 +456,8 @@ describe('retrieval-index cache reuse helpers', () => {
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-    globalForSqlite.sqlite = database
     seedRetrievalFixture(database)
+    registerSeededDatabase(database)
 
     vi.resetModules()
     const {
@@ -467,8 +485,8 @@ describe('retrieval-index cache reuse helpers', () => {
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-    globalForSqlite.sqlite = database
     seedRetrievalFixture(database)
+    registerSeededDatabase(database)
 
     database.prepare(
       `INSERT INTO KnowledgeChapter (
@@ -521,8 +539,8 @@ describe('retrieval-index cache reuse helpers', () => {
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-    globalForSqlite.sqlite = database
     seedRetrievalFixture(database)
+    registerSeededDatabase(database)
 
     vi.resetModules()
     const {
@@ -554,6 +572,7 @@ describe('retrieval-index cache reuse helpers', () => {
       mockLanceDb,
       retrievalCache,
       retrievalIndex,
+      withNovelDatabase,
     } = await createRetrievalIndexHarness('retale-retrieval-index-cache-reuse-final-rebuild-hit')
 
     const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
@@ -563,7 +582,7 @@ describe('retrieval-index cache reuse helpers', () => {
 
     const cachedEmbeddingInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(packedDoc!).text
     const cachedVector = [9, 9, 9]
-    await retrievalCache.upsertRawTextEmbeddingCacheEntries({
+    await withNovelDatabase(() => retrievalCache.upsertRawTextEmbeddingCacheEntries({
       scope: {
         novelId: 'novel-001',
         branchId: 'novel-001:main',
@@ -574,7 +593,7 @@ describe('retrieval-index cache reuse helpers', () => {
         embeddingInput: cachedEmbeddingInput,
         vector: cachedVector,
       }],
-    })
+    }))
 
     await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
       rowCount: mergedDocs.length,
@@ -599,6 +618,7 @@ describe('retrieval-index cache reuse helpers', () => {
       mockLanceDb,
       retrievalCache,
       retrievalIndex,
+      withNovelDatabase,
     } = await createRetrievalIndexHarness('retale-retrieval-index-cache-reuse-broader-final-rebuild')
 
     const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
@@ -628,7 +648,7 @@ describe('retrieval-index cache reuse helpers', () => {
       count: mergedDocs.length,
     })
 
-    await retrievalCache.upsertRawTextEmbeddingCacheEntries({
+    await withNovelDatabase(() => retrievalCache.upsertRawTextEmbeddingCacheEntries({
       scope: {
         novelId: 'novel-001',
         branchId: 'novel-001:main',
@@ -649,7 +669,7 @@ describe('retrieval-index cache reuse helpers', () => {
           vector: [7, 7, 7],
         },
       ],
-    })
+    }))
 
     embedTextsWithOllama.mockClear()
     mockLanceDb.database.createTable.mockClear()
@@ -729,7 +749,7 @@ describe('retrieval-index cache reuse helpers', () => {
 
     const packedInput = degradedHarness.retrievalIndex.buildRawTextRetrievalEmbeddingInput(packedDoc!).text
     const sceneInput = degradedHarness.retrievalIndex.buildRawTextRetrievalEmbeddingInput(sceneDoc!).text
-    await degradedHarness.retrievalCache.upsertRawTextEmbeddingCacheEntries({
+    await degradedHarness.withNovelDatabase(() => degradedHarness.retrievalCache.upsertRawTextEmbeddingCacheEntries({
       scope: {
         novelId: 'novel-001',
         branchId: 'novel-001:main',
@@ -740,7 +760,7 @@ describe('retrieval-index cache reuse helpers', () => {
         embeddingInput: packedInput,
         vector: [8, 8, 8],
       }],
-    })
+    }))
     const sceneHash = degradedHarness.retrievalCache.buildEmbeddingInputHash(sceneInput)
     degradedHarness.database.prepare(
       `INSERT INTO RawTextEmbeddingCache (
@@ -769,7 +789,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('garbage collects unreachable raw-text cache rows during precompute', async () => {
-    const { database, retrievalCache, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-cache-reuse-precompute-gc')
+    const { database, retrievalCache, retrievalIndex, withNovelDatabase } = await createRetrievalIndexHarness('retale-retrieval-index-cache-reuse-precompute-gc')
 
     const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
     const packedDoc = rawTextDocs.find((row) => row.id.startsWith('packed-span:'))
@@ -780,7 +800,7 @@ describe('retrieval-index cache reuse helpers', () => {
     const retainedHash = retrievalCache.buildEmbeddingInputHash(retainedInput)
     const staleHash = retrievalCache.buildEmbeddingInputHash(staleInput)
 
-    await retrievalCache.upsertRawTextEmbeddingCacheEntries({
+    await withNovelDatabase(() => retrievalCache.upsertRawTextEmbeddingCacheEntries({
       scope: {
         novelId: 'novel-001',
         branchId: 'novel-001:main',
@@ -791,7 +811,7 @@ describe('retrieval-index cache reuse helpers', () => {
         { embeddingInput: retainedInput, vector: [9, 9, 9] },
         { embeddingInput: staleInput, vector: [7, 7, 7] },
       ],
-    })
+    }))
 
     await expect(retrievalIndex.precomputeRawTextEmbeddingCache({
       novelId: 'novel-001',
@@ -842,7 +862,7 @@ describe('retrieval-index cache reuse helpers', () => {
   })
 
   it('does not garbage collect out-of-range raw-text cache rows during ranged precompute', async () => {
-    const { database, retrievalCache, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-cache-reuse-precompute-range-gc')
+    const { database, retrievalCache, retrievalIndex, withNovelDatabase } = await createRetrievalIndexHarness('retale-retrieval-index-cache-reuse-precompute-range-gc')
 
     const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
     const retainedDoc = rawTextDocs.find((row) => row.id.startsWith('packed-span:'))
@@ -853,7 +873,7 @@ describe('retrieval-index cache reuse helpers', () => {
     const retainedHash = retrievalCache.buildEmbeddingInputHash(retainedInput)
     const staleHash = retrievalCache.buildEmbeddingInputHash(staleInput)
 
-    await retrievalCache.upsertRawTextEmbeddingCacheEntries({
+    await withNovelDatabase(() => retrievalCache.upsertRawTextEmbeddingCacheEntries({
       scope: {
         novelId: 'novel-001',
         branchId: 'novel-001:main',
@@ -864,7 +884,7 @@ describe('retrieval-index cache reuse helpers', () => {
         { embeddingInput: retainedInput, vector: [9, 9, 9] },
         { embeddingInput: staleInput, vector: [7, 7, 7] },
       ],
-    })
+    }))
 
     await expect(retrievalIndex.precomputeRawTextEmbeddingCache({
       novelId: 'novel-001',
