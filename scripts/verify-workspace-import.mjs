@@ -4,10 +4,10 @@ import path from 'node:path'
 import { execSync, spawn } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { chromium } from 'playwright'
+import { assertOwnedTestPath, createOwnedTestRoot } from './test-path-safety.mjs'
 
 const ROOT = process.cwd()
 const FIXTURE_PATH = path.join(ROOT, 'scripts/fixtures/workspace-import-smoke.txt')
-const SOURCE_DB_PATH = path.join(ROOT, 'dev.db')
 const PORT = 3000
 const HOST = '127.0.0.1'
 const SERVER_URL = `http://${HOST}:${PORT}`
@@ -54,13 +54,17 @@ async function main() {
   if (!fs.existsSync(FIXTURE_PATH)) {
     throw new Error(`Missing fixture file: ${FIXTURE_PATH}`)
   }
-  if (!fs.existsSync(SOURCE_DB_PATH)) {
-    throw new Error(`Missing source database: ${SOURCE_DB_PATH}`)
-  }
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-workspace-import-'))
-  const tempDbPath = path.join(tempDir, 'verify.db')
-  fs.copyFileSync(SOURCE_DB_PATH, tempDbPath)
+  const tempDir = createOwnedTestRoot(os.tmpdir(), 'retale-workspace-import-', { repoRoot: ROOT })
+  const tempDbPath = assertOwnedTestPath(tempDir, path.join(tempDir, 'verify.db'), {
+    repoRoot: ROOT,
+    label: 'workspace import database',
+  })
+  const tempDataDir = assertOwnedTestPath(tempDir, path.join(tempDir, 'data'), {
+    repoRoot: ROOT,
+    label: 'workspace import data directory',
+  })
+  fs.closeSync(fs.openSync(tempDbPath, 'wx'))
 
   killPort3000IfNeeded()
 
@@ -71,6 +75,8 @@ async function main() {
     env: {
       ...process.env,
       DATABASE_URL: `file:${tempDbPath}`,
+      RETALE_DATA_DIR: tempDataDir,
+      RETALE_TEST_ROOT: tempDir,
     },
     stdio: ['ignore', serverLogFd, serverLogFd],
   })
