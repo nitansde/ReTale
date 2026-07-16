@@ -60,9 +60,13 @@ async function importContextBuilderHelpers() {
   vi.doMock('@/lib/server/retrieval-index', () => ({
     searchLanceEvidence: vi.fn(),
   }))
-  vi.doMock('@/lib/server/sqlite', () => ({
+  vi.doMock('@/lib/server/database-access', () => ({
+    execute: vi.fn(),
     queryAll: vi.fn(),
     queryOne: vi.fn(),
+    withTransaction: vi.fn(),
+    createNovelDatabaseAccess: vi.fn(),
+    runWithNovelDatabaseAccess: vi.fn((_novelId: string, callback: () => unknown) => callback()),
   }))
 
   return import('@/lib/server/context-builder')
