@@ -1,15 +1,22 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
-import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const originalDataDir = process.env.RETALE_DATA_DIR
 
-function createTestDatabase(prefix: string) {
-  const tempDatabase = createTempDatabaseCopy(prefix)
-  cleanups.push(tempDatabase.cleanup)
-  const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+function createTestDatabase(prefix: string, novelId = 'novel-001') {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
+  cleanups.push(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const dataRoot = path.join(directory, 'data')
+  const databasePath = path.join(dataRoot, 'novels', novelId, 'novel.db')
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true })
+  process.env.RETALE_DATA_DIR = dataRoot
+  const database = initializeDatabase(new DatabaseSync(databasePath))
   globalForSqlite.sqlite = database
   return database
 }
@@ -142,8 +149,8 @@ function seedPromoteFixture(database: DatabaseSync) {
     '改写正文',
     1,
     'active',
-    '2026-05-15T01:20:00.000Z',
-    '2026-05-15T01:20:00.000Z'
+    '2026-05-15 01:20:00',
+    '2026-05-15 01:20:00'
   )
 
   database.prepare(
@@ -165,8 +172,8 @@ function seedPromoteFixture(database: DatabaseSync) {
     '续写正文 A',
     1,
     'active',
-    '2026-05-15T01:21:00.000Z',
-    '2026-05-15T01:21:00.000Z'
+    '2026-05-15 01:21:00',
+    '2026-05-15 01:21:00'
   )
 
   database.prepare(
@@ -188,8 +195,8 @@ function seedPromoteFixture(database: DatabaseSync) {
     '续写正文 B',
     1,
     'active',
-    '2026-05-15T01:22:00.000Z',
-    '2026-05-15T01:22:00.000Z'
+    '2026-05-15 01:22:00',
+    '2026-05-15 01:22:00'
   )
 
   database.prepare(
@@ -219,8 +226,8 @@ function seedPromoteFixture(database: DatabaseSync) {
     0,
     'fuchsia',
     'active',
-    '2026-05-15T01:20:00.000Z',
-    '2026-05-15T01:20:00.000Z'
+    '2026-05-15 01:20:00',
+    '2026-05-15 01:20:00'
   )
 
   database.prepare('UPDATE continue_blocks SET parent_timeline_node_id = ? WHERE id = ?').run('rewrite-node-promote', 'continue-block-promote-a')
@@ -253,8 +260,8 @@ function seedPromoteFixture(database: DatabaseSync) {
     1,
     'fuchsia',
     'active',
-    '2026-05-15T01:21:00.000Z',
-    '2026-05-15T01:21:00.000Z'
+    '2026-05-15 01:21:00',
+    '2026-05-15 01:21:00'
   )
 
   database.prepare(
@@ -284,8 +291,8 @@ function seedPromoteFixture(database: DatabaseSync) {
     1,
     'fuchsia',
     'active',
-    '2026-05-15T01:22:00.000Z',
-    '2026-05-15T01:22:00.000Z'
+    '2026-05-15 01:22:00',
+    '2026-05-15 01:22:00'
   )
 
   database.prepare(
@@ -322,12 +329,12 @@ function seedPromoteFixture(database: DatabaseSync) {
     0,
     'rose',
     'active',
-    '2026-05-15T01:25:00.000Z',
-    '2026-05-15T01:25:00.000Z'
+    '2026-05-15 01:25:00',
+    '2026-05-15 01:25:00'
   )
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.resetModules()
 
   if (globalForSqlite.sqlite) {
@@ -337,6 +344,11 @@ afterEach(() => {
     }
     delete globalForSqlite.sqlite
   }
+
+  const resolver = await import('@/lib/server/db-resolver')
+  resolver.resetResolvedDatabasesForTests()
+  if (originalDataDir === undefined) delete process.env.RETALE_DATA_DIR
+  else process.env.RETALE_DATA_DIR = originalDataDir
 
   while (cleanups.length) {
     cleanups.pop()?.()
@@ -421,7 +433,7 @@ describe('story branch delete APIs', () => {
   })
 
   it('deletes only the current timeline node and promotes its direct children at the deleted index', async () => {
-    const database = createTestDatabase('retale-story-branch-delete-promote')
+    const database = createTestDatabase('retale-story-branch-delete-promote', 'novel-promote')
     seedPromoteFixture(database)
     vi.resetModules()
 
@@ -474,8 +486,13 @@ describe('story branch delete APIs', () => {
     expect(timeline.edges).toEqual([])
 
     const orderedNodes = database.prepare(
-      'SELECT id FROM story_timeline_nodes WHERE novel_id = ? AND branch_id = ? ORDER BY created_at ASC, id ASC'
-    ).all('novel-promote', 'novel-promote:main') as Array<{ id: string }>
+      'SELECT id, created_at FROM story_timeline_nodes WHERE novel_id = ? AND branch_id = ? ORDER BY created_at ASC, id ASC'
+    ).all('novel-promote', 'novel-promote:main') as Array<{ id: string; created_at: string }>
+    expect(orderedNodes).toEqual([
+      { id: 'continue-node-promote-a', created_at: '2026-05-15 01:20:00.000' },
+      { id: 'continue-node-promote-b', created_at: '2026-05-15 01:20:00.001' },
+      { id: 'if-node-promote-sibling', created_at: '2026-05-15 01:25:00' },
+    ])
     expect(orderedNodes.map((node) => node.id)).toEqual([
       'continue-node-promote-a',
       'continue-node-promote-b',
@@ -484,7 +501,7 @@ describe('story branch delete APIs', () => {
   })
 
   it('deletes a leaf timeline node without disturbing surviving sibling order', async () => {
-    const database = createTestDatabase('retale-story-branch-delete-leaf')
+    const database = createTestDatabase('retale-story-branch-delete-leaf', 'novel-promote')
     seedPromoteFixture(database)
     database.prepare(
       `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, progress, currentStep, payloadJson)

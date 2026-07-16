@@ -701,9 +701,11 @@ function compareStoryTimelineNodeChronology(left: StoryTimelineNodeRecord, right
 }
 
 function buildPromotionCreatedAt(createdAt: string, index: number) {
-  const parsed = Date.parse(createdAt)
+  const normalized = createdAt.trim().replace(' ', 'T')
+  const withZone = /(?:Z|[+-]\d{2}:\d{2})$/iu.test(normalized) ? normalized : `${normalized}Z`
+  const parsed = Date.parse(withZone)
   if (!Number.isFinite(parsed)) return createdAt
-  return new Date(parsed + index).toISOString()
+  return new Date(parsed + index).toISOString().replace('T', ' ').replace(/Z$/u, '')
 }
 
 function orderStoryTimelineNodes(nodes: StoryTimelineNodeRecord[]): StoryTimelineNodeRecord[] {
