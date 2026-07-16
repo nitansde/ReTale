@@ -1,9 +1,12 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { initializeDatabase } from '@/lib/server/sqlite'
+import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
+const novelDatabaseDisposers: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync; fetch?: typeof fetch }
 
 function seedFailureFixture(database: DatabaseSync) {
@@ -56,12 +59,18 @@ function seedFailureFixture(database: DatabaseSync) {
 
 afterEach(() => {
   vi.restoreAllMocks()
-  vi.resetModules()
+
+  while (novelDatabaseDisposers.length) {
+    novelDatabaseDisposers.pop()?.()
+  }
+  resetNovelDatabaseTestState()
 
   if (globalForSqlite.sqlite) {
     try {
       ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
-    } catch {
+    } catch (_closeError) {
+      void _closeError
+      // Ignore close failures so temporary files can still be removed.
     }
     delete globalForSqlite.sqlite
   }
@@ -69,6 +78,8 @@ afterEach(() => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
+
+  vi.resetModules()
 })
 
 describe('future-jump-service failure', () => {
@@ -95,7 +106,7 @@ describe('future-jump-service failure', () => {
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
     globalForSqlite.sqlite = database
     seedFailureFixture(database)
-    vi.resetModules()
+    novelDatabaseDisposers.push(registerLegacyNovelDatabase(database, ['novel-001']))
 
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ bridgeSummary: '太短了' }) } }] }), { status: 200 }))
@@ -126,7 +137,7 @@ describe('future-jump-service failure', () => {
     const failedRun = database.prepare('SELECT id FROM future_jump_runs ORDER BY created_at DESC, id DESC LIMIT 1').get() as { id: string } | undefined
     expect(failedRun?.id).toBeTruthy()
 
-    const persisted = findFutureJumpRunById(failedRun!.id)
+    const persisted = findFutureJumpRunById(failedRun!.id, createNovelDatabaseAccess('novel-001'))
     expect(persisted?.status).toBe('failed')
     expect(persisted?.errorMessage).toMatch(/bridgeSummary must be 300-600/)
     expect(persisted?.revisions).toHaveLength(0)

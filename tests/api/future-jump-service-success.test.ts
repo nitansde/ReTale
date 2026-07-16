@@ -1,9 +1,12 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { initializeDatabase } from '@/lib/server/sqlite'
+import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
+const novelDatabaseDisposers: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync; fetch?: typeof fetch }
 
 function createAiSettings() {
@@ -94,12 +97,18 @@ function seedFutureJumpFixture(database: DatabaseSync) {
 
 afterEach(() => {
   vi.restoreAllMocks()
-  vi.resetModules()
+
+  while (novelDatabaseDisposers.length) {
+    novelDatabaseDisposers.pop()?.()
+  }
+  resetNovelDatabaseTestState()
 
   if (globalForSqlite.sqlite) {
     try {
       ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
-    } catch {
+    } catch (_closeError) {
+      void _closeError
+      // Ignore close failures so temporary files can still be removed.
     }
     delete globalForSqlite.sqlite
   }
@@ -107,6 +116,8 @@ afterEach(() => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
+
+  vi.resetModules()
 })
 
 describe('future-jump-service success', () => {
@@ -120,7 +131,7 @@ describe('future-jump-service success', () => {
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
     globalForSqlite.sqlite = database
     seedFutureJumpFixture(database)
-    vi.resetModules()
+    novelDatabaseDisposers.push(registerLegacyNovelDatabase(database, ['novel-001']))
 
     const fetchMock = vi.fn()
     const longBridge = '决裂之后，男主把原本要与女主共享的线索全部压在自己手里，他坚信真正的问题出在女主身边，于是故意切断联系，只凭零碎情报独自追查。女主被这份怀疑逼得心灰意冷，也不再解释，而是带着自己的判断去追索反派的暗线。两人越走越远，原本互补的能力被硬生生拆成彼此掣肘的盲区，旧日默契在一次次错过里变成更深的误会。反派情报网敏锐地捕捉到他们的裂缝，先挑动外围势力散布假消息，再借泄密者把女主引到孤立地点。男主因为不肯求证女主的行踪，始终晚半步；女主则误以为男主已经默认放弃自己，强撑着独自周旋。两人身边原本愿意调停的盟友，也因为长期收不到完整真相，只能各自站队，让误会越积越深。等双方终于意识到真正的敌人并不是彼此时，反派已经完成布置，把这场情感与信任上的断裂，推成了女主被绑走的必然后果。'
@@ -181,7 +192,7 @@ describe('future-jump-service success', () => {
     expect(revised.titleHint).toBe('迟到的救援')
     expect(revised.subtitleHint).toBeNull()
 
-    const persisted = findFutureJumpRunById(generated.run.id)
+    const persisted = findFutureJumpRunById(generated.run.id, createNovelDatabaseAccess('novel-001'))
     expect(persisted?.revisions).toHaveLength(2)
     expect(persisted?.errorMessage).toBeNull()
   }, 45000)
