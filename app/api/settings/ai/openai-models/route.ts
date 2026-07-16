@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     if (!scenario) {
       return jsonError('scenario is invalid', 400)
     }
-    const result = await listAvailableOpenAICompatibleModels(body.baseUrl, body.apiKey, scenario)
+    const result = await listAvailableOpenAICompatibleModels(body.baseUrl, body.apiKey, scenario, request.signal)
 
     return NextResponse.json({ ok: true, ...result })
   } catch (error) {

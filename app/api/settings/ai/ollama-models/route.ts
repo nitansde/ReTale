@@ -12,8 +12,8 @@ export async function GET(request: Request) {
     }
     const purpose = rawPurpose === 'embedding' ? 'embedding' : 'text'
     const result = purpose === 'embedding'
-      ? await listAvailableOllamaEmbeddingModels(baseUrl)
-      : await listAvailableOllamaTextModels(baseUrl)
+      ? await listAvailableOllamaEmbeddingModels(baseUrl, request.signal)
+      : await listAvailableOllamaTextModels(baseUrl, request.signal)
     return NextResponse.json({ ok: true, purpose, ...result })
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : 'Failed to list local Ollama models', 500)

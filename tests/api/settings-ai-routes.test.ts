@@ -65,4 +65,59 @@ describe('settings AI route validation', () => {
     expect(listAvailableOllamaEmbeddingModels).not.toHaveBeenCalled()
     expect(listAvailableOllamaTextModels).not.toHaveBeenCalled()
   })
+
+  it('forwards the OpenAI discovery request signal', async () => {
+    const listAvailableOpenAICompatibleModels = vi.fn().mockResolvedValue({
+      baseUrl: 'https://example.test/v1',
+      models: [],
+    })
+    vi.doMock('@/lib/server/openai-compatible', () => ({
+      listAvailableOpenAICompatibleModels,
+    }))
+
+    const { POST } = await import('@/app/api/settings/ai/openai-models/route')
+    const request = new Request('http://localhost/api/settings/ai/openai-models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl: 'https://example.test/v1',
+        apiKey: 'test-key',
+        scenario: 'embeddings',
+      }),
+    })
+    const response = await POST(request)
+
+    expect(response.status).toBe(200)
+    expect(listAvailableOpenAICompatibleModels).toHaveBeenCalledWith(
+      'https://example.test/v1',
+      'test-key',
+      'embeddings',
+      request.signal,
+    )
+  })
+
+  it('forwards the Ollama discovery request signal for both purposes', async () => {
+    const listAvailableOllamaEmbeddingModels = vi.fn().mockResolvedValue({
+      baseUrl: 'http://127.0.0.1:11434',
+      models: [],
+    })
+    const listAvailableOllamaTextModels = vi.fn().mockResolvedValue({
+      baseUrl: 'http://127.0.0.1:11434',
+      models: [],
+    })
+    vi.doMock('@/lib/server/ollama-local', () => ({
+      listAvailableOllamaEmbeddingModels,
+      listAvailableOllamaTextModels,
+    }))
+
+    const { GET } = await import('@/app/api/settings/ai/ollama-models/route')
+    const textRequest = new Request('http://localhost/api/settings/ai/ollama-models?baseUrl=http%3A%2F%2F127.0.0.1%3A11434&purpose=text')
+    const embeddingRequest = new Request('http://localhost/api/settings/ai/ollama-models?baseUrl=http%3A%2F%2F127.0.0.1%3A11434&purpose=embedding')
+
+    expect((await GET(textRequest)).status).toBe(200)
+    expect((await GET(embeddingRequest)).status).toBe(200)
+    expect(listAvailableOllamaTextModels).toHaveBeenCalledWith('http://127.0.0.1:11434', textRequest.signal)
+    expect(listAvailableOllamaEmbeddingModels).toHaveBeenCalledWith('http://127.0.0.1:11434', embeddingRequest.signal)
+  })
+
 })
