@@ -51,6 +51,7 @@ function createRequest(body: Record<string, unknown> = {}) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      novelId: 'novel-rewrite-provider-contract',
       sourceText: '原文',
       selectedText: '选段',
       prompt: '提示',

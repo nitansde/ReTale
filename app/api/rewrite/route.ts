@@ -1,7 +1,7 @@
 import { after, NextResponse } from 'next/server'
 import { buildGenerationContext } from '@/lib/server/context-builder'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
-import { createNovelDatabaseAccess } from '@/lib/server/database-access'
+import { createNovelDatabaseAccess, runWithNovelDatabaseAccess } from '@/lib/server/database-access'
 import { applyPresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runtime'
 import {
   deserializePresetCompatResponseMetadata,
@@ -637,27 +637,30 @@ export async function GET(request: Request) {
   const novelId = searchParams.get('novelId')?.trim()
   const branchId = searchParams.get('branchId')?.trim()
   const chapterId = searchParams.get('chapterId')?.trim()
-  const novelDb = novelId ? getNovelRouteDb(novelId) : null
+  if (!novelId) {
+    return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+  }
+  let novelDb
+  try {
+    novelDb = getNovelRouteDb(novelId)
+  } catch (error) {
+    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : 'Invalid novelId' }, { status: 400 })
+  }
 
   if (jobId) {
-    if (!novelId) {
-      return NextResponse.json({ ok: false, error: 'novelId is required when jobId is provided' }, { status: 400 })
-    }
-    reconcileKnowledgeJobWatchdog({ jobId, novelId, jobTypes: [RECOVERABLE_REWRITE_JOB_TYPE], db: novelDb ?? undefined })
-  } else if (novelId) {
+    reconcileKnowledgeJobWatchdog({ jobId, novelId, jobTypes: [RECOVERABLE_REWRITE_JOB_TYPE], db: novelDb })
+  } else {
     reconcileKnowledgeJobWatchdog({
       novelId,
       branchId: branchId ?? undefined,
       jobTypes: [RECOVERABLE_REWRITE_JOB_TYPE],
-      db: novelDb ?? undefined,
+      db: novelDb,
     })
   }
 
   const row = jobId
-    ? readRecoverableRewriteJob(jobId, getNovelRouteDb(novelId!))
-    : novelId
-      ? findLatestRecoverableRewriteJob({ novelId, branchId, chapterId })
-      : null
+    ? readRecoverableRewriteJob(jobId, novelDb)
+    : findLatestRecoverableRewriteJob({ novelId, branchId, chapterId })
 
   scheduleRecoverableRewriteJobIfQueued(row)
 
@@ -679,7 +682,12 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ ok: false, error: 'novelId and branchId are required' }, { status: 400 })
   }
 
-  const db = getNovelRouteDb(novelId)
+  let db
+  try {
+    db = getNovelRouteDb(novelId)
+  } catch (error) {
+    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : 'Invalid novelId' }, { status: 400 })
+  }
   const row = readRecoverableRewriteJob(jobId, db)
   const payload = normalizeRecoverableRewriteJobPayload(row?.payloadJson ?? null)
   const inScope = row
@@ -881,15 +889,35 @@ export async function POST(request: Request) {
 }
 
 async function handleRewritePost(request: Request, options: { allowRecoverable: boolean; signal?: AbortSignal }) {
-  const body = await request.json()
+  const body = await request.json().catch(() => null)
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return NextResponse.json({ ok: false, error: 'Invalid JSON body' }, { status: 400 })
+  }
+
+  const novelId = String(body.novelId ?? '').trim()
+  if (!novelId) {
+    return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+  }
+
+  try {
+    return await runWithNovelDatabaseAccess(novelId, () => handleRewriteBody(request, body, options))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Rewrite failed.'
+    const status = message.includes('Invalid novel ID') ? 400 : message.includes('not found') ? 404 : 500
+    return NextResponse.json({ ok: false, error: message }, { status })
+  }
+}
+
+async function handleRewriteBody(
+  request: Request,
+  body: Record<string, unknown>,
+  options: { allowRecoverable: boolean; signal?: AbortSignal },
+) {
   if (
     options.allowRecoverable
     && body?.recoverableRewriteJob === true
-    && body
-    && typeof body === 'object'
-    && !Array.isArray(body)
   ) {
-    return createRecoverableRewriteJob(body as Record<string, unknown>)
+    return createRecoverableRewriteJob(body)
   }
 
   const rewriteSettings = loadStoredAISettings().rewrite
@@ -1058,25 +1086,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
     })
   }
 
-  const rewriteInput = {
-    sourceText,
-    mode: body.mode,
-    tone: body.tone,
-    scope: body.scope,
-    prompt: context
-      ? [String(body.prompt ?? ''), assembledContext].filter(Boolean).join('\n\n')
-      : body.prompt,
-    keepCanon: Boolean(body.keepCanon),
-    autoContinue: Boolean(body.autoContinue),
-    thoughtLevel: body.thoughtLevel,
-    systemPrompt: runtime.systemPrompt,
-    userPrompt: runtime.userPrompt,
-    requestOptions: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
-      ? runtime.resolvedRuntime.providerRuntime.request
-      : runtime.resolvedRuntime.providerRuntime.request.options,
-    presetCompat: presetCompatMetadata,
-    signal: options.signal,
-  }
+  const rewriteInput = { sourceText, mode: String(body.mode ?? ''), tone: String(body.tone ?? ''), scope: String(body.scope ?? ''), prompt: context ? [String(body.prompt ?? ''), assembledContext].filter(Boolean).join('\n\n') : String(body.prompt ?? ''), keepCanon: Boolean(body.keepCanon), autoContinue: Boolean(body.autoContinue), thoughtLevel: String(body.thoughtLevel ?? ''), systemPrompt: runtime.systemPrompt, userPrompt: runtime.userPrompt, requestOptions: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible' ? runtime.resolvedRuntime.providerRuntime.request : runtime.resolvedRuntime.providerRuntime.request.options, presetCompat: presetCompatMetadata, signal: options.signal }
   const result = runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
     ? await generateRewriteWithOpenAICompatible(rewriteInput, runtime.resolvedRuntime.providerRuntime.config)
     : await generateRewriteWithOllama(rewriteInput, runtime.resolvedRuntime.providerRuntime.config)

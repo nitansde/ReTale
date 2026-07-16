@@ -417,6 +417,7 @@ function createRequest(operationType: string, body: Record<string, unknown>) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      novelId: 'novel-preset-runtime',
       sourceText: '原文 ALPHA',
       selectedText: '选段 ALPHA',
       prompt: '补充提示 ALPHA',

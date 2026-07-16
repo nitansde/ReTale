@@ -344,6 +344,7 @@ describe('llm debug logging', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        novelId: 'novel-llm-debug',
         sourceText: 'source marker',
         selectedText: 'selected marker',
         prompt: 'prompt marker',
@@ -383,6 +384,7 @@ describe('llm debug logging', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        novelId: 'novel-llm-debug',
         sourceText: 'source marker',
         selectedText: 'selected marker',
         prompt: 'prompt marker',
@@ -515,6 +517,7 @@ describe('llm debug logging', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        novelId: 'novel-llm-debug',
         sourceText: 'source marker',
         selectedText: 'selected marker',
         prompt: 'prompt marker',
