@@ -1,15 +1,16 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
-import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const EVIDENCE_DIR = path.join(process.cwd(), '.sisyphus/evidence/task-3-continue-block-service')
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const originalDataDir = process.env.RETALE_DATA_DIR
 
-afterEach(() => {
+afterEach(async () => {
   vi.resetModules()
 
   if (globalForSqlite.sqlite) {
@@ -20,10 +21,27 @@ afterEach(() => {
     delete globalForSqlite.sqlite
   }
 
+  const resolver = await import('@/lib/server/db-resolver')
+  resolver.resetResolvedDatabasesForTests()
+  if (originalDataDir === undefined) delete process.env.RETALE_DATA_DIR
+  else process.env.RETALE_DATA_DIR = originalDataDir
+
   while (cleanups.length) {
     cleanups.pop()?.()
   }
 })
+
+function createNovelTestDatabase(prefix: string) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
+  cleanups.push(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const dataRoot = path.join(directory, 'data')
+  const databasePath = path.join(dataRoot, 'novels', 'novel-001', 'novel.db')
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true })
+  process.env.RETALE_DATA_DIR = dataRoot
+  const database = initializeDatabase(new DatabaseSync(databasePath))
+  globalForSqlite.sqlite = database
+  return database
+}
 
 function seedNovel(database: DatabaseSync) {
   database.prepare('INSERT INTO NovelRecord (id, title, author, sourceType) VALUES (?, ?, ?, ?)').run('novel-001', 'Fixture Novel', 'Fixture Author', 'txt')
@@ -142,10 +160,7 @@ function seedNovel(database: DatabaseSync) {
 
 describe('continue-block service', () => {
   it('persists continue children under saved nodes, keeps future-jump continues as child blocks, and regenerates in place with history', async () => {
-    const tempDatabase = createTempDatabaseCopy('retale-continue-block-service')
-    cleanups.push(tempDatabase.cleanup)
-    const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-    globalForSqlite.sqlite = database
+    const database = createNovelTestDatabase('retale-continue-block-service')
     seedNovel(database)
 
     vi.resetModules()
@@ -237,6 +252,8 @@ describe('continue-block service', () => {
     })
 
     const regenerated = await regenerateContinueBlock({
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
       continueBlockId: root.continueBlockId,
       generatedText: '第一版续写正文（重生）',
       userInstruction: '重新生成同一个 continue block',
@@ -369,10 +386,7 @@ describe('continue-block service', () => {
   })
 
   it('returns a stable 404 for invalid parent timeline ids without leaving continue-block rows behind', async () => {
-    const tempDatabase = createTempDatabaseCopy('retale-continue-block-invalid-parent')
-    cleanups.push(tempDatabase.cleanup)
-    const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-    globalForSqlite.sqlite = database
+    const database = createNovelTestDatabase('retale-continue-block-invalid-parent')
     seedNovel(database)
 
     const beforeContinueBlocks = (database.prepare('SELECT COUNT(*) AS count FROM continue_blocks').get() as { count: number }).count
@@ -403,17 +417,83 @@ describe('continue-block service', () => {
     expect((database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes').get() as { count: number }).count).toBe(beforeTimelineNodes)
   })
 
+  it('rolls back the continue block and initial revision when timeline insertion fails', async () => {
+    const database = createNovelTestDatabase('retale-continue-block-atomic-rollback')
+    seedNovel(database)
+    database.exec(`
+      CREATE TRIGGER fail_continue_timeline_insert
+      BEFORE INSERT ON story_timeline_nodes
+      WHEN NEW.continue_block_id IS NOT NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'forced continue timeline failure');
+      END;
+    `)
+
+    vi.resetModules()
+    const { createContinueBlockFromRewrite } = await import('@/lib/server/continue-block-service')
+
+    await expect(createContinueBlockFromRewrite({
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      sourceChapterNo: 10,
+      selectedText: '原始选区',
+      originalText: '原始片段',
+      generatedText: '应当整体回滚的续写正文',
+      userInstruction: '验证原子写入',
+    })).rejects.toThrow('forced continue timeline failure')
+
+    expect(database.prepare('SELECT COUNT(*) AS count FROM continue_blocks').get()).toMatchObject({ count: 0 })
+    expect(database.prepare('SELECT COUNT(*) AS count FROM continue_block_revisions').get()).toMatchObject({ count: 0 })
+    expect(database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes WHERE continue_block_id IS NOT NULL').get()).toMatchObject({ count: 0 })
+  })
+
+  it('serializes concurrent label allocation for rewrite roots and continue children', async () => {
+    const database = createNovelTestDatabase('retale-continue-block-concurrent-allocation')
+    seedNovel(database)
+
+    vi.resetModules()
+    const { createContinueBlockFromRewrite } = await import('@/lib/server/continue-block-service')
+    const roots = await Promise.all(Array.from({ length: 6 }, (_, index) => createContinueBlockFromRewrite({
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      sourceChapterNo: 10,
+      selectedText: `根选区 ${index + 1}`,
+      originalText: `根原文 ${index + 1}`,
+      generatedText: `根改写 ${index + 1}`,
+      userInstruction: `并发创建根节点 ${index + 1}`,
+    })))
+    const children = await Promise.all(Array.from({ length: 6 }, (_, index) => createContinueBlockFromRewrite({
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      parentTimelineNodeId: roots[0]?.timelineNodeId,
+      sourceChapterNo: 10,
+      selectedText: `子选区 ${index + 1}`,
+      originalText: `子原文 ${index + 1}`,
+      generatedText: `子续写 ${index + 1}`,
+      userInstruction: `并发创建子节点 ${index + 1}`,
+    })))
+
+    expect(roots.map((root) => root.readableLabel).sort()).toEqual([
+      'RE-01', 'RE-02', 'RE-03', 'RE-04', 'RE-05', 'RE-06',
+    ])
+    expect(children.map((child) => child.readableLabel).sort()).toEqual([
+      'CONT-01', 'CONT-02', 'CONT-03', 'CONT-04', 'CONT-05', 'CONT-06',
+    ])
+    expect(database.prepare('SELECT COUNT(*) AS count FROM continue_blocks').get()).toMatchObject({ count: 12 })
+    expect(database.prepare('SELECT COUNT(*) AS count FROM continue_block_revisions').get()).toMatchObject({ count: 12 })
+    expect(database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes WHERE continue_block_id IS NOT NULL').get()).toMatchObject({ count: 12 })
+  })
+
   it('rejects regenerate for a missing continue block', async () => {
-    const tempDatabase = createTempDatabaseCopy('retale-continue-block-missing')
-    cleanups.push(tempDatabase.cleanup)
-    const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-    globalForSqlite.sqlite = database
+    const database = createNovelTestDatabase('retale-continue-block-missing')
     seedNovel(database)
 
     vi.resetModules()
     const { regenerateContinueBlock } = await import('@/lib/server/continue-block-service')
 
     await expect(regenerateContinueBlock({
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
       continueBlockId: 'missing-continue-block',
       generatedText: '不会写入',
       userInstruction: '重新生成',
@@ -423,10 +503,7 @@ describe('continue-block service', () => {
   })
 
   it('returns stable 404 JSON for missing continue blocks on the route boundary', async () => {
-    const tempDatabase = createTempDatabaseCopy('retale-continue-block-route-missing')
-    cleanups.push(tempDatabase.cleanup)
-    const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-    globalForSqlite.sqlite = database
+    const database = createNovelTestDatabase('retale-continue-block-route-missing')
     seedNovel(database)
 
     vi.resetModules()
@@ -437,6 +514,8 @@ describe('continue-block service', () => {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
         continueBlockId: 'missing-continue-block',
         generatedText: '不会写入',
         userInstruction: '重新生成',

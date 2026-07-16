@@ -31,6 +31,8 @@ export async function PUT(request: Request) {
   try {
     const body = await readJsonObject(request)
     const result = await regenerateContinueBlock({
+      novelId: String(body.novelId ?? ''),
+      branchId: String(body.branchId ?? ''),
       continueBlockId: String(body.continueBlockId ?? ''),
       generatedText: String(body.generatedText ?? ''),
       userInstruction: String(body.userInstruction ?? ''),

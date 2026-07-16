@@ -343,6 +343,8 @@ export const continueBlockCreateRequestSchema = z.object({
 })
 
 export const continueBlockRegenerateRequestSchema = z.object({
+  novelId: z.string().min(1),
+  branchId: z.string().min(1),
   continueBlockId: z.string().min(1),
   generatedText: z.string().min(1),
   userInstruction: z.string().min(1),

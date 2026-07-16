@@ -131,52 +131,57 @@ export function findContinueBlockById(id: string, db: Db = defaultDb): ContinueB
   }
 }
 
+export function insertContinueBlockWithInitialRevision(
+  input: Omit<ContinueBlockRecord, 'createdAt' | 'updatedAt'>,
+  db: Db = defaultDb
+) {
+  db.execute(
+    `INSERT INTO continue_blocks (
+      id, novel_id, branch_id, parent_timeline_node_id, source_chapter_no, title, subtitle,
+      user_instruction, selected_text, original_text, latest_text, latest_input_tokens, latest_output_tokens, latest_revision_no, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    input.id,
+    input.novelId,
+    input.branchId,
+    input.parentTimelineNodeId,
+    input.sourceChapterNo,
+    input.title,
+    input.subtitle,
+    input.userInstruction,
+    input.selectedText,
+    input.originalText,
+    input.latestText,
+    input.inputTokens ?? null,
+    input.outputTokens ?? null,
+    input.latestRevisionNo,
+    input.status
+  )
+
+  db.execute(
+    `INSERT INTO continue_block_revisions (
+      id, continue_block_id, revision_no, revision_kind, user_instruction,
+      selected_text, original_text, generated_text, input_tokens, output_tokens, title, subtitle
+    ) VALUES (?, ?, 1, 'initial', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    uid('continue-block-revision'),
+    input.id,
+    input.userInstruction,
+    input.selectedText,
+    input.originalText,
+    input.latestText,
+    input.inputTokens ?? null,
+    input.outputTokens ?? null,
+    input.title,
+    input.subtitle
+  )
+
+  return findContinueBlockRecordById(input.id, db)
+}
+
 export async function createContinueBlockWithInitialRevision(
   input: Omit<ContinueBlockRecord, 'createdAt' | 'updatedAt'>,
   db: Db = defaultDb
 ) {
-  await db.withTransaction(async () => {
-    db.execute(
-      `INSERT INTO continue_blocks (
-        id, novel_id, branch_id, parent_timeline_node_id, source_chapter_no, title, subtitle,
-        user_instruction, selected_text, original_text, latest_text, latest_input_tokens, latest_output_tokens, latest_revision_no, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      input.id,
-      input.novelId,
-      input.branchId,
-      input.parentTimelineNodeId,
-      input.sourceChapterNo,
-      input.title,
-      input.subtitle,
-      input.userInstruction,
-      input.selectedText,
-      input.originalText,
-      input.latestText,
-      input.inputTokens ?? null,
-      input.outputTokens ?? null,
-      input.latestRevisionNo,
-      input.status
-    )
-
-    db.execute(
-      `INSERT INTO continue_block_revisions (
-        id, continue_block_id, revision_no, revision_kind, user_instruction,
-        selected_text, original_text, generated_text, input_tokens, output_tokens, title, subtitle
-      ) VALUES (?, ?, 1, 'initial', ?, ?, ?, ?, ?, ?, ?, ?)`,
-      uid('continue-block-revision'),
-      input.id,
-      input.userInstruction,
-      input.selectedText,
-      input.originalText,
-      input.latestText,
-      input.inputTokens ?? null,
-      input.outputTokens ?? null,
-      input.title,
-      input.subtitle
-    )
-  })
-
-  return findContinueBlockRecordById(input.id, db)
+  return db.withTransaction(() => insertContinueBlockWithInitialRevision(input, db))
 }
 
 export async function appendContinueBlockRevision(

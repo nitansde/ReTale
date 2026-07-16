@@ -91,6 +91,8 @@ test('real continue-block branch selections survive reload after child creation 
 
   const regenerateResponse = await page.request.put('/api/continue-blocks', {
     data: {
+      novelId: workspace.currentNovelId,
+      branchId: `${workspace.currentNovelId}:main`,
       continueBlockId: root.continueBlockId,
       selectedText: currentBodyText,
       originalText: currentBodyText,

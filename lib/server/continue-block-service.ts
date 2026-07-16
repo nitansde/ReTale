@@ -6,8 +6,8 @@ import {
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import {
   appendContinueBlockRevision,
-  createContinueBlockWithInitialRevision,
   findContinueBlockById,
+  insertContinueBlockWithInitialRevision,
 } from '@/lib/server/continue-block-store'
 import {
   createStoryTimelineNode,
@@ -67,74 +67,78 @@ export async function createContinueBlockFromRewrite(rawInput: ContinueBlockCrea
   const input = continueBlockCreateRequestSchema.parse(rawInput)
   const db = createNovelDatabaseAccess(input.novelId)
   const nodeType: StoryTimelineNodeType = input.parentTimelineNodeId ? 'continue_block' : 'rewrite'
-  const labelIndex = getNextStoryTimelineLabelIndex(input.novelId, input.branchId, nodeType, db)
-  const readableLabelIndex = nodeType === 'continue_block' && input.parentTimelineNodeId
-    ? getNextContinueReadableLabelIndex(input.novelId, input.branchId, input.parentTimelineNodeId, db)
-    : labelIndex
-  const readableLabel = formatStoryBranchReadableLabel(nodeType, readableLabelIndex)
-  const parentNode = requireOptionalTimelineNodeInBranchContext({
-    nodeId: input.parentTimelineNodeId,
-    novelId: input.novelId,
-    branchId: input.branchId,
-    label: 'Parent timeline node',
-    db,
+  const { continueBlock, timelineNode } = await db.withTransaction(() => {
+    const labelIndex = getNextStoryTimelineLabelIndex(input.novelId, input.branchId, nodeType, db)
+    const readableLabelIndex = nodeType === 'continue_block' && input.parentTimelineNodeId
+      ? getNextContinueReadableLabelIndex(input.novelId, input.branchId, input.parentTimelineNodeId, db)
+      : labelIndex
+    const readableLabel = formatStoryBranchReadableLabel(nodeType, readableLabelIndex)
+    const parentNode = requireOptionalTimelineNodeInBranchContext({
+      nodeId: input.parentTimelineNodeId,
+      novelId: input.novelId,
+      branchId: input.branchId,
+      label: 'Parent timeline node',
+      db,
+    })
+    const readableLineageLabel = buildChildReadableLineageLabel(parentNode, readableLabel)
+    const title = buildContinueBlockTitle({
+      readableLineageLabel,
+      titleHint: input.titleHint,
+      userInstruction: input.userInstruction,
+      selectedText: input.selectedText,
+    })
+    const subtitle = buildContinueBlockSubtitle({ subtitleHint: input.subtitleHint, userInstruction: input.userInstruction })
+    const insertedContinueBlock = insertContinueBlockWithInitialRevision({
+      id: uid('continue-block'),
+      novelId: input.novelId,
+      branchId: input.branchId,
+      parentTimelineNodeId: input.parentTimelineNodeId ?? null,
+      sourceChapterNo: input.sourceChapterNo,
+      title,
+      subtitle,
+      userInstruction: input.userInstruction,
+      selectedText: input.selectedText,
+      originalText: input.originalText,
+      latestText: input.generatedText,
+      inputTokens: input.inputTokens ?? null,
+      outputTokens: input.outputTokens ?? null,
+      latestRevisionNo: 1,
+      status: 'active',
+    }, db)
+
+    if (!insertedContinueBlock) {
+      throw new Error('Failed to create continue block')
+    }
+
+    const insertedTimelineNode = createStoryTimelineNode({
+      id: uid('timeline-node'),
+      novelId: input.novelId,
+      branchId: input.branchId,
+      nodeType,
+      labelIndex,
+      readableLabel,
+      readableLineageLabel,
+      anchorChapterNo: input.sourceChapterNo,
+      title,
+      subtitle,
+      parentNodeId: input.parentTimelineNodeId ?? null,
+      sourceChapterNo: input.sourceChapterNo,
+      targetChapterNo: null,
+      chapterId: null,
+      continueBlockId: insertedContinueBlock.id,
+      whatIfSessionId: null,
+      futureJumpRunId: null,
+      laneIndex: 0,
+      colorToken: 'fuchsia',
+      status: insertedContinueBlock.status,
+    }, db)
+
+    if (!insertedTimelineNode) {
+      throw new Error('Failed to create continue block timeline node')
+    }
+
+    return { continueBlock: insertedContinueBlock, timelineNode: insertedTimelineNode }
   })
-  const readableLineageLabel = buildChildReadableLineageLabel(parentNode, readableLabel)
-  const title = buildContinueBlockTitle({
-    readableLineageLabel,
-    titleHint: input.titleHint,
-    userInstruction: input.userInstruction,
-    selectedText: input.selectedText,
-  })
-  const subtitle = buildContinueBlockSubtitle({ subtitleHint: input.subtitleHint, userInstruction: input.userInstruction })
-  const continueBlock = await createContinueBlockWithInitialRevision({
-    id: uid('continue-block'),
-    novelId: input.novelId,
-    branchId: input.branchId,
-    parentTimelineNodeId: input.parentTimelineNodeId ?? null,
-    sourceChapterNo: input.sourceChapterNo,
-    title,
-    subtitle,
-    userInstruction: input.userInstruction,
-    selectedText: input.selectedText,
-    originalText: input.originalText,
-    latestText: input.generatedText,
-    inputTokens: input.inputTokens ?? null,
-    outputTokens: input.outputTokens ?? null,
-    latestRevisionNo: 1,
-    status: 'active',
-  }, db)
-
-  if (!continueBlock) {
-    throw new Error('Failed to create continue block')
-  }
-
-  const timelineNode = createStoryTimelineNode({
-    id: uid('timeline-node'),
-    novelId: input.novelId,
-    branchId: input.branchId,
-    nodeType,
-    labelIndex,
-    readableLabel,
-    readableLineageLabel,
-    anchorChapterNo: input.sourceChapterNo,
-    title,
-    subtitle,
-    parentNodeId: input.parentTimelineNodeId ?? null,
-    sourceChapterNo: input.sourceChapterNo,
-    targetChapterNo: null,
-    chapterId: null,
-    continueBlockId: continueBlock.id,
-    whatIfSessionId: null,
-    futureJumpRunId: null,
-    laneIndex: 0,
-    colorToken: 'fuchsia',
-    status: continueBlock.status,
-  }, db)
-
-  if (!timelineNode) {
-    throw new Error('Failed to create continue block timeline node')
-  }
 
   return continueBlockMutationResponseSchema.parse({
     continueBlockId: continueBlock.id,
@@ -151,11 +155,11 @@ export async function createContinueBlockFromRewrite(rawInput: ContinueBlockCrea
 
 export async function regenerateContinueBlock(rawInput: ContinueBlockRegenerateRequest): Promise<ContinueBlockMutationResponse> {
   const input = continueBlockRegenerateRequestSchema.parse(rawInput)
-  const existing = findContinueBlockById(input.continueBlockId)
-  if (!existing) {
+  const db = createNovelDatabaseAccess(input.novelId)
+  const existing = findContinueBlockById(input.continueBlockId, db)
+  if (!existing || existing.novelId !== input.novelId || existing.branchId !== input.branchId) {
     throw new Error(`Continue block not found: ${input.continueBlockId}`)
   }
-  const db = createNovelDatabaseAccess(existing.novelId)
 
   const timelineNode = findStoryTimelineNodeByContinueBlockId(existing.id, db)
   const labelIndex = timelineNode?.labelIndex ?? existing.latestRevisionNo
