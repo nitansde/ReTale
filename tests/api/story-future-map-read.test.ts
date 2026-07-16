@@ -4,15 +4,18 @@ import { FUTURE_MAP_MISSING_SUMMARY_FALLBACK } from '@/lib/story-branch-types'
 import { initializeDatabase } from '@/lib/server/sqlite'
 import { persistWorkspaceRuntimeState } from '@/lib/server/workspace-resilience'
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
+import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
+const overrideDisposers: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 
 function createTestDatabase(prefix: string) {
   const tempDatabase = createTempDatabaseCopy(prefix)
   cleanups.push(tempDatabase.cleanup)
   const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+  overrideDisposers.push(registerLegacyNovelDatabase(database, ['novel-001', 'novel-002']))
   globalForSqlite.sqlite = database
   return database
 }
@@ -135,7 +138,7 @@ function seedFutureJumpDetailFixture(database: DatabaseSync) {
   ).run('future-jump-revision-002', 'jump-run-001', 2, 'revise', '更虐一点', '新的桥接摘要', '新的未来节点正文')
 }
 
-function seedWorkspaceDirectChapterFallbackFixture(database: DatabaseSync) {
+async function seedWorkspaceDirectChapterFallbackFixture(database: DatabaseSync) {
   database.prepare(
     `INSERT INTO NovelRecord (id, title, author, sourceType)
      VALUES (?, ?, ?, ?)`
@@ -222,10 +225,17 @@ function seedWorkspaceDirectChapterFallbackFixture(database: DatabaseSync) {
 afterEach(() => {
   vi.resetModules()
 
+  while (overrideDisposers.length) {
+    overrideDisposers.pop()?.()
+  }
+  resetNovelDatabaseTestState()
+
   if (globalForSqlite.sqlite) {
     try {
       ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
-    } catch {
+    } catch (_closeError) {
+      void _closeError
+      // Ignore close failures so teardown can continue removing fixture files.
     }
     delete globalForSqlite.sqlite
   }
@@ -377,7 +387,7 @@ describe('story-future-map-read', () => {
 
   it('keeps direct-chapter options available from workspace chapters even when persisted summaries and anchors are missing', async () => {
     const database = createTestDatabase('retale-story-future-map-workspace-fallback')
-    seedWorkspaceDirectChapterFallbackFixture(database)
+    await seedWorkspaceDirectChapterFallbackFixture(database)
     vi.resetModules()
 
     const { GET: getFutureMap } = await import('@/app/api/story-future-map/route')
