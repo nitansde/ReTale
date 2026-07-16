@@ -1136,6 +1136,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
       'graph-edge-patch',
       page.request.patch(`/api/graph/edge/${graphFixtures.edgeId}`, {
         data: {
+          novelId: identity.novelId,
           linkType: 'bond',
           label: 'Task 12 Graph Link Updated',
           description: 'Task 12 graph edge edited through browser-context request.',
@@ -1201,7 +1202,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
 
     const graphRejectResponse = await timedRequest(
       'graph-edge-reject',
-      page.request.post(`/api/graph/edge/${graphFixtures.edgeId}/reject`),
+      page.request.post(`/api/graph/edge/${graphFixtures.edgeId}/reject`, { data: { novelId: identity.novelId } }),
       (response) => response.status(),
       apiTimings,
     )
@@ -1225,7 +1226,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
 
     const graphConfirmResponse = await timedRequest(
       'graph-edge-confirm',
-      page.request.post(`/api/graph/edge/${graphFixtures.edgeId}/confirm`),
+      page.request.post(`/api/graph/edge/${graphFixtures.edgeId}/confirm`, { data: { novelId: identity.novelId } }),
       (response) => response.status(),
       apiTimings,
     )

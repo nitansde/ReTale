@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { editEntityLink } from '@/lib/server/graph-store'
+import { runWithNovelDatabaseAccess } from '@/lib/server/database-access'
+import { editEntityLink, loadEntityLinkById } from '@/lib/server/graph-store'
 
 type RouteContext = {
   params: Promise<{ edgeId: string }>
@@ -65,6 +66,11 @@ export async function PATCH(request: Request, context: RouteContext) {
       return NextResponse.json({ ok: false, error: 'Invalid JSON body' }, { status: 400 })
     }
 
+    const novelId = String(body.novelId ?? '').trim()
+    if (!novelId) {
+      return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+    }
+
     if (Object.prototype.hasOwnProperty.call(body, 'validToChapter')) {
       return NextResponse.json({ ok: false, error: 'validToChapter is no longer supported; use validUntilChapter' }, { status: 400 })
     }
@@ -84,16 +90,21 @@ export async function PATCH(request: Request, context: RouteContext) {
       return NextResponse.json({ ok: false, error: 'validUntilChapter must be greater than validFromChapter' }, { status: 400 })
     }
 
-    const edge = await editEntityLink({
-      id: normalizedEdgeId,
-      linkType: normalizedLinkType,
-      label: normalizeOptionalText(body.label),
-      description: normalizeOptionalText(body.description),
-      polarity: normalizeOptionalPolarity(body.polarity),
-      strength: normalizeOptionalStrength(body.strength),
-      validFromChapter: typeof validFromChapter === 'number' ? validFromChapter : undefined,
-      validUntilChapter,
-      includeByDefault: normalizeOptionalBoolean(body.includeByDefault, 'includeByDefault'),
+    const edge = await runWithNovelDatabaseAccess(novelId, async () => {
+      const existing = loadEntityLinkById(normalizedEdgeId)
+      if (!existing || existing.novelId !== novelId) return null
+
+      return editEntityLink({
+        id: normalizedEdgeId,
+        linkType: normalizedLinkType,
+        label: normalizeOptionalText(body.label),
+        description: normalizeOptionalText(body.description),
+        polarity: normalizeOptionalPolarity(body.polarity),
+        strength: normalizeOptionalStrength(body.strength),
+        validFromChapter: typeof validFromChapter === 'number' ? validFromChapter : undefined,
+        validUntilChapter,
+        includeByDefault: normalizeOptionalBoolean(body.includeByDefault, 'includeByDefault'),
+      })
     })
 
     if (!edge) {
@@ -106,7 +117,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to edit graph edge'
-    const status = message.includes('Expected exactly one matching KnowledgeRelation') ? 409 : message.includes('must') || message.includes('Invalid JSON body') ? 400 : 500
+    const status = message.includes('Expected exactly one matching KnowledgeRelation') ? 409 : message.includes('must') || message.includes('Invalid JSON body') || message.includes('Invalid novel ID') ? 400 : 500
     return NextResponse.json({ ok: false, error: message }, { status })
   }
 }
