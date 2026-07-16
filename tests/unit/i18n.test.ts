@@ -8,7 +8,7 @@ describe('i18n dictionaries', () => {
 
   it('formats translated messages with placeholders', () => {
     expect(getMessage('zh', 'library.importedAndOpening', { count: 3 })).toContain('3')
-    expect(getMessage('en', 'library.title')).toBe('Library')
+    expect(getMessage('en', 'library.title')).toBe('ReTale Library')
     expect(getMessage('en', 'chapterNav.showMore', { count: 8 })).toContain('8')
   })
 })
