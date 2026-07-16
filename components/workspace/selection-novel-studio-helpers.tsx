@@ -1174,21 +1174,29 @@ export async function callChapterGraphContextApi(url: string): Promise<ChapterGr
   return response.json()
 }
 
-export async function callGraphEdgeConfirmApi(edgeId: string) {
-  const response = await fetch(`/api/graph/edge/${edgeId}/confirm`, { method: 'POST' })
+export async function callGraphEdgeConfirmApi(edgeId: string, novelId: string) {
+  const response = await fetch(`/api/graph/edge/${edgeId}/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ novelId }),
+  })
   return response.json()
 }
 
-export async function callGraphEdgeRejectApi(edgeId: string) {
-  const response = await fetch(`/api/graph/edge/${edgeId}/reject`, { method: 'POST' })
+export async function callGraphEdgeRejectApi(edgeId: string, novelId: string) {
+  const response = await fetch(`/api/graph/edge/${edgeId}/reject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ novelId }),
+  })
   return response.json()
 }
 
-export async function callGraphEdgeEditApi(edgeId: string, payload: Record<string, unknown>) {
+export async function callGraphEdgeEditApi(edgeId: string, novelId: string, payload: Record<string, unknown>) {
   const response = await fetch(`/api/graph/edge/${edgeId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, novelId }),
   })
   return response.json()
 }

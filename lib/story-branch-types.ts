@@ -500,6 +500,8 @@ export type ContinueBlockCreateRequest = {
 }
 
 export type ContinueBlockRegenerateRequest = {
+  novelId: string
+  branchId: string
   continueBlockId: string
   generatedText: string
   userInstruction: string
