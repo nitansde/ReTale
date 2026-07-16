@@ -1,14 +1,15 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
-import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 import type { AISettings } from '@/lib/types'
 
 const EVIDENCE_DIR = path.join(process.cwd(), '.sisyphus/evidence/task-7-what-if')
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const originalDataDir = process.env.RETALE_DATA_DIR
 
 function seedWhatIfFixture(database: DatabaseSync) {
   database.prepare(
@@ -59,7 +60,7 @@ function snapshotAuthoritativeState(database: DatabaseSync) {
   }
 }
 
-afterEach(() => {
+afterEach(async () => {
   if (globalForSqlite.sqlite) {
     try {
       ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
@@ -68,6 +69,11 @@ afterEach(() => {
     delete globalForSqlite.sqlite
   }
 
+  const resolver = await import('@/lib/server/db-resolver')
+  resolver.resetResolvedDatabasesForTests()
+  if (originalDataDir === undefined) delete process.env.RETALE_DATA_DIR
+  else process.env.RETALE_DATA_DIR = originalDataDir
+
   while (cleanups.length) {
     cleanups.pop()?.()
   }
@@ -75,10 +81,13 @@ afterEach(() => {
 
 describe('what-if create API', () => {
   it('persists speculative session, deltas, and timeline node without mutating authoritative storage', async () => {
-    const tempDatabase = createTempDatabaseCopy('retale-what-if-create')
-    cleanups.push(tempDatabase.cleanup)
-
-    const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-what-if-create-'))
+    cleanups.push(() => fs.rmSync(directory, { recursive: true, force: true }))
+    const dataRoot = path.join(directory, 'data')
+    const databasePath = path.join(dataRoot, 'novels', 'novel-001', 'novel.db')
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true })
+    process.env.RETALE_DATA_DIR = dataRoot
+    const database = initializeDatabase(new DatabaseSync(databasePath))
     globalForSqlite.sqlite = database
     seedWhatIfFixture(database)
 
