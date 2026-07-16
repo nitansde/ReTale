@@ -2,21 +2,24 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PresetCompatMacroDiagnostic } from '@/lib/preset-compat/macro-context'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
+import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 import type { AISettings } from '@/lib/types'
 
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync; fetch?: typeof fetch }
+const databases: DatabaseSync[] = []
+const novelDatabaseDisposers: Array<() => void> = []
 
-async function createTestDatabase(prefix: string) {
+async function createTestDatabase(prefix: string, novelIds: readonly string[]) {
   const tempDatabase = createTempDatabaseCopy(prefix)
   cleanups.push(tempDatabase.cleanup)
   const database = new DatabaseSync(tempDatabase.dbPath)
-  globalForSqlite.sqlite = database
+  databases.push(database)
   vi.resetModules()
 
   const { initializeDatabase } = await import('@/lib/server/sqlite')
   initializeDatabase(database)
+  novelDatabaseDisposers.push(registerLegacyNovelDatabase(database, novelIds))
   return database
 }
 
@@ -436,12 +439,16 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.resetModules()
 
-  if (globalForSqlite.sqlite) {
+  while (novelDatabaseDisposers.length) {
+    novelDatabaseDisposers.pop()?.()
+  }
+  resetNovelDatabaseTestState()
+
+  while (databases.length) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databases.pop() as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
   }
 
   while (cleanups.length) {
@@ -458,7 +465,7 @@ describe('preset compat future jump runtime', () => {
       loadStoredPresetCompatLibrary: () => createRuntimeLibrary(),
     }))
 
-    const database = await createTestDatabase('retale-preset-compat-future-jump')
+    const database = await createTestDatabase('retale-preset-compat-future-jump', ['novel-001'])
     seedFutureJumpFixture(database)
 
     const bridgeSummary = '桥'.repeat(350)
@@ -565,7 +572,7 @@ describe('preset compat future jump runtime', () => {
       loadStoredPresetCompatLibrary: () => createRuntimeLibrary(),
     }))
 
-    const database = await createTestDatabase('retale-preset-compat-fail-closed')
+    const database = await createTestDatabase('retale-preset-compat-fail-closed', ['novel-whatif'])
     seedWhatIfFixture(database)
 
     const fetchMock = vi.fn()
@@ -691,7 +698,7 @@ describe('preset compat future jump runtime', () => {
       loadStoredPresetCompatLibrary: () => createMacroRuntimeLibrary(),
     }))
 
-    const database = await createTestDatabase('retale-preset-compat-future-jump-macro-runtime')
+    const database = await createTestDatabase('retale-preset-compat-future-jump-macro-runtime', ['novel-001'])
     seedFutureJumpFixture(database)
 
     const bridgeSummary = '桥'.repeat(350)
