@@ -1,15 +1,22 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
-import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const originalDataDir = process.env.RETALE_DATA_DIR
 
 function createTestDatabase(prefix: string) {
-  const tempDatabase = createTempDatabaseCopy(prefix)
-  cleanups.push(tempDatabase.cleanup)
-  const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
+  cleanups.push(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const dataRoot = path.join(directory, 'data')
+  const databasePath = path.join(dataRoot, 'novels', 'novel-001', 'novel.db')
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true })
+  process.env.RETALE_DATA_DIR = dataRoot
+  const database = initializeDatabase(new DatabaseSync(databasePath))
   globalForSqlite.sqlite = database
   return database
 }
@@ -172,7 +179,7 @@ function seedTimelineFixture(database: DatabaseSync) {
   ).run('jump_fixture_001', 'novel-001', 'novel-001:main', 'future_jump', 1, 100, 'RE-01, JUMP-01 第100章', '跳到被绑走后的未来', 'rewrite_fixture_001', 10, 100, 'chapter-100', null, null, 'jump-run-001', 1, 'violet', 'generated')
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.resetModules()
 
   if (globalForSqlite.sqlite) {
@@ -182,6 +189,11 @@ afterEach(() => {
     }
     delete globalForSqlite.sqlite
   }
+
+  const resolver = await import('@/lib/server/db-resolver')
+  resolver.resetResolvedDatabasesForTests()
+  if (originalDataDir === undefined) delete process.env.RETALE_DATA_DIR
+  else process.env.RETALE_DATA_DIR = originalDataDir
 
   while (cleanups.length) {
     cleanups.pop()?.()
