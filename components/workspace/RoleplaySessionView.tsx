@@ -61,6 +61,8 @@ async function loadRoleplaySessionDetail(input: {
 }
 
 async function appendRoleplayMessage(input: {
+  novelId: string
+  branchId: string
   sessionId: string
   role: 'user' | 'assistant'
   content: string
@@ -81,6 +83,8 @@ async function appendRoleplayMessage(input: {
 }
 
 async function createLatestAssistantVariant(input: {
+  novelId: string
+  branchId: string
   sessionId: string
   content: string
   parentMessageId?: string | null
@@ -357,6 +361,8 @@ export function RoleplaySessionView(props: {
 
     try {
       const userMessage = normalizeMessage(await appendRoleplayMessage({
+        novelId: props.novelId,
+        branchId: props.branchId,
         sessionId: detail.id,
         role: 'user',
         content: userContent,
@@ -399,6 +405,8 @@ export function RoleplaySessionView(props: {
       }
 
       await appendRoleplayMessage({
+        novelId: props.novelId,
+        branchId: props.branchId,
         sessionId: detail.id,
         role: 'assistant',
         content: assistantContent,
@@ -457,6 +465,8 @@ export function RoleplaySessionView(props: {
       }
 
       await createLatestAssistantVariant({
+        novelId: props.novelId,
+        branchId: props.branchId,
         sessionId: detail.id,
         content: assistantContent,
         parentMessageId: parentUser.id,

@@ -174,11 +174,16 @@ describe('RoleplaySessionView', () => {
 
       if (url === '/api/roleplay/sessions/roleplay-session-001/messages' && init?.method === 'POST') {
         const body = JSON.parse(String(init.body)) as {
+          novelId: string
+          branchId: string
           role: 'user' | 'assistant'
           content: string
           parentMessageId?: string | null
           forkedFromMessageId?: string | null
         }
+
+        expect(body.novelId).toBe('novel-001')
+        expect(body.branchId).toBe('novel-001:main')
 
         if (body.role === 'user') {
           const userMessage = buildMessage({

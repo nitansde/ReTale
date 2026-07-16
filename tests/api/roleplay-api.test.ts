@@ -7,6 +7,7 @@ import { initializeDatabase } from '@/lib/server/sqlite'
 
 const createdDirectories: string[] = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const originalDataDir = process.env.RETALE_DATA_DIR
 
 const FIXTURE_IDS = {
   novelId: 'novel-roleplay-001',
@@ -20,14 +21,14 @@ const FIXTURE_IDS = {
   futureJumpRunId: 'jump-roleplay-100',
 } as const
 
-function makeTempDatabasePath(prefix: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
-  createdDirectories.push(directory)
-  return path.join(directory, 'roleplay-api.db')
-}
-
 function createTestDatabase(prefix: string) {
-  const database = initializeDatabase(new DatabaseSync(makeTempDatabasePath(prefix)))
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-data-`))
+  createdDirectories.push(directory)
+  const dataRoot = path.join(directory, 'data')
+  const databasePath = path.join(dataRoot, 'novels', FIXTURE_IDS.novelId, 'novel.db')
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true })
+  process.env.RETALE_DATA_DIR = dataRoot
+  const database = initializeDatabase(new DatabaseSync(databasePath))
   globalForSqlite.sqlite = database
   return database
 }
@@ -275,11 +276,11 @@ function createMessageRequest(sessionId: string, body: Record<string, unknown>) 
   return new Request(`http://localhost/api/roleplay/sessions/${sessionId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ novelId: FIXTURE_IDS.novelId, branchId: FIXTURE_IDS.branchId, ...body }),
   })
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks()
   vi.resetModules()
 
@@ -290,6 +291,11 @@ afterEach(() => {
     }
     delete globalForSqlite.sqlite
   }
+
+  const resolver = await import('@/lib/server/db-resolver')
+  resolver.resetResolvedDatabasesForTests()
+  if (originalDataDir === undefined) delete process.env.RETALE_DATA_DIR
+  else process.env.RETALE_DATA_DIR = originalDataDir
 
   while (createdDirectories.length) {
     const directory = createdDirectories.pop()
@@ -589,7 +595,7 @@ describe('roleplay session API', () => {
       { params: Promise.resolve({ sessionId: 'missing-session' }) }
     )
     expect(appendResponse.status).toBe(404)
-    await expect(appendResponse.json()).resolves.toEqual({ ok: false, error: 'Roleplay session not found: missing-session' })
+    await expect(appendResponse.json()).resolves.toEqual({ ok: false, error: 'Roleplay session not found for the requested branch context' })
   })
 
   it('rejects invalid source timeline ids without creating a session or orphan timeline node', async () => {
@@ -621,5 +627,172 @@ describe('roleplay session API', () => {
     await expect(response.json()).resolves.toEqual({ ok: false, error: 'Source timeline node not found: missing-timeline-node' })
     expect((database.prepare('SELECT COUNT(*) AS count FROM roleplay_sessions').get() as { count: number }).count).toBe(beforeSessionCount)
     expect((database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes').get() as { count: number }).count).toBe(beforeTimelineNodeCount)
+  })
+
+  it('rolls back roleplay session creation when its timeline node insert fails', async () => {
+    const database = createTestDatabase('retale-roleplay-api-atomic-rollback')
+    createFixture(database)
+    database.exec(`
+      CREATE TRIGGER fail_roleplay_timeline_insert
+      BEFORE INSERT ON story_timeline_nodes
+      WHEN NEW.roleplay_session_id IS NOT NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'forced roleplay timeline failure');
+      END;
+    `)
+    vi.resetModules()
+
+    const { POST: createSession } = await import('@/app/api/roleplay/sessions/route')
+    const response = await createSession(createSessionRequest({
+      novelId: FIXTURE_IDS.novelId,
+      branchId: FIXTURE_IDS.branchId,
+      title: 'RP-回滚验证',
+      sourceChapterId: FIXTURE_IDS.chapterId,
+      sourceChapterNo: 12,
+      sourceChapterTitle: '第12章 夜谈',
+      sourceTimelineNodeId: FIXTURE_IDS.rewriteTimelineNodeId,
+      sourceTimelineNodeType: 'rewrite',
+      sourceSelectedText: '他在窗边停住，迟迟没有开口。',
+      sourceTextSnapshot: 'rewrite 正文：风吹动了窗纸，他还是没有转身。',
+    }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ ok: false, error: 'forced roleplay timeline failure' })
+    expect(database.prepare('SELECT COUNT(*) AS count FROM roleplay_sessions').get()).toMatchObject({ count: 0 })
+    expect(database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes WHERE roleplay_session_id IS NOT NULL').get()).toMatchObject({ count: 0 })
+  })
+
+  it('rolls back variant-group updates when latest-turn variant insertion fails', async () => {
+    const database = createTestDatabase('retale-roleplay-api-variant-rollback')
+    createFixture(database)
+    vi.resetModules()
+
+    const { createRoleplaySession, appendRoleplayMessage, createRoleplayLatestTurnVariant } = await import('@/lib/server/roleplay-store')
+    const { createNovelDatabaseAccess } = await import('@/lib/server/database-access')
+    const db = createNovelDatabaseAccess(FIXTURE_IDS.novelId)
+    const { session } = await createRoleplaySession({
+      id: 'roleplay-variant-rollback-session',
+      novelId: FIXTURE_IDS.novelId,
+      branchId: FIXTURE_IDS.branchId,
+      title: '变体回滚验证',
+      subtitle: null,
+      sourceChapterId: FIXTURE_IDS.chapterId,
+      sourceChapterNo: 12,
+      sourceChapterTitle: '第12章 夜谈',
+      sourceTimelineNodeId: FIXTURE_IDS.rewriteTimelineNodeId,
+      sourceTimelineNodeType: 'rewrite',
+      sourceSelectedText: '他在窗边停住，迟迟没有开口。',
+      sourceTextSnapshot: 'rewrite 正文：风吹动了窗纸，他还是没有转身。',
+      sourceSelectedLineStart: null,
+      sourceSelectedLineEnd: null,
+      status: 'active',
+    }, db)
+    const originalMessage = await appendRoleplayMessage({
+      id: 'roleplay-variant-rollback-original',
+      sessionId: session.id,
+      role: 'assistant',
+      content: '原始助手消息',
+      parentMessageId: null,
+      forkedFromMessageId: null,
+      variantGroupId: null,
+      status: 'active',
+    }, db)
+    database.exec(`
+      CREATE TRIGGER fail_roleplay_variant_insert
+      BEFORE INSERT ON roleplay_messages
+      WHEN NEW.content = '强制失败的变体'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced roleplay variant failure');
+      END;
+    `)
+
+    await expect(createRoleplayLatestTurnVariant({
+      sessionId: session.id,
+      role: 'assistant',
+      content: '强制失败的变体',
+    }, db)).rejects.toThrow('forced roleplay variant failure')
+
+    expect(database.prepare('SELECT COUNT(*) AS count FROM roleplay_messages WHERE session_id = ?').get(session.id)).toMatchObject({ count: 1 })
+    expect(database.prepare('SELECT variant_group_id FROM roleplay_messages WHERE id = ?').get(originalMessage.id)).toMatchObject({ variant_group_id: null })
+  })
+
+  it('serializes concurrent session, message, and latest-turn variant allocations and returns each inserted variant', async () => {
+    const database = createTestDatabase('retale-roleplay-api-concurrent-allocation')
+    createFixture(database)
+    vi.resetModules()
+
+    const { createRoleplaySession, appendRoleplayMessage, createRoleplayLatestTurnVariant } = await import('@/lib/server/roleplay-store')
+    const { createNovelDatabaseAccess } = await import('@/lib/server/database-access')
+    const db = createNovelDatabaseAccess(FIXTURE_IDS.novelId)
+    const createdSessions = await Promise.all(Array.from({ length: 5 }, (_, index) => createRoleplaySession({
+      id: `roleplay-concurrent-session-${index + 1}`,
+      novelId: FIXTURE_IDS.novelId,
+      branchId: FIXTURE_IDS.branchId,
+      title: `并发角色扮演 ${index + 1}`,
+      subtitle: null,
+      sourceChapterId: FIXTURE_IDS.chapterId,
+      sourceChapterNo: 12,
+      sourceChapterTitle: '第12章 夜谈',
+      sourceTimelineNodeId: FIXTURE_IDS.rewriteTimelineNodeId,
+      sourceTimelineNodeType: 'rewrite',
+      sourceSelectedText: '他在窗边停住，迟迟没有开口。',
+      sourceTextSnapshot: 'rewrite 正文：风吹动了窗纸，他还是没有转身。',
+      sourceSelectedLineStart: null,
+      sourceSelectedLineEnd: null,
+      status: 'active',
+    }, db)))
+
+    const timelineLabels = database.prepare(
+      `SELECT label_index
+       FROM story_timeline_nodes
+       WHERE node_type = 'roleplay_session'
+       ORDER BY label_index ASC`
+    ).all() as Array<{ label_index: number }>
+    expect(timelineLabels.map((row) => row.label_index)).toEqual([1, 2, 3, 4, 5])
+
+    const sessionId = createdSessions[0]?.session.id
+    expect(sessionId).toBeTruthy()
+    if (!sessionId) throw new Error('Concurrent roleplay session was not created')
+
+    const appendedMessages = await Promise.all(Array.from({ length: 6 }, (_, index) => appendRoleplayMessage({
+      id: `roleplay-concurrent-message-${index + 1}`,
+      sessionId,
+      role: 'assistant',
+      content: `并发普通消息 ${index + 1}`,
+      parentMessageId: null,
+      forkedFromMessageId: null,
+      variantGroupId: null,
+      status: 'active',
+    }, db)))
+    expect(appendedMessages.map((message) => message.messageIndex).sort((left, right) => left - right)).toEqual([1, 2, 3, 4, 5, 6])
+    expect(appendedMessages.map((message) => message.turnIndex).sort((left, right) => left - right)).toEqual([1, 2, 3, 4, 5, 6])
+
+    const variantContents = Array.from({ length: 5 }, (_, index) => `并发变体 ${index + 1}`)
+    const variants = await Promise.all(variantContents.map((content) => createRoleplayLatestTurnVariant({
+      sessionId,
+      role: 'assistant',
+      content,
+    }, db)))
+    const storedVariants = database.prepare(
+      `SELECT id, content, message_index, turn_index, variant_index
+       FROM roleplay_messages
+       WHERE session_id = ? AND content LIKE '并发变体 %'
+       ORDER BY variant_index ASC`
+    ).all(sessionId) as Array<{
+      id: string
+      content: string
+      message_index: number
+      turn_index: number
+      variant_index: number
+    }>
+
+    expect(storedVariants.map((message) => message.message_index)).toEqual([7, 8, 9, 10, 11])
+    expect(storedVariants.map((message) => message.turn_index)).toEqual([6, 6, 6, 6, 6])
+    expect(storedVariants.map((message) => message.variant_index)).toEqual([2, 3, 4, 5, 6])
+    expect(variants).toHaveLength(variantContents.length)
+    for (const variant of variants) {
+      const stored = storedVariants.find((message) => message.content === variant.content)
+      expect(stored?.id).toBe(variant.id)
+    }
   })
 })

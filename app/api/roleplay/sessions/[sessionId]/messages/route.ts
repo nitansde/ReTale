@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { isNotFoundErrorMessage, jsonError, readJsonObject, requireNonEmptyId, toErrorMessage } from '@/lib/server/api-route'
-import { appendRoleplayMessage, createRoleplayLatestTurnVariant } from '@/lib/server/roleplay-store'
+import { createNovelDatabaseAccess } from '@/lib/server/database-access'
+import { appendRoleplayMessage, createRoleplayLatestTurnVariant, findRoleplaySessionById } from '@/lib/server/roleplay-store'
 import { uid } from '@/lib/utils'
 
 export async function POST(request: Request, context: { params: Promise<{ sessionId: string }> }) {
@@ -8,6 +9,13 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
     const { sessionId: rawSessionId } = await context.params
     const sessionId = requireNonEmptyId(rawSessionId, 'sessionId')
     const body = await readJsonObject(request)
+    const novelId = requireNonEmptyId(String(body.novelId ?? ''), 'novelId')
+    const branchId = requireNonEmptyId(String(body.branchId ?? ''), 'branchId')
+    const db = createNovelDatabaseAccess(novelId)
+    const session = findRoleplaySessionById(sessionId, db)
+    if (!session || session.novelId !== novelId || session.branchId !== branchId) {
+      return jsonError('Roleplay session not found for the requested branch context', 404)
+    }
     const mode = body.mode === 'latest-turn-variant' ? 'latest-turn-variant' : 'append'
 
     const result = mode === 'latest-turn-variant'
@@ -18,7 +26,7 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
         parentMessageId: typeof body.parentMessageId === 'string' ? body.parentMessageId : null,
         forkedFromMessageId: typeof body.forkedFromMessageId === 'string' ? body.forkedFromMessageId : null,
         status: typeof body.status === 'string' ? body.status : 'active',
-      })
+      }, db)
       : await appendRoleplayMessage({
         id: typeof body.id === 'string' && body.id.trim() ? body.id : uid('roleplay-message'),
         sessionId,
@@ -28,7 +36,7 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
         forkedFromMessageId: typeof body.forkedFromMessageId === 'string' ? body.forkedFromMessageId : null,
         variantGroupId: typeof body.variantGroupId === 'string' ? body.variantGroupId : null,
         status: typeof body.status === 'string' ? body.status : 'active',
-      })
+      }, db)
 
     return NextResponse.json(result, { status: 201 })
   } catch (error) {
