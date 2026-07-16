@@ -2,9 +2,11 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
+import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import type { AISettings } from '@/lib/types'
 
 const cleanups: Array<() => void> = []
+const novelDatabaseOverrideDisposers: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
 const originalDataDir = process.env.RETALE_DATA_DIR
@@ -98,15 +100,6 @@ async function createTestDatabase(prefix: string) {
   vi.resetModules()
 
   const sqliteModule = await import('@/lib/server/sqlite')
-  vi.doMock('@/lib/server/db-resolver', async () => {
-    const actual = await vi.importActual<typeof import('@/lib/server/db-resolver')>('@/lib/server/db-resolver')
-    return {
-      ...actual,
-      getNovelDb: () => sqliteModule.sqlite,
-      getNovelLanceDbPath: (novelId: string) => path.join(tempDatabase.directory, `${novelId}.lancedb`),
-      resetResolvedDatabasesForTests: () => undefined,
-    }
-  })
   globalForSqlite.sqlite = sqliteModule.sqlite
 
   return {
@@ -157,6 +150,8 @@ function seedKnowledgeRebuildFixture(database: DatabaseSync, novelKey = 'novel_o
     insertSpan.run(`span-${chapterNo}`, novelId, branchId, chapterId, chapterNo, 1, 1, 0, rawText.length, rawText, 'paragraph', rawText.length)
   }
 
+  novelDatabaseOverrideDisposers.push(registerLegacyNovelDatabase(database, [novelId]))
+
   return { novelId, branchId }
 }
 
@@ -178,13 +173,20 @@ afterEach(() => {
   vi.unmock('@/lib/server/knowledge-extraction')
   vi.unmock('@/lib/server/ollama-local')
   vi.unmock('@/lib/server/retrieval-index')
+  vi.unmock('@/lib/server/database-access')
   vi.doUnmock('@/lib/server/ai-settings')
   vi.doUnmock('@/lib/server/hanlp-bootstrap')
   vi.doUnmock('@/lib/server/hanlp-bootstrap-initializer')
   vi.doUnmock('@/lib/server/knowledge-extraction')
   vi.doUnmock('@/lib/server/ollama-local')
   vi.doUnmock('@/lib/server/retrieval-index')
+  vi.doUnmock('@/lib/server/database-access')
   vi.resetModules()
+
+  while (novelDatabaseOverrideDisposers.length) {
+    novelDatabaseOverrideDisposers.pop()?.()
+  }
+  resetNovelDatabaseTestState()
 
   if (globalForSqlite.sqlite) {
     try {
@@ -235,6 +237,48 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
       errorMessage: expect.stringContaining('无进度更新'),
     })
     expect(payload.taskWatchdog).toMatchObject({ attemptCount: 1, lastAction: 'retried' })
+  })
+
+  it.each([
+    {
+      label: 'main rebuild',
+      startFunction: 'startKnowledgeRebuildForNovel',
+      runFunction: 'runStartedKnowledgeRebuildForNovel',
+    },
+    {
+      label: 'dedicated retrieval rebuild',
+      startFunction: 'startKnowledgeRetrievalRebuildForNovel',
+      runFunction: 'runStartedKnowledgeRetrievalRebuildForNovel',
+    },
+  ] as const)('keeps a queued $label unchanged when its claim transaction fails', async ({ startFunction, runFunction }) => {
+    const { database, queryOne } = await createTestDatabase(`retale-knowledge-${startFunction}-claim-failure`)
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, `novel_${startFunction}_claim_failure`, 1)
+    const starter = await import('@/lib/server/knowledge-rebuild')
+    const started = await starter[startFunction]({ novelId, branchId })
+    const claimError = new Error('forced claim transaction failure')
+
+    vi.resetModules()
+    vi.doMock('@/lib/server/database-access', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/database-access')>()
+      const failClaimTransaction: typeof actual.withTransaction = async () => {
+        throw claimError
+      }
+      return {
+        ...actual,
+        withTransaction: failClaimTransaction,
+      }
+    })
+
+    const worker = await import('@/lib/server/knowledge-rebuild')
+    await expect(worker[runFunction]({ novelId, branchId, jobId: started.jobId })).rejects.toThrow(claimError)
+
+    expect(queryOne<{ status: string; errorMessage: string | null }>(
+      'SELECT status, errorMessage FROM KnowledgeJob WHERE id = ?',
+      started.jobId,
+    )).toEqual({
+      status: 'queued',
+      errorMessage: null,
+    })
   })
 
   it('keeps dedicated retrieval rebuild visible while raw embedding is running, then builds LanceDB', async () => {
@@ -410,6 +454,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     const { database } = await createTestDatabase('retale-knowledge-rebuild-status-telemetry-surface')
     const novelId = `novel_status_${Math.random().toString(36).slice(2, 8)}`
     const branchId = `${novelId}:main`
+    novelDatabaseOverrideDisposers.push(registerLegacyNovelDatabase(database, [novelId]))
 
     vi.doMock('@/lib/server/retrieval-index', async () => await vi.importActual<typeof import('@/lib/server/retrieval-index')>('@/lib/server/retrieval-index'))
 
@@ -938,7 +983,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     )
 
     extractionGate.resolve()
-    await expect(staleRun).rejects.toThrow('Knowledge rebuild aborted')
+    await expect(staleRun).resolves.toBeUndefined()
 
     const finalJob = queryOne<{
       status: string
@@ -967,6 +1012,109 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     })
     expect(extractionCandidate?.status).toBe('extracting')
     expect(queryOne<{ summary: string | null }>('SELECT summary FROM KnowledgeChapter WHERE id = ?', 'chapter-1')?.summary).toBeNull()
+  })
+
+  it('stops a stale detached retrieval rebuild worker after watchdog rotates the attempt id', async () => {
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-retrieval-stale-attempt-rotation')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_retrieval_stale_attempt_rotation', 2)
+    const aiSettings = createMockAISettings()
+    const precomputeGate = createDeferred<void>()
+    let precomputeStarted = false
+    const rebuildBranchRetrievalIndex = vi.fn<typeof import('@/lib/server/retrieval-index').rebuildBranchRetrievalIndex>(
+      async () => ({ rowCount: 2, embeddingBatchCount: 1 }),
+    )
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+      saveAISettings: vi.fn(),
+      maskApiKey: (value: string) => value,
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async () => {
+      const actual = await vi.importActual<typeof import('@/lib/server/retrieval-index')>('@/lib/server/retrieval-index')
+      return {
+        ...actual,
+        precomputeRawTextEmbeddingCache: vi.fn(async () => {
+          precomputeStarted = true
+          await precomputeGate.promise
+          return {
+            totalDocs: 2,
+            completedDocs: 2,
+            cacheHits: 1,
+            cacheMisses: 1,
+            failedDocs: 0,
+            totalBatches: 2,
+            completedBatches: 2,
+            degraded: false,
+            cancelled: false,
+            durationMs: 5,
+          }
+        }),
+        rebuildBranchRetrievalIndex,
+      }
+    })
+
+    const worker = await import('@/lib/server/knowledge-rebuild')
+    const started = await worker.startKnowledgeRetrievalRebuildForNovel({ novelId, branchId, chapterRange: { startChapter: 1, endChapter: 2 } })
+    expect(started.outcome).toBe('queued')
+
+    const staleRun = worker.runStartedKnowledgeRetrievalRebuildForNovel({ novelId, branchId, jobId: started.jobId })
+    await waitForCondition(() => precomputeStarted, 'stale retrieval worker precompute start')
+
+    const runningJob = queryOne<{ payloadJson: string | null }>('SELECT payloadJson FROM KnowledgeJob WHERE id = ?', started.jobId)
+    const runningPayload = JSON.parse(runningJob?.payloadJson ?? '{}') as {
+      branchId?: string
+      taskWatchdog?: { attemptId?: string; attemptCount?: number; lastAction?: string; lastActionAt?: string }
+    }
+    const originalAttemptId = runningPayload.taskWatchdog?.attemptId
+    expect(originalAttemptId).toEqual(expect.any(String))
+
+    const rotatedAttemptId = `${originalAttemptId}-rotated`
+    const rotatedLastActionAt = new Date().toISOString()
+    const rotatedPayload = {
+      ...runningPayload,
+      taskWatchdog: {
+        ...(runningPayload.taskWatchdog ?? {}),
+        attemptId: rotatedAttemptId,
+        attemptCount: 1,
+        lastAction: 'retried',
+        lastActionAt: rotatedLastActionAt,
+      },
+    }
+
+    database.prepare(
+      `UPDATE KnowledgeJob
+         SET status = 'queued', currentStep = ?, progress = ?, errorMessage = ?, payloadJson = ?, updatedAt = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).run(
+      '重新排队检索重试',
+      0.95,
+      'Knowledge retrieval watchdog retried stale worker',
+      JSON.stringify(rotatedPayload),
+      started.jobId,
+    )
+
+    precomputeGate.resolve()
+    await expect(staleRun).resolves.toBeUndefined()
+
+    const finalJob = queryOne<{
+      status: string
+      currentStep: string | null
+      progress: number
+      payloadJson: string | null
+      errorMessage: string | null
+    }>('SELECT status, currentStep, progress, payloadJson, errorMessage FROM KnowledgeJob WHERE id = ?', started.jobId)
+    const finalPayload = JSON.parse(finalJob?.payloadJson ?? '{}') as {
+      taskWatchdog?: { attemptId?: string; attemptCount?: number; lastAction?: string; lastActionAt?: string }
+    }
+
+    expect(finalJob).toMatchObject({
+      status: 'queued',
+      currentStep: '重新排队检索重试',
+      progress: 0.95,
+      errorMessage: 'Knowledge retrieval watchdog retried stale worker',
+    })
+    expect(finalPayload.taskWatchdog).toEqual(rotatedPayload.taskWatchdog)
+    expect(rebuildBranchRetrievalIndex).not.toHaveBeenCalled()
   })
 
   it('finishes ranged SQLite rebuilds without waiting for retrieval phases', async () => {

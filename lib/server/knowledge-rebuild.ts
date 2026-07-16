@@ -1864,6 +1864,7 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
     throw new Error('Failed to create retrieval rebuild job')
   }
 
+  let claimedAttemptId: string | null = null
   try {
     const claimedProgress = Math.max(0.94, queryOne<{ progress: number }>('SELECT progress FROM KnowledgeJob WHERE id = ?', job.id)?.progress ?? 0.94)
     const claimedJob = await claimQueuedKnowledgeJob({
@@ -1886,7 +1887,8 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
       throw new Error('Claimed retrieval rebuild job is missing an attempt id')
     }
 
-    return runKnowledgeJobWithAttempt(job.id, claimedJob.attemptId, async () => {
+    claimedAttemptId = claimedJob.attemptId
+    return await runKnowledgeJobWithAttempt(job.id, claimedAttemptId, async () => {
       const initialState = getKnowledgeRebuildJobState(job.id)
       const defaultChapterRange = resolveKnowledgeRebuildChapterRange({
         payload: {
@@ -1966,8 +1968,12 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
       return { jobId: job.id, outcome: 'completed' as const }
     })
   } catch (error) {
+    if (!claimedAttemptId) {
+      throw error
+    }
+
     if (error instanceof KnowledgeRebuildPausedError) {
-      updateKnowledgeJob(job.id, { status: 'paused', currentStep: '已暂停' })
+      updateKnowledgeJob(job.id, { status: 'paused', currentStep: '已暂停' }, { expectedAttemptId: claimedAttemptId })
       return { jobId: job.id, outcome: 'paused' as const }
     }
 
@@ -1995,14 +2001,14 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
           appliedAliasDiscoveryCount: 0,
           stageStartedAtByKey: {},
         },
-      })
+      }, { expectedAttemptId: claimedAttemptId })
       return { jobId: job.id, outcome: 'aborted' as const }
     }
 
     updateKnowledgeJob(job.id, {
       status: 'failed',
       errorMessage: error instanceof Error ? error.message : 'Knowledge retrieval rebuild failed',
-    })
+    }, { expectedAttemptId: claimedAttemptId })
     throw error
   }
 }
@@ -6066,6 +6072,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
     throw new Error('Failed to create knowledge job')
   }
 
+  let claimedAttemptId: string | null = null
   try {
     let jobState = getKnowledgeRebuildJobState(job.id)
     const claimedProgress = Math.max(0.05, queryOne<{ progress: number }>('SELECT progress FROM KnowledgeJob WHERE id = ?', job.id)?.progress ?? 0)
@@ -6089,7 +6096,8 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
       throw new Error('Claimed knowledge rebuild job is missing an attempt id')
     }
 
-    return runKnowledgeJobWithAttempt(job.id, claimedJob.attemptId, async () => {
+    claimedAttemptId = claimedJob.attemptId
+    return await runKnowledgeJobWithAttempt(job.id, claimedAttemptId, async () => {
       const chapters = queryAll<KnowledgeChapterRow>(
         'SELECT id, novelId, branchId, chapterNo, title, rawText, summary, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? ORDER BY chapterNo ASC',
         params.novelId,
@@ -6589,8 +6597,12 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
       return { jobId: job.id, outcome: 'completed' as const }
     })
   } catch (error) {
+    if (!claimedAttemptId) {
+      throw error
+    }
+
     if (error instanceof KnowledgeRebuildPausedError) {
-      updateKnowledgeJob(job.id, { status: 'paused', currentStep: '已暂停' })
+      updateKnowledgeJob(job.id, { status: 'paused', currentStep: '已暂停' }, { expectedAttemptId: claimedAttemptId })
       return { jobId: job.id, outcome: 'paused' as const }
     }
 
@@ -6618,14 +6630,14 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
            appliedAliasDiscoveryCount: 0,
            stageStartedAtByKey: {},
          },
-       })
+       }, { expectedAttemptId: claimedAttemptId })
       return { jobId: job.id, outcome: 'aborted' as const }
     }
 
     updateKnowledgeJob(job.id, {
       status: 'failed',
       errorMessage: error instanceof Error ? error.message : 'Knowledge rebuild failed',
-    })
+    }, { expectedAttemptId: claimedAttemptId })
     throw error
   }
   })
