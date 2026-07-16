@@ -42,6 +42,7 @@ dev.db-wal
 backups/
 
 # local verification artifacts
+/docs/bug-review-and-fixes-*.md
 .playwright-mcp/
 __pycache__/
 *.log
