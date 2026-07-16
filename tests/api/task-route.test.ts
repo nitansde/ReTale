@@ -1,24 +1,33 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
-const originalDatabaseUrl = process.env.DATABASE_URL
+let controlDatabase: DatabaseSync | null = null
 const originalTaskStaleTimeoutMs = process.env.RETALE_TASK_STALE_TIMEOUT_MS
 const originalTaskMaxRetries = process.env.RETALE_TASK_MAX_RETRIES
 
-async function createTestDatabase(prefix: string) {
+function createTestDatabase(prefix: string, novelIds: readonly string[]) {
   const tempDatabase = createTempDatabaseCopy(prefix)
-  cleanups.push(tempDatabase.cleanup)
+  const database = new DatabaseSync(tempDatabase.dbPath)
+  const unregister = registerLegacyNovelDatabase(database, novelIds)
+  cleanups.push(() => {
+    unregister()
+    database.close()
+    tempDatabase.cleanup()
+  })
 
-  process.env.DATABASE_URL = tempDatabase.dbPath
-  vi.resetModules()
+  return { database }
+}
 
-  const sqliteModule = await import('@/lib/server/sqlite')
-  globalForSqlite.sqlite = sqliteModule.sqlite
-
-  return { database: sqliteModule.sqlite }
+async function activateNovel(novelId: string) {
+  const [{ getControlDb }, { writeActiveWorkspaceNovelId }] = await Promise.all([
+    import('@/lib/server/db-resolver'),
+    import('@/lib/server/persistence'),
+  ])
+  writeActiveWorkspaceNovelId(novelId)
+  controlDatabase = getControlDb()
 }
 
 async function loadTaskRoute() {
@@ -91,16 +100,15 @@ function createAbortRequest(body: Record<string, unknown>) {
 }
 
 afterEach(() => {
-  process.env.DATABASE_URL = originalDatabaseUrl
   process.env.RETALE_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
   process.env.RETALE_TASK_MAX_RETRIES = originalTaskMaxRetries
 
+  controlDatabase?.prepare('DELETE FROM AppSetting WHERE key = ?').run('WORKSPACE_ACTIVE_NOVEL_ID')
+  controlDatabase = null
+  resetNovelDatabaseTestState()
+
   for (const cleanup of cleanups.splice(0)) {
     cleanup()
-  }
-
-  if (globalForSqlite.sqlite) {
-    delete globalForSqlite.sqlite
   }
 
   vi.restoreAllMocks()
@@ -111,9 +119,11 @@ afterEach(() => {
 
 describe('/api/task', () => {
   it('returns only supported active persisted jobs ordered by recency', async () => {
-    const { database } = await createTestDatabase('retale-task-route')
+    const { database } = createTestDatabase('retale-task-route-active', ['novel-background-one'])
+    const { database: siblingDatabase } = createTestDatabase('retale-task-route-sibling', ['novel-background-two'])
+    await activateNovel('novel-background-one')
     const { mainBranchId: novelOneBranchId } = seedNovel(database, 'novel-background-one', 'Background One')
-    const { mainBranchId: novelTwoBranchId } = seedNovel(database, 'novel-background-two', 'Background Two')
+    const { mainBranchId: novelTwoBranchId } = seedNovel(siblingDatabase, 'novel-background-two', 'Background Two')
 
     insertJob(database, {
       id: 'job_extract_running_visible',
@@ -143,13 +153,13 @@ describe('/api/task', () => {
 
     insertJob(database, {
       id: 'job_rewrite_queued_visible',
-      novelId: 'novel-background-two',
-      branchId: novelTwoBranchId,
+      novelId: 'novel-background-one',
+      branchId: novelOneBranchId,
       jobType: 'rewrite_generation',
       status: 'queued',
       progress: 0.1,
       currentStep: '已创建可恢复魔改任务',
-      payloadJson: createRewritePayload('novel-background-two', novelTwoBranchId),
+      payloadJson: createRewritePayload('novel-background-one', novelOneBranchId),
       createdAtSql: "datetime('now', '-1 minutes')",
       updatedAtSql: "datetime('now', '-1 minutes')",
     })
@@ -167,7 +177,20 @@ describe('/api/task', () => {
       updatedAtSql: "datetime('now', '-30 seconds')",
     })
 
-    insertJob(database, {
+    insertJob(siblingDatabase, {
+      id: 'job_sibling_rewrite_queued_hidden',
+      novelId: 'novel-background-two',
+      branchId: novelTwoBranchId,
+      jobType: 'rewrite_generation',
+      status: 'queued',
+      progress: 0.2,
+      currentStep: '等待中',
+      payloadJson: createRewritePayload('novel-background-two', novelTwoBranchId),
+      createdAtSql: "datetime('now', '-5 seconds')",
+      updatedAtSql: "datetime('now', '-5 seconds')",
+    })
+
+    insertJob(siblingDatabase, {
       id: 'job_rewrite_aborted_hidden',
       novelId: 'novel-background-two',
       branchId: novelTwoBranchId,
@@ -181,7 +204,7 @@ describe('/api/task', () => {
       updatedAtSql: "datetime('now', '-20 seconds')",
     })
 
-    insertJob(database, {
+    insertJob(siblingDatabase, {
       id: 'job_unsupported_running_hidden',
       novelId: 'novel-background-two',
       branchId: novelTwoBranchId,
@@ -230,7 +253,8 @@ describe('/api/task', () => {
     process.env.RETALE_TASK_STALE_TIMEOUT_MS = '1000'
     process.env.RETALE_TASK_MAX_RETRIES = '1'
 
-    const { database } = await createTestDatabase('retale-task-watchdog-list')
+    const { database } = createTestDatabase('retale-task-watchdog-list', ['novel-watchdog'])
+    await activateNovel('novel-watchdog')
     const { mainBranchId } = seedNovel(database, 'novel-watchdog', 'Watchdog Novel')
 
     insertJob(database, {
@@ -316,7 +340,8 @@ describe('/api/task', () => {
   })
 
   it('aborts an active knowledge extraction task', async () => {
-    const { database } = await createTestDatabase('retale-task-abort-knowledge')
+    const { database } = createTestDatabase('retale-task-abort-knowledge', ['novel-knowledge'])
+    await activateNovel('novel-knowledge')
     const { mainBranchId } = seedNovel(database, 'novel-knowledge', 'Knowledge Novel')
     insertJob(database, {
       id: 'job_extract_abort',
@@ -345,7 +370,8 @@ describe('/api/task', () => {
   })
 
   it('does not overwrite a task that becomes terminal during abort', async () => {
-    const { database } = await createTestDatabase('retale-task-abort-race')
+    const { database } = createTestDatabase('retale-task-abort-race', ['novel-abort-race'])
+    await activateNovel('novel-abort-race')
     const { mainBranchId } = seedNovel(database, 'novel-abort-race', 'Abort Race Novel')
     insertJob(database, {
       id: 'job_abort_race',
@@ -358,19 +384,17 @@ describe('/api/task', () => {
       payloadJson: JSON.stringify({ steps: [] }),
     })
 
-    const actualSqliteModule = await import('@/lib/server/sqlite')
-    vi.doMock('@/lib/server/sqlite', () => ({
-      ...actualSqliteModule,
-      execute: vi.fn((sql: string, ...params: unknown[]) => {
-        if (sql.includes("SET status = 'aborted'")) {
-          database.prepare(
-            "UPDATE KnowledgeJob SET status = 'succeeded', progress = 1, currentStep = '完成', updatedAt = CURRENT_TIMESTAMP WHERE id = ?"
-          ).run('job_abort_race')
-        }
-
-        return actualSqliteModule.execute(sql, ...params as Parameters<typeof actualSqliteModule.execute>)
-      }),
-    }))
+    database.exec(`
+      CREATE TEMP TRIGGER complete_job_during_abort
+      BEFORE UPDATE OF status ON KnowledgeJob
+      WHEN OLD.id = 'job_abort_race' AND NEW.status = 'aborted'
+      BEGIN
+        UPDATE KnowledgeJob
+        SET status = 'succeeded', progress = 1, currentStep = '完成', updatedAt = CURRENT_TIMESTAMP
+        WHERE id = OLD.id;
+        SELECT RAISE(IGNORE);
+      END
+    `)
 
     const { POST } = await loadTaskRoute()
     const response = await POST(createAbortRequest({ jobId: 'job_abort_race' }))
@@ -387,7 +411,8 @@ describe('/api/task', () => {
   })
 
   it('aborts an active retrieval rebuild task', async () => {
-    const { database } = await createTestDatabase('retale-task-abort-retrieval')
+    const { database } = createTestDatabase('retale-task-abort-retrieval', ['novel-retrieval'])
+    await activateNovel('novel-retrieval')
     const { mainBranchId } = seedNovel(database, 'novel-retrieval', 'Retrieval Novel')
     insertJob(database, {
       id: 'job_retrieval_abort',
@@ -415,7 +440,8 @@ describe('/api/task', () => {
   })
 
   it('aborts a rewrite task even when the recoverable helper returns null', async () => {
-    const { database } = await createTestDatabase('retale-task-abort-rewrite')
+    const { database } = createTestDatabase('retale-task-abort-rewrite', ['novel-rewrite'])
+    await activateNovel('novel-rewrite')
     const { mainBranchId } = seedNovel(database, 'novel-rewrite', 'Rewrite Novel')
     insertJob(database, {
       id: 'job_rewrite_abort',
@@ -447,13 +473,23 @@ describe('/api/task', () => {
     }
 
     expect(response.status).toBe(200)
-    expect(abortRecoverableRewriteJob).toHaveBeenCalledWith('job_rewrite_abort', '已中止')
+    expect(abortRecoverableRewriteJob).toHaveBeenCalledWith(
+      'job_rewrite_abort',
+      '已中止',
+      expect.objectContaining({
+        execute: expect.any(Function),
+        queryAll: expect.any(Function),
+        queryOne: expect.any(Function),
+        withTransaction: expect.any(Function),
+      }),
+    )
     await expect(response.json()).resolves.toEqual({ ok: true, jobId: 'job_rewrite_abort', status: 'aborted', outcome: 'aborted' })
     expect(row).toEqual({ status: 'aborted', progress: 0, currentStep: '已中止', errorMessage: '已中止' })
   })
 
   it('rejects missing, unknown, unsupported, and terminal abort requests while keeping aborted idempotent', async () => {
-    const { database } = await createTestDatabase('retale-task-abort-errors')
+    const { database } = createTestDatabase('retale-task-abort-errors', ['novel-errors'])
+    await activateNovel('novel-errors')
     const { mainBranchId } = seedNovel(database, 'novel-errors', 'Error Novel')
     insertJob(database, {
       id: 'job_unsupported_abort',
