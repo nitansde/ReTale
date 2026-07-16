@@ -1,16 +1,19 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
+import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const databases: DatabaseSync[] = []
+const novelDatabaseDisposers: Array<() => void> = []
 
-function createTestDatabase(prefix: string) {
+function createTestDatabase(prefix: string, novelIds: readonly string[]) {
   const tempDatabase = createTempDatabaseCopy(prefix)
   cleanups.push(tempDatabase.cleanup)
   const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-  globalForSqlite.sqlite = database
+  databases.push(database)
+  novelDatabaseDisposers.push(registerLegacyNovelDatabase(database, novelIds))
   return database
 }
 
@@ -113,12 +116,16 @@ function seedTimelineFixture(database: DatabaseSync) {
 afterEach(() => {
   vi.resetModules()
 
-  if (globalForSqlite.sqlite) {
+  while (novelDatabaseDisposers.length) {
+    novelDatabaseDisposers.pop()?.()
+  }
+  resetNovelDatabaseTestState()
+
+  while (databases.length) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databases.pop() as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
   }
 
   while (cleanups.length) {
@@ -128,7 +135,7 @@ afterEach(() => {
 
 describe('roleplay timeline hydration', () => {
   it('hydrates one timeline node per multi-message roleplay session and keeps future-jump nodes intact', async () => {
-    const database = createTestDatabase('retale-roleplay-timeline')
+    const database = createTestDatabase('retale-roleplay-timeline', ['novel-001'])
     seedTimelineFixture(database)
     vi.resetModules()
 
