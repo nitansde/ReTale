@@ -36,9 +36,15 @@ export function ProjectGrid() {
     backendLoaded,
     loadFromBackend,
     saveToBackend,
+    deleteNovelFromBackend,
+    reconcileNovelDeletionFromBackend,
+    isNovelDeletionPending,
+    beginNovelDeletion,
+    rollbackNovelDeletion,
+    setNovelDeletionPending,
+    reconcileNovelDeletion,
     setCurrentNovelId,
     setCurrentChapterId,
-    deleteNovel,
   } = useNovelStore()
   const novels = getNovels()
   const [isImporting, setIsImporting] = useState(false)
@@ -47,6 +53,7 @@ export function ProjectGrid() {
   const [importMessage, setImportMessage] = useState<string | null>(null)
   const [uploadPercent, setUploadPercent] = useState<number>(0)
   const [phase, setPhase] = useState<'idle' | 'uploading' | 'processing'>('idle')
+  const deletionInFlightRef = useRef(false)
 
   const selectNovelChapter = (novelId: string, chapterId?: string) => {
     const chapter = resolveOpenNovelChapter(useNovelStore.getState().localChapters, novelId, chapterId)
@@ -152,20 +159,44 @@ export function ProjectGrid() {
   }
 
   const handleDeleteNovel = async (novelId: string, title: string) => {
+    if (isNovelDeletionPending || deletionInFlightRef.current) {
+      return
+    }
+
     if (!window.confirm(t('library.deleteConfirm', { title }))) {
       return
     }
 
+    deletionInFlightRef.current = true
     setDeletingNovelId(novelId)
-    deleteNovel(novelId)
-    try {
-      await saveToBackend()
-      setImportMessage(t('library.deleted', { title }))
-    } catch {
-      await loadFromBackend()
-      setImportMessage(t('library.deleteFailed', { title }))
-    } finally {
+    setNovelDeletionPending(true)
+    const transaction = beginNovelDeletion(novelId)
+    if (!transaction) {
+      setNovelDeletionPending(false)
       setDeletingNovelId(null)
+      deletionInFlightRef.current = false
+      return
+    }
+    try {
+      const outcome = await deleteNovelFromBackend(novelId)
+      if (outcome.status === 'committed') {
+        reconcileNovelDeletion(outcome.result.activeNovelId)
+        setImportMessage(t('library.deleted', { title }))
+      } else if (outcome.status === 'rejected') {
+        rollbackNovelDeletion(transaction)
+        setImportMessage(t('library.deleteFailed', { title }))
+      } else {
+        try {
+          const reconciliation = await reconcileNovelDeletionFromBackend(transaction)
+          setImportMessage(t(reconciliation === 'present' ? 'library.deleteFailedAuthoritative' : 'library.deleted', { title }))
+        } catch {
+          setImportMessage(t('library.deleteReconcileFailed', { title }))
+        }
+      }
+    } finally {
+      setNovelDeletionPending(false)
+      setDeletingNovelId(null)
+      deletionInFlightRef.current = false
     }
   }
 
@@ -233,7 +264,7 @@ export function ProjectGrid() {
               void handleDeleteNovel(novel.id, novel.title)
             }}
             opening={openingNovelId === novel.id}
-            deleting={deletingNovelId === novel.id}
+            deleting={isNovelDeletionPending || deletingNovelId === novel.id}
           />
         ))}
       </div>

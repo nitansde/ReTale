@@ -21,6 +21,17 @@ type MockStoreState = {
   getNovels: () => Array<{ id: string; title: string; summary: string; tags: string[] }>
   loadFromBackend: () => Promise<void>
   saveToBackend: () => Promise<void>
+  deleteNovelFromBackend: (novelId: string) => Promise<
+    | { status: 'committed'; result: { ok: true; deletedNovelId: string; activeNovelId: string | null; deletionState: 'deleted'; cleanupPending: boolean } }
+    | { status: 'rejected'; error: string }
+    | { status: 'indeterminate'; error: string }
+  >
+  reconcileNovelDeletionFromBackend?: (transaction: { novelId: string; before: object; optimistic: object }) => Promise<'deleted' | 'present'>
+  isNovelDeletionPending?: boolean
+  beginNovelDeletion?: (novelId: string) => { novelId: string; before: object; optimistic: object } | null
+  rollbackNovelDeletion?: (transaction: { novelId: string; before: object; optimistic: object }) => void
+  setNovelDeletionPending?: (pending: boolean) => void
+  reconcileNovelDeletion?: (activeNovelId: string | null) => void
   setCurrentNovelId: (novelId: string) => void
   setCurrentChapterId: (chapterId: string) => void
   deleteNovel: (novelId: string) => void
@@ -88,7 +99,23 @@ class MockXMLHttpRequest {
 }
 
 function renderProjectGrid() {
+  mockStoreState = {
+    isNovelDeletionPending: false,
+    beginNovelDeletion: (novelId) => ({ novelId, before: {}, optimistic: {} }),
+    rollbackNovelDeletion: vi.fn(),
+    reconcileNovelDeletionFromBackend: vi.fn(async () => 'deleted' as const),
+    setNovelDeletionPending: vi.fn(),
+    reconcileNovelDeletion: vi.fn(),
+    ...mockStoreState,
+  }
   return render(<ProjectGrid />)
+}
+
+function deletedNovelResult(novelId: string, activeNovelId: string | null = null, cleanupPending = false) {
+  return {
+    status: 'committed' as const,
+    result: { ok: true as const, deletedNovelId: novelId, activeNovelId, deletionState: 'deleted' as const, cleanupPending },
+  }
 }
 
 function createDeferredPromise<T>() {
@@ -184,6 +211,7 @@ describe('ProjectGrid chapter resolution', () => {
       getNovels: () => [],
       loadFromBackend,
       saveToBackend,
+      deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
       setCurrentNovelId,
       setCurrentChapterId,
       deleteNovel: vi.fn(),
@@ -226,6 +254,7 @@ describe('ProjectGrid chapter resolution', () => {
       getNovels: () => [],
       loadFromBackend,
       saveToBackend: vi.fn(async () => undefined),
+      deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
       setCurrentNovelId,
       setCurrentChapterId,
       deleteNovel: vi.fn(),
@@ -257,6 +286,7 @@ describe('ProjectGrid chapter resolution', () => {
       getNovels: () => [],
       loadFromBackend: vi.fn(async () => undefined),
       saveToBackend: vi.fn(async () => undefined),
+      deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
       setCurrentNovelId: vi.fn(),
       setCurrentChapterId: vi.fn(),
       deleteNovel: vi.fn(),
@@ -290,6 +320,7 @@ describe('ProjectGrid chapter resolution', () => {
       getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
       loadFromBackend: vi.fn(async () => undefined),
       saveToBackend,
+      deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
       setCurrentNovelId,
       setCurrentChapterId,
       deleteNovel: vi.fn(),
@@ -322,6 +353,7 @@ describe('ProjectGrid chapter resolution', () => {
       getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
       loadFromBackend: vi.fn(async () => undefined),
       saveToBackend,
+      deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
       setCurrentNovelId,
       setCurrentChapterId,
       deleteNovel: vi.fn(),
@@ -362,6 +394,7 @@ describe('ProjectGrid chapter resolution', () => {
       getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
       loadFromBackend,
       saveToBackend,
+      deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
       setCurrentNovelId,
       setCurrentChapterId,
       deleteNovel: vi.fn(),
@@ -397,6 +430,7 @@ describe('ProjectGrid chapter resolution', () => {
       getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
       loadFromBackend: vi.fn(async () => undefined),
       saveToBackend,
+      deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
       setCurrentNovelId: vi.fn(),
       setCurrentChapterId: vi.fn(),
       deleteNovel: vi.fn(),
@@ -420,5 +454,166 @@ describe('ProjectGrid chapter resolution', () => {
     })
 
     expect(pushMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('accepts a cleanup-pending success and reconciles the authoritative survivor', async () => {
+    const deleteDeferred = createDeferredPromise<ReturnType<typeof deletedNovelResult>>()
+    const deleteNovelFromBackend = vi.fn(() => deleteDeferred.promise)
+    const transaction = { novelId: 'novel-a', before: {}, optimistic: {} }
+    const beginNovelDeletion = vi.fn(() => transaction)
+    const setNovelDeletionPending = vi.fn()
+    const reconcileNovelDeletion = vi.fn()
+
+    mockStoreState = {
+      backendLoadError: '',
+      backendLoaded: true,
+      localChapters: [{ id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 }],
+      getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
+      loadFromBackend: vi.fn(async () => undefined),
+      saveToBackend: vi.fn(async () => undefined),
+      deleteNovelFromBackend,
+      setCurrentNovelId: vi.fn(),
+      setCurrentChapterId: vi.fn(),
+      deleteNovel: vi.fn(),
+      beginNovelDeletion,
+      rollbackNovelDeletion: vi.fn(),
+      setNovelDeletionPending,
+      reconcileNovelDeletion,
+    }
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    renderProjectGrid()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }))
+
+    expect(beginNovelDeletion).toHaveBeenCalledWith('novel-a')
+    expect(deleteNovelFromBackend).toHaveBeenCalledWith('novel-a')
+    expect(setNovelDeletionPending).toHaveBeenNthCalledWith(1, true)
+    expect(screen.getByRole('button', { name: 'Delete project' })).toBeDisabled()
+    expect(screen.queryByText('已删除《Novel A》')).not.toBeInTheDocument()
+
+    await act(async () => {
+      deleteDeferred.resolve(deletedNovelResult('novel-a', 'novel-survivor', true))
+      await deleteDeferred.promise
+    })
+
+    expect(reconcileNovelDeletion).toHaveBeenCalledWith('novel-survivor')
+    expect(setNovelDeletionPending).toHaveBeenLastCalledWith(false)
+    expect(screen.getByText('已删除《Novel A》')).toBeInTheDocument()
+  })
+
+  it('uses targeted rollback without reloading when deletion is definitively rejected', async () => {
+    const loadFromBackend = vi.fn(async () => undefined)
+    const deleteNovel = vi.fn()
+    const deleteNovelFromBackend = vi.fn(async () => ({ status: 'rejected' as const, error: 'delete conflict' }))
+    const transaction = { novelId: 'novel-a', before: {}, optimistic: {} }
+    const rollbackNovelDeletion = vi.fn()
+    const setNovelDeletionPending = vi.fn()
+
+    mockStoreState = {
+      backendLoadError: '',
+      backendLoaded: true,
+      localChapters: [{ id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 }],
+      getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
+      loadFromBackend,
+      saveToBackend: vi.fn(async () => undefined),
+      deleteNovelFromBackend,
+      setCurrentNovelId: vi.fn(),
+      setCurrentChapterId: vi.fn(),
+      deleteNovel,
+      beginNovelDeletion: vi.fn(() => transaction),
+      rollbackNovelDeletion,
+      setNovelDeletionPending,
+      reconcileNovelDeletion: vi.fn(),
+    }
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    renderProjectGrid()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('删除《Novel A》失败，已恢复本地状态。')).toBeInTheDocument()
+    })
+    expect(deleteNovel).not.toHaveBeenCalled()
+    expect(rollbackNovelDeletion).toHaveBeenCalledTimes(1)
+    expect(rollbackNovelDeletion).toHaveBeenCalledWith(transaction)
+    expect(loadFromBackend).not.toHaveBeenCalled()
+    expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
+  })
+
+  it.each([
+    { targetPresent: false, expectedMessage: '已删除《Novel A》' },
+    { targetPresent: true, expectedMessage: '服务器确认《Novel A》未被删除，已恢复权威状态。' },
+  ])('reconciles an indeterminate result with target present=$targetPresent before clearing pending', async ({ targetPresent, expectedMessage }) => {
+    const reconcileDeferred = createDeferredPromise<'deleted' | 'present'>()
+    const setNovelDeletionPending = vi.fn()
+    const transaction = { novelId: 'novel-a', before: {}, optimistic: {} }
+    const reconcileNovelDeletionFromBackend = vi.fn(() => reconcileDeferred.promise)
+
+    mockStoreState = {
+      backendLoadError: '',
+      backendLoaded: true,
+      localChapters: [{ id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 }],
+      getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
+      loadFromBackend: vi.fn(async () => undefined),
+      saveToBackend: vi.fn(async () => undefined),
+      deleteNovelFromBackend: vi.fn(async () => ({ status: 'indeterminate' as const, error: 'response lost' })),
+      reconcileNovelDeletionFromBackend,
+      setCurrentNovelId: vi.fn(),
+      setCurrentChapterId: vi.fn(),
+      deleteNovel: vi.fn(),
+      beginNovelDeletion: vi.fn(() => transaction),
+      rollbackNovelDeletion: vi.fn(),
+      setNovelDeletionPending,
+      reconcileNovelDeletion: vi.fn(),
+    }
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    renderProjectGrid()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }))
+
+    await waitFor(() => expect(reconcileNovelDeletionFromBackend).toHaveBeenCalledWith(transaction))
+    expect(setNovelDeletionPending).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Delete project' })).toBeDisabled()
+
+    await act(async () => {
+      reconcileDeferred.resolve(targetPresent ? 'present' : 'deleted')
+      await reconcileDeferred.promise
+    })
+
+    expect(screen.getByText(expectedMessage)).toBeInTheDocument()
+    expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('keeps the optimistic state and reports reconciliation failure for an indeterminate result', async () => {
+    const rollbackNovelDeletion = vi.fn()
+    const setNovelDeletionPending = vi.fn()
+
+    mockStoreState = {
+      backendLoadError: '',
+      backendLoaded: true,
+      localChapters: [{ id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 }],
+      getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
+      loadFromBackend: vi.fn(async () => undefined),
+      saveToBackend: vi.fn(async () => undefined),
+      deleteNovelFromBackend: vi.fn(async () => ({ status: 'indeterminate' as const, error: 'malformed response' })),
+      reconcileNovelDeletionFromBackend: vi.fn().mockRejectedValue(new Error('workspace unavailable')),
+      setCurrentNovelId: vi.fn(),
+      setCurrentChapterId: vi.fn(),
+      deleteNovel: vi.fn(),
+      beginNovelDeletion: vi.fn((novelId) => ({ novelId, before: {}, optimistic: {} })),
+      rollbackNovelDeletion,
+      setNovelDeletionPending,
+      reconcileNovelDeletion: vi.fn(),
+    }
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    renderProjectGrid()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('无法确认《Novel A》是否已删除，请刷新书库后重试。')).toBeInTheDocument()
+    })
+    expect(rollbackNovelDeletion).not.toHaveBeenCalled()
+    expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
   })
 })
