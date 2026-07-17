@@ -1975,7 +1975,7 @@ test('continue-block continue creates a child node while regenerate updates the 
   })
 
   await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
-  expect(continueBlockDetailRequests).toContain('continue-block-1')
+  await expect.poll(() => continueBlockDetailRequests.includes('continue-block-1')).toBe(true)
 
   await page.getByTestId('workspace-continue-block-continue-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
