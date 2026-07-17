@@ -128,6 +128,7 @@ function buildCoreParams(overrides: Partial<CoreParams> = {}): CoreParams {
   return {
     loadFromBackend: vi.fn().mockResolvedValue(undefined),
     saveToBackend: vi.fn().mockResolvedValue(undefined),
+    isNovelDeletionPending: false,
     backendLoaded: true,
     currentNovelId: '',
     localNovels: [],
@@ -154,7 +155,7 @@ function buildCoreParams(overrides: Partial<CoreParams> = {}): CoreParams {
 function renderAutosaveHook(saveToBackend: CoreParams['saveToBackend']) {
   const baseParams = buildCoreParams({ saveToBackend })
   return renderHook(
-    ({ signature }) => useSelectionNovelStudioCore({ ...baseParams, autosaveSignature: signature }),
+    ({ signature, deletionPending = false }: { signature: string; deletionPending?: boolean }) => useSelectionNovelStudioCore({ ...baseParams, autosaveSignature: signature, isNovelDeletionPending: deletionPending }),
     { initialProps: { signature: 'sig-0' } },
   )
 }
@@ -187,6 +188,7 @@ async function rejectDeferred(deferred: Deferred) {
 describe('useSelectionNovelStudioCore autosave drain', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    pushMock.mockReset()
   })
 
   afterEach(() => {
@@ -323,6 +325,43 @@ describe('useSelectionNovelStudioCore autosave drain', () => {
     expect(saveToBackend).toHaveBeenCalledTimes(1)
     expect(vi.getTimerCount()).toBe(0)
   })
+
+  it('suppresses deletion signatures and reevaluates the latest state when pending clears', async () => {
+    const saveToBackend = vi.fn().mockResolvedValue(undefined)
+    const { rerender } = renderAutosaveHook(saveToBackend)
+
+    rerender({ signature: 'sig-deleted', deletionPending: true })
+    await advanceTimers(10_000)
+    expect(saveToBackend).not.toHaveBeenCalled()
+
+    rerender({ signature: 'sig-0', deletionPending: false })
+    await advanceTimers(10_000)
+    expect(saveToBackend).not.toHaveBeenCalled()
+
+    rerender({ signature: 'sig-authoritative', deletionPending: true })
+    await advanceTimers(10_000)
+    expect(saveToBackend).not.toHaveBeenCalled()
+
+    rerender({ signature: 'sig-authoritative', deletionPending: false })
+    await advanceTimers(1199)
+    expect(saveToBackend).not.toHaveBeenCalled()
+    await advanceTimers(1)
+    expect(saveToBackend).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not redirect an optimistic empty workspace until deletion pending clears', () => {
+    const params = buildCoreParams({ localChapters: [], isNovelDeletionPending: true })
+    const { rerender } = renderHook(
+      ({ deletionPending }) => useSelectionNovelStudioCore({ ...params, isNovelDeletionPending: deletionPending }),
+      { initialProps: { deletionPending: true } },
+    )
+
+    expect(pushMock).not.toHaveBeenCalled()
+
+    rerender({ deletionPending: false })
+
+    expect(pushMock).toHaveBeenCalledWith('/library')
+  })
 })
 
 describe('useSelectionNovelStudioCore knowledge projection selection', () => {
@@ -402,6 +441,7 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
     const { result } = renderHook(() => useSelectionNovelStudioCore({
       loadFromBackend: vi.fn().mockResolvedValue(undefined),
       saveToBackend: vi.fn().mockResolvedValue(undefined),
+      isNovelDeletionPending: false,
       backendLoaded: true,
       currentNovelId: 'novel-1',
       localNovels: [{ id: 'novel-1', title: 'Novel 1' }],

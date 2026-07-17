@@ -106,6 +106,7 @@ import type {
 type SelectionNovelStudioCoreParams = {
   loadFromBackend: () => Promise<unknown>
   saveToBackend: () => Promise<unknown>
+  isNovelDeletionPending: boolean
   backendLoaded: boolean
   currentNovelId: string
   localNovels: Array<{ id: string; title: string }>
@@ -300,6 +301,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const autosaveMountedRef = useRef(false)
   const autosaveDrainRef = useRef<() => void>(() => undefined)
   const autosaveSaveToBackendRef = useRef(params.saveToBackend)
+  const novelDeletionPendingRef = useRef(params.isNovelDeletionPending)
   const hydratedRef = useRef(false)
   const workspaceSelectionHydratedRef = useRef(false)
   const lastActiveKnowledgeJobIdRef = useRef<string | null>(null)
@@ -373,10 +375,11 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   useEffect(() => {
     autosaveLatestSignatureRef.current = params.autosaveSignature
     autosaveSaveToBackendRef.current = params.saveToBackend
-  }, [params.autosaveSignature, params.saveToBackend])
+    novelDeletionPendingRef.current = params.isNovelDeletionPending
+  }, [params.autosaveSignature, params.isNovelDeletionPending, params.saveToBackend])
 
   const scheduleAutosaveDrain = useCallback((delay: number) => {
-    if (!autosaveMountedRef.current) return
+    if (!autosaveMountedRef.current || novelDeletionPendingRef.current) return
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
     autosaveTimerRef.current = setTimeout(() => {
       autosaveTimerRef.current = null
@@ -385,7 +388,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   }, [])
 
   const drainAutosave = useCallback(() => {
-    if (!autosaveMountedRef.current || autosaveInFlightRef.current) return
+    if (!autosaveMountedRef.current || autosaveInFlightRef.current || novelDeletionPendingRef.current) return
     const targetSignature = autosaveLatestSignatureRef.current
     if (
       targetSignature === autosaveLastSavedSignatureRef.current
@@ -407,7 +410,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
       })
       .finally(() => {
         autosaveInFlightRef.current = false
-        if (!autosaveMountedRef.current) return
+        if (!autosaveMountedRef.current || novelDeletionPendingRef.current) return
         const latestSignature = autosaveLatestSignatureRef.current
         if (
           latestSignature === autosaveLastSavedSignatureRef.current
@@ -436,16 +439,21 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   }, [params.backendLoaded, params.loadFromBackend])
 
   useEffect(() => {
-    if (params.backendLoaded && params.localChapters.length === 0) {
+    if (params.backendLoaded && !params.isNovelDeletionPending && params.localChapters.length === 0) {
       router.push('/library')
     }
-  }, [params.backendLoaded, params.localChapters.length, router])
+  }, [params.backendLoaded, params.isNovelDeletionPending, params.localChapters.length, router])
 
   useEffect(() => {
     if (!params.backendLoaded) return
     if (!hydratedRef.current) {
       hydratedRef.current = true
       autosaveLastSavedSignatureRef.current = params.autosaveSignature
+      return
+    }
+    if (params.isNovelDeletionPending) {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+      autosaveTimerRef.current = null
       return
     }
     if (
@@ -463,7 +471,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
       autosaveTimerRef.current = null
     }
-  }, [params.autosaveSignature, params.backendLoaded, scheduleAutosaveDrain])
+  }, [params.autosaveSignature, params.backendLoaded, params.isNovelDeletionPending, scheduleAutosaveDrain])
 
   const getKnowledgePollDelay = useCallback((status: KnowledgeRebuildStatus | null, actionLoading: KnowledgeActionLoading) => {
     if (actionLoading) return 1_200
