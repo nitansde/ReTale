@@ -6,16 +6,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 
 const root = process.cwd()
-const mainRepoRoot = process.cwd()
-
-function resolveFixturePath(relativePath: string) {
-  const worktreePath = path.join(root, relativePath)
-  if (fs.existsSync(worktreePath)) {
-    return worktreePath
-  }
-
-  return path.join(mainRepoRoot, relativePath)
-}
+const presetPath = path.join(root, 'tests/fixtures/preset-compat/synthetic-sillytavern-preset.json')
 
 function sha256(filePath: string) {
   return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
@@ -23,7 +14,6 @@ function sha256(filePath: string) {
 
 describe('process-sillytavern-preset-macros CLI', () => {
   it('writes processed preset JSON to stdout without mixing warnings into stdout', () => {
-    const presetPath = resolveFixturePath(path.join('external', 'resets_example.json'))
     const contextPath = path.join(root, 'tests/fixtures/sillytavern-macro-context.json')
 
     const run = spawnSync(
@@ -44,7 +34,6 @@ describe('process-sillytavern-preset-macros CLI', () => {
   })
 
   it('writes --out and --warnings artifacts without mutating the input preset', () => {
-    const presetPath = resolveFixturePath(path.join('external', 'resets_example.json'))
     const contextPath = path.join(root, 'tests/fixtures/sillytavern-macro-context.json')
     const checksumBefore = sha256(presetPath)
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'preset-macro-cli-'))

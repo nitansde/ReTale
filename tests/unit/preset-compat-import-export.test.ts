@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
@@ -13,25 +13,24 @@ import {
 } from '@/lib/preset-compat/normalize'
 
 function readFixture(name: string) {
-  const worktreePath = resolve(process.cwd(), 'external', name)
-  const fallbackPath = resolve(process.cwd(), 'external', name)
-  const fixturePath = existsSync(worktreePath) ? worktreePath : fallbackPath
+  const fixturePath = resolve(process.cwd(), 'tests', 'fixtures', 'preset-compat', name)
   return JSON.parse(readFileSync(fixturePath, 'utf8')) as Record<string, unknown>
 }
 
 describe('preset compat import/export compatibility', () => {
-  it('normalizes a preset from the golden fixture and round-trips key ST sections', () => {
-    const fixture = readFixture('resets_example.json')
+  it('normalizes the synthetic preset fixture and round-trips key ST sections', () => {
+    const fixture = readFixture('synthetic-sillytavern-preset.json')
     const { preset, warnings } = normalizePresetCompatPresetImport(fixture, {
-      uploadedFileName: 'resets_example.json',
-      existingNames: ['resets_example'],
+      uploadedFileName: 'synthetic-sillytavern-preset.json',
+      existingNames: ['synthetic-sillytavern-preset'],
       now: '2026-05-15T00:00:00.000Z',
       idFactory: () => 'preset-import-001',
     })
 
     expect(warnings).toEqual([])
     expect(preset.id).toBe('preset-import-001')
-    expect(preset.name).toBe('resets_example (copy)')
+    expect(fixture.name).not.toBe('synthetic-sillytavern-preset')
+    expect(preset.name).toBe('synthetic-sillytavern-preset (copy)')
     expect(preset.runtimeSampler).toMatchObject({
       temperature: 1,
       topP: 1,
@@ -85,23 +84,51 @@ describe('preset compat import/export compatibility', () => {
     expect(preset.preservedFields).toEqual({
       biasPresetSelected: 'Default (none)',
     })
-    expect(preset.promptRules[0]?.injectionTrigger).toEqual([])
+    expect(preset.promptRules.find((rule) => rule.id === 'synthetic-main')?.injectionTrigger).toEqual([])
     expect(Object.keys(preset.passthrough)).toEqual(['root', 'extensions', 'unknownPromptFields'])
     const activeFixtureOrder = (fixture.prompt_order as Array<{ character_id: number, order: Array<{ identifier: string }> }>)
       .find((entry) => entry.character_id === 100001)?.order ?? []
     expect(preset.promptOrderLists.rewrite).toEqual(activeFixtureOrder.map((entry) => entry.identifier))
     expect(preset.promptOrderLists.future_jump).toEqual(preset.promptOrderLists.rewrite)
-    expect(preset.embeddedRegexes).toHaveLength(
-      ((fixture.extensions as Record<string, unknown>).regex_scripts as unknown[]).length
-    )
-    expect((preset.passthrough.extensions as Record<string, unknown>).SPreset).toBeDefined()
+    expect(preset.embeddedRegexes.map((regex) => regex.id)).toEqual([
+      'synthetic-input-wrapper',
+      'synthetic-output-cleanup',
+    ])
+    expect(preset.passthrough.root).toMatchObject({
+      synthetic_root_sentinel: {
+        source: 'tracked-test-fixture',
+        preserve: true,
+      },
+    })
+    const fixtureExtensions = fixture.extensions as Record<string, unknown>
+    const fixtureSPreset = fixtureExtensions.SPreset as Record<string, unknown>
+    expect(preset.passthrough.extensions).toMatchObject({
+      SPreset: {
+        ChatSquash: fixtureSPreset.ChatSquash,
+        RegexBinding: fixtureSPreset.RegexBinding,
+        synthetic_extension_sentinel: 'preserve-spreset',
+      },
+      MacroNest: fixtureExtensions.MacroNest,
+      ToolBindings: fixtureExtensions.ToolBindings,
+      tavern_helper: fixtureExtensions.tavern_helper,
+      synthetic_extension_sentinel: {
+        source: 'tracked-test-fixture',
+        preserve: true,
+      },
+    })
 
     const exported = exportPresetCompatPreset(preset)
+    const exportedExtensions = exported.extensions as Record<string, unknown>
+    const exportedSPreset = exportedExtensions.SPreset as Record<string, unknown>
     expect(exported.prompts).toEqual(fixture.prompts)
     expect(exported.prompt_order).toEqual(fixture.prompt_order)
-    expect((exported.extensions as Record<string, unknown>).regex_scripts).toEqual(
-      (fixture.extensions as Record<string, unknown>).regex_scripts
-    )
+    expect(exportedExtensions.regex_scripts).toEqual(fixtureExtensions.regex_scripts)
+    expect(exported.synthetic_root_sentinel).toEqual(fixture.synthetic_root_sentinel)
+    expect(exportedSPreset.ChatSquash).toEqual(fixtureSPreset.ChatSquash)
+    expect(exportedSPreset.RegexBinding).toEqual(fixtureSPreset.RegexBinding)
+    expect(exportedExtensions.MacroNest).toEqual(fixtureExtensions.MacroNest)
+    expect(exportedExtensions.ToolBindings).toEqual(fixtureExtensions.ToolBindings)
+    expect(exportedExtensions.tavern_helper).toEqual(fixtureExtensions.tavern_helper)
   })
 
   it('preserves legacy flat prompt fields without migrating away from structured prompts', () => {
@@ -273,7 +300,7 @@ describe('preset compat import/export compatibility', () => {
 
   it('exports null, empty, and populated prompt triggers safely', () => {
     const preset = normalizePresetCompatPresetImport({}, {
-      uploadedFileName: 'resets_example.json',
+      uploadedFileName: 'synthetic-sillytavern-preset.json',
       existingNames: [],
       now: '2026-05-15T00:00:00.000Z',
       idFactory: () => 'preset-import-trigger-cases',
@@ -381,7 +408,7 @@ describe('preset compat import/export compatibility', () => {
   })
 
   it('keeps macro-bearing prompt, template, and regex fields raw across import/export round-trips', () => {
-    const fixture = readFixture('resets_example.json')
+    const fixture = readFixture('synthetic-sillytavern-preset.json')
     const rawFixture = structuredClone(fixture)
     const prompts = structuredClone(Array.isArray(rawFixture.prompts) ? rawFixture.prompts : []) as Array<Record<string, unknown>>
     const extensions = structuredClone(
@@ -391,15 +418,19 @@ describe('preset compat import/export compatibility', () => {
       Array.isArray(extensions.regex_scripts) ? extensions.regex_scripts : []
     ) as Array<Record<string, unknown>>
 
-    prompts[0] = {
-      ...prompts[0],
+    const mainPromptIndex = prompts.findIndex((prompt) => prompt.identifier === 'synthetic-main')
+    const inputWrapperIndex = regexScripts.findIndex((regex) => regex.id === 'synthetic-input-wrapper')
+    expect(mainPromptIndex).toBeGreaterThanOrEqual(0)
+    expect(inputWrapperIndex).toBeGreaterThanOrEqual(0)
+    prompts[mainPromptIndex] = {
+      ...prompts[mainPromptIndex],
       content: 'Prompt {{getvar::hero}} text',
     }
     extensions.instruct = {
       template: 'Template {{getvar::hero}} text',
     }
-    regexScripts[0] = {
-      ...regexScripts[0],
+    regexScripts[inputWrapperIndex] = {
+      ...regexScripts[inputWrapperIndex],
       findRegex: '{{getvar::hero}}',
       replaceString: 'Regex {{setvar::hero::Alice}}',
     }
@@ -411,39 +442,39 @@ describe('preset compat import/export compatibility', () => {
     }
 
     const imported = normalizePresetCompatPresetImport(rawFixture, {
-      uploadedFileName: 'resets_example.json',
+      uploadedFileName: 'synthetic-sillytavern-preset.json',
       existingNames: [],
       now: '2026-05-15T00:00:00.000Z',
       idFactory: () => 'preset-import-raw-macros',
     })
     const exported = exportPresetCompatPreset(imported.preset)
     const reimported = normalizePresetCompatPresetImport(exported, {
-      uploadedFileName: 'resets_example.json',
+      uploadedFileName: 'synthetic-sillytavern-preset.json',
       existingNames: [],
       now: '2026-05-15T00:00:00.000Z',
       idFactory: () => 'preset-import-raw-macros-reimport',
     })
 
-    expect((exported.prompts as Array<Record<string, unknown>>)[0]?.content).toBe('Prompt {{getvar::hero}} text')
+    expect((exported.prompts as Array<Record<string, unknown>>).find((prompt) => prompt.identifier === 'synthetic-main')?.content).toBe('Prompt {{getvar::hero}} text')
     expect(((exported.extensions as Record<string, unknown>).instruct as Record<string, unknown>)?.template).toBe('Template {{getvar::hero}} text')
-    expect((((exported.extensions as Record<string, unknown>).regex_scripts as Array<Record<string, unknown>>)[0])?.findRegex).toBe('{{getvar::hero}}')
-    expect((((exported.extensions as Record<string, unknown>).regex_scripts as Array<Record<string, unknown>>)[0])?.replaceString).toBe('Regex {{setvar::hero::Alice}}')
-    expect(imported.preset.promptRules[0]?.content).toBe('Prompt {{getvar::hero}} text')
+    expect(((exported.extensions as Record<string, unknown>).regex_scripts as Array<Record<string, unknown>>).find((regex) => regex.id === 'synthetic-input-wrapper')?.findRegex).toBe('{{getvar::hero}}')
+    expect(((exported.extensions as Record<string, unknown>).regex_scripts as Array<Record<string, unknown>>).find((regex) => regex.id === 'synthetic-input-wrapper')?.replaceString).toBe('Regex {{setvar::hero::Alice}}')
+    expect(imported.preset.promptRules.find((rule) => rule.id === 'synthetic-main')?.content).toBe('Prompt {{getvar::hero}} text')
     expect((((imported.preset.passthrough.extensions as Record<string, unknown>).instruct as Record<string, unknown>)?.template)).toBe('Template {{getvar::hero}} text')
-    expect(reimported.preset.promptRules[0]?.content).toBe('Prompt {{getvar::hero}} text')
+    expect(reimported.preset.promptRules.find((rule) => rule.id === 'synthetic-main')?.content).toBe('Prompt {{getvar::hero}} text')
     expect((((reimported.preset.passthrough.extensions as Record<string, unknown>).instruct as Record<string, unknown>)?.template)).toBe('Template {{getvar::hero}} text')
-    expect(reimported.preset.embeddedRegexes[0]).toMatchObject({
+    expect(reimported.preset.embeddedRegexes.find((regex) => regex.id === 'synthetic-input-wrapper')).toMatchObject({
       pattern: '{{getvar::hero}}',
       replacement: 'Regex {{setvar::hero::Alice}}',
     })
   })
 
   it('accepts standalone regex imports from all supported shapes and degrades malformed entries with warnings', () => {
-    const fixture = readFixture('resets_example.json')
+    const fixture = readFixture('synthetic-sillytavern-preset.json')
     const rawRegexes = (fixture.extensions as Record<string, unknown>).regex_scripts as unknown[]
 
     const fromArray = normalizePresetCompatStandaloneRegexImport(rawRegexes, {
-      existingNames: ['【云瑾】包裹最新指示'],
+      existingNames: ['Synthetic input wrapper'],
     })
     const fromObject = normalizePresetCompatStandaloneRegexImport({ regex_scripts: rawRegexes })
     const fromSPreset = normalizePresetCompatStandaloneRegexImport({
@@ -457,11 +488,11 @@ describe('preset compat import/export compatibility', () => {
     expect(fromArray.regexes).toHaveLength(rawRegexes.length)
     expect(fromObject.regexes).toHaveLength(rawRegexes.length)
     expect(fromSPreset.regexes).toHaveLength(rawRegexes.length)
-    expect(fromArray.regexes[0]?.name).toBe('【云瑾】包裹最新指示 (copy)')
+    expect(fromArray.regexes.find((regex) => regex.id === 'synthetic-input-wrapper')?.name).toBe('Synthetic input wrapper (copy)')
 
     const malformed = normalizePresetCompatStandaloneRegexImport({
       regex_scripts: [
-        rawRegexes[0],
+        rawRegexes.find((regex) => (regex as Record<string, unknown>)?.id === 'synthetic-input-wrapper'),
         null,
         { scriptName: 'Broken regex', replaceString: 'x' },
         { scriptName: 'Odd trim', findRegex: 'abc', replaceString: 'def', trimStrings: 'not-an-array' },
@@ -624,10 +655,153 @@ describe('preset compat import/export compatibility', () => {
     expect(exported.main_prompt).toBe('Legacy main prompt content')
   })
 
+  it('exactly round-trips a generated large heterogeneous preset corpus', () => {
+    const roles = ['system', 'user', 'assistant', 'model']
+    const prompts = Array.from({ length: 130 }, (_, index) => ({
+      identifier: `corpus-prompt-${index.toString().padStart(3, '0')}`,
+      name: `Neutral corpus prompt ${index}`,
+      role: roles[index % roles.length],
+      system_prompt: index % 4 === 0,
+      content: `Deterministic neutral prompt content ${index}.`,
+      enabled: index % 3 !== 0,
+      marker: index % 17 === 0,
+      injection_position: index % 5 === 0 ? 1 : 0,
+      injection_depth: index % 7,
+      injection_order: 1000 - index,
+      injection_trigger: index % 3 === 0
+        ? null
+        : index % 3 === 1
+          ? []
+          : ['continue', 'chat'],
+      forbid_overrides: index % 11 === 0,
+      synthetic_prompt_metadata: {
+        group: index % 5,
+        retained: true,
+      },
+    }))
+    const regexPlacements = [0, 1, 2, 3, 6, 7]
+    const regexScripts = Array.from({ length: 9 }, (_, index) => ({
+      id: `corpus-regex-${index.toString().padStart(2, '0')}`,
+      scriptName: `Neutral corpus regex ${index}`,
+      findRegex: `^synthetic-${index}-(.*)$`,
+      replaceString: `neutral-${index}-$1`,
+      trimStrings: index % 2 === 0 ? [] : [`trim-${index}`],
+      placement: [regexPlacements[index % regexPlacements.length]],
+      disabled: index % 4 === 0,
+      markdownOnly: index % 3 === 0,
+      promptOnly: index % 3 === 1,
+      runOnEdit: index % 2 === 0,
+      substituteRegex: index % 2 === 0 ? 0 : `substitute-${index}`,
+      minDepth: index % 2 === 0 ? null : index,
+      maxDepth: index + 3,
+      synthetic_regex_metadata: {
+        sequence: index,
+        retained: true,
+      },
+    }))
+    const legacyOrder = prompts
+      .filter((_, index) => index % 3 === 0)
+      .map((prompt, index) => ({ identifier: prompt.identifier, enabled: index % 2 === 0 }))
+    const activeOrder = prompts
+      .map((prompt, index) => ({ identifier: prompt.identifier, enabled: index % 2 === 0 }))
+      .reverse()
+    const payload = {
+      name: 'Embedded generated corpus metadata',
+      synthetic_large_root: {
+        promptCount: prompts.length,
+        regexCount: regexScripts.length,
+      },
+      prompts,
+      prompt_order: [
+        { character_id: 100000, order: legacyOrder },
+        { character_id: 100001, order: activeOrder },
+      ],
+      extensions: {
+        regex_scripts: regexScripts,
+        SPreset: {
+          ChatSquash: {
+            enabled: true,
+            strategy: 'generated-neutral-window',
+            message_limit: 24,
+          },
+          RegexBinding: {
+            regexes: regexScripts,
+            source: 'generated-neutral-corpus',
+          },
+        },
+        MacroNest: {
+          enabled: true,
+          entries: Array.from({ length: 12 }, (_, index) => ({
+            key: `corpus-macro-${index}`,
+            value: `neutral-value-${index}`,
+          })),
+        },
+        ToolBindings: {
+          enabled: false,
+          tools: Array.from({ length: 4 }, (_, index) => ({
+            id: `corpus-tool-${index}`,
+            active: false,
+          })),
+        },
+        tavern_helper: {
+          enabled: true,
+          records: Array.from({ length: 8 }, (_, index) => ({
+            id: `helper-record-${index}`,
+            value: index,
+          })),
+        },
+      },
+    }
+
+    const { preset, warnings } = normalizePresetCompatPresetImport(payload, {
+      uploadedFileName: 'generated-large-corpus.json',
+      now: '2026-05-19T00:00:00.000Z',
+      idFactory: () => 'generated-large-corpus-preset',
+    })
+    const exported = exportPresetCompatPreset(preset)
+    const jsonRoundTrip = JSON.parse(JSON.stringify(exported)) as Record<string, unknown>
+
+    expect(warnings).toEqual([])
+    expect(preset.name).toBe('generated-large-corpus')
+    expect(preset.promptRules).toHaveLength(130)
+    expect(new Set(preset.promptRules.map((prompt) => prompt.role))).toEqual(
+      new Set(['system', 'user', 'assistant', 'model'])
+    )
+    expect(preset.embeddedRegexes).toHaveLength(9)
+    expect(preset.promptOrderLists.rewrite).toEqual(activeOrder.map((entry) => entry.identifier))
+    expect(preset.promptRules.find((prompt) => prompt.id === 'corpus-prompt-000')).toMatchObject({
+      role: 'system',
+      enabled: true,
+      injectionTrigger: [],
+    })
+    expect(preset.promptRules.find((prompt) => prompt.id === 'corpus-prompt-001')).toMatchObject({
+      role: 'user',
+      enabled: false,
+      injectionTrigger: [],
+    })
+    expect(preset.promptRules.find((prompt) => prompt.id === 'corpus-prompt-002')).toMatchObject({
+      role: 'assistant',
+      enabled: true,
+      injectionTrigger: ['continue', 'chat'],
+    })
+    expect(preset.promptRules.find((prompt) => prompt.id === 'corpus-prompt-003')?.role).toBe('model')
+    expect((exported.prompts as Array<Record<string, unknown>>).find((prompt) => prompt.identifier === 'corpus-prompt-000')).toMatchObject({
+      enabled: false,
+      injection_trigger: null,
+    })
+    expect((exported.prompts as Array<Record<string, unknown>>).find((prompt) => prompt.identifier === 'corpus-prompt-001')?.injection_trigger).toEqual([])
+    expect((exported.prompts as Array<Record<string, unknown>>).find((prompt) => prompt.identifier === 'corpus-prompt-002')?.injection_trigger).toEqual(['continue', 'chat'])
+    expect((exported.extensions as Record<string, unknown>).SPreset).toEqual(payload.extensions.SPreset)
+    expect((exported.extensions as Record<string, unknown>).MacroNest).toEqual(payload.extensions.MacroNest)
+    expect((exported.extensions as Record<string, unknown>).ToolBindings).toEqual(payload.extensions.ToolBindings)
+    expect((exported.extensions as Record<string, unknown>).tavern_helper).toEqual(payload.extensions.tavern_helper)
+    expect(jsonRoundTrip).toEqual(payload)
+  })
+
   it('keeps restored preset content parseable when a full-library blob is rebuilt from imported preset exports', () => {
-    const fixture = readFixture('resets_example.json')
+    const fixture = readFixture('synthetic-sillytavern-preset.json')
     const { preset } = normalizePresetCompatPresetImport(fixture, {
-      uploadedFileName: 'resets_example.json',
+      uploadedFileName: 'synthetic-sillytavern-preset.json',
       existingNames: [],
       now: '2026-05-18T00:00:00.000Z',
       idFactory: () => 'reset-roundtrip-preset',
@@ -658,8 +832,8 @@ describe('preset compat import/export compatibility', () => {
     expect((restoredLibrary.presets[preset.id]?.passthrough.extensions as Record<string, unknown>).regex_scripts).toEqual(
       (exportedRegexes as Record<string, unknown>).regex_scripts
     )
-    expect(restoredLibrary.presets[preset.id]?.promptRules[0]?.content).toBe(
-      preset.promptRules[0]?.content
+    expect(restoredLibrary.presets[preset.id]?.promptRules.find((rule) => rule.id === 'synthetic-main')?.content).toBe(
+      preset.promptRules.find((rule) => rule.id === 'synthetic-main')?.content
     )
     expect(restoredLibrary.surfaceBindings.rewrite.presetId).toBe(preset.id)
     expect(Object.keys(restoredLibrary.standaloneRegexes)).toHaveLength(regexes.length)
