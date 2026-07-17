@@ -2,9 +2,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { syncWorkspacePayloadToKnowledgeStore } from '@/lib/server/knowledge-rebuild'
+import { createWorkspaceKnowledgeSync } from '@/lib/server/knowledge-workspace-sync'
 import { createDatabaseAccess } from '@/lib/server/database-access'
+import { NovelRegistryNotReadyError } from '@/lib/server/db-resolver'
 import { hashContent } from '@/lib/server/knowledge-store'
 import { execute, initializeDatabase, queryOne } from '@/lib/server/sqlite'
 import { htmlToPlainText } from '@/lib/utils'
@@ -63,6 +65,26 @@ async function createPerNovelResolverFixture(prefix: string) {
   return resolver
 }
 
+function seedNovelRegistryStatus(
+  controlDb: DatabaseSync,
+  novelId: string,
+  migrationStatus: 'ready' | 'deleting' | 'deleted',
+) {
+  const novelDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', novelId)
+  controlDb.prepare(
+    `INSERT INTO NovelRegistry (
+       novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus
+     ) VALUES (?, ?, ?, ?, ?, '1', ?)`,
+  ).run(
+    novelId,
+    novelId,
+    novelId,
+    path.join(novelDirectory, 'novel.db'),
+    path.join(novelDirectory, 'lancedb'),
+    migrationStatus,
+  )
+}
+
 describe('syncWorkspacePayloadToKnowledgeStore', () => {
   it('aborts stale running rebuild jobs before removing stale novels', async () => {
     createTestDatabase('retale-knowledge-sync-stale-job-cleanup')
@@ -82,6 +104,124 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
     expect(queryOne<{ id: string }>('SELECT id FROM NovelRecord WHERE id = ?', 'novel_stale')).toBeNull()
     expect(queryOne<{ id: string }>('SELECT id FROM StoryBranch WHERE id = ?', 'novel_stale:main')).toBeNull()
     expect(queryOne<{ id: string }>('SELECT id FROM KnowledgeJob WHERE id = ?', 'job_stale')).toBeNull()
+  })
+
+  it.each(['deleting', 'deleted'] as const)(
+    'removes stale projection rows without opening storage for a %s registry entry',
+    async (migrationStatus) => {
+      createTestDatabase(`retale-knowledge-sync-${migrationStatus}-cleanup`)
+      const resolver = await import('@/lib/server/db-resolver')
+      const controlDb = resolver.getControlDb()
+      seedNovelRegistryStatus(controlDb, 'novel_tombstone', migrationStatus)
+      const novelDirectory = resolver.getNovelStoragePaths('novel_tombstone').novelDirectory
+
+      globalForSqlite.sqlite?.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(
+        'novel_tombstone',
+        'Tombstone',
+        'workspace',
+      )
+      globalForSqlite.sqlite?.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run(
+        'novel_tombstone:main',
+        'novel_tombstone',
+        'main',
+      )
+
+      await syncWorkspacePayloadToKnowledgeStore({ localNovels: [], localChapters: [] })
+
+      expect(queryOne<{ id: string }>('SELECT id FROM NovelRecord WHERE id = ?', 'novel_tombstone')).toBeNull()
+      expect(queryOne<{ id: string }>('SELECT id FROM StoryBranch WHERE id = ?', 'novel_tombstone:main')).toBeNull()
+      expect(fs.existsSync(novelDirectory)).toBe(false)
+      expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel_tombstone')).toEqual({
+        migrationStatus,
+      })
+    },
+  )
+
+  it('keeps normal storage-backed cleanup for ready stale novels', async () => {
+    createTestDatabase('retale-knowledge-sync-ready-cleanup')
+    const resolver = await import('@/lib/server/db-resolver')
+    const controlDb = resolver.getControlDb()
+    const novelDb = resolver.getNovelDb('novel_ready_stale')
+    seedNovelRegistryStatus(controlDb, 'novel_ready_stale', 'ready')
+    const novelDirectory = resolver.getNovelStoragePaths('novel_ready_stale').novelDirectory
+
+    globalForSqlite.sqlite?.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(
+      'novel_ready_stale',
+      'Ready stale',
+      'workspace',
+    )
+    novelDb.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(
+      'novel_ready_stale',
+      'Ready stale',
+      'workspace',
+    )
+
+    await syncWorkspacePayloadToKnowledgeStore({ localNovels: [], localChapters: [] })
+
+    expect(queryOne<{ id: string }>('SELECT id FROM NovelRecord WHERE id = ?', 'novel_ready_stale')).toBeNull()
+    expect(fs.existsSync(novelDirectory)).toBe(true)
+  })
+
+  it('accepts a ready-to-deleted race only after the registry confirms the tombstone', async () => {
+    const database = createTestDatabase('retale-knowledge-sync-ready-deleted-race')
+    const resolver = await import('@/lib/server/db-resolver')
+    const controlDb = resolver.getControlDb()
+    seedNovelRegistryStatus(controlDb, 'novel_raced', 'ready')
+    database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(
+      'novel_raced',
+      'Raced',
+      'workspace',
+    )
+    const abortKnowledgeRebuildUntilIdle = vi.fn(async () => {
+      controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('deleted', 'novel_raced')
+      throw new NovelRegistryNotReadyError('novel_raced', 'deleted')
+    })
+    const sync = createWorkspaceKnowledgeSync({ abortKnowledgeRebuildUntilIdle })
+
+    await sync({ localNovels: [], localChapters: [] }, { db: createDatabaseAccess(database) })
+
+    expect(abortKnowledgeRebuildUntilIdle).toHaveBeenCalledTimes(1)
+    expect(database.prepare('SELECT id FROM NovelRecord WHERE id = ?').get('novel_raced')).toBeUndefined()
+  })
+
+  it('rethrows unexpected stale cleanup failures without deleting the projection', async () => {
+    const database = createTestDatabase('retale-knowledge-sync-unexpected-cleanup-error')
+    database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(
+      'novel_failure',
+      'Failure',
+      'workspace',
+    )
+    const cleanupError = new Error('unexpected cleanup failure')
+    const sync = createWorkspaceKnowledgeSync({
+      abortKnowledgeRebuildUntilIdle: vi.fn(async () => {
+        throw cleanupError
+      }),
+    })
+
+    await expect(sync({ localNovels: [], localChapters: [] }, { db: createDatabaseAccess(database) }))
+      .rejects.toBe(cleanupError)
+    expect(database.prepare('SELECT id FROM NovelRecord WHERE id = ?').get('novel_failure')).toEqual({ id: 'novel_failure' })
+  })
+
+  it('rethrows a not-ready error when the fresh registry read still reports ready', async () => {
+    const database = createTestDatabase('retale-knowledge-sync-unconfirmed-registry-race')
+    const resolver = await import('@/lib/server/db-resolver')
+    seedNovelRegistryStatus(resolver.getControlDb(), 'novel_still_ready', 'ready')
+    database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(
+      'novel_still_ready',
+      'Still ready',
+      'workspace',
+    )
+    const notReadyError = new NovelRegistryNotReadyError('novel_still_ready', 'deleted')
+    const sync = createWorkspaceKnowledgeSync({
+      abortKnowledgeRebuildUntilIdle: vi.fn(async () => {
+        throw notReadyError
+      }),
+    })
+
+    await expect(sync({ localNovels: [], localChapters: [] }, { db: createDatabaseAccess(database) }))
+      .rejects.toBe(notReadyError)
+    expect(database.prepare('SELECT id FROM NovelRecord WHERE id = ?').get('novel_still_ready')).toEqual({ id: 'novel_still_ready' })
   })
 
   it('syncs workspace chapters without enqueuing a rebuild job', async () => {

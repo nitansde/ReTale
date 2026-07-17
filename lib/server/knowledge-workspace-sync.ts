@@ -10,6 +10,7 @@ import {
 } from '@/lib/server/knowledge-store'
 import { deleteBranchRetrievalIndex } from '@/lib/server/retrieval-index'
 import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/database-access'
+import { getNovelRegistryMigrationStatus, NovelRegistryNotReadyError } from '@/lib/server/db-resolver'
 import { htmlToPlainText } from '@/lib/utils'
 
 type KnowledgeChapterRow = {
@@ -116,6 +117,11 @@ async function deleteNovelProjectionArtifacts(novelId: string, branchId: string,
   })
 }
 
+function hasNonReadyNovelRegistry(novelId: string) {
+  const registry = getNovelRegistryMigrationStatus(novelId)
+  return Boolean(registry && registry.migrationStatus !== 'ready')
+}
+
 function countStructuredKnowledgeRows(novelId: string, branchId: string, db: NonNullable<WorkspaceKnowledgeSyncContext['db']>) {
   return db.queryOne<{ count: number }>(
     `
@@ -173,8 +179,21 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
   if (staleNovelIds.length) {
     for (const novel of staleNovelIds) {
       const branchId = getMainBranchId(novel.id)
-      await dependencies.abortKnowledgeRebuildUntilIdle({ novelId: novel.id, branchId })
-      await deleteBranchRetrievalIndex(novel.id, branchId)
+      if (hasNonReadyNovelRegistry(novel.id)) {
+        await deleteNovelProjectionArtifacts(novel.id, branchId, db)
+        continue
+      }
+
+      try {
+        await dependencies.abortKnowledgeRebuildUntilIdle({ novelId: novel.id, branchId })
+        await deleteBranchRetrievalIndex(novel.id, branchId)
+      } catch (error) {
+        if (error instanceof NovelRegistryNotReadyError && hasNonReadyNovelRegistry(novel.id)) {
+          await deleteNovelProjectionArtifacts(novel.id, branchId, db)
+          continue
+        }
+        throw error
+      }
       await deleteNovelProjectionArtifacts(novel.id, branchId, db)
     }
   }
