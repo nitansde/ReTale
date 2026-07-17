@@ -5,7 +5,7 @@ import { ensureEvidenceDir, writeEvidenceFile } from '@/tests/helpers/evidence'
 import { storyBranchFixtureIds } from '@/tests/helpers/fixture-ids'
 import type { StoryTimelineResponse } from '@/lib/story-branch-types'
 
-const fixturePath = process.cwd() + '/scripts/fixtures/workspace-import-smoke.txt'
+const fixturePath = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
 const evidenceDirectory = ensureEvidenceDir('task-15-branch-ux-playwright-mode-ux-simplification')
 const readerTypographyEvidenceDirectory = ensureEvidenceDir('task-9-reader-typography')
 const rewritePromptPlaceholder = '例如：保留剧情走向，但把这段写得更压迫、更像命运在逼近。'
@@ -944,7 +944,6 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
 })
 
 test('continue-block rewrite does not collide with workspace autosave preset saves', async ({ page }) => {
-  const fixturePath = process.cwd() + '/scripts/fixtures/workspace-import-smoke.txt'
   let imported = false
   let timelineState = buildBaseTimeline()
   let rewriteIndex = 0
