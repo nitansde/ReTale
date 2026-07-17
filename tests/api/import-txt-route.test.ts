@@ -70,6 +70,13 @@ function createGb18030ImportRequest() {
 }
 
 function mockImportSideEffects() {
+  const workspaceDb = {
+    execute: vi.fn(),
+    queryAll: vi.fn(() => []),
+    queryOne: vi.fn(() => null),
+    withTransaction: vi.fn(async (callback: () => unknown) => callback()),
+  }
+  const createNovelDatabaseAccess = vi.fn(() => workspaceDb)
   const backfillWorkspaceRuntimeFromArtifactIfMissing = vi.fn(async () => {})
   const loadWorkspacePayloadFromRuntimeOrRecovery = vi.fn(async () => ({}))
   const persistWorkspaceRuntimeState = vi.fn(async () => {})
@@ -82,9 +89,12 @@ function mockImportSideEffects() {
     persistWorkspaceRuntimeState,
   }))
   vi.doMock('@/lib/server/persistence', () => ({ upsertWorkspaceState }))
+  vi.doMock('@/lib/server/database-access', () => ({ createNovelDatabaseAccess }))
   vi.doMock('@/lib/server/knowledge-rebuild', () => ({ syncWorkspacePayloadToKnowledgeStore }))
 
   return {
+    workspaceDb,
+    createNovelDatabaseAccess,
     backfillWorkspaceRuntimeFromArtifactIfMissing,
     loadWorkspacePayloadFromRuntimeOrRecovery,
     persistWorkspaceRuntimeState,
@@ -98,6 +108,7 @@ function expectNoImportSideEffects(sideEffects: ReturnType<typeof mockImportSide
   expect(sideEffects.loadWorkspacePayloadFromRuntimeOrRecovery).not.toHaveBeenCalled()
   expect(sideEffects.persistWorkspaceRuntimeState).not.toHaveBeenCalled()
   expect(sideEffects.upsertWorkspaceState).not.toHaveBeenCalled()
+  expect(sideEffects.createNovelDatabaseAccess).not.toHaveBeenCalled()
   expect(sideEffects.syncWorkspacePayloadToKnowledgeStore).not.toHaveBeenCalled()
 }
 
@@ -107,6 +118,7 @@ afterEach(() => {
   vi.doUnmock('@/lib/server/knowledge-rebuild')
   vi.doUnmock('@/lib/server/workspace-resilience')
   vi.doUnmock('@/lib/server/persistence')
+  vi.doUnmock('@/lib/server/database-access')
 
   if (globalForSqlite.sqlite) {
     try {
@@ -295,6 +307,45 @@ describe('import-txt route', () => {
     expect(payload.ok).toBe(true)
     expect(payload.novelId).toMatch(/^novel_/)
     expect(payload.chapterCount).toBe(3)
+  })
+
+  it('scopes a later import to its generated novel and syncs through that explicit database', async () => {
+    const sideEffects = mockImportSideEffects()
+    sideEffects.loadWorkspacePayloadFromRuntimeOrRecovery.mockResolvedValue({
+      currentNovelId: 'novel_deleted',
+      currentChapterId: 'deleted-chapter',
+      localNovels: [{ id: 'novel_deleted', title: 'Deleted', summary: '', tags: [] }],
+      localChapters: [{
+        id: 'deleted-chapter',
+        novelId: 'novel_deleted',
+        volumeId: 'deleted-volume',
+        title: 'Deleted chapter',
+        content: '<p>stale</p>',
+        order: 1,
+        status: 'draft',
+        wordCount: 1,
+        updatedAt: '2026-05-16T00:00:00.000Z',
+      }],
+    })
+
+    const { POST } = await import('@/app/api/import-txt/route')
+    const response = await POST(createImportRequest())
+    const result = await response.json() as { ok: boolean; novelId: string }
+
+    expect(response.status).toBe(200)
+    expect(result.ok).toBe(true)
+    expect(result.novelId).toMatch(/^novel_/)
+    expect(result.novelId).not.toBe('novel_deleted')
+    expect(sideEffects.createNovelDatabaseAccess).toHaveBeenCalledWith(result.novelId)
+    expect(sideEffects.syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentNovelId: result.novelId,
+        localNovels: [expect.objectContaining({ id: result.novelId })],
+        localChapters: expect.not.arrayContaining([expect.objectContaining({ novelId: 'novel_deleted' })]),
+        syncScope: 'target-novel',
+      }),
+      { db: sideEffects.workspaceDb },
+    )
   })
 
   it('surfaces knowledge sync failures instead of reporting a broken import as success', async () => {

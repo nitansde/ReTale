@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { importNovelIntoWorkspace } from '@/lib/server/import-txt'
 import { upsertWorkspaceState } from '@/lib/server/persistence'
+import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { syncWorkspacePayloadToKnowledgeStore } from '@/lib/server/knowledge-rebuild'
 import {
   backfillWorkspaceRuntimeFromArtifactIfMissing,
@@ -8,6 +9,7 @@ import {
   persistWorkspaceRuntimeState,
 } from '@/lib/server/workspace-resilience'
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
+import { scopeWorkspaceStateToNovel } from '@/lib/server/workspace-novel-scope'
 
 const MAX_TXT_FILE_SIZE_BYTES = 10 * 1024 * 1024
 const MAX_IMPORT_BODY_SIZE_BYTES = MAX_TXT_FILE_SIZE_BYTES + 256 * 1024
@@ -150,16 +152,29 @@ export async function POST(request: Request) {
       text,
       summary: `从 ${file.name} 导入`,
     }))
+    const targetNovelId = nextState.currentNovelId
+    if (!targetNovelId) {
+      throw new Error('Imported workspace is missing its target novel')
+    }
+    const scopedState = scopeWorkspaceStateToNovel(nextState, targetNovelId)
 
-    await persistWorkspaceRuntimeState(nextState)
-    upsertWorkspaceState('singleton', JSON.stringify(nextState), { backupReason: 'import-txt' })
-    await syncWorkspacePayloadToKnowledgeStore(nextState)
+    await persistWorkspaceRuntimeState(scopedState)
+    const workspaceDb = createNovelDatabaseAccess(targetNovelId)
+    upsertWorkspaceState('singleton', JSON.stringify(scopedState), {
+      backupReason: 'import-txt',
+      novelId: targetNovelId,
+      db: workspaceDb,
+    })
+    await syncWorkspacePayloadToKnowledgeStore({
+      ...scopedState,
+      syncScope: 'target-novel',
+    }, { db: workspaceDb })
 
     return NextResponse.json({
       ok: true,
-      novelId: nextState.currentNovelId,
-      chapterId: nextState.currentChapterId,
-      chapterCount: nextState.localChapters.filter((item: { novelId: string; parentChapterId?: string }) => item.novelId === nextState.currentNovelId && !item.parentChapterId).length,
+      novelId: targetNovelId,
+      chapterId: scopedState.currentChapterId,
+      chapterCount: scopedState.localChapters.filter((item: { parentChapterId?: string }) => !item.parentChapterId).length,
     })
   } catch (error) {
     if (error instanceof ImportRequestBodySizeLimitError || error instanceof TxtFileSizeLimitError) {
