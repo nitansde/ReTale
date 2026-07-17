@@ -3,10 +3,12 @@ import http from 'node:http'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { expect, test, type Page } from '@playwright/test'
+import { createRoleplaySafeDataPath } from '../../scripts/roleplay-safe-qa.mjs'
 
 const ROOT = process.cwd()
 const evidenceDirectory = path.join(ROOT, '.sisyphus/evidence/full-project-refactor')
 const fixturePath = path.join(ROOT, 'scripts/fixtures/workspace-import-smoke.txt')
+const task12NovelTitle = 'task-12-full-stack-regression-novel'
 const presetFixturePath = path.join(ROOT, 'external/resets_example.json')
 const matrixPath = path.join(evidenceDirectory, 'full-stack-qa-matrix.md')
 const performancePath = path.join(evidenceDirectory, 'performance-before-after.md')
@@ -21,6 +23,7 @@ type WorkspacePayload = {
   currentNovelId: string
   currentChapterId: string
   currentTab?: string
+  localNovels: Array<{ id: string }>
   localChapters: Array<{
     id: string
     novelId: string | null
@@ -119,6 +122,11 @@ type GraphFixtureIdentity = {
   relationId: string
 }
 
+type KnowledgeJobStatus = {
+  jobId: string
+  status: string
+}
+
 function ensureEvidenceDir() {
   fs.mkdirSync(evidenceDirectory, { recursive: true })
 }
@@ -131,21 +139,57 @@ function resolveTestDatabasePath() {
   return dbPath
 }
 
-function openDatabase() {
-  return new DatabaseSync(resolveTestDatabasePath())
+function openNovelDatabase(novelId: string) {
+  const dataDirectory = createRoleplaySafeDataPath(resolveTestDatabasePath())
+  const databasePath = path.join(dataDirectory, 'novels', novelId, 'novel.db')
+  if (!fs.existsSync(databasePath)) {
+    throw new Error(`Novel database does not exist for ${novelId}: ${databasePath}`)
+  }
+  return new DatabaseSync(databasePath)
 }
 
-function readBackupCount() {
-  const database = openDatabase()
+function openControlDatabase() {
+  const dataDirectory = createRoleplaySafeDataPath(resolveTestDatabasePath())
+  const databasePath = path.join(dataDirectory, 'control.db')
+  if (!fs.existsSync(databasePath)) {
+    throw new Error(`Control database does not exist: ${databasePath}`)
+  }
+  return new DatabaseSync(databasePath)
+}
+
+function readReadyNovelRegistryCount(novelId: string) {
+  const database = openControlDatabase()
   try {
-    return (database.prepare('SELECT COUNT(*) AS count FROM WorkspaceStateBackup').get() as { count: number }).count
+    return (database.prepare("SELECT COUNT(*) AS count FROM NovelRegistry WHERE novelId = ? AND migrationStatus = 'ready'").get(novelId) as { count: number }).count
   } finally {
     database.close()
   }
 }
 
-function readRoleplayIsolationCounts() {
-  const database = openDatabase()
+function readActiveWorkspaceNovelId() {
+  const database = openControlDatabase()
+  try {
+    return (database.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID') as { value: string } | undefined)?.value ?? null
+  } finally {
+    database.close()
+  }
+}
+
+function getNovelDataDirectory(novelId: string) {
+  return path.join(createRoleplaySafeDataPath(resolveTestDatabasePath()), 'novels', novelId)
+}
+
+function readBackupCount(databaseNovelId: string) {
+  const database = openNovelDatabase(databaseNovelId)
+  try {
+    return (database.prepare('SELECT COUNT(*) AS count FROM WorkspaceStateBackup WHERE workspaceStateId = ?').get('singleton') as { count: number }).count
+  } finally {
+    database.close()
+  }
+}
+
+function readRoleplayIsolationCounts(databaseNovelId: string) {
+  const database = openNovelDatabase(databaseNovelId)
   try {
     return {
       sessions: (database.prepare('SELECT COUNT(*) AS count FROM roleplay_sessions').get() as { count: number }).count,
@@ -156,26 +200,8 @@ function readRoleplayIsolationCounts() {
   }
 }
 
-function readWorkspaceRuntimeNovelCount(novelId: string) {
-  const database = openDatabase()
-  try {
-    return (database.prepare('SELECT COUNT(*) AS count FROM WorkspaceRuntimeNovel WHERE workspaceStateId = ? AND id = ?').get('singleton', novelId) as { count: number }).count
-  } finally {
-    database.close()
-  }
-}
-
-function readWorkspaceRuntimeChapterCount(novelId: string) {
-  const database = openDatabase()
-  try {
-    return (database.prepare('SELECT COUNT(*) AS count FROM WorkspaceRuntimeChapter WHERE workspaceStateId = ? AND novelId = ?').get('singleton', novelId) as { count: number }).count
-  } finally {
-    database.close()
-  }
-}
-
-function readStoryTimelineNodeCount(nodeId: string) {
-  const database = openDatabase()
+function readStoryTimelineNodeCount(databaseNovelId: string, nodeId: string) {
+  const database = openNovelDatabase(databaseNovelId)
   try {
     return (database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes WHERE id = ?').get(nodeId) as { count: number }).count
   } finally {
@@ -183,8 +209,8 @@ function readStoryTimelineNodeCount(nodeId: string) {
   }
 }
 
-function readEntityLinkAndRelationStatus(edgeId: string, relationId: string) {
-  const database = openDatabase()
+function readEntityLinkAndRelationStatus(novelId: string, edgeId: string, relationId: string) {
+  const database = openNovelDatabase(novelId)
   try {
     const entityLink = database.prepare(
       'SELECT status, linkType, label, description, polarity, strength, validFromChapter, validUntilChapter, includeByDefault FROM EntityLink WHERE id = ?'
@@ -217,7 +243,7 @@ function readEntityLinkAndRelationStatus(edgeId: string, relationId: string) {
 }
 
 function seedGraphFixtures(identity: WorkspaceIdentity) {
-  const database = openDatabase()
+  const database = openNovelDatabase(identity.novelId)
   try {
     const heroEntityId = `${identity.novelId}-task12-graph-hero`
     const rivalEntityId = `${identity.novelId}-task12-graph-rival`
@@ -227,25 +253,23 @@ function seedGraphFixtures(identity: WorkspaceIdentity) {
     const rivalAppearanceId = `${identity.novelId}-task12-graph-appearance-rival`
     const validUntilChapter = 2_147_483_647
 
-    database.prepare(
-      `INSERT OR REPLACE INTO KnowledgeChapter (
-        id, novelId, branchId, chapterNo, title, rawText, summary,
-        revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      identity.chapterId,
-      identity.novelId,
-      identity.branchId,
-      identity.chapterNo,
-      identity.chapterTitle,
-      identity.selectedText,
-      'Task 12 graph fixture chapter summary.',
-      1,
-      0,
-      null,
-      `${identity.chapterId}-task12-graph`,
-      'ready'
-    )
+    const knowledgeChapter = database.prepare(
+      'SELECT id, novelId, branchId, chapterNo FROM KnowledgeChapter WHERE id = ?'
+    ).get(identity.chapterId) as {
+      id: string
+      novelId: string
+      branchId: string
+      chapterNo: number
+    } | undefined
+    if (
+      !knowledgeChapter
+      || knowledgeChapter.id !== identity.chapterId
+      || knowledgeChapter.novelId !== identity.novelId
+      || knowledgeChapter.branchId !== identity.branchId
+      || knowledgeChapter.chapterNo !== identity.chapterNo
+    ) {
+      throw new Error(`Imported KnowledgeChapter does not match graph fixture identity: ${JSON.stringify(knowledgeChapter ?? null)}`)
+    }
 
     database.prepare(
       `INSERT OR REPLACE INTO KnowledgeEntity (
@@ -356,7 +380,7 @@ function seedGraphFixtures(identity: WorkspaceIdentity) {
 }
 
 function seedFutureJumpFixtures(identity: WorkspaceIdentity) {
-  const database = openDatabase()
+  const database = openNovelDatabase(identity.novelId)
   try {
     const targetChapterId = `${identity.novelId}-task12-future-target`
     const outlineNodeId = `${identity.novelId}-task12-outline-node`
@@ -589,14 +613,18 @@ async function startFakeOllamaServer() {
   } satisfies FakeOllamaServer
 }
 
-async function importWorkspaceFixture(page: Page) {
+async function importWorkspaceFixture(page: Page, novelTitle: string) {
   await page.goto('/library', { waitUntil: 'networkidle' })
   await expect(page.getByRole('button', { name: /导入 TXT 小说|Import TXT Novel/ })).toBeVisible()
 
   const importResponsePromise = page.waitForResponse(
     (response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST'
   )
-  await page.locator('input[type=file]').setInputFiles(fixturePath)
+  await page.locator('input[type=file]').setInputFiles({
+    name: `${novelTitle}.txt`,
+    mimeType: 'text/plain',
+    buffer: fs.readFileSync(fixturePath),
+  })
   const importResponse = await importResponsePromise
   expect(importResponse.ok()).toBeTruthy()
   await page.waitForLoadState('networkidle')
@@ -660,6 +688,44 @@ async function fetchPresetCompatLibraryState(page: Page) {
   const response = await page.request.get('/api/settings/preset-compat')
   expect(response.ok()).toBeTruthy()
   return await response.json() as PresetCompatLibraryPayload
+}
+
+async function readActiveKnowledgeJobs(page: Page, novelId: string) {
+  const response = await page.request.get(`/api/knowledge-view?novelId=${novelId}&statusOnly=1`)
+  expect(response.ok()).toBeTruthy()
+  const payload = await response.json() as {
+    ok?: boolean
+    knowledgeRebuildStatus?: KnowledgeJobStatus | null
+    knowledgeStatusOverview?: {
+      retrievalIndex?: { task?: KnowledgeJobStatus | null }
+    } | null
+  }
+  expect(payload.ok).toBe(true)
+
+  const activeStatuses = new Set(['queued', 'running', 'paused'])
+  const jobs = [
+    payload.knowledgeRebuildStatus ?? null,
+    payload.knowledgeStatusOverview?.retrievalIndex?.task ?? null,
+  ].filter((job): job is KnowledgeJobStatus => Boolean(job && activeStatuses.has(job.status)))
+
+  return [...new Map(jobs.map((job) => [job.jobId, job])).values()]
+}
+
+async function settleActiveKnowledgeJobs(page: Page, novelId: string) {
+  for (let abortCount = 0; abortCount < 2; abortCount += 1) {
+    const activeJobs = await readActiveKnowledgeJobs(page, novelId)
+    if (!activeJobs.length) return
+
+    const abortResponse = await page.request.post('/api/knowledge-view', {
+      data: { novelId, action: 'abort' },
+    })
+    expect(abortResponse.status()).toBe(200)
+    const abortPayload = await abortResponse.json() as { ok?: boolean; jobOutcome?: unknown }
+    expect(abortPayload.ok).toBe(true)
+    expect(['aborted', 'idle']).toContain(abortPayload.jobOutcome)
+  }
+
+  expect(await readActiveKnowledgeJobs(page, novelId)).toEqual([])
 }
 
 async function resolveWorkspaceIdentity(page: Page) {
@@ -762,7 +828,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await expect(page.getByRole('heading', { name: 'Library' })).toBeVisible()
     await expect(page.getByText('Import TXT Novel')).toBeVisible()
 
-    const importStatus = await importWorkspaceFixture(page)
+    const importStatus = await importWorkspaceFixture(page, task12NovelTitle)
     const workspaceLoadStartedAt = Date.now()
     await expect(page.getByRole('heading', { name: 'Chapters', exact: true })).toBeVisible()
     await expect(page.getByTestId('workspace-current-word-count')).toContainText('words')
@@ -794,7 +860,8 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     )
     expect(workspaceExport.ok()).toBeTruthy()
     const exportedWorkspace = await workspaceExport.json() as WorkspacePayload
-    const backupCountBeforeRestore = readBackupCount()
+    const backupCountBeforeRestore = readBackupCount(exportedWorkspace.currentNovelId)
+    expect(backupCountBeforeRestore).toBeGreaterThan(0)
     const restoredWorkspace = {
       ...exportedWorkspace,
       currentTab: exportedWorkspace.currentTab ?? 'editor',
@@ -809,8 +876,8 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
       apiTimings,
     )
     expect(restoreResponse.ok()).toBeTruthy()
-    const backupCountAfterRestore = readBackupCount()
-    expect(backupCountAfterRestore).toBeGreaterThanOrEqual(Math.min(backupCountBeforeRestore, 20))
+    const backupCountAfterRestore = readBackupCount(exportedWorkspace.currentNovelId)
+    expect(backupCountAfterRestore).toBe(Math.min(backupCountBeforeRestore + 1, 20))
     await page.reload({ waitUntil: 'networkidle' })
     await expect(page.getByTestId('workspace-chapter-body-view')).toContainText('Task 12 restored export/import payload.')
     appendQaRow(qaRows, 'Library import + workspace load/edit/save/reload + JSON export/import/backup', '[performance-before-after.md](./performance-before-after.md)', `Import status ${importStatus}; workspace save latency ${saveLatencyMs} ms; backup count ${backupCountBeforeRestore} -> ${backupCountAfterRestore}.`)
@@ -1078,6 +1145,8 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await page.goto('/task', { waitUntil: 'networkidle' })
     await expect(page.getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible()
     await page.goto('/workspace', { waitUntil: 'networkidle' })
+    const identity = await resolveWorkspaceIdentity(page)
+    await expect(page.getByText('Knowledge graph is not built yet')).toBeVisible()
 
     await selectEntireChapter(page)
     await expect(page.getByTestId('workspace-chapter-rewrite-entry')).toBeVisible()
@@ -1086,7 +1155,6 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await expect(page.getByTestId('workspace-context-panel-toggle')).toHaveAttribute('aria-expanded', 'false')
     await page.getByTestId('workspace-context-panel-toggle').click()
     await expect(page.getByTestId('workspace-context-panel-toggle')).toHaveAttribute('aria-expanded', 'true')
-    const identity = await resolveWorkspaceIdentity(page)
     const graphFixtures = seedGraphFixtures(identity)
 
     await dismissWorkspaceActionOverlayIfVisible(page)
@@ -1179,7 +1247,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
       status: 'user_confirmed',
       includeByDefault: 0,
     })
-    const graphStatusAfterPatch = readEntityLinkAndRelationStatus(graphFixtures.edgeId, graphFixtures.relationId)
+    const graphStatusAfterPatch = readEntityLinkAndRelationStatus(identity.novelId, graphFixtures.edgeId, graphFixtures.relationId)
     expect(graphStatusAfterPatch.entityLink).toMatchObject({
       status: 'user_confirmed',
       linkType: 'bond',
@@ -1210,7 +1278,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     const graphRejectPayload = await graphRejectResponse.json() as { ok?: boolean; edge?: { status: string; includeByDefault: number } }
     expect(graphRejectPayload.ok).toBeTruthy()
     expect(graphRejectPayload.edge).toMatchObject({ status: 'rejected', includeByDefault: 0 })
-    const graphStatusAfterReject = readEntityLinkAndRelationStatus(graphFixtures.edgeId, graphFixtures.relationId)
+    const graphStatusAfterReject = readEntityLinkAndRelationStatus(identity.novelId, graphFixtures.edgeId, graphFixtures.relationId)
     expect(graphStatusAfterReject.entityLink).toMatchObject({ status: 'rejected', includeByDefault: 0 })
     expect(graphStatusAfterReject.knowledgeRelation).toMatchObject({ status: 'rejected' })
     const graphSubgraphAfterRejectResponse = await timedRequest(
@@ -1236,7 +1304,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     expect(graphConfirmPayload.edge?.status).toBe('user_confirmed')
     expect(graphConfirmPayload.edge?.includeByDefault).toBe(1)
     expect((graphConfirmPayload.edge?.confidence ?? 0)).toBeGreaterThanOrEqual(0.95)
-    const graphStatusAfterConfirm = readEntityLinkAndRelationStatus(graphFixtures.edgeId, graphFixtures.relationId)
+    const graphStatusAfterConfirm = readEntityLinkAndRelationStatus(identity.novelId, graphFixtures.edgeId, graphFixtures.relationId)
     expect(graphStatusAfterConfirm.entityLink).toMatchObject({ status: 'user_confirmed', includeByDefault: 1 })
     expect(graphStatusAfterConfirm.knowledgeRelation).toMatchObject({ status: 'user_confirmed' })
     const graphSubgraphConfirmedOnlyResponse = await timedRequest(
@@ -1333,7 +1401,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     const rootContinue = await createContinueResponse.json() as { continueBlockId: string; timelineNodeId: string }
     await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
     await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('Task 12 fake stream output')
-    expect(readStoryTimelineNodeCount(rootContinue.timelineNodeId)).toBe(1)
+    expect(readStoryTimelineNodeCount(identity.novelId, rootContinue.timelineNodeId)).toBe(1)
 
     const regenerateRewriteResponsePromise = page.waitForResponse((response) => response.url().includes('/api/rewrite') && response.request().method() === 'POST')
     await page.getByTestId('workspace-continue-block-regenerate-entry').click()
@@ -1423,6 +1491,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     const futureJumpCreateResponse = await futureJumpCreateResponsePromise
     apiTimings.push({ label: 'future-jump-create', ms: 0, status: futureJumpCreateResponse.status() })
     const futureJumpCreateResult = await futureJumpCreateResponse.json() as { runId: string; timelineNodeId: string }
+    expect(readStoryTimelineNodeCount(identity.novelId, futureJumpCreateResult.timelineNodeId)).toBe(1)
     await expect(page.getByTestId('workspace-future-jump-view')).toBeVisible()
     await expect(page.getByTestId('future-jump-view').getByText('Persisted Future Jump run', { exact: true })).toBeVisible()
     await expect(page.getByTestId('workspace-future-jump-view').getByRole('button', { name: 'Regenerate Future Jump' })).toBeVisible()
@@ -1458,7 +1527,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     expect(futureJumpDeleteResponse.ok()).toBeTruthy()
     const futureJumpDeletePayload = await futureJumpDeleteResponse.json() as { ok?: boolean; nodeId?: string }
     expect(futureJumpDeletePayload).toMatchObject({ ok: true, nodeId: futureJumpCreateResult.timelineNodeId })
-    await expect.poll(() => readStoryTimelineNodeCount(futureJumpCreateResult.timelineNodeId), { timeout: 10_000 }).toBe(0)
+    await expect.poll(() => readStoryTimelineNodeCount(identity.novelId, futureJumpCreateResult.timelineNodeId), { timeout: 10_000 }).toBe(0)
     const storyTimelineAfterFutureJumpDelete = await timedRequest(
       'story-timeline-after-future-jump-delete',
       page.request.get(`/api/story-timeline?novelId=${identity.novelId}&branchId=${identity.branchId}`),
@@ -1475,7 +1544,8 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
     appendQaRow(qaRows, 'Future Jump delete through real backend route with workspace fallback proof', '[performance-before-after.md](./performance-before-after.md)', 'Deleted the real Future Jump timeline node through browser-context `DELETE /api/story-timeline`, verified the node disappeared from `story_timeline_nodes` and the reloaded workspace fell back to the chapter body instead of reopening the deleted Future Jump selection.')
 
-    const whatIfNodeCountBeforeDelete = readStoryTimelineNodeCount(whatIfResult.timelineNodeId)
+    const whatIfNodeCountBeforeDelete = readStoryTimelineNodeCount(identity.novelId, whatIfResult.timelineNodeId)
+    expect(whatIfNodeCountBeforeDelete).toBe(1)
     await dismissWorkspaceActionOverlayIfVisible(page)
     page.once('dialog', async (dialog) => {
       await dialog.accept()
@@ -1486,9 +1556,9 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await page.getByTestId(`timeline-node-${whatIfResult.timelineNodeId}`).locator('xpath=following-sibling::button[1]').click()
     const deleteWhatIfResponse = await deleteWhatIfResponsePromise
     expect(deleteWhatIfResponse.ok()).toBeTruthy()
-    await expect.poll(() => readStoryTimelineNodeCount(whatIfResult.timelineNodeId), { timeout: 10_000 }).toBe(0)
+    await expect.poll(() => readStoryTimelineNodeCount(identity.novelId, whatIfResult.timelineNodeId), { timeout: 10_000 }).toBe(0)
     await expect(page.getByTestId(`timeline-node-${whatIfResult.timelineNodeId}`)).toHaveCount(0)
-    appendQaRow(qaRows, 'What-if delete through real timeline UI', '[performance-before-after.md](./performance-before-after.md)', `Deleted a real What-if branch node through the timeline UI; story_timeline_nodes count ${whatIfNodeCountBeforeDelete} -> ${readStoryTimelineNodeCount(whatIfResult.timelineNodeId)}.`)
+    appendQaRow(qaRows, 'What-if delete through real timeline UI', '[performance-before-after.md](./performance-before-after.md)', `Deleted a real What-if branch node through the timeline UI; story_timeline_nodes count ${whatIfNodeCountBeforeDelete} -> ${readStoryTimelineNodeCount(identity.novelId, whatIfResult.timelineNodeId)}.`)
 
     await page.goto('/workspace', { waitUntil: 'networkidle' })
     await dismissWorkspaceActionOverlayIfVisible(page)
@@ -1510,7 +1580,6 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
 
     await page.goto('/workspace', { waitUntil: 'networkidle' })
     await dismissWorkspaceActionOverlayIfVisible(page)
-    await expect(page.getByText('Knowledge graph is not built yet')).toBeVisible()
     const knowledgeGetResponse = await timedRequest(
       'knowledge-view-get',
       page.request.get(`/api/knowledge-view?novelId=${identity.novelId}`),
@@ -1584,6 +1653,8 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await page.screenshot({ path: knowledgeI18nScreenshotPath, fullPage: true })
     appendQaRow(qaRows, 'Knowledge rebuild, cache controls, retrieval status, and knowledge cards', '[performance-before-after.md](./performance-before-after.md)', `Triggered all three cache-delete guardrails plus the main knowledge rebuild through the knowledge UI, kept retrieval-index refresh as a supplementary API trigger because the visible retrieval control stayed disabled while the rebuild job was active in this QA runtime, and observed ${knowledgePollEvents.length} GET /api/knowledge-view polls.`)
     appendQaRow(qaRows, 'English knowledge-card and empty-state i18n surfaces', '[task-12-knowledge-i18n.png](./task-12-knowledge-i18n.png)', 'Verified the pre-rebuild empty-state copy plus the post-rebuild KG status overview card labels in English.')
+    await settleActiveKnowledgeJobs(page, identity.novelId)
+    expect(await readActiveKnowledgeJobs(page, identity.novelId)).toEqual([])
 
     const invalidContextPreviewResponse = await timedRequest(
       'invalid-context-preview-operation',
@@ -1601,7 +1672,9 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     )
     expect(invalidContextPreviewResponse.status()).toBe(400)
 
-    const invalidRoleplayBefore = readRoleplayIsolationCounts()
+    const invalidRoleplayBefore = readRoleplayIsolationCounts(identity.novelId)
+    expect(invalidRoleplayBefore.sessions).toBeGreaterThan(0)
+    expect(invalidRoleplayBefore.timelineNodes).toBeGreaterThan(0)
     const invalidRoleplayCreate = await timedRequest(
       'invalid-roleplay-direct-api',
       page.request.post('/api/roleplay/sessions', {
@@ -1625,7 +1698,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
       apiTimings,
     )
     expect(invalidRoleplayCreate.status()).toBe(404)
-    const invalidRoleplayAfter = readRoleplayIsolationCounts()
+    const invalidRoleplayAfter = readRoleplayIsolationCounts(identity.novelId)
     expect(invalidRoleplayAfter).toEqual(invalidRoleplayBefore)
     appendQaRow(qaRows, 'Invalid direct API calls do not create orphan rows', '[performance-before-after.md](./performance-before-after.md)', 'Confirmed 400/404 validation paths and stable roleplay/timeline row counts after invalid direct requests.')
 
@@ -1633,9 +1706,12 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
     await page.screenshot({ path: screenshotPath, fullPage: true })
 
-    const importedNovelTitle = 'workspace-import-smoke'
-    const runtimeNovelCountBeforeDelete = readWorkspaceRuntimeNovelCount(identity.novelId)
-    const runtimeChapterCountBeforeDelete = readWorkspaceRuntimeChapterCount(identity.novelId)
+    const importedNovelTitle = task12NovelTitle
+    const workspaceBeforeDelete = await fetchWorkspace(page)
+    expect(workspaceBeforeDelete.localChapters.some((chapter) => chapter.novelId === identity.novelId)).toBeTruthy()
+    expect(readReadyNovelRegistryCount(identity.novelId)).toBe(1)
+    expect(readActiveWorkspaceNovelId()).toBe(identity.novelId)
+    expect(fs.existsSync(getNovelDataDirectory(identity.novelId))).toBe(true)
     let deleteConfirmMessage = ''
     page.once('dialog', async (dialog) => {
       deleteConfirmMessage = dialog.message()
@@ -1645,23 +1721,53 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await expect(page.getByRole('heading', { name: 'Library' })).toBeVisible()
     const importedNovelCards = page.locator('article').filter({ has: page.getByRole('heading', { name: importedNovelTitle, exact: true }) })
     const importedNovelCardCountBeforeDelete = await importedNovelCards.count()
+    expect(importedNovelCardCountBeforeDelete).toBe(1)
     const importedNovelCard = importedNovelCards.last()
     await expect(importedNovelCard).toBeVisible()
     const deleteNovelResponsePromise = page.waitForResponse(
-      (response) => response.url().includes('/api/workspace') && response.request().method() === 'POST' && response.ok()
+      (response) => new URL(response.url()).pathname === '/api/workspace' && response.request().method() === 'DELETE'
     )
     await importedNovelCard.getByRole('button', { name: `Delete novel ${importedNovelTitle}` }).click()
     const deleteNovelResponse = await deleteNovelResponsePromise
-    expect(deleteNovelResponse.ok()).toBeTruthy()
+    const deleteNovelResponseBody = await deleteNovelResponse.json() as {
+      ok?: unknown
+      deletedNovelId?: unknown
+      activeNovelId?: unknown
+      deletionState?: unknown
+      cleanupPending?: unknown
+    }
+    expect(Object.keys(deleteNovelResponseBody).sort(), JSON.stringify(deleteNovelResponseBody)).toEqual(['activeNovelId', 'cleanupPending', 'deletedNovelId', 'deletionState', 'ok'])
+    expect([200, 202], JSON.stringify(deleteNovelResponseBody)).toContain(deleteNovelResponse.status())
+    expect(deleteNovelResponseBody.ok, JSON.stringify(deleteNovelResponseBody)).toBe(true)
+    expect(deleteNovelResponseBody.deletedNovelId, JSON.stringify(deleteNovelResponseBody)).toBe(identity.novelId)
+    expect(deleteNovelResponseBody.activeNovelId === null || typeof deleteNovelResponseBody.activeNovelId === 'string', JSON.stringify(deleteNovelResponseBody)).toBe(true)
+    expect(deleteNovelResponseBody.deletionState, JSON.stringify(deleteNovelResponseBody)).toBe('deleted')
+    expect(typeof deleteNovelResponseBody.cleanupPending, JSON.stringify(deleteNovelResponseBody)).toBe('boolean')
+    expect(deleteNovelResponse.status() === 202, JSON.stringify(deleteNovelResponseBody)).toBe(deleteNovelResponseBody.cleanupPending)
+    const activeNovelIdAfterDelete = deleteNovelResponseBody.activeNovelId as string | null
+    const cleanupPendingAfterDelete = deleteNovelResponseBody.cleanupPending as boolean
+    expect(new URL(deleteNovelResponse.url()).searchParams.get('novelId')).toBe(identity.novelId)
     await expect(page.getByText(`Deleted "${importedNovelTitle}"`)).toBeVisible()
     await expect.poll(async () => await importedNovelCards.count()).toBe(importedNovelCardCountBeforeDelete - 1)
-    await expect.poll(() => readWorkspaceRuntimeNovelCount(identity.novelId), { timeout: 10_000 }).toBe(0)
-    await expect.poll(() => readWorkspaceRuntimeChapterCount(identity.novelId), { timeout: 10_000 }).toBe(0)
+    await expect.poll(() => readReadyNovelRegistryCount(identity.novelId), { timeout: 10_000 }).toBe(0)
+    expect(readActiveWorkspaceNovelId()).toBe(activeNovelIdAfterDelete)
+    if (!cleanupPendingAfterDelete) {
+      expect(fs.existsSync(getNovelDataDirectory(identity.novelId))).toBe(false)
+    }
     const workspaceAfterDelete = await fetchWorkspace(page)
-    expect(workspaceAfterDelete.currentNovelId).not.toBe(identity.novelId)
-    expect(workspaceAfterDelete.localChapters.some((chapter) => chapter.novelId === identity.novelId)).toBeFalsy()
+    expect(workspaceAfterDelete.localNovels.some((novel) => novel.id === identity.novelId)).toBe(false)
+    expect(workspaceAfterDelete.localChapters.some((chapter) => chapter.novelId === identity.novelId)).toBe(false)
+    expect(workspaceAfterDelete.currentNovelId).toBe(activeNovelIdAfterDelete ?? '')
+    if (activeNovelIdAfterDelete) {
+      expect(workspaceAfterDelete.currentChapterId).toBeTruthy()
+      expect(workspaceAfterDelete.localChapters.some((chapter) => chapter.id === workspaceAfterDelete.currentChapterId && chapter.novelId === activeNovelIdAfterDelete)).toBe(true)
+    } else {
+      expect(workspaceAfterDelete.currentChapterId).toBe('')
+    }
+    await page.reload({ waitUntil: 'networkidle' })
+    await expect(page.locator('article').filter({ has: page.getByRole('heading', { name: importedNovelTitle, exact: true }) })).toHaveCount(0)
     expect(deleteConfirmMessage).toContain(importedNovelTitle)
-    appendQaRow(qaRows, 'Library delete removes imported novel from UI and persisted workspace runtime', '[performance-before-after.md](./performance-before-after.md)', `Deleted \`${importedNovelTitle}\` through the real library UI; WorkspaceRuntimeNovel count ${runtimeNovelCountBeforeDelete} -> ${readWorkspaceRuntimeNovelCount(identity.novelId)}, chapter rows ${runtimeChapterCountBeforeDelete} -> ${readWorkspaceRuntimeChapterCount(identity.novelId)}.`)
+    appendQaRow(qaRows, 'Library delete permanently removes the target novel', '[performance-before-after.md](./performance-before-after.md)', `Deleted \`${importedNovelTitle}\` through the real library UI with status ${deleteNovelResponse.status()} and cleanupPending=${cleanupPendingAfterDelete}, removed its ready registry row, matched the control/workspace active novel to the server-selected survivor, and confirmed the target card stayed absent after reload.`)
 
     const matrixLines = [
       '# Task 12 full-stack QA matrix',
