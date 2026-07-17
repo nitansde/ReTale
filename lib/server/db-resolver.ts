@@ -7,6 +7,25 @@ import { assertOwnedTestPath } from '../../scripts/test-path-safety.mjs'
 
 type DatabaseSync = NodeSqlite.DatabaseSync
 
+export type NovelRegistryMigrationStatus = 'ready' | 'deleting' | 'deleted' | string
+
+export type NovelStoragePaths = {
+  dataRootPath: string
+  novelsRootPath: string
+  quarantineRootPath: string
+  novelDirectory: string
+  databasePath: string
+  lanceDbPath: string
+  quarantinePath: string
+}
+
+export class NovelRegistryNotReadyError extends Error {
+  constructor(readonly novelId: string, readonly migrationStatus: NovelRegistryMigrationStatus) {
+    super(`Novel "${novelId}" is not available while its registry status is "${migrationStatus}"`)
+    this.name = 'NovelRegistryNotReadyError'
+  }
+}
+
 const globalForDbResolver = globalThis as {
   __retaleNovelDatabaseOverrides?: Map<string, DatabaseSync>
   __retaleResolvedDbs?: Map<string, DatabaseSync>
@@ -50,7 +69,41 @@ function assertContainedPath(basePath: string, candidatePath: string, label: str
   throw new Error(`${label} resolves outside the configured data directory`)
 }
 
-function validateNovelId(novelId: string) {
+function canonicalizePotentialPath(candidatePath: string) {
+  const unresolvedParts: string[] = []
+  let existingPath = path.resolve(candidatePath)
+
+  while (!fs.existsSync(existingPath)) {
+    const parentPath = path.dirname(existingPath)
+    if (parentPath === existingPath) {
+      break
+    }
+    unresolvedParts.unshift(path.basename(existingPath))
+    existingPath = parentPath
+  }
+
+  const canonicalExistingPath = fs.existsSync(existingPath)
+    ? fs.realpathSync.native(existingPath)
+    : existingPath
+  return path.join(canonicalExistingPath, ...unresolvedParts)
+}
+
+function readPathStats(candidatePath: string) {
+  try {
+    return fs.lstatSync(candidatePath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+}
+
+function assertExistingPathIsNotSymlink(candidatePath: string, label: string) {
+  if (readPathStats(candidatePath)?.isSymbolicLink()) {
+    throw new Error(`${label} must not be a symbolic link`)
+  }
+}
+
+export function validateNovelId(novelId: string) {
   if (typeof novelId !== 'string') {
     throw new Error('Invalid novel ID: expected a string')
   }
@@ -87,6 +140,20 @@ function getCanonicalCacheKey(filePath: string) {
   return fs.realpathSync.native(absolutePath)
 }
 
+export function getNovelRegistryMigrationStatus(novelId: string) {
+  const stableNovelId = validateNovelId(novelId)
+  return getControlDb().prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get(stableNovelId) as {
+    migrationStatus: NovelRegistryMigrationStatus
+  } | undefined
+}
+
+function assertNovelRegistryReadyOrMissing(novelId: string) {
+  const registry = getNovelRegistryMigrationStatus(novelId)
+  if (registry && registry.migrationStatus !== 'ready') {
+    throw new NovelRegistryNotReadyError(novelId, registry.migrationStatus)
+  }
+}
+
 function openResolvedDatabase(databasePath: string, options?: { schemaSql?: string; mode?: 'full' | 'control' }) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true })
 
@@ -110,18 +177,114 @@ function getNovelDirectory(novelId: string) {
   return novelDirectory
 }
 
+export function getNovelStoragePaths(novelId: string): NovelStoragePaths {
+  const stableNovelId = validateNovelId(novelId)
+  const dataRootPath = getDataRootPath()
+  const novelsRootPath = path.join(dataRootPath, 'novels')
+  const quarantineRootPath = path.join(dataRootPath, '.novel-quarantine')
+  const novelDirectory = getNovelDirectory(stableNovelId)
+  return {
+    dataRootPath,
+    novelsRootPath,
+    quarantineRootPath,
+    novelDirectory,
+    databasePath: path.join(novelDirectory, 'novel.db'),
+    lanceDbPath: path.join(novelDirectory, 'lancedb'),
+    quarantinePath: path.resolve(quarantineRootPath, stableNovelId),
+  }
+}
+
+export function validateNovelDeletionPaths(novelId: string) {
+  const paths = getNovelStoragePaths(novelId)
+  assertExistingPathIsNotSymlink(paths.dataRootPath, 'Configured data directory')
+  assertExistingPathIsNotSymlink(paths.novelsRootPath, 'Novel storage root')
+  assertExistingPathIsNotSymlink(paths.quarantineRootPath, 'Novel quarantine root')
+  assertExistingPathIsNotSymlink(paths.novelDirectory, `Novel storage for "${novelId}"`)
+  assertExistingPathIsNotSymlink(paths.quarantinePath, `Novel quarantine for "${novelId}"`)
+
+  const canonicalDataRoot = canonicalizePotentialPath(paths.dataRootPath)
+  const canonicalNovelsRoot = canonicalizePotentialPath(paths.novelsRootPath)
+  const canonicalQuarantineRoot = canonicalizePotentialPath(paths.quarantineRootPath)
+  const canonicalNovelDirectory = canonicalizePotentialPath(paths.novelDirectory)
+  const canonicalQuarantinePath = canonicalizePotentialPath(paths.quarantinePath)
+  assertContainedPath(canonicalDataRoot, canonicalNovelsRoot, 'Novel storage root')
+  assertContainedPath(canonicalDataRoot, canonicalQuarantineRoot, 'Novel quarantine root')
+  assertContainedPath(canonicalNovelsRoot, canonicalNovelDirectory, `Novel storage for "${novelId}"`)
+  assertContainedPath(canonicalQuarantineRoot, canonicalQuarantinePath, `Novel quarantine for "${novelId}"`)
+  return paths
+}
+
+export function evictNovelStorageCache(novelId: string) {
+  const { databasePath } = getNovelStoragePaths(novelId)
+  const cache = getResolverCache()
+  const cacheKeys = new Set([path.resolve(databasePath), getCanonicalCacheKey(databasePath)])
+  const cachedDatabases = new Set(
+    [...cacheKeys]
+      .map((cacheKey) => cache.get(cacheKey))
+      .filter((database): database is DatabaseSync => Boolean(database)),
+  )
+
+  let closeFailure: unknown = null
+  try {
+    for (const cached of cachedDatabases) {
+      try {
+        ;(cached as DatabaseSync & { close?: () => void }).close?.()
+      } catch (error) {
+        closeFailure ??= error
+      }
+    }
+  } finally {
+    for (const cacheKey of cacheKeys) {
+      cache.delete(cacheKey)
+    }
+  }
+  if (closeFailure) throw closeFailure
+}
+
+export function quarantineNovelStorage(paths: NovelStoragePaths) {
+  const sourceExists = readPathStats(paths.novelDirectory) !== null
+  const quarantineExists = readPathStats(paths.quarantinePath) !== null
+  if (sourceExists && quarantineExists) {
+    throw new Error(`Novel storage and quarantine both exist for "${path.basename(paths.novelDirectory)}"`)
+  }
+  if (!sourceExists) {
+    return quarantineExists ? 'resumed' as const : 'absent' as const
+  }
+
+  fs.mkdirSync(paths.quarantineRootPath, { recursive: true })
+  assertExistingPathIsNotSymlink(paths.quarantineRootPath, 'Novel quarantine root')
+  assertExistingPathIsNotSymlink(paths.novelDirectory, `Novel storage for "${path.basename(paths.novelDirectory)}"`)
+  assertExistingPathIsNotSymlink(paths.quarantinePath, `Novel quarantine for "${path.basename(paths.novelDirectory)}"`)
+  fs.renameSync(paths.novelDirectory, paths.quarantinePath)
+  return 'moved' as const
+}
+
+export function purgeNovelQuarantine(paths: NovelStoragePaths) {
+  assertExistingPathIsNotSymlink(paths.quarantineRootPath, 'Novel quarantine root')
+  assertExistingPathIsNotSymlink(paths.quarantinePath, `Novel quarantine for "${path.basename(paths.quarantinePath)}"`)
+  fs.rmSync(paths.quarantinePath, {
+    recursive: true,
+    force: true,
+    maxRetries: 3,
+    retryDelay: 100,
+  })
+}
+
 export function getNovelLanceDbPath(novelId: string) {
-  return path.join(getNovelDirectory(novelId), 'lancedb')
+  const stableNovelId = validateNovelId(novelId)
+  assertNovelRegistryReadyOrMissing(stableNovelId)
+  return getNovelStoragePaths(stableNovelId).lanceDbPath
 }
 
 export function getNovelDb(novelId: string) {
   const stableNovelId = validateNovelId(novelId)
+  assertNovelRegistryReadyOrMissing(stableNovelId)
   const override = globalForDbResolver.__retaleNovelDatabaseOverrides?.get(stableNovelId)
   if (override) {
     return override
   }
 
-  return openResolvedDatabase(path.join(getNovelDirectory(stableNovelId), 'novel.db'))
+  return openResolvedDatabase(getNovelStoragePaths(stableNovelId).databasePath)
 }
 
 export function setNovelDatabaseOverrideForTests(novelId: string, database: DatabaseSync) {

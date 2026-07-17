@@ -111,14 +111,18 @@ async function loadResolverModule(dataRootPath: string) {
   return import('@/lib/server/db-resolver')
 }
 
-function setActiveWorkspaceNovelId(database: DatabaseSync, novelId: string) {
+function writeAppSetting(database: DatabaseSync, key: string, value: string) {
   database.prepare(
     `INSERT INTO AppSetting (id, key, value)
      VALUES (lower(hex(randomblob(16))), ?, ?)
      ON CONFLICT(key) DO UPDATE SET
        value = excluded.value,
        updatedAt = CURRENT_TIMESTAMP`
-  ).run('WORKSPACE_ACTIVE_NOVEL_ID', novelId)
+  ).run(key, value)
+}
+
+function setActiveWorkspaceNovelId(database: DatabaseSync, novelId: string) {
+  writeAppSetting(database, 'WORKSPACE_ACTIVE_NOVEL_ID', novelId)
 }
 
 function createWorkspaceRequest(payload: Record<string, unknown>, headers: Record<string, string> = {}) {
@@ -349,8 +353,73 @@ describe('per-novel database resolver', () => {
     expect(fs.existsSync(path.join(dataRootPath, 'novels'))).toBe(false)
   })
 
+  it('fences non-ready registry rows from live storage resolution and ordinary upserts', async () => {
+    const dataRootPath = createTempDataRoot()
+    const resolver = await loadResolverModule(dataRootPath)
+    const controlDb = resolver.getControlDb()
+    const alphaDb = resolver.getNovelDb('novel-alpha')
+    const alphaDbPath = getDatabaseFile(alphaDb)
+    controlDb.prepare(
+      `INSERT INTO NovelRegistry (
+         novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus
+       ) VALUES (?, ?, ?, ?, ?, '1', 'ready')`,
+    ).run('novel-alpha', 'novel-alpha', 'Original', alphaDbPath, path.join(path.dirname(alphaDbPath), 'lancedb'))
+    controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('deleting', 'novel-alpha')
+
+    expect(() => resolver.getNovelDb('novel-alpha')).toThrow(/not available/)
+    expect(() => resolver.getNovelLanceDbPath('novel-alpha')).toThrow(/not available/)
+
+    const { upsertWorkspaceNovelRegistry, upsertWorkspaceState } = await import('@/lib/server/persistence')
+    upsertWorkspaceNovelRegistry({ novelId: 'novel-alpha', title: 'Must Not Revive' })
+    expect(controlDb.prepare('SELECT title, migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({
+      title: 'Original',
+      migrationStatus: 'deleting',
+    })
+
+    setActiveWorkspaceNovelId(controlDb, 'novel-safe')
+    expect(() => upsertWorkspaceState('singleton', JSON.stringify(createNovelWorkspacePayload('novel-alpha')), {
+      novelId: 'novel-alpha',
+    })).toThrow('Novel deletion is already in progress or complete')
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({
+      value: 'novel-safe',
+    })
+
+    const { normalizeWorkspaceState } = await import('@/lib/workspace-state')
+    const { persistWorkspaceRuntimeState } = await import('@/lib/server/workspace-resilience')
+    await expect(persistWorkspaceRuntimeState(normalizeWorkspaceState(createNovelWorkspacePayload('novel-alpha'))))
+      .rejects.toThrow('Novel deletion is already in progress or complete')
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({
+      value: 'novel-safe',
+    })
+
+    upsertWorkspaceNovelRegistry({ novelId: 'novel-new', title: 'New Novel' })
+    expect(controlDb.prepare('SELECT title, migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-new')).toEqual({
+      title: 'New Novel',
+      migrationStatus: 'ready',
+    })
+    expect(() => resolver.getNovelDb('novel-new')).not.toThrow()
+  })
+
   it('keeps raw singleton sqlite imports limited to resolver and documented control modules', () => {
     expect(listRawSqliteImportFiles()).toEqual([...RAW_SQLITE_IMPORT_ALLOWED_FILES].sort((left, right) => left.localeCompare(right, 'en-US')))
+  })
+
+  it('keeps app-setting reads and writes in control.db inside novel scope', async () => {
+    const dataRootPath = createTempDataRoot()
+    const resolver = await loadResolverModule(dataRootPath)
+    const controlDb = resolver.getControlDb()
+    const novelDb = resolver.getNovelDb('novel-alpha')
+    writeAppSetting(controlDb, 'AI_SETTINGS_V2', 'control-value')
+    writeAppSetting(novelDb, 'AI_SETTINGS_V2', 'novel-decoy')
+
+    const { runWithNovelDatabaseAccess } = await import('@/lib/server/database-access')
+    const { findAppSettings, upsertAppSettings } = await import('@/lib/server/persistence')
+    const scopedRead = runWithNovelDatabaseAccess('novel-alpha', () => findAppSettings(['AI_SETTINGS_V2']))
+    await runWithNovelDatabaseAccess('novel-alpha', () => upsertAppSettings([['AI_SETTINGS_V2', 'control-updated']]))
+
+    expect(scopedRead).toMatchObject([{ key: 'AI_SETTINGS_V2', value: 'control-value' }])
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('AI_SETTINGS_V2')).toEqual({ value: 'control-updated' })
+    expect(novelDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('AI_SETTINGS_V2')).toEqual({ value: 'novel-decoy' })
   })
 
   it('saves workspace runtime and artifacts only into the targeted novel database', async () => {
@@ -385,6 +454,45 @@ describe('per-novel database resolver', () => {
       currentNovelId: 'novel-beta',
       localNovels: [{ id: 'novel-beta', title: 'Beta Initial' }],
     })
+  })
+
+  it('evicts and removes only the deleted novel storage while leaving sibling routing usable', async () => {
+    const dataRootPath = createTempDataRoot()
+    const resolver = await loadResolverModule(dataRootPath)
+    const controlDb = resolver.getControlDb()
+    const alphaDb = resolver.getNovelDb('novel-alpha')
+    const betaDb = resolver.getNovelDb('novel-beta')
+    const alphaDirectory = path.dirname(getDatabaseFile(alphaDb))
+    const betaDirectory = path.dirname(getDatabaseFile(betaDb))
+    setActiveWorkspaceNovelId(controlDb, 'novel-alpha')
+
+    for (const novelId of ['novel-alpha', 'novel-beta']) {
+      const novelDirectory = path.join(dataRootPath, 'novels', novelId)
+      controlDb.prepare(
+        `INSERT INTO NovelRegistry (
+           novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus
+         ) VALUES (?, ?, ?, ?, ?, '1', 'ready')`
+      ).run(
+        novelId,
+        novelId,
+        novelId,
+        path.join(novelDirectory, 'novel.db'),
+        path.join(novelDirectory, 'lancedb'),
+      )
+    }
+    fs.mkdirSync(resolver.getNovelLanceDbPath('novel-alpha'), { recursive: true })
+    fs.writeFileSync(path.join(resolver.getNovelLanceDbPath('novel-alpha'), 'index.lance'), 'alpha-index')
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await DELETE(new Request('http://localhost/api/workspace?novelId=novel-alpha&nextNovelId=novel-beta', {
+      method: 'DELETE',
+    }))
+
+    expect(response.status).toBe(200)
+    expect(fs.existsSync(alphaDirectory)).toBe(false)
+    expect(fs.existsSync(betaDirectory)).toBe(true)
+    expect((alphaDb as DatabaseSync & { isOpen: boolean }).isOpen).toBe(false)
+    expect(betaDb.prepare('SELECT 1 AS value').get()).toEqual({ value: 1 })
   })
 
   it('does not let a corrupt sibling novel database block alpha save or alpha read paths', async () => {
