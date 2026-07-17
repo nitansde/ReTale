@@ -10,18 +10,7 @@ import type { PresetCompatLibrary } from '@/lib/preset-compat/types'
 import { ensureEvidenceDir, writeEvidenceFile } from '@/tests/helpers/evidence'
 
 const WORKTREE_ROOT = process.cwd()
-const MAIN_REPO_ROOT = process.cwd()
-
-function resolveFixturePath(relativePath: string) {
-  const worktreePath = path.join(WORKTREE_ROOT, relativePath)
-  if (fs.existsSync(worktreePath)) {
-    return worktreePath
-  }
-
-  return path.join(MAIN_REPO_ROOT, relativePath)
-}
-
-const fixturePath = resolveFixturePath(path.join('external', 'resets_example.json'))
+const fixturePath = path.join(WORKTREE_ROOT, 'tests/fixtures/preset-compat/synthetic-sillytavern-preset.json')
 
 function buildRecoverableRewriteJob(params: {
   jobId: string
@@ -199,52 +188,7 @@ function buildWorkspacePayload() {
 
 test('workspace preset-compat library modal imports fixture JSON, edits bindings and generation settings, resets context state, and exports JSON', async ({ page }) => {
   const evidenceDirectory = ensureEvidenceDir('task-9')
-  const fixtureText = JSON.stringify({
-    temperature: 1,
-    frequency_penalty: 0,
-    presence_penalty: 0,
-    top_p: 1,
-    top_a: 1,
-    max_context_unlocked: true,
-    openai_max_context: 2000000,
-    openai_max_tokens: 32000,
-    stream_openai: true,
-    prompts: [
-      {
-        identifier: 'main',
-        name: '➡️扩写/转述输入',
-        role: 'user',
-        system_prompt: true,
-        content: 'Small fixture main prompt',
-        injection_position: 0,
-        injection_depth: 4,
-        forbid_overrides: false,
-        injection_order: 100,
-        injection_trigger: [],
-      },
-      {
-        identifier: 'jailbreak',
-        name: 'Small fixture support prompt',
-        role: 'system',
-        system_prompt: true,
-        content: 'Support prompt',
-        injection_position: 0,
-        injection_depth: 4,
-        forbid_overrides: false,
-        injection_order: 90,
-        injection_trigger: [],
-      },
-    ],
-    prompt_order: [
-      {
-        character_id: 100001,
-        order: [
-          { identifier: 'main', enabled: true },
-          { identifier: 'jailbreak', enabled: true },
-        ],
-      },
-    ],
-  })
+  const fixtureText = fs.readFileSync(fixturePath, 'utf8')
   let library = createDefaultPresetCompatLibrary()
   let presetImportCounter = 0
   let regexImportCounter = 0
@@ -354,16 +298,16 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
   await expect(page.getByText('全局预设兼容库')).toBeVisible()
 
   await page.getByTestId('preset-compat-preset-import-input').setInputFiles({
-    name: 'resets_example.json',
+    name: 'synthetic-sillytavern-preset.json',
     mimeType: 'application/json',
     buffer: Buffer.from(fixtureText),
   })
-  await expect(page.getByRole('button', { name: /resets_example/ }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: /synthetic-sillytavern-preset/ }).first()).toBeVisible()
 
   const importedPreset = library.presets['preset-ui-1']
   expect(importedPreset).toBeDefined()
-  const firstRuleId = importedPreset.promptRules[0]?.id
-  expect(firstRuleId).toBeTruthy()
+  const mainRuleId = importedPreset.promptRules.find((rule) => rule.id === 'synthetic-main')?.id
+  expect(mainRuleId).toBe('synthetic-main')
   await expect(page.locator('select[data-testid^="preset-compat-binding-"]')).toHaveCount(PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS.length)
   await expect(page.getByTestId('preset-compat-binding-summary-rewrite')).toContainText('save / continue / regenerate')
   await expect(page.getByTestId('preset-compat-binding-summary-future_jump')).toContainText('不参与 continue')
@@ -371,7 +315,7 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
   await expect(page.getByTestId('preset-compat-binding-expand')).toHaveCount(0)
   await expect(page.getByTestId('preset-compat-binding-polish')).toHaveCount(0)
   await expect(page.getByTestId('preset-compat-binding-continue')).toHaveCount(0)
-  await expect(page.getByTestId(`preset-compat-rule-content-${firstRuleId}`)).toBeVisible()
+  await expect(page.getByTestId(`preset-compat-rule-content-${mainRuleId}`)).toBeVisible()
   await expect(page.getByTestId('preset-compat-preview-surface-select')).toHaveValue('rewrite')
   await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toHaveCount(0)
   await page.getByTestId('preset-compat-preview-generate').click()
@@ -418,10 +362,10 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
       }],
     })),
   })
-  const firstStandaloneAttachButton = page.locator('[data-testid^="preset-compat-standalone-regex-attach-"]').first()
-  await expect(firstStandaloneAttachButton).toBeVisible()
-  const firstStandaloneRegexId = Object.keys(library.standaloneRegexes)[0]
-  expect(firstStandaloneRegexId).toBeTruthy()
+  const standaloneRegexId = 'fixture-regex-1'
+  const standaloneAttachButton = page.getByTestId(`preset-compat-standalone-regex-attach-${standaloneRegexId}`)
+  await expect(standaloneAttachButton).toBeVisible()
+  expect(library.standaloneRegexes[standaloneRegexId]).toBeDefined()
 
   for (const surfaceId of ['rewrite', 'future_jump', 'roleplay'] as const) {
     await page.getByTestId(`preset-compat-binding-${surfaceId}`).selectOption('preset-ui-1')
@@ -435,13 +379,13 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
   await page.getByTestId('preset-compat-runtime-top-p').fill('0.85')
   await page.getByTestId('preset-compat-transport-stream-openai').selectOption('true')
 
-  await page.getByTestId(`preset-compat-rule-toggle-${firstRuleId}`).uncheck()
-  await page.getByTestId(`preset-compat-rule-toggle-${firstRuleId}`).check()
-  await page.getByTestId(`preset-compat-rule-content-${firstRuleId}`).fill('Updated from Playwright.')
-  await expect(page.getByTestId(`preset-compat-rule-content-${firstRuleId}`)).toHaveValue('Updated from Playwright.')
+  await page.getByTestId(`preset-compat-rule-toggle-${mainRuleId}`).uncheck()
+  await page.getByTestId(`preset-compat-rule-toggle-${mainRuleId}`).check()
+  await page.getByTestId(`preset-compat-rule-content-${mainRuleId}`).fill('Updated from Playwright.')
+  await expect(page.getByTestId(`preset-compat-rule-content-${mainRuleId}`)).toHaveValue('Updated from Playwright.')
 
-  await firstStandaloneAttachButton.click()
-  await expect(firstStandaloneAttachButton).toContainText('Detach from preset')
+  await standaloneAttachButton.click()
+  await expect(standaloneAttachButton).toContainText('Detach from preset')
 
   const presetDownloadPromise = page.waitForEvent('download')
   await page.getByTestId('preset-compat-preset-export-preset-ui-1').click()
@@ -462,7 +406,7 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
   })
 
   await page.getByTestId('preset-compat-preset-delete-preset-ui-1').click()
-  await expect(page.getByText('已删除预设“resets_example”，并已保存。')).toBeVisible()
+  await expect(page.getByText('已删除预设“synthetic-sillytavern-preset”，并已保存。')).toBeVisible()
   expect(library.presets['preset-ui-1']).toBeUndefined()
   expect(library.surfaceBindings.rewrite.presetId).toBeNull()
   expect(library.surfaceBindings.future_jump.presetId).toBeNull()
@@ -485,7 +429,7 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
     buffer: Buffer.from(JSON.stringify({ regex_scripts: [null, { scriptName: 'Broken regex', replaceString: 'x' }] })),
   })
   await expect(page.getByText('没有导入任何正则条目。')).toBeVisible()
-  await expect(page.getByText('resets_example')).toHaveCount(0)
+  await expect(page.getByText('synthetic-sillytavern-preset')).toHaveCount(0)
 
   await page.screenshot({ path: path.join(evidenceDirectory, 'task-9-library-ui.png'), fullPage: true })
 })
@@ -670,13 +614,13 @@ test('workspace rewrite flow saves a macro-bearing preset binding and sends Alic
   await page.getByTestId('preset-compat-library-open').click()
   await expect(page.getByTestId('preset-compat-library-modal')).toBeVisible()
   await page.getByTestId('preset-compat-preset-import-input').setInputFiles(fixturePath)
-  await expect(page.getByRole('button', { name: /resets_example/ }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: /synthetic-sillytavern-preset/ }).first()).toBeVisible()
   const importedPreset = library.presets['preset-ui-1']
   expect(importedPreset).toBeDefined()
-  const firstEditableRuleId = importedPreset.promptRules.find((rule) => !rule.forbidOverrides)?.id
-  expect(firstEditableRuleId).toBeTruthy()
-  rewriteMacroRuleId = firstEditableRuleId ?? null
-  await page.getByTestId(`preset-compat-rule-content-${firstEditableRuleId}`).fill('Playwright macro proof: {{user}} talks to {{char}}.')
+  const macroRuleId = importedPreset.promptRules.find((rule) => rule.id === 'synthetic-main' && !rule.forbidOverrides)?.id
+  expect(macroRuleId).toBe('synthetic-main')
+  rewriteMacroRuleId = macroRuleId ?? null
+  await page.getByTestId(`preset-compat-rule-content-${macroRuleId}`).fill('Playwright macro proof: {{user}} talks to {{char}}.')
   await page.getByTestId('preset-compat-binding-rewrite').selectOption('preset-ui-1')
   await page.getByRole('button', { name: '保存兼容库' }).click()
   await expect(page.getByText('预设兼容库已保存。')).toBeVisible()

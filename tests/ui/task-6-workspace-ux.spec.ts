@@ -85,14 +85,16 @@ test('preset compat modal keeps internal error keys out of user-facing copy', as
   })
 
   await importWorkspaceFixture(page)
-  await page.getByTestId('preset-compat-library-open').click()
+  await page.getByTestId('preset-compat-library-open').evaluate((node) => {
+    ;(node as HTMLButtonElement).click()
+  })
   await expect(page.getByTestId('preset-compat-library-modal')).toBeVisible()
 
   const presetImportResponsePromise = page.waitForResponse(
     (response) => response.url().includes('/api/settings/preset-compat/import') && response.request().method() === 'POST'
   )
   await page.getByTestId('preset-compat-preset-import-input').setInputFiles(
-    path.join(process.cwd(), 'external/resets_example.json')
+    path.join(process.cwd(), 'tests/fixtures/preset-compat/synthetic-sillytavern-preset.json')
   )
   const presetImportResponse = await presetImportResponsePromise
   expect(presetImportResponse.ok()).toBeTruthy()

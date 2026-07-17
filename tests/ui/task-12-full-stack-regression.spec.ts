@@ -9,7 +9,7 @@ const ROOT = process.cwd()
 const evidenceDirectory = path.join(ROOT, '.sisyphus/evidence/full-project-refactor')
 const fixturePath = path.join(ROOT, 'scripts/fixtures/workspace-import-smoke.txt')
 const task12NovelTitle = 'task-12-full-stack-regression-novel'
-const presetFixturePath = path.join(ROOT, 'external/resets_example.json')
+const presetFixturePath = path.join(ROOT, 'tests/fixtures/preset-compat/synthetic-sillytavern-preset.json')
 const matrixPath = path.join(evidenceDirectory, 'full-stack-qa-matrix.md')
 const performancePath = path.join(evidenceDirectory, 'performance-before-after.md')
 const screenshotPath = path.join(evidenceDirectory, 'task-12-i18n-full-stack.png')
@@ -1039,8 +1039,8 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     const presetLibraryAfterImport = await fetchPresetCompatLibraryState(page)
     const importedPreset = importedPresetId ? presetLibraryAfterImport.presets[importedPresetId] : null
     expect(importedPreset).toBeTruthy()
-    const importedPresetName = importedPreset?.name ?? 'resets_example'
-    const editablePromptRule = importedPreset?.promptRules.find((rule) => !rule.forbidOverrides) ?? null
+    const importedPresetName = importedPreset?.name ?? 'synthetic-sillytavern-preset'
+    const editablePromptRule = importedPreset?.promptRules.find((rule) => rule.id === 'synthetic-main' && !rule.forbidOverrides) ?? null
     expect(editablePromptRule).toBeTruthy()
 
     const importedPresetButton = page.locator('button').filter({ hasText: importedPresetName }).first()
@@ -1066,7 +1066,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await page.getByTestId('preset-compat-preview-surface-select').selectOption('rewrite')
     await page.getByTestId('preset-compat-preview-generate').click()
     await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toBeVisible()
-    await expect(page.getByTestId('preset-compat-preview-user-rewrite')).toHaveValue(/<最新互动>/)
+    await expect(page.getByTestId('preset-compat-preview-user-rewrite')).toHaveValue(/<synthetic-user-input>/)
 
     const presetSaveResponsePromise = page.waitForResponse(
       (response) => response.url().includes('/api/settings/preset-compat') && response.request().method() === 'POST' && response.ok()
