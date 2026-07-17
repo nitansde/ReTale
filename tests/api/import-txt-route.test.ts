@@ -45,7 +45,7 @@ function createImportRequest() {
         '第2章 决断\n',
         '他决定改变既定命运。\n',
       ].join('')],
-      '合成测试故事-short.txt',
+      'workspace-import-smoke.txt',
       { type: 'text/plain' }
     )
   )
@@ -417,7 +417,7 @@ describe('import-txt route', () => {
     const payload = await response.json() as { localNovels: Array<{ title: string }>; localChapters: Array<{ title: string; content: string }> }
 
     expect(response.status).toBe(200)
-    expect(payload.localNovels[0]?.title).toBe('合成测试故事-short')
+    expect(payload.localNovels[0]?.title).toBe('workspace-import-smoke')
     expect(payload.localChapters[1]?.title).toBe('第1章 初遇')
     expect(payload.localChapters[1]?.content).toContain('林澄开始记录这次练习。')
   })
