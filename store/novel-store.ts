@@ -65,13 +65,21 @@ import {
 } from '@/lib/workspace-state'
 import { createAISettingsActions } from '@/store/novel-store-ai'
 import { createKnowledgeActions } from '@/store/novel-store-knowledge'
-import { createPersistenceActions, serializeState } from '@/store/novel-store-persistence'
+import {
+  createPersistenceActions,
+  fetchAuthoritativeWorkspace,
+  pollNovelDeletionStatus,
+  serializeState,
+} from '@/store/novel-store-persistence'
 import { createRewriteActions } from '@/store/novel-store-rewrite'
 import type {
   GenerateRewriteParams,
   ImportPayload,
   KnowledgeProjectionResult,
   PresetCompatImportResult,
+  DeleteNovelOutcome,
+  NovelDeletionReconciliationResult,
+  NovelDeletionTransaction,
 } from '@/store/novel-store-types'
 
 function collectChapterSubtreeIds(chapters: Chapter[], rootChapterId: string) {
@@ -205,9 +213,166 @@ function buildStateAfterChapterDeletion(state: PersistedNovelState, chapterId: s
   }
 }
 
+function valuesEqual(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function restoreRemovedRecords<T extends { id: string }>(
+  current: T[],
+  before: T[],
+  optimistic: T[]
+) {
+  const optimisticIds = new Set(optimistic.map((item) => item.id))
+  const removedIds = new Set(before.filter((item) => !optimisticIds.has(item.id)).map((item) => item.id))
+  if (!removedIds.size) return current
+
+  const currentById = new Map(current.map((item) => [item.id, item]))
+  const beforeIds = new Set(before.map((item) => item.id))
+  const restored = before.flatMap((item) => {
+    const currentItem = currentById.get(item.id)
+    if (currentItem) return [currentItem]
+    return removedIds.has(item.id) ? [item] : []
+  })
+
+  return [...restored, ...current.filter((item) => !beforeIds.has(item.id))]
+}
+
+function restoreRemovedSessionEntries(
+  current: PersistedNovelState['presetCompatSessionState'],
+  before: PersistedNovelState['presetCompatSessionState'],
+  optimistic: PersistedNovelState['presetCompatSessionState']
+) {
+  const restored = { ...current }
+  for (const [key, entry] of Object.entries(before)) {
+    if (!(key in optimistic) && !(key in current)) restored[key] = entry
+  }
+  return restored
+}
+
+function mergeAuthoritativeTargetRecords<T extends { id: string }>(
+  current: T[],
+  before: T[],
+  authoritative: T[],
+  isTarget: (item: T) => boolean
+) {
+  const currentById = new Map(current.map((item) => [item.id, item]))
+  const beforeIds = new Set(before.map((item) => item.id))
+  const authoritativeTarget = authoritative.filter(isTarget)
+  const authoritativeTargetById = new Map(authoritativeTarget.map((item) => [item.id, item]))
+  const merged = before.flatMap((item) => {
+    if (isTarget(item)) {
+      const authoritativeItem = authoritativeTargetById.get(item.id)
+      return authoritativeItem ? [authoritativeItem] : []
+    }
+
+    const currentItem = currentById.get(item.id)
+    return currentItem ? [currentItem] : []
+  })
+
+  merged.push(...authoritativeTarget.filter((item) => !beforeIds.has(item.id)))
+  merged.push(...current.filter((item) => !beforeIds.has(item.id) && !isTarget(item)))
+  return merged
+}
+
+function mergeAuthoritativeTargetSessionEntries(
+  current: PersistedNovelState['presetCompatSessionState'],
+  authoritative: PersistedNovelState['presetCompatSessionState'],
+  targetChapterIds: Set<string>
+) {
+  const isTargetKey = (key: string) => Array.from(targetChapterIds).some((chapterId) =>
+    key.startsWith(`chapter:${encodeURIComponent(chapterId)}::`)
+  )
+  const merged = Object.fromEntries(Object.entries(current).filter(([key]) => !isTargetKey(key)))
+  for (const [key, entry] of Object.entries(authoritative)) {
+    if (isTargetKey(key)) merged[key] = entry
+  }
+  return merged
+}
+
+function buildStateAfterAuthoritativeNovelDeletionReconciliation(
+  current: PersistedNovelState,
+  authoritative: PersistedNovelState,
+  transaction: NovelDeletionTransaction
+): { state: PersistedNovelState; result: NovelDeletionReconciliationResult } {
+  const selectionUnchanged = current.currentNovelId === transaction.optimistic.currentNovelId
+    && current.currentChapterId === transaction.optimistic.currentChapterId
+  const selection = selectionUnchanged
+    ? {
+        currentNovelId: authoritative.currentNovelId,
+        currentChapterId: authoritative.currentChapterId,
+      }
+    : {
+        currentNovelId: current.currentNovelId,
+        currentChapterId: current.currentChapterId,
+      }
+
+  const isTargetNovel = (item: { id: string }) => item.id === transaction.novelId
+  const isTargetRecord = (item: { novelId: string }) => item.novelId === transaction.novelId
+  const targetChapterIds = new Set([
+    ...transaction.before.localChapters.filter(isTargetRecord).map((chapter) => chapter.id),
+    ...authoritative.localChapters.filter(isTargetRecord).map((chapter) => chapter.id),
+  ])
+  const isTargetChapterRecord = (item: { chapterId: string }) => targetChapterIds.has(item.chapterId)
+
+  return {
+    state: {
+      ...current,
+      ...selection,
+      localNovels: mergeAuthoritativeTargetRecords(current.localNovels, transaction.before.localNovels, authoritative.localNovels, isTargetNovel),
+      localVolumes: mergeAuthoritativeTargetRecords(current.localVolumes, transaction.before.localVolumes, authoritative.localVolumes, isTargetRecord),
+      localChapters: mergeAuthoritativeTargetRecords(current.localChapters, transaction.before.localChapters, authoritative.localChapters, isTargetRecord),
+      localOutlines: mergeAuthoritativeTargetRecords(current.localOutlines, transaction.before.localOutlines, authoritative.localOutlines, isTargetRecord),
+      localCharacters: mergeAuthoritativeTargetRecords(current.localCharacters, transaction.before.localCharacters, authoritative.localCharacters, isTargetRecord),
+      localCharacterRelations: mergeAuthoritativeTargetRecords(current.localCharacterRelations, transaction.before.localCharacterRelations, authoritative.localCharacterRelations, isTargetRecord),
+      localWorldEntries: mergeAuthoritativeTargetRecords(current.localWorldEntries, transaction.before.localWorldEntries, authoritative.localWorldEntries, isTargetRecord),
+      localTimelineEvents: mergeAuthoritativeTargetRecords(current.localTimelineEvents, transaction.before.localTimelineEvents, authoritative.localTimelineEvents, isTargetRecord),
+      rewriteCandidates: valuesEqual(current.rewriteCandidates, transaction.optimistic.rewriteCandidates)
+        ? authoritative.rewriteCandidates
+        : current.rewriteCandidates,
+      rewriteHistory: mergeAuthoritativeTargetRecords(current.rewriteHistory, transaction.before.rewriteHistory, authoritative.rewriteHistory, isTargetChapterRecord),
+      trajectories: mergeAuthoritativeTargetRecords(current.trajectories, transaction.before.trajectories, authoritative.trajectories, isTargetChapterRecord),
+      selectionText: valuesEqual(current.selectionText, transaction.optimistic.selectionText)
+        ? authoritative.selectionText
+        : current.selectionText,
+      selectedParagraphIndex: valuesEqual(current.selectedParagraphIndex, transaction.optimistic.selectedParagraphIndex)
+        ? authoritative.selectedParagraphIndex
+        : current.selectedParagraphIndex,
+      presetCompatSessionState: mergeAuthoritativeTargetSessionEntries(current.presetCompatSessionState, authoritative.presetCompatSessionState, targetChapterIds),
+    },
+    result: 'present',
+  }
+}
+
+function buildStateAfterRejectedNovelDeletion(
+  current: PersistedNovelState,
+  transaction: NovelDeletionTransaction
+): PersistedNovelState {
+  const { before, optimistic } = transaction
+  return {
+    ...current,
+    currentNovelId: valuesEqual(current.currentNovelId, optimistic.currentNovelId) ? before.currentNovelId : current.currentNovelId,
+    currentChapterId: valuesEqual(current.currentChapterId, optimistic.currentChapterId) ? before.currentChapterId : current.currentChapterId,
+    localNovels: restoreRemovedRecords(current.localNovels, before.localNovels, optimistic.localNovels),
+    localVolumes: restoreRemovedRecords(current.localVolumes, before.localVolumes, optimistic.localVolumes),
+    localChapters: restoreRemovedRecords(current.localChapters, before.localChapters, optimistic.localChapters),
+    localOutlines: restoreRemovedRecords(current.localOutlines, before.localOutlines, optimistic.localOutlines),
+    localCharacters: restoreRemovedRecords(current.localCharacters, before.localCharacters, optimistic.localCharacters),
+    localCharacterRelations: restoreRemovedRecords(current.localCharacterRelations, before.localCharacterRelations, optimistic.localCharacterRelations),
+    localWorldEntries: restoreRemovedRecords(current.localWorldEntries, before.localWorldEntries, optimistic.localWorldEntries),
+    localTimelineEvents: restoreRemovedRecords(current.localTimelineEvents, before.localTimelineEvents, optimistic.localTimelineEvents),
+    rewriteCandidates: valuesEqual(current.rewriteCandidates, optimistic.rewriteCandidates) ? before.rewriteCandidates : current.rewriteCandidates,
+    rewriteHistory: restoreRemovedRecords(current.rewriteHistory, before.rewriteHistory, optimistic.rewriteHistory),
+    trajectories: restoreRemovedRecords(current.trajectories, before.trajectories, optimistic.trajectories),
+    selectionText: valuesEqual(current.selectionText, optimistic.selectionText) ? before.selectionText : current.selectionText,
+    selectedParagraphIndex: valuesEqual(current.selectedParagraphIndex, optimistic.selectedParagraphIndex) ? before.selectedParagraphIndex : current.selectedParagraphIndex,
+    presetCompatSessionState: restoreRemovedSessionEntries(current.presetCompatSessionState, before.presetCompatSessionState, optimistic.presetCompatSessionState),
+  }
+}
+
 type NovelStore = PersistedNovelState & {
   isHydrated: boolean
   isSaving: boolean
+  isNovelDeletionPending: boolean
   backendLoaded: boolean
   backendLoadError: string
   presetCompatLibrary: PresetCompatLibrary
@@ -267,6 +432,14 @@ type NovelStore = PersistedNovelState & {
   setHydrated: (value: boolean) => void
   loadFromBackend: () => Promise<void>
   saveToBackend: () => Promise<void>
+  deleteNovelFromBackend: (novelId: string) => Promise<DeleteNovelOutcome>
+  reconcileNovelDeletionFromBackend: (transaction: NovelDeletionTransaction) => Promise<NovelDeletionReconciliationResult>
+  beginNovelDeletion: (novelId: string) => NovelDeletionTransaction | null
+  rollbackNovelDeletion: (transaction: NovelDeletionTransaction) => void
+  snapshotPersistedState: () => PersistedNovelState
+  restorePersistedState: (snapshot: PersistedNovelState) => void
+  setNovelDeletionPending: (pending: boolean) => void
+  reconcileNovelDeletion: (activeNovelId: string | null) => void
   loadPresetCompatLibrary: () => Promise<void>
   savePresetCompatLibrary: () => Promise<void>
   importPresetCompatPreset: (params: Omit<ImportPresetCompatPayloadParams, 'kind'>) => Promise<PresetCompatImportResult>
@@ -320,6 +493,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
   ...initialState,
   isHydrated: false,
   isSaving: false,
+  isNovelDeletionPending: false,
   backendLoaded: false,
   backendLoadError: '',
   presetCompatLibrary: createDefaultPresetCompatLibrary(),
@@ -565,6 +739,64 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     set((state) => buildStateAfterChapterDeletion(state, chapterId)),
   deleteNovel: (novelId) =>
     set((state) => buildStateAfterNovelDeletion(state, novelId)),
+  beginNovelDeletion: (novelId) => {
+    let transaction: NovelDeletionTransaction | null = null
+    set((state) => {
+      const before = serializeState(state)
+      if (!before.localNovels.some((item) => item.id === novelId) && !before.localChapters.some((item) => item.novelId === novelId)) {
+        return state
+      }
+      const optimistic = {
+        ...before,
+        ...buildStateAfterNovelDeletion(before, novelId),
+      }
+      transaction = { novelId, before, optimistic }
+      return optimistic
+    })
+    return transaction
+  },
+  rollbackNovelDeletion: (transaction) => set((state) => buildStateAfterRejectedNovelDeletion(serializeState(state), transaction)),
+  reconcileNovelDeletionFromBackend: async (transaction) => {
+    const status = await pollNovelDeletionStatus(transaction.novelId)
+    if (status.deletionState === 'deleted') return 'deleted'
+
+    const authoritative = await fetchAuthoritativeWorkspace(transaction.novelId)
+    let result: NovelDeletionReconciliationResult = 'present'
+    set((state) => {
+      const reconciliation = buildStateAfterAuthoritativeNovelDeletionReconciliation(
+        serializeState(state),
+        authoritative,
+        transaction
+      )
+      result = reconciliation.result
+      return reconciliation.state
+    })
+    return result
+  },
+  snapshotPersistedState: () => serializeState(get()),
+  restorePersistedState: (snapshot) => set(snapshot),
+  setNovelDeletionPending: (pending) => set({ isNovelDeletionPending: pending }),
+  reconcileNovelDeletion: (activeNovelId) => set((state) => {
+    if (activeNovelId === null) {
+      return {
+        currentNovelId: '',
+        currentChapterId: '',
+      }
+    }
+
+    const activeChapter = state.currentNovelId === activeNovelId
+      ? state.localChapters.find((chapter) => chapter.id === state.currentChapterId && chapter.novelId === activeNovelId)
+      : null
+    const nextChapter = activeChapter ?? pickNextAvailableChapter(
+      state.localChapters.filter((chapter) => chapter.novelId === activeNovelId),
+      activeNovelId
+    )
+
+    return {
+      currentNovelId: nextChapter?.novelId ?? '',
+      currentChapterId: nextChapter?.id ?? '',
+    }
+  }),
   ...createKnowledgeActions(set, get),
   ...createAISettingsActions(set, get),
   selectRewriteCandidate: (id) =>

@@ -133,6 +133,39 @@ export type PresetCompatImportResult = {
   warnings: string[]
 }
 
+export type DeleteNovelFromBackendResult = {
+  ok: true
+  deletedNovelId: string
+  activeNovelId: string | null
+  deletionState: 'deleted'
+  cleanupPending: boolean
+}
+
+export type DeleteNovelOutcome =
+  | { status: 'committed'; result: DeleteNovelFromBackendResult }
+  | { status: 'rejected'; error: string }
+  | { status: 'indeterminate'; error: string }
+
+export type NovelDeletionTransaction = {
+  novelId: string
+  before: PersistedNovelState
+  optimistic: PersistedNovelState
+}
+
+export type NovelDeletionStatus = 'ready' | 'deleting' | 'deleted'
+
+export type NovelDeletionStatusObservation = {
+  ok: true
+  novelId: string
+  deletionState: NovelDeletionStatus
+}
+
+export type NovelDeletionStatusResult = Omit<NovelDeletionStatusObservation, 'deletionState'> & {
+  deletionState: Exclude<NovelDeletionStatus, 'deleting'>
+}
+
+export type NovelDeletionReconciliationResult = 'deleted' | 'present'
+
 export type KnowledgeProjectionResult = KnowledgeProjectionPayload & {
   knowledgeRebuildStatus: KnowledgeRebuildStatus | null
   hanlpCacheSnapshot: HanlpCacheSnapshot | null
@@ -144,6 +177,7 @@ export type KnowledgeProjectionResult = KnowledgeProjectionPayload & {
 export type NovelStore = PersistedNovelState & {
   isHydrated: boolean
   isSaving: boolean
+  isNovelDeletionPending: boolean
   backendLoaded: boolean
   backendLoadError: string
   presetCompatLibrary: PresetCompatLibrary
@@ -203,6 +237,14 @@ export type NovelStore = PersistedNovelState & {
   setHydrated: (value: boolean) => void
   loadFromBackend: () => Promise<void>
   saveToBackend: () => Promise<void>
+  deleteNovelFromBackend: (novelId: string) => Promise<DeleteNovelOutcome>
+  reconcileNovelDeletionFromBackend: (transaction: NovelDeletionTransaction) => Promise<NovelDeletionReconciliationResult>
+  beginNovelDeletion: (novelId: string) => NovelDeletionTransaction | null
+  rollbackNovelDeletion: (transaction: NovelDeletionTransaction) => void
+  snapshotPersistedState: () => PersistedNovelState
+  restorePersistedState: (snapshot: PersistedNovelState) => void
+  setNovelDeletionPending: (pending: boolean) => void
+  reconcileNovelDeletion: (activeNovelId: string | null) => void
   loadPresetCompatLibrary: () => Promise<void>
   savePresetCompatLibrary: () => Promise<void>
   importPresetCompatPreset: (params: Omit<ImportPresetCompatPayloadParams, 'kind'>) => Promise<PresetCompatImportResult>

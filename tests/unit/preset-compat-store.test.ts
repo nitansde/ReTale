@@ -140,12 +140,35 @@ function resetStore() {
   useNovelStore.setState({
     isHydrated: false,
     isSaving: false,
+    isNovelDeletionPending: false,
     backendLoaded: false,
     backendLoadError: '',
     presetCompatLibrary: createDefaultPresetCompatLibrary(),
     presetCompatLibraryLoading: false,
     presetCompatLibraryError: '',
   })
+}
+
+function createWorkspacePayload(novelId = 'novel-survivor') {
+  const chapterId = `${novelId}-chapter`
+  return {
+    ...useNovelStore.getState().snapshotPersistedState(),
+    currentNovelId: novelId,
+    currentChapterId: chapterId,
+    localNovels: [{ id: novelId, title: 'Authoritative novel', summary: '', tags: [] }],
+    localVolumes: [{ id: `${novelId}-volume`, novelId, title: 'Volume', order: 1 }],
+    localChapters: [{
+      id: chapterId,
+      novelId,
+      volumeId: `${novelId}-volume`,
+      title: 'Chapter',
+      order: 1,
+      content: '<p>Authoritative</p>',
+      status: 'draft' as const,
+      wordCount: 1,
+      updatedAt: 'now',
+    }],
+  }
 }
 
 describe('preset compat store lifecycle', () => {
@@ -547,6 +570,877 @@ describe('preset compat store lifecycle', () => {
 
     expect(requests).toEqual(['/api/workspace'])
     expect(useNovelStore.getState().isSaving).toBe(false)
+  })
+
+  it('permanently deletes a novel with the post-optimistic survivor encoded in the query', async () => {
+    useNovelStore.setState({ currentNovelId: 'novel survivor/二' })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.method).toBe('DELETE')
+      return new Response(JSON.stringify({
+        ok: true,
+        deletedNovelId: 'novel target/?',
+        activeNovelId: 'novel survivor/二',
+        deletionState: 'deleted',
+        cleanupPending: false,
+      }), { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(useNovelStore.getState().deleteNovelFromBackend('novel target/?')).resolves.toEqual({
+      status: 'committed',
+      result: {
+        ok: true,
+        deletedNovelId: 'novel target/?',
+        activeNovelId: 'novel survivor/二',
+        deletionState: 'deleted',
+        cleanupPending: false,
+      },
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const requestUrl = new URL(String(fetchMock.mock.calls[0]?.[0]), 'http://localhost')
+    expect(requestUrl.pathname).toBe('/api/workspace')
+    expect(requestUrl.searchParams.get('novelId')).toBe('novel target/?')
+    expect(requestUrl.searchParams.get('nextNovelId')).toBe('novel survivor/二')
+  })
+
+  it('accepts a queued cleanup deletion response', async () => {
+    useNovelStore.setState({ currentNovelId: 'novel-survivor' })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      deletedNovelId: 'novel-target',
+      activeNovelId: 'novel-survivor',
+      deletionState: 'deleted',
+      cleanupPending: true,
+    }), { status: 202 })))
+
+    await expect(useNovelStore.getState().deleteNovelFromBackend('novel-target')).resolves.toEqual({
+      status: 'committed',
+      result: {
+        ok: true,
+        deletedNovelId: 'novel-target',
+        activeNovelId: 'novel-survivor',
+        deletionState: 'deleted',
+        cleanupPending: true,
+      },
+    })
+  })
+
+  it('omits the survivor for the last novel and distinguishes rejection from indeterminate responses', async () => {
+    useNovelStore.setState({ currentNovelId: '' })
+    const fetchMock = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: false, error: 'Novel is busy' }), { status: 409 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, deletedNovelId: 'wrong-id', activeNovelId: null, deletionState: 'deleted', cleanupPending: false }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, deletedNovelId: 'novel-only', activeNovelId: null, deletionState: 'deleted', cleanupPending: false }), { status: 201 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(useNovelStore.getState().deleteNovelFromBackend('novel-only')).resolves.toEqual({ status: 'rejected', error: 'Novel is busy' })
+    await expect(useNovelStore.getState().deleteNovelFromBackend('novel-only')).resolves.toMatchObject({ status: 'indeterminate' })
+    await expect(useNovelStore.getState().deleteNovelFromBackend('novel-only')).resolves.toMatchObject({ status: 'indeterminate' })
+
+    for (const [input] of fetchMock.mock.calls) {
+      const requestUrl = new URL(String(input), 'http://localhost')
+      expect(requestUrl.searchParams.get('novelId')).toBe('novel-only')
+      expect(requestUrl.searchParams.has('nextNovelId')).toBe(false)
+    }
+  })
+
+  it.each([
+    {
+      name: 'missing success marker',
+      status: 200,
+      body: { deletedNovelId: 'novel-only', activeNovelId: null, deletionState: 'deleted', cleanupPending: false },
+      error: 'Failed to delete novel',
+    },
+    {
+      name: 'non-string deleted novel ID',
+      status: 200,
+      body: { ok: true, deletedNovelId: 42, activeNovelId: null, deletionState: 'deleted', cleanupPending: false },
+      error: 'invalid deleted novel ID',
+    },
+    {
+      name: 'invalid active novel ID',
+      status: 200,
+      body: { ok: true, deletedNovelId: 'novel-only', activeNovelId: 42, deletionState: 'deleted', cleanupPending: false },
+      error: 'invalid active novel ID',
+    },
+    {
+      name: 'invalid deletion state',
+      status: 200,
+      body: { ok: true, deletedNovelId: 'novel-only', activeNovelId: null, deletionState: 'deleting', cleanupPending: false },
+      error: 'invalid deletion state',
+    },
+    {
+      name: 'non-boolean cleanup marker',
+      status: 200,
+      body: { ok: true, deletedNovelId: 'novel-only', activeNovelId: null, deletionState: 'deleted', cleanupPending: 'false' },
+      error: 'invalid cleanup pending state',
+    },
+    {
+      name: '200 response with cleanup pending',
+      status: 200,
+      body: { ok: true, deletedNovelId: 'novel-only', activeNovelId: null, deletionState: 'deleted', cleanupPending: true },
+      error: 'inconsistent cleanup pending state',
+    },
+    {
+      name: '202 response without cleanup pending',
+      status: 202,
+      body: { ok: true, deletedNovelId: 'novel-only', activeNovelId: null, deletionState: 'deleted', cleanupPending: false },
+      error: 'inconsistent cleanup pending state',
+    },
+  ])('classifies deletion transport contract violations as indeterminate: $name', async ({ status, body }) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status })))
+
+    await expect(useNovelStore.getState().deleteNovelFromBackend('novel-only')).resolves.toEqual({
+      status: 'indeterminate',
+      error: 'Workspace endpoint returned an invalid deletion response',
+    })
+  })
+
+  it.each([400, 404, 409])('classifies strict %s delete errors as definitive rejection', async (status) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: false, error: 'Delete rejected' }), { status })))
+
+    await expect(useNovelStore.getState().deleteNovelFromBackend('novel-only')).resolves.toEqual({
+      status: 'rejected',
+      error: 'Delete rejected',
+    })
+  })
+
+  it('treats an inconsistent rejection contract as indeterminate', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: false, error: 'Delete rejected', deletedNovelId: 'novel-only' }), { status: 409 })))
+
+    await expect(useNovelStore.getState().deleteNovelFromBackend('novel-only')).resolves.toMatchObject({
+      status: 'indeterminate',
+    })
+  })
+
+  it('classifies response loss and malformed JSON as indeterminate', async () => {
+    const fetchMock = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(new Response('{not-json', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(useNovelStore.getState().deleteNovelFromBackend('novel-only')).resolves.toEqual({
+      status: 'indeterminate',
+      error: 'Failed to fetch',
+    })
+    await expect(useNovelStore.getState().deleteNovelFromBackend('novel-only')).resolves.toEqual({
+      status: 'indeterminate',
+      error: 'Workspace endpoint returned invalid JSON',
+    })
+  })
+
+  it('reconciles an immediately ready target through ordered status and targeted workspace requests', async () => {
+    const novelId = 'novel target/?'
+    useNovelStore.setState({
+      currentNovelId: novelId,
+      currentChapterId: 'chapter-target',
+      selectionText: 'before selection',
+      selectedParagraphIndex: 1,
+      localNovels: [
+        { id: novelId, title: 'Target before', summary: '', tags: [] },
+        { id: 'novel-survivor', title: 'Survivor', summary: '', tags: [] },
+      ],
+      localVolumes: [
+        { id: 'volume-target', novelId, title: 'Target volume', order: 1 },
+        { id: 'volume-survivor', novelId: 'novel-survivor', title: 'Survivor volume', order: 1 },
+      ],
+      localChapters: [
+        { id: 'chapter-target', novelId, volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+        { id: 'chapter-survivor', novelId: 'novel-survivor', volumeId: 'volume-survivor', title: 'Survivor chapter', order: 1, content: '<p>Survivor before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+      ],
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion(novelId)
+    expect(transaction).not.toBeNull()
+    useNovelStore.setState((state) => ({
+      currentNovelId: 'novel-imported',
+      currentChapterId: 'chapter-imported',
+      selectionText: 'post-optimistic selection',
+      selectedParagraphIndex: 9,
+      localNovels: [...state.localNovels, { id: 'novel-imported', title: 'Imported', summary: '', tags: [] }],
+      localVolumes: [...state.localVolumes, { id: 'volume-imported', novelId: 'novel-imported', title: 'Imported volume', order: 1 }],
+      localChapters: [
+        ...state.localChapters.map((chapter) => chapter.id === 'chapter-survivor'
+          ? { ...chapter, content: '<p>Survivor edited</p>', updatedAt: 'after' }
+          : chapter),
+        { id: 'chapter-imported', novelId: 'novel-imported', volumeId: 'volume-imported', title: 'Imported chapter', order: 1, content: '<p>Imported</p>', status: 'draft', wordCount: 1, updatedAt: 'after' },
+      ],
+    }))
+    const authoritative = {
+      ...transaction!.before,
+      currentNovelId: novelId,
+      currentChapterId: 'chapter-target',
+      selectionText: 'authoritative selection',
+      selectedParagraphIndex: 4,
+      localNovels: transaction!.before.localNovels.map((novel) => novel.id === novelId
+        ? { ...novel, title: 'Target authoritative' }
+        : novel),
+      localChapters: transaction!.before.localChapters.map((chapter) => chapter.novelId === novelId
+        ? { ...chapter, content: '<p>Target authoritative</p>', updatedAt: 'authoritative' }
+        : chapter),
+    }
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      requests.push(url)
+      if (url === '/api/workspace?novelId=novel+target%2F%3F&deletionStatus=1') {
+        return new Response(JSON.stringify({ ok: true, novelId, deletionState: 'ready' }), { status: 200 })
+      }
+      if (url === '/api/workspace?novelId=novel+target%2F%3F') {
+        return new Response(JSON.stringify(authoritative), { status: 200 })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).resolves.toBe('present')
+
+    expect(requests).toEqual([
+      '/api/workspace?novelId=novel+target%2F%3F&deletionStatus=1',
+      '/api/workspace?novelId=novel+target%2F%3F',
+    ])
+    const state = useNovelStore.getState()
+    expect(state.currentNovelId).toBe('novel-imported')
+    expect(state.currentChapterId).toBe('chapter-imported')
+    expect(state.selectionText).toBe('post-optimistic selection')
+    expect(state.selectedParagraphIndex).toBe(9)
+    expect(state.localNovels.find((novel) => novel.id === novelId)?.title).toBe('Target authoritative')
+    expect(state.localChapters.find((chapter) => chapter.id === 'chapter-target')).toMatchObject({
+      content: '<p>Target authoritative</p>',
+      updatedAt: 'authoritative',
+    })
+    expect(state.localChapters.find((chapter) => chapter.id === 'chapter-survivor')).toMatchObject({
+      content: '<p>Survivor edited</p>',
+      updatedAt: 'after',
+    })
+    expect(state.localNovels.some((novel) => novel.id === 'novel-imported')).toBe(true)
+    expect(state.localChapters.some((chapter) => chapter.id === 'chapter-imported')).toBe(true)
+  })
+
+  it('returns deleted immediately without fetching or mutating a workspace', async () => {
+    useNovelStore.setState({
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
+      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
+    expect(transaction).not.toBeNull()
+    const optimistic = useNovelStore.getState().snapshotPersistedState()
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      requests.push(String(input))
+      return new Response(JSON.stringify({ ok: true, novelId: 'novel-target', deletionState: 'deleted' }), { status: 200 })
+    }))
+
+    await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).resolves.toBe('deleted')
+
+    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
+  })
+
+  it('polls deleting status after 100ms and fetches the targeted workspace only once ready', async () => {
+    vi.useFakeTimers()
+    useNovelStore.setState({
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
+      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
+    expect(transaction).not.toBeNull()
+    const targetedWorkspace = transaction!.before
+    const requests: string[] = []
+    let statusRequestCount = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      requests.push(url)
+      if (url === '/api/workspace?novelId=novel-target&deletionStatus=1') {
+        statusRequestCount += 1
+        return new Response(JSON.stringify({
+          ok: true,
+          novelId: 'novel-target',
+          deletionState: statusRequestCount === 1 ? 'deleting' : 'ready',
+        }), { status: 200 })
+      }
+      if (url === '/api/workspace?novelId=novel-target') {
+        return new Response(JSON.stringify(targetedWorkspace), { status: 200 })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    const reconciliation = useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!).then(
+      (result) => ({ status: 'resolved' as const, result }),
+      (error) => ({ status: 'rejected' as const, error })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    await vi.advanceTimersByTimeAsync(99)
+    expect(requests).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+
+    await expect(reconciliation).resolves.toEqual({ status: 'resolved', result: 'present' })
+    expect(requests).toEqual([
+      '/api/workspace?novelId=novel-target&deletionStatus=1',
+      '/api/workspace?novelId=novel-target&deletionStatus=1',
+      '/api/workspace?novelId=novel-target',
+    ])
+  })
+
+  it('stops polling on deleting to deleted without fetching or mutating a workspace', async () => {
+    vi.useFakeTimers()
+    useNovelStore.setState({
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
+      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
+    expect(transaction).not.toBeNull()
+    const optimistic = useNovelStore.getState().snapshotPersistedState()
+    const requests: string[] = []
+    let statusRequestCount = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      requests.push(String(input))
+      statusRequestCount += 1
+      return new Response(JSON.stringify({
+        ok: true,
+        novelId: 'novel-target',
+        deletionState: statusRequestCount === 1 ? 'deleting' : 'deleted',
+      }), { status: 200 })
+    }))
+
+    const reconciliation = useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!).then(
+      (result) => ({ status: 'resolved' as const, result }),
+      (error) => ({ status: 'rejected' as const, error })
+    )
+    await vi.advanceTimersByTimeAsync(99)
+    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    await vi.advanceTimersByTimeAsync(1)
+
+    await expect(reconciliation).resolves.toEqual({ status: 'resolved', result: 'deleted' })
+    expect(requests).toEqual([
+      '/api/workspace?novelId=novel-target&deletionStatus=1',
+      '/api/workspace?novelId=novel-target&deletionStatus=1',
+    ])
+    expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
+  })
+
+  it('exhausts deleting retries at deterministic 100ms, 250ms, and 500ms delays without mutation', async () => {
+    vi.useFakeTimers()
+    useNovelStore.setState({
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
+      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
+    expect(transaction).not.toBeNull()
+    const optimistic = useNovelStore.getState().snapshotPersistedState()
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      requests.push(String(input))
+      return new Response(JSON.stringify({ ok: true, novelId: 'novel-target', deletionState: 'deleting' }), { status: 200 })
+    }))
+
+    const reconciliation = useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!).then(
+      (result) => ({ status: 'resolved' as const, result }),
+      (error) => ({ status: 'rejected' as const, error })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    expect(requests).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(requests).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(249)
+    expect(requests).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(requests).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(499)
+    expect(requests).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(reconciliation).resolves.toMatchObject({ status: 'rejected', error: expect.any(Error) })
+
+    expect(requests).toEqual(Array(4).fill('/api/workspace?novelId=novel-target&deletionStatus=1'))
+    expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
+  })
+
+  it('rejects malformed deletion-status JSON without mutating the store', async () => {
+    useNovelStore.setState({
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
+      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
+    expect(transaction).not.toBeNull()
+    const optimistic = useNovelStore.getState().snapshotPersistedState()
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      requests.push(String(input))
+      return new Response('{not-json', { status: 200 })
+    }))
+
+    await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).rejects.toThrow()
+
+    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
+  })
+
+  it.each([
+    ['missing deletion state', { ok: true, novelId: 'novel-target' }],
+    ['extra response field', { ok: true, novelId: 'novel-target', deletionState: 'deleted', extra: true }],
+    ['mismatched novel ID', { ok: true, novelId: 'novel-other', deletionState: 'deleted' }],
+    ['invalid deletion state', { ok: true, novelId: 'novel-target', deletionState: 'pending' }],
+  ])('rejects %s deletion-status responses without mutating the store', async (_name, statusPayload) => {
+    useNovelStore.setState({
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
+      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
+    expect(transaction).not.toBeNull()
+    const optimistic = useNovelStore.getState().snapshotPersistedState()
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      requests.push(String(input))
+      return new Response(JSON.stringify(statusPayload), { status: 200 })
+    }))
+
+    await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).rejects.toThrow()
+
+    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
+  })
+
+  it('propagates deletion-status request errors without fetching or mutating a workspace', async () => {
+    useNovelStore.setState({
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
+      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
+    expect(transaction).not.toBeNull()
+    const optimistic = useNovelStore.getState().snapshotPersistedState()
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      requests.push(String(input))
+      return new Response(JSON.stringify({ ok: false, error: 'Status unavailable' }), { status: 503 })
+    }))
+
+    await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).rejects.toThrow('Status unavailable')
+
+    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
+  })
+
+  it('rejects a ready targeted workspace that does not represent the requested novel', async () => {
+    useNovelStore.setState({
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
+      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
+    expect(transaction).not.toBeNull()
+    const optimistic = useNovelStore.getState().snapshotPersistedState()
+    const unrelatedWorkspace = createWorkspacePayload('novel-other')
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      requests.push(url)
+      if (url === '/api/workspace?novelId=novel-target&deletionStatus=1') {
+        return new Response(JSON.stringify({ ok: true, novelId: 'novel-target', deletionState: 'ready' }), { status: 200 })
+      }
+      if (url === '/api/workspace?novelId=novel-target') {
+        return new Response(JSON.stringify(unrelatedWorkspace), { status: 200 })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).rejects.toThrow()
+
+    expect(requests).toEqual([
+      '/api/workspace?novelId=novel-target&deletionStatus=1',
+      '/api/workspace?novelId=novel-target',
+    ])
+    expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
+  })
+
+  it('keeps survivor edits and unrelated imports when authoritative reconciliation confirms deletion', async () => {
+    useNovelStore.setState({
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      localNovels: [
+        { id: 'novel-target', title: 'Target', summary: '', tags: [] },
+        { id: 'novel-survivor', title: 'Survivor', summary: '', tags: [] },
+      ],
+      localVolumes: [
+        { id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 },
+        { id: 'volume-survivor', novelId: 'novel-survivor', title: 'Survivor volume', order: 1 },
+      ],
+      localChapters: [
+        { id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' },
+        { id: 'chapter-survivor-1', novelId: 'novel-survivor', volumeId: 'volume-survivor', title: 'Survivor one', order: 1, content: '<p>Before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+        { id: 'chapter-survivor-2', novelId: 'novel-survivor', volumeId: 'volume-survivor', title: 'Survivor two', order: 2, content: '<p>Second</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+      ],
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
+    expect(transaction).not.toBeNull()
+    useNovelStore.setState((state) => ({
+      localNovels: [...state.localNovels, { id: 'novel-imported', title: 'Imported', summary: '', tags: [] }],
+      localVolumes: [...state.localVolumes, { id: 'volume-imported', novelId: 'novel-imported', title: 'Imported volume', order: 1 }],
+      localChapters: [
+        ...state.localChapters.map((item) => item.id === 'chapter-survivor-1'
+          ? { ...item, content: '<p>Edited after delete</p>', updatedAt: 'after' }
+          : item),
+        { id: 'chapter-imported', novelId: 'novel-imported', volumeId: 'volume-imported', title: 'Imported chapter', order: 1, content: '<p>Imported</p>', status: 'draft', wordCount: 1, updatedAt: 'after' },
+      ],
+    }))
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      requests.push(url)
+      if (url === '/api/workspace?novelId=novel-target&deletionStatus=1') {
+        return new Response(JSON.stringify({ ok: true, novelId: 'novel-target', deletionState: 'deleted' }), { status: 200 })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).resolves.toBe('deleted')
+
+    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    const state = useNovelStore.getState()
+    expect(state.currentNovelId).toBe('novel-survivor')
+    expect(state.currentChapterId).toBe('chapter-survivor-1')
+    expect(state.localChapters.find((item) => item.id === 'chapter-survivor-1')).toMatchObject({
+      content: '<p>Edited after delete</p>',
+      updatedAt: 'after',
+    })
+    expect(state.localNovels.some((item) => item.id === 'novel-imported')).toBe(true)
+    expect(state.localChapters.some((item) => item.id === 'chapter-imported')).toBe(true)
+    expect(state.localNovels.some((item) => item.id === 'novel-target')).toBe(false)
+  })
+
+  it('restores authoritative target and chapter-scoped state while preserving post-optimistic mutations', async () => {
+    const beforeCandidate = {
+      id: 'candidate-before',
+      batchId: 'batch-before',
+      title: 'Before candidate',
+      summary: 'Before summary',
+      content: 'Before content',
+      mode: 'medium' as const,
+      tone: 'keep' as const,
+      selected: true,
+      createdAt: 'before',
+      prompt: 'Before prompt',
+      sourceExcerpt: 'Before source',
+      actions: ['apply' as const],
+    }
+    const authoritativeCandidate = {
+      ...beforeCandidate,
+      id: 'candidate-authoritative',
+      title: 'Authoritative candidate',
+      content: 'Authoritative content',
+      createdAt: 'authoritative',
+    }
+    useNovelStore.setState({
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      rewriteCandidates: [beforeCandidate],
+      selectionText: 'before selection',
+      selectedParagraphIndex: 3,
+      localNovels: [
+        { id: 'novel-target', title: 'Target before', summary: '', tags: [] },
+        { id: 'novel-survivor', title: 'Survivor', summary: '', tags: [] },
+      ],
+      localVolumes: [
+        { id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 },
+        { id: 'volume-survivor', novelId: 'novel-survivor', title: 'Survivor volume', order: 1 },
+      ],
+      localChapters: [
+        { id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+        { id: 'chapter-survivor', novelId: 'novel-survivor', volumeId: 'volume-survivor', title: 'Survivor chapter', order: 1, content: '<p>Survivor before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+      ],
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
+    expect(transaction).not.toBeNull()
+    useNovelStore.setState((state) => ({
+      currentNovelId: 'novel-imported',
+      currentChapterId: 'chapter-imported',
+      selectionText: 'post-optimistic selection',
+      localNovels: [...state.localNovels, { id: 'novel-imported', title: 'Imported', summary: '', tags: [] }],
+      localVolumes: [...state.localVolumes, { id: 'volume-imported', novelId: 'novel-imported', title: 'Imported volume', order: 1 }],
+      localChapters: [
+        ...state.localChapters.map((item) => item.id === 'chapter-survivor'
+          ? { ...item, content: '<p>Survivor edited</p>', updatedAt: 'after' }
+          : item),
+        { id: 'chapter-imported', novelId: 'novel-imported', volumeId: 'volume-imported', title: 'Imported chapter', order: 1, content: '<p>Imported</p>', status: 'draft', wordCount: 1, updatedAt: 'after' },
+      ],
+    }))
+    const authoritative = {
+      ...transaction!.before,
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      rewriteCandidates: [authoritativeCandidate],
+      selectionText: 'authoritative selection',
+      selectedParagraphIndex: 7,
+      localNovels: transaction!.before.localNovels.map((item) => item.id === 'novel-target'
+        ? { ...item, title: 'Target authoritative' }
+        : item),
+      localChapters: transaction!.before.localChapters.map((item) => item.id === 'chapter-target'
+        ? { ...item, content: '<p>Target authoritative</p>', updatedAt: 'authoritative' }
+        : item),
+    }
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      requests.push(url)
+      if (url === '/api/workspace?novelId=novel-target&deletionStatus=1') {
+        return new Response(JSON.stringify({ ok: true, novelId: 'novel-target', deletionState: 'ready' }), { status: 200 })
+      }
+      if (url === '/api/workspace?novelId=novel-target') {
+        return new Response(JSON.stringify(authoritative), { status: 200 })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).resolves.toBe('present')
+
+    expect(requests).toEqual([
+      '/api/workspace?novelId=novel-target&deletionStatus=1',
+      '/api/workspace?novelId=novel-target',
+    ])
+    const state = useNovelStore.getState()
+    expect(state.currentNovelId).toBe('novel-imported')
+    expect(state.currentChapterId).toBe('chapter-imported')
+    expect(state.rewriteCandidates).toEqual([authoritativeCandidate])
+    expect(state.selectionText).toBe('post-optimistic selection')
+    expect(state.selectedParagraphIndex).toBe(7)
+    expect(state.localNovels.find((item) => item.id === 'novel-target')?.title).toBe('Target authoritative')
+    expect(state.localChapters.find((item) => item.id === 'chapter-target')).toMatchObject({
+      content: '<p>Target authoritative</p>',
+      updatedAt: 'authoritative',
+    })
+    expect(state.localChapters.find((item) => item.id === 'chapter-survivor')).toMatchObject({
+      content: '<p>Survivor edited</p>',
+      updatedAt: 'after',
+    })
+    expect(state.localNovels.some((item) => item.id === 'novel-imported')).toBe(true)
+    expect(state.localChapters.some((item) => item.id === 'chapter-imported')).toBe(true)
+  })
+
+  it('propagates reconciliation failure without replacing optimistic state', async () => {
+    useNovelStore.setState({
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
+      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
+    expect(transaction).not.toBeNull()
+    const optimistic = useNovelStore.getState().snapshotPersistedState()
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      requests.push(url)
+      if (url === '/api/workspace?novelId=novel-target&deletionStatus=1') {
+        return new Response(JSON.stringify({ ok: true, novelId: 'novel-target', deletionState: 'ready' }), { status: 200 })
+      }
+      if (url === '/api/workspace?novelId=novel-target') {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).rejects.toThrow('invalid workspace')
+    expect(requests).toEqual([
+      '/api/workspace?novelId=novel-target&deletionStatus=1',
+      '/api/workspace?novelId=novel-target',
+    ])
+    expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
+  })
+
+  it('restores an exact persisted snapshot without overwriting transient state', () => {
+    useNovelStore.setState({
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      currentTab: 'characters',
+      localNovels: [
+        { id: 'novel-target', title: 'Target', summary: 'Target summary', tags: ['target'] },
+        { id: 'novel-survivor', title: 'Survivor', summary: 'Survivor summary', tags: ['survivor'] },
+      ],
+      localVolumes: [
+        { id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 },
+        { id: 'volume-survivor', novelId: 'novel-survivor', title: 'Survivor volume', order: 1 },
+      ],
+      localChapters: [
+        {
+          id: 'chapter-target',
+          novelId: 'novel-target',
+          volumeId: 'volume-target',
+          title: 'Target chapter',
+          order: 1,
+          content: '<p>Target</p>',
+          status: 'draft',
+          wordCount: 1,
+          updatedAt: 'target-now',
+        },
+        {
+          id: 'chapter-survivor',
+          novelId: 'novel-survivor',
+          volumeId: 'volume-survivor',
+          title: 'Survivor chapter',
+          order: 1,
+          content: '<p>Survivor</p>',
+          status: 'draft',
+          wordCount: 1,
+          updatedAt: 'survivor-now',
+        },
+      ],
+      backendLoadError: 'before snapshot',
+      isNovelDeletionPending: false,
+    })
+    const snapshot = useNovelStore.getState().snapshotPersistedState()
+
+    useNovelStore.getState().deleteNovel('novel-target')
+    useNovelStore.setState({
+      currentTab: 'world',
+      backendLoadError: 'preserve this transient error',
+    })
+    useNovelStore.getState().setNovelDeletionPending(true)
+    useNovelStore.getState().restorePersistedState(snapshot)
+
+    const restored = useNovelStore.getState()
+    expect(restored.snapshotPersistedState()).toEqual(snapshot)
+    expect(restored.backendLoadError).toBe('preserve this transient error')
+    expect(restored.isNovelDeletionPending).toBe(true)
+  })
+
+  it('targeted rollback restores only deleted records and preserves post-optimistic survivor edits', () => {
+    useNovelStore.setState({
+      currentNovelId: 'novel-target',
+      currentChapterId: 'chapter-target',
+      selectionText: 'target selection',
+      localNovels: [
+        { id: 'novel-target', title: 'Target', summary: '', tags: [] },
+        { id: 'novel-survivor', title: 'Survivor', summary: '', tags: [] },
+      ],
+      localVolumes: [
+        { id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 },
+        { id: 'volume-survivor', novelId: 'novel-survivor', title: 'Survivor volume', order: 1 },
+      ],
+      localChapters: [
+        { id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' },
+        { id: 'chapter-survivor', novelId: 'novel-survivor', volumeId: 'volume-survivor', title: 'Survivor chapter', order: 1, content: '<p>Before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+      ],
+    })
+
+    const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
+    expect(transaction).not.toBeNull()
+    useNovelStore.setState((state) => ({
+      selectionText: 'post-optimistic selection',
+      localChapters: state.localChapters.map((item) => item.id === 'chapter-survivor'
+        ? { ...item, content: '<p>Edited after delete</p>', updatedAt: 'after' }
+        : item),
+    }))
+
+    useNovelStore.getState().rollbackNovelDeletion(transaction!)
+
+    const state = useNovelStore.getState()
+    expect(state.localNovels.map((item) => item.id)).toEqual(['novel-target', 'novel-survivor'])
+    expect(state.localChapters.find((item) => item.id === 'chapter-target')).toBeDefined()
+    expect(state.localChapters.find((item) => item.id === 'chapter-survivor')).toMatchObject({
+      content: '<p>Edited after delete</p>',
+      updatedAt: 'after',
+    })
+    expect(state.selectionText).toBe('post-optimistic selection')
+  })
+
+  it('reconciles to the authoritative survivor with a deterministic valid chapter', () => {
+    useNovelStore.setState({
+      currentNovelId: 'novel-other',
+      currentChapterId: 'chapter-other',
+      localChapters: [
+        {
+          id: 'survivor-branch',
+          novelId: 'novel-survivor',
+          volumeId: 'volume-survivor',
+          title: 'Branch',
+          order: 0,
+          content: '<p>Branch</p>',
+          status: 'draft',
+          wordCount: 1,
+          updatedAt: 'now',
+          parentChapterId: 'survivor-first',
+        },
+        {
+          id: 'survivor-second',
+          novelId: 'novel-survivor',
+          volumeId: 'volume-survivor',
+          title: 'Second',
+          order: 2,
+          content: '<p>Second</p>',
+          status: 'draft',
+          wordCount: 1,
+          updatedAt: 'now',
+        },
+        {
+          id: 'survivor-first',
+          novelId: 'novel-survivor',
+          volumeId: 'volume-survivor',
+          title: 'First',
+          order: 1,
+          content: '<p>First</p>',
+          status: 'draft',
+          wordCount: 1,
+          updatedAt: 'now',
+        },
+        {
+          id: 'chapter-other',
+          novelId: 'novel-other',
+          volumeId: 'volume-other',
+          title: 'Other',
+          order: 1,
+          content: '<p>Other</p>',
+          status: 'draft',
+          wordCount: 1,
+          updatedAt: 'now',
+        },
+      ],
+    })
+
+    useNovelStore.getState().reconcileNovelDeletion('novel-survivor')
+
+    expect(useNovelStore.getState()).toMatchObject({
+      currentNovelId: 'novel-survivor',
+      currentChapterId: 'survivor-first',
+    })
+  })
+
+  it('clears the current selection when deletion has no surviving novel', () => {
+    useNovelStore.setState({
+      currentNovelId: 'stale-novel',
+      currentChapterId: 'stale-chapter',
+    })
+
+    useNovelStore.getState().reconcileNovelDeletion(null)
+
+    expect(useNovelStore.getState()).toMatchObject({
+      currentNovelId: '',
+      currentChapterId: '',
+    })
   })
 
   it('retains the last good library when load, save, or import fails and records explicit errors', async () => {

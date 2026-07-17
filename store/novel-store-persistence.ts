@@ -6,10 +6,183 @@ import {
 } from '@/lib/preset-compat/client'
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
 import type { PersistedNovelState } from '@/lib/types'
-import type { NovelStore, NovelStoreGet, NovelStoreSet, PresetCompatImportResult } from '@/store/novel-store-types'
+import type {
+  DeleteNovelFromBackendResult,
+  DeleteNovelOutcome,
+  NovelDeletionStatusObservation,
+  NovelDeletionStatusResult,
+  NovelStore,
+  NovelStoreGet,
+  NovelStoreSet,
+  PresetCompatImportResult,
+} from '@/store/novel-store-types'
 import { fetchKnowledgeProjection, normalizeKnowledgeProjectionResult, resolveCurrentChapterOrder } from '@/store/novel-store-knowledge'
 
 const WORKSPACE_RESTORE_TIMEOUT_MS = 15_000
+const NOVEL_DELETE_TIMEOUT_MS = 15_000
+const NOVEL_DELETION_STATUS_RETRY_DELAYS_MS = [100, 250, 500] as const
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isWorkspaceResponse(value: unknown): value is Partial<PersistedNovelState> {
+  if (!isRecord(value)) return false
+
+  return typeof value.currentNovelId === 'string'
+    && typeof value.currentChapterId === 'string'
+    && Array.isArray(value.localNovels)
+    && Array.isArray(value.localVolumes)
+    && Array.isArray(value.localChapters)
+    && Array.isArray(value.localOutlines)
+    && Array.isArray(value.localCharacters)
+    && Array.isArray(value.localCharacterRelations)
+    && Array.isArray(value.localWorldEntries)
+    && Array.isArray(value.localTimelineEvents)
+    && Array.isArray(value.rewriteCandidates)
+    && Array.isArray(value.rewriteHistory)
+    && Array.isArray(value.trajectories)
+}
+
+function hasExactKeys(value: Record<string, unknown>, expectedKeys: readonly string[]) {
+  const actualKeys = Object.keys(value)
+  return actualKeys.length === expectedKeys.length && expectedKeys.every((key) => key in value)
+}
+
+function parseDeletionStatusSuccess(value: unknown, novelId: string): NovelDeletionStatusObservation | null {
+  if (!isRecord(value) || !hasExactKeys(value, ['ok', 'novelId', 'deletionState'])) return null
+  if (value.ok !== true || value.novelId !== novelId) return null
+  if (value.deletionState !== 'ready' && value.deletionState !== 'deleting' && value.deletionState !== 'deleted') return null
+
+  return {
+    ok: true,
+    novelId,
+    deletionState: value.deletionState,
+  }
+}
+
+function parseErrorResponse(value: unknown): string | null {
+  if (!isRecord(value) || !hasExactKeys(value, ['ok', 'error'])) return null
+  return value.ok === false && typeof value.error === 'string' ? value.error : null
+}
+
+async function fetchWithWorkspaceTimeout(url: string, timeoutMessage: string) {
+  const controller = new AbortController()
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), WORKSPACE_RESTORE_TIMEOUT_MS)
+
+  try {
+    return await fetch(url, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(timeoutMessage)
+    }
+    throw error
+  } finally {
+    globalThis.clearTimeout(timeoutId)
+  }
+}
+
+async function fetchNovelDeletionStatus(novelId: string): Promise<NovelDeletionStatusObservation> {
+  const query = new URLSearchParams({ novelId, deletionStatus: '1' })
+  const response = await fetchWithWorkspaceTimeout(
+    `/api/workspace?${query.toString()}`,
+    'Novel deletion status request timed out'
+  )
+  const payload: unknown = await response.json().catch(() => {
+    throw new Error('Workspace deletion status endpoint returned invalid JSON')
+  })
+
+  if (!response.ok) {
+    const message = parseErrorResponse(payload)
+    if (message) throw new Error(message)
+    throw new Error('Workspace deletion status endpoint returned an invalid error response')
+  }
+
+  const result = response.status === 200 ? parseDeletionStatusSuccess(payload, novelId) : null
+  if (!result) {
+    throw new Error('Workspace deletion status endpoint returned an invalid status response')
+  }
+  return result
+}
+
+export async function pollNovelDeletionStatus(novelId: string): Promise<NovelDeletionStatusResult> {
+  let result = await fetchNovelDeletionStatus(novelId)
+  if (result.deletionState !== 'deleting') {
+    return {
+      ok: true,
+      novelId: result.novelId,
+      deletionState: result.deletionState,
+    }
+  }
+
+  for (const delayMs of NOVEL_DELETION_STATUS_RETRY_DELAYS_MS) {
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, delayMs))
+    result = await fetchNovelDeletionStatus(novelId)
+    if (result.deletionState !== 'deleting') {
+      return {
+        ok: true,
+        novelId: result.novelId,
+        deletionState: result.deletionState,
+      }
+    }
+  }
+
+  throw new Error('Novel deletion status remained deleting after all reconciliation attempts')
+}
+
+export async function fetchAuthoritativeWorkspace(novelId: string): Promise<PersistedNovelState> {
+  const query = new URLSearchParams({ novelId })
+  const response = await fetchWithWorkspaceTimeout(
+    `/api/workspace?${query.toString()}`,
+    'Workspace reconciliation timed out'
+  )
+  const payload: unknown = await response.json().catch(() => {
+    throw new Error('Workspace endpoint returned invalid JSON')
+  })
+
+  if (!response.ok) {
+    const message = parseErrorResponse(payload)
+    if (message) throw new Error(message)
+    throw new Error('Workspace endpoint returned an invalid error response')
+  }
+  if (response.status !== 200 || !isWorkspaceResponse(payload)) {
+    throw new Error('Workspace endpoint returned an invalid workspace')
+  }
+
+  const workspace = normalizeWorkspaceState(payload)
+  const targetPresent = workspace.localNovels.some((item) => item.id === novelId)
+    || workspace.localChapters.some((item) => item.novelId === novelId)
+  if (!targetPresent) {
+    throw new Error('Targeted workspace did not represent the requested novel')
+  }
+  return workspace
+}
+
+function parseDeleteRejection(status: number, payload: unknown): DeleteNovelOutcome | null {
+  if (status !== 400 && status !== 404 && status !== 409) return null
+  if (!isRecord(payload) || payload.ok !== false || typeof payload.error !== 'string') return null
+  if (Object.keys(payload).some((key) => key !== 'ok' && key !== 'error')) return null
+  return { status: 'rejected', error: payload.error }
+}
+
+function validateDeleteSuccess(status: number, payload: unknown, novelId: string): DeleteNovelFromBackendResult | null {
+  if ((status !== 200 && status !== 202) || !isRecord(payload) || payload.ok !== true) return null
+  if (payload.deletedNovelId !== novelId) return null
+  if (payload.activeNovelId !== null && typeof payload.activeNovelId !== 'string') return null
+  if (payload.deletionState !== 'deleted' || typeof payload.cleanupPending !== 'boolean') return null
+  if ((status === 202) !== payload.cleanupPending) return null
+
+  return {
+    ok: true,
+    deletedNovelId: novelId,
+    activeNovelId: payload.activeNovelId,
+    deletionState: 'deleted',
+    cleanupPending: payload.cleanupPending,
+  }
+}
 
 export function getWorkspaceRestoreErrorMessage(error: unknown) {
   if (error instanceof Error && error.name === 'AbortError') {
@@ -64,6 +237,7 @@ export function createPersistenceActions(
   'loadPresetCompatLibrary'
   | 'loadFromBackend'
   | 'saveToBackend'
+  | 'deleteNovelFromBackend'
   | 'savePresetCompatLibrary'
   | 'importPresetCompatPreset'
   | 'importPresetCompatRegexBundle'
@@ -225,6 +399,47 @@ export function createPersistenceActions(
         }
       } finally {
         set({ isSaving: false })
+      }
+    },
+    deleteNovelFromBackend: async (novelId) => {
+      const query = new URLSearchParams({ novelId })
+      const nextNovelId = get().currentNovelId
+      if (nextNovelId) {
+        query.set('nextNovelId', nextNovelId)
+      }
+
+      const controller = new AbortController()
+      const timeoutId = globalThis.setTimeout(() => controller.abort(), NOVEL_DELETE_TIMEOUT_MS)
+
+      try {
+        const response = await fetch(`/api/workspace?${query.toString()}`, {
+          method: 'DELETE',
+          signal: controller.signal,
+        })
+        const rawBody = await response.text()
+        let payload: unknown
+        try {
+          payload = JSON.parse(rawBody)
+        } catch {
+          return { status: 'indeterminate', error: 'Workspace endpoint returned invalid JSON' }
+        }
+
+        const rejection = parseDeleteRejection(response.status, payload)
+        if (rejection) return rejection
+
+        const result = validateDeleteSuccess(response.status, payload, novelId)
+        if (result) return { status: 'committed', result }
+
+        return { status: 'indeterminate', error: 'Workspace endpoint returned an invalid deletion response' }
+      } catch (error) {
+        const message = error instanceof Error && error.name === 'AbortError'
+          ? 'Novel deletion timed out'
+          : error instanceof Error
+            ? error.message
+            : 'Novel deletion failed before its result could be confirmed'
+        return { status: 'indeterminate', error: message }
+      } finally {
+        globalThis.clearTimeout(timeoutId)
       }
     },
     savePresetCompatLibrary: async () => {
