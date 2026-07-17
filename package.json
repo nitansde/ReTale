@@ -17,7 +17,7 @@
     "test:unit": "node scripts/run-vitest-suite.mjs unit",
     "test:api": "node scripts/run-vitest-suite.mjs api",
     "test:ui": "node scripts/run-playwright-suite.mjs",
-    "test:all": "npm run test:unit && npm run test:api && npm run test:ui -- future-jump",
+    "test:all": "npm run test:unit && npm run test:api && npm run test:ui",
     "verify:workspace-import": "node scripts/verify-workspace-import.mjs",
     "setup:hanlp": "node scripts/setup-hanlp-runtime.mjs --smoke"
   },
