@@ -1,31 +1,39 @@
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const originalDataDir = process.env.RETALE_DATA_DIR
+
+function restoreDataDir() {
+  if (originalDataDir === undefined) {
+    delete process.env.RETALE_DATA_DIR
+    return
+  }
+
+  process.env.RETALE_DATA_DIR = originalDataDir
+}
 
 async function createTestDatabase(prefix: string) {
   const tempDatabase = createTempDatabaseCopy(prefix)
   cleanups.push(tempDatabase.cleanup)
-  const database = new DatabaseSync(tempDatabase.dbPath)
-  globalForSqlite.sqlite = database
+  process.env.RETALE_DATA_DIR = path.join(tempDatabase.directory, 'data')
   vi.resetModules()
 
-  const { initializeDatabase } = await import('@/lib/server/sqlite')
-  initializeDatabase(database)
-  return database
+  const { getControlDb } = await import('@/lib/server/db-resolver')
+  return getControlDb()
 }
 
-function closeTestDatabase() {
-  if (globalForSqlite.sqlite) {
-    try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
-    } catch {
-    }
-    delete globalForSqlite.sqlite
-  }
+function writeAppSetting(database: DatabaseSync, key: string, value: string) {
+  database.prepare(
+    `INSERT INTO AppSetting (id, key, value)
+     VALUES (lower(hex(randomblob(16))), ?, ?)
+     ON CONFLICT(key) DO UPDATE SET
+       value = excluded.value,
+       updatedAt = CURRENT_TIMESTAMP`
+  ).run(key, value)
 }
 
 function createJsonRequest(url: string, payload: Record<string, unknown>) {
@@ -38,10 +46,12 @@ function createJsonRequest(url: string, payload: Record<string, unknown>) {
   })
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks()
+  const resolver = await import('@/lib/server/db-resolver')
+  resolver.resetResolvedDatabasesForTests()
+  restoreDataDir()
   vi.resetModules()
-  closeTestDatabase()
 
   while (cleanups.length) {
     cleanups.pop()?.()
@@ -218,6 +228,33 @@ describe('preset compat library route', () => {
         revision: 1,
       },
     })
+  })
+
+  it('reads and writes the control library when invoked inside novel scope', async () => {
+    const controlDb = await createTestDatabase('retale-preset-compat-route-control-owner')
+    const { getNovelDb } = await import('@/lib/server/db-resolver')
+    const novelDb = getNovelDb('novel-decoy')
+    const controlLibrary = createDefaultPresetCompatLibrary()
+    controlLibrary.revision = 4
+    const novelDecoy = createDefaultPresetCompatLibrary()
+    novelDecoy.revision = 12
+    writeAppSetting(controlDb, 'PRESET_COMPAT_LIBRARY_V1', JSON.stringify(controlLibrary))
+    writeAppSetting(novelDb, 'PRESET_COMPAT_LIBRARY_V1', JSON.stringify(novelDecoy))
+
+    const { runWithNovelDatabaseAccess } = await import('@/lib/server/database-access')
+    const { GET, POST } = await import('@/app/api/settings/preset-compat/route')
+    const getResponse = await runWithNovelDatabaseAccess('novel-decoy', () => GET())
+    const loaded = await getResponse.json() as ReturnType<typeof createDefaultPresetCompatLibrary>
+    const postResponse = await runWithNovelDatabaseAccess('novel-decoy', () => POST(createJsonRequest(
+      'http://localhost/api/settings/preset-compat',
+      { expectedRevision: loaded.revision, library: loaded },
+    )))
+
+    expect(getResponse.status).toBe(200)
+    expect(loaded.revision).toBe(4)
+    expect(postResponse.status).toBe(200)
+    expect(JSON.parse((controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('PRESET_COMPAT_LIBRARY_V1') as { value: string }).value)).toMatchObject({ revision: 5 })
+    expect(JSON.parse((novelDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('PRESET_COMPAT_LIBRARY_V1') as { value: string }).value)).toMatchObject({ revision: 12 })
   })
 
   it('imports presets, preserves passthrough warnings, and defaults display-name conflicts to copy', async () => {

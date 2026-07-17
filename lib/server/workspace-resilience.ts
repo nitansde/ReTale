@@ -1,4 +1,5 @@
 import {
+  assertWorkspaceNovelReadyForWrite,
   readActiveWorkspaceNovelId,
   upsertWorkspaceNovelRegistry,
   writeActiveWorkspaceNovelId,
@@ -339,6 +340,7 @@ export async function persistWorkspaceRuntimeState(
     }
 
     const scopedPayload = scopeWorkspaceStateToNovel(normalized, targetNovelId)
+    assertWorkspaceNovelReadyForWrite(targetNovelId)
     const targetDb = createNovelDatabaseAccess(targetNovelId)
 
     writeActiveWorkspaceNovelId(targetNovelId)

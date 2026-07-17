@@ -1,12 +1,19 @@
 import { after, NextResponse } from 'next/server'
 import {
+  assertWorkspaceNovelReadyForWrite,
   claimPendingWorkspaceKnowledgeSync,
   completeWorkspaceKnowledgeSync,
+  deleteWorkspaceNovel,
   failWorkspaceKnowledgeSync,
   listReadyWorkspaceNovelRegistry,
   markWorkspaceKnowledgeSyncRequested,
   readActiveWorkspaceNovelId,
+  readWorkspaceNovelDeletionState,
+  resumePendingWorkspaceNovelCleanup,
+  resumeWorkspaceNovelCleanup,
   upsertWorkspaceState,
+  WorkspaceNovelDeletionError,
+  WorkspaceNovelStateConflictError,
 } from '@/lib/server/persistence'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { syncWorkspacePayloadToKnowledgeStore } from '@/lib/server/knowledge-rebuild'
@@ -19,6 +26,8 @@ import {
   shouldBlockEmptyWorkspaceOverwrite,
 } from '@/lib/server/workspace-resilience'
 import { resolveWorkspaceNovelId } from '@/lib/server/workspace-novel-scope'
+import { runWithPerNovelWriteGate } from '@/lib/server/per-novel-write-gate'
+import { NovelRegistryNotReadyError } from '@/lib/server/db-resolver'
 import { createEmptyWorkspaceState, normalizeWorkspaceState } from '@/lib/workspace-state'
 
 export const maxDuration = 3600
@@ -45,6 +54,22 @@ function scheduleAfterResponse(callback: () => Promise<void>) {
     setTimeout(() => {
       void callback()
     }, 0)
+  }
+}
+
+async function retryWorkspaceNovelCleanup(novelId: string) {
+  try {
+    await resumeWorkspaceNovelCleanup(novelId)
+  } catch (error) {
+    console.error('Failed to retry quarantined novel cleanup:', novelId, error)
+  }
+}
+
+async function scanPendingWorkspaceNovelCleanup() {
+  try {
+    await resumePendingWorkspaceNovelCleanup()
+  } catch (error) {
+    console.error('Failed to scan pending quarantined novel cleanup:', error)
   }
 }
 
@@ -196,8 +221,36 @@ async function runPendingWorkspaceKnowledgeSync(novelId: string) {
 }
 
 export async function GET(request: Request = new Request('http://localhost/api/workspace')) {
+  const searchParams = new URL(request.url).searchParams
+  const deletionStatus = searchParams.get('deletionStatus')
+  if (deletionStatus !== null) {
+    if (deletionStatus !== '1') {
+      return NextResponse.json({ ok: false, error: 'deletionStatus must be 1' }, { status: 400 })
+    }
+
+    const novelId = searchParams.get('novelId')
+    if (novelId === null) {
+      return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+    }
+
+    try {
+      return NextResponse.json({
+        ok: true,
+        novelId: novelId.trim(),
+        deletionState: readWorkspaceNovelDeletionState(novelId),
+      })
+    } catch (error) {
+      if (error instanceof WorkspaceNovelDeletionError) {
+        return NextResponse.json({ ok: false, error: error.message }, { status: error.status })
+      }
+      throw error
+    }
+  }
+
+  scheduleAfterResponse(scanPendingWorkspaceNovelCleanup)
+
   try {
-    const requestedNovelId = new URL(request.url).searchParams.get('novelId')?.trim() || null
+    const requestedNovelId = searchParams.get('novelId')?.trim() || null
     if (requestedNovelId) {
       const payload = await loadWorkspacePayloadFromRuntimeOrRecovery('singleton', getNovelWorkspaceDb(requestedNovelId))
       return NextResponse.json(payload)
@@ -229,36 +282,72 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: '工作区 JSON 无效，请刷新页面后重试。' }, { status: 400 })
     }
 
-    const allowReset = isExplicitWorkspaceResetRequest(request)
-    if (shouldBlockEmptyWorkspaceOverwrite(payload, allowReset)) {
-      return NextResponse.json(
-        { ok: false, error: 'Refusing to overwrite a recoverable workspace with an empty payload' },
-        { status: 409 }
-      )
-    }
-
     const normalizedPayload = normalizeWorkspaceState(payload)
     const targetNovelId = resolveWorkspaceNovelId(normalizedPayload) ?? readActiveWorkspaceNovelId()
     if (!targetNovelId) {
       throw new Error('Unable to determine which novel workspace should be persisted')
     }
 
-    const savedRuntime = await persistWorkspaceRuntimeState(normalizedPayload)
-    const saved = upsertWorkspaceState(
-      'singleton',
-      JSON.stringify(normalizedPayload),
-      { backupReason: allowReset ? 'explicit-reset' : 'workspace-save' }
-    )
+    return await runWithPerNovelWriteGate(targetNovelId, async () => {
+      assertWorkspaceNovelReadyForWrite(targetNovelId)
+      const workspaceDb = getNovelWorkspaceDb(targetNovelId)
+      const allowReset = isExplicitWorkspaceResetRequest(request)
+      if (shouldBlockEmptyWorkspaceOverwrite(payload, allowReset, 'singleton', workspaceDb)) {
+        return NextResponse.json(
+          { ok: false, error: 'Refusing to overwrite a recoverable workspace with an empty payload' },
+          { status: 409 }
+        )
+      }
 
-    markWorkspaceKnowledgeSyncRequested('singleton', savedRuntime.updatedAt, { novelId: targetNovelId })
-    scheduleAfterResponse(() => runPendingWorkspaceKnowledgeSync(targetNovelId))
+      const savedRuntime = await persistWorkspaceRuntimeState(normalizedPayload)
+      const saved = upsertWorkspaceState(
+        'singleton',
+        JSON.stringify(normalizedPayload),
+        { backupReason: allowReset ? 'explicit-reset' : 'workspace-save' }
+      )
 
-    return NextResponse.json({ ok: true, updatedAt: savedRuntime.updatedAt ?? saved?.updatedAt ?? null })
+      markWorkspaceKnowledgeSyncRequested('singleton', savedRuntime.updatedAt, { novelId: targetNovelId })
+      scheduleAfterResponse(() => runPendingWorkspaceKnowledgeSync(targetNovelId))
+
+      return NextResponse.json({ ok: true, updatedAt: savedRuntime.updatedAt ?? saved?.updatedAt ?? null })
+    })
   } catch (error) {
+    if (error instanceof WorkspaceNovelStateConflictError || error instanceof NovelRegistryNotReadyError) {
+      return NextResponse.json({ ok: false, error: 'Novel deletion is already in progress or complete' }, { status: 409 })
+    }
     console.error('Failed to save workspace payload:', error)
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to save workspace payload' },
       { status: 500 }
+    )
+  }
+}
+
+export async function DELETE(request: Request) {
+  const searchParams = new URL(request.url).searchParams
+  const novelId = searchParams.get('novelId')
+  if (novelId === null) {
+    return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+  }
+
+  try {
+    const result = await deleteWorkspaceNovel({
+      novelId,
+      nextNovelId: searchParams.get('nextNovelId'),
+    })
+    if (result.cleanupPending) {
+      scheduleAfterResponse(() => retryWorkspaceNovelCleanup(result.deletedNovelId))
+    }
+    return NextResponse.json({ ok: true, ...result }, { status: result.cleanupPending ? 202 : 200 })
+  } catch (error) {
+    if (error instanceof WorkspaceNovelDeletionError) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: error.status })
+    }
+
+    console.error('Failed to permanently delete novel workspace:', error)
+    return NextResponse.json(
+      { ok: false, error: 'Failed to permanently delete novel workspace' },
+      { status: 500 },
     )
   }
 }

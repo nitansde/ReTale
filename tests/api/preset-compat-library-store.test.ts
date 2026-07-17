@@ -1,31 +1,29 @@
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const originalDataDir = process.env.RETALE_DATA_DIR
+
+function restoreDataDir() {
+  if (originalDataDir === undefined) {
+    delete process.env.RETALE_DATA_DIR
+    return
+  }
+
+  process.env.RETALE_DATA_DIR = originalDataDir
+}
 
 async function createTestDatabase(prefix: string) {
   const tempDatabase = createTempDatabaseCopy(prefix)
   cleanups.push(tempDatabase.cleanup)
-  const database = new DatabaseSync(tempDatabase.dbPath)
-  globalForSqlite.sqlite = database
+  process.env.RETALE_DATA_DIR = path.join(tempDatabase.directory, 'data')
   vi.resetModules()
 
-  const { initializeDatabase } = await import('@/lib/server/sqlite')
-  initializeDatabase(database)
-  return database
-}
-
-function closeTestDatabase() {
-  if (globalForSqlite.sqlite) {
-    try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
-    } catch {
-    }
-    delete globalForSqlite.sqlite
-  }
+  const { getControlDb } = await import('@/lib/server/db-resolver')
+  return getControlDb()
 }
 
 function readAppSetting(database: DatabaseSync, key: string) {
@@ -48,9 +46,12 @@ function deleteAppSetting(database: DatabaseSync, key: string) {
   database.prepare('DELETE FROM AppSetting WHERE key = ?').run(key)
 }
 
-afterEach(() => {
+afterEach(async () => {
+  vi.restoreAllMocks()
+  const resolver = await import('@/lib/server/db-resolver')
+  resolver.resetResolvedDatabasesForTests()
+  restoreDataDir()
   vi.resetModules()
-  closeTestDatabase()
 
   while (cleanups.length) {
     cleanups.pop()?.()
@@ -155,6 +156,28 @@ describe('preset compat library app-setting store', () => {
     const secondSaved = await saveStoredPresetCompatLibrary(firstSaved)
     expect(secondSaved.revision).toBe(2)
     expect(loadStoredPresetCompatLibrary().revision).toBe(2)
+  })
+
+  it('uses control settings inside novel scope and leaves novel decoys untouched on save', async () => {
+    const controlDb = await createTestDatabase('retale-preset-compat-library-control-owner')
+    const { getNovelDb } = await import('@/lib/server/db-resolver')
+    const novelDb = getNovelDb('novel-decoy')
+    const controlLibrary = createDefaultPresetCompatLibrary()
+    controlLibrary.revision = 2
+    const novelDecoy = createDefaultPresetCompatLibrary()
+    novelDecoy.revision = 9
+    writeAppSetting(controlDb, 'PRESET_COMPAT_LIBRARY_V1', JSON.stringify(controlLibrary))
+    writeAppSetting(novelDb, 'PRESET_COMPAT_LIBRARY_V1', JSON.stringify(novelDecoy))
+
+    const { runWithNovelDatabaseAccess } = await import('@/lib/server/database-access')
+    const { loadStoredPresetCompatLibrary, saveStoredPresetCompatLibrary } = await import('@/lib/server/preset-compat-library')
+    const loaded = runWithNovelDatabaseAccess('novel-decoy', () => loadStoredPresetCompatLibrary())
+    const saved = await runWithNovelDatabaseAccess('novel-decoy', () => saveStoredPresetCompatLibrary(loaded))
+
+    expect(loaded.revision).toBe(2)
+    expect(saved.revision).toBe(3)
+    expect(JSON.parse(readAppSetting(controlDb, 'PRESET_COMPAT_LIBRARY_V1')!.value)).toMatchObject({ revision: 3 })
+    expect(JSON.parse(readAppSetting(novelDb, 'PRESET_COMPAT_LIBRARY_V1')!.value)).toMatchObject({ revision: 9 })
   })
 
   it('persists a full library blob that remains parseable after raw app-setting reloads', async () => {

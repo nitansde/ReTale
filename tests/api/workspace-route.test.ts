@@ -71,6 +71,20 @@ function createWorkspaceRequest(payload: Record<string, unknown>, headers: Recor
   })
 }
 
+function createWorkspaceDeleteRequest(novelId?: string, nextNovelId?: string) {
+  const url = new URL('http://localhost/api/workspace')
+  if (novelId !== undefined) url.searchParams.set('novelId', novelId)
+  if (nextNovelId !== undefined) url.searchParams.set('nextNovelId', nextNovelId)
+  return new Request(url, { method: 'DELETE' })
+}
+
+function createWorkspaceDeletionStatusRequest(novelId?: string) {
+  const url = new URL('http://localhost/api/workspace')
+  url.searchParams.set('deletionStatus', '1')
+  if (novelId !== undefined) url.searchParams.set('novelId', novelId)
+  return new Request(url)
+}
+
 function createWorkspacePayload(novelId = 'novel-1', title = 'First') {
   return {
     localNovels: [{ id: novelId, title, summary: '', tags: ['测试'] }],
@@ -289,6 +303,693 @@ afterEach(() => {
 })
 
 describe('workspace route', () => {
+  it('permanently deletes the active novel and switches to the supplied survivor without touching control settings', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-delete-active', 'novel-alpha')
+    getNovelDb('novel-alpha')
+    getNovelDb('novel-beta')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta')
+    controlDb.prepare('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)').run('ai-setting', 'AI_SETTINGS_V2', '{"provider":"test"}')
+    controlDb.prepare('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)').run('preset-setting', 'PRESET_COMPAT_LIBRARY_V1', '{"presets":[]}')
+    const alphaDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', 'novel-alpha')
+    const betaDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', 'novel-beta')
+    fs.mkdirSync(path.join(alphaDirectory, 'lancedb'), { recursive: true })
+    fs.writeFileSync(path.join(alphaDirectory, 'lancedb', 'artifact.lance'), 'alpha')
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta'))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      deletedNovelId: 'novel-alpha',
+      activeNovelId: 'novel-beta',
+      deletionState: 'deleted',
+      cleanupPending: false,
+    })
+    expect(fs.existsSync(alphaDirectory)).toBe(false)
+    expect(fs.existsSync(betaDirectory)).toBe(true)
+    expect(controlDb.prepare('SELECT novelId, migrationStatus FROM NovelRegistry ORDER BY novelId').all()).toEqual([
+      { novelId: 'novel-alpha', migrationStatus: 'deleted' },
+      { novelId: 'novel-beta', migrationStatus: 'ready' },
+    ])
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: 'novel-beta' })
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('AI_SETTINGS_V2')).toEqual({ value: '{"provider":"test"}' })
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('PRESET_COMPAT_LIBRARY_V1')).toEqual({ value: '{"presets":[]}' })
+  })
+
+  it('uses the deterministic first ready survivor when deleting the active novel without an explicit successor', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-delete-fallback', 'novel-target')
+    for (const novelId of ['novel-target', 'novel-beta', 'novel-alpha']) {
+      getNovelDb(novelId)
+      seedNovelRegistryRow(controlDb, novelId, novelId)
+    }
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await DELETE(createWorkspaceDeleteRequest('novel-target'))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true, activeNovelId: 'novel-alpha' })
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: 'novel-alpha' })
+  })
+
+  it('clears the active setting when permanently deleting the last registered novel', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-delete-last', 'novel-only')
+    getNovelDb('novel-only')
+    seedNovelRegistryRow(controlDb, 'novel-only', 'Only Novel')
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await DELETE(createWorkspaceDeleteRequest('novel-only'))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      deletedNovelId: 'novel-only',
+      activeNovelId: null,
+      deletionState: 'deleted',
+      cleanupPending: false,
+    })
+    expect(controlDb.prepare('SELECT novelId, migrationStatus FROM NovelRegistry').all()).toEqual([
+      { novelId: 'novel-only', migrationStatus: 'deleted' },
+    ])
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toBeUndefined()
+  })
+
+  it('keeps the active novel unchanged when deleting a non-active novel', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-delete-inactive', 'novel-alpha')
+    for (const novelId of ['novel-alpha', 'novel-beta', 'novel-gamma']) {
+      getNovelDb(novelId)
+      seedNovelRegistryRow(controlDb, novelId, novelId)
+    }
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await DELETE(createWorkspaceDeleteRequest('novel-beta', 'novel-gamma'))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true, activeNovelId: 'novel-alpha' })
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: 'novel-alpha' })
+  })
+
+  it('returns typed validation and lookup statuses without creating storage for missing novels', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-delete-statuses', 'novel-alpha')
+    getNovelDb('novel-alpha')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    const novelsDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels')
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const missingIdResponse = await DELETE(createWorkspaceDeleteRequest())
+    const invalidIdResponse = await DELETE(createWorkspaceDeleteRequest('../escape'))
+    const unknownTargetResponse = await DELETE(createWorkspaceDeleteRequest('novel-unknown'))
+    const invalidSurvivorResponse = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-missing'))
+
+    expect(missingIdResponse.status).toBe(400)
+    expect(invalidIdResponse.status).toBe(400)
+    expect(unknownTargetResponse.status).toBe(404)
+    expect(invalidSurvivorResponse.status).toBe(409)
+    expect(fs.existsSync(path.join(novelsDirectory, 'novel-unknown'))).toBe(false)
+    expect(controlDb.prepare('SELECT novelId FROM NovelRegistry').all()).toEqual([{ novelId: 'novel-alpha' }])
+  })
+
+  it('returns exact ready, deleting, and deleted deletion-status payloads before scheduling cleanup', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-deletion-status-contract', 'novel-alpha')
+    getNovelDb('novel-alpha')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    const alphaDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', 'novel-alpha')
+
+    const { GET, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
+
+    const readyResponse = await GET(createWorkspaceDeletionStatusRequest('novel-alpha'))
+    expect(readyResponse.status).toBe(200)
+    await expect(readyResponse.json()).resolves.toEqual({
+      ok: true,
+      novelId: 'novel-alpha',
+      deletionState: 'ready',
+    })
+    expect(afterCallbacks).toHaveLength(0)
+
+    controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('deleting', 'novel-alpha')
+    const deletingResponse = await GET(createWorkspaceDeletionStatusRequest('novel-alpha'))
+    expect(deletingResponse.status).toBe(200)
+    await expect(deletingResponse.json()).resolves.toEqual({
+      ok: true,
+      novelId: 'novel-alpha',
+      deletionState: 'deleting',
+    })
+    expect(afterCallbacks).toHaveLength(0)
+
+    controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('deleted', 'novel-alpha')
+    const resolverModule = await import('@/lib/server/db-resolver')
+    resolverModule.evictNovelStorageCache('novel-alpha')
+    fs.rmSync(alphaDirectory, { recursive: true, force: true })
+
+    const deletedResponse = await GET(createWorkspaceDeletionStatusRequest('novel-alpha'))
+    expect(deletedResponse.status).toBe(200)
+    await expect(deletedResponse.json()).resolves.toEqual({
+      ok: true,
+      novelId: 'novel-alpha',
+      deletionState: 'deleted',
+    })
+    expect(afterCallbacks).toHaveLength(0)
+    expect(fs.existsSync(alphaDirectory)).toBe(false)
+  })
+
+  it('returns strict deletion-status errors without coercing unknown registry states', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-deletion-status-errors', 'novel-alpha')
+    getNovelDb('novel-alpha')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('pending', 'novel-alpha')
+    const novelsDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels')
+
+    const { GET, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
+    const missingIdResponse = await GET(createWorkspaceDeletionStatusRequest())
+    const invalidIdResponse = await GET(createWorkspaceDeletionStatusRequest('../escape'))
+    const unknownNovelResponse = await GET(createWorkspaceDeletionStatusRequest('novel-unknown'))
+    const unknownStateResponse = await GET(createWorkspaceDeletionStatusRequest('novel-alpha'))
+
+    expect(missingIdResponse.status).toBe(400)
+    await expect(missingIdResponse.json()).resolves.toEqual({ ok: false, error: expect.any(String) })
+    expect(invalidIdResponse.status).toBe(400)
+    await expect(invalidIdResponse.json()).resolves.toEqual({ ok: false, error: expect.any(String) })
+    expect(unknownNovelResponse.status).toBe(404)
+    await expect(unknownNovelResponse.json()).resolves.toEqual({ ok: false, error: expect.any(String) })
+    expect(unknownStateResponse.status).toBe(409)
+    await expect(unknownStateResponse.json()).resolves.toEqual({ ok: false, error: expect.any(String) })
+    expect(afterCallbacks).toHaveLength(0)
+    expect(fs.existsSync(path.join(novelsDirectory, 'novel-unknown'))).toBe(false)
+    expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'pending' })
+  })
+
+  it('returns 404 for a non-ready target without touching its registry row or storage', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-delete-non-ready', 'novel-pending')
+    getNovelDb('novel-pending')
+    getNovelDb('novel-ready')
+    seedNovelRegistryRow(controlDb, 'novel-pending', 'Pending')
+    seedNovelRegistryRow(controlDb, 'novel-ready', 'Ready')
+    controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('pending', 'novel-pending')
+    const pendingDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', 'novel-pending')
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await DELETE(createWorkspaceDeleteRequest('novel-pending', 'novel-ready'))
+
+    expect(response.status).toBe(404)
+    expect(fs.existsSync(pendingDirectory)).toBe(true)
+    expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-pending')).toEqual({ migrationStatus: 'pending' })
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: 'novel-pending' })
+  })
+
+  it('replaces an unknown active pointer with the validated requested survivor', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-delete-stale-active-requested', 'novel-stale')
+    for (const novelId of ['novel-target', 'novel-alpha', 'novel-gamma']) {
+      getNovelDb(novelId)
+      seedNovelRegistryRow(controlDb, novelId, novelId)
+    }
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await DELETE(createWorkspaceDeleteRequest('novel-target', 'novel-gamma'))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true, activeNovelId: 'novel-gamma' })
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: 'novel-gamma' })
+  })
+
+  it('replaces a non-ready active pointer with the deterministic first ready survivor', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-delete-non-ready-active-fallback', 'novel-pending')
+    for (const novelId of ['novel-target', 'novel-beta', 'novel-alpha', 'novel-pending']) {
+      getNovelDb(novelId)
+      seedNovelRegistryRow(controlDb, novelId, novelId)
+    }
+    controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('pending', 'novel-pending')
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await DELETE(createWorkspaceDeleteRequest('novel-target'))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true, activeNovelId: 'novel-alpha' })
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: 'novel-alpha' })
+    expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-pending')).toEqual({ migrationStatus: 'pending' })
+  })
+
+  it('returns 202 and autonomously retries a failed quarantine purge after the response', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-delete-cleanup-failure', 'novel-alpha')
+    getNovelDb('novel-alpha')
+    getNovelDb('novel-beta')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta')
+    const alphaDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', 'novel-alpha')
+    const quarantineDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', '.novel-quarantine', 'novel-alpha')
+    const cleanupError = new Error('simulated quarantine purge failure')
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const rmSpy = vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
+      throw cleanupError
+    })
+
+    const { DELETE, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta'))
+    expect(rmSpy).toHaveBeenCalledWith(quarantineDirectory, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+      retryDelay: 100,
+    })
+    rmSpy.mockRestore()
+
+    expect(response.status).toBe(202)
+    await expect(response.json()).resolves.toMatchObject({ ok: true, cleanupPending: true, deletionState: 'deleted' })
+    expect(fs.existsSync(alphaDirectory)).toBe(false)
+    expect(fs.existsSync(quarantineDirectory)).toBe(true)
+    expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'deleted' })
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: 'novel-beta' })
+    expect(consoleError).toHaveBeenCalledWith('Failed to purge quarantined novel storage:', cleanupError)
+    expect(afterCallbacks).toHaveLength(1)
+
+    await afterCallbacks[0]()
+    expect(fs.existsSync(quarantineDirectory)).toBe(false)
+  })
+
+  it('resumes persisted quarantine cleanup from GET after modules restart', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-delete-restart-recovery', 'novel-alpha')
+    getNovelDb('novel-alpha')
+    getNovelDb('novel-beta')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta')
+    const quarantineDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', '.novel-quarantine', 'novel-alpha')
+    const rmSpy = vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
+      throw new Error('simulated process-ending purge failure')
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const deleteResponse = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta'))
+    expect(deleteResponse.status).toBe(202)
+    expect(fs.existsSync(quarantineDirectory)).toBe(true)
+    rmSpy.mockRestore()
+
+    const resolverBeforeRestart = await import('@/lib/server/db-resolver')
+    resolverBeforeRestart.resetResolvedDatabasesForTests()
+    vi.resetModules()
+
+    const { GET, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
+    const getResponse = await GET()
+    expect(getResponse.status).toBe(200)
+    expect(fs.existsSync(quarantineDirectory)).toBe(true)
+    expect(afterCallbacks).toHaveLength(1)
+
+    await afterCallbacks[0]()
+    const { getControlDb } = await import('@/lib/server/db-resolver')
+    expect(fs.existsSync(quarantineDirectory)).toBe(false)
+    expect(getControlDb().prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'deleted' })
+  })
+
+  it('advances bounded GET cleanup scans past completed tombstones', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-bounded-cleanup-progress', null)
+    for (let index = 0; index < 25; index += 1) {
+      const novelId = `novel-clean-${String(index).padStart(2, '0')}`
+      seedNovelRegistryRow(controlDb, novelId, novelId)
+      controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('deleted', novelId)
+    }
+
+    getNovelDb('novel-pending')
+    seedNovelRegistryRow(controlDb, 'novel-pending', 'Pending')
+    const pendingDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', 'novel-pending')
+    const quarantineRoot = path.join(process.env.RETALE_DATA_DIR ?? 'data', '.novel-quarantine')
+    const quarantineDirectory = path.join(quarantineRoot, 'novel-pending')
+    const resolverModule = await import('@/lib/server/db-resolver')
+    resolverModule.evictNovelStorageCache('novel-pending')
+    fs.mkdirSync(quarantineRoot, { recursive: true })
+    fs.renameSync(pendingDirectory, quarantineDirectory)
+    controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('deleted', 'novel-pending')
+
+    const { GET, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
+    expect((await GET()).status).toBe(200)
+    expect(afterCallbacks).toHaveLength(1)
+    await afterCallbacks[0]()
+    expect(fs.existsSync(quarantineDirectory)).toBe(true)
+
+    expect((await GET()).status).toBe(200)
+    expect(afterCallbacks).toHaveLength(2)
+    await afterCallbacks[1]()
+    expect(fs.existsSync(quarantineDirectory)).toBe(false)
+  })
+
+  it('keeps tombstones permanent and makes repeated deletion idempotent', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-delete-idempotent', 'novel-alpha')
+    getNovelDb('novel-alpha')
+    getNovelDb('novel-beta')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta')
+    const alphaDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', 'novel-alpha')
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const firstResponse = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta'))
+    const secondResponse = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta'))
+
+    expect(firstResponse.status).toBe(200)
+    expect(secondResponse.status).toBe(200)
+    await expect(secondResponse.json()).resolves.toMatchObject({
+      ok: true,
+      activeNovelId: 'novel-beta',
+      deletionState: 'deleted',
+      cleanupPending: false,
+    })
+    expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'deleted' })
+    expect(fs.existsSync(alphaDirectory)).toBe(false)
+  })
+
+  it('rejects stale workspace saves without reviving tombstones or recreating storage', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-stale-save', 'novel-alpha')
+    getNovelDb('novel-alpha')
+    getNovelDb('novel-beta')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta')
+    const alphaDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', 'novel-alpha')
+
+    const { DELETE, POST, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
+    await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta'))
+    const staleSave = await POST(createWorkspaceRequest(createWorkspacePayload('novel-alpha', 'Stale Alpha')))
+
+    expect(staleSave.status).toBe(409)
+    await expect(staleSave.json()).resolves.toMatchObject({ ok: false })
+    expect(controlDb.prepare('SELECT title, migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({
+      title: 'Alpha',
+      migrationStatus: 'deleted',
+    })
+    expect(fs.existsSync(alphaDirectory)).toBe(false)
+    expect(afterCallbacks).toHaveLength(0)
+  })
+
+  it('fences a stale save that was queued before deletion publication', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-stale-save-race', 'novel-alpha')
+    getNovelDb('novel-alpha')
+    getNovelDb('novel-beta')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta')
+    const alphaDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', 'novel-alpha')
+    const quarantineRoot = path.join(process.env.RETALE_DATA_DIR ?? 'data', '.novel-quarantine')
+    const quarantineDirectory = path.join(quarantineRoot, 'novel-alpha')
+    const gateEntered = Promise.withResolvers<void>()
+    const gateRelease = Promise.withResolvers<void>()
+    const gateModule = await import('@/lib/server/per-novel-write-gate')
+    const resolverModule = await import('@/lib/server/db-resolver')
+    const deletionPublication = gateModule.runWithPerNovelWriteGate('novel-alpha', async () => {
+      gateEntered.resolve()
+      await gateRelease.promise
+      controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('deleted', 'novel-alpha')
+      controlDb.prepare('UPDATE AppSetting SET value = ? WHERE key = ?').run('novel-beta', 'WORKSPACE_ACTIVE_NOVEL_ID')
+      resolverModule.evictNovelStorageCache('novel-alpha')
+      fs.mkdirSync(quarantineRoot, { recursive: true })
+      fs.renameSync(alphaDirectory, quarantineDirectory)
+    })
+    await gateEntered.promise
+
+    const { POST, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
+    const staleSavePromise = POST(createWorkspaceRequest(createWorkspacePayload('novel-alpha', 'Queued Stale Alpha')))
+    await Promise.resolve()
+    gateRelease.resolve()
+    await deletionPublication
+    const staleSave = await staleSavePromise
+
+    expect(staleSave.status).toBe(409)
+    expect(controlDb.prepare('SELECT title, migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({
+      title: 'Alpha',
+      migrationStatus: 'deleted',
+    })
+    expect(fs.existsSync(alphaDirectory)).toBe(false)
+    expect(fs.existsSync(quarantineDirectory)).toBe(true)
+    expect(afterCallbacks).toHaveLength(0)
+  })
+
+  it('returns 409 for queued, running, and paused knowledge jobs without changing metadata or storage', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-active-jobs', 'novel-alpha')
+    const alphaDb = getNovelDb('novel-alpha')
+    getNovelDb('novel-beta')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta')
+    alphaDb.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run('novel-alpha', 'Alpha', 'workspace')
+    alphaDb.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run('novel-alpha:main', 'novel-alpha', 'main')
+    alphaDb.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run('job-active', 'novel-alpha', 'novel-alpha:main', 'extract_chapter_knowledge', 'queued')
+    const alphaDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', 'novel-alpha')
+    const activeSettingBefore = controlDb.prepare('SELECT * FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    for (const status of ['queued', 'running', 'paused']) {
+      alphaDb.prepare('UPDATE KnowledgeJob SET status = ? WHERE id = ?').run(status, 'job-active')
+      const response = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta'))
+      expect(response.status).toBe(409)
+      expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'ready' })
+      expect(controlDb.prepare('SELECT * FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual(activeSettingBefore)
+      expect(fs.existsSync(alphaDirectory)).toBe(true)
+    }
+  })
+
+  it('returns 409 for pending and started workspace synchronization without changing deletion state', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-active-sync', 'novel-alpha')
+    const alphaDb = getNovelDb('novel-alpha')
+    getNovelDb('novel-beta')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta')
+    alphaDb.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', '{}')
+    alphaDb.prepare(
+      `INSERT INTO WorkspaceKnowledgeSyncState (workspaceStateId, requestedRevision, syncedRevision)
+       VALUES (?, ?, ?)`,
+    ).run('singleton', 2, 1)
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const pendingResponse = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta'))
+    expect(pendingResponse.status).toBe(409)
+
+    alphaDb.prepare(
+      `UPDATE WorkspaceKnowledgeSyncState
+       SET syncedRevision = requestedRevision, startedRevision = requestedRevision
+       WHERE workspaceStateId = ?`,
+    ).run('singleton')
+    const startedResponse = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta'))
+    expect(startedResponse.status).toBe(409)
+    expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'ready' })
+  })
+
+  it('compensates exact ready and active metadata when atomic rename fails', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-rename-failure', 'novel-alpha')
+    getNovelDb('novel-alpha')
+    getNovelDb('novel-beta')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta')
+    const registryBefore = controlDb.prepare('SELECT * FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')
+    const activeBefore = controlDb.prepare('SELECT * FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')
+    const renameError = new Error('simulated rename failure')
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      throw renameError
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta'))
+    renameSpy.mockRestore()
+
+    expect(response.status).toBe(500)
+    await expect(response.json()).resolves.toEqual({ ok: false, error: 'Failed to permanently delete novel workspace' })
+    expect(controlDb.prepare('SELECT * FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual(registryBefore)
+    expect(controlDb.prepare('SELECT * FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual(activeBefore)
+    expect(consoleError).toHaveBeenCalledWith('Failed to permanently delete novel workspace:', renameError)
+  })
+
+  it('rotates the active-setting token and preserves a newer competing selection during rename compensation', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-rename-compensation-race', 'novel-alpha')
+    for (const novelId of ['novel-alpha', 'novel-beta', 'novel-gamma']) {
+      getNovelDb(novelId)
+      seedNovelRegistryRow(controlDb, novelId, novelId)
+    }
+    const activeBefore = controlDb.prepare(
+      'SELECT id, value FROM AppSetting WHERE key = ?',
+    ).get('WORKSPACE_ACTIVE_NOVEL_ID') as { id: string; value: string }
+    const observedTargetStates: string[] = []
+    let publishedActiveSetting: { id: string; value: string } | undefined
+    const renameError = new Error('simulated rename failure after competing active selection')
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      publishedActiveSetting = controlDb.prepare(
+        'SELECT id, value FROM AppSetting WHERE key = ?',
+      ).get('WORKSPACE_ACTIVE_NOVEL_ID') as { id: string; value: string }
+      const target = controlDb.prepare(
+        'SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?',
+      ).get('novel-alpha') as { migrationStatus: string }
+      observedTargetStates.push(target.migrationStatus)
+      controlDb.prepare(
+        'UPDATE AppSetting SET id = ?, value = ?, updatedAt = CURRENT_TIMESTAMP WHERE key = ?',
+      ).run('competing-gamma-selection', 'novel-gamma', 'WORKSPACE_ACTIVE_NOVEL_ID')
+      throw renameError
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta'))
+    renameSpy.mockRestore()
+
+    const targetAfter = controlDb.prepare(
+      'SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?',
+    ).get('novel-alpha') as { migrationStatus: string }
+    observedTargetStates.push(targetAfter.migrationStatus)
+
+    expect(response.status).toBe(500)
+    await expect(response.json()).resolves.toEqual({ ok: false, error: 'Failed to permanently delete novel workspace' })
+    expect(publishedActiveSetting?.id).not.toBe(activeBefore.id)
+    expect(publishedActiveSetting?.value).toBe('novel-beta')
+    expect(observedTargetStates).toEqual(['deleting', 'ready'])
+    expect(controlDb.prepare(
+      'SELECT id, value FROM AppSetting WHERE key = ?',
+    ).get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({
+      id: 'competing-gamma-selection',
+      value: 'novel-gamma',
+    })
+  })
+
+  it('finalizes a persisted deleting tombstone from the normal GET cleanup scan', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-finalize-failure', 'novel-alpha')
+    getNovelDb('novel-alpha')
+    getNovelDb('novel-beta')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta')
+    controlDb.exec(
+      `CREATE TRIGGER fail_novel_delete_finalize
+       BEFORE UPDATE OF migrationStatus ON NovelRegistry
+       WHEN NEW.migrationStatus = 'deleted'
+       BEGIN
+         SELECT RAISE(ABORT, 'simulated finalize failure');
+       END;`,
+    )
+    const alphaDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', 'novel-alpha')
+    const quarantineDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', '.novel-quarantine', 'novel-alpha')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const failedResponse = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta'))
+    expect(failedResponse.status).toBe(500)
+    expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'deleting' })
+    expect(fs.existsSync(alphaDirectory)).toBe(false)
+    expect(fs.existsSync(quarantineDirectory)).toBe(true)
+
+    controlDb.exec('DROP TRIGGER fail_novel_delete_finalize')
+    vi.resetModules()
+    const { GET, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
+    const getResponse = await GET()
+    expect(getResponse.status).toBe(200)
+    expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'deleting' })
+    expect(afterCallbacks).toHaveLength(1)
+
+    await afterCallbacks[0]()
+    expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'deleted' })
+    expect(fs.existsSync(quarantineDirectory)).toBe(false)
+  })
+
+  it('does not let a stale cleanup candidate delete a novel compensated to ready before gate acquisition', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-stale-cleanup-candidate', 'novel-beta')
+    getNovelDb('novel-alpha')
+    getNovelDb('novel-beta')
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta')
+    const alphaDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', 'novel-alpha')
+    const quarantineRoot = path.join(process.env.RETALE_DATA_DIR ?? 'data', '.novel-quarantine')
+    const quarantineDirectory = path.join(quarantineRoot, 'novel-alpha')
+    const resolverModule = await import('@/lib/server/db-resolver')
+    resolverModule.evictNovelStorageCache('novel-alpha')
+    fs.mkdirSync(quarantineRoot, { recursive: true })
+    fs.renameSync(alphaDirectory, quarantineDirectory)
+    controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('deleted', 'novel-alpha')
+
+    const gateEntered = Promise.withResolvers<void>()
+    const gateRelease = Promise.withResolvers<void>()
+    const gateModule = await import('@/lib/server/per-novel-write-gate')
+    const gateBlocker = gateModule.runWithPerNovelWriteGate('novel-alpha', async () => {
+      gateEntered.resolve()
+      await gateRelease.promise
+    })
+    await gateEntered.promise
+
+    const { GET, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await GET()
+    expect(response.status).toBe(200)
+    expect(afterCallbacks).toHaveLength(1)
+    const cleanupScan = afterCallbacks[0]()
+    await Promise.resolve()
+
+    controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('ready', 'novel-alpha')
+    fs.renameSync(quarantineDirectory, alphaDirectory)
+    gateRelease.resolve()
+    await gateBlocker
+    await cleanupScan
+
+    expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'ready' })
+    expect(fs.existsSync(alphaDirectory)).toBe(true)
+    expect(fs.existsSync(quarantineDirectory)).toBe(false)
+  })
+
+  it('rejects symlinked novels roots, target paths, and quarantine roots without touching outside sentinels', async () => {
+    for (const scenario of ['novels-root', 'target', 'quarantine-root'] as const) {
+      const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `retale-workspace-route-symlink-${scenario}-`))
+      cleanups.push(() => fs.rmSync(tempDirectory, { recursive: true, force: true }))
+      const dataRoot = path.join(tempDirectory, 'data')
+      const outsideRoot = path.join(tempDirectory, 'outside')
+      fs.mkdirSync(dataRoot, { recursive: true })
+      fs.mkdirSync(outsideRoot, { recursive: true })
+      const sentinelPath = path.join(outsideRoot, 'sentinel.txt')
+      fs.writeFileSync(sentinelPath, scenario)
+      process.env.RETALE_DATA_DIR = dataRoot
+      vi.resetModules()
+      const { getControlDb, getNovelDb } = await import('@/lib/server/db-resolver')
+      const controlDb = getControlDb()
+
+      if (scenario === 'novels-root') {
+        fs.symlinkSync(outsideRoot, path.join(dataRoot, 'novels'), 'dir')
+      } else if (scenario === 'target') {
+        fs.mkdirSync(path.join(dataRoot, 'novels'), { recursive: true })
+        fs.symlinkSync(outsideRoot, path.join(dataRoot, 'novels', 'novel-alpha'), 'dir')
+      } else {
+        getNovelDb('novel-alpha')
+        fs.symlinkSync(outsideRoot, path.join(dataRoot, '.novel-quarantine'), 'dir')
+      }
+      seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+      const response = await DELETE(createWorkspaceDeleteRequest('novel-alpha'))
+
+      expect(response.status).toBe(500)
+      await expect(response.json()).resolves.toEqual({ ok: false, error: 'Failed to permanently delete novel workspace' })
+      expect(fs.readFileSync(sentinelPath, 'utf8')).toBe(scenario)
+      expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'ready' })
+      expect(consoleError).toHaveBeenCalled()
+      const resolver = await import('@/lib/server/db-resolver')
+      resolver.resetResolvedDatabasesForTests()
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('rejects a symlinked configured data directory without exposing filesystem details', async () => {
+    const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-workspace-route-symlink-data-root-'))
+    cleanups.push(() => fs.rmSync(tempDirectory, { recursive: true, force: true }))
+    const realDataRoot = path.join(tempDirectory, 'real-data')
+    const linkedDataRoot = path.join(tempDirectory, 'linked-data')
+    fs.mkdirSync(realDataRoot, { recursive: true })
+    fs.symlinkSync(realDataRoot, linkedDataRoot, 'dir')
+    const sentinelPath = path.join(realDataRoot, 'sentinel.txt')
+    fs.writeFileSync(sentinelPath, 'preserve-data-root')
+    process.env.RETALE_DATA_DIR = linkedDataRoot
+    vi.resetModules()
+    const { getControlDb } = await import('@/lib/server/db-resolver')
+    const controlDb = getControlDb()
+    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await DELETE(createWorkspaceDeleteRequest('novel-alpha'))
+
+    expect(response.status).toBe(500)
+    await expect(response.json()).resolves.toEqual({ ok: false, error: 'Failed to permanently delete novel workspace' })
+    expect(fs.readFileSync(sentinelPath, 'utf8')).toBe('preserve-data-root')
+    expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'ready' })
+    expect(consoleError).toHaveBeenCalled()
+  })
+
   it('restores registered per-novel runtime libraries when no active novel setting exists', async () => {
     const { controlDb } = await createTestDataRoot('retale-workspace-route-registry-fallback', null)
 
