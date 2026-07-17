@@ -1,6 +1,11 @@
 import { spawn } from 'node:child_process'
 import path from 'node:path'
-import { getNovelDb, getNovelLanceDbPath } from '@/lib/server/db-resolver'
+import {
+  getNovelDb,
+  getNovelLanceDbPath,
+  getNovelRegistryMigrationStatus,
+  NovelRegistryNotReadyError,
+} from '@/lib/server/db-resolver'
 import type { KnowledgeJobType } from '@/lib/server/knowledge-rebuild'
 import { parseTaskWatchdogPayloadAttemptId } from '@/lib/server/task-watchdog-attempt'
 
@@ -35,15 +40,26 @@ function getNovelDbPath(novelId: string) {
 
 export function scheduleKnowledgeWorkerProcess(params: ScheduleKnowledgeWorkerParams) {
   const jobId = params.jobId.trim()
-  const attemptId = params.attemptId === undefined ? readKnowledgeWorkerAttemptId(params.novelId, jobId) : params.attemptId
-  const workerKey = `${params.jobType}:${jobId}:${attemptId ?? 'no-attempt'}`
-  if (!jobId || scheduledWorkerJobs.has(workerKey) || (process.env.NODE_ENV === 'test' && !params.allowInTests)) {
+  const registry = getNovelRegistryMigrationStatus(params.novelId)
+  if (!jobId || (registry && registry.migrationStatus !== 'ready') || (process.env.NODE_ENV === 'test' && !params.allowInTests)) {
     return false
   }
 
+  let attemptId: string | null | undefined
+  let novelDbPath: string
+  let lanceDbPath: string
+  try {
+    attemptId = params.attemptId === undefined ? readKnowledgeWorkerAttemptId(params.novelId, jobId) : params.attemptId
+    novelDbPath = getNovelDbPath(params.novelId)
+    lanceDbPath = getNovelLanceDbPath(params.novelId)
+  } catch (error) {
+    if (error instanceof NovelRegistryNotReadyError) return false
+    throw error
+  }
+  const workerKey = `${params.jobType}:${jobId}:${attemptId ?? 'no-attempt'}`
+  if (scheduledWorkerJobs.has(workerKey)) return false
+
   const workerPath = path.join(process.cwd(), 'scripts', 'knowledge-worker.mjs')
-  const novelDbPath = getNovelDbPath(params.novelId)
-  const lanceDbPath = getNovelLanceDbPath(params.novelId)
   const child = spawn(process.execPath, [
     workerPath,
     '--job-id', jobId,

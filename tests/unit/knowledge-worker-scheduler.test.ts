@@ -2,7 +2,6 @@ import fs from 'node:fs'
 import { EventEmitter } from 'node:events'
 import os from 'node:os'
 import path from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 class MockChildProcess extends EventEmitter {
@@ -206,5 +205,51 @@ describe('knowledge worker scheduler', () => {
     expect(canonicalizePath(String(spawnMock.mock.calls[0]?.[2]?.env?.DATABASE_URL).replace(/^file:/u, ''))).toBe(
       canonicalizePath(path.join(tempDataRoot, 'data', 'novels', 'novel-alpha', 'novel.db'))
     )
+  })
+
+  it('refuses to spawn workers for deleting and deleted registry rows', async () => {
+    const tempDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-knowledge-worker-scheduler-fence-'))
+    cleanupDirectories.push(tempDataRoot)
+    process.env.RETALE_DATA_DIR = path.join(tempDataRoot, 'data')
+    const spawnMock = vi.fn(() => new MockChildProcess())
+    vi.doMock('node:child_process', () => ({ spawn: spawnMock }))
+
+    const resolver = await import('@/lib/server/db-resolver')
+    const novelDb = resolver.getNovelDb('novel-fenced')
+    const novelDbPath = (novelDb.prepare('PRAGMA database_list').get() as { file: string }).file
+    const controlDb = resolver.getControlDb()
+    controlDb.prepare(
+      `INSERT INTO NovelRegistry (
+         novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus
+       ) VALUES (?, ?, ?, ?, ?, '1', ?)`,
+    ).run(
+      'novel-fenced',
+      'novel-fenced',
+      'Fenced',
+      novelDbPath,
+      path.join(path.dirname(novelDbPath), 'lancedb'),
+      'deleting',
+    )
+    const scheduler = await import('@/lib/server/knowledge-worker-scheduler')
+
+    expect(scheduler.scheduleKnowledgeWorkerProcess({
+      novelId: 'novel-fenced',
+      branchId: 'novel-fenced:main',
+      jobId: 'job-fenced',
+      jobType: 'extract_chapter_knowledge',
+      attemptId: 'attempt-1',
+      allowInTests: true,
+    })).toBe(false)
+
+    controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('deleted', 'novel-fenced')
+    expect(scheduler.scheduleKnowledgeWorkerProcess({
+      novelId: 'novel-fenced',
+      branchId: 'novel-fenced:main',
+      jobId: 'job-fenced',
+      jobType: 'extract_chapter_knowledge',
+      attemptId: 'attempt-2',
+      allowInTests: true,
+    })).toBe(false)
+    expect(spawnMock).not.toHaveBeenCalled()
   })
 })
