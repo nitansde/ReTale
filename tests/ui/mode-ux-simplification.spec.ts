@@ -1154,6 +1154,7 @@ test('focused rewrite and continue nodes launch future jump with history/direct 
   await expect(page.getByTestId('workspace-future-jump-view')).toBeVisible()
 
   expect(createPayloads[0]).toEqual({
+    novelId: 'novel-001',
     sourceContext: {
       nodeId: 'rewrite-node-1',
       nodeType: 'rewrite',
@@ -1180,6 +1181,7 @@ test('focused rewrite and continue nodes launch future jump with history/direct 
   await page.getByTestId('future-map-confirm').click()
 
   expect(createPayloads[1]).toEqual({
+    novelId: 'novel-001',
     sourceContext: {
       nodeId: 'continue-node-2',
       nodeType: 'continue_block',

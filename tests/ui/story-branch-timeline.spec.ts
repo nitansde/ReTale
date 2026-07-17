@@ -1326,6 +1326,7 @@ test('full speculative branching flow persists through revise, reload, and reope
   await page.getByTestId('future-map-confirm').click()
 
   expect(createPayload).toEqual({
+    novelId: 'novel-001',
     sourceContext: {
       nodeId: storyBranchFixtureIds.whatIfNodeId,
       nodeType: 'what_if',
@@ -1363,7 +1364,7 @@ test('full speculative branching flow persists through revise, reload, and reope
   await expect(page.getByTestId('future-jump-text')).toContainText('第三版未来正文：她被带走后，所有误会都在更慢地发酵。')
   await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 777 tokens')
   await expect(page.getByTestId('workspace-current-output-tokens')).toContainText('输出 888 tokens')
-  expect(revisePayload).toEqual({ userFeedback: '把救援再推迟一章' })
+  expect(revisePayload).toEqual({ novelId: 'novel-001', userFeedback: '把救援再推迟一章' })
 
   await expect(page).toHaveURL(/selectionKind=future_jump/)
   await page.reload({ waitUntil: 'networkidle' })
@@ -1632,7 +1633,7 @@ test('future jump view renders latest revision, revises in place, and reopens re
   await expect(page.getByTestId('future-jump-bridge')).toContainText('第三版桥接摘要：误会被拉长，救援明显延后。')
   await expect(page.getByTestId('future-jump-text')).toContainText('第三版未来正文：她被带走后，所有误会都在更慢地发酵。')
   await expect(page.getByText('第 3 版 · feedback')).toBeVisible()
-  expect(revisePayload).toEqual({ userFeedback: '把救援再推迟一章' })
+  expect(revisePayload).toEqual({ novelId: 'novel-001', userFeedback: '把救援再推迟一章' })
   await page.screenshot({ path: path.join(futureJumpEvidenceDirectory, 'revision-flow.png'), fullPage: true })
 
   await expect(page.getByTestId('future-jump-regenerate')).toBeVisible()
@@ -2216,6 +2217,7 @@ test('future jump launched from a continue node stays attached under that curren
   await page.getByTestId('future-map-confirm').click()
 
   expect(createPayload).toEqual({
+    novelId: 'novel-001',
     sourceContext: {
       nodeId: 'continue-node-1',
       nodeType: 'continue_block',
@@ -2283,6 +2285,7 @@ test('focused future jump chooser history mode from what-if binds the chapter im
   await page.getByTestId('future-map-confirm').click()
 
   expect(createPayload).toEqual({
+    novelId: 'novel-001',
     sourceContext: {
       nodeId: storyBranchFixtureIds.whatIfNodeId,
       nodeType: 'what_if',
@@ -2342,6 +2345,7 @@ test('focused future jump chooser direct-chapter mode shows real summaries and k
   await page.getByTestId('future-map-confirm').click()
 
   expect(createPayload).toEqual({
+    novelId: 'novel-001',
     sourceContext: {
       nodeId: storyBranchFixtureIds.whatIfNodeId,
       nodeType: 'what_if',
