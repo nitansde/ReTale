@@ -1062,4 +1062,19 @@ describe('per-novel database concurrency matrix', () => {
     expect(queuedAlphaWriteStarted).toBe(true)
     expect(alphaDb.queryOne<{ payload: string }>('SELECT payload FROM WorkspaceState WHERE id = ?', 'alpha-write-queued')?.payload).toBe('{"alpha":2}')
   })
+
+  it('allows nested same-novel gates without deadlock while preserving the outer ownership', async () => {
+    const { runWithPerNovelWriteGate } = await createNovelDatabases('retale-per-novel-write-gate-reentrant')
+    const events: string[] = []
+
+    await expect(runWithPerNovelWriteGate('novel-alpha', async () => {
+      events.push('outer-enter')
+      await runWithPerNovelWriteGate('novel-alpha', async () => {
+        events.push('inner-enter')
+      })
+      events.push('outer-exit')
+    })).resolves.toBeUndefined()
+
+    expect(events).toEqual(['outer-enter', 'inner-enter', 'outer-exit'])
+  })
 })
