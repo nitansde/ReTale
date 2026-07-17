@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useSelectionNovelStudioActions } from '@/components/workspace/use-selection-novel-studio-actions'
 import { useSelectionNovelStudioCore } from '@/components/workspace/use-selection-novel-studio-core'
 import type { Chapter } from '@/lib/types'
+import { useNovelStore } from '@/store/novel-store'
+import type { NovelStore } from '@/store/novel-store-types'
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -54,6 +56,13 @@ function jsonResponse(body: unknown, status = 200) {
   })
 }
 
+function deletedNovelResult(novelId: string, activeNovelId: string | null = null, cleanupPending = false) {
+  return {
+    status: 'committed' as const,
+    result: { ok: true as const, deletedNovelId: novelId, activeNovelId, deletionState: 'deleted' as const, cleanupPending },
+  }
+}
+
 const chapter: Chapter = {
   id: 'chapter-1',
   novelId: 'novel-1',
@@ -66,13 +75,25 @@ const chapter: Chapter = {
   updatedAt: '2026-07-15',
 }
 
-function renderActionsHook() {
+function renderActionsHook(options: {
+  currentNovelId?: string
+  loadFromBackend?: () => Promise<void>
+  reconcileNovelDeletionFromBackend?: NovelStore['reconcileNovelDeletionFromBackend']
+  deleteNovel?: (novelId: string) => void
+  deleteNovelFromBackend?: NovelStore['deleteNovelFromBackend']
+  isNovelDeletionPending?: boolean
+  beginNovelDeletion?: NovelStore['beginNovelDeletion']
+  rollbackNovelDeletion?: NovelStore['rollbackNovelDeletion']
+  setNovelDeletionPending?: NovelStore['setNovelDeletionPending']
+  reconcileNovelDeletion?: NovelStore['reconcileNovelDeletion']
+} = {}) {
   const coreParams: Parameters<typeof useSelectionNovelStudioCore>[0] = {
-    loadFromBackend: vi.fn().mockResolvedValue(undefined),
+    loadFromBackend: options.loadFromBackend ?? vi.fn().mockResolvedValue(undefined),
     saveToBackend: vi.fn().mockResolvedValue(undefined),
+    isNovelDeletionPending: options.isNovelDeletionPending ?? false,
     backendLoaded: true,
-    currentNovelId: '',
-    localNovels: [],
+    currentNovelId: options.currentNovelId ?? '',
+    localNovels: options.currentNovelId ? [{ id: options.currentNovelId, title: 'Novel 1', summary: '', tags: [] }] : [],
     localVolumes: [],
     localChapters: [chapter],
     currentChapterId: chapter.id,
@@ -105,9 +126,20 @@ function renderActionsHook() {
       },
       loadFromBackend: coreParams.loadFromBackend,
       saveToBackend: coreParams.saveToBackend,
+      deleteNovelFromBackend: options.deleteNovelFromBackend ?? vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
+      reconcileNovelDeletionFromBackend: options.reconcileNovelDeletionFromBackend ?? vi.fn(async () => 'deleted' as const),
+      isNovelDeletionPending: options.isNovelDeletionPending ?? false,
+      beginNovelDeletion: options.beginNovelDeletion ?? vi.fn((novelId: string) => ({
+        novelId,
+        before: useNovelStore.getState().snapshotPersistedState(),
+        optimistic: useNovelStore.getState().snapshotPersistedState(),
+      })),
+      rollbackNovelDeletion: options.rollbackNovelDeletion ?? vi.fn(),
+      setNovelDeletionPending: options.setNovelDeletionPending ?? vi.fn(),
+      reconcileNovelDeletion: options.reconcileNovelDeletion ?? vi.fn(),
       localChapters: [chapter],
       deleteChapter: vi.fn(),
-      deleteNovel: vi.fn(),
+      deleteNovel: options.deleteNovel ?? vi.fn(),
       saveAISettings: vi.fn().mockResolvedValue(undefined),
       savePresetCompatLibrary: vi.fn().mockResolvedValue(undefined),
       rebuildStoryKnowledge: vi.fn().mockResolvedValue(undefined),
@@ -243,5 +275,126 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     expect(requests.every((request) => !request.signal.aborted)).toBe(true)
     unmount()
     expect(requests.every((request) => request.signal.aborted)).toBe(true)
+  })
+
+  it('optimistically deletes the current novel and reconciles a null authoritative survivor', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ok: true, branchNodes: [] })))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const deleteNovel = vi.fn()
+    const deleteNovelFromBackend = vi.fn(async (novelId: string) => deletedNovelResult(novelId))
+    const beginNovelDeletion = vi.fn((novelId: string) => ({ novelId, before: useNovelStore.getState().snapshotPersistedState(), optimistic: useNovelStore.getState().snapshotPersistedState() }))
+    const setNovelDeletionPending = vi.fn()
+    const reconcileNovelDeletion = vi.fn()
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1', deleteNovel, deleteNovelFromBackend, beginNovelDeletion, setNovelDeletionPending, reconcileNovelDeletion })
+
+    await act(async () => {
+      await result.current.actions.handleDeleteNovel()
+    })
+
+    expect(beginNovelDeletion).toHaveBeenCalledWith('novel-1')
+    expect(deleteNovel).not.toHaveBeenCalled()
+    expect(deleteNovelFromBackend).toHaveBeenCalledWith('novel-1')
+    expect(reconcileNovelDeletion).toHaveBeenCalledWith(null)
+    expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
+    expect(result.current.core.toast).toBe('library.deleted')
+  })
+
+  it('uses targeted rollback without backend reload and retains the rejection toast', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ok: true, branchNodes: [] })))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const loadFromBackend = vi.fn(async () => undefined)
+    const deleteNovel = vi.fn(useNovelStore.getState().deleteNovel)
+    const deleteNovelFromBackend = vi.fn(async () => ({ status: 'rejected' as const, error: 'delete failed' }))
+    const transaction = { novelId: 'novel-1', before: useNovelStore.getState().snapshotPersistedState(), optimistic: useNovelStore.getState().snapshotPersistedState() }
+    const beginNovelDeletion = vi.fn(() => transaction)
+    const rollbackNovelDeletion = vi.fn()
+    const setNovelDeletionPending = vi.fn()
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1', loadFromBackend, deleteNovel, deleteNovelFromBackend, beginNovelDeletion, rollbackNovelDeletion, setNovelDeletionPending })
+
+    await act(async () => {
+      await result.current.actions.handleDeleteNovel()
+    })
+
+    expect(deleteNovel).not.toHaveBeenCalled()
+    expect(rollbackNovelDeletion).toHaveBeenCalledTimes(1)
+    expect(rollbackNovelDeletion).toHaveBeenCalledWith(transaction)
+    expect(loadFromBackend).not.toHaveBeenCalled()
+    expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
+    expect(result.current.core.toast).toBe('library.deleteFailed')
+  })
+
+  it.each([
+    { targetPresent: false, expectedToast: 'library.deleted' },
+    { targetPresent: true, expectedToast: 'library.deleteFailedAuthoritative' },
+  ])('reconciles indeterminate deletion with target present=$targetPresent before clearing pending', async ({ targetPresent, expectedToast }) => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ok: true, branchNodes: [] })))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const reconciliation = createDeferred<'deleted' | 'present'>()
+    const setNovelDeletionPending = vi.fn()
+    const reconcileNovelDeletionFromBackend = vi.fn(() => reconciliation.promise)
+    const transaction = {
+      novelId: 'novel-1',
+      before: useNovelStore.getState().snapshotPersistedState(),
+      optimistic: useNovelStore.getState().snapshotPersistedState(),
+    }
+    const { result } = renderActionsHook({
+      currentNovelId: 'novel-1',
+      deleteNovelFromBackend: vi.fn(async () => ({ status: 'indeterminate' as const, error: 'response lost' })),
+      reconcileNovelDeletionFromBackend,
+      beginNovelDeletion: vi.fn(() => transaction),
+      setNovelDeletionPending,
+    })
+
+    let deletionPromise: Promise<void> | undefined
+    act(() => {
+      deletionPromise = result.current.actions.handleDeleteNovel()
+    })
+
+    await waitFor(() => expect(reconcileNovelDeletionFromBackend).toHaveBeenCalledWith(transaction))
+    expect(setNovelDeletionPending.mock.calls).toEqual([[true]])
+
+    await act(async () => {
+      reconciliation.resolve(targetPresent ? 'present' : 'deleted')
+      await deletionPromise
+    })
+
+    expect(result.current.core.toast).toBe(expectedToast)
+    expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('does not roll back blindly when indeterminate reconciliation fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ok: true, branchNodes: [] })))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const rollbackNovelDeletion = vi.fn()
+    const setNovelDeletionPending = vi.fn()
+    const { result } = renderActionsHook({
+      currentNovelId: 'novel-1',
+      deleteNovelFromBackend: vi.fn(async () => ({ status: 'indeterminate' as const, error: 'malformed success' })),
+      reconcileNovelDeletionFromBackend: vi.fn().mockRejectedValue(new Error('workspace unavailable')),
+      rollbackNovelDeletion,
+      setNovelDeletionPending,
+    })
+
+    await act(async () => {
+      await result.current.actions.handleDeleteNovel()
+    })
+
+    expect(rollbackNovelDeletion).not.toHaveBeenCalled()
+    expect(result.current.core.toast).toBe('library.deleteReconcileFailed')
+    expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('guards duplicate deletion while a novel deletion is already pending', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ok: true, branchNodes: [] })))
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const deleteNovelFromBackend = vi.fn(async (novelId: string) => deletedNovelResult(novelId))
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1', isNovelDeletionPending: true, deleteNovelFromBackend })
+
+    await act(async () => {
+      await result.current.actions.handleDeleteNovel()
+    })
+
+    expect(confirm).not.toHaveBeenCalled()
+    expect(deleteNovelFromBackend).not.toHaveBeenCalled()
   })
 })

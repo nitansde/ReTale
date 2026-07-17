@@ -191,7 +191,7 @@ export function SelectionNovelStudio() {
   const { t } = useI18n()
   const store = useNovelStore()
   const {
-    loadFromBackend, saveToBackend, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId,
+    loadFromBackend, saveToBackend, deleteNovelFromBackend, reconcileNovelDeletionFromBackend, isNovelDeletionPending, beginNovelDeletion, rollbackNovelDeletion, setNovelDeletionPending, reconcileNovelDeletion, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId,
     setCurrentChapterId, updateChapterContent, createNewChapter, deleteChapter, deleteNovel, aiSettings, setAISettings,
     saveAISettings, loadPresetCompatLibrary, savePresetCompatLibrary, rebuildStoryKnowledge, rebuildStoryRetrievalIndex,
     pauseStoryKnowledgeRebuild, abortStoryKnowledgeRebuild, deleteStoryKnowledgeGraph, deleteStoryHanlpCache,
@@ -200,7 +200,7 @@ export function SelectionNovelStudio() {
     localCharacters, localWorldEntries, localTimelineEvents, localOutlines,
   } = store
   const autosaveSignature = useNovelStore((state) => JSON.stringify({ currentNovelId: state.currentNovelId, currentChapterId: state.currentChapterId, currentTab: state.currentTab, helperTab: state.helperTab, expandedVolumeIds: state.expandedVolumeIds, localNovels: state.localNovels, localVolumes: state.localVolumes, localChapters: state.localChapters, localOutlines: state.localOutlines, localCharacters: state.localCharacters, localCharacterRelations: state.localCharacterRelations, localWorldEntries: state.localWorldEntries, localTimelineEvents: state.localTimelineEvents, rewriteCandidates: state.rewriteCandidates, rewriteHistory: state.rewriteHistory, trajectories: state.trajectories, rewriteMode: state.rewriteMode, rewriteTone: state.rewriteTone, rewriteOutput: state.rewriteOutput, rewriteScope: state.rewriteScope, selectionText: state.selectionText, selectedParagraphIndex: state.selectedParagraphIndex, thinkingLevel: state.thinkingLevel, autoContinue: state.autoContinue, keepCanon: state.keepCanon, promptText: state.promptText, selectedPresetId: state.selectedPresetId, presets: state.presets, constraints: state.constraints, focusMode: state.focusMode, presetCompatSessionState: state.presetCompatSessionState }))
-  const core = useSelectionNovelStudioCore({ loadFromBackend, saveToBackend, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId, setCurrentChapterId, updateChapterContent, aiSettings, setAISettings, refreshKnowledgeProjection, clearPresetCompatSessionStateForSelection: (selection) => clearPresetCompatSessionStateForSelection(selection), resetPresetCompatSessionStateForSelection: (selection, surfaces) => resetPresetCompatSessionStateForSelection(selection, surfaces ?? []), presetCompatSessionState, localCharacters, localWorldEntries, localTimelineEvents, localOutlines, autosaveSignature })
+  const core = useSelectionNovelStudioCore({ loadFromBackend, saveToBackend, isNovelDeletionPending, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId, setCurrentChapterId, updateChapterContent, aiSettings, setAISettings, refreshKnowledgeProjection, clearPresetCompatSessionStateForSelection: (selection) => clearPresetCompatSessionStateForSelection(selection), resetPresetCompatSessionStateForSelection: (selection, surfaces) => resetPresetCompatSessionStateForSelection(selection, surfaces ?? []), presetCompatSessionState, localCharacters, localWorldEntries, localTimelineEvents, localOutlines, autosaveSignature })
   const {
     leftPanelOpen, setLeftPanelOpen, chapterListState, setChapterListState, centerPaneView, setCenterPaneView, refTab, setRefTab, settingsOpen, setSettingsOpen,
     selectionText, lockedSelectionText, toolbarPos, activeMode, rewritePrompt, setRewritePrompt, rewriteState, rewriteFlow, generationContext,
@@ -237,7 +237,7 @@ export function SelectionNovelStudio() {
     selectedTimelineDisplayLabel, selectedTimelineInstructionText, selectedTimelineInstructionPreview, workspaceHeaderTitle, currentNodeMetrics,
     chapterSelectionSummary, chapterGraphSummary, mobileRoleplayFocus,
   } = selectionView
-  const actions = useSelectionNovelStudioActions({ core, viewModel: { activeWorkspaceSelection, selectedTimelineNode, selectedContinueBlockNode, selectedContinueBlockFutureMapLaunch, selectedTimelineDisplayLabel, selectedTimelineInstructionPreview }, loadFromBackend, saveToBackend, localChapters, deleteChapter, deleteNovel, saveAISettings, savePresetCompatLibrary, rebuildStoryKnowledge, rebuildStoryRetrievalIndex, pauseStoryKnowledgeRebuild, abortStoryKnowledgeRebuild, deleteStoryKnowledgeGraph, deleteStoryHanlpCache, deleteStoryExtractionCache, deleteStoryEmbeddingCache, setPresetCompatSessionPhase, setCurrentChapterId, updateChapterContent })
+  const actions = useSelectionNovelStudioActions({ core, viewModel: { activeWorkspaceSelection, selectedTimelineNode, selectedContinueBlockNode, selectedContinueBlockFutureMapLaunch, selectedTimelineDisplayLabel, selectedTimelineInstructionPreview }, loadFromBackend, saveToBackend, deleteNovelFromBackend, reconcileNovelDeletionFromBackend, isNovelDeletionPending, beginNovelDeletion, rollbackNovelDeletion, setNovelDeletionPending, reconcileNovelDeletion, localChapters, deleteChapter, deleteNovel, saveAISettings, savePresetCompatLibrary, rebuildStoryKnowledge, rebuildStoryRetrievalIndex, pauseStoryKnowledgeRebuild, abortStoryKnowledgeRebuild, deleteStoryKnowledgeGraph, deleteStoryHanlpCache, deleteStoryExtractionCache, deleteStoryEmbeddingCache, setPresetCompatSessionPhase, setCurrentChapterId, updateChapterContent })
   const {
     openActionMode, handleRefreshContextReview, handleExcludedGenerationContextChange, handleConfirmGraphEdge, handleRejectGraphEdge,
     handleSaveGraphEdgeEdit, handleGraphControlChange, copyText, applyFullChapter, saveSettings, loadOllamaModels,
@@ -308,7 +308,8 @@ export function SelectionNovelStudio() {
                 onClick={() => {
                   void handleDeleteNovel()
                 }}
-                className="inline-flex items-center gap-2 rounded-full border border-rose-400/20 bg-rose-500/10 px-3 py-1.5 text-rose-100 transition hover:bg-rose-500/20"
+                disabled={isNovelDeletionPending}
+                className="inline-flex items-center gap-2 rounded-full border border-rose-400/20 bg-rose-500/10 px-3 py-1.5 text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 {t('workspace.deleteNovel')}
