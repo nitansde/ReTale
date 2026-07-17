@@ -1,0 +1,247 @@
+{
+  "name": "Neutral embedded preset metadata",
+  "temperature": 1,
+  "top_p": 1,
+  "top_k": 0,
+  "top_a": 1,
+  "min_p": 0,
+  "presence_penalty": 0,
+  "frequency_penalty": 0,
+  "repetition_penalty": 1,
+  "openai_max_context": 2000000,
+  "openai_max_tokens": 32000,
+  "seed": -1,
+  "n": 1,
+  "names_behavior": 0,
+  "send_if_empty": "",
+  "impersonation_prompt": "",
+  "new_chat_prompt": "",
+  "new_group_chat_prompt": "",
+  "new_example_chat_prompt": "",
+  "continue_nudge_prompt": "",
+  "wi_format": "",
+  "scenario_format": "",
+  "personality_format": "",
+  "group_nudge_prompt": "",
+  "assistant_prefill": "",
+  "assistant_impersonation": "",
+  "continue_postfix": " ",
+  "main_prompt": null,
+  "nsfw_prompt": null,
+  "jailbreak_prompt": null,
+  "max_context_unlocked": true,
+  "stream_openai": true,
+  "use_sysprompt": true,
+  "squash_system_messages": false,
+  "media_inlining": false,
+  "inline_image_quality": "low",
+  "continue_prefill": false,
+  "function_calling": false,
+  "show_thoughts": true,
+  "reasoning_effort": "high",
+  "verbosity": "auto",
+  "enable_web_search": false,
+  "request_images": false,
+  "request_image_aspect_ratio": "",
+  "request_image_resolution": "",
+  "bias_preset_selected": "Default (none)",
+  "synthetic_root_sentinel": {
+    "source": "tracked-test-fixture",
+    "preserve": true
+  },
+  "prompts": [
+    {
+      "identifier": "synthetic-main",
+      "name": "Synthetic main prompt",
+      "role": "user",
+      "system_prompt": true,
+      "content": "Synthetic compatibility prompt for {{user}} and {{char}}. The latest user message is {{lastusermessage}}.",
+      "injection_position": 0,
+      "injection_depth": 4,
+      "injection_order": 100,
+      "injection_trigger": [],
+      "forbid_overrides": false,
+      "synthetic_prompt_sentinel": "main-passthrough"
+    },
+    {
+      "identifier": "synthetic-support",
+      "name": "Synthetic support prompt",
+      "role": "system",
+      "system_prompt": true,
+      "content": "Keep the generated response concise, coherent, and safe for compatibility testing.",
+      "injection_position": 0,
+      "injection_depth": 4,
+      "injection_order": 90,
+      "injection_trigger": [],
+      "forbid_overrides": false,
+      "synthetic_prompt_sentinel": "support-passthrough"
+    },
+    {
+      "identifier": "chatHistory",
+      "name": "Chat history marker",
+      "role": "system",
+      "system_prompt": false,
+      "content": "",
+      "marker": true,
+      "injection_position": 0,
+      "injection_trigger": [],
+      "forbid_overrides": true,
+      "synthetic_prompt_sentinel": "history-passthrough"
+    }
+  ],
+  "prompt_order": [
+    {
+      "character_id": 100000,
+      "order": [
+        {
+          "identifier": "synthetic-support",
+          "enabled": true
+        },
+        {
+          "identifier": "synthetic-main",
+          "enabled": false
+        },
+        {
+          "identifier": "chatHistory",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "character_id": 100001,
+      "order": [
+        {
+          "identifier": "synthetic-support",
+          "enabled": true
+        },
+        {
+          "identifier": "synthetic-main",
+          "enabled": true
+        },
+        {
+          "identifier": "chatHistory",
+          "enabled": true
+        }
+      ]
+    }
+  ],
+  "extensions": {
+    "regex_scripts": [
+      {
+        "id": "synthetic-input-wrapper",
+        "scriptName": "Synthetic input wrapper",
+        "findRegex": "^((?:.|\\n)*)$",
+        "replaceString": "<synthetic-user-input>\n$1\n</synthetic-user-input>",
+        "trimStrings": [],
+        "placement": [
+          1
+        ],
+        "disabled": false,
+        "markdownOnly": false,
+        "promptOnly": true,
+        "runOnEdit": true,
+        "substituteRegex": 0,
+        "minDepth": null,
+        "maxDepth": 1,
+        "synthetic_regex_sentinel": "input-passthrough"
+      },
+      {
+        "id": "synthetic-output-cleanup",
+        "scriptName": "Synthetic output cleanup",
+        "findRegex": "/<synthetic-note>[\\s\\S]*?<\\/synthetic-note>/g",
+        "replaceString": "",
+        "trimStrings": [
+          "<synthetic-output>",
+          "</synthetic-output>"
+        ],
+        "placement": [
+          2
+        ],
+        "disabled": false,
+        "markdownOnly": false,
+        "promptOnly": false,
+        "runOnEdit": false,
+        "substituteRegex": 0,
+        "minDepth": null,
+        "maxDepth": 2,
+        "synthetic_regex_sentinel": "output-passthrough"
+      }
+    ],
+    "SPreset": {
+      "RegexBinding": {
+        "regexes": [
+          {
+            "id": "synthetic-input-wrapper",
+            "scriptName": "Synthetic input wrapper",
+            "findRegex": "^((?:.|\\n)*)$",
+            "replaceString": "<synthetic-user-input>\n$1\n</synthetic-user-input>",
+            "trimStrings": [],
+            "placement": [
+              1
+            ],
+            "disabled": false,
+            "markdownOnly": false,
+            "promptOnly": true,
+            "runOnEdit": true,
+            "substituteRegex": 0,
+            "minDepth": null,
+            "maxDepth": 1
+          },
+          {
+            "id": "synthetic-output-cleanup",
+            "scriptName": "Synthetic output cleanup",
+            "findRegex": "/<synthetic-note>[\\s\\S]*?<\\/synthetic-note>/g",
+            "replaceString": "",
+            "trimStrings": [
+              "<synthetic-output>",
+              "</synthetic-output>"
+            ],
+            "placement": [
+              2
+            ],
+            "disabled": false,
+            "markdownOnly": false,
+            "promptOnly": false,
+            "runOnEdit": false,
+            "substituteRegex": 0,
+            "minDepth": null,
+            "maxDepth": 2
+          }
+        ],
+        "synthetic_binding_sentinel": "preserve-regex-binding"
+      },
+      "ChatSquash": {
+        "enabled": false,
+        "strategy": "synthetic-window",
+        "message_limit": 12
+      },
+      "synthetic_extension_sentinel": "preserve-spreset"
+    },
+    "MacroNest": {
+      "enabled": true,
+      "entries": [
+        {
+          "key": "synthetic-context-label",
+          "value": "neutral-context-value"
+        }
+      ]
+    },
+    "ToolBindings": {
+      "enabled": false,
+      "tools": [],
+      "synthetic_tool_sentinel": "preserve-root-tool-bindings"
+    },
+    "tavern_helper": {
+      "enabled": false,
+      "labels": [
+        "synthetic-alpha",
+        "synthetic-beta"
+      ],
+      "synthetic_helper_sentinel": "preserve-tavern-helper"
+    },
+    "synthetic_extension_sentinel": {
+      "source": "tracked-test-fixture",
+      "preserve": true
+    }
+  }
+}
