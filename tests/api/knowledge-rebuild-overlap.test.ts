@@ -1254,6 +1254,113 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', branchId)?.count).toBe(0)
   })
 
+  it('resumes a persisted-ready write queue idempotently with duplicate entries', async () => {
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-write-resume-idempotent')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_write_resume_idempotent')
+    const aiSettings = createMockAISettings()
+    let writeTransactionCalls = 0
+
+    database.prepare(
+      "UPDATE KnowledgeChapter SET summary = ?, knowledgeStatus = 'ready', isDirty = 0, dirtyReason = NULL WHERE id = ?",
+    ).run('already persisted summary', 'chapter-1')
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/database-access', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/database-access')>()
+      return {
+        ...actual,
+        withPerNovelWriteTransaction: vi.fn(async (params: Parameters<typeof actual.withPerNovelWriteTransaction>[0]) => {
+          writeTransactionCalls += 1
+          return actual.withPerNovelWriteTransaction(params)
+        }),
+      }
+    })
+
+    const worker = await import('@/lib/server/knowledge-rebuild')
+    const candidateSourceHash = worker.buildChapterExtractionCandidateSourceHash({
+      chapterSourceHash: 'chapter-hash-1',
+      settings: aiSettings.knowledgeExtraction,
+    })
+    database.prepare(
+      `INSERT INTO chapter_extraction_candidates (
+        id, novel_id, branch_id, chapter_id, chapter_no, chapter_revision,
+        chapter_source_hash, extraction_json, status, provider, model
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'candidate-write-resume-persisted',
+      novelId,
+      branchId,
+      'chapter-1',
+      1,
+      1,
+      candidateSourceHash,
+      JSON.stringify(createMockExtraction(1)),
+      'persisted',
+      'ollama',
+      aiSettings.knowledgeExtraction.ollama.model,
+    )
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson)
+       VALUES (?, ?, ?, 'extract_chapter_knowledge', 'queued', ?, ?, ?)`,
+    ).run(
+      'job_write_resume_idempotent',
+      novelId,
+      branchId,
+      '继续写入结构化知识',
+      0.8,
+      JSON.stringify({
+        branchId,
+        phase: 'write',
+        rebuildStartChapter: 1,
+        chapterRange: { startChapter: 1, endChapter: 1 },
+        inlineCleanupCompleted: true,
+        pendingChapterIds: [],
+        chapterWeightsById: {},
+        totalChapterWeight: 10,
+        processedChapterWeight: 10,
+        totalChapterCount: 1,
+        extractedChapters: [
+          { chapterId: 'chapter-1', chapterNo: 1 },
+          { chapterId: 'chapter-1', chapterNo: 1 },
+        ],
+        currentBatchChapters: [
+          { chapterId: 'chapter-1', chapterNo: 1 },
+          { chapterId: 'chapter-1', chapterNo: 1 },
+        ],
+        extractionSettings: aiSettings.knowledgeExtraction,
+      }),
+    )
+
+    await expect(worker.rebuildKnowledgeForNovel({
+      novelId,
+      jobId: 'job_write_resume_idempotent',
+      chapterRange: { startChapter: 1, endChapter: 1 },
+    })).resolves.toMatchObject({ outcome: 'completed' })
+
+    const job = queryOne<{ status: string; progress: number; payloadJson: string | null }>(
+      'SELECT status, progress, payloadJson FROM KnowledgeJob WHERE id = ?',
+      'job_write_resume_idempotent',
+    )
+    const payload = JSON.parse(job?.payloadJson ?? '{}') as {
+      extractedChapters?: Array<{ chapterId: string }>
+      steps?: Array<{ key: string; status: string; progress: number }>
+    }
+    expect(job).toMatchObject({ status: 'succeeded', progress: 1 })
+    expect(payload.extractedChapters).toEqual([])
+    expect(payload.steps?.find((step) => step.key === 'write')).toMatchObject({ status: 'completed', progress: 1 })
+    expect(writeTransactionCalls).toBe(0)
+    expect(queryOne<{ summary: string | null; knowledgeStatus: string; isDirty: number }>(
+      'SELECT summary, knowledgeStatus, isDirty FROM KnowledgeChapter WHERE id = ?',
+      'chapter-1',
+    )).toEqual({ summary: 'already persisted summary', knowledgeStatus: 'ready', isDirty: 0 })
+    expect(queryOne<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE chapter_id = ?',
+      'chapter-1',
+    )?.count).toBe(1)
+  })
+
   it('treats a resumed raw-embedding main job as already complete for SQLite purposes', async () => {
     const { database } = await createTestDatabase('retale-knowledge-rebuild-raw-embedding-resume')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_raw_embedding_resume')

@@ -184,7 +184,9 @@ afterEach(() => {
   vi.unmock('@/lib/server/knowledge-extraction')
   vi.unmock('@/lib/server/context-builder')
   vi.unmock('@/lib/server/retrieval-index')
+  vi.unmock('@/lib/server/database-access')
   vi.doUnmock('@/lib/server/context-builder')
+  vi.doUnmock('@/lib/server/database-access')
 
   while (databaseOverrideDisposers.length) {
     databaseOverrideDisposers.pop()?.()
@@ -216,12 +218,18 @@ describe('knowledge rebuild HanLP orchestration', () => {
     const events: string[] = []
     let hanlpRunnerCalls = 0
     let extractionCalls = 0
+    let writeTransactionCalls = 0
     const hanlpGates = new Map([
       [1, createDeferred<void>()],
       [2, createDeferred<void>()],
       [3, createDeferred<void>()],
     ])
     const extractionGates = new Map([
+      [1, createDeferred<void>()],
+      [2, createDeferred<void>()],
+      [3, createDeferred<void>()],
+    ])
+    const writeGates = new Map([
       [1, createDeferred<void>()],
       [2, createDeferred<void>()],
       [3, createDeferred<void>()],
@@ -310,12 +318,32 @@ describe('knowledge rebuild HanLP orchestration', () => {
         rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
       }
     })
+    vi.doMock('@/lib/server/database-access', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/database-access')>()
+      return {
+        ...actual,
+        withPerNovelWriteTransaction: vi.fn(async (params: Parameters<typeof actual.withPerNovelWriteTransaction>[0]) => {
+          writeTransactionCalls += 1
+          await writeGates.get(writeTransactionCalls)?.promise
+          return actual.withPerNovelWriteTransaction(params)
+        }),
+      }
+    })
 
     const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
     const rebuildPromise = rebuildKnowledgeForNovel({ novelId })
 
     await waitForCondition(() => events.filter((event) => event.startsWith('hanlp:start:')).length === 3, 'HanLP batch start')
     expect(events.some((event) => event.startsWith('extract:start:'))).toBe(false)
+    const hanlpJob = queryOne<{ payloadJson: string | null }>(
+      'SELECT payloadJson FROM KnowledgeJob WHERE novelId = ? ORDER BY createdAt DESC LIMIT 1',
+      novelId,
+    )
+    const hanlpPayload = JSON.parse(hanlpJob?.payloadJson ?? '{}') as {
+      steps?: Array<{ key: string; progress: number; status: string }>
+    }
+    expect(hanlpPayload.steps?.filter((step) => step.status === 'pending').every((step) => step.progress === 0)).toBe(true)
+    expect(hanlpPayload.steps?.find((step) => step.key === 'write')).toMatchObject({ status: 'pending', progress: 0 })
 
     hanlpGates.get(3)?.resolve()
     hanlpGates.get(2)?.resolve()
@@ -328,10 +356,75 @@ describe('knowledge rebuild HanLP orchestration', () => {
     extractionGates.get(2)?.resolve()
     extractionGates.get(1)?.resolve()
 
+    await waitForCondition(() => writeTransactionCalls === 1, 'first write transaction start')
+    const firstWriteJob = queryOne<{ currentStep: string | null; progress: number; payloadJson: string | null }>(
+      'SELECT currentStep, progress, payloadJson FROM KnowledgeJob WHERE novelId = ? ORDER BY createdAt DESC LIMIT 1',
+      novelId,
+    )
+    const firstWritePayload = JSON.parse(firstWriteJob?.payloadJson ?? '{}') as {
+      phase?: string
+      pendingChapterIds?: string[]
+      extractedChapters?: Array<{ chapterId: string }>
+      steps?: Array<{ key: string; progress: number; status: string }>
+    }
+    expect(firstWritePayload).toMatchObject({
+      phase: 'write',
+      pendingChapterIds: ['chapter-3'],
+      extractedChapters: [{ chapterId: 'chapter-1' }, { chapterId: 'chapter-2' }],
+    })
+    expect(firstWriteJob?.currentStep).toContain('第 1 章知识')
+    expect(firstWriteJob?.progress).toBeCloseTo(0.1 + (2 / 3) * 0.7)
+    expect(firstWritePayload.steps?.find((step) => step.key === 'write')).toMatchObject({ status: 'running', progress: 0 })
+    expect(queryOne<{ knowledgeStatus: string }>('SELECT knowledgeStatus FROM KnowledgeChapter WHERE id = ?', 'chapter-1')?.knowledgeStatus).toBe('stale')
+
+    writeGates.get(1)?.resolve()
+    await waitForCondition(() => writeTransactionCalls === 2, 'second write transaction start')
+    const secondWriteJob = queryOne<{ progress: number; payloadJson: string | null }>(
+      'SELECT progress, payloadJson FROM KnowledgeJob WHERE novelId = ? ORDER BY createdAt DESC LIMIT 1',
+      novelId,
+    )
+    const secondWritePayload = JSON.parse(secondWriteJob?.payloadJson ?? '{}') as {
+      extractedChapters?: Array<{ chapterId: string }>
+      steps?: Array<{ key: string; progress: number; status: string }>
+    }
+    expect(queryOne<{ knowledgeStatus: string; isDirty: number }>('SELECT knowledgeStatus, isDirty FROM KnowledgeChapter WHERE id = ?', 'chapter-1')).toMatchObject({
+      knowledgeStatus: 'ready',
+      isDirty: 0,
+    })
+    expect(secondWritePayload.extractedChapters).toEqual([{ chapterId: 'chapter-2', chapterNo: 2 }])
+    expect(secondWritePayload.steps?.find((step) => step.key === 'write')?.progress).toBeCloseTo(1 / 3)
+    expect(secondWriteJob?.progress).toBeCloseTo(0.1 + (2 / 3) * 0.7 + (1 / 3) * 0.16)
+
+    writeGates.get(2)?.resolve()
     await waitForCondition(() => events.includes('extract:start:3'), 'second extraction batch start')
     expect(events.indexOf('story:3:ready:2')).toBeGreaterThan(events.indexOf('extract:end:2'))
     expect(events.indexOf('story:3:ready:2')).toBeLessThan(events.indexOf('extract:start:3'))
+    const resumedExtractJob = queryOne<{ progress: number; payloadJson: string | null }>(
+      'SELECT progress, payloadJson FROM KnowledgeJob WHERE novelId = ? ORDER BY createdAt DESC LIMIT 1',
+      novelId,
+    )
+    const resumedExtractPayload = JSON.parse(resumedExtractJob?.payloadJson ?? '{}') as {
+      pendingChapterIds?: string[]
+      extractedChapters?: Array<{ chapterId: string }>
+      steps?: Array<{ key: string; progress: number; status: string }>
+    }
+    expect(resumedExtractPayload).toMatchObject({ pendingChapterIds: ['chapter-3'], extractedChapters: [] })
+    expect(resumedExtractPayload.steps?.find((step) => step.key === 'write')).toMatchObject({ status: 'pending', progress: 0 })
+    expect(resumedExtractJob?.progress).toBeCloseTo(0.1 + (2 / 3) * 0.7 + (2 / 3) * 0.16)
     extractionGates.get(3)?.resolve()
+
+    await waitForCondition(() => writeTransactionCalls === 3, 'resumed write transaction start')
+    const resumedWriteJob = queryOne<{ progress: number; payloadJson: string | null }>(
+      'SELECT progress, payloadJson FROM KnowledgeJob WHERE novelId = ? ORDER BY createdAt DESC LIMIT 1',
+      novelId,
+    )
+    const resumedWritePayload = JSON.parse(resumedWriteJob?.payloadJson ?? '{}') as {
+      steps?: Array<{ key: string; progress: number; status: string }>
+    }
+    expect(resumedWritePayload.steps?.find((step) => step.key === 'write')?.progress).toBeCloseTo(2 / 3)
+    expect(resumedWriteJob?.progress).toBeCloseTo(0.1 + 0.7 + (2 / 3) * 0.16)
+    expect(resumedWriteJob?.progress ?? 0).toBeGreaterThanOrEqual(resumedExtractJob?.progress ?? 0)
+    writeGates.get(3)?.resolve()
 
     await expect(rebuildPromise).resolves.toMatchObject({ outcome: 'completed' })
 
@@ -372,6 +465,8 @@ describe('knowledge rebuild HanLP orchestration', () => {
       'raw-embedding',
       'index',
     ])
+    expect(payload.steps?.filter((step) => step.status === 'completed').every((step) => step.progress === 1)).toBe(true)
+    expect(payload.steps?.filter((step) => step.status === 'pending').every((step) => step.progress === 0)).toBe(true)
   })
 
   it('runs HanLP for every chapter while limiting extraction, progress, and cleanup to the requested chapter range', async () => {
