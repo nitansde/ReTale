@@ -50,6 +50,22 @@ function seedRetrievalFixture(database: DatabaseSync) {
   insertTextSpan.run('span-3', 'novel-001', 'novel-001:main', 'chapter-1', 1, 3, 4, 20, 39, '场景证据原文内容。', 'scene', 12)
 }
 
+function seedLongWorldFallbackFixture(database: DatabaseSync, suffix: string) {
+  const id = `world-ollama-fallback-${suffix}`
+  const term = `超长回退设定-${suffix}`
+  const definition = `${term}-开头-${'中文😀'.repeat(900)}-${term}-结尾-😀`
+  database.prepare(
+    `INSERT INTO KnowledgeWorld (
+      id, novelId, branchId, term, category, definition, firstSeenChapter,
+      validFromChapter, validUntilChapter, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, 'novel-001', 'novel-001:main', term, '设定', definition, 1, 1, 999999999, 'ready')
+  return {
+    docId: `worldbuilding:${id}`,
+    term,
+  }
+}
+
 function registerSeededDatabase(database: DatabaseSync) {
   databases.push(database)
   disposeNovelDatabaseOverride?.()
@@ -319,6 +335,67 @@ async function createRetrievalIndexHarness(testName: string) {
     tempDataDir: process.env.RETALE_DATA_DIR,
     withNovelDatabase: <T>(callback: () => T | Promise<T>) => runWithNovelDatabaseAccess('novel-001', callback),
   }
+}
+
+type RetrievalIndexHarness = Awaited<ReturnType<typeof createRetrievalIndexHarness>>
+
+function seedWorldWithExactEmbeddingInputCodePoints(
+  database: DatabaseSync,
+  retrievalIndex: RetrievalIndexHarness['retrievalIndex'],
+  suffix: string,
+  targetCodePoints: number,
+) {
+  const id = `world-ollama-boundary-${suffix}`
+  const term = `边界回退设定-${suffix}`
+  database.prepare(
+    `INSERT INTO KnowledgeWorld (
+      id, novelId, branchId, term, category, definition, firstSeenChapter,
+      validFromChapter, validUntilChapter, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, 'novel-001', 'novel-001:main', term, '设定', '', 1, 1, 999999999, 'ready')
+
+  const docId = `worldbuilding:${id}`
+  const initialDoc = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    .find((row) => row.id === docId)
+  if (!initialDoc) {
+    throw new Error(`Missing seeded retrieval doc ${docId}`)
+  }
+  const initialInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(initialDoc).text
+  const paddingCodePoints = targetCodePoints - Array.from(initialInput).length
+  if (paddingCodePoints < 0) {
+    throw new Error(`Target input length ${targetCodePoints} is shorter than fixture metadata`)
+  }
+
+  database.prepare('UPDATE KnowledgeWorld SET definition = ? WHERE id = ?').run('界'.repeat(paddingCodePoints), id)
+  const doc = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    .find((row) => row.id === docId)
+  if (!doc) {
+    throw new Error(`Missing resized retrieval doc ${docId}`)
+  }
+  const input = retrievalIndex.buildRawTextRetrievalEmbeddingInput(doc).text
+  if (Array.from(input).length !== targetCodePoints) {
+    throw new Error(`Expected ${targetCodePoints} code points but built ${Array.from(input).length}`)
+  }
+
+  return { docId, input }
+}
+
+async function cacheRetrievalDocsExcept(harness: RetrievalIndexHarness, excludedDocId: string) {
+  const docs = harness.retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+  await harness.withNovelDatabase(() => harness.retrievalCache.upsertRawTextEmbeddingCacheEntries({
+    scope: {
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      provider: 'ollama',
+      model: harness.aiSettings.embeddings.ollama.model,
+    },
+    entries: docs
+      .filter((row) => row.id !== excludedDocId)
+      .map((row) => ({
+        embeddingInput: harness.retrievalIndex.buildRawTextRetrievalEmbeddingInput(row).text,
+        vector: [9, 9, 9],
+      })),
+  }))
 }
 
 afterEach(() => {
@@ -1185,14 +1262,17 @@ describe('retrieval-index cache reuse helpers', () => {
     await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toBe(true)
   }, 120000)
 
-  it('retries a transient final rebuild embedding failure and still writes cache and table rows', async () => {
-    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-transient-final-rebuild-embedding-retry')
+  it('retries a real-style disabled Ollama runner EOF result and still writes cache and table rows', async () => {
+    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-ollama-runner-eof-retry')
 
     const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
-    const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+    const runnerEofError = String.raw`Ollama embedding HTTP 400: {"error":"do embedding request: Post \"http://127.0.0.1:58591/v1/embeddings\": EOF"}`
 
-    embedTextsWithOllama.mockImplementationOnce(async () => {
-      throw new Error('fetch failed')
+    embedTextsWithOllama.mockResolvedValueOnce({
+      enabled: false,
+      embeddings: [],
+      model: 'unit-test-embedding-model',
+      error: runnerEofError,
     })
 
     await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
@@ -1209,6 +1289,693 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
       count: mergedDocs.length,
     })
+  })
+
+  it('splits an exhausted two-row Ollama EOF batch into ordered singleton leaves', async () => {
+    const {
+      database,
+      embedTextsWithOllama,
+      mockLanceDb,
+      retrievalCache,
+      retrievalIndex,
+      withNovelDatabase,
+    } = await createRetrievalIndexHarness('retale-retrieval-index-ollama-two-row-eof-split')
+    const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    const cachedInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(mergedDocs[0]).text
+    await withNovelDatabase(() => retrievalCache.upsertRawTextEmbeddingCacheEntries({
+      scope: {
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        provider: 'ollama',
+        model: 'unit-test-embedding-model',
+      },
+      entries: [{ embeddingInput: cachedInput, vector: [9, 9, 9] }],
+    }))
+    const runnerEofError = String.raw`Ollama embedding HTTP 400: {"error":"do embedding request: Post \"http://127.0.0.1:58591/v1/embeddings\": EOF"}`
+    const callSizes: number[] = []
+    const progressEvents: Array<{ embeddedRows: number; completedBatches: number }> = []
+
+    embedTextsWithOllama.mockImplementation(async (input) => {
+      const values = Array.isArray(input) ? input : [input]
+      callSizes.push(values.length)
+      if (values.length > 1) {
+        return {
+          enabled: false,
+          embeddings: [],
+          model: 'unit-test-embedding-model',
+          error: runnerEofError,
+        }
+      }
+      return {
+        enabled: true,
+        embeddings: values.map(() => [2, 2, 2]),
+        model: 'unit-test-embedding-model',
+      }
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+      onProgress: (progress) => {
+        if (progress.phase === 'embedding') {
+          progressEvents.push(progress)
+        }
+      },
+    })).resolves.toMatchObject({ rowCount: mergedDocs.length })
+
+    expect(callSizes).toEqual([2, 2, 2, 1, 1])
+    expect(progressEvents.map(({ embeddedRows, completedBatches }) => ({ embeddedRows, completedBatches }))).toEqual([
+      { embeddedRows: 0, completedBatches: 0 },
+      { embeddedRows: 0, completedBatches: 0 },
+      { embeddedRows: 1, completedBatches: 0 },
+      { embeddedRows: 2, completedBatches: 0 },
+      { embeddedRows: 2, completedBatches: 1 },
+    ])
+    expect(progressEvents.filter((progress) => progress.completedBatches === 1)).toHaveLength(1)
+    expect(
+      (mockLanceDb.database.createTable.mock.calls[0]?.[1] as Array<{ id: string }> | undefined)?.map((row) => row.id)
+    ).toEqual(mergedDocs.map((row) => row.id))
+  })
+
+  it('keeps recovery heartbeats nondecreasing when an initially cached row requires deferred re-embedding', async () => {
+    const {
+      embedTextsWithOllama,
+      retrievalCache,
+      retrievalIndex,
+      withNovelDatabase,
+    } = await createRetrievalIndexHarness('retale-retrieval-index-ollama-recovery-heartbeat-deferred-cache')
+    const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    const cachedInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(mergedDocs[0]).text
+    await withNovelDatabase(() => retrievalCache.upsertRawTextEmbeddingCacheEntries({
+      scope: {
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        provider: 'ollama',
+        model: 'unit-test-embedding-model',
+      },
+      entries: [{ embeddingInput: cachedInput, vector: [9, 9] }],
+    }))
+    const runnerEofError = String.raw`Ollama embedding HTTP 400: {"error":"do embedding request: Post \"http://127.0.0.1:58591/v1/embeddings\": EOF"}`
+    const callSizes: number[] = []
+    const progressEvents: Array<{ embeddedRows: number; completedBatches: number }> = []
+
+    embedTextsWithOllama.mockImplementation(async (input) => {
+      const values = Array.isArray(input) ? input : [input]
+      callSizes.push(values.length)
+      if (values.length > 1) {
+        return {
+          enabled: false,
+          embeddings: [],
+          model: 'unit-test-embedding-model',
+          error: runnerEofError,
+        }
+      }
+      return {
+        enabled: true,
+        embeddings: [[3, 3, 3]],
+        model: 'unit-test-embedding-model',
+      }
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main', {
+      onProgress: (progress) => {
+        if (progress.phase === 'embedding') {
+          progressEvents.push(progress)
+        }
+      },
+    })).resolves.toMatchObject({ rowCount: mergedDocs.length })
+
+    expect(callSizes).toEqual([2, 2, 2, 1, 1, 1])
+    expect(progressEvents.map((progress) => progress.embeddedRows)).toEqual([0, 0, 1, 2, 2, 3])
+    expect(progressEvents.map((progress) => progress.completedBatches)).toEqual([0, 0, 0, 0, 1, 2])
+    expect(progressEvents.map((progress) => progress.embeddedRows).every((count, index, counts) => (
+      count <= mergedDocs.length && (index === 0 || count >= counts[index - 1])
+    ))).toBe(true)
+    expect(progressEvents.slice(0, -1).every((progress) => progress.embeddedRows < mergedDocs.length)).toBe(true)
+    expect(progressEvents.at(-1)?.embeddedRows).toBe(mergedDocs.length)
+  })
+
+  it('recursively splits exhausted Ollama EOF batches into contiguous ordered leaves with bounded calls', async () => {
+    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-ollama-recursive-eof-split')
+    database.prepare(
+      `INSERT INTO KnowledgeWorld (
+        id, novelId, branchId, term, category, definition, firstSeenChapter,
+        validFromChapter, validUntilChapter, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('world-recursive-split', 'novel-001', 'novel-001:main', '递归分割设定', '设定', '递归分割测试定义', 1, 1, 999999999, 'ready')
+    const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    const canonicalInputs = mergedDocs.map((row) => retrievalIndex.buildRawTextRetrievalEmbeddingInput(row).text)
+    expect(mergedDocs).toHaveLength(4)
+    const runnerEofError = String.raw`Ollama embedding HTTP 400: {"error":"do embedding request: Post \"http://127.0.0.1:58591/v1/embeddings\": EOF"}`
+    const calls: string[][] = []
+
+    embedTextsWithOllama.mockImplementation(async (input) => {
+      const values = Array.isArray(input) ? input : [input]
+      calls.push([...values])
+      if (values.length > 1) {
+        return {
+          enabled: false,
+          embeddings: [],
+          model: 'unit-test-embedding-model',
+          error: runnerEofError,
+        }
+      }
+      const inputIndex = canonicalInputs.indexOf(values[0])
+      return {
+        enabled: true,
+        embeddings: [[inputIndex + 1, inputIndex + 1, inputIndex + 1]],
+        model: 'unit-test-embedding-model',
+      }
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: mergedDocs.length,
+    })
+
+    expect(calls.map((call) => call.length)).toEqual([4, 4, 4, 2, 2, 2, 1, 1, 2, 2, 2, 1, 1])
+    expect(calls.slice(0, 3)).toEqual([canonicalInputs, canonicalInputs, canonicalInputs])
+    expect(calls.slice(3, 6)).toEqual([
+      canonicalInputs.slice(0, 2),
+      canonicalInputs.slice(0, 2),
+      canonicalInputs.slice(0, 2),
+    ])
+    expect(calls[6]).toEqual([canonicalInputs[0]])
+    expect(calls[7]).toEqual([canonicalInputs[1]])
+    expect(calls.slice(8, 11)).toEqual([
+      canonicalInputs.slice(2),
+      canonicalInputs.slice(2),
+      canonicalInputs.slice(2),
+    ])
+    expect(calls[11]).toEqual([canonicalInputs[2]])
+    expect(calls[12]).toEqual([canonicalInputs[3]])
+    const storedRows = mockLanceDb.database.createTable.mock.calls[0]?.[1] as Array<{ id: string; vector: number[] }>
+    expect(storedRows.map((row) => row.id)).toEqual(mergedDocs.map((row) => row.id))
+    expect(storedRows.map((row) => row.vector[0])).toEqual([1, 2, 3, 4])
+  }, 120000)
+
+  it('repairs a split singleton fallback under the canonical hash on the next healthy rebuild', async () => {
+    const {
+      aiSettings,
+      database,
+      embedTextsWithOllama,
+      retrievalCache,
+      retrievalIndex,
+      withNovelDatabase,
+    } = await createRetrievalIndexHarness('retale-retrieval-index-ollama-split-singleton-fallback-cache')
+    aiSettings.embeddings.embeddingBatchSize = 16
+    const fixture = seedLongWorldFallbackFixture(database, 'split-leaf')
+    const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    const longDoc = mergedDocs.find((row) => row.id === fixture.docId)
+    expect(longDoc).toBeTruthy()
+    const liveDocs = [mergedDocs[0], longDoc!]
+    const cachedDocs = mergedDocs.filter((row) => !liveDocs.includes(row))
+    await withNovelDatabase(() => retrievalCache.upsertRawTextEmbeddingCacheEntries({
+      scope: {
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        provider: 'ollama',
+        model: 'unit-test-embedding-model',
+      },
+      entries: cachedDocs.map((row) => ({
+        embeddingInput: retrievalIndex.buildRawTextRetrievalEmbeddingInput(row).text,
+        vector: [9, 9, 9],
+      })),
+    }))
+    const longInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(longDoc!).text
+    const longInputHash = retrievalCache.buildEmbeddingInputHash(longInput)
+    const runnerEofError = String.raw`Ollama embedding HTTP 400: {"error":"do embedding request: Post \"http://127.0.0.1:58591/v1/embeddings\": EOF"}`
+    const callSizes: number[] = []
+    const longAttempts: string[] = []
+
+    embedTextsWithOllama.mockImplementation(async (input) => {
+      const values = Array.isArray(input) ? input : [input]
+      callSizes.push(values.length)
+      if (values.length > 1) {
+        return {
+          enabled: false,
+          embeddings: [],
+          model: aiSettings.embeddings.ollama.model,
+          error: runnerEofError,
+        }
+      }
+      if (values[0]?.includes(fixture.term)) {
+        longAttempts.push(values[0])
+        if (longAttempts.length === 1) {
+          return {
+            enabled: false,
+            embeddings: [],
+            model: aiSettings.embeddings.ollama.model,
+            error: runnerEofError,
+          }
+        }
+      }
+      return {
+        enabled: true,
+        embeddings: values.map(() => [5, 5, 5]),
+        model: aiSettings.embeddings.ollama.model,
+      }
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: mergedDocs.length,
+    })
+
+    expect(callSizes).toEqual([2, 2, 2, 1, 1, 1])
+    expect(longAttempts[0]).toBe(longInput)
+    expect(Array.from(longAttempts[1]).length).toBeLessThanOrEqual(1800)
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
+    ).get('novel-001:main', longInputHash)).toMatchObject({ count: 0 })
+
+    embedTextsWithOllama.mockClear()
+    embedTextsWithOllama.mockResolvedValue({
+      enabled: true,
+      embeddings: [[6, 6, 6]],
+      model: aiSettings.embeddings.ollama.model,
+    })
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: mergedDocs.length,
+    })
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(embedTextsWithOllama).toHaveBeenCalledWith([longInput], expect.any(Object))
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
+    ).get('novel-001:main', longInputHash)).toMatchObject({ count: 1 })
+
+    embedTextsWithOllama.mockClear()
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: mergedDocs.length,
+    })
+    expect(embedTextsWithOllama).not.toHaveBeenCalled()
+  }, 120000)
+
+  it('durably reuses successful split leaves after a later leaf fails without publishing a table', async () => {
+    const {
+      database,
+      embedTextsWithOllama,
+      mockLanceDb,
+      retrievalCache,
+      retrievalIndex,
+      withNovelDatabase,
+    } = await createRetrievalIndexHarness('retale-retrieval-index-ollama-partial-split-cache-reuse')
+    const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    const cachedDoc = mergedDocs[0]
+    const liveDocs = mergedDocs.slice(1)
+    const leftInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(liveDocs[0]).text
+    const rightInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(liveDocs[1]).text
+    const leftHash = retrievalCache.buildEmbeddingInputHash(leftInput)
+    const rightHash = retrievalCache.buildEmbeddingInputHash(rightInput)
+    await withNovelDatabase(() => retrievalCache.upsertRawTextEmbeddingCacheEntries({
+      scope: {
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        provider: 'ollama',
+        model: 'unit-test-embedding-model',
+      },
+      entries: [{
+        embeddingInput: retrievalIndex.buildRawTextRetrievalEmbeddingInput(cachedDoc).text,
+        vector: [9, 9, 9],
+      }],
+    }))
+    const runnerEofError = String.raw`Ollama embedding HTTP 400: {"error":"do embedding request: Post \"http://127.0.0.1:58591/v1/embeddings\": EOF"}`
+    const callSizes: number[] = []
+
+    embedTextsWithOllama.mockImplementation(async (input) => {
+      const values = Array.isArray(input) ? input : [input]
+      callSizes.push(values.length)
+      if (values.length > 1 || values[0] === rightInput) {
+        return {
+          enabled: false,
+          embeddings: [],
+          model: 'unit-test-embedding-model',
+          error: runnerEofError,
+        }
+      }
+      return {
+        enabled: true,
+        embeddings: [[7, 7, 7]],
+        model: 'unit-test-embedding-model',
+      }
+    })
+
+    const failedRebuild = retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    await expect(failedRebuild).rejects.toThrow(
+      new RegExp(`batchSize=1, preview=id=${liveDocs[1].id}.*EOF`)
+    )
+    await expect(failedRebuild).rejects.toMatchObject({
+      cause: expect.objectContaining({ message: runnerEofError }),
+    })
+
+    expect(callSizes).toEqual([2, 2, 2, 1, 1])
+    expect(mockLanceDb.database.createTable).not.toHaveBeenCalled()
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
+    ).get('novel-001:main', leftHash)).toMatchObject({ count: 1 })
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
+    ).get('novel-001:main', rightHash)).toMatchObject({ count: 0 })
+
+    embedTextsWithOllama.mockClear()
+    embedTextsWithOllama.mockResolvedValue({
+      enabled: true,
+      embeddings: [[8, 8, 8]],
+      model: 'unit-test-embedding-model',
+    })
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: mergedDocs.length,
+    })
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(embedTextsWithOllama).toHaveBeenCalledWith([rightInput], expect.any(Object))
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
+  }, 120000)
+
+  it('repairs a direct singleton fallback under the canonical hash on the next healthy rebuild', async () => {
+    const { aiSettings, database, embedTextsWithOllama, retrievalCache, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-ollama-singleton-1800-fallback')
+    aiSettings.embeddings.embeddingBatchSize = 1
+    const fixture = seedLongWorldFallbackFixture(database, '1800')
+    const longDoc = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+      .find((row) => row.id === fixture.docId)
+    expect(longDoc).toBeTruthy()
+    const fullInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(longDoc!).text
+    const fullInputHash = retrievalCache.buildEmbeddingInputHash(fullInput)
+    const runnerEofError = String.raw`Ollama embedding HTTP 400: {"error":"do embedding request: Post \"http://127.0.0.1:58591/v1/embeddings\": EOF"}`
+    const longAttempts: string[] = []
+
+    embedTextsWithOllama.mockImplementation(async (input) => {
+      const values = Array.isArray(input) ? input : [input]
+      if (values[0]?.includes(fixture.term)) {
+        longAttempts.push(values[0])
+        if (longAttempts.length === 1) {
+          return {
+            enabled: false,
+            embeddings: [],
+            model: aiSettings.embeddings.ollama.model,
+            error: runnerEofError,
+          }
+        }
+      }
+      return {
+        enabled: true,
+        embeddings: values.map(() => [2, 2, 2]),
+        model: aiSettings.embeddings.ollama.model,
+      }
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+
+    expect(longAttempts).toHaveLength(2)
+    expect(longAttempts[0]).toBe(fullInput)
+    expect(Array.from(fullInput).length).toBeGreaterThan(1800)
+    expect(Array.from(longAttempts[1]).length).toBeLessThanOrEqual(1800)
+    expect(longAttempts[1].startsWith(Array.from(fullInput).slice(0, 64).join(''))).toBe(true)
+    expect(longAttempts[1].endsWith(Array.from(fullInput).slice(-64).join(''))).toBe(true)
+    expect(longAttempts[1]).toContain('😀')
+    expect(Buffer.from(longAttempts[1], 'utf8').toString('utf8')).toBe(longAttempts[1])
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
+    ).get('novel-001:main', fullInputHash)).toMatchObject({ count: 0 })
+
+    embedTextsWithOllama.mockClear()
+    embedTextsWithOllama.mockResolvedValue({
+      enabled: true,
+      embeddings: [[4, 4, 4]],
+      model: aiSettings.embeddings.ollama.model,
+    })
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(embedTextsWithOllama).toHaveBeenCalledWith([fullInput], expect.any(Object))
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
+    ).get('novel-001:main', fullInputHash)).toMatchObject({ count: 1 })
+
+    embedTextsWithOllama.mockClear()
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+    expect(embedTextsWithOllama).not.toHaveBeenCalled()
+  })
+
+  it('reduces a long Ollama singleton to 1200 code points after two runner EOF responses', async () => {
+    const { aiSettings, database, embedTextsWithOllama, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-ollama-singleton-1200-fallback')
+    aiSettings.embeddings.embeddingBatchSize = 1
+    const fixture = seedLongWorldFallbackFixture(database, '1200')
+    const longDoc = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+      .find((row) => row.id === fixture.docId)
+    expect(longDoc).toBeTruthy()
+    const fullInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(longDoc!).text
+    const runnerEofError = String.raw`Ollama embedding HTTP 400: {"error":"do embedding request: Post \"http://127.0.0.1:58591/v1/embeddings\": EOF"}`
+    const longAttempts: string[] = []
+
+    embedTextsWithOllama.mockImplementation(async (input) => {
+      const values = Array.isArray(input) ? input : [input]
+      if (values[0]?.includes(fixture.term)) {
+        longAttempts.push(values[0])
+        if (longAttempts.length <= 2) {
+          return {
+            enabled: false,
+            embeddings: [],
+            model: aiSettings.embeddings.ollama.model,
+            error: runnerEofError,
+          }
+        }
+      }
+      return {
+        enabled: true,
+        embeddings: values.map(() => [3, 3, 3]),
+        model: aiSettings.embeddings.ollama.model,
+      }
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+
+    expect(longAttempts).toHaveLength(3)
+    expect(longAttempts[0]).toBe(fullInput)
+    expect(Array.from(longAttempts[1]).length).toBeLessThanOrEqual(1800)
+    expect(Array.from(longAttempts[2]).length).toBeLessThanOrEqual(1200)
+    expect(longAttempts[2].startsWith(Array.from(fullInput).slice(0, 64).join(''))).toBe(true)
+    expect(longAttempts[2].endsWith(Array.from(fullInput).slice(-64).join(''))).toBe(true)
+    expect(longAttempts[2]).toContain('😀')
+    expect(Buffer.from(longAttempts[2], 'utf8').toString('utf8')).toBe(longAttempts[2])
+  })
+
+  it('skips the no-op 1800 cap for an exact 1800-code-point singleton and retries at 1200', async () => {
+    const harness = await createRetrievalIndexHarness('retale-retrieval-index-ollama-singleton-exact-1800')
+    harness.aiSettings.embeddings.embeddingBatchSize = 1
+    const fixture = seedWorldWithExactEmbeddingInputCodePoints(harness.database, harness.retrievalIndex, 'exact-1800', 1800)
+    await cacheRetrievalDocsExcept(harness, fixture.docId)
+    const runnerEofError = String.raw`Ollama embedding HTTP 400: {"error":"do embedding request: Post \"http://127.0.0.1:58591/v1/embeddings\": EOF"}`
+    const attempts: string[] = []
+
+    harness.embedTextsWithOllama.mockImplementation(async (input) => {
+      const values = Array.isArray(input) ? input : [input]
+      attempts.push(values[0])
+      if (attempts.length === 1) {
+        return {
+          enabled: false,
+          embeddings: [],
+          model: harness.aiSettings.embeddings.ollama.model,
+          error: runnerEofError,
+        }
+      }
+      return {
+        enabled: true,
+        embeddings: [[3, 3, 3]],
+        model: harness.aiSettings.embeddings.ollama.model,
+      }
+    })
+
+    await expect(harness.retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: harness.retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+
+    expect(attempts).toHaveLength(2)
+    expect(attempts[0]).toBe(fixture.input)
+    expect(attempts.map((input) => Array.from(input).length)).toEqual([1800, 1200])
+    expect(attempts[1]).not.toBe(attempts[0])
+  })
+
+  it('surfaces an exact EOF immediately for an exact 1200-code-point singleton', async () => {
+    const harness = await createRetrievalIndexHarness('retale-retrieval-index-ollama-singleton-exact-1200')
+    harness.aiSettings.embeddings.embeddingBatchSize = 1
+    const fixture = seedWorldWithExactEmbeddingInputCodePoints(harness.database, harness.retrievalIndex, 'exact-1200', 1200)
+    await cacheRetrievalDocsExcept(harness, fixture.docId)
+    const runnerEofError = String.raw`Ollama embedding HTTP 400: {"error":"do embedding request: Post \"http://127.0.0.1:58591/v1/embeddings\": EOF"}`
+    const attempts: string[] = []
+
+    harness.embedTextsWithOllama.mockImplementation(async (input) => {
+      const values = Array.isArray(input) ? input : [input]
+      attempts.push(values[0])
+      return {
+        enabled: false,
+        embeddings: [],
+        model: harness.aiSettings.embeddings.ollama.model,
+        error: runnerEofError,
+      }
+    })
+
+    const rebuild = harness.retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    await expect(rebuild).rejects.toThrow(new RegExp(`batchSize=1, preview=id=${fixture.docId}.*EOF`))
+    await expect(rebuild).rejects.toMatchObject({
+      cause: expect.objectContaining({ message: runnerEofError }),
+    })
+
+    expect(attempts).toEqual([fixture.input])
+    expect(Array.from(attempts[0]).length).toBe(1200)
+  })
+
+  it('surfaces an exact EOF immediately for a singleton below 1200 code points', async () => {
+    const harness = await createRetrievalIndexHarness('retale-retrieval-index-ollama-singleton-below-1200')
+    harness.aiSettings.embeddings.embeddingBatchSize = 1
+    const fixture = seedWorldWithExactEmbeddingInputCodePoints(harness.database, harness.retrievalIndex, 'below-1200', 1199)
+    await cacheRetrievalDocsExcept(harness, fixture.docId)
+    const runnerEofError = String.raw`Ollama embedding HTTP 400: {"error":"do embedding request: Post \"http://127.0.0.1:58591/v1/embeddings\": EOF"}`
+    const attempts: string[] = []
+
+    harness.embedTextsWithOllama.mockImplementation(async (input) => {
+      const values = Array.isArray(input) ? input : [input]
+      attempts.push(values[0])
+      return {
+        enabled: false,
+        embeddings: [],
+        model: harness.aiSettings.embeddings.ollama.model,
+        error: runnerEofError,
+      }
+    })
+
+    const rebuild = harness.retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    await expect(rebuild).rejects.toThrow(new RegExp(`batchSize=1, preview=id=${fixture.docId}.*EOF`))
+    await expect(rebuild).rejects.toMatchObject({
+      cause: expect.objectContaining({ message: runnerEofError }),
+    })
+
+    expect(attempts).toEqual([fixture.input])
+    expect(Array.from(attempts[0]).length).toBe(1199)
+  })
+
+  it('retries a generic long singleton failure without changing the attempted input', async () => {
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-generic-singleton-retry-input')
+    aiSettings.embeddings.embeddingBatchSize = 1
+    const fixture = seedLongWorldFallbackFixture(database, 'generic')
+    const longDoc = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+      .find((row) => row.id === fixture.docId)
+    expect(longDoc).toBeTruthy()
+    const fullInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(longDoc!).text
+    const longAttempts: string[] = []
+
+    embedTextsWithOllama.mockImplementation(async (input) => {
+      const values = Array.isArray(input) ? input : [input]
+      if (values[0]?.includes(fixture.term)) {
+        longAttempts.push(values[0])
+        throw new Error('fetch failed')
+      }
+      return {
+        enabled: true,
+        embeddings: values.map(() => [4, 4, 4]),
+        model: aiSettings.embeddings.ollama.model,
+      }
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).rejects.toThrow('fetch failed')
+
+    expect(longAttempts).toEqual([fullInput, fullInput, fullInput])
+    expect(mockLanceDb.database.createTable).not.toHaveBeenCalled()
+  })
+
+  it('does not retry an ordinary disabled Ollama HTTP 400 result', async () => {
+    const { database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-ollama-permanent-http-400')
+
+    embedTextsWithOllama.mockResolvedValueOnce({
+      enabled: false,
+      embeddings: [],
+      model: 'unit-test-embedding-model',
+      error: 'Ollama embedding HTTP 400: {"error":"model not found"}',
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).rejects.toThrow(
+      'Ollama embedding HTTP 400: {"error":"model not found"}'
+    )
+
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(embedTextsWithOllama.mock.calls[0]?.[0]).toHaveLength(3)
+    expect(mockLanceDb.database.createTable).not.toHaveBeenCalled()
+    expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
+      count: 0,
+    })
+  })
+
+  it('reuses successful singleton embeddings after the last Ollama runner EOF batch exhausts retries', async () => {
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalCache, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-singleton-late-runner-eof-cache-reuse')
+    aiSettings.embeddings.embeddingBatchSize = 1
+    const fixture = seedLongWorldFallbackFixture(database, 'exhausted')
+
+    const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    const failedDoc = mergedDocs.find((row) => row.id === fixture.docId)
+    expect(failedDoc).toBeTruthy()
+    const failedInput = retrievalIndex.buildRawTextRetrievalEmbeddingInput(failedDoc!).text
+    const failedInputHash = retrievalCache.buildEmbeddingInputHash(failedInput)
+    const runnerEofError = String.raw`Ollama embedding HTTP 400: {"error":"do embedding request: Post \"http://127.0.0.1:58591/v1/embeddings\": EOF"}`
+    const failedAttempts: string[] = []
+
+    embedTextsWithOllama.mockImplementation(async (input) => {
+      const values = Array.isArray(input) ? input : [input]
+      if (values[0]?.includes(fixture.term)) {
+        failedAttempts.push(values[0])
+        return {
+          enabled: false,
+          embeddings: [],
+          model: aiSettings.embeddings.ollama.model,
+          error: runnerEofError,
+        }
+      }
+      return {
+        enabled: true,
+        embeddings: values.map(() => [2, 2, 2]),
+        model: aiSettings.embeddings.ollama.model,
+      }
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).rejects.toThrow(runnerEofError)
+
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(mergedDocs.length + 2)
+    expect(failedAttempts).toHaveLength(3)
+    expect(failedAttempts[0]).toBe(failedInput)
+    expect(Array.from(failedAttempts[1]).length).toBeLessThanOrEqual(1800)
+    expect(Array.from(failedAttempts[2]).length).toBeLessThanOrEqual(1200)
+    expect(mockLanceDb.database.createTable).not.toHaveBeenCalled()
+    expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
+      count: mergedDocs.length - 1,
+    })
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
+    ).get('novel-001:main', failedInputHash)).toMatchObject({ count: 0 })
+
+    embedTextsWithOllama.mockClear()
+    embedTextsWithOllama.mockImplementation(async (input) => {
+      const values = Array.isArray(input) ? input : [input]
+      return {
+        enabled: true,
+        embeddings: values.map(() => [6, 6, 6]),
+        model: aiSettings.embeddings.ollama.model,
+      }
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: mergedDocs.length,
+    })
+
+    expect(embedTextsWithOllama).toHaveBeenCalledTimes(1)
+    expect(embedTextsWithOllama).toHaveBeenCalledWith([failedInput], aiSettings.embeddings.ollama)
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
+    expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
+      count: mergedDocs.length,
+    })
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND embeddingInputHash = ?'
+    ).get('novel-001:main', failedInputHash)).toMatchObject({ count: 1 })
   })
 
   it('splits long Ollama final embedding batches by input size', async () => {
@@ -1268,6 +2035,11 @@ describe('retrieval-index cache reuse helpers', () => {
     )
 
     expect(embedTextsWithOllama).toHaveBeenCalledTimes(3)
+    expect(embedTextsWithOllama.mock.calls.map((call) => call[0])).toEqual([
+      expect.arrayContaining(mergedDocs.map((row) => retrievalIndex.buildRawTextRetrievalEmbeddingInput(row).text)),
+      expect.arrayContaining(mergedDocs.map((row) => retrievalIndex.buildRawTextRetrievalEmbeddingInput(row).text)),
+      expect.arrayContaining(mergedDocs.map((row) => retrievalIndex.buildRawTextRetrievalEmbeddingInput(row).text)),
+    ])
     expect(mockLanceDb.database.createTable).not.toHaveBeenCalled()
     expect(mergedDocs).toHaveLength(3)
   })
@@ -1426,7 +2198,7 @@ describe('retrieval-index cache reuse helpers', () => {
     await expect(retrievalIndex.hasBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toBe(true)
   }, 120000)
 
-  it('preserves a pending replacement table when full index creation fails and resumes it on the next rebuild', async () => {
+  it('preserves a pending replacement table under the current embedding policy and resumes it on the next rebuild', async () => {
     const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-index-failure-preserves-active-table')
 
     database.prepare(
@@ -1488,6 +2260,7 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(originalTable?.delete).not.toHaveBeenCalled()
     expect(originalTable?.add).not.toHaveBeenCalled()
     const pendingRows = getPendingRetrievalIndexRows(database)
+    expect(retrievalIndex.RETRIEVAL_EMBEDDING_POLICY_VERSION).toBe('ollama-eof-fallback-v2')
     expect(pendingRows).toEqual([
       expect.objectContaining({
         scopeKey: 'full',
@@ -1519,6 +2292,71 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(getPendingRetrievalIndexRows(database)).toEqual([])
     expect(getActiveMockTableName(database)).toBe(pendingTableName)
     expect(getActiveMockTable(database, mockLanceDb)).toBe(pendingTable)
+  }, 120000)
+
+  it('invalidates a pending table from the v1 embedding policy without invalidating canonical raw cache entries', async () => {
+    const { aiSettings, database, embedTextsWithOllama, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-stale-pending-embedding-policy')
+
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    const originalTableName = getActiveMockTableName(database)
+
+    aiSettings.embeddings.ollama.model = 'unit-test-embedding-model-v2'
+    embedTextsWithOllama.mockClear()
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+
+    mockLanceDb.database.createTable.mockImplementationOnce(async (name: string, rows: Array<Record<string, unknown>>) => {
+      const table = {
+        rows: [...rows],
+        add: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+        createIndex: vi.fn(async (column: string) => {
+          if (column === 'text') {
+            throw new Error('Lance index failed under current embedding policy')
+          }
+        }),
+        waitForIndex: vi.fn(async () => undefined),
+        query: () => ({
+          limit: () => ({
+            toArray: async () => table.rows.slice(0, 1),
+          }),
+        }),
+      }
+      mockLanceDb.tables.set(name, table)
+      return table
+    })
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).rejects.toThrow(
+      'Failed to create LanceDB FTS index: Lance index failed under current embedding policy'
+    )
+
+    const pendingTableName = getPendingRetrievalIndexRows(database)[0]?.tableName
+    expect(pendingTableName).toBeTruthy()
+    const cachedRowsBeforeResume = database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND provider = ? AND model = ?'
+    ).get('novel-001:main', 'ollama', 'unit-test-embedding-model-v2') as { count: number }
+    expect(cachedRowsBeforeResume.count).toBe(retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length)
+
+    database.prepare(
+      'UPDATE PendingRetrievalIndex SET rebuildFingerprint = ? WHERE branchId = ? AND scopeKey = ?'
+    ).run('pending-fingerprint-from-ollama-eof-fallback-v1', 'novel-001:main', 'full')
+    embedTextsWithOllama.mockClear()
+    mockLanceDb.database.createTable.mockClear()
+    mockLanceDb.database.dropTable.mockClear()
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
+    })
+
+    expect(embedTextsWithOllama).not.toHaveBeenCalled()
+    expect(mockLanceDb.database.createTable).toHaveBeenCalledTimes(1)
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledWith(pendingTableName)
+    expect(mockLanceDb.database.dropTable).toHaveBeenCalledWith(originalTableName)
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND provider = ? AND model = ?'
+    ).get('novel-001:main', 'ollama', 'unit-test-embedding-model-v2')).toEqual(cachedRowsBeforeResume)
+    expect(getPendingRetrievalIndexRows(database)).toEqual([])
+    expect(getActiveMockTableName(database)).not.toBe(pendingTableName)
   }, 120000)
 
   it('discards a stale pending table when the embedding model changes after an index failure', async () => {

@@ -80,8 +80,11 @@ type RetrievalDocSeedRow = {
   contentHash: string
 }
 
-type RetrievalDocRow = RetrievalDocSeedRow & {
+type EmbeddedRetrievalDocRow = RetrievalDocSeedRow & {
   vector: number[]
+}
+
+type RetrievalDocRow = EmbeddedRetrievalDocRow & {
   embeddingProvider: AIProvider
   embeddingModel: string
   embeddingDimension: number
@@ -171,6 +174,11 @@ export type RetrievalIndexBuildResult = {
 const TABLE_PREFIX = 'retrieval_docs_'
 const DEFAULT_EMBEDDING_BATCH_SIZE = 16
 const RETRIEVAL_EMBEDDING_RETRY_DELAYS_MS = [500, 1500] as const
+// Exact Ollama EOF recovery may split batches and retry singleton input at full/1800/1200 code points.
+// Bump when that deterministic policy changes which embedding result a pending table may contain.
+// Raw embedding cache identity remains canonical and intentionally does not include this version.
+export const RETRIEVAL_EMBEDDING_POLICY_VERSION = 'ollama-eof-fallback-v2'
+const OLLAMA_SINGLETON_EOF_FALLBACK_CODE_POINTS = [1800, 1200] as const
 const OLLAMA_RETRIEVAL_EMBEDDING_MAX_BATCH_CHARS = 6000
 const LANCEDB_INDEX_LOG_PREFIX = '[LanceDB Index]'
 const LANCEDB_INDEX_WAIT_TIMEOUT_SECONDS = 3600
@@ -719,8 +727,8 @@ function getEmbeddingBatchSize(settings: EmbeddingsScenarioSettings) {
 async function embedRetrievalRowBatch(
   rows: Array<Pick<RetrievalDocEmbeddingPlanRow, 'row' | 'embeddingInput'>>,
   settings: EmbeddingsScenarioSettings,
-) {
-  if (!rows.length) return [] as RetrievalDocRow[]
+): Promise<EmbeddedRetrievalDocRow[]> {
+  if (!rows.length) return []
 
   const embeddingInputs = rows.map((item) => item.embeddingInput)
   const result = settings.provider === 'openai-compatible'
@@ -749,11 +757,11 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
-function isRetryableRetrievalEmbeddingError(error: unknown) {
+function getNormalizedRetrievalEmbeddingError(error: unknown) {
   const topLevelDetails = readRetrievalErrorLikeDetails(error)
   const nestedCause = error instanceof Error ? (error as Error & { cause?: unknown }).cause : undefined
   const causeDetails = readRetrievalErrorLikeDetails(nestedCause)
-  const normalizedHaystack = [
+  return [
     topLevelDetails.name,
     topLevelDetails.code,
     topLevelDetails.message,
@@ -764,6 +772,18 @@ function isRetryableRetrievalEmbeddingError(error: unknown) {
     .filter((value): value is string => Boolean(value))
     .join(' ')
     .toLowerCase()
+}
+
+function isOllamaInternalRunnerEofError(error: unknown) {
+  const normalizedHaystack = getNormalizedRetrievalEmbeddingError(error)
+  return normalizedHaystack.includes('ollama embedding http 400')
+    && normalizedHaystack.includes('do embedding request')
+    && normalizedHaystack.includes('/v1/embeddings')
+    && /\beof\b/u.test(normalizedHaystack)
+}
+
+function isRetryableRetrievalEmbeddingError(error: unknown) {
+  const normalizedHaystack = getNormalizedRetrievalEmbeddingError(error)
 
   return normalizedHaystack.includes('fetch failed')
     || normalizedHaystack.includes('timed out')
@@ -774,6 +794,43 @@ function isRetryableRetrievalEmbeddingError(error: unknown) {
     || normalizedHaystack.includes('etimedout')
     || normalizedHaystack.includes('socket hang up')
     || normalizedHaystack.includes('und_err')
+    || isOllamaInternalRunnerEofError(error)
+}
+
+function middleElideEmbeddingInput(input: string, maxCodePoints: number) {
+  const inputCodePoints = Array.from(input)
+  if (inputCodePoints.length <= maxCodePoints) {
+    return input
+  }
+
+  const marker = '\n[…]\n'
+  const markerCodePoints = Array.from(marker)
+  const retainedCodePoints = maxCodePoints - markerCodePoints.length
+  const prefixLength = Math.ceil(retainedCodePoints / 2)
+  const suffixLength = retainedCodePoints - prefixLength
+
+  return inputCodePoints.slice(0, prefixLength).join('')
+    + marker
+    + inputCodePoints.slice(inputCodePoints.length - suffixLength).join('')
+}
+
+function selectNextOllamaSingletonEofFallback(originalInput: string, currentInput: string, startIndex: number) {
+  const currentCodePoints = Array.from(currentInput).length
+  for (let index = startIndex; index < OLLAMA_SINGLETON_EOF_FALLBACK_CODE_POINTS.length; index += 1) {
+    const maxCodePoints = OLLAMA_SINGLETON_EOF_FALLBACK_CODE_POINTS[index]
+    const candidateInput = middleElideEmbeddingInput(originalInput, maxCodePoints)
+    if (Array.from(candidateInput).length >= currentCodePoints) {
+      continue
+    }
+
+    return {
+      fallbackLevel: index + 1,
+      nextIndex: index + 1,
+      input: candidateInput,
+    }
+  }
+
+  return null
 }
 
 async function waitForRetrievalEmbeddingRetry(delayMs: number) {
@@ -785,14 +842,40 @@ async function embedRetrievalRowBatchWithRetry(
   settings: EmbeddingsScenarioSettings,
 ) {
   let lastError: unknown = null
+  let attemptRows = rows
+  let nextFallbackIndex = 0
 
   for (let attempt = 0; attempt <= RETRIEVAL_EMBEDDING_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
-      return await embedRetrievalRowBatch(rows, settings)
+      return {
+        attemptedEmbeddingInputs: attemptRows.map((item) => item.embeddingInput),
+        embeddedRows: await embedRetrievalRowBatch(attemptRows, settings),
+      }
     } catch (error) {
       lastError = error
       if (!isRetryableRetrievalEmbeddingError(error) || attempt >= RETRIEVAL_EMBEDDING_RETRY_DELAYS_MS.length) {
-        throw new Error(buildRetrievalBatchErrorMessage(rows, error))
+        throw new Error(buildRetrievalBatchErrorMessage(rows, error), { cause: error })
+      }
+
+      if (
+        settings.provider === 'ollama'
+        && rows.length === 1
+        && isOllamaInternalRunnerEofError(error)
+      ) {
+        const currentRow = attemptRows[0]
+        const fallback = selectNextOllamaSingletonEofFallback(rows[0].embeddingInput, currentRow.embeddingInput, nextFallbackIndex)
+        if (!fallback) {
+          throw new Error(buildRetrievalBatchErrorMessage(rows, error), { cause: error })
+        }
+
+        nextFallbackIndex = fallback.nextIndex
+        attemptRows = [{
+          ...currentRow,
+          embeddingInput: fallback.input,
+        }]
+        logLanceIndex(
+          `embedding singleton fallback level=${fallback.fallbackLevel}, previousCodePoints=${Array.from(currentRow.embeddingInput).length}, attemptCodePoints=${Array.from(fallback.input).length}, rowId=${currentRow.row.id}, source=${currentRow.row.sourceType}/${currentRow.row.sourceId}`
+        )
       }
 
       const delayMs = RETRIEVAL_EMBEDDING_RETRY_DELAYS_MS[attempt]
@@ -801,7 +884,51 @@ async function embedRetrievalRowBatchWithRetry(
     }
   }
 
-  throw new Error(buildRetrievalBatchErrorMessage(rows, lastError ?? 'unknown retrieval embedding failure'))
+  throw new Error(buildRetrievalBatchErrorMessage(rows, lastError ?? 'unknown retrieval embedding failure'), {
+    cause: lastError,
+  })
+}
+
+async function embedRetrievalRowBatchWithRecovery(
+  rows: RetrievalDocEmbeddingPlanRow[],
+  settings: EmbeddingsScenarioSettings,
+  onLeafResolved: (
+    leafRows: RetrievalDocEmbeddingPlanRow[],
+    attemptedEmbeddingInputs: string[],
+    embeddedRows: EmbeddedRetrievalDocRow[],
+  ) => Promise<void>,
+  onRecoveryHeartbeat: () => Promise<void>,
+  isRecoveryBranch = false,
+): Promise<EmbeddedRetrievalDocRow[]> {
+  let resolvedBatch: Awaited<ReturnType<typeof embedRetrievalRowBatchWithRetry>>
+  try {
+    resolvedBatch = await embedRetrievalRowBatchWithRetry(rows, settings)
+  } catch (error) {
+    if (
+      settings.provider !== 'ollama'
+      || rows.length <= 1
+      || !isOllamaInternalRunnerEofError(error)
+    ) {
+      throw error
+    }
+
+    const midpoint = Math.floor(rows.length / 2)
+    const leftRows = rows.slice(0, midpoint)
+    const rightRows = rows.slice(midpoint)
+    logLanceIndex(
+      `embedding batch split: parentSize=${rows.length}, leftSize=${leftRows.length}, rightSize=${rightRows.length}`
+    )
+    await onRecoveryHeartbeat()
+    const leftEmbeddedRows = await embedRetrievalRowBatchWithRecovery(leftRows, settings, onLeafResolved, onRecoveryHeartbeat, true)
+    const rightEmbeddedRows = await embedRetrievalRowBatchWithRecovery(rightRows, settings, onLeafResolved, onRecoveryHeartbeat, true)
+    return [...leftEmbeddedRows, ...rightEmbeddedRows]
+  }
+
+  await onLeafResolved(rows, resolvedBatch.attemptedEmbeddingInputs, resolvedBatch.embeddedRows)
+  if (isRecoveryBranch) {
+    await onRecoveryHeartbeat()
+  }
+  return resolvedBatch.embeddedRows
 }
 
 function buildRetrievalEmbeddingBatches(
@@ -991,6 +1118,7 @@ function buildPendingRebuildFingerprint(params: {
   plannedRows: RetrievalDocEmbeddingPlanRow[]
 }) {
   return hashValue(JSON.stringify({
+    embeddingPolicyVersion: RETRIEVAL_EMBEDDING_POLICY_VERSION,
     scopeKey: params.scope.scopeKey,
     scopeStartChapter: params.scope.scopeStartChapter,
     scopeEndChapter: params.scope.scopeEndChapter,
@@ -1246,6 +1374,8 @@ async function writeBranchTableRows(params: {
   let embeddingElapsedMs = 0
   let writeElapsedMs = 0
   let completedBatches = 0
+  const validatedCachedRowIndices = new Set<number>()
+  const successfullyEmbeddedRowIndices = new Set<number>()
   let embeddedRowsCount = 0
   let expectedVectorDimension: number | null = null
   const resolvedRows = Array<RetrievalDocRow | null>(rows.length).fill(null)
@@ -1272,41 +1402,73 @@ async function writeBranchTableRows(params: {
     }
   }
 
+  const persistResolvedEmbeddingLeaf = async (
+    leafRows: RetrievalDocEmbeddingPlanRow[],
+    attemptedEmbeddingInputs: string[],
+    embeddedRows: EmbeddedRetrievalDocRow[],
+  ) => {
+    if (embeddedRows.length !== leafRows.length || attemptedEmbeddingInputs.length !== leafRows.length) {
+      throw new Error(`Embedding provider returned ${embeddedRows.length} embeddings for ${leafRows.length} retrieval rows`)
+    }
+    const leafDimension = embeddedRows[0]?.vector.length ?? 0
+    if (!leafDimension || embeddedRows.some((row) => row.vector.length !== leafDimension)) {
+      throw new Error('Retrieval embedding dimensions are inconsistent within a LanceDB write batch')
+    }
+    if (embeddedRows.some((row) => row.vector.some((value) => !Number.isFinite(value)))) {
+      throw new Error('Retrieval embedding vector contains a non-finite value during LanceDB rebuild')
+    }
+    if (expectedVectorDimension !== null && expectedVectorDimension !== leafDimension) {
+      throw new Error('Retrieval embedding dimensions are inconsistent across cached and live LanceDB rows')
+    }
+
+    for (const [leafIndex, embeddedRow] of embeddedRows.entries()) {
+      assignResolvedRow(leafRows[leafIndex], embeddedRow.vector)
+    }
+
+    const canonicalCacheEntries = leafRows.flatMap((item, itemIndex) => (
+      attemptedEmbeddingInputs[itemIndex] === item.embeddingInput
+        ? [{
+            embeddingInput: item.embeddingInput,
+            vector: embeddedRows[itemIndex].vector,
+          }]
+        : []
+    ))
+    if (canonicalCacheEntries.length) {
+      await upsertRawTextEmbeddingCacheEntries({
+        scope: retrievalEmbeddingCacheScope,
+        entries: canonicalCacheEntries,
+      })
+    }
+
+    for (const leafRow of leafRows) {
+      successfullyEmbeddedRowIndices.add(leafRow.rowIndex)
+    }
+  }
+
+  const countResolvedRows = () => new Set([
+    ...validatedCachedRowIndices,
+    ...successfullyEmbeddedRowIndices,
+  ]).size
+
+  const emitRecoveryHeartbeat = async () => {
+    embeddedRowsCount = countResolvedRows()
+    await onProgress?.({
+      phase: 'embedding',
+      totalRows: rows.length,
+      embeddedRows: embeddedRowsCount,
+      totalBatches,
+      completedBatches,
+    })
+  }
+
   logLanceIndex(`embedding started: docs=${rows.length}, batchSize=${embeddingBatchSize}, liveBatches=${liveBatches.length}`)
 
   for (const batch of liveBatches) {
     const embeddingBatchStartedAt = Date.now()
-    const embeddedBatch = await embedRetrievalRowBatchWithRetry(batch, embeddingSettings)
+    await embedRetrievalRowBatchWithRecovery(batch, embeddingSettings, persistResolvedEmbeddingLeaf, emitRecoveryHeartbeat)
     embeddingElapsedMs += Date.now() - embeddingBatchStartedAt
-    const batchDimension = embeddedBatch[0]?.vector.length ?? 0
 
-    if (!batchDimension || embeddedBatch.some((row) => row.vector.length !== batchDimension)) {
-      throw new Error('Retrieval embedding dimensions are inconsistent within a LanceDB write batch')
-    }
-    if (expectedVectorDimension === null) {
-      expectedVectorDimension = batchDimension
-    } else if (expectedVectorDimension !== batchDimension) {
-      throw new Error('Retrieval embedding dimensions are inconsistent across LanceDB batches')
-    }
-
-    for (const [batchIndex, embeddedRow] of embeddedBatch.entries()) {
-      assignResolvedRow(batch[batchIndex], embeddedRow.vector)
-    }
-
-    const cacheableBatch = batch
-      .map((item, itemIndex) => ({ item, vector: embeddedBatch[itemIndex]?.vector }))
-      .filter((entry): entry is { item: RetrievalDocEmbeddingPlanRow; vector: number[] } => Array.isArray(entry.vector))
-    if (cacheableBatch.length) {
-      await upsertRawTextEmbeddingCacheEntries({
-        scope: retrievalEmbeddingCacheScope,
-        entries: cacheableBatch.map(({ item, vector }) => ({
-          embeddingInput: item.embeddingInput,
-          vector,
-        })),
-      })
-    }
-
-    embeddedRowsCount = resolvedRows.filter(Boolean).length
+    embeddedRowsCount = countResolvedRows()
     completedBatches += 1
 
     const embeddingWallElapsedMs = Date.now() - embeddingStartedAt
@@ -1338,6 +1500,7 @@ async function writeBranchTableRows(params: {
     }
 
     assignResolvedRow(item, item.cachedVector)
+    validatedCachedRowIndices.add(item.rowIndex)
   }
 
   if (deferredCachedRows.length) {
@@ -1351,32 +1514,10 @@ async function writeBranchTableRows(params: {
 
     for (const batch of deferredBatches) {
       const embeddingBatchStartedAt = Date.now()
-      const embeddedBatch = await embedRetrievalRowBatchWithRetry(batch, embeddingSettings)
+      await embedRetrievalRowBatchWithRecovery(batch, embeddingSettings, persistResolvedEmbeddingLeaf, emitRecoveryHeartbeat)
       embeddingElapsedMs += Date.now() - embeddingBatchStartedAt
 
-      const batchDimension = embeddedBatch[0]?.vector.length ?? 0
-      if (!batchDimension || embeddedBatch.some((row) => row.vector.length !== batchDimension)) {
-        throw new Error('Retrieval embedding dimensions are inconsistent within a LanceDB write batch')
-      }
-      if (expectedVectorDimension === null) {
-        expectedVectorDimension = batchDimension
-      } else if (expectedVectorDimension !== batchDimension) {
-        throw new Error('Retrieval embedding dimensions are inconsistent across cached and live LanceDB rows')
-      }
-
-      for (const [batchIndex, embeddedRow] of embeddedBatch.entries()) {
-        assignResolvedRow(batch[batchIndex], embeddedRow.vector)
-      }
-
-      await upsertRawTextEmbeddingCacheEntries({
-        scope: retrievalEmbeddingCacheScope,
-        entries: batch.map((item, itemIndex) => ({
-          embeddingInput: item.embeddingInput,
-          vector: embeddedBatch[itemIndex].vector,
-        })),
-      })
-
-      embeddedRowsCount = resolvedRows.filter(Boolean).length
+      embeddedRowsCount = countResolvedRows()
       completedBatches += 1
 
       const embeddingWallElapsedMs = Date.now() - embeddingStartedAt
@@ -2482,7 +2623,7 @@ async function rebuildBranchRetrievalIndexUnlocked(
   await options?.onProgress?.({
     phase: rows.length ? 'embedding' : 'completed',
     totalRows: rows.length,
-      embeddedRows: plannedRows.filter((item) => item.cachedVector).length,
+    embeddedRows: 0,
     totalBatches,
     completedBatches: 0,
   })
