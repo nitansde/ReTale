@@ -231,7 +231,7 @@ POST /api/knowledge-view?action=rebuild
   -> detached scripts/knowledge-worker.mjs runs targeted worker entrypoints
 ```
 
-这样 HTTP response 可以快速返回。Route 只负责持久化 `KnowledgeJob` 并调度 detached worker 进程；后台 worker 继续运行，并通过 `KnowledgeJob.payloadJson` 更新 progress、steps、ETA、HanLP telemetry 和 stage timings。知识视图的 GET/status 读取在发现 watchdog 已把 stale job 重新标记为 `queued` 时，也会再次触发调度，避免用户必须手动再点一次 rebuild。
+这样 HTTP response 可以快速返回。Route 只负责持久化 `KnowledgeJob` 并调度 detached worker 进程；后台 worker 继续运行，并通过 `KnowledgeJob.payloadJson` 更新 progress、steps、ETA、HanLP telemetry 和 stage timings。worker 使用 Node.js `>=22.15.0` 的同步 `node:module.registerHooks` loader，在导入应用代码前转换仓库内的 TypeScript graph。知识视图的 GET/status 读取在发现 watchdog 已把 stale job 重新标记为 `queued` 时，也会再次触发调度，避免用户必须手动再点一次 rebuild。
 
 `activeKnowledgeRebuildRuns` / `activeKnowledgeRetrievalRuns` 只是进程内优化，用于减少同一进程里的重复启动。真正的 lifecycle 和跨进程 claim 仍以 SQLite `KnowledgeJob.status` 的条件更新为准。
 
@@ -243,6 +243,7 @@ POST /api/knowledge-view?action=rebuild
 - `RETALE_TASK_MAX_RETRIES`：watchdog 最多自动重试多少次；超过上限后直接标记失败。
 - 每次 watchdog retry/terminal fail 都会在 `payloadJson.taskWatchdog` 写入新的 `attemptId`。
 - worker / rewrite runner claim 任务时会读取并持有当前 `attemptId`；后续 progress/success/failure 写入都要求 attempt 仍匹配。
+- detached worker 启动失败发生在 claim 之前时，只能将 identity、`queued` 状态和调度时 `attemptId` 都仍匹配的任务标记为失败；无 token 的旧 worker 只匹配无 token 的 job。
 - 因此旧的超时 worker 即使还活着，也不能覆盖新的 watchdog retry、pause/abort，或最终失败状态。
 - `paused` / `aborted` 任务不会被 watchdog 自动重排。
 
@@ -524,7 +525,7 @@ do not silently fall back to LLM-only rebuild
 
 ### 9.2 Background worker failure
 
-调度层只负责 detached spawn 和同 attempt 去重；它不会通过 stdio 捕获子进程错误输出。可见状态仍以 worker 自己写回的 `KnowledgeJob` payload/status 为准，后续 UI 可以继续轮询 projection。
+调度层只负责 detached spawn 和同 attempt 去重；它不会通过 stdio 捕获子进程错误输出。调度器把当前 watchdog `attemptId` 传给 worker。若应用 TypeScript graph 在 claim 前加载失败，worker 直接使用目标 novel SQLite 文件写入受 identity、`queued` 状态和 attempt token 共同约束的 bounded error；stale 或 tokenless worker 不能覆盖 tokenized retry。可见状态仍以 worker 自己写回的 `KnowledgeJob` payload/status 为准，后续 UI 可以继续轮询 projection。
 
 ### 9.3 Active rebuild duplicate start
 

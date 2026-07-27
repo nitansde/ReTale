@@ -29,6 +29,8 @@ This app now behaves like a local-first rewrite product with a real backend laye
 
 ## Environment
 
+ReTale requires Node.js `>=22.15.0`. Detached knowledge workers use synchronous `node:module` loader hooks to transpile the repository TypeScript graph before importing it; older Node releases do not provide the required `registerHooks` API.
+
 Copy the example file:
 
 ```bash
@@ -64,7 +66,7 @@ Knowledge graph rebuilds use the server-side `hanlp_bootstrap.py` script before 
 
 The rebuild API returns quickly with a queued/running job status. The server continues the rebuild in the background and the workspace polls job state instead of blocking the whole site while HanLP is running.
 
-Background task watchdogs use `RETALE_TASK_STALE_TIMEOUT_MS` to decide when a queued/running knowledge or recoverable rewrite job has stopped making progress, and `RETALE_TASK_MAX_RETRIES` to cap automatic retry attempts. When a job is retried, ReTale writes a new in-payload attempt token so stale old workers cannot overwrite the newer retry or a terminal watchdog failure. Knowledge-view reads also reschedule queued watchdog retries, so users do not need to press rebuild again after a stale worker is reconciled.
+Background task watchdogs use `RETALE_TASK_STALE_TIMEOUT_MS` to decide when a queued/running knowledge or recoverable rewrite job has stopped making progress, and `RETALE_TASK_MAX_RETRIES` to cap automatic retry attempts. When a job is retried, ReTale writes a new in-payload attempt token so stale old workers cannot overwrite the newer retry or a terminal watchdog failure. Detached worker startup failures are fenced by the scheduled attempt token before they can mark a queued job failed. Knowledge-view reads also reschedule queued watchdog retries, so users do not need to press rebuild again after a stale worker is reconciled.
 
 ## First-time setup
 
@@ -93,9 +95,9 @@ npm run dev:test
   - URL: `http://127.0.0.1:3000`
   - Legacy-source env: `.sisyphus/runtime/test-server/dev-test.db`
   - Migrated runtime storage: `.sisyphus/runtime/test-server/data/`
-  - Next dist dir: `.sisyphus/runtime/next-test-server`
+  - Next dist dir: `.sisyphus/runtime/test-server/next-dist`
 
-Both wrappers override inherited `DATABASE_URL` and `RETALE_NEXT_DIST_DIR`, so a shell that was previously pointed at a test database cannot accidentally redirect the daily server, and vice versa. The public scripts are fixed-mode wrappers: `--hostname/-H` and `--port/-p` are rejected instead of changing the target server profile. If port `14500` or `3000` is already occupied, the wrapper exits with a clear error instead of killing unknown processes. Internal `.sisyphus` test DB/dist overrides remain reserved for the Playwright web-server helper.
+The test wrapper overrides inherited `DATABASE_URL`, `RETALE_DATA_DIR`, and `RETALE_NEXT_DIST_DIR` with paths inside a marker-owned test root. The daily wrapper continues to force its production `DATABASE_URL` and default Next dist directory. The public scripts are fixed-mode wrappers: `--hostname/-H` and `--port/-p` are rejected instead of changing the target server profile. If port `14500` or `3000` is already occupied, the wrapper exits with a clear error instead of killing unknown processes. Internal marker-owned test path overrides remain reserved for the Playwright web-server helper.
 
 ## Production check
 
