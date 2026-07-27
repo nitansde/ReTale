@@ -10,6 +10,7 @@ test('task 13 defaults to zh and persists en across reload and navigation', asyn
 
   await page.goto('/library', { waitUntil: 'networkidle' })
   await expect(page.getByRole('heading', { name: '书库' })).toBeVisible()
+  await expect(page.getByTestId('app-language-switcher')).toHaveCount(1)
   await expect(page.getByText('导入 TXT 小说')).toBeVisible()
   await expect(page.getByTestId('app-language-option-zh')).toHaveAttribute('aria-pressed', 'true')
 
@@ -29,8 +30,11 @@ test('task 13 defaults to zh and persists en across reload and navigation', asyn
 
   await page.goto('/task', { waitUntil: 'networkidle' })
   await expect(page.getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible()
+  await expect(page.getByTestId('app-language-switcher')).toHaveCount(0)
 
   await page.goto('/library', { waitUntil: 'networkidle' })
+  await expect(page.getByTestId('app-language-switcher')).toHaveCount(1)
+  await expect(page.getByTestId('app-language-option-en')).toHaveAttribute('aria-pressed', 'true')
   const importResponsePromise = page.waitForResponse(
     (response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST'
   )
@@ -45,7 +49,7 @@ test('task 13 defaults to zh and persists en across reload and navigation', asyn
 
   await expect(page.getByRole('heading', { name: 'Chapters', exact: true })).toBeVisible()
   await expect(page.getByTestId('workspace-current-word-count')).toContainText('words')
-  await expect(page.getByTestId('app-language-option-en')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('app-language-switcher')).toHaveCount(0)
 
   await page.screenshot({
     path: path.join(evidenceDirectory, 'task-13-en-switch.png'),

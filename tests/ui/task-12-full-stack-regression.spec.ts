@@ -833,7 +833,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await expect(page.getByRole('heading', { name: 'Chapters', exact: true })).toBeVisible()
     await expect(page.getByTestId('workspace-current-word-count')).toContainText('words')
     const workspaceLoadMs = Date.now() - workspaceLoadStartedAt
-    await expect(page.getByTestId('app-language-option-en')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('app-language-switcher')).toHaveCount(0)
 
     const saveBaseline = workspacePostTimestamps.length
     const editedText = 'Task 12 full-stack save proof: the workspace persists this edited line after reload.'
@@ -1140,10 +1140,11 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await expect(page.getByTestId(`preset-compat-standalone-regex-attach-${importedRegexId}`)).toContainText(/detach/i)
     await page.mouse.click(12, 12)
     appendQaRow(qaRows, 'Preset compatibility import/bind/preview/save/reload/export', '[task-12-preset-export.json](./task-12-preset-export.json), [task-12-regex-export.json](./task-12-regex-export.json)', `Imported preset ${importedPresetId} and standalone regex ${importedRegexId}; persisted rewrite/future-jump/roleplay bindings plus runtime fields through save and reload.`)
-    appendQaRow(qaRows, 'English persisted language switch across workspace, task page, settings modal, and preset modal', '[task-12-i18n-full-stack.png](./task-12-i18n-full-stack.png)', 'Verified after switching to English and reopening major surfaces.')
+    appendQaRow(qaRows, 'English locale persistence across workspace, task page, settings modal, and preset modal', '[task-12-i18n-full-stack.png](./task-12-i18n-full-stack.png)', 'Verified translated English content after switching on Library and reopening major surfaces; the language control remains Library-only.')
 
     await page.goto('/task', { waitUntil: 'networkidle' })
     await expect(page.getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible()
+    await expect(page.getByTestId('app-language-switcher')).toHaveCount(0)
     await page.goto('/workspace', { waitUntil: 'networkidle' })
     const identity = await resolveWorkspaceIdentity(page)
     await expect(page.getByText('Knowledge graph is not built yet')).toBeVisible()
