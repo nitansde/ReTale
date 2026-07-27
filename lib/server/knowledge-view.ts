@@ -10,6 +10,7 @@ import {
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import {
   abortKnowledgeRebuildForNovel,
+  buildChapterExtractionCandidateSourceHash,
   deleteKnowledgeGraphForNovel,
   type KnowledgeJobType,
   type KnowledgeRebuildJobOutcome,
@@ -109,6 +110,7 @@ export type RetrievalIndexCoverageOverview = {
 
 export type KnowledgeStatusOverview = {
   knowledgeGraph: KnowledgeChapterCoverageOverview
+  extractionCache: KnowledgeChapterCoverageOverview
   embeddingCache: KnowledgeChapterCoverageOverview & {
     provider: string | null
     model: string | null
@@ -450,10 +452,18 @@ function buildKnowledgeCoverageOverview(params: {
   }
 }
 
+type KnowledgeChapterStatusRow = {
+  id: string
+  chapterNo: number
+  sourceHash: string
+  isDirty: number
+  knowledgeStatus: string
+}
+
 function loadKnowledgeChapterStatusRows(novelId: string, branchId: string) {
-  return queryAll<{ chapterNo: number; isDirty: number; knowledgeStatus: string }>(
+  return queryAll<KnowledgeChapterStatusRow>(
     `
-      SELECT chapterNo, isDirty, knowledgeStatus
+      SELECT id, chapterNo, sourceHash, isDirty, knowledgeStatus
       FROM KnowledgeChapter
       WHERE novelId = ? AND branchId = ?
       ORDER BY chapterNo ASC
@@ -473,6 +483,52 @@ function getKnowledgeGraphCoverageOverview(chapters: Array<{ chapterNo: number; 
   return buildKnowledgeCoverageOverview({
     chapters,
     isCovered: (chapterNo) => readyChapterNos.has(chapterNo),
+  })
+}
+
+function getExtractionCacheCoverageOverview(
+  novelId: string,
+  branchId: string,
+  chapters: KnowledgeChapterStatusRow[],
+) {
+  const extractionSettings = loadStoredAISettings().knowledgeExtraction
+  const expectedHashByChapterId = new Map(
+    chapters.map((chapter) => [
+      chapter.id,
+      buildChapterExtractionCandidateSourceHash({
+        chapterSourceHash: chapter.sourceHash,
+        settings: extractionSettings,
+      }),
+    ])
+  )
+  const matchingChapterIds = new Set<string>()
+
+  for (const chapterIdBatch of chunkValues(chapters.map((chapter) => chapter.id))) {
+    const rows = queryAll<{ chapterId: string; chapterSourceHash: string }>(
+      `
+        SELECT chapter_id AS chapterId, chapter_source_hash AS chapterSourceHash
+        FROM chapter_extraction_candidates
+        WHERE novel_id = ?
+          AND branch_id = ?
+          AND status IN ('extracted', 'persisted')
+          AND chapter_id IN (${buildSqlPlaceholders(chapterIdBatch.length)})
+      `,
+      novelId,
+      branchId,
+      ...chapterIdBatch,
+    )
+
+    for (const row of rows) {
+      if (expectedHashByChapterId.get(row.chapterId) === row.chapterSourceHash) {
+        matchingChapterIds.add(row.chapterId)
+      }
+    }
+  }
+
+  const chapterIdByNo = new Map(chapters.map((chapter) => [chapter.chapterNo, chapter.id]))
+  return buildKnowledgeCoverageOverview({
+    chapters,
+    isCovered: (chapterNo) => matchingChapterIds.has(chapterIdByNo.get(chapterNo) ?? ''),
   })
 }
 
@@ -499,6 +555,7 @@ function buildProgressCoverageOverview(chapters: Array<{ chapterNo: number }>, p
 async function getKnowledgeStatusOverview(novelId: string, branchId: string): Promise<KnowledgeStatusOverview> {
   const chapters = loadKnowledgeChapterStatusRows(novelId, branchId)
   const knowledgeGraph = getKnowledgeGraphCoverageOverview(chapters)
+  const extractionCache = getExtractionCacheCoverageOverview(novelId, branchId, chapters)
 
   const embeddingSettings = getCurrentEmbeddingModel()
   const chapterHashesByNo = new Map<number, Set<string>>()
@@ -584,10 +641,11 @@ async function getKnowledgeStatusOverview(novelId: string, branchId: string): Pr
 
   return {
     knowledgeGraph,
+    extractionCache,
     embeddingCache: {
       ...embeddingCacheCoverage,
-      provider: embeddingSettings.provider,
-      model: embeddingSettings.model,
+      provider: embeddingCacheCoverage.status === 'missing' ? null : embeddingSettings.provider,
+      model: embeddingCacheCoverage.status === 'missing' ? null : embeddingSettings.model,
     },
     retrievalIndex: fullRetrievalRow
       ? {
@@ -627,6 +685,7 @@ async function getKnowledgeStatusOverview(novelId: string, branchId: string): Pr
 function getLightweightKnowledgeStatusOverview(novelId: string, branchId: string): KnowledgeStatusOverview {
   const chapters = loadKnowledgeChapterStatusRows(novelId, branchId)
   const knowledgeGraph = getKnowledgeGraphCoverageOverview(chapters)
+  const extractionCache = getExtractionCacheCoverageOverview(novelId, branchId, chapters)
   const embeddingSettings = getCurrentEmbeddingModel()
   const retrievalTask = getKnowledgeJobStatusByTypes({
     novelId,
@@ -669,21 +728,22 @@ function getLightweightKnowledgeStatusOverview(novelId: string, branchId: string
     embeddingSettings.provider,
     embeddingSettings.model,
   ))
-  const embeddingProgress = typeof retrievalTask?.rawTextEmbeddingProgress === 'number'
-    ? Math.max(0, Math.min(1, retrievalTask.rawTextEmbeddingProgress))
-    : fullRetrievalRow
-      ? 1
-      : hasEmbeddingRows
-        ? Math.min(1, 1 / Math.max(1, chapters.length))
-        : 0
+  const embeddingProgress = !hasEmbeddingRows
+    ? 0
+    : typeof retrievalTask?.rawTextEmbeddingProgress === 'number'
+      ? Math.max(0, Math.min(1, retrievalTask.rawTextEmbeddingProgress))
+      : fullRetrievalRow
+        ? 1
+        : Math.min(1, 1 / Math.max(1, chapters.length))
   const embeddingCacheCoverage = buildProgressCoverageOverview(chapters, embeddingProgress)
 
   return {
     knowledgeGraph,
+    extractionCache,
     embeddingCache: {
       ...embeddingCacheCoverage,
-      provider: embeddingSettings.provider,
-      model: embeddingSettings.model,
+      provider: embeddingCacheCoverage.status === 'missing' ? null : embeddingSettings.provider,
+      model: embeddingCacheCoverage.status === 'missing' ? null : embeddingSettings.model,
     },
     retrievalIndex: fullRetrievalRow
       ? {
@@ -849,11 +909,12 @@ function hydrateKnowledgeRebuildStatus(status: KnowledgeRebuildStatusRow, branch
     return null
   }
 
-  const steps = parseKnowledgeRebuildSteps(status.payloadJson)
-  const telemetry = parseKnowledgeRebuildTelemetryStatusFields(status.payloadJson)
+  const { payloadJson, ...publicStatus } = status
+  const steps = parseKnowledgeRebuildSteps(payloadJson)
+  const telemetry = parseKnowledgeRebuildTelemetryStatusFields(payloadJson)
   const activeStep = steps.find((step) => step.status === 'running' || step.status === 'paused') ?? null
   const provisionalStatus = {
-    ...status,
+    ...publicStatus,
     etaMinutes: status.status === 'paused'
       ? null
       : activeStep?.etaMinutes ?? estimateRebuildEtaMinutes(status.progress, status.createdAt),

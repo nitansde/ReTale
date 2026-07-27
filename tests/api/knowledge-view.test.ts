@@ -309,6 +309,8 @@ function insertExtractionCacheFixture(database: DatabaseSync, params: {
   chapterId: string
   chapterNo: number
   batchChapterNos?: number[]
+  chapterSourceHash?: string
+  status?: string
 }) {
   const processingBatchId = params.batchChapterNos?.length ? `${params.idPrefix}-batch` : null
   if (processingBatchId) {
@@ -344,13 +346,24 @@ function insertExtractionCacheFixture(database: DatabaseSync, params: {
     params.chapterId,
     params.chapterNo,
     1,
-    `candidate-source-hash-${params.idPrefix}`,
+    params.chapterSourceHash ?? `candidate-source-hash-${params.idPrefix}`,
     JSON.stringify({ chapterNo: params.chapterNo, summary: `summary-${params.idPrefix}` }),
     processingBatchId,
-    'extracted',
+    params.status ?? 'extracted',
     'openai-compatible',
     'knowledge-model',
   )
+}
+
+async function getCurrentExtractionCandidateSourceHash(chapterSourceHash: string) {
+  const [{ loadStoredAISettings }, { buildChapterExtractionCandidateSourceHash }] = await Promise.all([
+    import('@/lib/server/ai-settings'),
+    import('@/lib/server/knowledge-rebuild'),
+  ])
+  return buildChapterExtractionCandidateSourceHash({
+    chapterSourceHash,
+    settings: loadStoredAISettings().knowledgeExtraction,
+  })
 }
 
 afterEach(async () => {
@@ -723,6 +736,120 @@ describe('/api/knowledge-view', () => {
         pipelineVersion: 'hanlp-bootstrap:v1',
       },
     })
+  })
+
+  it('omits stored payloads and provider credentials from public job statuses', async () => {
+    const { database } = await createTestDatabase('retale-knowledge-view-public-job-status-security')
+    const novelId = `novel_knowledge_view_security_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+    const mainApiKeySentinel = 'knowledge-view-main-api-key-sentinel'
+    const mainBaseUrlSentinel = 'https://main-secret.invalid/v1'
+    const retrievalApiKeySentinel = 'knowledge-view-retrieval-api-key-sentinel'
+    const retrievalBaseUrlSentinel = 'https://retrieval-secret.invalid/v1'
+
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-security-1', chapterNo: 1 })
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-2 minutes'), datetime('now', '-2 minutes'))`
+    ).run(
+      'job_public_status_security_main',
+      novelId,
+      mainBranchId,
+      'extract_chapter_knowledge',
+      'running',
+      '抽取章节知识',
+      0.4,
+      JSON.stringify({
+        extractionSettings: {
+          provider: 'openai-compatible',
+          model: 'private-extraction-model',
+          apiKey: mainApiKeySentinel,
+          baseUrl: mainBaseUrlSentinel,
+        },
+        embeddingSettingsSnapshot: {
+          provider: 'openai-compatible',
+          model: 'public-embedding-model',
+          embeddingBatchSize: 8,
+        },
+        steps: [{
+          key: 'extract',
+          label: '抽取章节知识',
+          status: 'running',
+          progress: 0.4,
+          etaMinutes: 3,
+          detail: '主知识重建进行中',
+        }],
+      })
+    )
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-1 minute'), datetime('now', '-1 minute'))`
+    ).run(
+      'job_public_status_security_retrieval',
+      novelId,
+      mainBranchId,
+      'rebuild_retrieval_index',
+      'running',
+      '生成检索向量',
+      0.8,
+      JSON.stringify({
+        embeddingSettings: {
+          provider: 'openai-compatible',
+          model: 'private-retrieval-model',
+          apiKey: retrievalApiKeySentinel,
+          baseUrl: retrievalBaseUrlSentinel,
+        },
+        rawTextEmbeddingProgress: 0.6,
+        steps: [{
+          key: 'raw-embedding',
+          label: '原文 Embedding 预计算',
+          status: 'running',
+          progress: 0.6,
+          etaMinutes: 2,
+          detail: '原文向量缓存 60%',
+        }],
+      })
+    )
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const serializedResponse = await response.text()
+    const payload = JSON.parse(serializedResponse) as {
+      ok: boolean
+      knowledgeRebuildStatus: Record<string, unknown> | null
+      knowledgeStatusOverview: {
+        retrievalIndex: { task: Record<string, unknown> | null }
+      } | null
+    }
+    const retrievalTask = payload.knowledgeStatusOverview?.retrievalIndex.task
+
+    expect(response.status).toBe(200)
+    expect(payload.ok).toBe(true)
+    expect(payload.knowledgeRebuildStatus).toMatchObject({
+      jobId: 'job_public_status_security_main',
+      steps: [expect.objectContaining({ key: 'extract', status: 'running' })],
+      embeddingSettingsSnapshot: {
+        provider: 'openai-compatible',
+        model: 'public-embedding-model',
+        embeddingBatchSize: 8,
+      },
+    })
+    expect(retrievalTask).toMatchObject({
+      jobId: 'job_public_status_security_retrieval',
+      rawTextEmbeddingProgress: 0.6,
+      steps: [expect.objectContaining({ key: 'raw-embedding', status: 'running' })],
+    })
+    expect(payload.knowledgeRebuildStatus).not.toHaveProperty('payloadJson')
+    expect(payload.knowledgeRebuildStatus).not.toHaveProperty('apiKey')
+    expect(payload.knowledgeRebuildStatus).not.toHaveProperty('baseUrl')
+    expect(retrievalTask).not.toHaveProperty('payloadJson')
+    expect(retrievalTask).not.toHaveProperty('apiKey')
+    expect(retrievalTask).not.toHaveProperty('baseUrl')
+    expect(serializedResponse).not.toContain('"payloadJson"')
+    expect(serializedResponse).not.toContain(mainApiKeySentinel)
+    expect(serializedResponse).not.toContain(mainBaseUrlSentinel)
+    expect(serializedResponse).not.toContain(retrievalApiKeySentinel)
+    expect(serializedResponse).not.toContain(retrievalBaseUrlSentinel)
   })
 
   it('surfaces retrieval task status in the overview payload while preserving main rebuild status priority', async () => {
@@ -1373,6 +1500,291 @@ describe('/api/knowledge-view', () => {
     })
   })
 
+  it('reports full, partial, and missing extraction cache coverage for current chapter hashes', async () => {
+    const { database } = await createTestDatabase('retale-knowledge-view-extraction-coverage')
+    const novelId = `novel_extraction_coverage_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    for (let chapterNo = 1; chapterNo <= 3; chapterNo += 1) {
+      const chapterId = `chapter-extraction-coverage-${chapterNo}`
+      seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId, chapterNo })
+      insertExtractionCacheFixture(database, {
+        idPrefix: `coverage-${chapterNo}`,
+        novelId,
+        branchId: mainBranchId,
+        chapterId,
+        chapterNo,
+        chapterSourceHash: await getCurrentExtractionCandidateSourceHash(`source-hash-${chapterId}`),
+        status: chapterNo === 2 ? 'persisted' : 'extracted',
+      })
+    }
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const loadCoverage = async () => {
+      const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+      const payload = await response.json() as {
+        knowledgeStatusOverview: { extractionCache: Record<string, unknown> } | null
+      }
+      expect(response.status).toBe(200)
+      return payload.knowledgeStatusOverview?.extractionCache
+    }
+
+    await expect(loadCoverage()).resolves.toMatchObject({
+      status: 'full',
+      coveredChapterCount: 3,
+      totalChapterCount: 3,
+      validThroughChapterNo: 3,
+    })
+
+    database.prepare('DELETE FROM chapter_extraction_candidates WHERE chapter_id = ?').run('chapter-extraction-coverage-3')
+    await expect(loadCoverage()).resolves.toMatchObject({
+      status: 'partial',
+      coveredChapterCount: 2,
+      totalChapterCount: 3,
+      validThroughChapterNo: 2,
+    })
+
+    database.prepare('DELETE FROM chapter_extraction_candidates WHERE branch_id = ?').run(mainBranchId)
+    await expect(loadCoverage()).resolves.toMatchObject({
+      status: 'missing',
+      coveredChapterCount: 0,
+      totalChapterCount: 3,
+      validThroughChapterNo: null,
+    })
+  })
+
+  it('reports missing extraction coverage for a novel with no chapters', async () => {
+    const { database } = await createTestDatabase('retale-knowledge-view-extraction-empty')
+    const novelId = `novel_extraction_empty_${Math.random().toString(36).slice(2, 8)}`
+    seedNovel(database, novelId)
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      knowledgeStatusOverview: { extractionCache: Record<string, unknown> } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.knowledgeStatusOverview?.extractionCache).toEqual({
+      status: 'missing',
+      coveredChapterCount: 0,
+      totalChapterCount: 0,
+      validThroughChapterNo: null,
+    })
+  })
+
+  it('chunks extraction candidate lookups and reports only contiguous current-hash coverage', async () => {
+    const { database } = await createTestDatabase('retale-knowledge-view-extraction-chunked-contiguous')
+    const novelId = `novel_extraction_chunked_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+    const [{ loadStoredAISettings }, { buildChapterExtractionCandidateSourceHash }] = await Promise.all([
+      import('@/lib/server/ai-settings'),
+      import('@/lib/server/knowledge-rebuild'),
+    ])
+    const extractionSettings = loadStoredAISettings().knowledgeExtraction
+
+    for (let chapterNo = 1; chapterNo <= 501; chapterNo += 1) {
+      const chapterId = `chapter-extraction-chunked-${chapterNo}`
+      seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId, chapterNo })
+      insertExtractionCacheFixture(database, {
+        idPrefix: `chunked-${chapterNo}`,
+        novelId,
+        branchId: mainBranchId,
+        chapterId,
+        chapterNo,
+        chapterSourceHash: buildChapterExtractionCandidateSourceHash({
+          chapterSourceHash: `source-hash-${chapterId}`,
+          settings: extractionSettings,
+        }),
+        status: 'extracted',
+      })
+    }
+
+    database.prepare('DELETE FROM chapter_extraction_candidates WHERE chapter_id = ?')
+      .run('chapter-extraction-chunked-250')
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      knowledgeStatusOverview: { extractionCache: Record<string, unknown> } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.knowledgeStatusOverview?.extractionCache).toEqual({
+      status: 'partial',
+      coveredChapterCount: 249,
+      totalChapterCount: 501,
+      validThroughChapterNo: 249,
+    })
+  })
+
+  it('excludes obsolete, non-terminal, cross-scope, and non-current extraction candidates', async () => {
+    const { database } = await createTestDatabase('retale-knowledge-view-extraction-exclusions')
+    const novelId = `novel_extraction_exclusions_${Math.random().toString(36).slice(2, 8)}`
+    const otherNovelId = `${novelId}_other`
+    const { mainBranchId, altBranchId } = seedNovel(database, novelId)
+    const { mainBranchId: otherMainBranchId } = seedNovel(database, otherNovelId)
+
+    for (let chapterNo = 1; chapterNo <= 3; chapterNo += 1) {
+      const chapterId = `chapter-extraction-exclusion-${chapterNo}`
+      seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId, chapterNo })
+      insertExtractionCacheFixture(database, {
+        idPrefix: `obsolete-${chapterNo}`,
+        novelId,
+        branchId: mainBranchId,
+        chapterId,
+        chapterNo,
+        chapterSourceHash: `obsolete-hash-${chapterNo}`,
+        status: 'extracted',
+      })
+      insertExtractionCacheFixture(database, {
+        idPrefix: `invalid-${chapterNo}`,
+        novelId,
+        branchId: mainBranchId,
+        chapterId,
+        chapterNo,
+        chapterSourceHash: await getCurrentExtractionCandidateSourceHash(`source-hash-${chapterId}`),
+        status: ['failed', 'stale', 'in_progress'][chapterNo - 1],
+      })
+    }
+
+    const chapterOneHash = await getCurrentExtractionCandidateSourceHash('source-hash-chapter-extraction-exclusion-1')
+    insertExtractionCacheFixture(database, {
+      idPrefix: 'cross-branch',
+      novelId,
+      branchId: altBranchId,
+      chapterId: 'chapter-extraction-exclusion-1',
+      chapterNo: 1,
+      chapterSourceHash: chapterOneHash,
+      status: 'extracted',
+    })
+    insertExtractionCacheFixture(database, {
+      idPrefix: 'cross-novel',
+      novelId: otherNovelId,
+      branchId: otherMainBranchId,
+      chapterId: 'chapter-extraction-exclusion-1',
+      chapterNo: 1,
+      chapterSourceHash: chapterOneHash,
+      status: 'persisted',
+    })
+    insertExtractionCacheFixture(database, {
+      idPrefix: 'non-current',
+      novelId,
+      branchId: mainBranchId,
+      chapterId: 'deleted-chapter-id',
+      chapterNo: 99,
+      chapterSourceHash: await getCurrentExtractionCandidateSourceHash('deleted-source-hash'),
+      status: 'extracted',
+    })
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const payload = await response.json() as {
+      knowledgeStatusOverview: { extractionCache: Record<string, unknown> } | null
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.knowledgeStatusOverview?.extractionCache).toMatchObject({
+      status: 'missing',
+      coveredChapterCount: 0,
+      totalChapterCount: 3,
+      validThroughChapterNo: null,
+    })
+  })
+
+  it('keeps full and lightweight extraction coverage in exact parity', async () => {
+    const { database } = await createTestDatabase('retale-knowledge-view-extraction-lightweight-parity')
+    const novelId = `novel_extraction_parity_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+
+    for (let chapterNo = 1; chapterNo <= 2; chapterNo += 1) {
+      seedKnowledgeChapter(database, {
+        novelId,
+        branchId: mainBranchId,
+        chapterId: `chapter-extraction-parity-${chapterNo}`,
+        chapterNo,
+      })
+    }
+    insertExtractionCacheFixture(database, {
+      idPrefix: 'parity-1',
+      novelId,
+      branchId: mainBranchId,
+      chapterId: 'chapter-extraction-parity-1',
+      chapterNo: 1,
+      chapterSourceHash: await getCurrentExtractionCandidateSourceHash('source-hash-chapter-extraction-parity-1'),
+      status: 'persisted',
+    })
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const fullResponse = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const lightweightResponse = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}&statusOnly=1`))
+    const fullPayload = await fullResponse.json() as { knowledgeStatusOverview: { extractionCache: Record<string, unknown> } | null }
+    const lightweightPayload = await lightweightResponse.json() as { knowledgeStatusOverview: { extractionCache: Record<string, unknown> } | null }
+
+    expect(fullResponse.status).toBe(200)
+    expect(lightweightResponse.status).toBe(200)
+    expect(lightweightPayload.knowledgeStatusOverview?.extractionCache).toEqual(
+      fullPayload.knowledgeStatusOverview?.extractionCache
+    )
+    expect(fullPayload.knowledgeStatusOverview?.extractionCache).toMatchObject({
+      status: 'partial',
+      coveredChapterCount: 1,
+      totalChapterCount: 2,
+      validThroughChapterNo: 1,
+    })
+  })
+
+  it('reports lightweight embedding coverage as missing when a full index has zero matching cache rows', async () => {
+    const { database } = await createTestDatabase('retale-knowledge-view-lightweight-zero-embedding-cache')
+    const novelId = `novel_zero_embedding_cache_${Math.random().toString(36).slice(2, 8)}`
+    const { mainBranchId } = seedNovel(database, novelId)
+    seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-zero-embedding-1', chapterNo: 1 })
+    database.prepare(
+      `INSERT INTO ActiveRetrievalIndex (
+        branchId, scopeKey, tableName, scopeStartChapter, scopeEndChapter
+      ) VALUES (?, 'full', ?, NULL, NULL)`
+    ).run(mainBranchId, 'retrieval_docs_full_without_embedding_cache')
+
+    const { GET } = await loadKnowledgeViewRoute()
+    const fullResponse = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}`))
+    const lightweightResponse = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}&statusOnly=1`))
+    const fullPayload = await fullResponse.json() as {
+      knowledgeStatusOverview: {
+        embeddingCache: Record<string, unknown>
+        retrievalIndex: Record<string, unknown>
+      } | null
+    }
+    const lightweightPayload = await lightweightResponse.json() as {
+      knowledgeStatusOverview: {
+        embeddingCache: Record<string, unknown>
+        retrievalIndex: Record<string, unknown>
+      } | null
+    }
+    const expectedMissingEmbeddingCache = {
+      status: 'missing',
+      coveredChapterCount: 0,
+      totalChapterCount: 1,
+      validThroughChapterNo: null,
+      provider: null,
+      model: null,
+    }
+
+    expect(fullResponse.status).toBe(200)
+    expect(lightweightResponse.status).toBe(200)
+    expect(fullPayload.knowledgeStatusOverview).toMatchObject({
+      embeddingCache: expectedMissingEmbeddingCache,
+      retrievalIndex: {
+        status: 'full',
+      },
+    })
+    expect(lightweightPayload.knowledgeStatusOverview).toMatchObject({
+      embeddingCache: expectedMissingEmbeddingCache,
+      retrievalIndex: {
+        status: 'full',
+      },
+    })
+  })
+
   it('returns lightweight status-only payloads without loading retrieval docs', async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-status-only-lightweight')
     const novelId = `novel_status_only_${Math.random().toString(36).slice(2, 8)}`
@@ -1438,8 +1850,8 @@ describe('/api/knowledge-view', () => {
         },
       },
     })
-    expect(payload.knowledgeStatusOverview?.embeddingCache.provider).toEqual(expect.any(String))
-    expect(payload.knowledgeStatusOverview?.embeddingCache.model).toEqual(expect.any(String))
+    expect(payload.knowledgeStatusOverview?.embeddingCache.provider).toBeNull()
+    expect(payload.knowledgeStatusOverview?.embeddingCache.model).toBeNull()
   })
 
   it('deletes only the target main-branch HanLP cache rows and preserves raw embedding cache', async () => {
@@ -1604,10 +2016,21 @@ describe('/api/knowledge-view', () => {
       novelId,
       action: 'delete-extraction-cache',
     }))
-    const payload = await response.json() as { ok: boolean; jobOutcome: string; actionError: unknown }
+    const payload = await response.json() as {
+      ok: boolean
+      jobOutcome: string
+      actionError: unknown
+      knowledgeStatusOverview: { extractionCache: Record<string, unknown> } | null
+    }
 
     expect(response.status).toBe(200)
     expect(payload).toMatchObject({ ok: true, jobOutcome: 'deleted', actionError: null })
+    expect(payload.knowledgeStatusOverview?.extractionCache).toMatchObject({
+      status: 'missing',
+      coveredChapterCount: 0,
+      totalChapterCount: 1,
+      validThroughChapterNo: null,
+    })
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ?', mainBranchId)?.count).toBe(0)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ?', altBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ?', otherMainBranchId)?.count).toBe(1)
@@ -1641,10 +2064,23 @@ describe('/api/knowledge-view', () => {
       novelId,
       action: 'delete-embedding-cache',
     }))
-    const payload = await response.json() as { ok: boolean; jobOutcome: string; actionError: unknown }
+    const payload = await response.json() as {
+      ok: boolean
+      jobOutcome: string
+      actionError: unknown
+      knowledgeStatusOverview: { embeddingCache: Record<string, unknown> } | null
+    }
 
     expect(response.status).toBe(200)
     expect(payload).toMatchObject({ ok: true, jobOutcome: 'deleted', actionError: null })
+    expect(payload.knowledgeStatusOverview?.embeddingCache).toEqual({
+      status: 'missing',
+      coveredChapterCount: 0,
+      totalChapterCount: 1,
+      validThroughChapterNo: null,
+      provider: null,
+      model: null,
+    })
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', mainBranchId)?.count).toBe(0)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', altBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', otherMainBranchId)?.count).toBe(1)
