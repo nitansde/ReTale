@@ -1278,6 +1278,98 @@ describe('workspace route', () => {
     })
   })
 
+  it('preserves a running first rebuild during an unchanged refresh-style save', async () => {
+    const database = await createTestDatabase('retale-workspace-route-unchanged-active-rebuild', 'novel-refresh')
+    clearWorkspaceRecoveryData(database)
+    const payload = createWorkspacePayloadWithSideData('novel-refresh', 'Refresh Novel')
+    const chapter = payload.localChapters[0]
+    const { hashContent } = await import('@/lib/server/knowledge-store')
+    const { htmlToPlainText } = await import('@/lib/utils')
+    const rawText = htmlToPlainText(chapter.content)
+
+    database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(
+      'novel-refresh',
+      'Refresh Novel',
+      'workspace',
+    )
+    database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run(
+      'novel-refresh:main',
+      'novel-refresh',
+      'main',
+    )
+    database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      chapter.id,
+      'novel-refresh',
+      'novel-refresh:main',
+      1,
+      chapter.title,
+      rawText,
+      5,
+      0,
+      null,
+      hashContent(rawText),
+      'ready',
+    )
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'job-refresh-running',
+      'novel-refresh',
+      'novel-refresh:main',
+      'extract_chapter_knowledge',
+      'running',
+      'extracting',
+      0.4,
+    )
+
+    expect(database.prepare(
+      `SELECT (
+        (SELECT COUNT(*) FROM KnowledgeEntity)
+        + (SELECT COUNT(*) FROM KnowledgeFact)
+        + (SELECT COUNT(*) FROM KnowledgeRelation)
+        + (SELECT COUNT(*) FROM EntityLink)
+        + (SELECT COUNT(*) FROM EntityState)
+        + (SELECT COUNT(*) FROM KnowledgeEvent)
+        + (SELECT COUNT(*) FROM KnowledgeWorld)
+      ) AS count`,
+    ).get()).toEqual({ count: 0 })
+    const chapterBefore = database.prepare(
+      `SELECT chapterNo, title, rawText, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+       FROM KnowledgeChapter WHERE id = ?`,
+    ).get(chapter.id)
+    const jobBefore = database.prepare(
+      `SELECT status, currentStep, progress
+       FROM KnowledgeJob WHERE id = ?`,
+    ).get('job-refresh-running')
+
+    const { POST, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await POST(createWorkspaceRequest(payload))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true })
+    expect(afterCallbacks).toHaveLength(1)
+    await afterCallbacks[0]()
+
+    expect(database.prepare(
+      `SELECT status, currentStep, progress
+       FROM KnowledgeJob WHERE id = ?`,
+    ).get('job-refresh-running')).toEqual(jobBefore)
+    expect(database.prepare(
+      `SELECT chapterNo, title, rawText, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+       FROM KnowledgeChapter WHERE id = ?`,
+    ).get(chapter.id)).toEqual(chapterBefore)
+    expect(readWorkspaceKnowledgeSyncState(database)).toMatchObject({
+      startedSourceUpdatedAt: null,
+      syncedSourceUpdatedAt: expect.any(String),
+      lastError: null,
+    })
+  })
+
   it('returns success without waiting for workspace knowledge sync', async () => {
     const database = await createTestDatabase('retale-workspace-route-non-blocking-sync', 'novel-1')
     clearWorkspaceRecoveryData(database)

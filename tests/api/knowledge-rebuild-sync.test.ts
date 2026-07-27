@@ -258,6 +258,137 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeJob WHERE novelId = ?', 'novel_imported')).toMatchObject({ count: 0 })
   })
 
+  it('preserves an active first rebuild for unchanged source and aborts it after a real edit', async () => {
+    const database = createTestDatabase('retale-knowledge-sync-active-first-rebuild')
+    const chapterContent = '<p>林澄开始记录这次练习。</p>'
+    const rawText = htmlToPlainText(chapterContent)
+
+    database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(
+      'novel_active_rebuild',
+      'Active Rebuild',
+      'workspace',
+    )
+    database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run(
+      'novel_active_rebuild:main',
+      'novel_active_rebuild',
+      'main',
+    )
+    database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'ch_active_rebuild_1',
+      'novel_active_rebuild',
+      'novel_active_rebuild:main',
+      1,
+      '第1章 初遇',
+      rawText,
+      7,
+      0,
+      null,
+      hashContent(rawText),
+      'ready',
+    )
+    database.prepare(
+      `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'job_active_rebuild',
+      'novel_active_rebuild',
+      'novel_active_rebuild:main',
+      'extract_chapter_knowledge',
+      'running',
+      'extracting',
+      0.25,
+    )
+
+    const chapterBefore = database.prepare(
+      `SELECT chapterNo, title, rawText, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+       FROM KnowledgeChapter WHERE id = ?`,
+    ).get('ch_active_rebuild_1')
+    const jobBefore = database.prepare(
+      `SELECT status, currentStep, progress
+       FROM KnowledgeJob WHERE id = ?`,
+    ).get('job_active_rebuild')
+    let chapterObservedAtAbort: unknown
+    const abortKnowledgeRebuildUntilIdle = vi.fn(async () => {
+      chapterObservedAtAbort = database.prepare(
+        `SELECT revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+         FROM KnowledgeChapter WHERE id = ?`,
+      ).get('ch_active_rebuild_1')
+    })
+    const sync = createWorkspaceKnowledgeSync({ abortKnowledgeRebuildUntilIdle })
+    const payload = {
+      currentNovelId: 'novel_active_rebuild',
+      localNovels: [{
+        id: 'novel_active_rebuild',
+        title: 'Active Rebuild',
+        summary: '',
+        tags: [],
+      }],
+      localChapters: [{
+        id: 'ch_active_rebuild_1',
+        novelId: 'novel_active_rebuild',
+        volumeId: 'volume-1',
+        title: '第1章 初遇',
+        content: chapterContent,
+        order: 1,
+        status: 'draft' as const,
+        wordCount: 8,
+        updatedAt: '2026-05-16T00:00:00.000Z',
+      }],
+    }
+
+    await sync(payload, { db: createDatabaseAccess(database) })
+
+    expect(abortKnowledgeRebuildUntilIdle).not.toHaveBeenCalled()
+    expect(database.prepare(
+      `SELECT chapterNo, title, rawText, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+       FROM KnowledgeChapter WHERE id = ?`,
+    ).get('ch_active_rebuild_1')).toEqual(chapterBefore)
+    expect(database.prepare(
+      `SELECT status, currentStep, progress
+       FROM KnowledgeJob WHERE id = ?`,
+    ).get('job_active_rebuild')).toEqual(jobBefore)
+
+    const editedChapterContent = '<p>林澄开始记录这次练习，并发现新的线索。</p>'
+    const editedRawText = htmlToPlainText(editedChapterContent)
+    await sync({
+      ...payload,
+      localChapters: [{
+        ...payload.localChapters[0],
+        content: editedChapterContent,
+        wordCount: 16,
+        updatedAt: '2026-05-16T00:01:00.000Z',
+      }],
+    }, { db: createDatabaseAccess(database) })
+
+    expect(abortKnowledgeRebuildUntilIdle).toHaveBeenCalledTimes(1)
+    expect(abortKnowledgeRebuildUntilIdle).toHaveBeenCalledWith({
+      novelId: 'novel_active_rebuild',
+      branchId: 'novel_active_rebuild:main',
+    })
+    expect(chapterObservedAtAbort).toEqual({
+      revision: 8,
+      isDirty: 1,
+      dirtyReason: 'Chapter 1 changed',
+      sourceHash: hashContent(editedRawText),
+      knowledgeStatus: 'stale',
+    })
+    expect(database.prepare(
+      `SELECT rawText, revision, isDirty, dirtyReason, sourceHash, knowledgeStatus
+       FROM KnowledgeChapter WHERE id = ?`,
+    ).get('ch_active_rebuild_1')).toEqual({
+      rawText: editedRawText,
+      revision: 8,
+      isDirty: 1,
+      dirtyReason: 'Chapter 1 changed',
+      sourceHash: hashContent(editedRawText),
+      knowledgeStatus: 'stale',
+    })
+  })
+
   it('repairs missing derived line and span artifacts for unchanged chapters', async () => {
     createTestDatabase('retale-knowledge-sync-repairs-derived-artifacts')
     const chapterContent = '<p>林澄开始记录这次练习。</p>'

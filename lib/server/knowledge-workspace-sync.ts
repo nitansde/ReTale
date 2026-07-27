@@ -122,36 +122,6 @@ function hasNonReadyNovelRegistry(novelId: string) {
   return Boolean(registry && registry.migrationStatus !== 'ready')
 }
 
-function countStructuredKnowledgeRows(novelId: string, branchId: string, db: NonNullable<WorkspaceKnowledgeSyncContext['db']>) {
-  return db.queryOne<{ count: number }>(
-    `
-      SELECT (
-        (SELECT COUNT(*) FROM KnowledgeEntity WHERE novelId = ? AND branchId = ?)
-        + (SELECT COUNT(*) FROM KnowledgeFact WHERE novelId = ? AND branchId = ?)
-        + (SELECT COUNT(*) FROM KnowledgeRelation WHERE novelId = ? AND branchId = ?)
-        + (SELECT COUNT(*) FROM EntityLink WHERE novelId = ? AND branchId = ?)
-        + (SELECT COUNT(*) FROM EntityState WHERE novelId = ? AND branchId = ?)
-        + (SELECT COUNT(*) FROM KnowledgeEvent WHERE novelId = ? AND branchId = ?)
-        + (SELECT COUNT(*) FROM KnowledgeWorld WHERE novelId = ? AND branchId = ?)
-      ) AS count
-    `,
-    novelId,
-    branchId,
-    novelId,
-    branchId,
-    novelId,
-    branchId,
-    novelId,
-    branchId,
-    novelId,
-    branchId,
-    novelId,
-    branchId,
-    novelId,
-    branchId,
-  )?.count ?? 0
-}
-
 async function performWorkspacePayloadToKnowledgeStoreSync(
   payload: WorkspaceKnowledgeSyncPayload,
   dependencies: WorkspaceKnowledgeSyncDependencies,
@@ -241,8 +211,6 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
     }
 
     const existingById = new Map(existing.map((item) => [item.id, item]))
-    const existingStructuredKnowledgeCount = countStructuredKnowledgeRows(novelId, branchId, db)
-    const shouldBootstrapKnowledge = novelChapters.length > 0 && (existing.length === 0 || existingStructuredKnowledgeCount === 0)
 
     let firstChangedChapterNo: number | null = null
 
@@ -330,7 +298,7 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
       return Math.min(current, value)
     }, null)
 
-    if (shouldBootstrapKnowledge || staleChapters.length || firstChangedChapterNo !== null) {
+    if (staleChapters.length || firstChangedChapterNo !== null) {
       if (invalidationFromChapterNo !== null) {
         await markKnowledgeStaleFromChapter({
           novelId,
