@@ -336,6 +336,12 @@ describe('preset compat store lifecycle', () => {
               totalChapterCount: 702,
               validThroughChapterNo: 702,
             },
+            extractionCache: {
+              status: 'full',
+              coveredChapterCount: 702,
+              totalChapterCount: 702,
+              validThroughChapterNo: 702,
+            },
             embeddingCache: {
               status: 'full',
               coveredChapterCount: 702,

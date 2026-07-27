@@ -152,16 +152,30 @@ export function createKnowledgeActions(set: NovelStoreSet, get: NovelStoreGet): 
   | 'refreshKnowledgeProjection'
 > {
   const collectMainChapters = (state: NovelStore, targetNovelId?: string) => state.localChapters.filter((chapter) => chapter.novelId === targetNovelId && !chapter.parentChapterId)
+  const projectionRequestGenerations = new Map<string | undefined, number>()
+
+  const beginProjectionRequest = (targetNovelId: string | undefined) => {
+    const generation = (projectionRequestGenerations.get(targetNovelId) ?? 0) + 1
+    projectionRequestGenerations.set(targetNovelId, generation)
+    return generation
+  }
+
+  const isCurrentProjectionRequest = (targetNovelId: string | undefined, generation: number) => (
+    projectionRequestGenerations.get(targetNovelId) === generation
+  )
 
   const applyProjection = (
     targetNovelId: string | undefined,
     result: KnowledgeProjectionResult,
+    generation: number,
     preserveExistingIfProjectionEmpty = false
   ) => {
     const projection = normalizeKnowledgeProjection(result)
-    set((current) => ({
-      ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId, preserveExistingIfProjectionEmpty),
-    }))
+    set((current) => isCurrentProjectionRequest(targetNovelId, generation)
+      ? {
+          ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId, preserveExistingIfProjectionEmpty),
+        }
+      : {})
   }
 
   return {
@@ -171,25 +185,28 @@ export function createKnowledgeActions(set: NovelStoreSet, get: NovelStoreGet): 
       const chaptersForNovel = collectMainChapters(state, targetNovelId)
       if (!targetNovelId || !chaptersForNovel.length) return null
 
+      const generation = beginProjectionRequest(targetNovelId)
       const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', chapterRange: options?.chapterRange })
       const projection = normalizeKnowledgeProjection(result)
 
-      set((current) => ({
-        ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId, result.jobOutcome !== 'completed'),
-        trajectories: result.jobOutcome === 'completed'
-          ? [
-              {
-                id: uid('traj'),
-                chapterId: chaptersForNovel[0].id,
-                type: 'note',
-                title: tm('store.knowledgeRebuildTitle'),
-                detail: tm('store.knowledgeRebuildDetail', { title: chaptersForNovel[0].title }),
-                createdAt: formatNowLabel(),
-              },
-              ...current.trajectories,
-            ]
-          : current.trajectories,
-      }))
+      set((current) => isCurrentProjectionRequest(targetNovelId, generation)
+        ? {
+            ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId, result.jobOutcome !== 'completed'),
+            trajectories: result.jobOutcome === 'completed'
+              ? [
+                  {
+                    id: uid('traj'),
+                    chapterId: chaptersForNovel[0].id,
+                    type: 'note',
+                    title: tm('store.knowledgeRebuildTitle'),
+                    detail: tm('store.knowledgeRebuildDetail', { title: chaptersForNovel[0].title }),
+                    createdAt: formatNowLabel(),
+                  },
+                  ...current.trajectories,
+                ]
+              : current.trajectories,
+          }
+        : {})
 
       return result
     },
@@ -199,68 +216,88 @@ export function createKnowledgeActions(set: NovelStoreSet, get: NovelStoreGet): 
       const chaptersForNovel = collectMainChapters(state, targetNovelId)
       if (!targetNovelId || !chaptersForNovel.length) return null
 
+      const generation = beginProjectionRequest(targetNovelId)
       const result = await fetchKnowledgeProjection({
         novelId: targetNovelId,
         method: 'POST',
         action: 'rebuild-retrieval-index',
         chapterRange: options?.chapterRange,
       })
-      applyProjection(targetNovelId, result, true)
+      applyProjection(targetNovelId, result, generation, true)
       return result
     },
     pauseStoryKnowledgeRebuild: async (novelId) => {
       const state = get()
       const targetNovelId = novelId ?? state.currentNovelId
       if (!targetNovelId) return null
+      const generation = beginProjectionRequest(targetNovelId)
       const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'pause' })
-      applyProjection(targetNovelId, result, true)
+      applyProjection(targetNovelId, result, generation, true)
       return result
     },
     abortStoryKnowledgeRebuild: async (novelId) => {
       const state = get()
       const targetNovelId = novelId ?? state.currentNovelId
       if (!targetNovelId) return null
+      const generation = beginProjectionRequest(targetNovelId)
       const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'abort' })
-      applyProjection(targetNovelId, result, true)
+      applyProjection(targetNovelId, result, generation, true)
       return result
     },
     deleteStoryKnowledgeGraph: async (novelId) => {
       const state = get()
       const targetNovelId = novelId ?? state.currentNovelId
       if (!targetNovelId) return null
+      const generation = beginProjectionRequest(targetNovelId)
       const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-knowledge' })
-      set((current) => ({ ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId) }))
+      set((current) => isCurrentProjectionRequest(targetNovelId, generation)
+        ? { ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId) }
+        : {})
       return result
     },
     deleteStoryHanlpCache: async (novelId) => {
       const state = get()
       const targetNovelId = novelId ?? state.currentNovelId
       if (!targetNovelId) return null
+      const generation = beginProjectionRequest(targetNovelId)
       const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-hanlp-cache' })
-      set((current) => ({ ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId) }))
+      set((current) => isCurrentProjectionRequest(targetNovelId, generation)
+        ? { ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId) }
+        : {})
       return result
     },
     deleteStoryExtractionCache: async (novelId) => {
       const state = get()
       const targetNovelId = novelId ?? state.currentNovelId
       if (!targetNovelId) return null
+      const generation = beginProjectionRequest(targetNovelId)
       const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-extraction-cache' })
-      set((current) => ({ ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId) }))
+      set((current) => isCurrentProjectionRequest(targetNovelId, generation)
+        ? { ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId) }
+        : {})
       return result
     },
     deleteStoryEmbeddingCache: async (novelId) => {
       const state = get()
       const targetNovelId = novelId ?? state.currentNovelId
       if (!targetNovelId) return null
+      const generation = beginProjectionRequest(targetNovelId)
       const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-embedding-cache' })
-      set((current) => ({ ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId) }))
+      set((current) => isCurrentProjectionRequest(targetNovelId, generation)
+        ? { ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId) }
+        : {})
       return result
     },
     refreshKnowledgeProjection: async (novelId, asOfChapter) => {
-      const result = await fetchKnowledgeProjection({ novelId, asOfChapter, method: 'GET' })
-      set((current) => ({
-        ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), novelId),
-      }))
+      const targetNovelId = novelId ?? get().currentNovelId
+      const generation = beginProjectionRequest(targetNovelId)
+      const result = await fetchKnowledgeProjection({ novelId: targetNovelId, asOfChapter, method: 'GET' })
+      set((current) => isCurrentProjectionRequest(targetNovelId, generation)
+        ? {
+            ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId),
+          }
+        : {})
+      return result
     },
   }
 }

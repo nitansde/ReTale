@@ -6,6 +6,30 @@ function resetStore() {
   useNovelStore.getState().resetWorkspace()
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
+function knowledgeProjectionResponse(marker?: string) {
+  return new Response(JSON.stringify({
+    ok: true,
+    localOutlines: marker ? [{ id: `outline-${marker}`, novelId: 'novel-1', title: `Outline ${marker}`, type: 'foreshadow', summary: marker, relatedChapterIds: [] }] : [],
+    localCharacters: marker ? [{ id: `char-${marker}`, novelId: 'novel-1', name: `Character ${marker}`, role: '主角', goal: marker, trait: marker, note: marker }] : [],
+    localCharacterRelations: marker ? [{ id: `relation-${marker}`, novelId: 'novel-1', fromCharacterId: `char-${marker}`, toCharacterId: `char-${marker}`, label: marker, strength: 'weak', status: 'active', note: marker, chapterIds: [] }] : [],
+    localWorldEntries: marker ? [{ id: `world-${marker}`, novelId: 'novel-1', title: `World ${marker}`, type: 'location', content: marker }] : [],
+    localTimelineEvents: marker ? [{ id: `timeline-${marker}`, novelId: 'novel-1', title: `Timeline ${marker}`, phase: marker, worldline: '主线', summary: marker, order: 1, chapterIds: [] }] : [],
+    knowledgeRebuildStatus: null,
+    hanlpCacheSnapshot: null,
+    knowledgeStatusOverview: null,
+    jobOutcome: null,
+    actionError: null,
+  }), { status: 200 })
+}
+
 describe('knowledge view store lightweight action responses', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
@@ -160,5 +184,88 @@ describe('knowledge view store lightweight action responses', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ novelId: 'novel-1', action: 'pause' }),
     })
+  })
+
+  it('returns the authoritative projection result from a full refresh', async () => {
+    const knowledgeStatusOverview = {
+      knowledgeGraph: { status: 'full' as const, coveredChapterCount: 64, totalChapterCount: 64, validThroughChapterNo: 64 },
+      extractionCache: { status: 'full' as const, coveredChapterCount: 64, totalChapterCount: 64, validThroughChapterNo: 64 },
+      embeddingCache: {
+        status: 'full' as const,
+        coveredChapterCount: 64,
+        totalChapterCount: 64,
+        validThroughChapterNo: 64,
+        provider: 'ollama',
+        model: 'qwen3-embedding:4b',
+      },
+      retrievalIndex: { status: 'full' as const, indexedScopeCount: 64, task: null },
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      localOutlines: [],
+      localCharacters: [],
+      localCharacterRelations: [],
+      localWorldEntries: [],
+      localTimelineEvents: [],
+      knowledgeRebuildStatus: null,
+      hanlpCacheSnapshot: null,
+      knowledgeStatusOverview,
+      jobOutcome: null,
+      actionError: null,
+    }), { status: 200 })))
+
+    const result = await useNovelStore.getState().refreshKnowledgeProjection('novel-1', 64)
+
+    expect(result.knowledgeStatusOverview).toEqual(knowledgeStatusOverview)
+  })
+
+  it('keeps the newest projection when refresh responses resolve out of order', async () => {
+    const refreshAResponse = createDeferred<Response>()
+    const refreshBResponse = createDeferred<Response>()
+    vi.stubGlobal('fetch', vi.fn()
+      .mockImplementationOnce(() => refreshAResponse.promise)
+      .mockImplementationOnce(() => refreshBResponse.promise))
+
+    const refreshA = useNovelStore.getState().refreshKnowledgeProjection('novel-1', 1)
+    const refreshB = useNovelStore.getState().refreshKnowledgeProjection('novel-1', 2)
+
+    refreshBResponse.resolve(knowledgeProjectionResponse('B'))
+    await refreshB
+    refreshAResponse.resolve(knowledgeProjectionResponse('A'))
+    const staleResult = await refreshA
+
+    const state = useNovelStore.getState()
+    expect(state.localOutlines.map((item) => item.id)).toEqual(['outline-B'])
+    expect(state.localCharacters.map((item) => item.id)).toEqual(['char-B'])
+    expect(state.localCharacterRelations.map((item) => item.id)).toEqual(['relation-B'])
+    expect(state.localWorldEntries.map((item) => item.id)).toEqual(['world-B'])
+    expect(state.localTimelineEvents.map((item) => item.id)).toEqual(['timeline-B'])
+    expect(staleResult.localCharacters.map((item) => item.id)).toEqual(['char-A'])
+  })
+
+  it('scopes an omitted-id refresh to the current novel and invalidates it after an explicit delete', async () => {
+    const refreshResponse = createDeferred<Response>()
+    const deleteResponse = createDeferred<Response>()
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => refreshResponse.promise)
+      .mockImplementationOnce(() => deleteResponse.promise)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const refresh = useNovelStore.getState().refreshKnowledgeProjection(undefined, 1)
+    const deleteKnowledge = useNovelStore.getState().deleteStoryKnowledgeGraph('novel-1')
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/knowledge-view?novelId=novel-1&asOfChapter=1', { cache: 'no-store' })
+
+    deleteResponse.resolve(knowledgeProjectionResponse())
+    await deleteKnowledge
+    refreshResponse.resolve(knowledgeProjectionResponse('stale'))
+    await refresh
+
+    const state = useNovelStore.getState()
+    expect(state.localOutlines).toEqual([])
+    expect(state.localCharacters).toEqual([])
+    expect(state.localCharacterRelations).toEqual([])
+    expect(state.localWorldEntries).toEqual([])
+    expect(state.localTimelineEvents).toEqual([])
   })
 })
