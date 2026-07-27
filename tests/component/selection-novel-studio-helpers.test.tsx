@@ -4,9 +4,32 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   callGetRecoverableRewriteJobApi,
   resolveChapterListTargetForAnchorVisibility,
+  resolveKnowledgeStepDisplayStatus,
   upsertOptimisticContinueBlockTimelineNode,
 } from '@/components/workspace/selection-novel-studio-helpers'
 import type { StoryTimelineBranchNode, StoryTimelineResponse } from '@/lib/story-branch-types'
+
+describe('resolveKnowledgeStepDisplayStatus', () => {
+  it.each([
+    ['pending', 1],
+    ['running', 0.995],
+    ['running', 1],
+    ['paused', 1],
+    ['completed', 0],
+  ] as const)('keeps backend status %s authoritative at progress %s', (status, progress) => {
+    expect(resolveKnowledgeStepDisplayStatus({
+      step: {
+        key: 'write',
+        label: 'Write',
+        status,
+        progress,
+        etaMinutes: null,
+        detail: null,
+      },
+      isCurrentRunningStep: false,
+    })).toBe(status)
+  })
+})
 
 describe('callGetRecoverableRewriteJobApi', () => {
   afterEach(() => {

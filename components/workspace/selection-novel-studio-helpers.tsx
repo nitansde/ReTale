@@ -216,6 +216,7 @@ export type HanlpCacheSnapshot = {
 }
 
 export type KnowledgeCoverageStatus = 'missing' | 'partial' | 'full'
+export type RetrievalIndexCoverageStatus = KnowledgeCoverageStatus | 'pending'
 
 export type KnowledgeChapterCoverageOverview = {
   status: KnowledgeCoverageStatus
@@ -225,7 +226,7 @@ export type KnowledgeChapterCoverageOverview = {
 }
 
 export type RetrievalIndexCoverageOverview = {
-  status: KnowledgeCoverageStatus
+  status: RetrievalIndexCoverageStatus
   indexedScopeCount: number
   chapterRange?: KnowledgeRebuildChapterRange
   task: KnowledgeRebuildStatus | null
@@ -233,6 +234,7 @@ export type RetrievalIndexCoverageOverview = {
 
 export type KnowledgeStatusOverview = {
   knowledgeGraph: KnowledgeChapterCoverageOverview
+  extractionCache: KnowledgeChapterCoverageOverview
   embeddingCache: KnowledgeChapterCoverageOverview & {
     provider: string | null
     model: string | null
@@ -646,12 +648,7 @@ export function resolveKnowledgeStepDisplayStatus(params: {
   step: KnowledgeRebuildStatus['steps'][number]
   isCurrentRunningStep: boolean
 }) {
-  const stepProgress = toProgressPercent(params.step.progress)
-  const isSaturated = stepProgress >= 100
-
-  if (params.step.status === 'completed') return 'completed' satisfies KnowledgeStepDisplayStatus
-  if (!params.isCurrentRunningStep && isSaturated) return 'completed' satisfies KnowledgeStepDisplayStatus
-  return params.step.status
+  return params.step.status satisfies KnowledgeStepDisplayStatus
 }
 
 export function resolveKnowledgeRebuildFailureMessage(status: Pick<KnowledgeRebuildStatus, 'status' | 'errorMessage'> | null) {
@@ -680,6 +677,7 @@ export function formatKnowledgeCoverageDetail(label: string, coverage: Knowledge
 
 export function formatRetrievalIndexBadge(overview: RetrievalIndexCoverageOverview | null | undefined) {
   if (!overview) return tm('workspace.knowledge.waitingState')
+  if (overview.status === 'pending') return tm('workspace.knowledge.job.queued')
   if (overview.status === 'full') return tm('workspace.knowledge.indexed')
   if (overview.status === 'partial') {
     if (overview.chapterRange) return formatKnowledgeRebuildChapterRangeLabel(overview.chapterRange)
@@ -690,6 +688,9 @@ export function formatRetrievalIndexBadge(overview: RetrievalIndexCoverageOvervi
 
 export function formatRetrievalIndexDetail(overview: RetrievalIndexCoverageOverview | null | undefined) {
   if (!overview) return tm('workspace.knowledge.lancedbStatusNotLoaded')
+  if (overview.status === 'pending') return overview.chapterRange
+    ? tm('workspace.knowledge.lancedbPendingRange', { range: formatKnowledgeRebuildChapterRangeLabel(overview.chapterRange) })
+    : tm('workspace.knowledge.lancedbPending')
   if (overview.status === 'full') return tm('workspace.knowledge.lancedbFullyIndexed')
   if (overview.status === 'partial') {
     if (overview.chapterRange) {
@@ -727,6 +728,7 @@ export function formatKnowledgeJobStatusLabel(status: string | null | undefined)
     case 'failed':
       return tm('workspace.knowledge.job.failed')
     case 'completed':
+    case 'succeeded':
       return tm('workspace.knowledge.job.completed')
     case 'aborted':
       return tm('workspace.knowledge.job.aborted')

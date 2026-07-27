@@ -40,6 +40,7 @@ type WorkspaceKnowledgeControlsProps = {
   knowledgeStatusOverview: KnowledgeStatusOverview | null
   currentKnowledgeJobBusy: boolean
   knowledgeGraphOverview: KnowledgeChapterCoverageOverview | null
+  extractionCacheOverview: KnowledgeChapterCoverageOverview | null
   embeddingCacheOverview: (KnowledgeChapterCoverageOverview & { provider: string | null; model: string | null }) | null
   retrievalIndexOverview: RetrievalIndexCoverageOverview | null
   retrievalIndexStatusLine: string
@@ -63,6 +64,7 @@ type WorkspaceKnowledgeControlsProps = {
   hanlpBootstrapTimingLabel: string | null
   hanlpSettingsLine: string | null
   rawTextEmbeddingStatusLine: string
+  rawTextEmbeddingActive: boolean
   rawTextEmbeddingPhaseBadge: string
   rawTextEmbeddingPercent: number | null
   rawTextEmbeddingCacheHitRatePercent: number | null
@@ -188,6 +190,15 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
             <span className="rounded-full border border-violet-300/20 bg-black/20 px-3 py-1.5 text-[11px] text-violet-100/85">{props.currentKnowledgeJobBusy ? t('workspace.knowledge.jobRunning') : t('workspace.knowledge.latestStatus')}</span>
           </div>
           <div className="mt-3 space-y-2">
+            <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-medium text-zinc-100">{t('workspace.knowledge.extractionCacheLabel')}</p>
+                  <p className="mt-1 text-[10px] leading-4 text-zinc-400">{formatKnowledgeCoverageDetail(t('workspace.knowledge.extractionCacheLabel'), props.extractionCacheOverview)}</p>
+                </div>
+                <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">{formatKnowledgeCoverageBadge(props.extractionCacheOverview)}</span>
+              </div>
+            </div>
             <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -337,7 +348,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
             </div>
             {props.hanlpSettingsLine ? <p className="mt-1 truncate text-[10px] leading-4 text-zinc-500">{props.hanlpSettingsLine}</p> : null}
           </div>
-          <div className="mt-3 rounded-xl border border-violet-300/15 bg-violet-500/[0.08] px-3 py-3" data-testid="workspace-raw-embedding-card">
+          {props.rawTextEmbeddingActive ? <div className="mt-3 rounded-xl border border-violet-300/15 bg-violet-500/[0.08] px-3 py-3" data-testid="workspace-raw-embedding-card">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
                 <p className="text-[11px] font-medium text-violet-100">{t('workspace.knowledge.rawEmbeddingPrecompute')}</p>
@@ -361,7 +372,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
               {props.rawTextEmbeddingTimingLabel ? <span>{t('workspace.knowledge.stepDuration', { value: props.rawTextEmbeddingTimingLabel })}</span> : null}
             </div>
             {props.rawTextEmbeddingSettingsLine ? <p className="mt-1 truncate text-[10px] leading-4 text-zinc-500">{props.rawTextEmbeddingSettingsLine}</p> : null}
-          </div>
+          </div> : null}
           {props.knowledgeRebuildSteps.length > 0 ? (
             <div className="mt-3 space-y-2">
               {props.knowledgeRebuildSteps.map((step) => {
@@ -433,14 +444,17 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
           </div>
         ) : null}
       </div>
-      <div className="mt-3 rounded-2xl border border-emerald-400/15 bg-emerald-500/[0.06] px-3 py-3 text-xs text-zinc-300">
+      <div className="mt-3 rounded-2xl border border-emerald-400/15 bg-emerald-500/[0.06] px-3 py-3 text-xs text-zinc-300" data-testid="workspace-extraction-cache-card">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-[11px] uppercase tracking-[0.18em] text-emerald-200/70">{t('workspace.knowledge.extractionCacheEyebrow')}</p>
-            <p className="mt-1 leading-5 text-zinc-300">{t('workspace.knowledge.extractionCacheDescription')}</p>
+            <p className="mt-1 leading-5 text-zinc-300">{formatKnowledgeCoverageDetail(t('workspace.knowledge.extractionCacheLabel'), props.extractionCacheOverview)}</p>
             <p className="mt-1 leading-5 text-zinc-400">{props.extractionCacheDeleteState.helperText}</p>
           </div>
-          <button onClick={props.onToggleConfirmDeleteExtractionCache} disabled={props.extractionCacheDeleteState.disabled} data-testid="workspace-delete-extraction-cache" aria-label={t('workspace.knowledge.deleteExtractionCache')} className="rounded-full border border-emerald-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-emerald-100 transition hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60">{t('workspace.knowledge.deleteExtractionCache')}</button>
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            <span className="rounded-full border border-emerald-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-emerald-100/85">{formatKnowledgeCoverageBadge(props.extractionCacheOverview)}</span>
+            <button onClick={props.onToggleConfirmDeleteExtractionCache} disabled={props.extractionCacheDeleteState.disabled} data-testid="workspace-delete-extraction-cache" aria-label={t('workspace.knowledge.deleteExtractionCache')} className="rounded-full border border-emerald-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-emerald-100 transition hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60">{t('workspace.knowledge.deleteExtractionCache')}</button>
+          </div>
         </div>
         <div className="mt-2 text-[10px] leading-4 text-zinc-400">{t('workspace.knowledge.extractionCacheAfterDeleteHint')}</div>
         {props.confirmDeleteExtractionCache ? (
@@ -453,20 +467,35 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
           </div>
         ) : null}
       </div>
-      <div className="mt-3 rounded-2xl border border-amber-400/15 bg-amber-500/[0.06] px-3 py-3 text-xs text-zinc-300">
+      <div className="mt-3 rounded-2xl border border-amber-400/15 bg-amber-500/[0.06] px-3 py-3 text-xs text-zinc-300" data-testid="workspace-embedding-cache-card">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-[11px] uppercase tracking-[0.18em] text-amber-200/70">{t('workspace.knowledge.rawEmbeddingCacheEyebrow')}</p>
-            <p className="mt-1 leading-5 text-zinc-300">{t('workspace.knowledge.currentStatus', { value: props.rawTextEmbeddingPercent !== null ? `${props.rawTextEmbeddingPercent}%` : t('workspace.knowledge.waitingProgress') })}</p>
+            <p className="mt-1 leading-5 text-zinc-300">{props.rawTextEmbeddingStatusLine}</p>
             <p className="mt-1 leading-5 text-zinc-400">{props.embeddingCacheDeleteState.helperText}</p>
           </div>
-          <button onClick={props.onToggleConfirmDeleteEmbeddingCache} disabled={props.embeddingCacheDeleteState.disabled} data-testid="workspace-delete-embedding-cache" aria-label={t('workspace.knowledge.deleteEmbeddingCache')} className="rounded-full border border-amber-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-amber-100 transition hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60">{t('workspace.knowledge.deleteEmbeddingCache')}</button>
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            <span className="rounded-full border border-amber-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-amber-100/85">{props.rawTextEmbeddingPhaseBadge}</span>
+            <button onClick={props.onToggleConfirmDeleteEmbeddingCache} disabled={props.embeddingCacheDeleteState.disabled} data-testid="workspace-delete-embedding-cache" aria-label={t('workspace.knowledge.deleteEmbeddingCache')} className="rounded-full border border-amber-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-amber-100 transition hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60">{t('workspace.knowledge.deleteEmbeddingCache')}</button>
+          </div>
         </div>
-        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] leading-4 text-zinc-400">
-          <span>{t('workspace.knowledge.warmupStatus', { value: props.rawTextEmbeddingPercent !== null ? `${props.rawTextEmbeddingPercent}%` : t('workspace.knowledge.waitingProgress') })}</span>
-          <span>{t('workspace.knowledge.cacheHitRate', { value: props.rawTextEmbeddingCacheHitRatePercent !== null ? `${props.rawTextEmbeddingCacheHitRatePercent}%` : t('workspace.knowledge.notReturnedYet') })}</span>
-          <span>{t('workspace.knowledge.stepDuration', { value: props.rawTextEmbeddingTimingLabel ?? t('workspace.knowledge.waitingProgress') })}</span>
-        </div>
+        {props.rawTextEmbeddingPercent !== null ? (
+          <>
+            <div className="mt-2 flex items-center justify-between gap-2 text-[10px] leading-4 text-zinc-400">
+              <span>{t('workspace.knowledge.warmupProgress')}</span>
+              <span className="text-amber-100">{props.rawTextEmbeddingPercent}%</span>
+            </div>
+            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
+              <div className="h-full rounded-full bg-amber-300 transition-all" style={{ width: `${Math.max(props.rawTextEmbeddingPercent > 0 ? 8 : 0, Math.min(100, props.rawTextEmbeddingPercent))}%` }} />
+            </div>
+          </>
+        ) : null}
+        {props.rawTextEmbeddingActive ? (
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] leading-4 text-zinc-400">
+            {props.rawTextEmbeddingCacheHitRatePercent !== null ? <span>{t('workspace.knowledge.cacheHitRate', { value: `${props.rawTextEmbeddingCacheHitRatePercent}%` })}</span> : null}
+            {props.rawTextEmbeddingTimingLabel ? <span>{t('workspace.knowledge.stepDuration', { value: props.rawTextEmbeddingTimingLabel })}</span> : null}
+          </div>
+        ) : null}
         {props.rawTextEmbeddingSettingsLine ? <p className="mt-1 truncate text-[10px] leading-4 text-zinc-500">{props.rawTextEmbeddingSettingsLine}</p> : null}
         {props.confirmDeleteEmbeddingCache ? (
           <div className="mt-3 rounded-xl border border-amber-400/15 bg-black/20 p-3">
