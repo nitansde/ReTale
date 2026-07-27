@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
+import { createDefaultAISettings } from '@/lib/ai-settings'
+import type { AISettings } from '@/lib/types'
 
 const fixturePath = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
 const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/task-10-knowledge-ui')
@@ -135,6 +137,12 @@ test('knowledge workspace shows HanLP progress, cache state, and character tiers
             embeddingBatchSize: 32,
           },
         },
+        knowledgeStatusOverview: {
+          knowledgeGraph: { status: 'partial', coveredChapterCount: 2, totalChapterCount: 4, validThroughChapterNo: 2 },
+          extractionCache: { status: 'partial', coveredChapterCount: 2, totalChapterCount: 4, validThroughChapterNo: 2 },
+          embeddingCache: { status: 'partial', coveredChapterCount: 1, totalChapterCount: 4, validThroughChapterNo: 1, provider: 'ollama', model: 'qwen3-embedding:4b' },
+          retrievalIndex: { status: 'missing', indexedScopeCount: 0, task: null },
+        },
       }),
     })
   })
@@ -245,6 +253,12 @@ test('knowledge workspace shows LanceDB Refresh progress inline', async ({ page 
         totalChapterCount: 3,
         validThroughChapterNo: 3,
       },
+      extractionCache: {
+        status: 'full',
+        coveredChapterCount: 3,
+        totalChapterCount: 3,
+        validThroughChapterNo: 3,
+      },
       embeddingCache: {
         status: retrievalRefreshQueued ? 'partial' : 'partial',
         coveredChapterCount: retrievalRefreshQueued ? 2 : 1,
@@ -317,12 +331,15 @@ test('knowledge workspace shows LanceDB Refresh progress inline', async ({ page 
 
   await overviewCard.getByRole('button', { name: /Refresh|刷新/i }).click()
 
-  await expect(overviewCard).toContainText('后台正在刷新 LanceDB 检索索引')
+  await expect(overviewCard).toContainText('后台正在预热原文 Embedding，完成后会自动刷新 LanceDB')
   await expect(overviewCard).toContainText('任务状态：进行中')
   await expect(overviewCard).toContainText('95%')
   await expect(overviewCard).toContainText('阶段：原文向量缓存 50%')
   await expect(overviewCard.getByRole('button', { name: /Pause|暂停/i })).toBeVisible()
   await expect(overviewCard.getByRole('button', { name: /Abort|终止/i })).toBeVisible()
+  await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('50%')
+  await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('缓存命中率：33%')
+  await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('Ollama · qwen3-embedding:4b · batch 32')
 
   await page.screenshot({
     path: path.join(evidenceDirectory, 'task-10-lancedb-refresh-progress-ui.png'),
@@ -365,10 +382,17 @@ test('knowledge workspace stops polling when no job is active', async ({ page })
   fs.mkdirSync(evidenceDirectory, { recursive: true })
 
   let knowledgeStatusRequestCount = 0
+  let extractionDeleted = false
+  let embeddingDeleted = false
 
   await page.route('**/api/knowledge-view*', async (route) => {
-    if (route.request().method() === 'GET') {
+    const method = route.request().method()
+    if (method === 'GET') {
       knowledgeStatusRequestCount += 1
+    } else {
+      const body = route.request().postDataJSON() as { action?: string }
+      if (body.action === 'delete-extraction-cache') extractionDeleted = true
+      if (body.action === 'delete-embedding-cache') embeddingDeleted = true
     }
 
     await route.fulfill({
@@ -384,11 +408,16 @@ test('knowledge workspace stops polling when no job is active', async ({ page })
         knowledgeRebuildStatus: null,
         hanlpCacheSnapshot: null,
         knowledgeStatusOverview: {
-          knowledgeGraph: { status: 'empty', coveredChapterCount: 0, totalChapterCount: 3, validThroughChapterNo: 0 },
-          embeddingCache: { status: 'empty', coveredChapterCount: 0, totalChapterCount: 3, validThroughChapterNo: 0, provider: null, model: null },
-          retrievalIndex: { status: 'empty', indexedScopeCount: 0, chapterRange: null, task: null },
+          knowledgeGraph: { status: 'full', coveredChapterCount: 64, totalChapterCount: 64, validThroughChapterNo: 64 },
+          extractionCache: extractionDeleted
+            ? { status: 'missing', coveredChapterCount: 0, totalChapterCount: 64, validThroughChapterNo: null }
+            : { status: 'full', coveredChapterCount: 64, totalChapterCount: 64, validThroughChapterNo: 64 },
+          embeddingCache: embeddingDeleted
+            ? { status: 'missing', coveredChapterCount: 0, totalChapterCount: 64, validThroughChapterNo: null, provider: null, model: null }
+            : { status: 'full', coveredChapterCount: 64, totalChapterCount: 64, validThroughChapterNo: 64, provider: 'ollama', model: 'qwen3-embedding:4b' },
+          retrievalIndex: { status: 'full', indexedScopeCount: 64, chapterRange: null, task: null },
         },
-        jobOutcome: null,
+        jobOutcome: method === 'POST' ? 'deleted' : null,
         actionError: null,
       }),
     })
@@ -401,9 +430,125 @@ test('knowledge workspace stops polling when no job is active', async ({ page })
 
   await page.goto('/workspace', { waitUntil: 'networkidle' })
   await expect(page.getByTestId('workspace-knowledge-status-overview-card')).toBeVisible()
+  await expect(page.getByTestId('workspace-extraction-cache-card')).toContainText('64')
+  await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('64')
+  await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('100%')
+  await expect(page.getByTestId('workspace-embedding-cache-card')).not.toContainText('缓存命中率')
+  await expect(page.getByTestId('workspace-embedding-cache-card')).not.toContainText('阶段耗时')
+  await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('Ollama · qwen3-embedding:4b')
   const initialRequestCount = knowledgeStatusRequestCount
 
   await page.waitForTimeout(4000)
 
   expect(knowledgeStatusRequestCount).toBe(initialRequestCount)
+
+  await page.getByTestId('workspace-delete-extraction-cache').click()
+  await page.getByRole('button', { name: '确认删除 LLM 抽取缓存' }).click()
+  await expect(page.getByTestId('workspace-extraction-cache-card')).toContainText('0 / 64')
+  await expect(page.getByTestId('workspace-extraction-cache-card')).toContainText('缺失')
+
+  await page.getByTestId('workspace-delete-embedding-cache').click()
+  await page.getByRole('button', { name: '确认删除原文 Embedding 缓存' }).click()
+  await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('0 / 64')
+  await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('缺失')
+  await expect(page.getByTestId('workspace-embedding-cache-card')).not.toContainText('Ollama · qwen3-embedding:4b')
+})
+
+test('saving AI settings waits for the current full knowledge projection refresh', async ({ page }) => {
+  let aiSettings: AISettings = createDefaultAISettings()
+  let postedEmbeddingModel: string | null = null
+  let settingsSaved = false
+  let refreshedRequest: { novelId: string; asOfChapter: string | null } | null = null
+  let releaseProjectionRefresh: (() => void) | null = null
+  let markProjectionRefreshStarted: (() => void) | null = null
+  const projectionRefreshStarted = new Promise<void>((resolve) => {
+    markProjectionRefreshStarted = resolve
+  })
+
+  await page.route('**/api/settings/ai', async (route) => {
+    if (route.request().method() === 'POST') {
+      aiSettings = route.request().postDataJSON() as AISettings
+      postedEmbeddingModel = aiSettings.embeddings.ollama.model
+      settingsSaved = true
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) })
+      return
+    }
+
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(aiSettings) })
+  })
+
+  await page.route('**/api/knowledge-view*', async (route) => {
+    const requestUrl = new URL(route.request().url())
+    const novelId = requestUrl.searchParams.get('novelId') ?? ''
+    const isFullProjection = requestUrl.searchParams.get('statusOnly') !== '1'
+
+    if (settingsSaved && isFullProjection) {
+      refreshedRequest = { novelId, asOfChapter: requestUrl.searchParams.get('asOfChapter') }
+      markProjectionRefreshStarted?.()
+      await new Promise<void>((resolve) => {
+        releaseProjectionRefresh = resolve
+      })
+    }
+
+    const embeddingCache = settingsSaved && isFullProjection
+      ? { status: 'missing', coveredChapterCount: 0, totalChapterCount: 1, validThroughChapterNo: null, provider: null, model: null }
+      : { status: 'full', coveredChapterCount: 1, totalChapterCount: 1, validThroughChapterNo: 1, provider: 'ollama', model: 'qwen3-embedding:4b' }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        localOutlines: [],
+        localCharacters: [],
+        localCharacterRelations: [],
+        localWorldEntries: [],
+        localTimelineEvents: [],
+        knowledgeRebuildStatus: null,
+        hanlpCacheSnapshot: null,
+        knowledgeStatusOverview: {
+          knowledgeGraph: { status: 'full', coveredChapterCount: 1, totalChapterCount: 1, validThroughChapterNo: 1 },
+          extractionCache: { status: 'full', coveredChapterCount: 1, totalChapterCount: 1, validThroughChapterNo: 1 },
+          embeddingCache,
+          retrievalIndex: { status: 'full', indexedScopeCount: 1, task: null },
+        },
+        jobOutcome: null,
+        actionError: null,
+      }),
+    })
+  })
+
+  await page.goto('/library', { waitUntil: 'networkidle' })
+  await page.locator('input[type=file]').setInputFiles(fixturePath)
+  await page.waitForResponse((response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST')
+  await page.goto('/workspace', { waitUntil: 'networkidle' })
+
+  const embeddingCard = page.getByTestId('workspace-embedding-cache-card')
+  await expect(embeddingCard).toContainText('qwen3-embedding:4b')
+
+  const settingsButton = page.getByTestId('preset-compat-library-open').locator('xpath=following-sibling::button[1]')
+  await settingsButton.click()
+  const settingsHeading = page.getByRole('heading', { name: /模型服务配置|Model service settings/ })
+  await expect(settingsHeading).toBeVisible()
+
+  const embeddingScenario = page.getByRole('heading', { name: /Embedding 场景|Embedding scenario/ }).locator('..').locator('..').locator('..')
+  const changedEmbeddingModel = 'nomic-embed-text:settings-refresh'
+  const embeddingModelInput = embeddingScenario.getByPlaceholder('nomic-embed-text')
+  await embeddingModelInput.fill(changedEmbeddingModel)
+  await expect(embeddingModelInput).toHaveValue(changedEmbeddingModel)
+
+  await page.getByRole('button', { name: /保存设置|Save settings/ }).click()
+  await projectionRefreshStarted
+
+  expect(postedEmbeddingModel).toBe(changedEmbeddingModel)
+  expect(refreshedRequest).toEqual({ novelId: expect.stringMatching(/^novel[_-]/), asOfChapter: '1' })
+  await expect(settingsHeading).toBeVisible()
+  await expect(embeddingCard).toContainText('qwen3-embedding:4b')
+
+  releaseProjectionRefresh?.()
+
+  await expect(embeddingCard).toContainText('0 / 1')
+  await expect(embeddingCard).toContainText(/缺失|Missing/)
+  await expect(embeddingCard).not.toContainText('qwen3-embedding:4b')
+  await expect(settingsHeading).toHaveCount(0)
 })
