@@ -68,6 +68,7 @@ export function scheduleKnowledgeWorkerProcess(params: ScheduleKnowledgeWorkerPa
     '--novel-db-path', novelDbPath,
     '--lance-db-path', lanceDbPath,
     '--branch-id', params.branchId,
+    ...(attemptId === null || attemptId === undefined ? [] : ['--attempt-id', attemptId]),
   ], {
     cwd: process.cwd(),
     detached: true,

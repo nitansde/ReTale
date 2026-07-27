@@ -5,7 +5,12 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 class MockChildProcess extends EventEmitter {
-  unref() {}
+  unrefInvoked = false
+
+  unref() {
+    this.unrefInvoked = true
+    return this
+  }
 }
 
 const originalDataDir = process.env.RETALE_DATA_DIR
@@ -43,7 +48,12 @@ describe('knowledge worker scheduler', () => {
     const tempDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-knowledge-worker-scheduler-'))
     cleanupDirectories.push(tempDataRoot)
     process.env.RETALE_DATA_DIR = path.join(tempDataRoot, 'data')
-    const spawnMock = vi.fn(() => new MockChildProcess())
+    const childProcesses: MockChildProcess[] = []
+    const spawnMock = vi.fn(() => {
+      const child = new MockChildProcess()
+      childProcesses.push(child)
+      return child
+    })
     vi.doMock('node:child_process', () => ({ spawn: spawnMock }))
 
     const scheduler = await import('@/lib/server/knowledge-worker-scheduler')
@@ -80,20 +90,25 @@ describe('knowledge worker scheduler', () => {
     const firstWorkerPath = path.join(process.cwd(), 'scripts', 'knowledge-worker.mjs')
     const firstSpawnArgs = spawnMock.mock.calls[0]?.[1]
     const firstSpawnOptions = spawnMock.mock.calls[0]?.[2]
-    const expectedNovelDbPath = path.join(tempDataRoot, 'data', 'novels', 'novel-1', 'novel.db')
-    const expectedLanceDbPath = path.join(tempDataRoot, 'data', 'novels', 'novel-1', 'lancedb')
+    const expectedNovelDbPath = canonicalizePath(path.join(tempDataRoot, 'data', 'novels', 'novel-1', 'novel.db'))
+    const expectedLanceDbPath = canonicalizePath(path.join(tempDataRoot, 'data', 'novels', 'novel-1', 'lancedb'))
 
-    expect(firstSpawnArgs).toMatchObject([
+    expect(spawnMock.mock.calls[0]?.[0]).toBe(process.execPath)
+    expect(firstSpawnArgs).toEqual([
       firstWorkerPath,
       '--job-id', 'job-1',
       '--job-type', 'extract_chapter_knowledge',
       '--novel-id', 'novel-1',
-      '--novel-db-path', expect.any(String),
-      '--lance-db-path', expect.any(String),
+      '--novel-db-path', expectedNovelDbPath,
+      '--lance-db-path', expectedLanceDbPath,
       '--branch-id', 'novel-1:main',
+      '--attempt-id', 'attempt-1',
     ])
-    expect(canonicalizePath(String(firstSpawnArgs?.[8]))).toBe(canonicalizePath(expectedNovelDbPath))
-    expect(canonicalizePath(String(firstSpawnArgs?.[10]))).toBe(canonicalizePath(expectedLanceDbPath))
+    expect(firstSpawnOptions?.cwd).toBe(process.cwd())
+    expect(firstSpawnOptions?.detached).toBe(true)
+    expect(firstSpawnOptions?.stdio).toBe('ignore')
+    expect(childProcesses[0]?.unrefInvoked).toBe(true)
+    expect(childProcesses[1]?.unrefInvoked).toBe(true)
     expect(firstSpawnOptions?.env?.RETALE_KNOWLEDGE_WORKER).toBe('1')
     expect(firstSpawnOptions?.env?.RETALE_KNOWLEDGE_WORKER_NOVEL_ID).toBe('novel-1')
     expect(canonicalizePath(String(firstSpawnOptions?.env?.RETALE_KNOWLEDGE_WORKER_NOVEL_DB_PATH))).toBe(canonicalizePath(expectedNovelDbPath))
@@ -201,10 +216,44 @@ describe('knowledge worker scheduler', () => {
     })).toBe(true)
 
     expect(spawnMock).toHaveBeenCalledTimes(2)
+    expect(spawnMock.mock.calls[0]?.[1]?.slice(-2)).toEqual(['--attempt-id', 'alpha-attempt-1'])
+    expect(spawnMock.mock.calls[1]?.[1]?.slice(-2)).toEqual(['--attempt-id', 'alpha-attempt-2'])
     expect(spawnMock.mock.calls[0]?.[2]?.env?.RETALE_KNOWLEDGE_WORKER_NOVEL_ID).toBe('novel-alpha')
     expect(canonicalizePath(String(spawnMock.mock.calls[0]?.[2]?.env?.DATABASE_URL).replace(/^file:/u, ''))).toBe(
       canonicalizePath(path.join(tempDataRoot, 'data', 'novels', 'novel-alpha', 'novel.db'))
     )
+  })
+
+  it('omits the attempt argument when the resolved attempt id is null', async () => {
+    const tempDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-knowledge-worker-scheduler-tokenless-'))
+    cleanupDirectories.push(tempDataRoot)
+    process.env.RETALE_DATA_DIR = path.join(tempDataRoot, 'data')
+    const spawnMock = vi.fn(() => new MockChildProcess())
+    vi.doMock('node:child_process', () => ({ spawn: spawnMock }))
+
+    const scheduler = await import('@/lib/server/knowledge-worker-scheduler')
+    scheduler.resetScheduledKnowledgeWorkerJobsForTesting()
+
+    expect(scheduler.scheduleKnowledgeWorkerProcess({
+      novelId: 'novel-tokenless',
+      branchId: 'novel-tokenless:main',
+      jobId: 'job-tokenless',
+      jobType: 'extract_chapter_knowledge',
+      attemptId: null,
+      allowInTests: true,
+    })).toBe(true)
+
+    const workerArgs = spawnMock.mock.calls[0]?.[1]
+    expect(workerArgs).toEqual([
+      path.join(process.cwd(), 'scripts', 'knowledge-worker.mjs'),
+      '--job-id', 'job-tokenless',
+      '--job-type', 'extract_chapter_knowledge',
+      '--novel-id', 'novel-tokenless',
+      '--novel-db-path', canonicalizePath(path.join(tempDataRoot, 'data', 'novels', 'novel-tokenless', 'novel.db')),
+      '--lance-db-path', canonicalizePath(path.join(tempDataRoot, 'data', 'novels', 'novel-tokenless', 'lancedb')),
+      '--branch-id', 'novel-tokenless:main',
+    ])
+    expect(workerArgs).not.toContain('--attempt-id')
   })
 
   it('refuses to spawn workers for deleting and deleted registry rows', async () => {
