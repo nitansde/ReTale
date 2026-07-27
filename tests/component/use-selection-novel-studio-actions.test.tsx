@@ -4,9 +4,10 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useSelectionNovelStudioActions } from '@/components/workspace/use-selection-novel-studio-actions'
 import { useSelectionNovelStudioCore } from '@/components/workspace/use-selection-novel-studio-core'
+import type { KnowledgeStatusOverview, RecoverableRewriteJob } from '@/components/workspace/selection-novel-studio-helpers'
 import type { Chapter } from '@/lib/types'
 import { useNovelStore } from '@/store/novel-store'
-import type { NovelStore } from '@/store/novel-store-types'
+import type { KnowledgeProjectionResult, NovelStore } from '@/store/novel-store-types'
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -56,6 +57,65 @@ function jsonResponse(body: unknown, status = 200) {
   })
 }
 
+function buildRecoverableRewriteJob(status: 'queued' | 'running' | 'succeeded', overrides: Partial<RecoverableRewriteJob> = {}): RecoverableRewriteJob {
+  return {
+    jobId: 'rewrite-job-1',
+    status,
+    progress: status === 'queued' ? 0 : status === 'running' ? 0.5 : 1,
+    currentStep: status === 'queued' ? 'Queued' : status === 'running' ? 'Running' : null,
+    errorMessage: null,
+    createdAt: '2026-07-27T00:00:00.000Z',
+    updatedAt: '2026-07-27T00:00:01.000Z',
+    panel: {
+      novelId: 'novel-1',
+      branchId: 'novel-1:main',
+      chapterId: chapter.id,
+      selectedText: 'Recovered selection',
+      sourceText: 'Recovered source',
+      sourceTextOverride: 'Recovered source override',
+      userInstruction: 'Recovered instruction',
+      rewriteLaunchSource: 'chapter',
+      branchContextNodeId: null,
+      branchContextInclusion: null,
+      continueBlockId: null,
+      createdAt: '2026-07-27T00:00:00.000Z',
+    },
+    result: status === 'succeeded'
+      ? { title: 'Recovered result', summary: 'Recovered summary', content: 'Recovered content', provider: 'test-provider' }
+      : null,
+    ...overrides,
+  }
+}
+
+function buildRecoverableRewriteStoryTimeline() {
+  return {
+    novelId: 'novel-1',
+    branchId: 'novel-1:main',
+    chapters: [{ type: 'chapter', chapterId: chapter.id, chapterNo: chapter.order, title: chapter.title, wordCount: chapter.wordCount }],
+    branchNodes: [{
+      type: 'branch_node',
+      id: 'continue-node-1',
+      nodeType: 'continue_block',
+      readableLabel: 'CONT-01',
+      readableLineageLabel: 'CONT-01',
+      anchorChapterNo: 1,
+      parentNodeId: null,
+      title: 'Continue block',
+      subtitle: null,
+      laneIndex: 0,
+      colorToken: 'fuchsia',
+      sourceChapterNo: 1,
+      targetChapterNo: null,
+      continueBlockId: 'continue-1',
+      whatIfSessionId: null,
+      futureJumpRunId: null,
+      roleplaySessionId: null,
+      status: 'active',
+    }],
+    edges: [],
+  }
+}
+
 function deletedNovelResult(novelId: string, activeNovelId: string | null = null, cleanupPending = false) {
   return {
     status: 'committed' as const,
@@ -75,8 +135,43 @@ const chapter: Chapter = {
   updatedAt: '2026-07-15',
 }
 
+function buildKnowledgeStatusOverview(overrides: Partial<KnowledgeStatusOverview> = {}): KnowledgeStatusOverview {
+  return {
+    knowledgeGraph: { status: 'full', coveredChapterCount: 1, totalChapterCount: 1, validThroughChapterNo: 1 },
+    extractionCache: { status: 'full', coveredChapterCount: 1, totalChapterCount: 1, validThroughChapterNo: 1 },
+    embeddingCache: {
+      status: 'full',
+      coveredChapterCount: 1,
+      totalChapterCount: 1,
+      validThroughChapterNo: 1,
+      provider: 'ollama',
+      model: 'qwen3-embedding:4b',
+    },
+    retrievalIndex: { status: 'full', indexedScopeCount: 1, task: null },
+    ...overrides,
+  }
+}
+
+function buildKnowledgeProjectionResult(knowledgeStatusOverview: KnowledgeStatusOverview | null): KnowledgeProjectionResult {
+  return {
+    localOutlines: [],
+    localCharacters: [],
+    localCharacterRelations: [],
+    localWorldEntries: [],
+    localTimelineEvents: [],
+    knowledgeRebuildStatus: null,
+    hanlpCacheSnapshot: null,
+    knowledgeStatusOverview,
+    jobOutcome: null,
+    actionError: null,
+  }
+}
+
 function renderActionsHook(options: {
+  backendLoaded?: boolean
   currentNovelId?: string
+  refreshKnowledgeProjection?: (novelId: string, asOfChapter?: number) => Promise<KnowledgeProjectionResult>
+  saveAISettings?: () => Promise<unknown>
   loadFromBackend?: () => Promise<void>
   reconcileNovelDeletionFromBackend?: NovelStore['reconcileNovelDeletionFromBackend']
   deleteNovel?: (novelId: string) => void
@@ -91,7 +186,7 @@ function renderActionsHook(options: {
     loadFromBackend: options.loadFromBackend ?? vi.fn().mockResolvedValue(undefined),
     saveToBackend: vi.fn().mockResolvedValue(undefined),
     isNovelDeletionPending: options.isNovelDeletionPending ?? false,
-    backendLoaded: true,
+    backendLoaded: options.backendLoaded ?? true,
     currentNovelId: options.currentNovelId ?? '',
     localNovels: options.currentNovelId ? [{ id: options.currentNovelId, title: 'Novel 1', summary: '', tags: [] }] : [],
     localVolumes: [],
@@ -101,7 +196,7 @@ function renderActionsHook(options: {
     updateChapterContent: vi.fn(),
     aiSettings: undefined,
     setAISettings: vi.fn(),
-    refreshKnowledgeProjection: vi.fn().mockResolvedValue(undefined),
+    refreshKnowledgeProjection: options.refreshKnowledgeProjection ?? vi.fn().mockResolvedValue(buildKnowledgeProjectionResult(null)),
     clearPresetCompatSessionStateForSelection: vi.fn(),
     resetPresetCompatSessionStateForSelection: vi.fn(),
     presetCompatSessionState: {},
@@ -112,12 +207,21 @@ function renderActionsHook(options: {
     autosaveSignature: 'sig-0',
   }
 
-  return renderHook(() => {
-    const core = useSelectionNovelStudioCore(coreParams)
+  return renderHook(({ currentNovelId, localChapters }: { currentNovelId: string; localChapters?: Chapter[] }) => {
+    const runtimeChapters = localChapters ?? coreParams.localChapters
+    const runtimeChapter = runtimeChapters[0] ?? chapter
+    const runtimeCoreParams = {
+      ...coreParams,
+      currentNovelId,
+      localNovels: currentNovelId ? [{ id: currentNovelId, title: 'Novel 1', summary: '', tags: [] }] : [],
+      localChapters: runtimeChapters,
+      currentChapterId: runtimeChapter.id,
+    }
+    const core = useSelectionNovelStudioCore(runtimeCoreParams)
     const actions = useSelectionNovelStudioActions({
       core,
       viewModel: {
-        activeWorkspaceSelection: { kind: 'chapter', chapterId: chapter.id, chapterNo: chapter.order },
+        activeWorkspaceSelection: { kind: 'chapter', chapterId: runtimeChapter.id, chapterNo: runtimeChapter.order },
         selectedTimelineNode: null,
         selectedContinueBlockNode: null,
         selectedContinueBlockFutureMapLaunch: null,
@@ -137,10 +241,10 @@ function renderActionsHook(options: {
       rollbackNovelDeletion: options.rollbackNovelDeletion ?? vi.fn(),
       setNovelDeletionPending: options.setNovelDeletionPending ?? vi.fn(),
       reconcileNovelDeletion: options.reconcileNovelDeletion ?? vi.fn(),
-      localChapters: [chapter],
+      localChapters: runtimeChapters,
       deleteChapter: vi.fn(),
       deleteNovel: options.deleteNovel ?? vi.fn(),
-      saveAISettings: vi.fn().mockResolvedValue(undefined),
+      saveAISettings: options.saveAISettings ?? vi.fn().mockResolvedValue(undefined),
       savePresetCompatLibrary: vi.fn().mockResolvedValue(undefined),
       rebuildStoryKnowledge: vi.fn().mockResolvedValue(undefined),
       rebuildStoryRetrievalIndex: vi.fn().mockResolvedValue(undefined),
@@ -155,7 +259,71 @@ function renderActionsHook(options: {
       updateChapterContent: coreParams.updateChapterContent,
     })
     return { actions, core }
+  }, { initialProps: { currentNovelId: options.currentNovelId ?? '', localChapters: coreParams.localChapters } })
+}
+
+function installIdleWorkspaceFetchMock() {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.startsWith('/api/knowledge-view?')) {
+      return jsonResponse({ ok: true, knowledgeRebuildStatus: null, hanlpCacheSnapshot: null, knowledgeStatusOverview: null })
+    }
+    if (url.startsWith('/api/story-timeline?')) {
+      return jsonResponse({ novelId: 'novel-1', branchId: 'novel-1:main', chapters: [], branchNodes: [], edges: [] })
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+}
+
+function installRecoverableRewriteFetchMock(options: {
+  restoreResponse: Deferred<Response>
+  storyTimelineResponse?: Deferred<Response>
+  createResponse?: Deferred<Response>
+  createResponses?: Deferred<Response>[]
+  pollResponses?: Deferred<Response>[]
+  abortResponses?: Deferred<Response>[]
+}) {
+  let createIndex = 0
+  let pollIndex = 0
+  let abortIndex = 0
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method ?? 'GET'
+    if (url.startsWith('/api/knowledge-view?') && method === 'GET') {
+      return Promise.resolve(jsonResponse({ ok: true, knowledgeRebuildStatus: null, hanlpCacheSnapshot: null, knowledgeStatusOverview: null }))
+    }
+    if (url.startsWith('/api/story-timeline?') && method === 'GET') {
+      if (options.storyTimelineResponse) return options.storyTimelineResponse.promise
+      return Promise.resolve(jsonResponse({ novelId: 'novel-1', branchId: 'novel-1:main', chapters: [], branchNodes: [], edges: [] }))
+    }
+    if (url.startsWith('/api/rewrite?') && method === 'GET') {
+      if (url.includes('jobId=')) {
+        const response = options.pollResponses?.[pollIndex]
+        pollIndex += 1
+        if (!response) throw new Error(`Unexpected rewrite poll: ${url}`)
+        return response.promise
+      }
+      return options.restoreResponse.promise
+    }
+    if (url === '/api/rewrite' && method === 'POST') {
+      const response = options.createResponses?.[createIndex] ?? options.createResponse
+      createIndex += 1
+      if (!response) throw new Error('Unexpected rewrite create')
+      return response.promise
+    }
+    if (url.startsWith('/api/rewrite?') && method === 'DELETE') {
+      const response = options.abortResponses?.[abortIndex]
+      abortIndex += 1
+      if (!response) throw new Error(`Unexpected rewrite abort: ${url}`)
+      return response.promise
+    }
+    if (url === '/api/generation-context' && method === 'POST') {
+      return Promise.resolve(jsonResponse({ ok: false, error: 'Context preview omitted by test' }, 400))
+    }
+    throw new Error(`Unexpected fetch: ${method} ${url}`)
   })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
 }
 
 function installPendingFetchMock() {
@@ -188,8 +356,51 @@ async function rejectRequest(request: PendingFetch, error: Error) {
   })
 }
 
+async function resolveDeferredResponse(deferred: Deferred<Response>, response: Response) {
+  await act(async () => {
+    deferred.resolve(response)
+    await deferred.promise
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+function captureRewritePoll() {
+  const scheduledPolls: Array<{ id: number; handler: () => void }> = []
+  const nativeSetTimeout = window.setTimeout
+  const nativeClearTimeout = window.clearTimeout
+  let nextPollId = 900_000
+  vi.spyOn(window, 'setTimeout').mockImplementation((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+    if (delay === 1500 && typeof handler === 'function') {
+      nextPollId += 1
+      scheduledPolls.push({ id: nextPollId, handler })
+      return nextPollId
+    }
+    return nativeSetTimeout(handler, delay, ...args)
+  })
+  vi.spyOn(window, 'clearTimeout').mockImplementation((timeoutId?: number) => {
+    const pollIndex = scheduledPolls.findIndex((poll) => poll.id === timeoutId)
+    if (pollIndex >= 0) {
+      scheduledPolls.splice(pollIndex, 1)
+      return
+    }
+    nativeClearTimeout(timeoutId)
+  })
+  return {
+    runNext() {
+      const poll = scheduledPolls.shift()
+      if (!poll) throw new Error('Rewrite poll was not scheduled')
+      poll.handler()
+    },
+    scheduledCount() {
+      return scheduledPolls.length
+    },
+  }
+}
+
 describe('useSelectionNovelStudioActions model discovery', () => {
   afterEach(() => {
+    window.history.replaceState({}, '', '/')
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
@@ -275,6 +486,419 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     expect(requests.every((request) => !request.signal.aborted)).toBe(true)
     unmount()
     expect(requests.every((request) => request.signal.aborted)).toBe(true)
+  })
+
+  it.each(['queued', 'running'] as const)('hydrates a clean initial %s recoverable rewrite', async (status) => {
+    const restoreResponse = createDeferred<Response>()
+    const fetchMock = installRecoverableRewriteFetchMock({ restoreResponse })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/rewrite\?/), expect.anything()))
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob(status) }))
+
+    await waitFor(() => {
+      expect(result.current.core.activeMode).toBe('rewrite')
+      expect(result.current.core.selectionText).toBe('Recovered selection')
+      expect(result.current.core.lockedSelectionText).toBe('Recovered selection')
+      expect(result.current.core.rewritePrompt).toBe('Recovered instruction')
+      expect(result.current.core.rewriteFlow.jobId).toBe('rewrite-job-1')
+      expect(result.current.core.rewriteFlow.jobStatus).toBe(status)
+      expect(result.current.core.rewriteFlow.loading).toBe(true)
+    })
+  })
+
+  it('hydrates a clean initial succeeded recoverable rewrite with content', async () => {
+    const restoreResponse = createDeferred<Response>()
+    installRecoverableRewriteFetchMock({ restoreResponse })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+
+    await waitFor(() => {
+      expect(result.current.core.activeMode).toBe('rewrite')
+      expect(result.current.core.rewriteFlow.jobId).toBe('rewrite-job-1')
+      expect(result.current.core.rewriteFlow.jobStatus).toBe('succeeded')
+      expect(result.current.core.rewriteState.result).toBe('Recovered content')
+    })
+  })
+
+  it('ignores a delayed initial restore after a same-chapter timeline transition', async () => {
+    const restoreResponse = createDeferred<Response>()
+    installRecoverableRewriteFetchMock({ restoreResponse })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+
+    act(() => result.current.core.handleTimelineSelection({ kind: 'rewrite', nodeId: 'node-1', continueBlockId: 'continue-1', anchorChapterNo: 1 }))
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+
+    expect(result.current.core.activeMode).toBeNull()
+    expect(result.current.core.rewriteFlow.jobId).toBeNull()
+  })
+
+  it('lets URL branch hydration invalidate delayed restore and create ownership', async () => {
+    window.history.replaceState({}, '', '/?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-1&selectionAnchorChapterNo=1')
+    const restoreResponse = createDeferred<Response>()
+    const storyTimelineResponse = createDeferred<Response>()
+    const createResponse = createDeferred<Response>()
+    installRecoverableRewriteFetchMock({ restoreResponse, storyTimelineResponse, createResponse })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    act(() => result.current.core.setSelectionText('Fresh selection'))
+    await act(async () => { await result.current.actions.openActionMode('rewrite') })
+    act(() => { void result.current.actions.handleRewrite() })
+
+    await resolveDeferredResponse(storyTimelineResponse, jsonResponse(buildRecoverableRewriteStoryTimeline()))
+    await waitFor(() => expect(result.current.core.workspaceSelection).toEqual({ kind: 'continue_block', nodeId: 'continue-node-1', continueBlockId: 'continue-1', anchorChapterNo: 1 }))
+    await resolveDeferredResponse(createResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('queued') }))
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+
+    expect(result.current.core.activeMode).toBeNull()
+    expect(result.current.core.ownedRecoverableRewriteJobIdRef.current).toBeNull()
+    expect(result.current.core.rewriteFlow.jobId).toBeNull()
+  })
+
+  it('lets delayed URL branch hydration close a restored rewrite and reject its in-flight poll', async () => {
+    window.history.replaceState({}, '', '/?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-1&selectionAnchorChapterNo=1')
+    const restoreResponse = createDeferred<Response>()
+    const storyTimelineResponse = createDeferred<Response>()
+    const pollResponse = createDeferred<Response>()
+    const poll = captureRewritePoll()
+    installRecoverableRewriteFetchMock({ restoreResponse, storyTimelineResponse, pollResponses: [pollResponse] })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('running') }))
+    await waitFor(() => expect(result.current.core.rewriteFlow.jobId).toBe('rewrite-job-1'))
+    act(() => poll.runNext())
+    await resolveDeferredResponse(storyTimelineResponse, jsonResponse(buildRecoverableRewriteStoryTimeline()))
+    await waitFor(() => expect(result.current.core.workspaceSelection).toEqual({ kind: 'continue_block', nodeId: 'continue-node-1', continueBlockId: 'continue-1', anchorChapterNo: 1 }))
+    await resolveDeferredResponse(pollResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+
+    expect(result.current.core.activeMode).toBeNull()
+    expect(result.current.core.ownedRecoverableRewriteJobIdRef.current).toBeNull()
+    expect(result.current.core.rewriteFlow.jobStatus).toBe('running')
+  })
+
+  it('ignores a delayed restore after a fresh rewrite open', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const fetchMock = installRecoverableRewriteFetchMock({ restoreResponse })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/rewrite\?/), expect.anything()))
+    act(() => result.current.core.setSelectionText('Fresh selection'))
+    act(() => {
+      void result.current.actions.openActionMode('rewrite')
+    })
+
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+
+    expect(result.current.core.activeMode).toBe('rewrite')
+    expect(result.current.core.selectionText).toBe('Fresh selection')
+    expect(result.current.core.lockedSelectionText).toBe('Fresh selection')
+    expect(result.current.core.rewritePrompt).toBe('workspace.rewrite.defaultPrompt')
+    expect(result.current.core.rewriteFlow.jobId).toBeNull()
+  })
+
+  it('ignores a delayed restore after the rewrite prompt is edited', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const fetchMock = installRecoverableRewriteFetchMock({ restoreResponse })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/rewrite\?/), expect.anything()))
+    act(() => result.current.actions.handleRewritePromptChange('Fresh instruction'))
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+
+    expect(result.current.core.activeMode).toBeNull()
+    expect(result.current.core.rewritePrompt).toBe('Fresh instruction')
+    expect(result.current.core.selectionText).toBe('')
+    expect(result.current.core.rewriteFlow.jobId).toBeNull()
+  })
+
+  it('does not reopen the panel when a delayed restore resolves after close', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const fetchMock = installRecoverableRewriteFetchMock({ restoreResponse })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/rewrite\?/), expect.anything()))
+    act(() => result.current.core.setActiveMode('rewrite'))
+    act(() => result.current.core.closePanel())
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+
+    expect(result.current.core.activeMode).toBeNull()
+    expect(result.current.core.rewritePrompt).toBe('workspace.rewrite.defaultPrompt')
+    expect(result.current.core.selectionText).toBe('')
+    expect(result.current.core.rewriteFlow.jobId).toBeNull()
+  })
+
+  it('synchronizes a rewrite POST job without hydrating returned panel fields', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const createResponse = createDeferred<Response>()
+    const fetchMock = installRecoverableRewriteFetchMock({ restoreResponse, createResponse })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/rewrite\?/), expect.anything()))
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: null }))
+    act(() => result.current.core.setSelectionText('Fresh selection'))
+    act(() => {
+      void result.current.actions.openActionMode('rewrite')
+    })
+    act(() => result.current.actions.handleRewritePromptChange('Fresh instruction'))
+
+    let rewritePromise: Promise<void> | undefined
+    act(() => {
+      rewritePromise = result.current.actions.handleRewrite()
+    })
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/rewrite', expect.objectContaining({ method: 'POST' }))
+    })
+
+    await act(async () => {
+      createResponse.resolve(jsonResponse({ ok: true, job: buildRecoverableRewriteJob('queued') }))
+      await rewritePromise
+    })
+
+    expect(result.current.core.selectionText).toBe('Fresh selection')
+    expect(result.current.core.lockedSelectionText).toBe('Fresh selection')
+    expect(result.current.core.rewritePrompt).toBe('Fresh instruction')
+    expect(result.current.core.rewriteFlow.jobId).toBe('rewrite-job-1')
+    expect(result.current.core.rewriteFlow.jobStatus).toBe('queued')
+  })
+
+  it('ignores a delayed create after close and reopen', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const createResponse = createDeferred<Response>()
+    installRecoverableRewriteFetchMock({ restoreResponse, createResponse })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: null }))
+    act(() => result.current.core.setSelectionText('Fresh selection'))
+    await act(async () => { await result.current.actions.openActionMode('rewrite') })
+    act(() => { void result.current.actions.handleRewrite() })
+    act(() => result.current.core.closePanel())
+    await act(async () => { await result.current.actions.openActionMode('rewrite') })
+
+    await resolveDeferredResponse(createResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('queued') }))
+
+    expect(result.current.core.activeMode).toBe('rewrite')
+    expect(result.current.core.rewriteFlow.jobId).toBeNull()
+    expect(result.current.core.rewriteFlow.loading).toBe(false)
+  })
+
+  it('lets only the newest concurrent create claim the panel', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const olderCreate = createDeferred<Response>()
+    const newerCreate = createDeferred<Response>()
+    const fetchMock = installRecoverableRewriteFetchMock({ restoreResponse, createResponses: [olderCreate, newerCreate] })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: null }))
+    act(() => result.current.core.setSelectionText('Fresh selection'))
+    await act(async () => { await result.current.actions.openActionMode('rewrite') })
+    act(() => { void result.current.actions.handleRewrite() })
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url, init]) => String(url) === '/api/rewrite' && (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(1))
+    act(() => { void result.current.actions.handleRewrite() })
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url, init]) => String(url) === '/api/rewrite' && (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(2))
+
+    await resolveDeferredResponse(newerCreate, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('queued', { jobId: 'newer-job' }) }))
+    await resolveDeferredResponse(olderCreate, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('queued', { jobId: 'older-job' }) }))
+
+    expect(result.current.core.rewriteFlow.jobId).toBe('newer-job')
+  })
+
+  it('ignores an in-flight poll after close and reopen', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const pollResponse = createDeferred<Response>()
+    const poll = captureRewritePoll()
+    installRecoverableRewriteFetchMock({ restoreResponse, pollResponses: [pollResponse] })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('running') }))
+    await waitFor(() => expect(result.current.core.rewriteFlow.jobId).toBe('rewrite-job-1'))
+    act(() => poll.runNext())
+    act(() => result.current.core.closePanel())
+    act(() => result.current.core.setSelectionText('Fresh selection'))
+    await act(async () => { await result.current.actions.openActionMode('rewrite') })
+
+    await resolveDeferredResponse(pollResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+
+    expect(result.current.core.rewriteFlow.jobId).toBeNull()
+    expect(result.current.core.rewriteState.result).toBe('')
+  })
+
+  it('ignores a poll response with the wrong returned job ID', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const pollResponse = createDeferred<Response>()
+    const poll = captureRewritePoll()
+    installRecoverableRewriteFetchMock({ restoreResponse, pollResponses: [pollResponse] })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('running') }))
+    await waitFor(() => expect(result.current.core.rewriteFlow.jobId).toBe('rewrite-job-1'))
+    act(() => poll.runNext())
+
+    await resolveDeferredResponse(pollResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded', { jobId: 'wrong-job' }) }))
+
+    expect(result.current.core.rewriteFlow.jobId).toBe('rewrite-job-1')
+    expect(result.current.core.rewriteFlow.jobStatus).toBe('running')
+    expect(poll.scheduledCount()).toBe(1)
+  })
+
+  it('continues polling after null, wrong-context, and recoverable error responses', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const nullPollResponse = createDeferred<Response>()
+    const wrongContextPollResponse = createDeferred<Response>()
+    const errorPollResponse = createDeferred<Response>()
+    const terminalPollResponse = createDeferred<Response>()
+    const poll = captureRewritePoll()
+    installRecoverableRewriteFetchMock({ restoreResponse, pollResponses: [nullPollResponse, wrongContextPollResponse, errorPollResponse, terminalPollResponse] })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('running') }))
+    await waitFor(() => expect(poll.scheduledCount()).toBe(1))
+
+    act(() => poll.runNext())
+    await resolveDeferredResponse(nullPollResponse, jsonResponse({ ok: true, job: null }))
+    expect(poll.scheduledCount()).toBe(1)
+
+    const wrongContextJob = buildRecoverableRewriteJob('running')
+    act(() => poll.runNext())
+    await resolveDeferredResponse(wrongContextPollResponse, jsonResponse({ ok: true, job: { ...wrongContextJob, panel: { ...wrongContextJob.panel, chapterId: 'wrong-chapter' } } }))
+    expect(poll.scheduledCount()).toBe(1)
+
+    act(() => poll.runNext())
+    await resolveDeferredResponse(errorPollResponse, jsonResponse({ ok: false, error: 'Temporary poll failure' }, 503))
+    expect(result.current.core.rewriteFlow.error).toBe('Temporary poll failure')
+    expect(result.current.core.rewriteFlow.jobStatus).toBe('running')
+    expect(poll.scheduledCount()).toBe(1)
+
+    act(() => poll.runNext())
+    await resolveDeferredResponse(terminalPollResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+    expect(result.current.core.rewriteFlow.jobStatus).toBe('succeeded')
+    expect(poll.scheduledCount()).toBe(0)
+  })
+
+  it('keeps prompt edits while a valid poll synchronizes status and result', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const pollResponse = createDeferred<Response>()
+    const poll = captureRewritePoll()
+    installRecoverableRewriteFetchMock({ restoreResponse, pollResponses: [pollResponse] })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('running') }))
+    await waitFor(() => expect(result.current.core.rewriteFlow.jobId).toBe('rewrite-job-1'))
+    act(() => result.current.actions.handleRewritePromptChange('Edited while running'))
+    act(() => poll.runNext())
+
+    await resolveDeferredResponse(pollResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+
+    expect(result.current.core.rewritePrompt).toBe('Edited while running')
+    expect(result.current.core.rewriteFlow.jobStatus).toBe('succeeded')
+    expect(result.current.core.rewriteState.result).toBe('Recovered content')
+  })
+
+  it('keeps slow rewrite polling single-flight and schedules the next poll after settlement', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const firstPollResponse = createDeferred<Response>()
+    const secondPollResponse = createDeferred<Response>()
+    const poll = captureRewritePoll()
+    const fetchMock = installRecoverableRewriteFetchMock({ restoreResponse, pollResponses: [firstPollResponse, secondPollResponse] })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('running') }))
+    await waitFor(() => expect(poll.scheduledCount()).toBe(1))
+
+    act(() => poll.runNext())
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('jobId=rewrite-job-1'))).toHaveLength(1)
+    expect(poll.scheduledCount()).toBe(0)
+    expect(() => poll.runNext()).toThrow('Rewrite poll was not scheduled')
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('jobId=rewrite-job-1'))).toHaveLength(1)
+
+    await resolveDeferredResponse(firstPollResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('running', { currentStep: 'Slow response applied' }) }))
+    expect(result.current.core.rewriteFlow.jobCurrentStep).toBe('Slow response applied')
+    expect(poll.scheduledCount()).toBe(1)
+
+    act(() => poll.runNext())
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('jobId=rewrite-job-1'))).toHaveLength(2)
+    await resolveDeferredResponse(secondPollResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+    expect(result.current.core.rewriteFlow.jobStatus).toBe('succeeded')
+    expect(poll.scheduledCount()).toBe(0)
+  })
+
+  it('keeps rewrite polling single-flight across equivalent poll effect generations', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const oldGenerationPollResponse = createDeferred<Response>()
+    const currentGenerationPollResponse = createDeferred<Response>()
+    const poll = captureRewritePoll()
+    const fetchMock = installRecoverableRewriteFetchMock({ restoreResponse, pollResponses: [oldGenerationPollResponse, currentGenerationPollResponse] })
+    const { result, rerender } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('running') }))
+    await waitFor(() => expect(poll.scheduledCount()).toBe(1))
+
+    act(() => poll.runNext())
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('jobId=rewrite-job-1'))).toHaveLength(1)
+
+    await act(async () => {
+      rerender({ currentNovelId: 'novel-1', localChapters: [{ ...chapter }] })
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(poll.scheduledCount()).toBe(1))
+    act(() => poll.runNext())
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('jobId=rewrite-job-1'))).toHaveLength(1)
+
+    await resolveDeferredResponse(oldGenerationPollResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('running', { currentStep: 'Stale generation response' }) }))
+    expect(result.current.core.rewriteFlow.jobCurrentStep).toBe('Running')
+    await waitFor(() => expect(poll.scheduledCount()).toBe(1))
+
+    act(() => poll.runNext())
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('jobId=rewrite-job-1'))).toHaveLength(2)
+    await resolveDeferredResponse(currentGenerationPollResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+    expect(result.current.core.rewriteFlow.jobStatus).toBe('succeeded')
+    expect(result.current.core.rewriteState.result).toBe('Recovered content')
+  })
+
+  it('ignores a delayed abort after close and reopen', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const abortResponse = createDeferred<Response>()
+    installRecoverableRewriteFetchMock({ restoreResponse, abortResponses: [abortResponse] })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('running') }))
+    await waitFor(() => expect(result.current.core.rewriteFlow.jobId).toBe('rewrite-job-1'))
+    act(() => { void result.current.actions.handleAbortRewriteGeneration() })
+    act(() => result.current.core.closePanel())
+    act(() => result.current.core.setSelectionText('Fresh selection'))
+    await act(async () => { await result.current.actions.openActionMode('rewrite') })
+
+    await resolveDeferredResponse(abortResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+
+    expect(result.current.core.rewriteFlow.jobId).toBeNull()
+    expect(result.current.core.toast).toBe('')
+  })
+
+  it('ignores an abort response with the wrong returned job ID', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const abortResponse = createDeferred<Response>()
+    installRecoverableRewriteFetchMock({ restoreResponse, abortResponses: [abortResponse] })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('running') }))
+    await waitFor(() => expect(result.current.core.rewriteFlow.jobId).toBe('rewrite-job-1'))
+    act(() => { void result.current.actions.handleAbortRewriteGeneration() })
+
+    await resolveDeferredResponse(abortResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded', { jobId: 'wrong-job' }) }))
+
+    expect(result.current.core.rewriteFlow.jobId).toBe('rewrite-job-1')
+    expect(result.current.core.toast).toBe('')
+  })
+
+  it('invalidates ownership only when the context identity key changes', async () => {
+    const restoreResponse = createDeferred<Response>()
+    installRecoverableRewriteFetchMock({ restoreResponse })
+    const { result, rerender } = renderActionsHook({ currentNovelId: 'novel-1' })
+    const initialGeneration = result.current.core.rewritePanelOwnershipGenerationRef.current
+
+    await act(async () => {
+      rerender({ currentNovelId: 'novel-1' })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(result.current.core.rewritePanelOwnershipGenerationRef.current).toBe(initialGeneration)
+
+    await act(async () => {
+      rerender({ currentNovelId: 'novel-2' })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(result.current.core.rewritePanelOwnershipGenerationRef.current).toBe(initialGeneration + 1)
+    expect(result.current.core.ownedRecoverableRewriteJobIdRef.current).toBeNull()
   })
 
   it('optimistically deletes the current novel and reconciles a null authoritative survivor', async () => {
@@ -396,5 +1020,171 @@ describe('useSelectionNovelStudioActions model discovery', () => {
 
     expect(confirm).not.toHaveBeenCalled()
     expect(deleteNovelFromBackend).not.toHaveBeenCalled()
+  })
+
+  it('saves settings before refreshing the exact current projection and closes after both succeed', async () => {
+    installIdleWorkspaceFetchMock()
+    const saveDeferred = createDeferred<void>()
+    const refreshDeferred = createDeferred<KnowledgeProjectionResult>()
+    const saveAISettings = vi.fn(() => saveDeferred.promise)
+    const refreshKnowledgeProjection = vi.fn(() => refreshDeferred.promise)
+    const missingOverview = buildKnowledgeStatusOverview({
+      embeddingCache: {
+        status: 'missing',
+        coveredChapterCount: 0,
+        totalChapterCount: 1,
+        validThroughChapterNo: null,
+        provider: null,
+        model: null,
+      },
+    })
+    const { result } = renderActionsHook({
+      backendLoaded: false,
+      currentNovelId: 'novel-1',
+      saveAISettings,
+      refreshKnowledgeProjection,
+    })
+
+    act(() => result.current.core.setSettingsOpen(true))
+    let savePromise: Promise<void> | undefined
+    act(() => {
+      savePromise = result.current.actions.saveSettings()
+    })
+
+    expect(saveAISettings).toHaveBeenCalledTimes(1)
+    expect(refreshKnowledgeProjection).not.toHaveBeenCalled()
+    expect(result.current.core.settingsOpen).toBe(true)
+
+    await act(async () => {
+      saveDeferred.resolve(undefined)
+      await saveDeferred.promise
+    })
+
+    await waitFor(() => {
+      expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-1', 1)
+    })
+    expect(result.current.core.settingsOpen).toBe(true)
+
+    await act(async () => {
+      refreshDeferred.resolve(buildKnowledgeProjectionResult(missingOverview))
+      await savePromise
+    })
+
+    expect(result.current.core.knowledgeStatusOverview).toEqual(missingOverview)
+    expect(result.current.core.settingsOpen).toBe(false)
+  })
+
+  it('saves settings and closes without refreshing when no novel is selected', async () => {
+    const saveAISettings = vi.fn().mockResolvedValue(undefined)
+    const refreshKnowledgeProjection = vi.fn().mockResolvedValue(buildKnowledgeProjectionResult(null))
+    const { result } = renderActionsHook({
+      backendLoaded: false,
+      currentNovelId: '',
+      saveAISettings,
+      refreshKnowledgeProjection,
+    })
+
+    act(() => result.current.core.setSettingsOpen(true))
+
+    await act(async () => {
+      await result.current.actions.saveSettings()
+    })
+
+    expect(saveAISettings).toHaveBeenCalledTimes(1)
+    expect(refreshKnowledgeProjection).not.toHaveBeenCalled()
+    expect(result.current.core.settingsOpen).toBe(false)
+  })
+
+  it('rejects an older settings projection after a newer refresh applies', async () => {
+    installIdleWorkspaceFetchMock()
+    const olderRefresh = createDeferred<KnowledgeProjectionResult>()
+    const currentRefresh = createDeferred<KnowledgeProjectionResult>()
+    const refreshKnowledgeProjection = vi.fn()
+      .mockImplementationOnce(() => olderRefresh.promise)
+      .mockImplementationOnce(() => currentRefresh.promise)
+    const currentOverview = buildKnowledgeStatusOverview({
+      embeddingCache: {
+        status: 'missing',
+        coveredChapterCount: 0,
+        totalChapterCount: 1,
+        validThroughChapterNo: null,
+        provider: null,
+        model: null,
+      },
+    })
+    const staleOverview = buildKnowledgeStatusOverview()
+    const { result } = renderActionsHook({
+      backendLoaded: false,
+      currentNovelId: 'novel-1',
+      saveAISettings: vi.fn().mockResolvedValue(undefined),
+      refreshKnowledgeProjection,
+    })
+
+    let olderSavePromise: Promise<void> | undefined
+    let currentSavePromise: Promise<void> | undefined
+    act(() => {
+      olderSavePromise = result.current.actions.saveSettings()
+    })
+    await waitFor(() => expect(refreshKnowledgeProjection).toHaveBeenCalledTimes(1))
+    act(() => {
+      currentSavePromise = result.current.actions.saveSettings()
+    })
+    await waitFor(() => expect(refreshKnowledgeProjection).toHaveBeenCalledTimes(2))
+    expect(refreshKnowledgeProjection.mock.calls).toEqual([
+      ['novel-1', 1],
+      ['novel-1', 1],
+    ])
+
+    await act(async () => {
+      currentRefresh.resolve(buildKnowledgeProjectionResult(currentOverview))
+      await currentSavePromise
+    })
+    expect(result.current.core.knowledgeStatusOverview).toEqual(currentOverview)
+
+    await act(async () => {
+      olderRefresh.resolve(buildKnowledgeProjectionResult(staleOverview))
+      await olderSavePromise
+    })
+    expect(result.current.core.knowledgeStatusOverview).toEqual(currentOverview)
+  })
+
+  it('keeps settings open and skips projection refresh when saving fails', async () => {
+    installIdleWorkspaceFetchMock()
+    const saveError = new Error('settings save failed')
+    const refreshKnowledgeProjection = vi.fn().mockResolvedValue(buildKnowledgeProjectionResult(null))
+    const { result } = renderActionsHook({
+      backendLoaded: false,
+      currentNovelId: 'novel-1',
+      saveAISettings: vi.fn().mockRejectedValue(saveError),
+      refreshKnowledgeProjection,
+    })
+
+    act(() => result.current.core.setSettingsOpen(true))
+
+    await act(async () => {
+      await expect(result.current.actions.saveSettings()).rejects.toBe(saveError)
+    })
+
+    expect(refreshKnowledgeProjection).not.toHaveBeenCalled()
+    expect(result.current.core.settingsOpen).toBe(true)
+  })
+
+  it('keeps settings open when the post-save projection refresh fails', async () => {
+    installIdleWorkspaceFetchMock()
+    const refreshError = new Error('projection refresh failed')
+    const { result } = renderActionsHook({
+      backendLoaded: false,
+      currentNovelId: 'novel-1',
+      saveAISettings: vi.fn().mockResolvedValue(undefined),
+      refreshKnowledgeProjection: vi.fn().mockRejectedValue(refreshError),
+    })
+
+    act(() => result.current.core.setSettingsOpen(true))
+
+    await act(async () => {
+      await expect(result.current.actions.saveSettings()).rejects.toBe(refreshError)
+    })
+
+    expect(result.current.core.settingsOpen).toBe(true)
   })
 })

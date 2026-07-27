@@ -203,7 +203,7 @@ export function SelectionNovelStudio() {
   const core = useSelectionNovelStudioCore({ loadFromBackend, saveToBackend, isNovelDeletionPending, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId, setCurrentChapterId, updateChapterContent, aiSettings, setAISettings, refreshKnowledgeProjection, clearPresetCompatSessionStateForSelection: (selection) => clearPresetCompatSessionStateForSelection(selection), resetPresetCompatSessionStateForSelection: (selection, surfaces) => resetPresetCompatSessionStateForSelection(selection, surfaces ?? []), presetCompatSessionState, localCharacters, localWorldEntries, localTimelineEvents, localOutlines, autosaveSignature })
   const {
     leftPanelOpen, setLeftPanelOpen, chapterListState, setChapterListState, centerPaneView, setCenterPaneView, refTab, setRefTab, settingsOpen, setSettingsOpen,
-    selectionText, lockedSelectionText, toolbarPos, activeMode, rewritePrompt, setRewritePrompt, rewriteState, rewriteFlow, generationContext,
+    selectionText, lockedSelectionText, toolbarPos, activeMode, rewritePrompt, rewriteState, rewriteFlow, generationContext,
     graphContext, contextPreviewLoading, contextPreviewError, graphReviewLoading, graphReviewControls, contextPanelOpen,
     setContextPanelOpen, graphSelection, setGraphSelection, evidenceDrawerOpen, setEvidenceDrawerOpen, disabledContextBlockIds, setDisabledContextBlockIds, excludedGraphEdgeIds, excludedEvidenceIds, graphMutationPendingId, graphMutationError, chapterGraphData,
     chapterGraphLoading, chapterGraphError, chapterGraphControls, chapterGraphSelection, setChapterGraphSelection, copied, setCopied, toast,
@@ -216,12 +216,12 @@ export function SelectionNovelStudio() {
     timelineChapterById, timelineNodeById, storyTimelineError, novelVolumes, currentNovelMeta, chapterListTarget, chapterText,
     mainKnowledgeRebuildStatus, knowledgeRebuildActive, knowledgeRebuildPaused, knowledgeRebuildFailed, knowledgeRebuildRangeMode,
     knowledgeRebuildFirstChapterCount, knowledgeRebuildStartChapter, knowledgeRebuildEndChapter, selectedKnowledgeRebuildChapterRangeLabel,
-    knowledgeStatusOverview, currentKnowledgeJobBusy, knowledgeGraphOverview, embeddingCacheOverview, retrievalIndexOverview,
+    knowledgeStatusOverview, currentKnowledgeJobBusy, knowledgeGraphOverview, extractionCacheOverview, embeddingCacheOverview, retrievalIndexOverview,
     retrievalIndexStatusLine, retrievalTaskStatus, retrievalTaskStatusLabel, retrievalTaskPercent, retrievalTaskPhaseLabel,
     retrievalControlsState, knowledgeRebuildOverallPercent, knowledgeRebuildFailureMessage, knowledgeRebuildEtaMinutes,
     hanlpBootstrapStatusLine, hanlpBootstrapCompletedChapterCount, hanlpBootstrapTotalChapterCount, hanlpCacheStatusLabel,
     hanlpBootstrapPercent, hanlpBootstrapCacheHitRatePercent, hanlpBootstrapPhaseLabel, hanlpBootstrapEtaLabel, hanlpBootstrapTimingLabel,
-    hanlpSettingsLine, rawTextEmbeddingStatusLine, rawTextEmbeddingPhaseBadge, rawTextEmbeddingPercent,
+    hanlpSettingsLine, rawTextEmbeddingStatusLine, rawTextEmbeddingActive, rawTextEmbeddingPhaseBadge, rawTextEmbeddingPercent,
     rawTextEmbeddingCacheHitRatePercent, rawTextEmbeddingTimingLabel, rawTextEmbeddingSettingsLine, knowledgeRebuildSteps,
     currentKnowledgeRunningStepKey, confirmDeleteHanlpCache, confirmDeleteExtractionCache, confirmDeleteEmbeddingCache,
     confirmDeleteKnowledge, hanlpCacheDeleteState, extractionCacheDeleteState, embeddingCacheDeleteState,
@@ -242,7 +242,7 @@ export function SelectionNovelStudio() {
     openActionMode, handleRefreshContextReview, handleExcludedGenerationContextChange, handleConfirmGraphEdge, handleRejectGraphEdge,
     handleSaveGraphEdgeEdit, handleGraphControlChange, copyText, applyFullChapter, saveSettings, loadOllamaModels,
     loadOpenAICompatibleModels, handleDeleteNovel, handleDeleteChapter, handleTimelineDeleteChapter,
-    handleDeleteBranchNode, handleRewrite, handleAbortRewriteGeneration, handleSaveContinueBlock,
+    handleDeleteBranchNode, handleRewritePromptChange, handleRewrite, handleAbortRewriteGeneration, handleSaveContinueBlock,
     handleCreateWhatIf, launchFutureMapFromWhatIf, handleFutureJumpCreated, reopenWhatIfRewriteFlow,
     reopenFutureJumpRewriteFlow, selectionActions, knowledgeControls,
   } = actions
@@ -906,7 +906,7 @@ export function SelectionNovelStudio() {
 
                 <label className="block">
                   <span className="mb-2 block text-sm text-zinc-300">{t('workspace.shell.rewriteInstructionLabel')}</span>
-                  <textarea value={rewritePrompt} onChange={(event) => setRewritePrompt(event.target.value)} className="h-28 w-full rounded-[24px] border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.rewriteInstructionPlaceholder')} />
+                  <textarea value={rewritePrompt} onChange={(event) => handleRewritePromptChange(event.target.value)} className="h-28 w-full rounded-[24px] border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.rewriteInstructionPlaceholder')} />
                 </label>
 
                 {generationContext && activeGraphContext ? (
@@ -1043,7 +1043,7 @@ export function SelectionNovelStudio() {
                   <button onClick={() => selectedRewriteCandidate && copyText('rewrite', selectedRewriteCandidate.content)} disabled={!selectedRewriteCandidate} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
                     {copied === 'rewrite' ? <span className="inline-flex items-center gap-2"><Check className="h-4 w-4" /> {t('workspace.shell.copied')}</span> : t('workspace.shell.copyResult')}
                   </button>
-                  <button onClick={() => selectedRewriteCandidate && setRewritePrompt((current) => `${current}\n\n${t('workspace.shell.continueRewritePromptAppend')}`)} disabled={!selectedRewriteCandidate} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
+                  <button onClick={() => selectedRewriteCandidate && handleRewritePromptChange((current) => `${current}\n\n${t('workspace.shell.continueRewritePromptAppend')}`)} disabled={!selectedRewriteCandidate} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
                     {t('workspace.shell.continueRewrite')}
                   </button>
                 </div>

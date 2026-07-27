@@ -1,7 +1,7 @@
 "use client"
 
 import { useRouter } from 'next/navigation'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/graph-review-panel'
@@ -36,6 +36,8 @@ import {
   filterWorkspaceVisibleCharacters,
   findSourceBlock,
   formatEmbeddingProviderLabel,
+  formatKnowledgeCoverageBadge,
+  formatKnowledgeCoverageDetail,
   formatKnowledgeEtaLabel,
   formatKnowledgeJobStatusLabel,
   formatKnowledgeRebuildChapterRangeLabel,
@@ -102,6 +104,7 @@ import type {
   Volume,
   WorldEntry,
 } from '@/lib/types'
+import type { KnowledgeProjectionResult } from '@/store/novel-store-types'
 
 type SelectionNovelStudioCoreParams = {
   loadFromBackend: () => Promise<unknown>
@@ -117,7 +120,7 @@ type SelectionNovelStudioCoreParams = {
   updateChapterContent: (chapterId: string, content: string) => void
   aiSettings: AISettings | undefined
   setAISettings: (settings: AISettings) => void
-  refreshKnowledgeProjection: (novelId: string, asOfChapter?: number) => Promise<unknown>
+  refreshKnowledgeProjection: (novelId: string, asOfChapter?: number) => Promise<KnowledgeProjectionResult>
   clearPresetCompatSessionStateForSelection: (selection: TimelineSelection, surfaces?: PresetCompatSurfaceId[], phase?: string) => void
   resetPresetCompatSessionStateForSelection: (selection: TimelineSelection, surfaces?: PresetCompatSurfaceId[], phase?: string) => void
   presetCompatSessionState: Record<string, { phase?: string | null } | undefined>
@@ -155,6 +158,31 @@ export function resolveSelectedKnowledgeProjectionChapterOrder(params: {
   }
 
   return localChapters.find((chapter) => chapter.id === currentChapterId)?.order
+}
+
+export function mergeKnowledgeStatusOverview(
+  current: KnowledgeStatusOverview | null,
+  incoming: KnowledgeStatusOverview | null | undefined
+): KnowledgeStatusOverview | null {
+  if (!incoming) return current
+  if (!current) return incoming
+
+  const currentEmbedding = current.embeddingCache
+  const incomingEmbedding = incoming.embeddingCache
+  const embeddingGenerationChanged = currentEmbedding.provider !== incomingEmbedding.provider
+    || currentEmbedding.model !== incomingEmbedding.model
+    || currentEmbedding.totalChapterCount !== incomingEmbedding.totalChapterCount
+  const incomingClearsCoverage = incomingEmbedding.status === 'missing'
+    || incomingEmbedding.coveredChapterCount === 0
+
+  return {
+    knowledgeGraph: incoming.knowledgeGraph,
+    extractionCache: incoming.extractionCache,
+    embeddingCache: embeddingGenerationChanged || incomingClearsCoverage
+      ? incomingEmbedding
+      : currentEmbedding,
+    retrievalIndex: incoming.retrievalIndex,
+  }
 }
 
 export function useSelectionNovelStudioCore(params: SelectionNovelStudioCoreParams) {
@@ -273,6 +301,8 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const [knowledgeRebuilding, setKnowledgeRebuilding] = useState(false)
   const [presetCompatLibraryOpen, setPresetCompatLibraryOpen] = useState(false)
   const [knowledgeRebuildStatus, setKnowledgeRebuildStatus] = useState<KnowledgeRebuildStatus | null>(null)
+  const latestKnowledgeRebuildStatusRef = useRef<KnowledgeRebuildStatus | null>(null)
+  const knowledgePollInFlightRef = useRef<Promise<void> | null>(null)
   const [hanlpCacheSnapshot, setHanlpCacheSnapshot] = useState<HanlpCacheSnapshot | null>(null)
   const [knowledgeStatusOverview, setKnowledgeStatusOverview] = useState<KnowledgeStatusOverview | null>(null)
   const [knowledgeActionLoading, setKnowledgeActionLoading] = useState<KnowledgeActionLoading>(null)
@@ -302,13 +332,35 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const autosaveDrainRef = useRef<() => void>(() => undefined)
   const autosaveSaveToBackendRef = useRef(params.saveToBackend)
   const novelDeletionPendingRef = useRef(params.isNovelDeletionPending)
+  const fullKnowledgeProjectionRequestGenerationRef = useRef(0)
+  const knowledgeProjectionNovelIdRef = useRef(params.currentNovelId)
   const hydratedRef = useRef(false)
   const workspaceSelectionHydratedRef = useRef(false)
   const lastActiveKnowledgeJobIdRef = useRef<string | null>(null)
   const openAICompatibleModelsRequestRef = useRef<Record<AIScenarioKey, number>>({ rewrite: 0, knowledgeExtraction: 0, embeddings: 0 })
   const chapterGraphRequestRef = useRef(0)
   const storyTimelineRequestRef = useRef(0)
+  const recoverablePanelHydrationGenerationRef = useRef(0)
+  const rewritePanelOwnershipGenerationRef = useRef(0)
+  const ownedRecoverableRewriteJobIdRef = useRef<string | null>(null)
   const resolvedAISettings = useMemo(() => normalizeAISettings(params.aiSettings), [params.aiSettings])
+
+  const invalidateRecoverablePanelHydration = useCallback(() => {
+    recoverablePanelHydrationGenerationRef.current += 1
+  }, [])
+
+  const invalidateRecoverableRewriteOwnership = useCallback(() => {
+    recoverablePanelHydrationGenerationRef.current += 1
+    rewritePanelOwnershipGenerationRef.current += 1
+    ownedRecoverableRewriteJobIdRef.current = null
+  }, [])
+
+  const applyFullKnowledgeProjectionResult = useCallback((projection: KnowledgeProjectionResult) => {
+    latestKnowledgeRebuildStatusRef.current = projection.knowledgeRebuildStatus
+    setKnowledgeRebuildStatus(projection.knowledgeRebuildStatus)
+    setHanlpCacheSnapshot(projection.hanlpCacheSnapshot)
+    setKnowledgeStatusOverview(projection.knowledgeStatusOverview)
+  }, [])
 
   const updateAISettings = useCallback((updater: (current: AISettings) => AISettings) => {
     params.setAISettings(normalizeAISettings(updater(resolvedAISettings)))
@@ -542,6 +594,17 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     return grouped
   }, [sortedChapters])
   const storyTimelineBranchId = params.currentNovelId ? `${params.currentNovelId}:main` : ''
+  const recoverableRewriteContextKey = `${params.currentNovelId}\u0000${storyTimelineBranchId}\u0000${currentChapter?.id ?? ''}`
+  const recoverableRewriteContextKeyRef = useRef(recoverableRewriteContextKey)
+  const previousRecoverableRewriteContextKeyRef = useRef(recoverableRewriteContextKey)
+  useLayoutEffect(() => {
+    const previousKey = previousRecoverableRewriteContextKeyRef.current
+    recoverableRewriteContextKeyRef.current = recoverableRewriteContextKey
+    previousRecoverableRewriteContextKeyRef.current = recoverableRewriteContextKey
+    if (previousKey !== recoverableRewriteContextKey) {
+      invalidateRecoverableRewriteOwnership()
+    }
+  }, [invalidateRecoverableRewriteOwnership, recoverableRewriteContextKey])
   const fallbackStoryTimeline = useMemo<StoryTimelineResponse>(() => ({
     novelId: params.currentNovelId,
     branchId: storyTimelineBranchId,
@@ -559,21 +622,46 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     timelineNodeById,
   }), [params.currentChapterId, params.localChapters, timelineNodeById, workspaceSelection])
 
+  const refreshCurrentFullKnowledgeProjection = useCallback(async (isRequestRelevant?: () => boolean) => {
+    const novelId = params.currentNovelId
+    if (!novelId) return
+    const selectedChapterOrder = selectedKnowledgeStatusChapterOrder
+    const requestGeneration = fullKnowledgeProjectionRequestGenerationRef.current + 1
+    fullKnowledgeProjectionRequestGenerationRef.current = requestGeneration
+    const refreshedProjection = await params.refreshKnowledgeProjection(novelId, selectedChapterOrder)
+    if (
+      (!isRequestRelevant || isRequestRelevant())
+      && fullKnowledgeProjectionRequestGenerationRef.current === requestGeneration
+      && knowledgeProjectionNovelIdRef.current === novelId
+    ) {
+      applyFullKnowledgeProjectionResult(refreshedProjection)
+    }
+  }, [applyFullKnowledgeProjectionResult, params.currentNovelId, params.refreshKnowledgeProjection, selectedKnowledgeStatusChapterOrder])
+
+  useEffect(() => {
+    if (knowledgeProjectionNovelIdRef.current === params.currentNovelId) return
+    knowledgeProjectionNovelIdRef.current = params.currentNovelId
+    fullKnowledgeProjectionRequestGenerationRef.current += 1
+    latestKnowledgeRebuildStatusRef.current = null
+    lastActiveKnowledgeJobIdRef.current = null
+    setKnowledgeRebuildStatus(null)
+    setHanlpCacheSnapshot(null)
+    setKnowledgeStatusOverview(null)
+  }, [params.currentNovelId])
+
+  useEffect(() => {
+    latestKnowledgeRebuildStatusRef.current = knowledgeRebuildStatus
+  }, [knowledgeRebuildStatus])
+
   useEffect(() => {
     if (!params.currentNovelId) {
       setConfirmDeleteKnowledge(false)
       setConfirmDeleteHanlpCache(false)
       setConfirmDeleteExtractionCache(false)
       setConfirmDeleteEmbeddingCache(false)
-      const resetTimer = window.setTimeout(() => {
-        setKnowledgeRebuildStatus(null)
-        setHanlpCacheSnapshot(null)
-        setKnowledgeStatusOverview(null)
-      }, 0)
+      latestKnowledgeRebuildStatusRef.current = null
       lastActiveKnowledgeJobIdRef.current = null
-      return () => {
-        window.clearTimeout(resetTimer)
-      }
+      return
     }
 
     const confirmResetTimer = window.setTimeout(() => {
@@ -585,6 +673,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
 
     let cancelled = false
     let pollTimerId: number | null = null
+    let pollAbortController: AbortController | null = null
 
     const scheduleNextPoll = (delay: number | null) => {
       if (cancelled || delay === null) return
@@ -593,62 +682,98 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
       }, delay)
     }
 
+    const scheduleRetry = () => {
+      const latestStatus = latestKnowledgeRebuildStatusRef.current?.novelId === params.currentNovelId
+        ? latestKnowledgeRebuildStatusRef.current
+        : null
+      scheduleNextPoll(getKnowledgePollDelay(latestStatus, knowledgeActionLoading) ?? 1_500)
+    }
+
     const syncRebuildStatus = async () => {
-      try {
-        const searchParams = new URLSearchParams({ novelId: params.currentNovelId })
-        searchParams.set('statusOnly', '1')
-        const selectedChapterOrder = selectedKnowledgeStatusChapterOrder
-        if (typeof selectedChapterOrder === 'number' && Number.isFinite(selectedChapterOrder) && selectedChapterOrder >= 1) {
-          searchParams.set('asOfChapter', String(selectedChapterOrder))
-        }
+      const previousRequest = knowledgePollInFlightRef.current
+      if (previousRequest) {
+        await previousRequest
+      }
+      if (cancelled) return
 
-        const response = await fetch(`/api/knowledge-view?${searchParams.toString()}`, { cache: 'no-store' })
-        const data = (await response.json()) as {
-          ok?: boolean
-          knowledgeRebuildStatus?: KnowledgeRebuildStatus | null
-          hanlpCacheSnapshot?: HanlpCacheSnapshot | null
-          knowledgeStatusOverview?: KnowledgeStatusOverview | null
-        }
-
-        if (cancelled || !response.ok || !data.ok) return
-
-        const nextStatus = data.knowledgeRebuildStatus ?? null
-        setHanlpCacheSnapshot(data.hanlpCacheSnapshot ?? null)
-        setKnowledgeStatusOverview(data.knowledgeStatusOverview ?? null)
-        const hadActiveJob = Boolean(lastActiveKnowledgeJobIdRef.current)
-        const failureMessage = resolveKnowledgeRebuildFailureMessage(nextStatus)
-
-        setKnowledgeRebuildStatus(nextStatus)
-
-        if (nextStatus?.jobId && (nextStatus.status === 'queued' || nextStatus.status === 'running' || nextStatus.status === 'paused')) {
-          lastActiveKnowledgeJobIdRef.current = nextStatus.jobId
-          scheduleNextPoll(getKnowledgePollDelay(nextStatus, knowledgeActionLoading))
-          return
-        }
-
-        if (nextStatus?.status === 'failed') {
-          lastActiveKnowledgeJobIdRef.current = null
-          if (hadActiveJob && !cancelled) {
-            showKnowledgeToast(failureMessage ?? t('workspace.knowledge.failedDefault'), 2600)
+      const requestAbortController = new AbortController()
+      pollAbortController = requestAbortController
+      const request = (async () => {
+        try {
+          const searchParams = new URLSearchParams({ novelId: params.currentNovelId })
+          searchParams.set('statusOnly', '1')
+          const selectedChapterOrder = selectedKnowledgeStatusChapterOrder
+          if (typeof selectedChapterOrder === 'number' && Number.isFinite(selectedChapterOrder) && selectedChapterOrder >= 1) {
+            searchParams.set('asOfChapter', String(selectedChapterOrder))
           }
-          return
-        }
 
-        if (hadActiveJob) {
-          lastActiveKnowledgeJobIdRef.current = null
-          await params.refreshKnowledgeProjection(params.currentNovelId, selectedChapterOrder)
-          if (!cancelled && !knowledgeRebuilding && !knowledgeActionLoading) {
-            showKnowledgeToast(t('workspace.knowledge.updated'))
+          const response = await fetch(`/api/knowledge-view?${searchParams.toString()}`, {
+            cache: 'no-store',
+            signal: requestAbortController.signal,
+          })
+          const data = (await response.json()) as {
+            ok?: boolean
+            knowledgeRebuildStatus?: KnowledgeRebuildStatus | null
+            hanlpCacheSnapshot?: HanlpCacheSnapshot | null
+            knowledgeStatusOverview?: KnowledgeStatusOverview | null
           }
-          return
-        }
 
-        const idleDelay = getKnowledgePollDelay(nextStatus, knowledgeActionLoading)
-        if (idleDelay !== null) {
-          scheduleNextPoll(idleDelay)
+          if (cancelled) return
+          if (!response.ok || !data.ok) {
+            scheduleRetry()
+            return
+          }
+
+          const nextStatus = data.knowledgeRebuildStatus ?? null
+          setHanlpCacheSnapshot(data.hanlpCacheSnapshot ?? null)
+          setKnowledgeStatusOverview((current) => mergeKnowledgeStatusOverview(current, data.knowledgeStatusOverview))
+          const hadActiveJob = Boolean(lastActiveKnowledgeJobIdRef.current)
+          const failureMessage = resolveKnowledgeRebuildFailureMessage(nextStatus)
+
+          latestKnowledgeRebuildStatusRef.current = nextStatus
+          setKnowledgeRebuildStatus(nextStatus)
+
+          if (nextStatus?.jobId && (nextStatus.status === 'queued' || nextStatus.status === 'running' || nextStatus.status === 'paused')) {
+            lastActiveKnowledgeJobIdRef.current = nextStatus.jobId
+            scheduleNextPoll(getKnowledgePollDelay(nextStatus, knowledgeActionLoading))
+            return
+          }
+
+          if (nextStatus?.status === 'failed') {
+            lastActiveKnowledgeJobIdRef.current = null
+            if (hadActiveJob && !cancelled) {
+              showKnowledgeToast(failureMessage ?? t('workspace.knowledge.failedDefault'), 2600)
+            }
+            return
+          }
+
+          if (hadActiveJob) {
+            lastActiveKnowledgeJobIdRef.current = null
+            await refreshCurrentFullKnowledgeProjection(() => !cancelled)
+            if (!cancelled && !knowledgeRebuilding && !knowledgeActionLoading) {
+              showKnowledgeToast(t('workspace.knowledge.updated'))
+            }
+            return
+          }
+
+          const idleDelay = getKnowledgePollDelay(nextStatus, knowledgeActionLoading)
+          if (idleDelay !== null) {
+            scheduleNextPoll(idleDelay)
+          }
+        } catch {
+          if (!cancelled) {
+            scheduleRetry()
+          }
         }
-      } catch {
-        scheduleNextPoll(getKnowledgePollDelay(knowledgeRebuildStatus, knowledgeActionLoading))
+      })()
+
+      knowledgePollInFlightRef.current = request
+      await request
+      if (pollAbortController === requestAbortController) {
+        pollAbortController = null
+      }
+      if (knowledgePollInFlightRef.current === request) {
+        knowledgePollInFlightRef.current = null
       }
     }
 
@@ -656,18 +781,20 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
 
     return () => {
       cancelled = true
+      pollAbortController?.abort()
       window.clearTimeout(confirmResetTimer)
       if (pollTimerId !== null) {
         window.clearTimeout(pollTimerId)
       }
     }
-  }, [getKnowledgePollDelay, params.currentNovelId, knowledgeActionLoading, knowledgeRebuildStatus, knowledgeRebuilding, params.refreshKnowledgeProjection, selectedKnowledgeStatusChapterOrder, setConfirmDeleteKnowledge, showKnowledgeToast, t])
+  }, [getKnowledgePollDelay, params.currentNovelId, knowledgeActionLoading, knowledgeRebuilding, refreshCurrentFullKnowledgeProjection, selectedKnowledgeStatusChapterOrder, setConfirmDeleteKnowledge, showKnowledgeToast, t])
 
   const handleTimelineSelection = useCallback((selection: TimelineSelection) => {
     if (currentChapter) {
       params.clearPresetCompatSessionStateForSelection(workspaceSelection ?? toChapterTimelineSelection(currentChapter))
     }
     setLeftPanelOpen(false)
+    invalidateRecoverableRewriteOwnership()
     setWorkspaceSelection(selection)
     setActiveMode(null)
     setToolbarPos(null)
@@ -678,17 +805,30 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
         return
       }
     }
-  }, [currentChapter, params.clearPresetCompatSessionStateForSelection, selectChapter, sortedChapters, workspaceSelection])
+  }, [currentChapter, invalidateRecoverableRewriteOwnership, params.clearPresetCompatSessionStateForSelection, selectChapter, sortedChapters, workspaceSelection])
 
   useEffect(() => {
-    if (!params.backendLoaded || !params.currentNovelId || typeof selectedKnowledgeStatusChapterOrder !== 'number' || !Number.isFinite(selectedKnowledgeStatusChapterOrder)) return
+    if (knowledgeRebuilding || knowledgeActionLoading || !params.backendLoaded || !params.currentNovelId || typeof selectedKnowledgeStatusChapterOrder !== 'number' || !Number.isFinite(selectedKnowledgeStatusChapterOrder)) return
+    let cancelled = false
+    const requestGeneration = fullKnowledgeProjectionRequestGenerationRef.current + 1
+    fullKnowledgeProjectionRequestGenerationRef.current = requestGeneration
     const timer = window.setTimeout(() => {
-      void params.refreshKnowledgeProjection(params.currentNovelId, selectedKnowledgeStatusChapterOrder).catch(() => undefined)
+      void params.refreshKnowledgeProjection(params.currentNovelId, selectedKnowledgeStatusChapterOrder)
+        .then((result) => {
+          if (!cancelled && fullKnowledgeProjectionRequestGenerationRef.current === requestGeneration) {
+            applyFullKnowledgeProjectionResult(result)
+          }
+        })
+        .catch(() => undefined)
     }, 0)
     return () => {
+      cancelled = true
       window.clearTimeout(timer)
+      if (fullKnowledgeProjectionRequestGenerationRef.current === requestGeneration) {
+        fullKnowledgeProjectionRequestGenerationRef.current += 1
+      }
     }
-  }, [params.backendLoaded, params.currentNovelId, params.refreshKnowledgeProjection, selectedKnowledgeStatusChapterOrder])
+  }, [applyFullKnowledgeProjectionResult, knowledgeActionLoading, knowledgeRebuilding, params.backendLoaded, params.currentNovelId, params.refreshKnowledgeProjection, selectedKnowledgeStatusChapterOrder])
 
   useEffect(() => {
     workspaceSelectionHydratedRef.current = false
@@ -698,9 +838,14 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     if (!params.backendLoaded || !currentChapter || workspaceSelectionHydratedRef.current) return
     const requestedSelection = readWorkspaceSelectionFromSearchParams(new URLSearchParams(window.location.search))
     if (requestedSelection && requestedSelection.kind !== 'chapter' && !storyTimelineData) return
-    setWorkspaceSelection(resolveWorkspaceSelection({ currentSelection: requestedSelection, currentChapter, branchNodes: resolvedStoryTimeline.branchNodes }))
+    const resolvedSelection = resolveWorkspaceSelection({ currentSelection: requestedSelection, currentChapter, branchNodes: resolvedStoryTimeline.branchNodes })
     workspaceSelectionHydratedRef.current = true
-  }, [params.backendLoaded, currentChapter, resolvedStoryTimeline.branchNodes, storyTimelineData])
+    if (resolvedSelection && resolvedSelection.kind !== 'chapter') {
+      handleTimelineSelection(resolvedSelection)
+      return
+    }
+    setWorkspaceSelection(resolvedSelection)
+  }, [handleTimelineSelection, params.backendLoaded, currentChapter, resolvedStoryTimeline.branchNodes, storyTimelineData])
 
   useEffect(() => {
     if (!params.backendLoaded || !currentChapter || !workspaceSelectionHydratedRef.current) return
@@ -779,7 +924,15 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     if (!targetChapter) return null
     return { chapterId: targetChapter.id, chapterNo: targetChapter.order, lineStart: item.lineStart, lineEnd: item.lineEnd, searchText: normalizeSourceSearchText(item.text || buildChapterLineExcerpt(targetChapter, item.lineStart, item.lineEnd)) } satisfies PendingSourceJump
   }
-  const mainKnowledgeRebuildStatus = useMemo(() => knowledgeRebuildStatus?.jobType === 'extract_chapter_knowledge' ? knowledgeRebuildStatus : null, [knowledgeRebuildStatus])
+  const mainKnowledgeRebuildStatus = useMemo(() => {
+    if (knowledgeRebuildStatus?.jobType !== 'extract_chapter_knowledge') return null
+    return knowledgeRebuildStatus.status === 'queued'
+      || knowledgeRebuildStatus.status === 'running'
+      || knowledgeRebuildStatus.status === 'paused'
+      || knowledgeRebuildStatus.status === 'failed'
+      ? knowledgeRebuildStatus
+      : null
+  }, [knowledgeRebuildStatus])
   const currentKnowledgeJobActive = knowledgeRebuildStatus?.status === 'running' || knowledgeRebuildStatus?.status === 'queued'
   const currentKnowledgeJobBusy = currentKnowledgeJobActive || knowledgeRebuildStatus?.status === 'paused'
   const knowledgeRebuildEtaMinutes = useMemo(() => mainKnowledgeRebuildStatus?.etaMinutes ?? null, [mainKnowledgeRebuildStatus])
@@ -791,7 +944,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const knowledgeRebuildFailureMessage = useMemo(() => resolveKnowledgeRebuildFailureMessage(mainKnowledgeRebuildStatus), [mainKnowledgeRebuildStatus])
   const knowledgeRebuildOverallPercent = useMemo(() => toProgressPercent(mainKnowledgeRebuildStatus?.progress), [mainKnowledgeRebuildStatus])
   const hanlpBootstrapStep = useMemo(() => knowledgeRebuildSteps.find((step) => step.key === HANLP_BOOTSTRAP_STAGE_KEY) ?? null, [knowledgeRebuildSteps])
-  const rawEmbeddingStep = useMemo(() => knowledgeRebuildSteps.find((step) => step.key === 'raw-embedding') ?? null, [knowledgeRebuildSteps])
   const hanlpBootstrapCompletedChapterCount = mainKnowledgeRebuildStatus?.hanlpBootstrapCompletedChapterCount ?? null
   const hanlpBootstrapTotalChapterCount = mainKnowledgeRebuildStatus?.hanlpBootstrapTotalChapterCount ?? null
   const hanlpBootstrapProgress = mainKnowledgeRebuildStatus?.hanlpBootstrapProgress ?? hanlpBootstrapStep?.progress ?? null
@@ -842,44 +994,68 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const hanlpCacheDeleteState = useMemo(() => resolveHanlpCacheDeleteState({ knowledgeRebuildStatus, knowledgeActionLoading }), [knowledgeActionLoading, knowledgeRebuildStatus])
   const extractionCacheDeleteState = useMemo(() => resolveCacheDeleteState({ knowledgeRebuildStatus, knowledgeActionLoading, idleHelperText: t('workspace.knowledge.extractionDeleteIdleHelper') }), [knowledgeActionLoading, knowledgeRebuildStatus, t])
   const embeddingCacheDeleteState = useMemo(() => resolveCacheDeleteState({ knowledgeRebuildStatus, knowledgeActionLoading, idleHelperText: t('workspace.knowledge.embeddingDeleteIdleHelper') }), [knowledgeActionLoading, knowledgeRebuildStatus, t])
-  const rawTextEmbeddingProgress = mainKnowledgeRebuildStatus?.rawTextEmbeddingProgress
-  const rawTextEmbeddingPercent = useMemo(() => rawTextEmbeddingProgress === undefined ? null : toProgressPercent(rawTextEmbeddingProgress), [rawTextEmbeddingProgress])
+  const rawTextEmbeddingActiveStatus = useMemo(() => {
+    if (!knowledgeRebuildStatus) return null
+    return knowledgeRebuildStatus.status === 'queued'
+      || knowledgeRebuildStatus.status === 'running'
+      || knowledgeRebuildStatus.status === 'paused'
+      ? knowledgeRebuildStatus
+      : null
+  }, [knowledgeRebuildStatus])
+  const rawTextEmbeddingActive = rawTextEmbeddingActiveStatus !== null
+  const activeRawEmbeddingStep = useMemo(() => rawTextEmbeddingActiveStatus?.steps.find((step) => step.key === 'raw-embedding') ?? null, [rawTextEmbeddingActiveStatus])
+  const rawTextEmbeddingProgress = rawTextEmbeddingActiveStatus?.rawTextEmbeddingProgress
+  const durableRawTextEmbeddingPercent = useMemo(() => {
+    const coverage = knowledgeStatusOverview?.embeddingCache
+    if (!coverage || coverage.totalChapterCount <= 0) return null
+    return Math.max(0, Math.min(100, Math.round((coverage.coveredChapterCount / coverage.totalChapterCount) * 100)))
+  }, [knowledgeStatusOverview])
+  const rawTextEmbeddingPercent = useMemo(() => {
+    if (!rawTextEmbeddingActive) return durableRawTextEmbeddingPercent
+    return rawTextEmbeddingProgress === undefined ? null : toProgressPercent(rawTextEmbeddingProgress)
+  }, [durableRawTextEmbeddingPercent, rawTextEmbeddingActive, rawTextEmbeddingProgress])
   const rawEmbeddingCurrentStep = useMemo(() => {
-    const currentStep = mainKnowledgeRebuildStatus?.currentStep?.trim().toLowerCase() ?? ''
+    const currentStep = rawTextEmbeddingActiveStatus?.currentStep?.trim().toLowerCase() ?? ''
     return currentStep.includes('raw') && currentStep.includes('embedding')
-  }, [mainKnowledgeRebuildStatus])
-  const rawEmbeddingWaitingFinalization = Boolean(rawEmbeddingStep && rawEmbeddingStep.status === 'running')
-  const rawEmbeddingRunningInParallel = knowledgeRebuildActive && !rawEmbeddingWaitingFinalization && ((rawTextEmbeddingPercent !== null && rawTextEmbeddingPercent < 100) || rawEmbeddingCurrentStep)
+  }, [rawTextEmbeddingActiveStatus])
+  const rawEmbeddingWaitingFinalization = Boolean(activeRawEmbeddingStep?.status === 'running')
+  const rawEmbeddingRunningInParallel = rawTextEmbeddingActive && !rawEmbeddingWaitingFinalization && ((rawTextEmbeddingProgress !== undefined && toProgressPercent(rawTextEmbeddingProgress) < 100) || rawEmbeddingCurrentStep)
   const rawEmbeddingCompleted = rawTextEmbeddingPercent !== null && rawTextEmbeddingPercent >= 100
-  const rawTextEmbeddingCacheHitRatePercent = useMemo(() => mainKnowledgeRebuildStatus?.rawTextEmbeddingCacheHitRate === undefined ? null : toProgressPercent(mainKnowledgeRebuildStatus.rawTextEmbeddingCacheHitRate), [mainKnowledgeRebuildStatus])
+  const rawTextEmbeddingCacheHitRatePercent = useMemo(() => rawTextEmbeddingActiveStatus?.rawTextEmbeddingCacheHitRate === undefined ? null : toProgressPercent(rawTextEmbeddingActiveStatus.rawTextEmbeddingCacheHitRate), [rawTextEmbeddingActiveStatus])
   const rawTextEmbeddingTimingLabel = useMemo(() => {
-    const duration = mainKnowledgeRebuildStatus?.stageTimingsMs?.[RAW_TEXT_PRECOMPUTE_STAGE_KEY]
+    const duration = rawTextEmbeddingActiveStatus?.stageTimingsMs?.[RAW_TEXT_PRECOMPUTE_STAGE_KEY]
     return typeof duration === 'number' && Number.isFinite(duration) ? formatStageDuration(duration) : null
-  }, [mainKnowledgeRebuildStatus])
+  }, [rawTextEmbeddingActiveStatus])
   const rawTextEmbeddingSettingsLine = useMemo(() => {
-    const snapshot = mainKnowledgeRebuildStatus?.embeddingSettingsSnapshot
-    if (!snapshot) return null
-    return `${formatEmbeddingProviderLabel(snapshot.provider)} · ${snapshot.model} · batch ${snapshot.embeddingBatchSize}`
-  }, [mainKnowledgeRebuildStatus])
+    const snapshot = rawTextEmbeddingActiveStatus?.embeddingSettingsSnapshot
+    if (snapshot) return `${formatEmbeddingProviderLabel(snapshot.provider)} · ${snapshot.model} · batch ${snapshot.embeddingBatchSize}`
+    const coverage = knowledgeStatusOverview?.embeddingCache
+    if (!coverage?.provider || !coverage.model) return null
+    return `${formatEmbeddingProviderLabel(coverage.provider)} · ${coverage.model}`
+  }, [knowledgeStatusOverview, rawTextEmbeddingActiveStatus])
   const rawTextEmbeddingPhaseBadge = useMemo(() => {
-    if (knowledgeRebuildFailed) return t('workspace.knowledge.bootstrapFailed')
-    if (knowledgeRebuildPaused) return t('workspace.knowledge.etaPaused')
+    if (!rawTextEmbeddingActive) return formatKnowledgeCoverageBadge(knowledgeStatusOverview?.embeddingCache)
+    if (rawTextEmbeddingActiveStatus?.status === 'paused') return t('workspace.knowledge.etaPaused')
     if (rawEmbeddingWaitingFinalization) return t('workspace.knowledge.rawEmbeddingWaitingFinalization')
     if (rawEmbeddingRunningInParallel) return t('workspace.knowledge.rawEmbeddingParallel')
     if (rawEmbeddingCompleted) return t('workspace.knowledge.rawEmbeddingCompleted')
     return t('workspace.knowledge.rawEmbeddingNotStarted')
-  }, [knowledgeRebuildFailed, knowledgeRebuildPaused, rawEmbeddingCompleted, rawEmbeddingRunningInParallel, rawEmbeddingWaitingFinalization, t])
+  }, [knowledgeStatusOverview, rawEmbeddingCompleted, rawEmbeddingRunningInParallel, rawEmbeddingWaitingFinalization, rawTextEmbeddingActive, rawTextEmbeddingActiveStatus, t])
   const rawTextEmbeddingStatusLine = useMemo(() => {
-    if (knowledgeRebuildFailed) return rawTextEmbeddingPercent !== null ? t('workspace.knowledge.rawEmbeddingFailedPartial') : t('workspace.knowledge.rawEmbeddingFailed')
-    if (knowledgeRebuildPaused) return rawTextEmbeddingPercent !== null ? t('workspace.knowledge.rawEmbeddingPausedPartial') : t('workspace.knowledge.rawEmbeddingPausedNoTelemetry')
+    if (!rawTextEmbeddingActive) return formatKnowledgeCoverageDetail(t('workspace.knowledge.rawEmbeddingCacheEyebrow'), knowledgeStatusOverview?.embeddingCache)
+    if (rawTextEmbeddingActiveStatus?.status === 'paused') return rawTextEmbeddingProgress !== undefined ? t('workspace.knowledge.rawEmbeddingPausedPartial') : t('workspace.knowledge.rawEmbeddingPausedNoTelemetry')
     if (rawEmbeddingWaitingFinalization) return rawEmbeddingCompleted ? t('workspace.knowledge.rawEmbeddingWaitingIndexReady') : t('workspace.knowledge.rawEmbeddingWaitingIndex')
-    if (rawEmbeddingRunningInParallel) return rawTextEmbeddingPercent !== null ? t('workspace.knowledge.rawEmbeddingParallelWithPercent') : t('workspace.knowledge.rawEmbeddingParallelWaiting')
+    if (rawEmbeddingRunningInParallel) return rawTextEmbeddingProgress !== undefined ? t('workspace.knowledge.rawEmbeddingParallelWithPercent') : t('workspace.knowledge.rawEmbeddingParallelWaiting')
     if (rawEmbeddingCompleted) return t('workspace.knowledge.rawEmbeddingDone')
     return t('workspace.knowledge.rawEmbeddingPending')
-  }, [knowledgeRebuildFailed, knowledgeRebuildPaused, rawEmbeddingCompleted, rawEmbeddingRunningInParallel, rawEmbeddingWaitingFinalization, rawTextEmbeddingPercent, t])
+  }, [knowledgeStatusOverview, rawEmbeddingCompleted, rawEmbeddingRunningInParallel, rawEmbeddingWaitingFinalization, rawTextEmbeddingActive, rawTextEmbeddingActiveStatus, rawTextEmbeddingProgress, t])
   const retrievalIndexStep = useMemo(() => knowledgeRebuildSteps.find((step) => step.key === 'index') ?? null, [knowledgeRebuildSteps])
   const retrievalIndexOverview = knowledgeStatusOverview?.retrievalIndex ?? null
-  const retrievalTaskStatus = useMemo(() => retrievalIndexOverview?.task ?? (knowledgeRebuildStatus?.jobType === 'rebuild_retrieval_index' ? knowledgeRebuildStatus : null), [knowledgeRebuildStatus, retrievalIndexOverview])
+  const retrievalTaskStatus = useMemo(() => {
+    const task = retrievalIndexOverview?.task ?? (knowledgeRebuildStatus?.jobType === 'rebuild_retrieval_index' ? knowledgeRebuildStatus : null)
+    if (task?.status === 'succeeded' || task?.status === 'completed' || task?.status === 'aborted') return null
+    return task
+  }, [knowledgeRebuildStatus, retrievalIndexOverview])
   const retrievalTaskPercent = useMemo(() => toProgressPercent(retrievalTaskStatus?.progress ?? 0), [retrievalTaskStatus])
   const retrievalTaskPhaseLabel = useMemo(() => resolveKnowledgeJobPhaseLabel(retrievalTaskStatus), [retrievalTaskStatus])
   const retrievalTaskStatusLabel = useMemo(() => formatKnowledgeJobStatusLabel(retrievalTaskStatus?.status), [retrievalTaskStatus])
@@ -888,18 +1064,16 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     if (retrievalTaskStatus?.status === 'failed') return resolveKnowledgeRebuildFailureMessage(retrievalTaskStatus) ?? t('workspace.knowledge.retrievalRefreshFailed')
     if (retrievalTaskStatus?.status === 'paused') return t('workspace.knowledge.retrievalPaused')
     if (retrievalTaskStatus?.status === 'queued') return t('workspace.knowledge.retrievalQueued')
-    if (rawEmbeddingStep?.status === 'running' && mainKnowledgeRebuildStatus) return t('workspace.knowledge.retrievalWaitingEmbedding')
+    if (activeRawEmbeddingStep?.status === 'running' && rawTextEmbeddingActiveStatus?.jobType === 'rebuild_retrieval_index') return t('workspace.knowledge.retrievalWaitingEmbedding')
     if (retrievalTaskStatus?.status === 'running') return t('workspace.knowledge.retrievalRunning')
     return formatRetrievalIndexDetail(retrievalIndexOverview)
-  }, [mainKnowledgeRebuildStatus, rawEmbeddingStep, retrievalIndexOverview, retrievalTaskStatus, t])
+  }, [activeRawEmbeddingStep, rawTextEmbeddingActiveStatus, retrievalIndexOverview, retrievalTaskStatus, t])
   const knowledgeGraphOverview = knowledgeStatusOverview?.knowledgeGraph ?? null
+  const extractionCacheOverview = knowledgeStatusOverview?.extractionCache ?? null
   const embeddingCacheOverview = knowledgeStatusOverview?.embeddingCache ?? null
   const currentKnowledgeRunningStepKey = useMemo(() => {
-    const runningSteps = knowledgeRebuildSteps.filter((step) => step.status === 'running')
-    if (runningSteps.length === 0) return null
-    const unsaturatedStep = runningSteps.find((step) => toProgressPercent(step.progress) < 100)
-    return (unsaturatedStep ?? rawEmbeddingStep ?? runningSteps[0]).key
-  }, [knowledgeRebuildSteps, rawEmbeddingStep])
+    return knowledgeRebuildSteps.find((step) => step.status === 'running')?.key ?? null
+  }, [knowledgeRebuildSteps])
 
   const editor = useEditor({
     extensions: [StarterKit],
@@ -943,6 +1117,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   }, [centerPaneView, currentChapter, pendingSourceJump, showKnowledgeToast])
 
   const closePanel = useCallback(() => {
+    invalidateRecoverableRewriteOwnership()
     if (activeMode && currentChapter) {
       params.resetPresetCompatSessionStateForSelection(workspaceSelection ?? toChapterTimelineSelection(currentChapter), [toPresetCompatSessionSurfaceId(activeMode)])
     }
@@ -968,7 +1143,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     setGraphMutationPendingId(null)
     setGraphMutationError('')
     setRewriteState((current) => ({ ...current, error: '' }))
-  }, [activeMode, currentChapter, params, workspaceSelection])
+  }, [activeMode, currentChapter, invalidateRecoverableRewriteOwnership, params, workspaceSelection])
 
   useEffect(() => {
     if (centerPaneView === 'body') return
@@ -1159,25 +1334,26 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     const sessionEntry = params.presetCompatSessionState[createPresetCompatSessionStateKey(selection, surfaceId)]
     return { sessionPhase: sessionEntry?.phase ?? null, hasImpersonationContext: surfaceId === 'roleplay' }
   }, [currentChapter, params.presetCompatSessionState, workspaceSelection])
-  const syncRewriteFlowFromRecoverableJob = useCallback((job: RecoverableRewriteJob, options?: { restorePanelState?: boolean }) => {
+  const hydrateRewritePanelFromRecoverableJob = useCallback((job: RecoverableRewriteJob) => {
+    const restoredSelection = job.panel.selectedText.trim()
+    if (restoredSelection) {
+      setSelectionText(restoredSelection)
+      setLockedSelectionText(restoredSelection)
+    }
+    setRewritePrompt(job.panel.userInstruction || t('workspace.rewrite.defaultPrompt'))
+    setRewriteSourceTextOverride(job.panel.sourceTextOverride ?? '')
+    if (job.panel.rewriteLaunchSource === 'chapter' || job.panel.rewriteLaunchSource === 'what_if' || job.panel.rewriteLaunchSource === 'future_jump' || job.panel.rewriteLaunchSource === 'continue_block') {
+      setRewriteLaunchSource(job.panel.rewriteLaunchSource)
+    }
+  }, [t])
+
+  const syncRewriteJobFromRecoverableJob = useCallback((job: RecoverableRewriteJob) => {
     const nextCandidate = job.result ? toRewriteCandidateFromRecoverableResult(job.result) : null
     const isPending = job.status === 'queued' || job.status === 'running'
     const nextError = job.status === 'failed' ? (job.errorMessage?.trim() || t('workspace.actionError.createRecoverableRewriteJobFailed')) : ''
-    if (options?.restorePanelState) {
-      const restoredSelection = job.panel.selectedText.trim()
-      if (restoredSelection) {
-        setSelectionText(restoredSelection)
-        setLockedSelectionText(restoredSelection)
-      }
-        setRewritePrompt(job.panel.userInstruction || t('workspace.rewrite.defaultPrompt'))
-      setRewriteSourceTextOverride(job.panel.sourceTextOverride ?? '')
-      if (job.panel.rewriteLaunchSource === 'chapter' || job.panel.rewriteLaunchSource === 'what_if' || job.panel.rewriteLaunchSource === 'future_jump' || job.panel.rewriteLaunchSource === 'continue_block') {
-        setRewriteLaunchSource(job.panel.rewriteLaunchSource)
-      }
-    }
     setRewriteFlow({ loading: isPending, error: nextError, provider: job.result?.provider || 'recoverable-rewrite-job', candidates: nextCandidate ? [nextCandidate] : [], selectedIndex: 0, jobId: job.jobId, jobStatus: job.status, jobCurrentStep: job.currentStep })
     setRewriteState((current) => ({ loading: isPending, error: nextError, result: nextCandidate?.content || current.result }))
-  }, [])
+  }, [t])
 
   return {
     currentNovelId: params.currentNovelId,
@@ -1338,6 +1514,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     updateScenarioOllamaField,
     updateKnowledgeExtractionParallelism,
     updateEmbeddingBatchSize,
+    refreshCurrentFullKnowledgeProjection,
     showKnowledgeToast,
     novelVolumes,
     currentNovelMeta,
@@ -1393,6 +1570,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     rawTextEmbeddingSettingsLine,
     rawTextEmbeddingPhaseBadge,
     rawTextEmbeddingStatusLine,
+    rawTextEmbeddingActive,
     retrievalIndexOverview,
     retrievalTaskStatus,
     retrievalTaskPercent,
@@ -1401,6 +1579,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     retrievalControlsState,
     retrievalIndexStatusLine,
     knowledgeGraphOverview,
+    extractionCacheOverview,
     embeddingCacheOverview,
     currentKnowledgeRunningStepKey,
     currentNovelVisibleCharacterCount,
@@ -1422,7 +1601,14 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     providerLabel,
     getInstructionForMode,
     buildPresetCompatRuntimeContext,
-    syncRewriteFlowFromRecoverableJob,
+    recoverablePanelHydrationGenerationRef,
+    invalidateRecoverablePanelHydration,
+    rewritePanelOwnershipGenerationRef,
+    ownedRecoverableRewriteJobIdRef,
+    recoverableRewriteContextKeyRef,
+    invalidateRecoverableRewriteOwnership,
+    hydrateRewritePanelFromRecoverableJob,
+    syncRewriteJobFromRecoverableJob,
     closePanel,
   }
 }
