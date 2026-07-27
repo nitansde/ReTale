@@ -97,6 +97,7 @@ export type HanlpCacheSnapshot = {
 }
 
 export type KnowledgeCoverageStatus = 'missing' | 'partial' | 'full'
+export type RetrievalIndexCoverageStatus = KnowledgeCoverageStatus | 'pending'
 
 export type KnowledgeChapterCoverageOverview = {
   status: KnowledgeCoverageStatus
@@ -106,7 +107,7 @@ export type KnowledgeChapterCoverageOverview = {
 }
 
 export type RetrievalIndexCoverageOverview = {
-  status: KnowledgeCoverageStatus
+  status: RetrievalIndexCoverageStatus
   indexedScopeCount: number
   chapterRange?: KnowledgeRebuildChapterRange
   task: KnowledgeRebuildStatus | null
@@ -114,6 +115,7 @@ export type RetrievalIndexCoverageOverview = {
 
 export type KnowledgeStatusOverview = {
   knowledgeGraph: KnowledgeChapterCoverageOverview
+  extractionCache: KnowledgeChapterCoverageOverview
   embeddingCache: KnowledgeChapterCoverageOverview & {
     provider: string | null
     model: string | null
@@ -286,7 +288,7 @@ export type NovelStore = PersistedNovelState & {
   deleteStoryHanlpCache: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   deleteStoryExtractionCache: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   deleteStoryEmbeddingCache: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
-  refreshKnowledgeProjection: (novelId?: string, asOfChapter?: number) => Promise<void>
+  refreshKnowledgeProjection: (novelId?: string, asOfChapter?: number) => Promise<KnowledgeProjectionResult>
   setAISettings: (settings: AISettings) => void
   saveAISettings: () => Promise<void>
 }

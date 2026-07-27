@@ -481,7 +481,7 @@ type NovelStore = PersistedNovelState & {
   deleteStoryHanlpCache: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   deleteStoryExtractionCache: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   deleteStoryEmbeddingCache: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
-  refreshKnowledgeProjection: (novelId?: string, asOfChapter?: number) => Promise<void>
+  refreshKnowledgeProjection: (novelId?: string, asOfChapter?: number) => Promise<KnowledgeProjectionResult>
 
   setAISettings: (settings: AISettings) => void
   saveAISettings: () => Promise<void>
