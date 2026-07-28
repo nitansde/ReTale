@@ -257,7 +257,7 @@ describe('FutureJumpView', () => {
       }
       if (url === '/api/future-jump/runs/jump-run-001/revise' && init?.method === 'POST') {
         expect(JSON.parse(String(init.body))).toEqual({ novelId: 'novel-001', userFeedback: '把救援推得更晚' })
-        return new Response(JSON.stringify({ error: '修订失败' }), { status: 500 })
+        return new Response(JSON.stringify({ error: 'SENTINEL 修订 SQL stack' }), { status: 500 })
       }
       throw new Error(`Unhandled fetch: ${url}`)
     })
@@ -283,7 +283,8 @@ describe('FutureJumpView', () => {
     fireEvent.click(screen.getByTestId('future-jump-regenerate'))
 
     await waitFor(() => {
-      expect(screen.getByTestId('future-jump-action-error')).toHaveTextContent('修订失败')
+    expect(screen.getByTestId('future-jump-action-error')).toHaveTextContent('重新生成 Future Jump 失败，请稍后重试。')
+    expect(screen.getByTestId('future-jump-action-error')).not.toHaveTextContent('SENTINEL')
     })
   })
 

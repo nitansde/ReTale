@@ -7,7 +7,7 @@ import { FutureJumpControlPanel } from '@/components/future-jump/FutureJumpContr
 import { FutureNodeTextPanel } from '@/components/future-jump/FutureNodeTextPanel'
 import { useI18n } from '@/lib/i18n/provider'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
-import { toUserFacingWorkspaceError } from '@/lib/workspace-user-facing-errors'
+import { resolveWorkspaceUserFacingError } from '@/lib/workspace-user-facing-errors'
 import type {
   FutureJumpMutationResponse,
   FutureJumpRunDetail,
@@ -148,7 +148,7 @@ export function FutureJumpView(props: {
       } catch (loadError) {
         if (cancelled) return
         setBundle(null)
-        setError(toUserFacingWorkspaceError(loadError instanceof Error ? loadError.message : 'Future jump run load failed', locale))
+        setError(resolveWorkspaceUserFacingError('future-jump-load', loadError, locale))
       } finally {
         if (!cancelled) {
           setLoading(false)
@@ -160,7 +160,7 @@ export function FutureJumpView(props: {
     return () => {
       cancelled = true
     }
-  }, [props.branchId, props.novelId, props.runId])
+  }, [locale, props.branchId, props.novelId, props.runId])
 
   const revisions = useMemo(
     () => [...(bundle?.detail.revisions ?? [])].sort((left, right) => right.revisionNo - left.revisionNo),
@@ -202,7 +202,7 @@ export function FutureJumpView(props: {
       setBundle(nextBundle)
       setFeedback('')
     } catch (submitError) {
-      setActionError(submitError instanceof Error ? submitError.message : 'Future jump revise failed')
+      setActionError(resolveWorkspaceUserFacingError('future-jump-revise', submitError, locale))
     } finally {
       setRegenerating(false)
     }
