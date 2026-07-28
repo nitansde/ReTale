@@ -5,7 +5,7 @@ import { Clock3, LoaderCircle } from 'lucide-react'
 import { useI18n } from '@/lib/i18n/provider'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import type { ContinueBlockDetail, ContinueBlockRecord } from '@/lib/story-branch-types'
-import { toUserFacingWorkspaceError } from '@/lib/workspace-user-facing-errors'
+import { resolveWorkspaceUserFacingError } from '@/lib/workspace-user-facing-errors'
 import { cn, splitPlainTextParagraphs } from '@/lib/utils'
 
 async function loadContinueBlockDetail(input: {
@@ -88,7 +88,7 @@ export function ContinueBlockDetailView(props: {
       } catch (loadError) {
         if (cancelled) return
         setDetail(null)
-        setError(toUserFacingWorkspaceError(loadError instanceof Error ? loadError.message : 'Continue block load failed', locale))
+        setError(resolveWorkspaceUserFacingError('continue-block-load', loadError, locale))
       } finally {
         if (!cancelled) {
           setLoading(false)
@@ -100,7 +100,7 @@ export function ContinueBlockDetailView(props: {
     return () => {
       cancelled = true
     }
-  }, [props.branchId, props.continueBlockId, props.latestRevisionNo, props.novelId])
+  }, [locale, props.branchId, props.continueBlockId, props.latestRevisionNo, props.novelId])
 
   const effectiveDetail = detail ?? props.fallbackDetail ?? null
 

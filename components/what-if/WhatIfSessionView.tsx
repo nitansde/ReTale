@@ -5,7 +5,7 @@ import { ArrowRight, GitBranch, LoaderCircle, RefreshCcw, Sparkles } from 'lucid
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import { WhatIfDeltaPanel } from '@/components/what-if/WhatIfDeltaPanel'
 import { useI18n } from '@/lib/i18n/provider'
-import { toUserFacingWorkspaceError } from '@/lib/workspace-user-facing-errors'
+import { resolveWorkspaceUserFacingError } from '@/lib/workspace-user-facing-errors'
 import { cn, splitPlainTextParagraphs } from '@/lib/utils'
 import type { WhatIfSessionDetail } from '@/lib/story-branch-types'
 
@@ -95,7 +95,7 @@ export function WhatIfSessionView(props: {
       } catch (loadError) {
         if (cancelled) return
         setDetail(null)
-        setError(toUserFacingWorkspaceError(loadError instanceof Error ? loadError.message : 'What-if session load failed', locale))
+        setError(resolveWorkspaceUserFacingError('what-if-session-load', loadError, locale))
       } finally {
         if (!cancelled) {
           setLoading(false)
@@ -107,7 +107,7 @@ export function WhatIfSessionView(props: {
     return () => {
       cancelled = true
     }
-  }, [props.branchId, props.novelId, props.sessionId])
+  }, [locale, props.branchId, props.novelId, props.sessionId])
 
   useEffect(() => {
     if (!detail) return
@@ -129,7 +129,7 @@ export function WhatIfSessionView(props: {
         t('futureJump.sourceChapter', { count: detail?.sourceChapterNo ?? props.anchorChapterNo }),
         detail ? t('roleplay.createdAt', { value: formatCreatedAt(detail.createdAt) }) : null,
     ].filter(Boolean) as string[],
-    [detail, instructionPreview, props.anchorChapterNo, readableLabel]
+    [detail, instructionPreview, props.anchorChapterNo, readableLabel, t]
   )
   const revisionEntries = useMemo(
     () => [...(detail?.revisions ?? [])].sort((left, right) => right.revisionNo - left.revisionNo),
