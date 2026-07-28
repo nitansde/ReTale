@@ -5,6 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/graph-review-panel'
+import type { NoticeVariant } from '@/components/ui/Notice'
 import { Building2, Globe, LoaderCircle, MapPin, ScrollText, Users } from 'lucide-react'
 import {
   type PendingSourceJump,
@@ -24,6 +25,7 @@ import { useI18n } from '@/lib/i18n/provider'
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import { createPresetCompatSessionStateKey } from '@/lib/workspace-state'
+import { resolveWorkspaceUserFacingError } from '@/lib/workspace-user-facing-errors'
 import {
   AI_SCENARIO_META,
   getAIScenarioMeta,
@@ -131,6 +133,8 @@ type SelectionNovelStudioCoreParams = {
   autosaveSignature: string
 }
 
+type WorkspaceSelectionHistoryMode = 'push' | 'replace' | 'none'
+
 export function resolveSelectedKnowledgeProjectionChapterOrder(params: {
   currentChapterId: string
   localChapters: Chapter[]
@@ -192,6 +196,10 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const {
     leftPanelOpen,
     setLeftPanelOpen,
+    referencePanelOpen,
+    setReferencePanelOpen,
+    knowledgePanelOpen,
+    setKnowledgePanelOpen,
     chapterListState,
     setChapterListState,
     centerPaneView,
@@ -282,10 +290,13 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const [chapterGraphSelection, setChapterGraphSelection] = useState<GraphSelection>(null)
   const [pendingSourceJump, setPendingSourceJump] = useState<PendingSourceJump | null>(null)
   const [workspaceSelection, setWorkspaceSelection] = useState<TimelineSelection | null>(null)
+  const workspaceSelectionRef = useRef<TimelineSelection | null>(null)
+  workspaceSelectionRef.current = workspaceSelection
   const [storyTimelineData, setStoryTimelineData] = useState<StoryTimelineResponse | null>(null)
   const [storyTimelineError, setStoryTimelineError] = useState('')
   const [copied, setCopied] = useState<'rewrite' | 'roleplay' | null>(null)
-  const [toast, setToast] = useState('')
+  const [toast, setToastMessage] = useState('')
+  const [toastVariant, setToastVariant] = useState<NoticeVariant>('success')
   const [saveContinueBlockPending, setSaveContinueBlockPending] = useState(false)
   const [saveContinueBlockError, setSaveContinueBlockError] = useState('')
   const [roleplaySessionStarting, setRoleplaySessionStarting] = useState(false)
@@ -336,6 +347,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const knowledgeProjectionNovelIdRef = useRef(params.currentNovelId)
   const hydratedRef = useRef(false)
   const workspaceSelectionHydratedRef = useRef(false)
+  const workspaceSelectionHistoryModeRef = useRef<WorkspaceSelectionHistoryMode>('replace')
   const lastActiveKnowledgeJobIdRef = useRef<string | null>(null)
   const openAICompatibleModelsRequestRef = useRef<Record<AIScenarioKey, number>>({ rewrite: 0, knowledgeExtraction: 0, embeddings: 0 })
   const chapterGraphRequestRef = useRef(0)
@@ -419,10 +431,15 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     })
   }, [updateAISettings])
 
-  const showKnowledgeToast = useCallback((message: string, duration = 1800) => {
-    setToast(message)
-    window.setTimeout(() => setToast(''), duration)
+  const setToast = useCallback((message: string, variant: NoticeVariant = 'success') => {
+    setToastMessage(message)
+    setToastVariant(variant)
   }, [])
+
+  const showKnowledgeToast = useCallback((message: string, duration = 1800, variant: NoticeVariant = 'success') => {
+    setToast(message, variant)
+    window.setTimeout(() => setToast(''), duration)
+  }, [setToast])
 
   useEffect(() => {
     autosaveLatestSignatureRef.current = params.autosaveSignature
@@ -742,7 +759,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
           if (nextStatus?.status === 'failed') {
             lastActiveKnowledgeJobIdRef.current = null
             if (hadActiveJob && !cancelled) {
-              showKnowledgeToast(failureMessage ?? t('workspace.knowledge.failedDefault'), 2600)
+              showKnowledgeToast(resolveWorkspaceUserFacingError('knowledge-rebuild', failureMessage, locale), 2600, 'error')
             }
             return
           }
@@ -787,18 +804,23 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
         window.clearTimeout(pollTimerId)
       }
     }
-  }, [getKnowledgePollDelay, params.currentNovelId, knowledgeActionLoading, knowledgeRebuilding, refreshCurrentFullKnowledgeProjection, selectedKnowledgeStatusChapterOrder, setConfirmDeleteKnowledge, showKnowledgeToast, t])
+  }, [getKnowledgePollDelay, params.currentNovelId, knowledgeActionLoading, knowledgeRebuilding, locale, refreshCurrentFullKnowledgeProjection, selectedKnowledgeStatusChapterOrder, setConfirmDeleteKnowledge, showKnowledgeToast, t])
 
-  const handleTimelineSelection = useCallback((selection: TimelineSelection) => {
+  const handleTimelineSelection = useCallback((
+    selection: TimelineSelection,
+    historyMode: WorkspaceSelectionHistoryMode = 'push',
+    selectChapterSelection = true,
+  ) => {
     if (currentChapter) {
       params.clearPresetCompatSessionStateForSelection(workspaceSelection ?? toChapterTimelineSelection(currentChapter))
     }
     setLeftPanelOpen(false)
     invalidateRecoverableRewriteOwnership()
+    workspaceSelectionHistoryModeRef.current = historyMode
     setWorkspaceSelection(selection)
     setActiveMode(null)
     setToolbarPos(null)
-    if (selection.kind === 'chapter') {
+    if (selection.kind === 'chapter' && selectChapterSelection) {
       const selectedChapter = sortedChapters.find((chapter) => chapter.id === selection.chapterId)
       if (selectedChapter) {
         selectChapter(selectedChapter)
@@ -806,6 +828,52 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
       }
     }
   }, [currentChapter, invalidateRecoverableRewriteOwnership, params.clearPresetCompatSessionStateForSelection, selectChapter, sortedChapters, workspaceSelection])
+
+  const restoreWorkspaceSelectionFromLocation = useCallback((historyMode: Exclude<WorkspaceSelectionHistoryMode, 'push'>) => {
+    if (!currentChapter) return
+
+    const currentUrl = new URL(window.location.href)
+    const requestedSelection = readWorkspaceSelectionFromSearchParams(currentUrl.searchParams)
+    let resolvedSelection: TimelineSelection
+    let selectedChapter = currentChapter
+
+    if (requestedSelection?.kind === 'chapter') {
+      const requestedChapter = resolveSourceChapter({
+        chapterId: requestedSelection.chapterId,
+        chapterNo: requestedSelection.chapterNo,
+      })
+      if (requestedChapter) {
+        selectedChapter = requestedChapter
+      }
+      resolvedSelection = toChapterTimelineSelection(selectedChapter)
+    } else {
+      resolvedSelection = resolveWorkspaceSelection({
+        currentSelection: requestedSelection,
+        currentChapter,
+        branchNodes: resolvedStoryTimeline.branchNodes,
+      }) ?? toChapterTimelineSelection(currentChapter)
+
+      if (resolvedSelection.kind !== 'chapter') {
+        const selectedNodeId = resolvedSelection.nodeId
+        const selectedNode = resolvedStoryTimeline.branchNodes.find((node) => node.id === selectedNodeId)
+        const sourceChapterNo = selectedNode?.sourceChapterNo ?? selectedNode?.anchorChapterNo ?? null
+        const sourceChapter = resolveSourceChapter({ chapterId: null, chapterNo: sourceChapterNo })
+        if (sourceChapter) {
+          selectedChapter = sourceChapter
+        }
+      }
+    }
+
+    if (selectedChapter.id !== params.currentChapterId) {
+      selectChapter(selectedChapter)
+    }
+
+    const canonicalSearch = writeWorkspaceSelectionToSearchParams(currentUrl.searchParams, resolvedSelection).toString()
+    const resolvedHistoryMode = historyMode === 'none' && canonicalSearch === currentUrl.searchParams.toString()
+      ? 'none'
+      : 'replace'
+    handleTimelineSelection(resolvedSelection, resolvedHistoryMode, false)
+  }, [currentChapter, handleTimelineSelection, params.currentChapterId, resolveSourceChapter, resolvedStoryTimeline.branchNodes, selectChapter])
 
   useEffect(() => {
     if (knowledgeRebuilding || knowledgeActionLoading || !params.backendLoaded || !params.currentNovelId || typeof selectedKnowledgeStatusChapterOrder !== 'number' || !Number.isFinite(selectedKnowledgeStatusChapterOrder)) return
@@ -838,27 +906,37 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     if (!params.backendLoaded || !currentChapter || workspaceSelectionHydratedRef.current) return
     const requestedSelection = readWorkspaceSelectionFromSearchParams(new URLSearchParams(window.location.search))
     if (requestedSelection && requestedSelection.kind !== 'chapter' && !storyTimelineData) return
-    const resolvedSelection = resolveWorkspaceSelection({ currentSelection: requestedSelection, currentChapter, branchNodes: resolvedStoryTimeline.branchNodes })
     workspaceSelectionHydratedRef.current = true
-    if (resolvedSelection && resolvedSelection.kind !== 'chapter') {
-      handleTimelineSelection(resolvedSelection)
-      return
-    }
-    setWorkspaceSelection(resolvedSelection)
-  }, [handleTimelineSelection, params.backendLoaded, currentChapter, resolvedStoryTimeline.branchNodes, storyTimelineData])
+    restoreWorkspaceSelectionFromLocation('replace')
+  }, [params.backendLoaded, currentChapter, restoreWorkspaceSelectionFromLocation, storyTimelineData])
 
   useEffect(() => {
-    if (!params.backendLoaded || !currentChapter || !workspaceSelectionHydratedRef.current) return
+    const handlePopState = () => {
+      if (!params.backendLoaded || !workspaceSelectionHydratedRef.current) return
+      restoreWorkspaceSelectionFromLocation('none')
+    }
+
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [params.backendLoaded, restoreWorkspaceSelectionFromLocation])
+
+  useEffect(() => {
+    if (!params.backendLoaded || !currentChapter || !workspaceSelection || !workspaceSelectionHydratedRef.current) return
+    const historyMode = workspaceSelectionHistoryModeRef.current
+    workspaceSelectionHistoryModeRef.current = 'replace'
+    if (historyMode === 'none') return
     const currentUrl = new URL(window.location.href)
     const currentSearch = currentUrl.searchParams.toString()
     const nextSearchParams = writeWorkspaceSelectionToSearchParams(currentUrl.searchParams, workspaceSelection ?? toChapterTimelineSelection(currentChapter))
     const nextSearch = nextSearchParams.toString()
     if (nextSearch === currentSearch) return
     const nextUrl = `${currentUrl.pathname}${nextSearch ? `?${nextSearch}` : ''}${currentUrl.hash}`
-    window.history.replaceState(window.history.state, '', nextUrl)
+    window.history[historyMode === 'push' ? 'pushState' : 'replaceState'](window.history.state, '', nextUrl)
   }, [params.backendLoaded, currentChapter, workspaceSelection])
 
   useEffect(() => {
+    if (!workspaceSelectionRef.current) return
+    workspaceSelectionHistoryModeRef.current = 'replace'
     setWorkspaceSelection((current) => resolveWorkspaceSelection({ currentSelection: current, currentChapter, branchNodes: resolvedStoryTimeline.branchNodes }))
   }, [currentChapter, resolvedStoryTimeline.branchNodes])
 
@@ -877,19 +955,19 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
       if (storyTimelineRequestRef.current !== requestId) return null
       if (!response.ok || !data) {
         setStoryTimelineData(null)
-        setStoryTimelineError(data?.error ?? t('workspace.storyTimeline.loadFailed'))
+        setStoryTimelineError(resolveWorkspaceUserFacingError('story-timeline-load', data?.error, locale))
         return null
       }
       setStoryTimelineData(data)
       setStoryTimelineError('')
       return data
-    } catch {
+    } catch (error) {
       if (storyTimelineRequestRef.current !== requestId) return null
       setStoryTimelineData(null)
-        setStoryTimelineError(t('workspace.storyTimeline.loadFailed'))
+      setStoryTimelineError(resolveWorkspaceUserFacingError('story-timeline-load', error, locale))
       return null
     }
-  }, [params.currentNovelId, storyTimelineBranchId])
+  }, [locale, params.currentNovelId, storyTimelineBranchId])
 
   useEffect(() => {
     void loadStoryTimeline()
@@ -1107,7 +1185,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
             ? t('workspace.knowledge.jumpSourceLineRange', { start: pendingSourceJump.lineStart, end: pendingSourceJump.lineEnd })
             : t('workspace.knowledge.jumpSourceLineSingle', { line: pendingSourceJump.lineStart })
           : t('workspace.knowledge.jumpSourceLocation')
-        showKnowledgeToast(t('workspace.knowledge.jumpSourceToast', { chapter: pendingSourceJump.chapterNo, lineLabel }))
+        showKnowledgeToast(t('workspace.knowledge.jumpSourceToast', { chapter: pendingSourceJump.chapterNo, lineLabel }), 1800, 'info')
       }
       setPendingSourceJump(null)
     }, 120)
@@ -1263,7 +1341,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
       setChapterGraphSelection(defaultNode ? { type: 'node', node: defaultNode } : null)
     } catch (error) {
       if (chapterGraphRequestRef.current !== requestId) return
-      setChapterGraphError(error instanceof Error ? error.message : t('workspace.chapterGraph.loadFailed'))
+      setChapterGraphError(resolveWorkspaceUserFacingError('chapter-graph-load', error, locale))
       if (!preserveData) {
         setChapterGraphData(null)
         setChapterGraphSelection(null)
@@ -1273,7 +1351,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
         setChapterGraphLoading(false)
       }
     }
-  }, [chapterGraphControls, params.currentNovelId, parentChapter])
+  }, [chapterGraphControls, locale, params.currentNovelId, parentChapter])
 
   useEffect(() => {
     if (centerPaneView !== 'graph' || !currentChapter) return
@@ -1350,15 +1428,19 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const syncRewriteJobFromRecoverableJob = useCallback((job: RecoverableRewriteJob) => {
     const nextCandidate = job.result ? toRewriteCandidateFromRecoverableResult(job.result) : null
     const isPending = job.status === 'queued' || job.status === 'running'
-    const nextError = job.status === 'failed' ? (job.errorMessage?.trim() || t('workspace.actionError.createRecoverableRewriteJobFailed')) : ''
+    const nextError = job.status === 'failed' ? resolveWorkspaceUserFacingError('rewrite-job-failed', job.errorMessage, locale) : ''
     setRewriteFlow({ loading: isPending, error: nextError, provider: job.result?.provider || 'recoverable-rewrite-job', candidates: nextCandidate ? [nextCandidate] : [], selectedIndex: 0, jobId: job.jobId, jobStatus: job.status, jobCurrentStep: job.currentStep })
     setRewriteState((current) => ({ loading: isPending, error: nextError, result: nextCandidate?.content || current.result }))
-  }, [t])
+  }, [locale, t])
 
   return {
     currentNovelId: params.currentNovelId,
     leftPanelOpen,
     setLeftPanelOpen,
+    referencePanelOpen,
+    setReferencePanelOpen,
+    knowledgePanelOpen,
+    setKnowledgePanelOpen,
     chapterListState,
     setChapterListState,
     centerPaneView,
@@ -1439,6 +1521,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     copied,
     setCopied,
     toast,
+    toastVariant,
     setToast,
     saveContinueBlockPending,
     setSaveContinueBlockPending,

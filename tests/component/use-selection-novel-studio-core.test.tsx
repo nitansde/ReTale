@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { useState } from 'react'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -7,7 +8,7 @@ import {
   resolveSelectedKnowledgeProjectionChapterOrder,
   useSelectionNovelStudioCore,
 } from '@/components/workspace/use-selection-novel-studio-core'
-import type { KnowledgeRebuildStatus, KnowledgeStatusOverview } from '@/components/workspace/selection-novel-studio-helpers'
+import type { KnowledgeRebuildStatus, KnowledgeStatusOverview, RecoverableRewriteJob } from '@/components/workspace/selection-novel-studio-helpers'
 import type { StoryTimelineResponse } from '@/lib/story-branch-types'
 import type { Chapter } from '@/lib/types'
 import type { KnowledgeProjectionResult } from '@/store/novel-store-types'
@@ -159,6 +160,33 @@ function buildStoryTimeline(): StoryTimelineResponse {
       },
     ],
     edges: [],
+  }
+}
+
+function buildFailedRecoverableRewriteJob(errorMessage: string): RecoverableRewriteJob {
+  return {
+    jobId: 'rewrite-job-failed',
+    status: 'failed',
+    progress: 0.5,
+    currentStep: null,
+    errorMessage,
+    createdAt: '2026-07-27T00:00:00.000Z',
+    updatedAt: '2026-07-27T00:00:01.000Z',
+    panel: {
+      novelId: 'novel-1',
+      branchId: 'novel-1:main',
+      chapterId: 'chapter-1',
+      selectedText: 'Selected text',
+      sourceText: 'Source text',
+      sourceTextOverride: null,
+      userInstruction: 'Rewrite',
+      rewriteLaunchSource: 'chapter',
+      branchContextNodeId: null,
+      branchContextInclusion: null,
+      continueBlockId: null,
+      createdAt: '2026-07-27T00:00:00.000Z',
+    },
+    result: null,
   }
 }
 
@@ -412,6 +440,51 @@ describe('knowledge cache overview derivations', () => {
     expect(result.current.rawTextEmbeddingActive).toBe(false)
     expect(result.current.retrievalTaskStatus).toBeNull()
     unmount()
+  })
+})
+
+describe('useSelectionNovelStudioCore user-facing errors', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('sanitizes raw story timeline diagnostics', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url.startsWith('/api/story-timeline?')) {
+        return new Response(JSON.stringify({ error: 'SENTINEL story timeline SQL path' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (url.startsWith('/api/knowledge-view?')) {
+        return jsonResponse({ ok: true, knowledgeRebuildStatus: null, hanlpCacheSnapshot: null, knowledgeStatusOverview: null })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const params = buildCoreParams({
+      currentNovelId: 'novel-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
+    })
+    const { result } = renderHook(() => useSelectionNovelStudioCore(params))
+
+    await waitFor(() => expect(result.current.storyTimelineError).toBe('Failed to load story timeline'))
+    expect(result.current.storyTimelineError).not.toContain('SENTINEL')
+  })
+
+  it('sanitizes persisted recoverable rewrite job diagnostics', () => {
+    const params = buildCoreParams()
+    const { result } = renderHook(() => useSelectionNovelStudioCore(params))
+
+    act(() => {
+      result.current.syncRewriteJobFromRecoverableJob(buildFailedRecoverableRewriteJob('SENTINEL persisted provider stack'))
+    })
+
+    expect(result.current.rewriteFlow.error).toBe('Rewrite failed.')
+    expect(result.current.rewriteState.error).not.toContain('SENTINEL')
   })
 })
 
@@ -1497,5 +1570,175 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
     })
 
     expect(result.current.knowledgeStatusOverview).toEqual(novelBOverview)
+  })
+})
+
+describe('useSelectionNovelStudioCore workspace selection history', () => {
+  beforeEach(() => {
+    window.history.replaceState({ preserved: 'history-state' }, '', '/workspace')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  function stubWorkspaceFetch(storyTimeline = buildStoryTimeline()) {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>()
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.startsWith('/api/story-timeline?')) return jsonResponse(storyTimeline)
+      if (url.startsWith('/api/knowledge-view?')) {
+        return jsonResponse({ ok: true, knowledgeRebuildStatus: null, hanlpCacheSnapshot: null, knowledgeStatusOverview: null })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+  }
+
+  function renderHistoryCore() {
+    const localChapters = [
+      buildChapter({ id: 'chapter-1', order: 1, title: 'Chapter 1' }),
+      buildChapter({ id: 'chapter-2', order: 2, title: 'Chapter 2' }),
+    ]
+    const baseParams = buildCoreParams({
+      currentNovelId: 'novel-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
+      localChapters,
+      autosaveSignature: 'history-test',
+    })
+
+    return renderHook(() => {
+      const [currentChapterId, setCurrentChapterId] = useState('chapter-1')
+      const core = useSelectionNovelStudioCore({ ...baseParams, currentChapterId, setCurrentChapterId })
+      return { core, currentChapterId }
+    })
+  }
+
+  it('pushes explicit chapter and branch selections and restores them with Back and Forward without write loops', async () => {
+    stubWorkspaceFetch()
+    window.history.replaceState(
+      { preserved: 'history-state' },
+      '',
+      '/workspace?foo=bar&selectionKind=chapter&selectionChapterId=chapter-1&selectionChapterNo=1#selection-anchor',
+    )
+    const pushState = vi.spyOn(window.history, 'pushState')
+    const replaceState = vi.spyOn(window.history, 'replaceState')
+    const { result } = renderHistoryCore()
+
+    await waitFor(() => {
+      expect(result.current.core.workspaceSelection).toEqual({ kind: 'chapter', chapterId: 'chapter-1', chapterNo: 1 })
+      expect(result.current.core.timelineNodeById.get('continue-node-2')).toBeDefined()
+    })
+    expect(pushState).not.toHaveBeenCalled()
+    expect(replaceState).not.toHaveBeenCalled()
+
+    act(() => {
+      result.current.core.handleTimelineSelection({ kind: 'chapter', chapterId: 'chapter-2', chapterNo: 2 })
+    })
+    await waitFor(() => {
+      expect(result.current.currentChapterId).toBe('chapter-2')
+      expect(window.location.search).toContain('selectionChapterId=chapter-2')
+    })
+    expect(pushState).toHaveBeenCalledTimes(1)
+    expect(pushState).toHaveBeenLastCalledWith(
+      { preserved: 'history-state' },
+      '',
+      '/workspace?foo=bar&selectionKind=chapter&selectionChapterId=chapter-2&selectionChapterNo=2#selection-anchor',
+    )
+
+    act(() => {
+      result.current.core.handleTimelineSelection({
+        kind: 'continue_block',
+        nodeId: 'continue-node-2',
+        continueBlockId: 'continue-block-2',
+        anchorChapterNo: 99,
+      })
+    })
+    await waitFor(() => {
+      expect(window.location.search).toContain('selectionNodeId=continue-node-2')
+    })
+    expect(pushState).toHaveBeenCalledTimes(2)
+    expect(window.location.search).toContain('foo=bar')
+    expect(window.location.hash).toBe('#selection-anchor')
+
+    act(() => window.history.back())
+    await waitFor(() => {
+      expect(result.current.core.workspaceSelection).toEqual({ kind: 'chapter', chapterId: 'chapter-2', chapterNo: 2 })
+      expect(result.current.currentChapterId).toBe('chapter-2')
+    })
+
+    act(() => window.history.forward())
+    await waitFor(() => {
+      expect(result.current.core.workspaceSelection).toEqual({
+        kind: 'continue_block',
+        nodeId: 'continue-node-2',
+        continueBlockId: 'continue-block-2',
+        anchorChapterNo: 99,
+      })
+      expect(result.current.currentChapterId).toBe('chapter-2')
+    })
+    expect(pushState).toHaveBeenCalledTimes(2)
+    expect(replaceState).not.toHaveBeenCalled()
+  })
+
+  it('canonicalizes initial chapter hydration with replace while preserving unrelated URL state', async () => {
+    stubWorkspaceFetch()
+    window.history.replaceState(
+      { preserved: 'history-state' },
+      '',
+      '/workspace?foo=bar&selectionKind=chapter&selectionChapterId=deleted-chapter&selectionChapterNo=2#selection-anchor',
+    )
+    const pushState = vi.spyOn(window.history, 'pushState')
+    const replaceState = vi.spyOn(window.history, 'replaceState')
+    const { result } = renderHistoryCore()
+
+    await waitFor(() => {
+      expect(result.current.currentChapterId).toBe('chapter-2')
+      expect(result.current.core.workspaceSelection).toEqual({ kind: 'chapter', chapterId: 'chapter-2', chapterNo: 2 })
+      expect(window.location.search).toContain('selectionChapterId=chapter-2')
+    })
+    expect(pushState).not.toHaveBeenCalled()
+    expect(replaceState).toHaveBeenCalledTimes(1)
+    expect(replaceState).toHaveBeenCalledWith(
+      { preserved: 'history-state' },
+      '',
+      '/workspace?foo=bar&selectionKind=chapter&selectionChapterId=chapter-2&selectionChapterNo=2#selection-anchor',
+    )
+  })
+
+  it('replaces a deleted branch selection with its chapter fallback', async () => {
+    stubWorkspaceFetch()
+    window.history.replaceState(
+      { preserved: 'history-state' },
+      '',
+      '/workspace?selectionKind=chapter&selectionChapterId=chapter-2&selectionChapterNo=2',
+    )
+    const pushState = vi.spyOn(window.history, 'pushState')
+    const replaceState = vi.spyOn(window.history, 'replaceState')
+    const { result } = renderHistoryCore()
+
+    await waitFor(() => {
+      expect(result.current.core.timelineNodeById.get('continue-node-2')).toBeDefined()
+      expect(result.current.currentChapterId).toBe('chapter-2')
+    })
+    act(() => {
+      result.current.core.handleTimelineSelection({
+        kind: 'continue_block',
+        nodeId: 'continue-node-2',
+        continueBlockId: 'continue-block-2',
+        anchorChapterNo: 99,
+      })
+    })
+    await waitFor(() => expect(pushState).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      result.current.core.setStoryTimelineData({ ...buildStoryTimeline(), branchNodes: [] })
+    })
+    await waitFor(() => {
+      expect(result.current.core.workspaceSelection).toEqual({ kind: 'chapter', chapterId: 'chapter-2', chapterNo: 2 })
+      expect(window.location.search).toContain('selectionChapterId=chapter-2')
+    })
+    expect(replaceState).toHaveBeenCalledTimes(1)
   })
 })
