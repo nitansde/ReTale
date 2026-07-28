@@ -291,7 +291,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const [pendingSourceJump, setPendingSourceJump] = useState<PendingSourceJump | null>(null)
   const [workspaceSelection, setWorkspaceSelection] = useState<TimelineSelection | null>(null)
   const workspaceSelectionRef = useRef<TimelineSelection | null>(null)
-  workspaceSelectionRef.current = workspaceSelection
   const [storyTimelineData, setStoryTimelineData] = useState<StoryTimelineResponse | null>(null)
   const [storyTimelineError, setStoryTimelineError] = useState('')
   const [copied, setCopied] = useState<'rewrite' | 'roleplay' | null>(null)
@@ -331,6 +330,10 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const [openAICompatibleModelsLoading, setOpenAICompatibleModelsLoading] = useState<Record<AIScenarioKey, boolean>>({ rewrite: false, knowledgeExtraction: false, embeddings: false })
   const [editState, setEditState] = useState<{ type: 'char' | 'outline' | 'world' | 'relation' | 'timeline' | null; id: string | null; form: Record<string, string> }>({ type: null, id: null, form: {} })
   const knowledgePanelReadOnly = true
+
+  useEffect(() => {
+    workspaceSelectionRef.current = workspaceSelection
+  }, [workspaceSelection])
 
   const editorRef = useRef<HTMLDivElement | null>(null)
   const toolbarRef = useRef<HTMLDivElement | null>(null)
@@ -1020,7 +1023,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const knowledgeRebuildActive = mainKnowledgeRebuildStatus?.status === 'running' || mainKnowledgeRebuildStatus?.status === 'queued'
   const knowledgeRebuildBusy = knowledgeRebuildActive || knowledgeRebuildPaused
   const knowledgeRebuildFailureMessage = useMemo(() => resolveKnowledgeRebuildFailureMessage(mainKnowledgeRebuildStatus), [mainKnowledgeRebuildStatus])
-  const knowledgeRebuildOverallPercent = useMemo(() => toProgressPercent(mainKnowledgeRebuildStatus?.progress), [mainKnowledgeRebuildStatus])
   const hanlpBootstrapStep = useMemo(() => knowledgeRebuildSteps.find((step) => step.key === HANLP_BOOTSTRAP_STAGE_KEY) ?? null, [knowledgeRebuildSteps])
   const hanlpBootstrapCompletedChapterCount = mainKnowledgeRebuildStatus?.hanlpBootstrapCompletedChapterCount ?? null
   const hanlpBootstrapTotalChapterCount = mainKnowledgeRebuildStatus?.hanlpBootstrapTotalChapterCount ?? null
@@ -1083,15 +1085,10 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const rawTextEmbeddingActive = rawTextEmbeddingActiveStatus !== null
   const activeRawEmbeddingStep = useMemo(() => rawTextEmbeddingActiveStatus?.steps.find((step) => step.key === 'raw-embedding') ?? null, [rawTextEmbeddingActiveStatus])
   const rawTextEmbeddingProgress = rawTextEmbeddingActiveStatus?.rawTextEmbeddingProgress
-  const durableRawTextEmbeddingPercent = useMemo(() => {
-    const coverage = knowledgeStatusOverview?.embeddingCache
-    if (!coverage || coverage.totalChapterCount <= 0) return null
-    return Math.max(0, Math.min(100, Math.round((coverage.coveredChapterCount / coverage.totalChapterCount) * 100)))
-  }, [knowledgeStatusOverview])
   const rawTextEmbeddingPercent = useMemo(() => {
-    if (!rawTextEmbeddingActive) return durableRawTextEmbeddingPercent
+    if (!rawTextEmbeddingActive) return null
     return rawTextEmbeddingProgress === undefined ? null : toProgressPercent(rawTextEmbeddingProgress)
-  }, [durableRawTextEmbeddingPercent, rawTextEmbeddingActive, rawTextEmbeddingProgress])
+  }, [rawTextEmbeddingActive, rawTextEmbeddingProgress])
   const rawEmbeddingCurrentStep = useMemo(() => {
     const currentStep = rawTextEmbeddingActiveStatus?.currentStep?.trim().toLowerCase() ?? ''
     return currentStep.includes('raw') && currentStep.includes('embedding')
@@ -1134,7 +1131,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     if (task?.status === 'succeeded' || task?.status === 'completed' || task?.status === 'aborted') return null
     return task
   }, [knowledgeRebuildStatus, retrievalIndexOverview])
-  const retrievalTaskPercent = useMemo(() => toProgressPercent(retrievalTaskStatus?.progress ?? 0), [retrievalTaskStatus])
   const retrievalTaskPhaseLabel = useMemo(() => resolveKnowledgeJobPhaseLabel(retrievalTaskStatus), [retrievalTaskStatus])
   const retrievalTaskStatusLabel = useMemo(() => formatKnowledgeJobStatusLabel(retrievalTaskStatus?.status), [retrievalTaskStatus])
   const retrievalControlsState = useMemo(() => resolveRetrievalTaskControlsState({ retrievalTask: retrievalTaskStatus, retrievalIndexOverview, knowledgeRebuildStatus, knowledgeActionLoading, knowledgeRebuilding }), [knowledgeActionLoading, knowledgeRebuildStatus, knowledgeRebuilding, retrievalIndexOverview, retrievalTaskStatus])
@@ -1633,10 +1629,8 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     knowledgeRebuildActive,
     knowledgeRebuildBusy,
     knowledgeRebuildFailureMessage,
-    knowledgeRebuildOverallPercent,
     hanlpBootstrapCompletedChapterCount,
     hanlpBootstrapTotalChapterCount,
-    hanlpBootstrapPercent,
     hanlpBootstrapCacheHitRatePercent,
     hanlpBootstrapTimingLabel,
     hanlpBootstrapPhaseLabel,
@@ -1647,7 +1641,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     hanlpCacheDeleteState,
     extractionCacheDeleteState,
     embeddingCacheDeleteState,
-    rawTextEmbeddingPercent,
     rawTextEmbeddingCacheHitRatePercent,
     rawTextEmbeddingTimingLabel,
     rawTextEmbeddingSettingsLine,
@@ -1656,7 +1649,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     rawTextEmbeddingActive,
     retrievalIndexOverview,
     retrievalTaskStatus,
-    retrievalTaskPercent,
     retrievalTaskPhaseLabel,
     retrievalTaskStatusLabel,
     retrievalControlsState,

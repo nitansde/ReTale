@@ -372,7 +372,7 @@ describe('knowledge cache overview derivations', () => {
     expect(mergeKnowledgeStatusOverview(current, changedProvider)?.embeddingCache).toEqual(changedProvider.embeddingCache)
   })
 
-  it('uses durable idle coverage without fabricating hit rate, timing, or batch size', () => {
+  it('uses durable idle coverage without exposing an idle embedding percent or historical telemetry', () => {
     const { result, unmount } = renderHook(() => useSelectionNovelStudioCore(buildCoreParams()))
 
     act(() => {
@@ -389,7 +389,9 @@ describe('knowledge cache overview derivations', () => {
 
     expect(result.current.mainKnowledgeRebuildStatus).toBeNull()
     expect(result.current.rawTextEmbeddingActive).toBe(false)
-    expect(result.current.rawTextEmbeddingPercent).toBe(100)
+    expect('rawTextEmbeddingPercent' in result.current).toBe(false)
+    expect('knowledgeRebuildOverallPercent' in result.current).toBe(false)
+    expect('retrievalTaskPercent' in result.current).toBe(false)
     expect(result.current.rawTextEmbeddingCacheHitRatePercent).toBeNull()
     expect(result.current.rawTextEmbeddingTimingLabel).toBeNull()
     expect(result.current.rawTextEmbeddingSettingsLine).toBe('Ollama · qwen3-embedding:4b')
@@ -413,7 +415,6 @@ describe('knowledge cache overview derivations', () => {
     })
 
     expect(result.current.rawTextEmbeddingActive).toBe(true)
-    expect(result.current.rawTextEmbeddingPercent).toBe(35)
     expect(result.current.rawTextEmbeddingCacheHitRatePercent).toBe(20)
     expect(result.current.rawTextEmbeddingTimingLabel).not.toBeNull()
     expect(result.current.rawTextEmbeddingSettingsLine).toBe('Ollama · qwen3-embedding:4b · batch 32')
@@ -1614,6 +1615,51 @@ describe('useSelectionNovelStudioCore workspace selection history', () => {
       return { core, currentChapterId }
     })
   }
+
+  it('defers branch selection hydration until timeline data is available without writing an intermediate chapter URL', async () => {
+    window.history.replaceState(
+      { preserved: 'history-state' },
+      '',
+      '/workspace?selectionKind=continue_block&selectionNodeId=continue-node-2&selectionContinueBlockId=continue-block-2&selectionAnchorChapterNo=99',
+    )
+    const storyTimelineResponse = createDeferred()
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>()
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.startsWith('/api/story-timeline?')) {
+        return storyTimelineResponse.promise.then((value) => value as Response)
+      }
+      if (url.startsWith('/api/knowledge-view?')) {
+        return jsonResponse({ ok: true, knowledgeRebuildStatus: null, hanlpCacheSnapshot: null, knowledgeStatusOverview: null })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const pushState = vi.spyOn(window.history, 'pushState')
+    const replaceState = vi.spyOn(window.history, 'replaceState')
+    const { result } = renderHistoryCore()
+
+    await flushEffects()
+    expect(result.current.core.workspaceSelection).toBeNull()
+    expect(pushState).not.toHaveBeenCalled()
+    expect(replaceState).not.toHaveBeenCalled()
+
+    await act(async () => {
+      storyTimelineResponse.resolve(jsonResponse(buildStoryTimeline()))
+      await storyTimelineResponse.promise
+    })
+
+    await waitFor(() => {
+      expect(result.current.core.workspaceSelection).toEqual({
+        kind: 'continue_block',
+        nodeId: 'continue-node-2',
+        continueBlockId: 'continue-block-2',
+        anchorChapterNo: 99,
+      })
+    })
+    expect(pushState).not.toHaveBeenCalled()
+    expect(replaceState).not.toHaveBeenCalled()
+  })
 
   it('pushes explicit chapter and branch selections and restores them with Back and Forward without write loops', async () => {
     stubWorkspaceFetch()
