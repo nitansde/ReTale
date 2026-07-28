@@ -2358,3 +2358,90 @@ test('focused future jump chooser direct-chapter mode shows real summaries and k
     parentTimelineNodeId: storyBranchFixtureIds.whatIfNodeId,
   })
 })
+
+
+test('focused Future Map overlay is single-column without mobile overflow and preserves desktop columns', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.route('**/api/workspace', async (route) => {
+    await route.fulfill({ json: buildWorkspacePayload() })
+  })
+  await page.route('**/api/story-timeline*', async (route) => {
+    await route.fulfill({ json: buildStoryTimelinePayload({ includeWhatIf: true, includeFutureJump: false }) })
+  })
+  await page.route('**/api/knowledge-view*', async (route) => {
+    await route.fulfill({ json: { ok: true, localOutlines: [], localCharacters: [], localCharacterRelations: [], localWorldEntries: [], localTimelineEvents: [], knowledgeRebuildStatus: null, jobOutcome: null } })
+  })
+  await page.route('**/api/what-if/sessions/what-if-session-001?*', async (route) => {
+    await route.fulfill({ json: buildWhatIfSessionDetail() })
+  })
+  await page.route('**/api/story-future-map*', async (route) => {
+    await route.fulfill({ json: buildFutureMapPayload() })
+  })
+
+  await page.goto(`/workspace?selectionKind=what_if&selectionNodeId=${storyBranchFixtureIds.whatIfNodeId}&selectionSessionId=what-if-session-001&selectionAnchorChapterNo=10`, { waitUntil: 'networkidle' })
+  const opener = page.getByTestId('what-if-jump-button')
+  await opener.click()
+
+  const dialog = page.getByRole('dialog', { name: 'Future map · IF-01 决裂线' })
+  await expect(dialog).toBeVisible()
+  await expect(page.getByTestId('future-map-layout')).toBeVisible()
+  const closeButton = page.getByRole('button', { name: '关闭 Future Map' })
+  await expect(closeButton).toBeFocused()
+  const closeBox = await closeButton.boundingBox()
+  expect(closeBox).not.toBeNull()
+  expect(closeBox!.width).toBeGreaterThanOrEqual(44)
+  expect(closeBox!.height).toBeGreaterThanOrEqual(44)
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('hidden')
+
+  const mobileGeometry = await page.evaluate(() => {
+    const documentElement = document.documentElement
+    const overlay = document.querySelector<HTMLElement>('[data-testid="future-map-overlay"]')
+    const tracks = document.querySelector<HTMLElement>('[data-testid="future-map-tracks"]')
+    const candidates = document.querySelector<HTMLElement>('[data-testid="future-map-candidates"]')
+    const confirmation = document.querySelector<HTMLElement>('[data-testid="future-map-confirmation"]')
+    if (!overlay || !tracks || !candidates || !confirmation) throw new Error('Future Map geometry targets missing')
+    return {
+      documentOverflow: documentElement.scrollWidth - documentElement.clientWidth,
+      overlayOverflow: overlay.scrollWidth - overlay.clientWidth,
+      overlay: overlay.getBoundingClientRect().toJSON(),
+      tracks: tracks.getBoundingClientRect().toJSON(),
+      candidates: candidates.getBoundingClientRect().toJSON(),
+      confirmation: confirmation.getBoundingClientRect().toJSON(),
+    }
+  })
+
+  expect(mobileGeometry.documentOverflow).toBeLessThanOrEqual(0)
+  expect(mobileGeometry.overlayOverflow).toBeLessThanOrEqual(0)
+  expect(mobileGeometry.tracks.width).toBeLessThanOrEqual(mobileGeometry.overlay.width)
+  expect(mobileGeometry.candidates.width).toBeLessThanOrEqual(mobileGeometry.overlay.width)
+  expect(mobileGeometry.confirmation.width).toBeLessThanOrEqual(mobileGeometry.overlay.width)
+  expect(mobileGeometry.tracks.y).toBeLessThan(mobileGeometry.candidates.y)
+  expect(mobileGeometry.candidates.y).toBeLessThan(mobileGeometry.confirmation.y)
+
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const desktopGeometry = await page.evaluate(() => {
+    const tracks = document.querySelector<HTMLElement>('[data-testid="future-map-tracks"]')?.getBoundingClientRect()
+    const candidates = document.querySelector<HTMLElement>('[data-testid="future-map-candidates"]')?.getBoundingClientRect()
+    const confirmation = document.querySelector<HTMLElement>('[data-testid="future-map-confirmation"]')?.getBoundingClientRect()
+    if (!tracks || !candidates || !confirmation) throw new Error('Future Map desktop geometry targets missing')
+    return {
+      tracks: tracks.toJSON(),
+      candidates: candidates.toJSON(),
+      confirmation: confirmation.toJSON(),
+      documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    }
+  })
+
+  expect(desktopGeometry.documentOverflow).toBeLessThanOrEqual(0)
+  expect(Math.abs(desktopGeometry.tracks.y - desktopGeometry.candidates.y)).toBeLessThanOrEqual(1)
+  expect(Math.abs(desktopGeometry.candidates.y - desktopGeometry.confirmation.y)).toBeLessThanOrEqual(1)
+  expect(desktopGeometry.tracks.x).toBeLessThan(desktopGeometry.candidates.x)
+  expect(desktopGeometry.candidates.x).toBeLessThan(desktopGeometry.confirmation.x)
+  expect(Math.round(desktopGeometry.tracks.width)).toBe(248)
+  expect(Math.round(desktopGeometry.confirmation.width)).toBe(360)
+
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+  await expect(opener).toBeFocused()
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('')
+})

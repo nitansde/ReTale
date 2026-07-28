@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, Check, GitBranch, LoaderCircle, Sparkles, X } from 'lucide-react'
+import { DialogSurface } from '@/components/ui/DialogSurface'
 import { useI18n } from '@/lib/i18n/provider'
 import { cn } from '@/lib/utils'
+import { resolveWorkspaceUserFacingError } from '@/lib/workspace-user-facing-errors'
 import {
   FUTURE_MAP_MISSING_SUMMARY_FALLBACK,
   type FutureJumpMutationResponse,
@@ -116,6 +118,7 @@ function EventCard(props: {
     <button
       type="button"
       data-testid={`future-map-event-${props.event.id}`}
+      aria-pressed={props.selected}
       onClick={props.onClick}
       className={cn(
         'w-full rounded-[24px] border p-4 text-left transition',
@@ -160,7 +163,7 @@ function EventCard(props: {
 }
 
 export function FutureMapOverlay(props: FutureMapOverlayProps) {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
   const { branchId, novelId, onClose, onCreated, parentTimelineNodeId, sourceContext, title } = props
   const [data, setData] = useState<FutureMapResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -192,7 +195,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
       } catch (loadError) {
         if (cancelled) return
         setData(null)
-        setError(loadError instanceof Error ? loadError.message : 'Future map load failed')
+        setError(resolveWorkspaceUserFacingError('future-map-load', loadError, locale))
       } finally {
         if (!cancelled) {
           setLoading(false)
@@ -204,7 +207,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
     return () => {
       cancelled = true
     }
-  }, [branchId, novelId, sourceContext])
+  }, [branchId, locale, novelId, sourceContext])
 
   const eventsById = useMemo(() => new Map((data?.events ?? []).map((event) => [event.id, event] as const)), [data?.events])
   const visibleEvents = useMemo(() => {
@@ -281,20 +284,25 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
           targetChapterNo: selectedChapter.chapterNo,
         })
     } catch (submitError) {
-      setCreateError(submitError instanceof Error ? submitError.message : 'Future jump create failed')
+      setCreateError(resolveWorkspaceUserFacingError('future-jump-create', submitError, locale))
     } finally {
       setCreating(false)
     }
   }
 
   return (
-    <div className="fixed inset-0 z-[70] bg-black/72 backdrop-blur-sm" data-testid="future-map-overlay" onClick={onClose}>
-      <div
-        className="absolute inset-x-0 top-0 h-full overflow-y-auto"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="min-h-screen px-4 py-4 sm:px-6 sm:py-6">
-          <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-[1680px] flex-col rounded-[34px] border border-sky-300/20 bg-[#0d1017] shadow-[0_30px_120px_rgba(0,0,0,0.55)]">
+    <DialogSurface
+      open
+      onClose={onClose}
+      title={`Future map · ${title}`}
+      busy={creating}
+      closeDisabled={creating}
+      backdropClassName="bg-black/72"
+      titleClassName="sr-only"
+      contentClassName="mt-0 flex min-h-[calc(100vh-2rem)] flex-col sm:min-h-[calc(100vh-3rem)]"
+      className="my-4 min-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-[1680px] rounded-[34px] border-sky-300/20 p-0 shadow-[0_30px_120px_rgba(0,0,0,0.55)] sm:my-6 sm:min-h-[calc(100vh-3rem)] sm:w-[calc(100%-3rem)]"
+    >
+      <div className="flex flex-1 flex-col" data-testid="future-map-overlay">
             <div className="border-b border-white/8 px-5 py-5 sm:px-7 sm:py-6">
               <div className="flex items-start justify-between gap-4">
                 <div className="max-w-4xl">
@@ -304,8 +312,15 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                     {t('futureMap.description')}
                   </p>
                 </div>
-                <button data-testid="future-map-close" onClick={onClose} className="rounded-2xl border border-white/10 p-2 text-zinc-300 transition hover:bg-white/[0.06]">
-                  <X className="h-4 w-4" />
+                <button
+                  type="button"
+                  data-testid="future-map-close"
+                  aria-label={t('futureMap.close')}
+                  disabled={creating}
+                  onClick={onClose}
+                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
                 </button>
               </div>
 
@@ -318,6 +333,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                 <button
                   type="button"
                   data-testid="future-map-mode-history-node"
+                  aria-pressed={mode === 'history_node'}
                   onClick={() => {
                     setMode('history_node')
                     setSelectedEventId(null)
@@ -336,6 +352,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                 <button
                   type="button"
                   data-testid="future-map-mode-direct-chapter"
+                  aria-pressed={mode === 'direct_chapter'}
                   onClick={() => {
                     setMode('direct_chapter')
                     setSelectedEventId(null)
@@ -363,11 +380,11 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
               </div>
             ) : error ? (
               <div className="px-6 py-8 sm:px-7">
-                <div className="rounded-[24px] border border-rose-400/20 bg-rose-500/10 p-5 text-sm leading-6 text-rose-100">{error}</div>
+                <div role="alert" className="rounded-[24px] border border-rose-400/20 bg-rose-500/10 p-5 text-sm leading-6 text-rose-100">{error}</div>
               </div>
             ) : data ? (
-              <div className="grid flex-1 gap-4 p-4 sm:grid-cols-[248px_minmax(0,1.3fr)_360px] sm:p-5 lg:p-6">
-                <aside className="rounded-[28px] border border-white/8 bg-black/20 p-4">
+              <div data-testid="future-map-layout" className="grid min-w-0 flex-1 gap-4 p-4 sm:p-5 lg:grid-cols-[248px_minmax(0,1.3fr)_360px] lg:p-6">
+                <aside data-testid="future-map-tracks" className="min-w-0 rounded-[28px] border border-white/8 bg-black/20 p-4">
                   <div className="flex items-center gap-2 text-zinc-200">
                     <GitBranch className="h-4 w-4 text-sky-300" />
                     <h4 className="text-sm font-medium">Tracks</h4>
@@ -381,6 +398,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                           key={track.trackKey}
                           type="button"
                           data-testid={`future-map-track-${track.trackKey}`}
+                          aria-pressed={selected}
                           onClick={() => handleTrackSelect(track.trackKey)}
                           className={cn(
                             'w-full rounded-[22px] border px-3 py-3 text-left transition',
@@ -400,7 +418,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                   </div>
                 </aside>
 
-                <section className="rounded-[28px] border border-white/8 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.08),_transparent_40%),#0b0d12] p-4 sm:p-5">
+                <section data-testid="future-map-candidates" className="min-w-0 rounded-[28px] border border-white/8 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.08),_transparent_40%),#0b0d12] p-4 sm:p-5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{mode === 'history_node' ? 'History nodes' : 'Direct chapter anchors'}</p>
@@ -435,6 +453,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                                 key={option.chapter.id}
                                 type="button"
                                 data-testid={`future-map-direct-chapter-${option.chapter.chapterNo}`}
+                                aria-pressed={selected}
                                 onClick={() => handleDirectChapterSelect(option)}
                                 className={cn(
                                   'w-full rounded-[24px] border p-4 text-left transition',
@@ -473,7 +492,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                   )}
                 </section>
 
-                <aside className="rounded-[28px] border border-white/8 bg-black/20 p-4 sm:p-5">
+                <aside data-testid="future-map-confirmation" className="min-w-0 rounded-[28px] border border-white/8 bg-black/20 p-4 sm:p-5">
                   <div className="flex items-center gap-2 text-zinc-200">
                     <Sparkles className="h-4 w-4 text-sky-300" />
                     <h4 className="text-sm font-medium">Confirm target</h4>
@@ -535,7 +554,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                   </label>
 
                   {createError ? (
-                    <div data-testid="future-map-create-error" className="mt-4 rounded-[20px] border border-rose-400/20 bg-rose-500/10 p-3 text-sm leading-6 text-rose-100">{createError}</div>
+                    <div role="alert" data-testid="future-map-create-error" className="mt-4 rounded-[20px] border border-rose-400/20 bg-rose-500/10 p-3 text-sm leading-6 text-rose-100">{createError}</div>
                   ) : null}
 
                   <button
@@ -553,9 +572,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                 </aside>
               </div>
             ) : null}
-          </div>
-        </div>
       </div>
-    </div>
+    </DialogSurface>
   )
 }
