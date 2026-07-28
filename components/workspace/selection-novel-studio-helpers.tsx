@@ -1011,7 +1011,7 @@ export function WorkspaceCharacterReferenceCard({
       <div className="mb-2 flex items-center justify-between gap-2">
         <div>
           <p className="text-sm font-medium text-zinc-100">{char.name}</p>
-          <p className="text-xs text-violet-300">{showProfile ? (identitySummary || char.role) : char.role}</p>
+          {!identitySummary && char.role.trim() ? <p className="text-xs text-violet-300">{char.role}</p> : null}
         </div>
         {!knowledgePanelReadOnly ? (
           <div className="flex gap-1">

@@ -32,18 +32,10 @@ describe('WorkspaceCharacterReferenceCard', () => {
       },
     }
 
-    render(
-      <div className="bg-black">
-        <WorkspaceCharacterReferenceCard
-          char={character}
-          knowledgePanelReadOnly
-          onEdit={vi.fn()}
-          onDelete={vi.fn()}
-        />
-      </div>
-    )
+    const { container } = render(<div className="bg-black"><WorkspaceCharacterReferenceCard char={character} knowledgePanelReadOnly onEdit={vi.fn()} onDelete={vi.fn()} /></div>)
 
-    expect(screen.getAllByText('被卷入旧案的书生').length).toBeGreaterThan(0)
+    expect(screen.getByText('被卷入旧案的书生')).toBeInTheDocument()
+    expect(container.querySelector('p.text-violet-300')).not.toBeInTheDocument()
     expect(screen.getAllByText('洞察布局').length).toBeGreaterThan(0)
     expect(screen.getByText('越危险越冷静')).toBeInTheDocument()
     expect(screen.getByTestId('workspace-character-tier-tier0')).toHaveTextContent('Tier 0')
@@ -89,9 +81,67 @@ describe('WorkspaceCharacterReferenceCard', () => {
       />
     )
 
-    expect(screen.getAllByText('暗线联络人').length).toBeGreaterThan(0)
+    expect(screen.getByText('暗线联络人')).toBeInTheDocument()
     expect(screen.getByText('体态')).toBeInTheDocument()
     expect(screen.getByText('身形利落，像随时准备转身离场')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '展开详情' })).not.toBeInTheDocument()
+  })
+
+  it('shows the role subtitle when a profile has no identity facet', () => {
+    const character: Character = {
+      id: 'char-profile-role-fallback',
+      novelId: 'novel-1',
+      name: '顾衡',
+      role: '军师',
+      goal: '稳住军心',
+      trait: '审慎',
+      note: '',
+      aliases: [],
+      importanceTier: 'important',
+      profile: {
+        personality: { content: '谋定后动' },
+      },
+    }
+
+    const { container } = render(
+      <WorkspaceCharacterReferenceCard
+        char={character}
+        knowledgePanelReadOnly
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    expect(screen.getAllByText('军师')).toHaveLength(1)
+    expect(container.querySelector('p.text-violet-300')).toHaveTextContent('军师')
+    expect(screen.getByText('谋定后动')).toBeInTheDocument()
+  })
+
+  it('keeps the role and goal/trait fallback for characters without a profile', () => {
+    const character: Character = {
+      id: 'char-role-only',
+      novelId: 'novel-1',
+      name: '老周',
+      role: '守门人',
+      goal: '守住城门',
+      trait: '寡言谨慎',
+      note: '',
+      aliases: [],
+      importanceTier: 'arc',
+    }
+
+    const { container } = render(
+      <WorkspaceCharacterReferenceCard
+        char={character}
+        knowledgePanelReadOnly
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    expect(screen.getAllByText('守门人')).toHaveLength(1)
+    expect(container.querySelector('p.text-violet-300')).toHaveTextContent('守门人')
+    expect(screen.getByText(/守住城门/)).toBeInTheDocument()
+    expect(screen.getByText(/寡言谨慎/)).toBeInTheDocument()
   })
 })
