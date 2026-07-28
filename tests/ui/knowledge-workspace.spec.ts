@@ -1,11 +1,22 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { createDefaultAISettings } from '@/lib/ai-settings'
 import type { AISettings } from '@/lib/types'
 
 const fixturePath = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
 const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/task-10-knowledge-ui')
+
+async function expandKnowledgeDetails(page: Page) {
+  const summary = page.getByTestId('workspace-knowledge-status')
+  await expect(summary).toBeVisible()
+  await expect(summary).toContainText(/故事分析|Story analysis/)
+  await expect(summary).toContainText(/内容检索准备|Content search preparation/)
+  await expect(summary).not.toContainText(/HanLP|LLM|Embedding|LanceDB|%/i)
+  await expect(page.getByTestId('workspace-knowledge-advanced-details')).toHaveCount(0)
+  await page.getByRole('button', { name: /高级详情|Advanced details/i }).click()
+  await expect(page.getByTestId('workspace-knowledge-advanced-details')).toBeVisible()
+}
 
 test('knowledge workspace shows HanLP progress, cache state, and character tiers', async ({ page }) => {
   fs.mkdirSync(evidenceDirectory, { recursive: true })
@@ -159,6 +170,7 @@ test('knowledge workspace shows HanLP progress, cache state, and character tiers
   expect(importResponse.ok()).toBeTruthy()
 
   await page.goto('/workspace', { waitUntil: 'domcontentloaded' })
+  await expandKnowledgeDetails(page)
 
   await expect(page.getByTestId('workspace-hanlp-bootstrap-card')).toContainText('HanLP Bootstrap')
   await expect(page.getByTestId('workspace-hanlp-bootstrap-card')).toContainText('完成章节：2 / 4')
@@ -323,6 +335,7 @@ test('knowledge workspace shows LanceDB Refresh progress inline', async ({ page 
   await page.waitForResponse((response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST')
 
   await page.goto('/workspace', { waitUntil: 'networkidle' })
+  await expandKnowledgeDetails(page)
   const overviewCard = page.getByTestId('workspace-knowledge-status-overview-card')
   await expect(overviewCard).toContainText('Embedding 缓存')
   await expect(overviewCard).toContainText('已连续覆盖到第 1 章')
@@ -366,6 +379,7 @@ test('knowledge workspace keeps cache controls visible against the real backend'
   await page.goto('/workspace', { waitUntil: 'networkidle' })
   const knowledgeResponse = await knowledgeResponsePromise
   expect(knowledgeResponse.ok()).toBeTruthy()
+  await expandKnowledgeDetails(page)
 
   await expect(page.getByTestId('workspace-hanlp-cache-card')).toBeVisible()
   await expect(page.getByTestId('workspace-delete-hanlp-cache')).toBeVisible()
@@ -429,6 +443,7 @@ test('knowledge workspace stops polling when no job is active', async ({ page })
   await page.waitForResponse((response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST')
 
   await page.goto('/workspace', { waitUntil: 'networkidle' })
+  await expandKnowledgeDetails(page)
   await expect(page.getByTestId('workspace-knowledge-status-overview-card')).toBeVisible()
   await expect(page.getByTestId('workspace-extraction-cache-card')).toContainText('64')
   await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('64')
@@ -522,6 +537,7 @@ test('saving AI settings waits for the current full knowledge projection refresh
   await page.locator('input[type=file]').setInputFiles(fixturePath)
   await page.waitForResponse((response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST')
   await page.goto('/workspace', { waitUntil: 'networkidle' })
+  await expandKnowledgeDetails(page)
 
   const embeddingCard = page.getByTestId('workspace-embedding-cache-card')
   await expect(embeddingCard).toContainText('qwen3-embedding:4b')

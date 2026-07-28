@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import type { ComponentProps } from 'react'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorkspaceKnowledgeControls } from '@/components/workspace/WorkspaceKnowledgeControls'
 import { resolveRetrievalTaskControlsState } from '@/components/workspace/selection-novel-studio-helpers'
@@ -123,8 +123,20 @@ describe('WorkspaceKnowledgeControls durable cache cards', () => {
     document.documentElement.dataset.locale = 'zh'
   })
 
+  it('shows the compact user summary first and keeps diagnostics collapsed', () => {
+    render(<WorkspaceKnowledgeControls {...buildProps()} />)
+
+    const summary = screen.getByTestId('workspace-knowledge-status')
+    expect(summary).toHaveTextContent('workspace.knowledge.status.storyAnalysis')
+    expect(summary).toHaveTextContent('workspace.knowledge.status.contentSearch')
+    expect(screen.queryByTestId('workspace-knowledge-advanced-details')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('workspace-extraction-cache-card')).not.toBeInTheDocument()
+    expect(summary).not.toHaveTextContent(/HanLP|LLM|Embedding|LanceDB|%/i)
+  })
+
   it('shows full idle extraction and embedding coverage without historical telemetry placeholders', () => {
     render(<WorkspaceKnowledgeControls {...buildProps()} />)
+    fireEvent.click(screen.getByRole('button', { name: /workspace.knowledge.status.advancedDetails/ }))
 
     const extractionCard = screen.getByTestId('workspace-extraction-cache-card')
     const embeddingCard = screen.getByTestId('workspace-embedding-cache-card')
@@ -151,6 +163,7 @@ describe('WorkspaceKnowledgeControls durable cache cards', () => {
       rawTextEmbeddingTimingLabel: '12 秒',
       rawTextEmbeddingSettingsLine: 'Ollama · qwen3-embedding:4b · batch 32',
     })} />)
+    fireEvent.click(screen.getByRole('button', { name: /workspace.knowledge.status.advancedDetails/ }))
 
     const embeddingCard = screen.getByTestId('workspace-embedding-cache-card')
     expect(embeddingCard).toHaveTextContent('35%')
@@ -167,6 +180,7 @@ describe('WorkspaceKnowledgeControls durable cache cards', () => {
       validThroughChapterNo: null,
     }
     const { rerender } = render(<WorkspaceKnowledgeControls {...buildProps()} />)
+    fireEvent.click(screen.getByRole('button', { name: /workspace.knowledge.status.advancedDetails/ }))
 
     rerender(<WorkspaceKnowledgeControls {...buildProps({
       extractionCacheOverview: missingCoverage,
@@ -181,5 +195,34 @@ describe('WorkspaceKnowledgeControls durable cache cards', () => {
     expect(screen.getByTestId('workspace-extraction-cache-card')).toHaveTextContent('缺失')
     expect(screen.getByTestId('workspace-embedding-cache-card')).toHaveTextContent('0 / 64 章')
     expect(screen.getByTestId('workspace-embedding-cache-card')).toHaveTextContent('缺失')
+  })
+
+  it('keeps raw failure diagnostics out of the primary summary', () => {
+    const failedStatus = {
+      jobId: 'job-1',
+      novelId: 'novel-1',
+      jobType: 'extract_chapter_knowledge' as const,
+      status: 'failed',
+      errorMessage: 'provider stack trace',
+      progress: 0.4,
+      currentStep: 'raw backend phase',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      etaMinutes: null,
+      steps: [],
+    }
+    render(<WorkspaceKnowledgeControls {...buildProps({
+      knowledgeRebuildFailed: true,
+      mainKnowledgeRebuildStatus: failedStatus,
+      knowledgeRebuildFailureMessage: 'provider stack trace',
+    })} />)
+
+    const summary = screen.getByTestId('workspace-knowledge-status')
+    expect(summary).toHaveTextContent('workspace.knowledge.status.overall.failed')
+    expect(summary).toHaveTextContent('workspace.knowledge.status.previousResultsAvailable')
+    expect(summary).not.toHaveTextContent('provider stack trace')
+
+    fireEvent.click(screen.getByRole('button', { name: /workspace.knowledge.status.advancedDetails/ }))
+    expect(screen.getByTestId('workspace-knowledge-advanced-details')).toHaveTextContent('provider stack trace')
   })
 })

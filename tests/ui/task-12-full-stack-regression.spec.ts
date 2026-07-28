@@ -1581,6 +1581,9 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
 
     await page.goto('/workspace', { waitUntil: 'networkidle' })
     await dismissWorkspaceActionOverlayIfVisible(page)
+    await expect(page.getByTestId('workspace-knowledge-status')).toBeVisible()
+    await page.getByRole('button', { name: 'Advanced details' }).click()
+    await expect(page.getByTestId('workspace-knowledge-advanced-details')).toBeVisible()
     const knowledgeGetResponse = await timedRequest(
       'knowledge-view-get',
       page.request.get(`/api/knowledge-view?novelId=${identity.novelId}`),

@@ -1,5 +1,9 @@
 "use client"
 
+import { useState } from 'react'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { WorkspaceKnowledgeStatus } from '@/components/workspace/WorkspaceKnowledgeStatus'
+import { mapWorkspaceKnowledgeStatus } from '@/components/workspace/workspace-knowledge-status'
 import {
   formatEmbeddingProviderLabel,
   formatKnowledgeCoverageBadge,
@@ -27,6 +31,8 @@ type DeleteState = {
 }
 
 type WorkspaceKnowledgeControlsProps = {
+  advancedDetailsOpen?: boolean
+  onAdvancedDetailsChange?: (open: boolean) => void
   knowledgeRebuilding: boolean
   knowledgeRebuildActive: boolean
   knowledgeActionLoading: KnowledgeActionLoading
@@ -103,11 +109,31 @@ type WorkspaceKnowledgeControlsProps = {
 
 export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProps) {
   const { t } = useI18n()
+  const [internalAdvancedDetailsOpen, setInternalAdvancedDetailsOpen] = useState(false)
+  const advancedDetailsOpen = props.advancedDetailsOpen ?? internalAdvancedDetailsOpen
+  const setAdvancedDetailsOpen = props.onAdvancedDetailsChange ?? setInternalAdvancedDetailsOpen
+  const userStatus = mapWorkspaceKnowledgeStatus({
+    overview: props.knowledgeStatusOverview,
+    job: props.mainKnowledgeRebuildStatus ?? props.retrievalTaskStatus,
+  })
 
   return (
-    <div className="mb-4 rounded-[24px] border border-violet-400/20 bg-violet-500/10 p-4">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] uppercase tracking-[0.22em] text-violet-200/70">{t('workspace.knowledge.controlsEyebrow')}</p>
+    <div className="mb-4">
+      <WorkspaceKnowledgeStatus
+        status={userStatus}
+        advancedDetailsOpen={advancedDetailsOpen}
+        onAdvancedDetailsChange={setAdvancedDetailsOpen}
+        onPrepareAnalysis={props.onRebuildKnowledge}
+        onPrepareSearch={props.onRebuildRetrievalIndex}
+        actionDisabled={props.knowledgeRebuilding || props.knowledgeRebuildActive || Boolean(props.knowledgeActionLoading)}
+      />
+      {advancedDetailsOpen ? (
+        <div className="mt-3 rounded-[24px] border border-white/10 bg-black/20 p-4" data-testid="workspace-knowledge-advanced-details">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">{t('workspace.knowledge.status.maintenanceEyebrow')}</p>
+              <p className="mt-1 text-xs leading-5 text-zinc-400">{t('workspace.knowledge.status.maintenanceDescription')}</p>
+            </div>
         <button
           onClick={props.onRebuildKnowledge}
           disabled={props.knowledgeRebuilding || props.knowledgeRebuildActive || Boolean(props.knowledgeActionLoading)}
@@ -115,7 +141,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
         >
           {props.knowledgeRebuilding ? t('workspace.knowledge.processing') : props.knowledgeRebuildPaused ? t('workspace.knowledge.resumeRebuild') : props.knowledgeRebuildFailed ? t('workspace.knowledge.retryRebuild') : t('workspace.knowledge.startRebuild')}
         </button>
-      </div>
+          </div>
       <div className="mt-3 rounded-2xl border border-violet-300/15 bg-black/20 p-3">
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-300">
           <span className="text-zinc-500">{t('workspace.knowledge.chapterRange')}</span>
@@ -434,15 +460,6 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
           <span>{t('workspace.knowledge.stepDuration', { value: props.hanlpBootstrapTimingLabel ?? t('workspace.knowledge.waitingProgress') })}</span>
         </div>
         {props.hanlpSettingsLine ? <p className="mt-1 truncate text-[10px] leading-4 text-zinc-500">{props.hanlpSettingsLine}</p> : null}
-        {props.confirmDeleteHanlpCache ? (
-          <div className="mt-3 rounded-xl border border-sky-400/15 bg-black/20 p-3">
-            <p className="text-[11px] leading-5 text-sky-100">{t('workspace.knowledge.confirmDeleteHanlpCacheDescription')}</p>
-            <div className="mt-3 flex gap-2">
-              <button onClick={props.onDeleteHanlpCache} disabled={props.hanlpCacheDeleteState.disabled} className="flex-1 rounded-xl border border-sky-400/20 bg-sky-500/15 px-3 py-2 text-[11px] text-sky-100 transition hover:bg-sky-500/25 disabled:cursor-not-allowed disabled:opacity-50">{props.knowledgeActionLoading === 'delete-hanlp-cache' ? t('workspace.knowledge.processing') : t('workspace.knowledge.confirmDeleteHanlpCache')}</button>
-              <button onClick={props.onCancelDeleteHanlpCache} disabled={props.knowledgeActionLoading === 'delete-hanlp-cache'} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50">{t('workspace.knowledge.cancel')}</button>
-            </div>
-          </div>
-        ) : null}
       </div>
       <div className="mt-3 rounded-2xl border border-emerald-400/15 bg-emerald-500/[0.06] px-3 py-3 text-xs text-zinc-300" data-testid="workspace-extraction-cache-card">
         <div className="flex items-start justify-between gap-3">
@@ -457,15 +474,6 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
           </div>
         </div>
         <div className="mt-2 text-[10px] leading-4 text-zinc-400">{t('workspace.knowledge.extractionCacheAfterDeleteHint')}</div>
-        {props.confirmDeleteExtractionCache ? (
-          <div className="mt-3 rounded-xl border border-emerald-400/15 bg-black/20 p-3">
-            <p className="text-[11px] leading-5 text-emerald-100">{t('workspace.knowledge.confirmDeleteExtractionCacheDescription')}</p>
-            <div className="mt-3 flex gap-2">
-              <button onClick={props.onDeleteExtractionCache} disabled={props.extractionCacheDeleteState.disabled} className="flex-1 rounded-xl border border-emerald-400/20 bg-emerald-500/15 px-3 py-2 text-[11px] text-emerald-100 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50">{props.knowledgeActionLoading === 'delete-extraction-cache' ? t('workspace.knowledge.processing') : t('workspace.knowledge.confirmDeleteExtractionCache')}</button>
-              <button onClick={props.onCancelDeleteExtractionCache} disabled={props.knowledgeActionLoading === 'delete-extraction-cache'} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50">{t('workspace.knowledge.cancel')}</button>
-            </div>
-          </div>
-        ) : null}
       </div>
       <div className="mt-3 rounded-2xl border border-amber-400/15 bg-amber-500/[0.06] px-3 py-3 text-xs text-zinc-300" data-testid="workspace-embedding-cache-card">
         <div className="flex items-start justify-between gap-3">
@@ -497,15 +505,6 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
           </div>
         ) : null}
         {props.rawTextEmbeddingSettingsLine ? <p className="mt-1 truncate text-[10px] leading-4 text-zinc-500">{props.rawTextEmbeddingSettingsLine}</p> : null}
-        {props.confirmDeleteEmbeddingCache ? (
-          <div className="mt-3 rounded-xl border border-amber-400/15 bg-black/20 p-3">
-            <p className="text-[11px] leading-5 text-amber-100">{t('workspace.knowledge.confirmDeleteEmbeddingCacheDescription')}</p>
-            <div className="mt-3 flex gap-2">
-              <button onClick={props.onDeleteEmbeddingCache} disabled={props.embeddingCacheDeleteState.disabled} className="flex-1 rounded-xl border border-amber-400/20 bg-amber-500/15 px-3 py-2 text-[11px] text-amber-100 transition hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-50">{props.knowledgeActionLoading === 'delete-embedding-cache' ? t('workspace.knowledge.processing') : t('workspace.knowledge.confirmDeleteEmbeddingCache')}</button>
-              <button onClick={props.onCancelDeleteEmbeddingCache} disabled={props.knowledgeActionLoading === 'delete-embedding-cache'} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50">{t('workspace.knowledge.cancel')}</button>
-            </div>
-          </div>
-        ) : null}
       </div>
       <div className="mt-3 rounded-2xl border border-rose-400/15 bg-rose-500/[0.06] px-3 py-3 text-xs text-zinc-300">
         <div className="flex items-start justify-between gap-3">
@@ -515,17 +514,50 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
           </div>
           <button onClick={props.onToggleConfirmDeleteKnowledge} disabled={props.knowledgeActionLoading === 'delete'} className="rounded-full border border-rose-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-60">{t('workspace.knowledge.deleteKnowledgeGraph')}</button>
         </div>
-        {props.confirmDeleteKnowledge ? (
-          <div className="mt-3 rounded-xl border border-rose-400/15 bg-black/20 p-3">
-            <p className="text-[11px] leading-5 text-rose-100">{t('workspace.knowledge.confirmDeleteKnowledgeDescription')}</p>
-            <div className="mt-3 flex gap-2">
-              <button onClick={props.onDeleteKnowledgeGraph} disabled={Boolean(props.knowledgeActionLoading)} className="flex-1 rounded-xl border border-rose-400/20 bg-rose-500/15 px-3 py-2 text-[11px] text-rose-100 transition hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-50">{props.knowledgeActionLoading === 'delete' ? t('workspace.knowledge.processing') : t('workspace.knowledge.confirmDeleteKnowledgeGraph')}</button>
-              <button onClick={props.onCancelDeleteKnowledge} disabled={props.knowledgeActionLoading === 'delete'} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50">{t('workspace.knowledge.cancel')}</button>
-            </div>
-          </div>
-        ) : null}
       </div>
       <p className="mt-3 rounded-2xl border border-white/8 bg-black/20 px-3 py-2 text-xs leading-5 text-zinc-400">{t('workspace.knowledge.readonlyNotice')}</p>
+        </div>
+      ) : null}
+      <ConfirmDialog
+        open={props.confirmDeleteHanlpCache}
+        onClose={props.onCancelDeleteHanlpCache}
+        onConfirm={props.onDeleteHanlpCache}
+        title={t('workspace.knowledge.confirmDeleteHanlpCache')}
+        description={t('workspace.knowledge.confirmDeleteHanlpCacheDescription')}
+        confirmLabel={props.knowledgeActionLoading === 'delete-hanlp-cache' ? t('workspace.knowledge.processing') : t('workspace.knowledge.confirmDeleteHanlpCache')}
+        cancelLabel={t('workspace.knowledge.cancel')}
+        busy={props.knowledgeActionLoading === 'delete-hanlp-cache'}
+      />
+      <ConfirmDialog
+        open={props.confirmDeleteExtractionCache}
+        onClose={props.onCancelDeleteExtractionCache}
+        onConfirm={props.onDeleteExtractionCache}
+        title={t('workspace.knowledge.confirmDeleteExtractionCache')}
+        description={t('workspace.knowledge.confirmDeleteExtractionCacheDescription')}
+        confirmLabel={props.knowledgeActionLoading === 'delete-extraction-cache' ? t('workspace.knowledge.processing') : t('workspace.knowledge.confirmDeleteExtractionCache')}
+        cancelLabel={t('workspace.knowledge.cancel')}
+        busy={props.knowledgeActionLoading === 'delete-extraction-cache'}
+      />
+      <ConfirmDialog
+        open={props.confirmDeleteEmbeddingCache}
+        onClose={props.onCancelDeleteEmbeddingCache}
+        onConfirm={props.onDeleteEmbeddingCache}
+        title={t('workspace.knowledge.confirmDeleteEmbeddingCache')}
+        description={t('workspace.knowledge.confirmDeleteEmbeddingCacheDescription')}
+        confirmLabel={props.knowledgeActionLoading === 'delete-embedding-cache' ? t('workspace.knowledge.processing') : t('workspace.knowledge.confirmDeleteEmbeddingCache')}
+        cancelLabel={t('workspace.knowledge.cancel')}
+        busy={props.knowledgeActionLoading === 'delete-embedding-cache'}
+      />
+      <ConfirmDialog
+        open={props.confirmDeleteKnowledge}
+        onClose={props.onCancelDeleteKnowledge}
+        onConfirm={props.onDeleteKnowledgeGraph}
+        title={t('workspace.knowledge.confirmDeleteKnowledgeGraph')}
+        description={t('workspace.knowledge.confirmDeleteKnowledgeDescription')}
+        confirmLabel={props.knowledgeActionLoading === 'delete' ? t('workspace.knowledge.processing') : t('workspace.knowledge.confirmDeleteKnowledgeGraph')}
+        cancelLabel={t('workspace.knowledge.cancel')}
+        busy={props.knowledgeActionLoading === 'delete'}
+      />
     </div>
   )
 }
