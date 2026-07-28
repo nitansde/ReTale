@@ -26,8 +26,55 @@ const ERROR_MESSAGE_KEYS: Record<string, TranslationKey> = {
   'Future jump revise failed': 'errors.futureJumpReviseFailed',
 }
 
+const WORKSPACE_OPERATION_MESSAGE_KEYS = {
+  'workspace-restore': 'errors.failedRestoreWorkspace',
+  'story-timeline-load': 'workspace.storyTimeline.loadFailed',
+  'chapter-graph-load': 'workspace.chapterGraph.loadFailed',
+  'context-preview': 'workspace.action.contextPreviewFailed',
+  'graph-assembly': 'workspace.action.graphAssemblyFailed',
+  'graph-relation-update': 'workspace.action.graphRelationUpdateFailed',
+  'ollama-model-load': 'workspace.action.loadLocalOllamaModelsFailed',
+  'roleplay-session-create': 'workspace.actionError.createRoleplaySessionFailed',
+  'roleplay-session-load': 'errors.roleplaySessionLoadFailed',
+  'roleplay-send': 'errors.roleplayMessageAppendFailed',
+  'roleplay-regenerate': 'errors.roleplayVariantCreationFailed',
+  'roleplay-stream': 'errors.roleplayStreamingRequestFailed',
+  'timeline-node-delete': 'workspace.actionError.deleteTimelineNodeFailed',
+  'knowledge-rebuild': 'workspace.action.knowledgeFailed',
+  'retrieval-index-rebuild': 'workspace.action.retrievalStartFailed',
+  'knowledge-pause': 'workspace.action.pauseKnowledgeFailed',
+  'knowledge-abort': 'workspace.action.abortKnowledgeFailed',
+  'knowledge-graph-delete': 'workspace.action.deleteKnowledgeGraphFailed',
+  'hanlp-cache-delete': 'workspace.action.deleteHanlpCacheFailed',
+  'extraction-cache-delete': 'workspace.action.deleteExtractionCacheFailed',
+  'embedding-cache-delete': 'workspace.action.deleteEmbeddingCacheFailed',
+  'rewrite-create': 'workspace.actionError.createRecoverableRewriteJobFailed',
+  'rewrite-abort': 'workspace.actionError.abortGenerationFailed',
+  'rewrite-restore': 'workspace.action.restoreRecoverableRewriteJobFailed',
+  'rewrite-refresh': 'workspace.action.refreshRecoverableRewriteJobFailed',
+  'rewrite-job-failed': 'workspace.action.rewriteFailed',
+  'continue-block-load': 'errors.continueBlockLoadFailed',
+  'continue-block-save': 'workspace.actionError.saveContinueBlockFailed',
+  'what-if-session-load': 'errors.whatIfSessionLoadFailed',
+  'what-if-create': 'workspace.actionError.createWhatIfFailed',
+  'future-map-load': 'errors.futureMapLoadFailed',
+  'future-jump-create': 'errors.futureJumpCreateFailed',
+  'future-jump-load': 'errors.futureJumpRunLoadFailed',
+  'future-jump-revise': 'errors.futureJumpReviseFailed',
+} satisfies Record<string, TranslationKey>
+
+export type WorkspaceErrorOperation = keyof typeof WORKSPACE_OPERATION_MESSAGE_KEYS
+
 function trimMessage(message: string) {
   return message.trim()
+}
+
+function extractErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return trimMessage(error.message)
+  }
+
+  return typeof error === 'string' ? trimMessage(error) : ''
 }
 
 export function toUserFacingError(message: string, locale: Locale = 'zh') {
@@ -36,10 +83,35 @@ export function toUserFacingError(message: string, locale: Locale = 'zh') {
   return key ? getMessage(locale, key) : normalizedMessage
 }
 
-export function toUserFacingPresetCompatError(message: string, locale: Locale = 'zh') {
-  return toUserFacingError(message, locale)
+const PRESET_COMPAT_OPERATION_MESSAGE_KEYS = {
+  load: 'errors.failedLoadPresetCompatLibrary',
+  save: 'errors.failedSavePresetCompatLibrary',
+  'import-preset': 'preset.importPresetFailed',
+  'import-regex': 'preset.importRegexFailed',
+  'delete-save': 'preset.deleteAfterSaveFailed',
+  'export-preset': 'preset.exportMissingSelected',
+} satisfies Record<string, TranslationKey>
+
+export type PresetCompatErrorOperation = keyof typeof PRESET_COMPAT_OPERATION_MESSAGE_KEYS
+
+export function toUserFacingPresetCompatError(
+  operation: PresetCompatErrorOperation,
+  error: unknown,
+  locale: Locale = 'zh'
+) {
+  const key = ERROR_MESSAGE_KEYS[extractErrorMessage(error)] ?? PRESET_COMPAT_OPERATION_MESSAGE_KEYS[operation]
+  return getMessage(locale, key)
 }
 
-export function toUserFacingWorkspaceError(message: string, locale: Locale = 'zh') {
-  return toUserFacingError(message, locale)
+export function resolveWorkspaceUserFacingError(
+  operation: WorkspaceErrorOperation,
+  error: unknown,
+  locale: Locale = 'zh'
+) {
+  const key = ERROR_MESSAGE_KEYS[extractErrorMessage(error)] ?? WORKSPACE_OPERATION_MESSAGE_KEYS[operation]
+  return getMessage(locale, key)
+}
+
+export function toUserFacingWorkspaceError(error: unknown, locale: Locale = 'zh') {
+  return resolveWorkspaceUserFacingError('workspace-restore', error, locale)
 }
