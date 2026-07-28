@@ -4,13 +4,13 @@ import type { KnowledgeRebuildStatus, KnowledgeStatusOverview } from '@/componen
 
 const coverage = {
   missing: { status: 'missing' as const, coveredChapterCount: 0, totalChapterCount: 12, validThroughChapterNo: null },
-  partial: { status: 'partial' as const, coveredChapterCount: 5, totalChapterCount: 12, validThroughChapterNo: 5 },
+  partial: { status: 'partial' as const, coveredChapterCount: 8, totalChapterCount: 12, validThroughChapterNo: 5 },
   full: { status: 'full' as const, coveredChapterCount: 12, totalChapterCount: 12, validThroughChapterNo: 12 },
 }
 
 function overview(
   graph: 'missing' | 'partial' | 'full',
-  search: 'missing' | 'pending' | 'partial' | 'full'
+  search: 'missing' | 'pending' | 'partial' | 'full',
 ): KnowledgeStatusOverview {
   return {
     knowledgeGraph: coverage[graph],
@@ -20,97 +20,131 @@ function overview(
   }
 }
 
-function job(jobType: KnowledgeRebuildStatus['jobType'], status: string): KnowledgeRebuildStatus {
+function job(
+  jobType: KnowledgeRebuildStatus['jobType'],
+  status: string,
+  overrides: Partial<KnowledgeRebuildStatus> = {},
+): KnowledgeRebuildStatus {
   return {
     jobId: 'job-1',
     novelId: 'novel-1',
     jobType,
     status,
-    progress: 0,
-    currentStep: null,
+    progress: 0.95,
+    currentStep: 'global backend phase',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     etaMinutes: null,
     steps: [],
+    ...overrides,
   }
 }
 
 describe('mapWorkspaceKnowledgeStatus', () => {
-  it('returns loading only while neither overview nor job has loaded', () => {
-    expect(mapWorkspaceKnowledgeStatus({ overview: null })).toMatchObject({
-      overall: 'loading', analysis: 'not_ready', search: 'not_ready', stage: null,
+  it('returns loading only while the durable overview has not loaded', () => {
+    expect(mapWorkspaceKnowledgeStatus({ overview: null, job: job('extract_chapter_knowledge', 'running') })).toMatchObject({
+      overall: 'loading', analysis: 'not_ready', search: 'not_ready', operation: { stage: 'analysis', status: 'running' },
     })
   })
 
-  it('maps queued and running work by job type before durable readiness', () => {
-    expect(mapWorkspaceKnowledgeStatus({ overview: overview('full', 'full'), job: job('extract_chapter_knowledge', 'queued') })).toMatchObject({
-      overall: 'working_analysis', stage: 'analysis', previousResultsAvailable: true,
-    })
-    expect(mapWorkspaceKnowledgeStatus({ overview: overview('full', 'partial'), job: job('rebuild_retrieval_index', 'running') })).toMatchObject({
-      overall: 'working_search', stage: 'search', searchResultsUsable: true,
-    })
-  })
-
-  it('keeps retained durable coverage visible when analysis work is paused or failed', () => {
-    expect(mapWorkspaceKnowledgeStatus({ overview: overview('partial', 'full'), job: job('extract_chapter_knowledge', 'paused') })).toEqual({
-      overall: 'paused',
-      analysis: 'partial',
-      search: 'ready',
-      stage: 'analysis',
-      validThroughChapterNo: 5,
-      totalChapterCount: 12,
-      analysisResultsUsable: true,
-      searchResultsUsable: true,
-      previousResultsAvailable: true,
-      searchMayBeStale: false,
+  it('keeps durable readiness independent while a refresh is running or failed', () => {
+    expect(mapWorkspaceKnowledgeStatus({ overview: overview('full', 'full'), job: job('extract_chapter_knowledge', 'running') })).toMatchObject({
+      overall: 'ready', analysis: 'ready', search: 'ready', operation: { stage: 'analysis', status: 'running' },
     })
     expect(mapWorkspaceKnowledgeStatus({ overview: overview('full', 'full'), job: job('extract_chapter_knowledge', 'failed') })).toMatchObject({
-      overall: 'failed', analysis: 'ready', search: 'ready', previousResultsAvailable: true,
+      overall: 'ready', analysis: 'ready', search: 'ready', operation: { stage: 'analysis', status: 'failed', progressPercent: null },
     })
   })
 
-  it('keeps retained search coverage visible when search work is paused or failed', () => {
-    expect(mapWorkspaceKnowledgeStatus({ overview: overview('full', 'partial'), job: job('rebuild_retrieval_index', 'paused') })).toMatchObject({
-      overall: 'paused', stage: 'search', search: 'partial', searchResultsUsable: true, previousResultsAvailable: true,
+  it('uses active-step progress instead of the 95 percent global job progress', () => {
+    const status = mapWorkspaceKnowledgeStatus({
+      overview: overview('full', 'full'),
+      job: job('extract_chapter_knowledge', 'running', {
+        steps: [
+          { key: 'hanlp-bootstrap', label: 'Bootstrap', status: 'completed', progress: 1, etaMinutes: null, detail: null },
+          { key: 'extract', label: 'Extract', status: 'running', progress: 0.36, etaMinutes: 2, detail: 'Chapter extraction' },
+        ],
+      }),
     })
-    expect(mapWorkspaceKnowledgeStatus({ overview: overview('full', 'partial'), job: job('rebuild_retrieval_index', 'failed') })).toMatchObject({
-      overall: 'failed', stage: 'search', searchMayBeStale: true, previousResultsAvailable: true,
+
+    expect(status.operation).toEqual({
+      jobId: 'job-1',
+      stage: 'analysis',
+      status: 'running',
+      phaseLabel: 'Chapter extraction',
+      progressPercent: 36,
+      progressSource: 'phase',
     })
   })
 
-  it('reports ready only from full durable graph and retrieval coverage', () => {
+  it('does not expose determinate progress for queued work', () => {
+    expect(mapWorkspaceKnowledgeStatus({
+      overview: overview('full', 'full'),
+      job: job('extract_chapter_knowledge', 'queued', { progress: 0.63 }),
+    }).operation).toMatchObject({ status: 'queued', progressPercent: null, progressSource: null })
+  })
+
+  it('falls back to finite positive job progress when running work has no running step', () => {
+    expect(mapWorkspaceKnowledgeStatus({
+      overview: overview('full', 'full'),
+      job: job('extract_chapter_knowledge', 'running', { progress: 0.63, steps: [] }),
+    }).operation).toMatchObject({ status: 'running', progressPercent: 63, progressSource: 'job' })
+  })
+
+  it.each([0, Number.NaN, Number.POSITIVE_INFINITY])('does not expose invalid or zero job progress %s without a running step', (progress) => {
+    expect(mapWorkspaceKnowledgeStatus({
+      overview: overview('full', 'full'),
+      job: job('extract_chapter_knowledge', 'running', { progress, steps: [] }),
+    }).operation).toMatchObject({ status: 'running', progressPercent: null, progressSource: null })
+  })
+
+  it('derives retrieval work independently and deduplicates an embedded copy of the top-level job', () => {
+    const value = overview('full', 'partial')
+    const retrievalJob = job('rebuild_retrieval_index', 'running', {
+      jobId: 'retrieval-1',
+      steps: [{ key: 'index', label: 'Index', status: 'running', progress: 0.42, etaMinutes: null, detail: null }],
+    })
+    value.retrievalIndex.task = retrievalJob
+
+    expect(mapWorkspaceKnowledgeStatus({ overview: value, job: retrievalJob })).toMatchObject({
+      overall: 'partial',
+      operation: { jobId: 'retrieval-1', stage: 'search', status: 'running', progressPercent: 42, progressSource: 'phase' },
+    })
+  })
+
+  it.each(['paused', 'failed'] as const)('keeps retained results and exposes no progress for %s work', (operationStatus) => {
+    expect(mapWorkspaceKnowledgeStatus({ overview: overview('partial', 'full'), job: job('extract_chapter_knowledge', operationStatus) })).toMatchObject({
+      overall: 'partial',
+      analysis: 'partial',
+      search: 'ready',
+      operation: { status: operationStatus, progressPercent: null, progressSource: null },
+      analysisResultsUsable: true,
+      searchResultsUsable: true,
+    })
+  })
+
+  it.each(['completed', 'succeeded', 'aborted'] as const)('does not expose terminal %s work as a current operation', (operationStatus) => {
+    expect(mapWorkspaceKnowledgeStatus({ overview: overview('full', 'full'), job: job('extract_chapter_knowledge', operationStatus) }).operation).toBeNull()
+  })
+
+  it('uses validThroughChapterNo rather than covered count for graph continuity', () => {
+    expect(mapWorkspaceKnowledgeStatus({ overview: overview('partial', 'missing') }).analysisCoverage).toEqual({ kind: 'through', chapter: 5 })
+  })
+
+  it('maps canonical durable graph and retrieval coverage shapes', () => {
     expect(mapWorkspaceKnowledgeStatus({ overview: overview('full', 'full') })).toMatchObject({
-      overall: 'ready', analysis: 'ready', search: 'ready', searchMayBeStale: false,
+      analysisCoverage: { kind: 'all', count: 12 },
+      searchCoverage: { kind: 'all', count: 12 },
     })
-  })
 
-  it.each(['missing', 'pending'] as const)('separates ready analysis from %s search preparation', (search) => {
-    expect(mapWorkspaceKnowledgeStatus({ overview: overview('full', search) })).toMatchObject({
-      overall: 'analysis_ready_search_not_ready', analysis: 'ready', search: search === 'missing' ? 'not_ready' : 'pending', searchMayBeStale: true,
-    })
-  })
+    const through = overview('full', 'partial')
+    through.retrievalIndex.chapterRange = { startChapter: 1, endChapter: 7 }
+    expect(mapWorkspaceKnowledgeStatus({ overview: through }).searchCoverage).toEqual({ kind: 'through', chapter: 7 })
 
-  it('reports partial when either durable dimension has incomplete usable coverage', () => {
-    expect(mapWorkspaceKnowledgeStatus({ overview: overview('partial', 'missing') })).toMatchObject({
-      overall: 'partial', analysis: 'partial', search: 'not_ready', validThroughChapterNo: 5,
-    })
-    expect(mapWorkspaceKnowledgeStatus({ overview: overview('missing', 'partial') })).toMatchObject({
-      overall: 'partial', analysis: 'not_ready', search: 'partial', searchResultsUsable: true,
-    })
-    expect(mapWorkspaceKnowledgeStatus({ overview: overview('full', 'partial') })).toMatchObject({
-      overall: 'partial', searchMayBeStale: true,
-    })
-  })
+    const range = overview('full', 'partial')
+    range.retrievalIndex.chapterRange = { startChapter: 4, endChapter: 9 }
+    expect(mapWorkspaceKnowledgeStatus({ overview: range }).searchCoverage).toEqual({ kind: 'range', start: 4, end: 9 })
 
-  it('reports not ready when loaded durable coverage is absent', () => {
-    expect(mapWorkspaceKnowledgeStatus({ overview: overview('missing', 'missing') })).toMatchObject({
-      overall: 'not_ready', analysisResultsUsable: false, searchResultsUsable: false, previousResultsAvailable: false,
-    })
-  })
-
-  it('uses the retrieval task embedded in the overview when no separate job is supplied', () => {
-    const value = overview('full', 'pending')
-    value.retrievalIndex.task = job('rebuild_retrieval_index', 'running')
-    expect(mapWorkspaceKnowledgeStatus({ overview: value })).toMatchObject({ overall: 'working_search', stage: 'search' })
+    expect(mapWorkspaceKnowledgeStatus({ overview: overview('full', 'partial') }).searchCoverage).toEqual({ kind: 'partial' })
   })
 })

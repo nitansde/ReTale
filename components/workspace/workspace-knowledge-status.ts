@@ -31,6 +31,7 @@ export type WorkspaceKnowledgeOperation = {
   status: WorkspaceKnowledgeOperationStatus
   phaseLabel: string | null
   progressPercent: number | null
+  progressSource: 'phase' | 'job' | null
 }
 
 export type WorkspaceKnowledgeStatus = {
@@ -79,13 +80,6 @@ function mapRetrievalCoverage(
       ? { kind: 'through', chapter: coverage.chapterRange.endChapter }
       : { kind: 'range', start, end: coverage.chapterRange.endChapter }
   }
-  if (totalChapterCount && totalChapterCount > 0 && coverage.indexedScopeCount > 0) {
-    return {
-      kind: 'count',
-      covered: Math.min(coverage.indexedScopeCount, totalChapterCount),
-      total: totalChapterCount,
-    }
-  }
   return coverage.status === 'partial' ? { kind: 'partial' } : null
 }
 
@@ -111,9 +105,18 @@ function resolveOperation(
 
   const activeStep = job.steps.find((step) => step.status === 'running') ?? null
   const phaseLabel = activeStep?.detail?.trim() || activeStep?.label || job.currentStep?.trim() || null
-  const progressPercent = (job.status === 'queued' || job.status === 'running')
-    ? Math.max(0, Math.min(100, Math.round((activeStep?.progress ?? 0) * 100)))
-    : null
+  let progressPercent: number | null = null
+  let progressSource: WorkspaceKnowledgeOperation['progressSource'] = null
+
+  if (job.status === 'running' && activeStep) {
+    progressPercent = Number.isFinite(activeStep.progress)
+      ? Math.max(0, Math.min(100, Math.round(activeStep.progress * 100)))
+      : null
+    progressSource = progressPercent === null ? null : 'phase'
+  } else if (job.status === 'running' && Number.isFinite(job.progress) && job.progress > 0) {
+    progressPercent = Math.max(0, Math.min(100, Math.round(job.progress * 100)))
+    progressSource = 'job'
+  }
 
   return {
     jobId: job.jobId,
@@ -121,6 +124,7 @@ function resolveOperation(
     status: job.status as WorkspaceKnowledgeOperationStatus,
     phaseLabel,
     progressPercent,
+    progressSource,
   }
 }
 
