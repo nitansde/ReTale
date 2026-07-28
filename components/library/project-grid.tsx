@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { LoaderCircle } from 'lucide-react'
 import { ProjectCard } from './project-card'
+import { Notice, type NoticeVariant } from '@/components/ui/Notice'
 import { useI18n } from '@/lib/i18n/provider'
 import { toUserFacingWorkspaceError } from '@/lib/workspace-user-facing-errors'
 import { useNovelStore } from '@/store/novel-store'
@@ -26,6 +28,52 @@ export function resolveOpenNovelChapter(
     .sort((a, b) => a.order - b.order)[0] ?? null
 }
 
+type ImportFeedback =
+  | { status: 'idle' }
+  | { status: 'uploading'; fileName: string; percent: number }
+  | { status: 'processing'; fileName: string }
+  | { status: 'success'; message: string }
+  | { status: 'error'; message: string }
+
+type LibraryNotice = {
+  variant: NoticeVariant
+  message: string
+} | null
+
+type ImportFailureReason = 'server' | 'invalid-response' | 'network' | 'refresh' | 'handoff'
+
+type ImportFailure = {
+  type: 'import-failure'
+  reason: ImportFailureReason
+}
+
+function createImportFailure(reason: ImportFailureReason): ImportFailure {
+  return { type: 'import-failure', reason }
+}
+
+function isImportFailure(error: unknown): error is ImportFailure {
+  return typeof error === 'object' && error !== null && 'type' in error && error.type === 'import-failure'
+}
+
+type ImportSuccessPayload = {
+  novelId: string
+  chapterId: string
+  chapterCount: number
+}
+
+function isImportSuccessPayload(value: unknown): value is ImportSuccessPayload {
+  if (typeof value !== 'object' || value === null) return false
+  const payload = value as Partial<ImportSuccessPayload>
+  return typeof payload.novelId === 'string'
+    && payload.novelId.trim().length > 0
+    && typeof payload.chapterId === 'string'
+    && payload.chapterId.trim().length > 0
+    && typeof payload.chapterCount === 'number'
+    && Number.isFinite(payload.chapterCount)
+    && Number.isInteger(payload.chapterCount)
+    && payload.chapterCount >= 0
+}
+
 export function ProjectGrid() {
   const { t, locale } = useI18n()
   const router = useRouter()
@@ -47,13 +95,15 @@ export function ProjectGrid() {
     setCurrentChapterId,
   } = useNovelStore()
   const novels = getNovels()
-  const [isImporting, setIsImporting] = useState(false)
   const [deletingNovelId, setDeletingNovelId] = useState<string | null>(null)
   const [openingNovelId, setOpeningNovelId] = useState<string | null>(null)
-  const [importMessage, setImportMessage] = useState<string | null>(null)
-  const [uploadPercent, setUploadPercent] = useState<number>(0)
-  const [phase, setPhase] = useState<'idle' | 'uploading' | 'processing'>('idle')
+  const [importFeedback, setImportFeedback] = useState<ImportFeedback>({ status: 'idle' })
+  const [libraryNotice, setLibraryNotice] = useState<LibraryNotice>(null)
   const deletionInFlightRef = useRef(false)
+  const importRequestSequenceRef = useRef(0)
+  const activeImportXhrRef = useRef<XMLHttpRequest | null>(null)
+  const mountedRef = useRef(true)
+  const isImporting = importFeedback.status === 'uploading' || importFeedback.status === 'processing'
 
   const selectNovelChapter = (novelId: string, chapterId?: string) => {
     const chapter = resolveOpenNovelChapter(useNovelStore.getState().localChapters, novelId, chapterId)
@@ -71,14 +121,24 @@ export function ProjectGrid() {
     if (backendLoaded) return
     loadFromBackend().catch(() => undefined)
   }, [backendLoaded, loadFromBackend])
+  
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      importRequestSequenceRef.current += 1
+      activeImportXhrRef.current?.abort?.()
+      activeImportXhrRef.current = null
+    }
+  }, [])
 
   const openNovel = async (novelId: string, chapterId?: string) => {
     const chapter = selectNovelChapter(novelId, chapterId)
 
     if (!chapter) {
       setOpeningNovelId(null)
-      setImportMessage(t('library.noChapter'))
-      return
+      setLibraryNotice({ variant: 'warning', message: t('library.noChapter') })
+      return false
     }
 
     setOpeningNovelId(novelId)
@@ -88,73 +148,106 @@ export function ProjectGrid() {
       void saveToBackend().catch((error) => {
         console.warn('Failed to persist the newly opened workspace selection in the background.', error)
       })
+      return true
     } catch {
-      setImportMessage(t('library.openFailed'))
+      setLibraryNotice({ variant: 'error', message: t('library.openFailed') })
       setOpeningNovelId(null)
+      return false
     }
   }
 
   const handleImportTxt = async (file: File) => {
-    setIsImporting(true)
-    setPhase('uploading')
-    setUploadPercent(0)
-    setImportMessage(t('library.uploadingFile', { name: file.name }))
-
+    const requestSequence = importRequestSequenceRef.current + 1
+    importRequestSequenceRef.current = requestSequence
+    activeImportXhrRef.current?.abort?.()
+    const ownsRequest = () => mountedRef.current && importRequestSequenceRef.current === requestSequence
+    setImportFeedback({ status: 'uploading', fileName: file.name, percent: 0 })
+  
     try {
       const formData = new FormData()
       formData.append('file', file)
-
-      const data = await new Promise<{ novelId: string; chapterId: string; chapterCount: number }>((resolve, reject) => {
+  
+      const data = await new Promise<ImportSuccessPayload>((resolve, reject) => {
         const xhr = new XMLHttpRequest()
+        activeImportXhrRef.current = xhr
         xhr.open('POST', '/api/import-txt')
-
+  
         xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
+          if (ownsRequest() && event.lengthComputable) {
             const percent = Math.min(100, Math.round((event.loaded / event.total) * 100))
-            setUploadPercent(percent)
-            setImportMessage(t('library.uploadingFilePercent', { name: file.name, percent }))
+            setImportFeedback({ status: 'uploading', fileName: file.name, percent })
           }
         }
-
+  
         xhr.upload.onload = () => {
-          setPhase('processing')
-          setUploadPercent(100)
-          setImportMessage(t('library.uploadCompleteProcessing', { name: file.name }))
+          if (ownsRequest()) {
+            setImportFeedback({ status: 'processing', fileName: file.name })
+          }
         }
-
+  
         xhr.onload = () => {
+          if (!ownsRequest()) {
+            reject(createImportFailure('network'))
+            return
+          }
           try {
-            const json = JSON.parse(xhr.responseText)
+            const json: unknown = JSON.parse(xhr.responseText)
             if (xhr.status >= 200 && xhr.status < 300) {
-              resolve(json)
+              if (isImportSuccessPayload(json)) {
+                resolve(json)
+              } else {
+                reject(createImportFailure('invalid-response'))
+              }
             } else {
-              reject(new Error(json.error || t('library.importFailed')))
+              reject(createImportFailure('server'))
             }
           } catch {
-            reject(new Error(t('library.invalidServerResult')))
+            reject(createImportFailure('invalid-response'))
           }
         }
-
-        xhr.onerror = () => reject(new Error(t('library.uploadFailed')))
+  
+        xhr.onerror = () => reject(createImportFailure('network'))
+        xhr.onabort = () => reject(createImportFailure('network'))
         xhr.send(formData)
       })
-
-      setPhase('processing')
-      setUploadPercent(100)
-      await loadFromBackend()
-
+  
+      if (!ownsRequest()) return
+      try {
+        await loadFromBackend()
+      } catch {
+        throw createImportFailure('refresh')
+      }
+  
+      if (!ownsRequest()) return
       if (data.chapterCount <= 120) {
-        setImportMessage(t('library.importedAndOpening', { count: data.chapterCount }))
-        await openNovel(data.novelId, data.chapterId)
+        const opened = await openNovel(data.novelId, data.chapterId)
+        if (!opened) {
+          throw createImportFailure('handoff')
+        }
+        if (ownsRequest()) {
+          setImportFeedback({ status: 'success', message: t('library.importedAndOpening', { count: data.chapterCount }) })
+        }
         return
       }
-
-      setImportMessage(t('library.importedRefresh', { count: data.chapterCount }))
+  
+      setImportFeedback({ status: 'success', message: t('library.importedRefresh', { count: data.chapterCount }) })
     } catch (error) {
-      setImportMessage(error instanceof Error ? error.message : t('library.importFailed'))
+      if (!ownsRequest()) return
+      const reason = isImportFailure(error) ? error.reason : 'server'
+      const message = reason === 'network'
+        ? t('library.uploadFailed')
+        : reason === 'invalid-response'
+          ? t('library.invalidServerResult')
+          : reason === 'refresh'
+            ? t('library.importRefreshFailed')
+            : reason === 'handoff'
+              ? t('library.importHandoffFailed')
+              : t('library.importFailed')
+      setImportFeedback({ status: 'error', message })
     } finally {
-      setIsImporting(false)
-      setPhase('idle')
+      if (ownsRequest()) {
+        activeImportXhrRef.current = null
+      }
     }
   }
 
@@ -181,16 +274,19 @@ export function ProjectGrid() {
       const outcome = await deleteNovelFromBackend(novelId)
       if (outcome.status === 'committed') {
         reconcileNovelDeletion(outcome.result.activeNovelId)
-        setImportMessage(t('library.deleted', { title }))
+        setLibraryNotice({ variant: 'success', message: t('library.deleted', { title }) })
       } else if (outcome.status === 'rejected') {
         rollbackNovelDeletion(transaction)
-        setImportMessage(t('library.deleteFailed', { title }))
+        setLibraryNotice({ variant: 'error', message: t('library.deleteFailed', { title }) })
       } else {
         try {
           const reconciliation = await reconcileNovelDeletionFromBackend(transaction)
-          setImportMessage(t(reconciliation === 'present' ? 'library.deleteFailedAuthoritative' : 'library.deleted', { title }))
+          setLibraryNotice({
+            variant: reconciliation === 'present' ? 'warning' : 'success',
+            message: t(reconciliation === 'present' ? 'library.deleteFailedAuthoritative' : 'library.deleted', { title }),
+          })
         } catch {
-          setImportMessage(t('library.deleteReconcileFailed', { title }))
+          setLibraryNotice({ variant: 'warning', message: t('library.deleteReconcileFailed', { title }) })
         }
       }
     } finally {
@@ -218,7 +314,11 @@ export function ProjectGrid() {
           disabled={isImporting}
           className="rounded-2xl border border-indigo-400/20 bg-indigo-500/90 px-4 py-2.5 text-sm font-medium text-white shadow-[0_12px_30px_rgba(99,102,241,0.35)] transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isImporting ? (phase === 'uploading' ? t('library.uploading') : t('library.processing')) : t('library.importButton')}
+          {importFeedback.status === 'uploading'
+            ? t('library.uploading')
+            : importFeedback.status === 'processing'
+              ? t('library.processing')
+              : t('library.importButton')}
         </button>
         <input
           ref={fileRef}
@@ -231,24 +331,46 @@ export function ProjectGrid() {
             event.target.value = ''
           }}
         />
-        {importMessage ? (
-          <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300">
-            <div className="mb-2 flex items-center justify-between gap-3 text-xs text-zinc-500">
-              <span>
-                {phase === 'uploading' && isImporting ? t('library.uploadProgress') : phase === 'processing' ? t('library.serverProcessing') : t('library.importResult')}
-              </span>
-              <span>{phase === 'uploading' ? `${uploadPercent}%` : phase === 'processing' ? t('library.processing') : t('library.completed')}</span>
+        {importFeedback.status === 'uploading' ? (
+          <Notice variant="info" title={t('library.uploadProgress')} className="w-full max-w-xl">
+            <div className="flex items-center justify-between gap-3 text-xs text-sky-100/70">
+              <span>{t('library.uploadingFilePercent', { name: importFeedback.fileName, percent: importFeedback.percent })}</span>
+              <span>{importFeedback.percent}%</span>
             </div>
-            {(isImporting || uploadPercent > 0) && (
-              <div className="mb-3 h-2 overflow-hidden rounded-full bg-white/10">
-                <div
-                  className="h-full rounded-full bg-indigo-400 transition-all"
-                  style={{ width: `${phase === 'processing' ? 100 : uploadPercent}%` }}
-                />
-              </div>
-            )}
-            <div>{importMessage}</div>
-          </div>
+            <div
+              role="progressbar"
+              aria-label={t('library.uploadProgress')}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={importFeedback.percent}
+              className="mt-3 h-2 overflow-hidden rounded-full bg-sky-950/40"
+            >
+              <div
+                className="h-full rounded-full bg-sky-300 transition-all"
+                style={{ width: `${importFeedback.percent}%` }}
+              />
+            </div>
+          </Notice>
+        ) : importFeedback.status === 'processing' ? (
+          <Notice variant="info" title={t('library.serverProcessing')} className="w-full max-w-xl">
+            <div className="flex items-center gap-2">
+              <LoaderCircle className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
+              <span>{t('library.uploadCompleteProcessing', { name: importFeedback.fileName })}</span>
+            </div>
+          </Notice>
+        ) : importFeedback.status === 'success' ? (
+          <Notice variant="success" title={t('library.importResult')} className="w-full max-w-xl">
+            {importFeedback.message}
+          </Notice>
+        ) : importFeedback.status === 'error' ? (
+          <Notice variant="error" title={t('library.importFailed')} className="w-full max-w-xl">
+            {importFeedback.message}
+          </Notice>
+        ) : null}
+        {libraryNotice ? (
+          <Notice variant={libraryNotice.variant} className="w-full max-w-xl">
+            {libraryNotice.message}
+          </Notice>
         ) : null}
       </div>
 

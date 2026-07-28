@@ -73,6 +73,8 @@ vi.mock('@/store/novel-store', () => {
 class MockXMLHttpRequest {
   static responseBody: unknown = null
   static status = 200
+  static autoRespond = true
+  static instances: MockXMLHttpRequest[] = []
 
   upload: {
     onprogress: ((event: { lengthComputable: boolean; loaded: number; total: number }) => void) | null
@@ -87,14 +89,35 @@ class MockXMLHttpRequest {
   status = MockXMLHttpRequest.status
   responseText = ''
 
+  constructor() {
+    MockXMLHttpRequest.instances.push(this)
+  }
+
   open() {}
 
   send() {
-    this.upload.onprogress?.({ lengthComputable: true, loaded: 1, total: 1 })
+    if (!MockXMLHttpRequest.autoRespond) return
+    this.emitUploadProgress(1, 1)
+    this.finishUpload()
+    this.respond(MockXMLHttpRequest.responseBody, MockXMLHttpRequest.status)
+  }
+
+  emitUploadProgress(loaded: number, total: number) {
+    this.upload.onprogress?.({ lengthComputable: true, loaded, total })
+  }
+
+  finishUpload() {
     this.upload.onload?.()
-    this.status = MockXMLHttpRequest.status
-    this.responseText = JSON.stringify(MockXMLHttpRequest.responseBody)
+  }
+
+  respond(body: unknown, status = 200) {
+    this.status = status
+    this.responseText = JSON.stringify(body)
     this.onload?.()
+  }
+
+  failNetwork() {
+    this.onerror?.()
   }
 }
 
@@ -138,11 +161,29 @@ async function importTxt(container: HTMLElement, fileName = 'fixture.txt') {
   })
 }
 
+function setReadyStore(overrides: Partial<MockStoreState> = {}) {
+  mockStoreState = {
+    backendLoadError: '',
+    backendLoaded: true,
+    localChapters: [],
+    getNovels: () => [],
+    loadFromBackend: vi.fn(async () => undefined),
+    saveToBackend: vi.fn(async () => undefined),
+    deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
+    setCurrentNovelId: vi.fn(),
+    setCurrentChapterId: vi.fn(),
+    deleteNovel: vi.fn(),
+    ...overrides,
+  }
+}
+
 describe('ProjectGrid chapter resolution', () => {
   beforeEach(() => {
     pushMock.mockReset()
     MockXMLHttpRequest.responseBody = null
     MockXMLHttpRequest.status = 200
+    MockXMLHttpRequest.autoRespond = true
+    MockXMLHttpRequest.instances = []
     vi.stubGlobal('XMLHttpRequest', MockXMLHttpRequest)
   })
 
@@ -276,6 +317,191 @@ describe('ProjectGrid chapter resolution', () => {
     expect(setCurrentNovelId).not.toHaveBeenCalled()
     expect(setCurrentChapterId).not.toHaveBeenCalled()
     expect(pushMock).not.toHaveBeenCalled()
+  })
+
+  it('shows real partial transport progress while the upload is active', async () => {
+    setReadyStore()
+    MockXMLHttpRequest.autoRespond = false
+
+    const { container } = renderProjectGrid()
+    await importTxt(container, 'partial.txt')
+
+    const xhr = MockXMLHttpRequest.instances[0]
+    await act(async () => {
+      xhr.emitUploadProgress(2, 5)
+      await Promise.resolve()
+    })
+
+    expect(screen.getByRole('progressbar', { name: '上传进度' })).toHaveAttribute('aria-valuenow', '40')
+    expect(screen.getByText('正在上传 partial.txt … 40%')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '上传中…' })).toBeDisabled()
+  })
+
+  it('switches to indeterminate processing after upload completion and waits for the response', async () => {
+    setReadyStore()
+    MockXMLHttpRequest.autoRespond = false
+
+    const { container } = renderProjectGrid()
+    await importTxt(container, 'processing.txt')
+
+    const xhr = MockXMLHttpRequest.instances[0]
+    await act(async () => {
+      xhr.emitUploadProgress(1, 1)
+      xhr.finishUpload()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText('服务器处理')).toBeInTheDocument()
+    expect(screen.getByText('文件上传完成，服务器正在解析并入库 processing.txt …')).toBeInTheDocument()
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+    expect(screen.queryByText('完成')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '解析中…' })).toBeDisabled()
+  })
+
+  it('keeps processing visible until the backend refresh resolves', async () => {
+    const refreshDeferred = createDeferredPromise<void>()
+    const loadFromBackend = vi.fn(() => refreshDeferred.promise)
+    setReadyStore({ loadFromBackend })
+    MockXMLHttpRequest.autoRespond = false
+
+    const { container } = renderProjectGrid()
+    await importTxt(container, 'refresh.txt')
+
+    const xhr = MockXMLHttpRequest.instances[0]
+    await act(async () => {
+      xhr.finishUpload()
+      xhr.respond({ novelId: 'novel-new', chapterId: 'ch-new', chapterCount: 121 })
+      await Promise.resolve()
+    })
+
+    expect(loadFromBackend).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('服务器处理')).toBeInTheDocument()
+    expect(screen.queryByText(/服务器已解析完成/)).not.toBeInTheDocument()
+
+    await act(async () => {
+      refreshDeferred.resolve()
+      await refreshDeferred.promise
+    })
+
+    expect(await screen.findByText('上传完成，服务器已解析完成：共 121 章。已刷新书库，请从书库卡片进入工作区。')).toBeInTheDocument()
+  })
+
+  it('shows terminal success only after the response and refresh complete', async () => {
+    setReadyStore()
+    MockXMLHttpRequest.autoRespond = false
+
+    const { container } = renderProjectGrid()
+    await importTxt(container, 'success.txt')
+
+    const xhr = MockXMLHttpRequest.instances[0]
+    await act(async () => {
+      xhr.finishUpload()
+      xhr.respond({ novelId: 'novel-new', chapterId: 'ch-new', chapterCount: 121 })
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByText('上传完成，服务器已解析完成：共 121 章。已刷新书库，请从书库卡片进入工作区。')).toBeInTheDocument()
+    expect(screen.getByText('导入结果')).toBeInTheDocument()
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '导入 TXT 小说' })).toBeEnabled()
+  })
+
+  it.each([
+    ['missing novel id', { chapterId: 'ch-new', chapterCount: 1 }],
+    ['blank novel id', { novelId: '   ', chapterId: 'ch-new', chapterCount: 1 }],
+    ['blank chapter id', { novelId: 'novel-new', chapterId: '', chapterCount: 1 }],
+    ['negative chapter count', { novelId: 'novel-new', chapterId: 'ch-new', chapterCount: -1 }],
+    ['fractional chapter count', { novelId: 'novel-new', chapterId: 'ch-new', chapterCount: 1.5 }],
+    ['non-numeric chapter count', { novelId: 'novel-new', chapterId: 'ch-new', chapterCount: '1' }],
+  ])('rejects malformed successful import payloads with %s before refresh or navigation', async (_label, payload) => {
+    const loadFromBackend = vi.fn(async () => undefined)
+    setReadyStore({ loadFromBackend })
+    MockXMLHttpRequest.autoRespond = false
+  
+    const { container } = renderProjectGrid()
+    await importTxt(container, 'malformed-success.txt')
+  
+    await act(async () => {
+      MockXMLHttpRequest.instances[0].respond(payload)
+      await Promise.resolve()
+    })
+  
+    expect(screen.getByRole('alert')).toHaveTextContent('服务器返回了无效结果')
+    expect(loadFromBackend).not.toHaveBeenCalled()
+    expect(pushMock).not.toHaveBeenCalled()
+  })
+  
+  it('ignores import callbacks after unmount', async () => {
+    const loadFromBackend = vi.fn(async () => undefined)
+    setReadyStore({ loadFromBackend })
+    MockXMLHttpRequest.autoRespond = false
+  
+    const { container, unmount } = renderProjectGrid()
+    await importTxt(container, 'unmounted.txt')
+    const xhr = MockXMLHttpRequest.instances[0]
+    unmount()
+  
+    await act(async () => {
+      xhr.respond({ novelId: 'novel-new', chapterId: 'ch-new', chapterCount: 1 })
+      await Promise.resolve()
+    })
+  
+    expect(loadFromBackend).not.toHaveBeenCalled()
+    expect(pushMock).not.toHaveBeenCalled()
+  })
+  
+  it('shows a localized alert for a server failure without exposing raw diagnostics', async () => { setReadyStore()
+  MockXMLHttpRequest.autoRespond = false
+  
+  const { container } = renderProjectGrid()
+  await importTxt(container, 'server-error.txt')
+  
+  const xhr = MockXMLHttpRequest.instances[0]
+  await act(async () => {
+    xhr.finishUpload()
+    xhr.respond({ error: 'SQLITE_CONSTRAINT: internal path /private/data/control.db' }, 500)
+    await Promise.resolve()
+  })
+  
+  expect(screen.getByRole('alert')).toHaveTextContent('导入失败')
+  expect(screen.queryByText(/SQLITE_CONSTRAINT|private\/data\/control\.db/)).not.toBeInTheDocument()
+  expect(screen.queryByRole('progressbar')).not.toBeInTheDocument() })
+
+  it('shows a localized alert for a network failure', async () => {
+    setReadyStore()
+    MockXMLHttpRequest.autoRespond = false
+
+    const { container } = renderProjectGrid()
+    await importTxt(container, 'network-error.txt')
+
+    const xhr = MockXMLHttpRequest.instances[0]
+    await act(async () => {
+      xhr.failNetwork()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent('上传失败，请检查本地服务是否正常')
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+  })
+
+  it('clears prior terminal feedback when retrying an import', async () => {
+    setReadyStore()
+    MockXMLHttpRequest.autoRespond = false
+
+    const { container } = renderProjectGrid()
+    await importTxt(container, 'failed.txt')
+
+    await act(async () => {
+      MockXMLHttpRequest.instances[0].respond({ error: 'raw failure' }, 500)
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent('导入失败')
+
+    await importTxt(container, 'retry.txt')
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByText('正在上传 retry.txt … 0%')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: '上传进度' })).toHaveAttribute('aria-valuenow', '0')
   })
 
   it('shows a lightweight loading message while recovering the library from backend state', () => {
