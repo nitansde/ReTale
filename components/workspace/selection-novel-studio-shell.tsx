@@ -1,12 +1,10 @@
 "use client"
 
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import {
-  ArrowLeft,
   BookOpen,
   Building2,
   Check,
@@ -17,9 +15,7 @@ import {
   MessageCircleMore,
   Pencil,
   Plus,
-  ScrollText,
   Sparkles,
-  Settings2,
   Trash2,
   Users,
   Wand2,
@@ -35,11 +31,13 @@ import { PresetCompatLibraryModal } from '@/components/workspace/PresetCompatLib
 import { RoleplaySessionView } from '@/components/workspace/RoleplaySessionView'
 import { WorkspaceCenterPane } from '@/components/workspace/WorkspaceCenterPane'
 import { WorkspaceChapterNav } from '@/components/workspace/WorkspaceChapterNav'
+import { WorkspaceHeader } from '@/components/workspace/WorkspaceHeader'
 import { WorkspaceWorldEntriesPanel } from '@/components/workspace/WorkspaceWorldEntriesPanel'
 import { WorkspaceReferencePanel } from '@/components/workspace/WorkspaceReferencePanel'
 import { WorkspaceAISettingsModal } from '@/components/workspace/WorkspaceAISettingsModal'
 import { WorkspaceKnowledgeControls } from '@/components/workspace/WorkspaceKnowledgeControls'
 import { WorkspaceSelectionActions } from '@/components/workspace/WorkspaceSelectionActions'
+import { Notice } from '@/components/ui/Notice'
 import { useSelectionNovelStudioActions } from '@/components/workspace/use-selection-novel-studio-actions'
 import { useSelectionNovelStudioCore } from '@/components/workspace/use-selection-novel-studio-core'
 import { useSelectionNovelStudioViewModel } from '@/components/workspace/use-selection-novel-studio-view-model'
@@ -202,11 +200,11 @@ export function SelectionNovelStudio() {
   const autosaveSignature = useNovelStore((state) => JSON.stringify({ currentNovelId: state.currentNovelId, currentChapterId: state.currentChapterId, currentTab: state.currentTab, helperTab: state.helperTab, expandedVolumeIds: state.expandedVolumeIds, localNovels: state.localNovels, localVolumes: state.localVolumes, localChapters: state.localChapters, localOutlines: state.localOutlines, localCharacters: state.localCharacters, localCharacterRelations: state.localCharacterRelations, localWorldEntries: state.localWorldEntries, localTimelineEvents: state.localTimelineEvents, rewriteCandidates: state.rewriteCandidates, rewriteHistory: state.rewriteHistory, trajectories: state.trajectories, rewriteMode: state.rewriteMode, rewriteTone: state.rewriteTone, rewriteOutput: state.rewriteOutput, rewriteScope: state.rewriteScope, selectionText: state.selectionText, selectedParagraphIndex: state.selectedParagraphIndex, thinkingLevel: state.thinkingLevel, autoContinue: state.autoContinue, keepCanon: state.keepCanon, promptText: state.promptText, selectedPresetId: state.selectedPresetId, presets: state.presets, constraints: state.constraints, focusMode: state.focusMode, presetCompatSessionState: state.presetCompatSessionState }))
   const core = useSelectionNovelStudioCore({ loadFromBackend, saveToBackend, isNovelDeletionPending, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId, setCurrentChapterId, updateChapterContent, aiSettings, setAISettings, refreshKnowledgeProjection, clearPresetCompatSessionStateForSelection: (selection) => clearPresetCompatSessionStateForSelection(selection), resetPresetCompatSessionStateForSelection: (selection, surfaces) => resetPresetCompatSessionStateForSelection(selection, surfaces ?? []), presetCompatSessionState, localCharacters, localWorldEntries, localTimelineEvents, localOutlines, autosaveSignature })
   const {
-    leftPanelOpen, setLeftPanelOpen, chapterListState, setChapterListState, centerPaneView, setCenterPaneView, refTab, setRefTab, settingsOpen, setSettingsOpen,
+    leftPanelOpen, setLeftPanelOpen, referencePanelOpen, setReferencePanelOpen, knowledgePanelOpen, setKnowledgePanelOpen, chapterListState, setChapterListState, centerPaneView, setCenterPaneView, refTab, setRefTab, settingsOpen, setSettingsOpen,
     selectionText, lockedSelectionText, toolbarPos, activeMode, rewritePrompt, rewriteState, rewriteFlow, generationContext,
     graphContext, contextPreviewLoading, contextPreviewError, graphReviewLoading, graphReviewControls, contextPanelOpen,
     setContextPanelOpen, graphSelection, setGraphSelection, evidenceDrawerOpen, setEvidenceDrawerOpen, disabledContextBlockIds, setDisabledContextBlockIds, excludedGraphEdgeIds, excludedEvidenceIds, graphMutationPendingId, graphMutationError, chapterGraphData,
-    chapterGraphLoading, chapterGraphError, chapterGraphControls, chapterGraphSelection, setChapterGraphSelection, copied, setCopied, toast,
+    chapterGraphLoading, chapterGraphError, chapterGraphControls, chapterGraphSelection, setChapterGraphSelection, copied, setCopied, toast, toastVariant,
     saveContinueBlockPending, saveContinueBlockError, roleplaySessionStarting, rewriteLaunchSource, futureMapLaunch, setFutureMapLaunch,
     presetCompatLibraryOpen, setPresetCompatLibraryOpen, ollamaModelsByScenario, ollamaModelsLoading, ollamaModelsError,
     openAICompatibleModelsByScenario, openAICompatibleModelsLoading, editState, setEditState, knowledgePanelReadOnly,
@@ -235,7 +233,7 @@ export function SelectionNovelStudio() {
   const {
     activeWorkspaceSelection, selectedTimelineNode, selectedContinueBlockNode, selectedContinueBlockFutureMapLaunch,
     selectedTimelineDisplayLabel, selectedTimelineInstructionText, selectedTimelineInstructionPreview, workspaceHeaderTitle, currentNodeMetrics,
-    chapterSelectionSummary, chapterGraphSummary, mobileRoleplayFocus,
+    chapterSelectionSummary, chapterGraphSummary,
   } = selectionView
   const actions = useSelectionNovelStudioActions({ core, viewModel: { activeWorkspaceSelection, selectedTimelineNode, selectedContinueBlockNode, selectedContinueBlockFutureMapLaunch, selectedTimelineDisplayLabel, selectedTimelineInstructionPreview }, loadFromBackend, saveToBackend, deleteNovelFromBackend, reconcileNovelDeletionFromBackend, isNovelDeletionPending, beginNovelDeletion, rollbackNovelDeletion, setNovelDeletionPending, reconcileNovelDeletion, localChapters, deleteChapter, deleteNovel, saveAISettings, savePresetCompatLibrary, rebuildStoryKnowledge, rebuildStoryRetrievalIndex, pauseStoryKnowledgeRebuild, abortStoryKnowledgeRebuild, deleteStoryKnowledgeGraph, deleteStoryHanlpCache, deleteStoryExtractionCache, deleteStoryEmbeddingCache, setPresetCompatSessionPhase, setCurrentChapterId, updateChapterContent })
   const {
@@ -246,6 +244,17 @@ export function SelectionNovelStudio() {
     handleCreateWhatIf, launchFutureMapFromWhatIf, handleFutureJumpCreated, reopenWhatIfRewriteFlow,
     reopenFutureJumpRewriteFlow, selectionActions, knowledgeControls,
   } = actions
+  const contextLabel = activeWorkspaceSelection.kind === 'chapter'
+    ? t('workspace.context.chapter')
+    : activeWorkspaceSelection.kind === 'rewrite'
+      ? t('workspace.context.rewrite')
+      : activeWorkspaceSelection.kind === 'continue_block'
+        ? t('workspace.context.continueBlock')
+        : activeWorkspaceSelection.kind === 'what_if'
+          ? t('workspace.context.whatIf')
+          : activeWorkspaceSelection.kind === 'roleplay_session'
+            ? t('workspace.context.roleplay')
+            : t('workspace.context.futureJump')
 
   if (!backendLoaded) {
     return (
@@ -282,70 +291,31 @@ export function SelectionNovelStudio() {
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(129,140,248,0.12),_transparent_30%),#0a0c12] text-zinc-100">
       <div className="mx-auto flex min-h-screen max-w-[1720px] flex-col px-3 pb-10 pt-3 sm:px-5 lg:px-6">
-        <header className="sticky top-0 z-30 mb-4 rounded-[28px] border border-white/10 bg-[#0d1017]/92 px-4 py-3 shadow-[0_20px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <Link href="/library" className="rounded-2xl border border-white/10 bg-white/[0.04] p-2 text-zinc-300 transition hover:bg-white/[0.08]">
-                <ArrowLeft className="h-4 w-4" />
-              </Link>
-              <button
-                onClick={() => setLeftPanelOpen((current) => !current)}
-                className="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-zinc-300 transition hover:bg-white/[0.08] lg:hidden"
-              >
-                {t('workspace.mobileChapters')}
-              </button>
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">{t('workspace.headerEyebrow')}</p>
-                <h1 className="mt-1 text-xl font-semibold tracking-tight text-zinc-100">{workspaceHeaderTitle}</h1>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5" data-testid="workspace-current-word-count">{t('workspace.wordCount', { count: currentNodeMetrics.wordCount.toLocaleString() })}</span>
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5" data-testid="workspace-current-input-tokens">{t('workspace.inputTokens', { count: currentNodeMetrics.inputTokens?.toLocaleString() ?? '—' })}</span>
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5" data-testid="workspace-current-output-tokens">{t('workspace.outputTokens', { count: currentNodeMetrics.outputTokens?.toLocaleString() ?? '—' })}</span>
-              <button
-                onClick={() => {
-                  void handleDeleteNovel()
-                }}
-                disabled={isNovelDeletionPending}
-                className="inline-flex items-center gap-2 rounded-full border border-rose-400/20 bg-rose-500/10 px-3 py-1.5 text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                {t('workspace.deleteNovel')}
-              </button>
-              <button
-                type="button"
-                data-testid="preset-compat-library-open"
-                onClick={() => {
-                  setPresetCompatLibraryOpen(true)
-                  void loadPresetCompatLibrary().catch(() => undefined)
-                }}
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 transition hover:bg-white/[0.08]"
-              >
-                <ScrollText className="h-3.5 w-3.5" />
-                {t('workspace.preset')}
-              </button>
-              <button
-                onClick={() => setSettingsOpen(true)}
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 transition hover:bg-white/[0.08]"
-              >
-                <Settings2 className="h-3.5 w-3.5" />
-                {providerLabel}
-              </button>
-            </div>
-          </div>
-        </header>
+        <WorkspaceHeader
+          title={workspaceHeaderTitle}
+          metrics={{
+            wordCount: t('workspace.wordCount', { count: currentNodeMetrics.wordCount.toLocaleString() }),
+            inputTokens: t('workspace.inputTokens', { count: currentNodeMetrics.inputTokens?.toLocaleString() ?? '—' }),
+            outputTokens: t('workspace.outputTokens', { count: currentNodeMetrics.outputTokens?.toLocaleString() ?? '—' }),
+          }}
+          providerLabel={providerLabel}
+          deletionPending={isNovelDeletionPending}
+          onOpenChapters={() => setLeftPanelOpen(true)}
+          onOpenContext={() => setReferencePanelOpen(true)}
+          onOpenKnowledge={() => setKnowledgePanelOpen(true)}
+          onOpenPresets={() => {
+            setPresetCompatLibraryOpen(true)
+            void loadPresetCompatLibrary().catch(() => undefined)
+          }}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onDeleteNovel={() => { void handleDeleteNovel() }}
+        />
 
         <div className="grid flex-1 gap-4 lg:grid-cols-[264px_minmax(0,1.28fr)_376px] 2xl:grid-cols-[280px_minmax(0,1.32fr)_392px]">
-          <div className={cn(mobileRoleplayFocus && 'order-2 lg:order-none')}>
-            <WorkspaceChapterNav
+          <WorkspaceChapterNav
             leftPanelOpen={leftPanelOpen}
             onClose={() => setLeftPanelOpen(false)}
-            onCreateChapter={() => {
-              createNewChapter()
-              setLeftPanelOpen(false)
-            }}
+            onCreateChapter={createNewChapter}
             novelVolumes={novelVolumes}
             sortedChapters={sortedChapters}
             chapterListTarget={chapterListTarget}
@@ -361,11 +331,10 @@ export function SelectionNovelStudio() {
             onSelectionChange={handleTimelineSelection}
             onDeleteChapter={handleTimelineDeleteChapter}
             deletingBranchNodeId={deletingBranchNodeId}
-                    onDeleteBranchNode={handleDeleteBranchNode}
-                  />
-          </div>
+            onDeleteBranchNode={handleDeleteBranchNode}
+          />
 
-          <div className={cn('min-w-0', mobileRoleplayFocus && 'order-1')}>
+          <div className="min-w-0">
             <WorkspaceCenterPane
             selection={activeWorkspaceSelection}
             chapterTitle={currentChapter.title}
@@ -495,9 +464,12 @@ export function SelectionNovelStudio() {
           />
           </div>
 
-          <div className={cn('min-w-0', mobileRoleplayFocus && 'order-3')}>
-            <WorkspaceReferencePanel
-            selection={activeWorkspaceSelection}
+          <WorkspaceReferencePanel
+            open={referencePanelOpen}
+            onClose={() => setReferencePanelOpen(false)}
+            knowledgeOpen={knowledgePanelOpen}
+            onKnowledgeClose={() => setKnowledgePanelOpen(false)}
+            contextLabel={contextLabel}
             selectionActions={selectionActions}
             knowledgeControls={knowledgeControls}
             references={(
@@ -529,7 +501,7 @@ export function SelectionNovelStudio() {
               })}
             </div>
 
-            <div className="overflow-y-auto max-h-[calc(100vh-28rem)] space-y-2">
+            <div className="space-y-2 lg:max-h-[calc(100vh-28rem)] lg:overflow-y-auto">
               {refTab === 'characters' && (
                 <>
                   {currentNovelVisibleCharacterCount === 0 && (
@@ -767,7 +739,6 @@ export function SelectionNovelStudio() {
               </>
             )}
           />
-          </div>
         </div>
       </div>
 
@@ -805,8 +776,10 @@ export function SelectionNovelStudio() {
       ) : null}
 
       {toast ? (
-        <div className="fixed right-4 top-4 z-[80] rounded-2xl border border-emerald-400/20 bg-emerald-500/15 px-4 py-3 text-sm text-emerald-100 shadow-[0_12px_50px_rgba(0,0,0,0.35)]">
-          {toast}
+        <div className="fixed inset-x-3 top-[max(0.75rem,env(safe-area-inset-top))] z-[80] sm:left-auto sm:right-4 sm:w-full sm:max-w-sm">
+          <Notice variant={toastVariant} className="shadow-[0_12px_50px_rgba(0,0,0,0.35)]">
+            {toast}
+          </Notice>
         </div>
       ) : null}
 
