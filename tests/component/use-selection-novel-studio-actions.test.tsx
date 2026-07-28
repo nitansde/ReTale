@@ -758,8 +758,9 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     expect(poll.scheduledCount()).toBe(1)
 
     act(() => poll.runNext())
-    await resolveDeferredResponse(errorPollResponse, jsonResponse({ ok: false, error: 'Temporary poll failure' }, 503))
-    expect(result.current.core.rewriteFlow.error).toBe('Temporary poll failure')
+    await resolveDeferredResponse(errorPollResponse, jsonResponse({ ok: false, error: 'SENTINEL temporary poll SQL stack' }, 503))
+    expect(result.current.core.rewriteFlow.error).toBe('Failed to refresh recoverable rewrite job')
+    expect(result.current.core.rewriteFlow.error).not.toContain('SENTINEL')
     expect(result.current.core.rewriteFlow.jobStatus).toBe('running')
     expect(poll.scheduledCount()).toBe(1)
 
@@ -921,6 +922,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     expect(reconcileNovelDeletion).toHaveBeenCalledWith(null)
     expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
     expect(result.current.core.toast).toBe('library.deleted')
+    expect(result.current.core.toastVariant).toBe('success')
   })
 
   it('uses targeted rollback without backend reload and retains the rejection toast', async () => {
@@ -945,6 +947,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     expect(loadFromBackend).not.toHaveBeenCalled()
     expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
     expect(result.current.core.toast).toBe('library.deleteFailed')
+    expect(result.current.core.toastVariant).toBe('error')
   })
 
   it.each([
@@ -983,6 +986,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     })
 
     expect(result.current.core.toast).toBe(expectedToast)
+    expect(result.current.core.toastVariant).toBe(targetPresent ? 'error' : 'success')
     expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
   })
 
@@ -1005,6 +1009,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
 
     expect(rollbackNovelDeletion).not.toHaveBeenCalled()
     expect(result.current.core.toast).toBe('library.deleteReconcileFailed')
+    expect(result.current.core.toastVariant).toBe('error')
     expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
   })
 
@@ -1169,22 +1174,72 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     expect(result.current.core.settingsOpen).toBe(true)
   })
 
-  it('keeps settings open when the post-save projection refresh fails', async () => {
-    installIdleWorkspaceFetchMock()
-    const refreshError = new Error('projection refresh failed')
-    const { result } = renderActionsHook({
-      backendLoaded: false,
-      currentNovelId: 'novel-1',
-      saveAISettings: vi.fn().mockResolvedValue(undefined),
-      refreshKnowledgeProjection: vi.fn().mockRejectedValue(refreshError),
+  it('blocks rapid duplicate What-if creation for the full request lifecycle', async () => {
+    const createResponse = createDeferred<Response>()
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url.startsWith('/api/knowledge-view?')) {
+        return Promise.resolve(jsonResponse({ ok: true, knowledgeRebuildStatus: null, hanlpCacheSnapshot: null, knowledgeStatusOverview: null }))
+      }
+      if (url.startsWith('/api/story-timeline?')) {
+        return Promise.resolve(jsonResponse({ novelId: 'novel-1', branchId: 'novel-1:main', chapters: [], branchNodes: [], edges: [] }))
+      }
+      if (url === '/api/what-if/sessions' && method === 'POST') {
+        return createResponse.promise
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`)
     })
-
-    act(() => result.current.core.setSettingsOpen(true))
-
+    vi.stubGlobal('fetch', fetchMock)
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+  
+    act(() => {
+      result.current.core.setSelectionText('Selected source')
+      result.current.core.setRewriteFlow((current) => ({
+        ...current,
+        candidates: [{ title: 'Candidate', summary: 'Summary', content: 'Generated branch' }],
+      }))
+    })
+  
+    let firstRequest: Promise<void> | undefined
+    let secondRequest: Promise<void> | undefined
+    act(() => {
+      firstRequest = result.current.actions.handleCreateWhatIf()
+      secondRequest = result.current.actions.handleCreateWhatIf()
+    })
+  
+    expect(result.current.core.saveContinueBlockPending).toBe(true)
+    expect(fetchMock.mock.calls.filter(([url, init]) => (
+      String(url) === '/api/what-if/sessions'
+      && (init as RequestInit | undefined)?.method === 'POST'
+    ))).toHaveLength(1)
+  
     await act(async () => {
-      await expect(result.current.actions.saveSettings()).rejects.toBe(refreshError)
+      createResponse.resolve(jsonResponse({
+        sessionId: 'what-if-1',
+        timelineNodeId: 'what-if-node-1',
+        title: 'What-if branch',
+      }))
+      await Promise.all([firstRequest, secondRequest])
     })
-
-    expect(result.current.core.settingsOpen).toBe(true)
+  
+    expect(result.current.core.saveContinueBlockPending).toBe(false)
   })
+  
+  it('keeps settings open when the post-save projection refresh fails', async () => { installIdleWorkspaceFetchMock()
+  const refreshError = new Error('projection refresh failed')
+  const { result } = renderActionsHook({
+    backendLoaded: false,
+    currentNovelId: 'novel-1',
+    saveAISettings: vi.fn().mockResolvedValue(undefined),
+    refreshKnowledgeProjection: vi.fn().mockRejectedValue(refreshError),
+  })
+  
+  act(() => result.current.core.setSettingsOpen(true))
+  
+  await act(async () => {
+    await expect(result.current.actions.saveSettings()).rejects.toBe(refreshError)
+  })
+  
+  expect(result.current.core.settingsOpen).toBe(true) })
 })
