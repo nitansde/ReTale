@@ -20,6 +20,8 @@ export function resolveWorkspaceRefTab(value: string | null | undefined): Worksp
 
 export function useWorkspacePaneState() {
   const [leftPanelOpen, setLeftPanelOpen] = useState(false)
+  const [referencePanelOpen, setReferencePanelOpen] = useState(false)
+  const [knowledgePanelOpen, setKnowledgePanelOpen] = useState(false)
   const [chapterListState, setChapterListState] = useState<Record<string, number>>({})
   const [centerPaneView, setCenterPaneView] = useState<WorkspaceCenterPaneView>('body')
   const [rawRefTab, setRawRefTab] = useState<string>('characters')
@@ -31,6 +33,10 @@ export function useWorkspacePaneState() {
   return {
     leftPanelOpen,
     setLeftPanelOpen,
+    referencePanelOpen,
+    setReferencePanelOpen,
+    knowledgePanelOpen,
+    setKnowledgePanelOpen,
     chapterListState,
     setChapterListState,
     centerPaneView,

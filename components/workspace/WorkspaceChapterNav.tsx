@@ -2,13 +2,15 @@
 
 import type { Dispatch, SetStateAction } from 'react'
 import { ChevronDown, X } from 'lucide-react'
-import { useI18n } from '@/lib/i18n/provider'
+import { DialogSurface } from '@/components/ui/DialogSurface'
+import { IconButton } from '@/components/ui/IconButton'
 import { StoryTimeline } from '@/components/timeline/StoryTimeline'
-import { cn } from '@/lib/utils'
+import { useDesktopWorkspaceLayout } from '@/components/workspace/use-desktop-workspace-layout'
+import { useI18n } from '@/lib/i18n/provider'
 import type { ChapterTimelineItem, StoryTimelineBranchNode, StoryTimelineEdge, TimelineSelection } from '@/lib/story-branch-types'
 import type { Chapter, Volume } from '@/lib/types'
 
-export function WorkspaceChapterNav(props: {
+type WorkspaceChapterNavProps = {
   leftPanelOpen: boolean
   onClose: () => void
   onCreateChapter: () => void
@@ -28,33 +30,24 @@ export function WorkspaceChapterNav(props: {
   onDeleteChapter: (chapterId: string) => void
   deletingBranchNodeId: string | null
   onDeleteBranchNode: (node: StoryTimelineBranchNode) => void
-}) {
+}
+
+export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
   const { t } = useI18n()
+  const desktop = useDesktopWorkspaceLayout()
 
-  return (
-    <aside
-      className={cn(
-        'fixed inset-y-0 left-0 z-40 w-[86vw] max-w-[320px] overflow-y-auto border-r border-white/10 bg-[#0d1017] p-4 shadow-[0_24px_90px_rgba(0,0,0,0.5)] transition lg:static lg:w-auto lg:max-w-none lg:rounded-[30px] lg:border lg:bg-[#11141d] lg:shadow-[0_24px_70px_rgba(0,0,0,0.3)]',
-        props.leftPanelOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-      )}
-    >
-      <div className="mb-4 flex items-center justify-between lg:block">
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">{t('chapterNav.novel')}</p>
-          <h2 className="mt-1 text-lg font-semibold text-zinc-100">{t('chapterNav.title')}</h2>
-        </div>
-        <button onClick={props.onClose} className="rounded-2xl border border-white/10 p-2 text-zinc-300 lg:hidden">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
+  const content = (
+    <>
       <button
-        onClick={props.onCreateChapter}
-        className="mb-4 w-full rounded-2xl bg-violet-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-400"
+        type="button"
+        onClick={() => {
+          props.onCreateChapter()
+          props.onClose()
+        }}
+        className="mb-4 min-h-11 w-full rounded-2xl bg-violet-500 px-4 text-sm font-medium text-white transition hover:bg-violet-400"
       >
         {t('chapterNav.newChapter')}
       </button>
-
       <div className="space-y-3">
         {props.novelVolumes.map((volume) => {
           const chaptersInVolume = props.sortedChapters.filter((chapter) => chapter.volumeId === volume.id && !chapter.parentChapterId)
@@ -71,13 +64,11 @@ export function WorkspaceChapterNav(props: {
                   <p className="text-sm font-medium text-zinc-100">{volume.title}</p>
                   <p className="mt-1 text-xs text-zinc-500">{t('chapterNav.volumeChapters', { count: chaptersInVolume.length })}</p>
                 </div>
-                <ChevronDown className="h-4 w-4 text-zinc-500" />
+                <ChevronDown className="h-4 w-4 text-zinc-500" aria-hidden="true" />
               </div>
               <div className="mt-2 space-y-3">
                 {props.storyTimelineError ? (
-                  <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-3 py-3 text-sm text-amber-100">
-                    {props.storyTimelineError}
-                  </div>
+                  <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-3 py-3 text-sm text-amber-100">{props.storyTimelineError}</div>
                 ) : null}
                 <StoryTimeline
                   chapters={visibleChapters.map((chapter) => props.timelineChapterById.get(chapter.id) ?? {
@@ -92,7 +83,10 @@ export function WorkspaceChapterNav(props: {
                   activeChapterId={props.currentChapterId}
                   activeSelection={props.activeSelection}
                   branchChaptersByParentId={props.branchChaptersByParentId}
-                  onSelectionChange={props.onSelectionChange}
+                  onSelectionChange={(selection) => {
+                    props.onSelectionChange(selection)
+                    props.onClose()
+                  }}
                   onDeleteChapter={props.onDeleteChapter}
                   onDeleteBranchChapter={props.onDeleteChapter}
                   deletingBranchNodeId={props.deletingBranchNodeId}
@@ -100,13 +94,12 @@ export function WorkspaceChapterNav(props: {
                 />
                 {hiddenCount > 0 ? (
                   <button
-                    onClick={() =>
-                      props.setChapterListState((current) => ({
-                        ...current,
-                        [props.currentNovelId]: Math.min(chaptersInVolume.length, (current[props.currentNovelId] ?? 80) + 80),
-                      }))
-                    }
-                    className="w-full rounded-2xl border border-dashed border-white/10 bg-black/20 px-3 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06]"
+                    type="button"
+                    onClick={() => props.setChapterListState((current) => ({
+                      ...current,
+                      [props.currentNovelId]: Math.min(chaptersInVolume.length, (current[props.currentNovelId] ?? 80) + 80),
+                    }))}
+                    className="min-h-11 w-full rounded-2xl border border-dashed border-white/10 bg-black/20 px-3 text-sm text-zinc-300 transition hover:bg-white/[0.06]"
                   >
                     {t('chapterNav.showMore', { count: hiddenCount })}
                   </button>
@@ -116,6 +109,27 @@ export function WorkspaceChapterNav(props: {
           )
         })}
       </div>
-    </aside>
+    </>
+  )
+
+  if (desktop) {
+    return (
+      <aside className="rounded-[30px] border border-white/10 bg-[#11141d] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.3)]" data-testid="workspace-chapter-nav">
+        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">{t('chapterNav.novel')}</p>
+        <h2 className="mb-4 mt-1 text-lg font-semibold text-zinc-100">{t('chapterNav.title')}</h2>
+        {content}
+      </aside>
+    )
+  }
+
+  return (
+    <DialogSurface open={props.leftPanelOpen} onClose={props.onClose} title={t('chapterNav.title')} description={t('chapterNav.description')} placement="left">
+      <div className="mb-4 flex justify-end">
+        <IconButton label={t('chapterNav.close')} onClick={props.onClose}>
+          <X className="h-4 w-4" aria-hidden="true" />
+        </IconButton>
+      </div>
+      <div data-testid="workspace-chapter-nav">{content}</div>
+    </DialogSurface>
   )
 }
