@@ -12,13 +12,13 @@ async function expandKnowledgeDetails(page: Page) {
   await expect(summary).toBeVisible()
   await expect(summary).toContainText(/故事分析|Story analysis/)
   await expect(summary).toContainText(/内容检索准备|Content search preparation/)
-  await expect(summary).not.toContainText(/HanLP|LLM|Embedding|LanceDB|%/i)
+  await expect(summary).not.toContainText(/HanLP|LLM|Embedding|LanceDB|Ollama|provider|model/i)
   await expect(page.getByTestId('workspace-knowledge-advanced-details')).toHaveCount(0)
   await page.getByRole('button', { name: /高级详情|Advanced details/i }).click()
   await expect(page.getByTestId('workspace-knowledge-advanced-details')).toBeVisible()
 }
 
-test('knowledge workspace shows HanLP progress, cache state, and character tiers', async ({ page }) => {
+test('knowledge workspace shows phase-local progress, advanced HanLP diagnostics, cache state, and character tiers', async ({ page }) => {
   fs.mkdirSync(evidenceDirectory, { recursive: true })
 
   await page.route('**/api/knowledge-view*', async (route) => {
@@ -170,7 +170,12 @@ test('knowledge workspace shows HanLP progress, cache state, and character tiers
   expect(importResponse.ok()).toBeTruthy()
 
   await page.goto('/workspace', { waitUntil: 'domcontentloaded' })
+  await expect(page.getByRole('progressbar')).toHaveCount(1)
+  await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50')
+  await expect(page.getByTestId('workspace-knowledge-status')).toContainText('50%')
+  await expect(page.getByTestId('workspace-knowledge-status')).not.toContainText('46%')
   await expandKnowledgeDetails(page)
+  await expect(page.getByRole('progressbar')).toHaveCount(1)
 
   await expect(page.getByTestId('workspace-hanlp-bootstrap-card')).toContainText('HanLP Bootstrap')
   await expect(page.getByTestId('workspace-hanlp-bootstrap-card')).toContainText('完成章节：2 / 4')
@@ -180,8 +185,6 @@ test('knowledge workspace shows HanLP progress, cache state, and character tiers
   await expect(page.getByTestId('workspace-hanlp-bootstrap-card')).toContainText('阶段耗时：48 秒')
   await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('原文 Embedding 预计算')
   await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('与抽取并行')
-  await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('缓存预热进度')
-  await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('35%')
   await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('缓存命中率：20%')
   await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('阶段耗时：12 秒')
   await expect(page.getByTestId('workspace-raw-embedding-card')).toContainText('Ollama · qwen3-embedding:4b · batch 32')
@@ -346,11 +349,14 @@ test('knowledge workspace shows LanceDB Refresh progress inline', async ({ page 
 
   await expect(overviewCard).toContainText('后台正在预热原文 Embedding，完成后会自动刷新 LanceDB')
   await expect(overviewCard).toContainText('任务状态：进行中')
-  await expect(overviewCard).toContainText('95%')
   await expect(overviewCard).toContainText('阶段：原文向量缓存 50%')
+  await expect(overviewCard).not.toContainText('95%')
+  await expect(page.getByTestId('workspace-knowledge-status')).not.toContainText('95%')
+  await expect(page.getByTestId('workspace-knowledge-status')).toContainText('50%')
+  await expect(page.getByRole('progressbar')).toHaveCount(1)
+  await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50')
   await expect(overviewCard.getByRole('button', { name: /Pause|暂停/i })).toBeVisible()
   await expect(overviewCard.getByRole('button', { name: /Abort|终止/i })).toBeVisible()
-  await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('50%')
   await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('缓存命中率：33%')
   await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('Ollama · qwen3-embedding:4b · batch 32')
 
@@ -447,7 +453,8 @@ test('knowledge workspace stops polling when no job is active', async ({ page })
   await expect(page.getByTestId('workspace-knowledge-status-overview-card')).toBeVisible()
   await expect(page.getByTestId('workspace-extraction-cache-card')).toContainText('64')
   await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('64')
-  await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('100%')
+  await expect(page.getByTestId('workspace-embedding-cache-card')).not.toContainText('100%')
+  await expect(page.getByRole('progressbar')).toHaveCount(0)
   await expect(page.getByTestId('workspace-embedding-cache-card')).not.toContainText('缓存命中率')
   await expect(page.getByTestId('workspace-embedding-cache-card')).not.toContainText('阶段耗时')
   await expect(page.getByTestId('workspace-embedding-cache-card')).toContainText('Ollama · qwen3-embedding:4b')
@@ -567,4 +574,90 @@ test('saving AI settings waits for the current full knowledge projection refresh
   await expect(embeddingCard).toContainText(/缺失|Missing/)
   await expect(embeddingCard).not.toContainText('qwen3-embedding:4b')
   await expect(settingsHeading).toHaveCount(0)
+})
+
+
+test('knowledge status keeps truthful fallback, queued, redacted, and mobile target semantics', async ({ page }) => {
+  let operationStatus: 'running' | 'queued' = 'running'
+
+  await page.route('**/api/knowledge-view*', async (route) => {
+    const requestUrl = new URL(route.request().url())
+    const novelId = requestUrl.searchParams.get('novelId') ?? 'novel-001'
+    const diagnostic = 'Retry provider request Authorization: Bearer browser-secret token=browser-token at /Users/alice/private/job.ts\n    at run (/Users/alice/private/job.ts:42:9)'
+    const job = {
+      jobId: 'job-truthful-progress',
+      novelId,
+      jobType: 'extract_chapter_knowledge',
+      status: operationStatus,
+      progress: 0.63,
+      currentStep: diagnostic,
+      errorMessage: null,
+      createdAt: '2026-07-27T00:00:00.000Z',
+      updatedAt: '2026-07-27T00:00:01.000Z',
+      etaMinutes: null,
+      steps: [],
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        localOutlines: [],
+        localCharacters: [],
+        localCharacterRelations: [],
+        localWorldEntries: [],
+        localTimelineEvents: [],
+        knowledgeRebuildStatus: job,
+        hanlpCacheSnapshot: null,
+        knowledgeStatusOverview: {
+          knowledgeGraph: { status: 'full', coveredChapterCount: 4, totalChapterCount: 4, validThroughChapterNo: 4 },
+          extractionCache: { status: 'full', coveredChapterCount: 4, totalChapterCount: 4, validThroughChapterNo: 4 },
+          embeddingCache: { status: 'full', coveredChapterCount: 4, totalChapterCount: 4, validThroughChapterNo: 4, provider: 'ollama', model: 'qwen3-embedding:4b' },
+          retrievalIndex: { status: 'partial', indexedScopeCount: 63, task: null },
+        },
+        jobOutcome: operationStatus,
+        actionError: null,
+      }),
+    })
+  })
+
+  await page.goto('/library', { waitUntil: 'networkidle' })
+  await page.locator('input[type=file]').setInputFiles(fixturePath)
+  await page.waitForResponse((response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST')
+  await page.goto('/workspace', { waitUntil: 'domcontentloaded' })
+
+  const summary = page.getByTestId('workspace-knowledge-status')
+  await expect(summary).toContainText('63%')
+  await expect(summary).toContainText(/部分覆盖|Partial coverage/)
+  await expect(page.getByRole('progressbar', { name: /后台任务整体进度|Overall background job progress/ })).toHaveAttribute('aria-valuenow', '63')
+  await expect(page.getByRole('progressbar')).toHaveCount(1)
+  await expect(summary).not.toContainText(/browser-secret|browser-token|\/Users\/alice|job\.ts:42/i)
+
+  await expandKnowledgeDetails(page)
+  const advanced = page.getByTestId('workspace-knowledge-advanced-details')
+  await expect(advanced).toContainText('Retry provider request')
+  await expect(advanced).toContainText('[REDACTED]')
+  await expect(advanced).not.toContainText(/browser-secret|browser-token|\/Users\/alice|job\.ts:42/i)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole('button', { name: /更多选项|More options/ }).click()
+  await page.getByRole('button', { name: /打开知识状态|Open knowledge status/ }).click()
+  await page.getByRole('button', { name: /高级详情|Advanced details/i }).click()
+  const mobileAdvanced = page.getByTestId('workspace-knowledge-advanced-details')
+  await expect(mobileAdvanced).toBeVisible()
+  const undersizedTargets = await mobileAdvanced.locator('button, input, select').evaluateAll((controls) => controls
+    .map((control) => ({ text: control.textContent, height: control.getBoundingClientRect().height }))
+    .filter((control) => control.height < 44))
+  expect(undersizedTargets).toEqual([])
+
+  operationStatus = 'queued'
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.getByRole('button', { name: /更多选项|More options/ }).click()
+  await page.getByRole('button', { name: /打开知识状态|Open knowledge status/ }).click()
+  await expect(page.getByTestId('workspace-knowledge-status')).toContainText(/已排队|Queued/)
+  await expect(page.getByTestId('workspace-knowledge-status')).not.toContainText('0%')
+  await expect(page.getByRole('progressbar')).toHaveCount(0)
+  await page.getByRole('button', { name: /高级详情|Advanced details/i }).click()
+  await expect(page.getByTestId('workspace-knowledge-advanced-details')).toContainText(/本地知识图谱重建已排队|Local knowledge graph rebuild queued/)
 })
