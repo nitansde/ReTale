@@ -546,86 +546,100 @@ describe('PresetCompatLibraryModal', () => {
     expect(screen.queryByText('Macro is not supported on rewrite: input')).not.toBeInTheDocument()
   })
 
-  it('imports the synthetic fixture, keeps malformed regex imports non-destructive, and leaves existing library data visible', async () => {
-    const fixtureText = readFixtureText('synthetic-sillytavern-preset.json')
-    let currentLibrary = createDefaultPresetCompatLibrary()
-    const previewSpy = vi.spyOn(creativeRuntimePreview, 'buildPresetCompatCreativeRuntimePreview').mockReturnValue({
-      systemPrompt: 'Mocked system preview',
-      userPrompt: 'Mocked user preview',
-      warnings: [],
-      metadata: { macroDiagnostics: [] },
+  it('sanitizes unknown preset save diagnostics in the primary modal error surface', async () => {
+    const sentinel = 'SQLITE_ERROR /private/preset-compat.db'
+    useNovelStore.setState({
+      presetCompatLibrary: createLibrary(),
+      savePresetCompatLibrary: vi.fn(async () => {
+        throw new Error(sentinel)
+      }),
     })
-    const presetFile = new File([fixtureText], 'synthetic-sillytavern-preset.json', { type: 'application/json' })
-    Object.defineProperty(presetFile, 'text', { value: () => Promise.resolve(fixtureText) })
-    const malformedRegexText = JSON.stringify({ regex_scripts: [null, { scriptName: 'Broken regex', replaceString: 'x' }] })
-    const malformedRegexFile = new File([malformedRegexText], 'broken-regex.json', { type: 'application/json' })
-    Object.defineProperty(malformedRegexFile, 'text', { value: () => Promise.resolve(malformedRegexText) })
-
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url !== '/api/settings/preset-compat/import') {
-        throw new Error(`Unexpected fetch: ${url}`)
-      }
-
-      const body = JSON.parse(String(init?.body)) as { kind: 'preset' | 'regex'; jsonText: string; nameHint?: string }
-      if (body.kind === 'preset') {
-        const { preset, warnings } = normalizePresetCompatPresetImport(JSON.parse(body.jsonText), {
-          nameHint: body.nameHint,
-          existingNames: Object.values(currentLibrary.presets).map((entry) => entry.name),
-          now: '2026-05-15T00:00:00.000Z',
-          idFactory: () => 'preset-import-001',
-        })
-        currentLibrary = {
-          ...currentLibrary,
-          presets: {
-            ...currentLibrary.presets,
-            [preset.id]: preset,
-          },
-          lastImportedAt: '2026-05-15T00:00:00.000Z',
-        }
-        return new Response(JSON.stringify({ ok: true, library: currentLibrary, importedIds: [preset.id], warnings }), { status: 200 })
-      }
-
-      const { regexes, warnings } = normalizePresetCompatStandaloneRegexImport(JSON.parse(body.jsonText), {
-        existingNames: Object.values(currentLibrary.standaloneRegexes).map((entry) => entry.name),
+  
+    render(<PresetCompatLibraryModal open onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '保存兼容库' }))
+  
+    expect(await screen.findByText('保存预设兼容库失败，请稍后重试。')).toBeInTheDocument()
+    expect(screen.queryByText(sentinel)).not.toBeInTheDocument()
+  })
+  
+  it('imports the synthetic fixture, keeps malformed regex imports non-destructive, and leaves existing library data visible', async () => { const fixtureText = readFixtureText('synthetic-sillytavern-preset.json')
+  let currentLibrary = createDefaultPresetCompatLibrary()
+  const previewSpy = vi.spyOn(creativeRuntimePreview, 'buildPresetCompatCreativeRuntimePreview').mockReturnValue({
+    systemPrompt: 'Mocked system preview',
+    userPrompt: 'Mocked user preview',
+    warnings: [],
+    metadata: { macroDiagnostics: [] },
+  })
+  const presetFile = new File([fixtureText], 'synthetic-sillytavern-preset.json', { type: 'application/json' })
+  Object.defineProperty(presetFile, 'text', { value: () => Promise.resolve(fixtureText) })
+  const malformedRegexText = JSON.stringify({ regex_scripts: [null, { scriptName: 'Broken regex', replaceString: 'x' }] })
+  const malformedRegexFile = new File([malformedRegexText], 'broken-regex.json', { type: 'application/json' })
+  Object.defineProperty(malformedRegexFile, 'text', { value: () => Promise.resolve(malformedRegexText) })
+  
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url !== '/api/settings/preset-compat/import') {
+      throw new Error(`Unexpected fetch: ${url}`)
+    }
+  
+    const body = JSON.parse(String(init?.body)) as { kind: 'preset' | 'regex'; jsonText: string; nameHint?: string }
+    if (body.kind === 'preset') {
+      const { preset, warnings } = normalizePresetCompatPresetImport(JSON.parse(body.jsonText), {
+        nameHint: body.nameHint,
+        existingNames: Object.values(currentLibrary.presets).map((entry) => entry.name),
+        now: '2026-05-15T00:00:00.000Z',
+        idFactory: () => 'preset-import-001',
       })
-      for (const regexRecord of regexes) {
-        currentLibrary = {
-          ...currentLibrary,
-          standaloneRegexes: {
-            ...currentLibrary.standaloneRegexes,
-            [regexRecord.id]: regexRecord,
-          },
-          lastImportedAt: '2026-05-15T00:00:00.000Z',
-        }
+      currentLibrary = {
+        ...currentLibrary,
+        presets: {
+          ...currentLibrary.presets,
+          [preset.id]: preset,
+        },
+        lastImportedAt: '2026-05-15T00:00:00.000Z',
       }
-      return new Response(JSON.stringify({ ok: true, library: currentLibrary, importedIds: regexes.map((entry) => entry.id), warnings }), { status: 200 })
-    }))
-
-    render(<PresetCompatLibraryModal activeSelection={chapterSelection} open onClose={vi.fn()} />)
-
-    fireEvent.change(screen.getByTestId('preset-compat-preset-import-input'), {
-      target: { files: [presetFile] },
+      return new Response(JSON.stringify({ ok: true, library: currentLibrary, importedIds: [preset.id], warnings }), { status: 200 })
+    }
+  
+    const { regexes, warnings } = normalizePresetCompatStandaloneRegexImport(JSON.parse(body.jsonText), {
+      existingNames: Object.values(currentLibrary.standaloneRegexes).map((entry) => entry.name),
     })
-
-    await waitFor(() => {
-      expect(screen.getAllByText('synthetic-sillytavern-preset').length).toBeGreaterThan(0)
-    })
-    expect(previewSpy).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
-    await waitFor(() => {
-      expect(previewSpy).toHaveBeenCalled()
-    })
-
-    fireEvent.change(screen.getByTestId('preset-compat-regex-import-input'), {
-      target: { files: [malformedRegexFile] },
-    })
-
-    await waitFor(() => {
-      expect(screen.getByText('没有导入任何正则条目。')).toBeInTheDocument()
-    })
-
+    for (const regexRecord of regexes) {
+      currentLibrary = {
+        ...currentLibrary,
+        standaloneRegexes: {
+          ...currentLibrary.standaloneRegexes,
+          [regexRecord.id]: regexRecord,
+        },
+        lastImportedAt: '2026-05-15T00:00:00.000Z',
+      }
+    }
+    return new Response(JSON.stringify({ ok: true, library: currentLibrary, importedIds: regexes.map((entry) => entry.id), warnings }), { status: 200 })
+  }))
+  
+  render(<PresetCompatLibraryModal activeSelection={chapterSelection} open onClose={vi.fn()} />)
+  
+  fireEvent.change(screen.getByTestId('preset-compat-preset-import-input'), {
+    target: { files: [presetFile] },
+  })
+  
+  await waitFor(() => {
     expect(screen.getAllByText('synthetic-sillytavern-preset').length).toBeGreaterThan(0)
-    expect(Object.keys(useNovelStore.getState().presetCompatLibrary.presets)).toContain('preset-import-001')
-  }, 30000)
+  })
+  expect(previewSpy).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByTestId('preset-compat-preview-generate'))
+  await waitFor(() => {
+    expect(previewSpy).toHaveBeenCalled()
+  })
+  
+  fireEvent.change(screen.getByTestId('preset-compat-regex-import-input'), {
+    target: { files: [malformedRegexFile] },
+  })
+  
+  await waitFor(() => {
+    expect(screen.getByText('没有导入任何正则条目。')).toBeInTheDocument()
+  })
+  
+  expect(screen.getAllByText('synthetic-sillytavern-preset').length).toBeGreaterThan(0)
+  expect(Object.keys(useNovelStore.getState().presetCompatLibrary.presets)).toContain('preset-import-001') }, 30000)
 })

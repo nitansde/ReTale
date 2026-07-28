@@ -11,7 +11,10 @@ import {
 } from '@/lib/preset-compat/types'
 import { useI18n } from '@/lib/i18n/provider'
 import type { PresetCompatSessionWorkspaceSelection } from '@/lib/types'
-import { toUserFacingPresetCompatError } from '@/lib/workspace-user-facing-errors'
+import {
+  toUserFacingPresetCompatError,
+  type PresetCompatErrorOperation,
+} from '@/lib/workspace-user-facing-errors'
 import { useNovelStore } from '@/store/novel-store'
 import { cn } from '@/lib/utils'
 
@@ -74,11 +77,18 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
 
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState('')
-  const [actionError, setActionError] = useState('')
+  const [actionError, setActionError] = useState<{
+    operation: PresetCompatErrorOperation
+    error: unknown
+  } | null>(null)
   const [saving, setSaving] = useState(false)
   const resolvedErrorMessage = useMemo(() => {
-    const nextError = actionError || presetCompatLibraryError
-    return nextError ? toUserFacingPresetCompatError(nextError, locale) : ''
+    if (actionError) {
+      return toUserFacingPresetCompatError(actionError.operation, actionError.error, locale)
+    }
+    return presetCompatLibraryError
+      ? toUserFacingPresetCompatError('load', presetCompatLibraryError, locale)
+      : ''
   }, [actionError, locale, presetCompatLibraryError])
 
   const presets = useMemo(
@@ -97,7 +107,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
     event.target.value = ''
     if (!file) return
 
-    setActionError('')
+    setActionError(null)
     setStatusMessage('')
 
     try {
@@ -113,19 +123,22 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
         : t(kind === 'preset' ? 'preset.importedNonePresets' : 'preset.importedNoneRegex')
       setStatusMessage(importedLabel)
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : t(kind === 'preset' ? 'preset.importPresetFailed' : 'preset.importRegexFailed'))
+      setActionError({
+        operation: kind === 'preset' ? 'import-preset' : 'import-regex',
+        error,
+      })
     }
   }
 
   async function handleSave() {
     setSaving(true)
-    setActionError('')
+    setActionError(null)
     setStatusMessage('')
     try {
       await savePresetCompatLibrary()
       setStatusMessage(t('preset.saved'))
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : t('preset.saveFailed'))
+      setActionError({ operation: 'save', error })
     } finally {
       setSaving(false)
     }
@@ -137,7 +150,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
     const presetId = selectedPreset.id
     const presetName = selectedPreset.name
     const nextPresetId = presets.find((preset) => preset.id !== presetId)?.id ?? null
-    setActionError('')
+    setActionError(null)
     setStatusMessage('')
     setSaving(true)
 
@@ -147,7 +160,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
       await savePresetCompatLibrary()
       setStatusMessage(t('preset.deletedAndSaved', { name: presetName }))
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : t('preset.deleteAfterSaveFailed'))
+      setActionError({ operation: 'delete-save', error })
     } finally {
       setSaving(false)
     }
@@ -157,17 +170,17 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
     if (!selectedPreset) return
     const jsonText = exportPresetCompatPreset(selectedPreset.id)
     if (!jsonText) {
-      setActionError(t('preset.exportMissingSelected'))
+      setActionError({ operation: 'export-preset', error: null })
       return
     }
-    setActionError('')
+    setActionError(null)
     setStatusMessage(t('preset.exportedPreset', { name: selectedPreset.name }))
     downloadTextFile(`${sanitizeFileStem(selectedPreset.name)}.json`, jsonText)
   }
 
   function handleExportRegexBundle() {
     const jsonText = exportPresetCompatStandaloneRegexBundle()
-    setActionError('')
+    setActionError(null)
     setStatusMessage(t('preset.exportedRegexBundle'))
     downloadTextFile('preset-compat-standalone-regexes.json', jsonText)
   }
