@@ -1,5 +1,248 @@
 import { getMessage, type Locale, type TranslationKey } from '@/lib/i18n/messages'
 
+const MAX_USER_FACING_DIAGNOSTIC_LENGTH = 1_000
+const REDACTED_DIAGNOSTIC_VALUE = '[REDACTED]'
+const REDACTED_LOCAL_PATH = '[local path]'
+
+function findQuotedValueEnd(value: string, start: number, quote: string) {
+  let cursor = start + 1
+  while (cursor < value.length) {
+    if (value[cursor] === '\\') {
+      cursor += 2
+      continue
+    }
+    if (value[cursor] === quote) return cursor + 1
+    cursor += 1
+  }
+  return value.length
+}
+
+function findStructuredValueEnd(value: string, start: number) {
+  const openingCharacter = value[start]
+  const closingCharacter = openingCharacter === '[' ? ']' : '}'
+  let depth = 0
+  let cursor = start
+
+  while (cursor < value.length) {
+    const character = value[cursor]
+    if (character === '"' || character === "'" || character === '`') {
+      cursor = findQuotedValueEnd(value, cursor, character)
+      continue
+    }
+    if (character === openingCharacter) depth += 1
+    if (character === closingCharacter) {
+      depth -= 1
+      if (depth === 0) return cursor + 1
+    }
+    cursor += 1
+  }
+
+  return value.length
+}
+
+function findSensitiveValueEnd(value: string, start: number) {
+  const firstCharacter = value[start]
+  if (firstCharacter === '"' || firstCharacter === "'" || firstCharacter === '`') {
+    return findQuotedValueEnd(value, start, firstCharacter)
+  }
+  if (firstCharacter === '[' || firstCharacter === '{') {
+    return findStructuredValueEnd(value, start)
+  }
+
+  let cursor = start
+  while (cursor < value.length && value[cursor] !== '\n' && value[cursor] !== '\r' && value[cursor] !== '}' && value[cursor] !== ']') {
+    cursor += 1
+  }
+  return cursor
+}
+
+function isSensitiveDiagnosticKey(key: string) {
+  const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, '')
+  return normalizedKey === 'authorization'
+    || normalizedKey === 'cookie'
+    || normalizedKey === 'setcookie'
+    || normalizedKey === 'privatekey'
+    || normalizedKey === 'connectsid'
+    || normalizedKey.endsWith('authorization')
+    || normalizedKey.endsWith('apikey')
+    || normalizedKey.endsWith('clientkey')
+    || normalizedKey.includes('token')
+    || normalizedKey.includes('secret')
+    || normalizedKey.includes('password')
+    || normalizedKey.includes('passwd')
+    || normalizedKey.includes('passphrase')
+    || normalizedKey.includes('session')
+}
+
+function redactSensitiveValues(value: string) {
+  const keyPattern = /(?:(?:[A-Za-z_$][A-Za-z0-9_$]*\s*)?\[\s*(["'`])([A-Za-z][A-Za-z0-9_. -]*)\1\s*\]|\\(["'`])([A-Za-z][A-Za-z0-9_. -]*)\\\3|(["'`])([A-Za-z][A-Za-z0-9_. -]*)\5|([A-Za-z][A-Za-z0-9_. -]*?))(\s*(?:=>|[:=])\s*|\s*,\s*)/g
+  let redacted = ''
+  let cursor = 0
+  let match = keyPattern.exec(value)
+
+  while (match) {
+    const key = match[2] ?? match[4] ?? match[6] ?? match[7]
+    const tupleEntry = match[8].includes(',')
+    const quotedKey = Boolean(match[1] || match[3] || match[5])
+    if (!isSensitiveDiagnosticKey(key) || (tupleEntry && !quotedKey)) {
+      match = keyPattern.exec(value)
+      continue
+    }
+
+    redacted += value.slice(cursor, match.index)
+    redacted += `${match[0]}${REDACTED_DIAGNOSTIC_VALUE}`
+    cursor = findSensitiveValueEnd(value, keyPattern.lastIndex)
+    keyPattern.lastIndex = cursor
+    match = keyPattern.exec(value)
+  }
+
+  return redacted + value.slice(cursor)
+}
+
+function redactUrlUserinfo(value: string) {
+  const schemePattern = /\b[a-z][a-z0-9+.-]*:\/\//gi
+  let redacted = ''
+  let cursor = 0
+  let match = schemePattern.exec(value)
+
+  while (match) {
+    const authorityStart = schemePattern.lastIndex
+    let authorityEnd = authorityStart
+    while (authorityEnd < value.length && !/[\s/?#"'`<>]/.test(value[authorityEnd])) authorityEnd += 1
+
+    const authority = value.slice(authorityStart, authorityEnd)
+    const userinfoEnd = authority.lastIndexOf('@')
+    if (userinfoEnd !== -1) {
+      redacted += value.slice(cursor, match.index)
+      redacted += `${match[0]}${REDACTED_DIAGNOSTIC_VALUE}@${authority.slice(userinfoEnd + 1)}`
+      cursor = authorityEnd
+    }
+
+    schemePattern.lastIndex = authorityEnd
+    match = schemePattern.exec(value)
+  }
+
+  return redacted + value.slice(cursor)
+}
+
+function redactHttpUrlLocalPaths(url: string) {
+  const suffixStart = url.search(/[?#]/)
+  if (suffixStart === -1) return url
+  return url.slice(0, suffixStart) + redactLocalPaths(url.slice(suffixStart))
+}
+
+function isLocalPathBoundary(value: string, index: number) {
+  const previousCharacter = value[index - 1]
+  return index === 0
+    || /\s/.test(previousCharacter)
+    || ['(', '"', "'", '`', '<', '=', ':', '{', '[', '?', '#', '&', ',', ';'].includes(previousCharacter)
+}
+
+function isLocalPathStart(value: string) {
+  return /^[a-z]:[\\/]/i.test(value)
+    || value.startsWith('\\\\')
+    || (value.startsWith('//') && !/[\s/]/.test(value[2] ?? ''))
+    || (value[0] === '/' && !/[\s/]/.test(value[1] ?? '') && !/^\/api(?:\/|$|[?#])/i.test(value))
+    || (value.startsWith('~/') && !/\s/.test(value[2] ?? ''))
+    || (value.startsWith('./') && !/\s/.test(value[2] ?? ''))
+    || (value.startsWith('../') && !/\s/.test(value[3] ?? ''))
+}
+
+function redactEncodedLocalPaths(value: string) {
+  return value.replace(/(?:%[0-9a-f]{2}|[a-z0-9._~:\/\\-])+/gi, (candidate) => {
+    if (!/%[0-9a-f]{2}/i.test(candidate)) return candidate
+
+    try {
+      const decodedCandidate = decodeURIComponent(candidate)
+      return isLocalPathStart(decodedCandidate) || /^file:\/\//i.test(decodedCandidate)
+        ? REDACTED_LOCAL_PATH
+        : candidate
+    } catch {
+      return candidate
+    }
+  })
+}
+
+function findLocalPathEnd(value: string, pathStart: number, tokenStart: number) {
+  const delimiter = value[tokenStart - 1]
+  if (delimiter === '"' || delimiter === "'" || delimiter === '`') {
+    return findQuotedValueEnd(value, tokenStart - 1, delimiter) - 1
+  }
+  if (delimiter === '<') {
+    const angleEnd = value.indexOf('>', pathStart)
+    return angleEnd === -1 ? value.length : angleEnd
+  }
+
+  let cursor = pathStart
+  while (cursor < value.length && !/[\r\n,;)}>\]]/.test(value[cursor])) cursor += 1
+  return cursor
+}
+
+function redactLocalPaths(value: string) {
+  let redacted = ''
+  let cursor = 0
+
+  while (cursor < value.length) {
+    const remaining = value.slice(cursor)
+    const httpUrl = remaining.match(/^https?:\/\/[^\s"'`<>]+/i)?.[0]
+    if (httpUrl) {
+      redacted += redactHttpUrlLocalPaths(httpUrl)
+      cursor += httpUrl.length
+      continue
+    }
+
+    const redactedFileUrl = `file://${REDACTED_LOCAL_PATH}`
+    if (remaining.startsWith(redactedFileUrl)) {
+      redacted += redactedFileUrl
+      cursor += redactedFileUrl.length
+      continue
+    }
+
+    if (/^file:\/\//i.test(remaining)) {
+      const pathStart = cursor + 'file://'.length
+      redacted += redactedFileUrl
+      cursor = findLocalPathEnd(value, pathStart, cursor)
+      continue
+    }
+
+    if (isLocalPathBoundary(value, cursor)) {
+      if (isLocalPathStart(remaining)) {
+        redacted += REDACTED_LOCAL_PATH
+        cursor = findLocalPathEnd(value, cursor, cursor)
+        continue
+      }
+    }
+
+    redacted += value[cursor]
+    cursor += 1
+  }
+
+  return redacted
+}
+
+export function redactUserFacingDiagnostic(value: string | null | undefined) {
+  if (!value) return ''
+
+  const withoutStacks = value
+    .replace(/^\s*at\s+(?:async\s+)?(?:.+?\s+\()?[^()\s]+:\d+:\d+\)?\s*$/gm, '')
+    .replace(/^[\t ]*File[\t ]+["'][^"'\r\n]+["'],[\t ]+line[\t ]+\d+(?:,[\t ]+in[\t ]+.*)?[\t ]*(?:\r?\n|$)/gm, '')
+    .replace(/^\s*at\s+[\w$<>./]+\([^()\r\n]+:\d+\)\s*$/gm, '')
+    .replace(/^\s*at\s+.+\s+in\s+.+:line\s+\d+\s*$/gm, '')
+    .replace(/^\s*from\s+.+:\d+(?::in\s+.*)?\s*$/gm, '')
+    .replace(/-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----[\s\S]*?(?:-----END \1-----|$)/g, REDACTED_DIAGNOSTIC_VALUE)
+
+  const withoutCredentials = redactUrlUserinfo(redactSensitiveValues(withoutStacks))
+    .replace(/\bbearer\s+[a-z0-9._~+/=-]+/gi, `Bearer ${REDACTED_DIAGNOSTIC_VALUE}`)
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16}|ASIA[A-Z0-9]{16}|sk_live_[A-Za-z0-9]{16,}|rk_live_[A-Za-z0-9]{16,}|whsec_[A-Za-z0-9]{16,}|AIza[A-Za-z0-9_-]{20,}|ya29\.[A-Za-z0-9._-]{20,}|xox[a-z]-[A-Za-z0-9-]{16,}|xapp-[A-Za-z0-9-]{16,}|glpat-[A-Za-z0-9_-]{16,}|glrt-[A-Za-z0-9_-]{16,}|npm_[A-Za-z0-9]{16,}|[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,})\b/g, REDACTED_DIAGNOSTIC_VALUE)
+
+  const redacted = redactLocalPaths(redactEncodedLocalPaths(withoutCredentials))
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  if (redacted.length <= MAX_USER_FACING_DIAGNOSTIC_LENGTH) return redacted
+  return `${redacted.slice(0, MAX_USER_FACING_DIAGNOSTIC_LENGTH - 3).trimEnd()}...`
+}
+
 const ERROR_MESSAGE_KEYS: Record<string, TranslationKey> = {
   preset_not_found: 'errors.preset_not_found',
   standalone_regex_not_found: 'errors.standalone_regex_not_found',
