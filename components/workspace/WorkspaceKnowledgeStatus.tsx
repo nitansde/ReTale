@@ -4,7 +4,10 @@ import { ChevronDown, Circle, CircleCheck, LoaderCircle, TriangleAlert } from 'l
 import type { TranslationKey } from '@/lib/i18n/messages'
 import { useI18n } from '@/lib/i18n/provider'
 import { cn } from '@/lib/utils'
-import type { WorkspaceKnowledgeStatus as WorkspaceKnowledgeStatusModel } from '@/components/workspace/workspace-knowledge-status'
+import type {
+  WorkspaceKnowledgeCoverage,
+  WorkspaceKnowledgeStatus as WorkspaceKnowledgeStatusModel,
+} from '@/components/workspace/workspace-knowledge-status'
 
 type PrimaryAction = {
   label: TranslationKey
@@ -23,12 +26,12 @@ function getPrimaryAction(
   onPrepareAnalysis: () => void,
   onPrepareSearch: () => void
 ): PrimaryAction {
-  if (status.overall === 'loading' || status.overall === 'working_analysis' || status.overall === 'working_search' || status.overall === 'ready') return null
+  if (status.overall === 'loading' || status.overall === 'ready') return null
 
-  if (status.overall === 'paused' || status.overall === 'failed') {
-    const isSearch = status.stage === 'search'
+  if (status.operation?.status === 'paused' || status.operation?.status === 'failed') {
+    const isSearch = status.operation.stage === 'search'
     return {
-      label: status.overall === 'paused'
+      label: status.operation.status === 'paused'
         ? isSearch ? 'workspace.knowledge.status.action.resumeSearch' : 'workspace.knowledge.status.action.resumeAnalysis'
         : isSearch ? 'workspace.knowledge.status.action.retrySearch' : 'workspace.knowledge.status.action.retryAnalysis',
       onClick: isSearch ? onPrepareSearch : onPrepareAnalysis,
@@ -40,6 +43,19 @@ function getPrimaryAction(
   }
 
   return { label: 'workspace.knowledge.status.action.startAnalysis', onClick: onPrepareAnalysis }
+}
+
+function coverageText(
+  coverage: WorkspaceKnowledgeCoverage,
+  fallback: string,
+  t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+) {
+  if (!coverage) return fallback
+  if (coverage.kind === 'all') return t('workspace.knowledge.status.coverage.all', { count: coverage.count })
+  if (coverage.kind === 'through') return t('workspace.knowledge.status.coverage.through', { chapter: coverage.chapter })
+  if (coverage.kind === 'range') return t('workspace.knowledge.status.coverage.range', { start: coverage.start, end: coverage.end })
+  if (coverage.kind === 'count') return t('workspace.knowledge.status.coverage.count', { covered: coverage.covered, total: coverage.total })
+  return t('workspace.knowledge.status.coverage.partial')
 }
 
 export function WorkspaceKnowledgeStatus({
@@ -61,6 +77,39 @@ export function WorkspaceKnowledgeStatus({
   const primaryAction = getPrimaryAction(status, onPrepareAnalysis, onPrepareSearch)
   const AnalysisIcon = statusIcon(status.analysis)
   const SearchIcon = statusIcon(status.search)
+  const analysisOperation = status.operation?.stage === 'analysis' ? status.operation : null
+  const searchOperation = status.operation?.stage === 'search' ? status.operation : null
+  const retainedResultsAvailable = status.operation
+    && (status.operation.status === 'paused' || status.operation.status === 'failed')
+    && (status.analysisResultsUsable || status.searchResultsUsable)
+
+  const renderOperation = (operation: typeof status.operation, progressLabel: TranslationKey) => {
+    if (!operation) return null
+    const active = operation.status === 'queued' || operation.status === 'running'
+    const progress = active ? operation.progressPercent ?? 0 : null
+    return (
+      <div className="mt-2 border-t border-white/8 pt-2">
+        <div className="flex items-center justify-between gap-3 text-[11px]">
+          <span className={cn(operation.status === 'failed' ? 'text-rose-200' : operation.status === 'paused' ? 'text-amber-200' : 'text-violet-200')}>
+            {t(`workspace.knowledge.status.operation.${operation.status}` as TranslationKey)}
+          </span>
+          {progress !== null ? <span className="text-violet-100">{progress}%</span> : null}
+        </div>
+        {progress !== null ? (
+          <div
+            role="progressbar"
+            aria-label={t(progressLabel)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progress}
+            className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10"
+          >
+            <div className="h-full rounded-full bg-violet-300 transition-[width]" style={{ width: `${progress}%` }} />
+          </div>
+        ) : null}
+      </div>
+    )
+  }
 
   return (
     <section className="rounded-[24px] border border-violet-400/20 bg-violet-500/10 p-4" data-testid="workspace-knowledge-status">
@@ -70,26 +119,29 @@ export function WorkspaceKnowledgeStatus({
       </h3>
 
       <div className="mt-3 space-y-2">
-        <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-black/20 px-3 py-2.5">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <AnalysisIcon className={cn('h-4 w-4 shrink-0', status.analysis === 'ready' ? 'text-emerald-300' : status.analysis === 'partial' ? 'text-amber-300' : 'text-zinc-500')} aria-hidden="true" />
-            <span className="text-xs text-zinc-200">{t('workspace.knowledge.status.storyAnalysis')}</span>
+        <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <AnalysisIcon className={cn('h-4 w-4 shrink-0', status.analysis === 'ready' ? 'text-emerald-300' : status.analysis === 'partial' ? 'text-amber-300' : 'text-zinc-500')} aria-hidden="true" />
+              <span className="text-xs text-zinc-200">{t('workspace.knowledge.status.storyAnalysis')}</span>
+            </div>
+            <span className="text-right text-[11px] text-zinc-400">{coverageText(status.analysisCoverage, t(`workspace.knowledge.status.analysis.${status.analysis}`), t)}</span>
           </div>
-          <span className="text-right text-[11px] text-zinc-400">{t(`workspace.knowledge.status.analysis.${status.analysis}`)}</span>
+          {renderOperation(analysisOperation, 'workspace.knowledge.status.progress.analysis')}
         </div>
-        <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-black/20 px-3 py-2.5">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <SearchIcon className={cn('h-4 w-4 shrink-0', status.search === 'ready' ? 'text-emerald-300' : status.search === 'partial' ? 'text-amber-300' : status.search === 'pending' ? 'animate-spin text-violet-300' : 'text-zinc-500')} aria-hidden="true" />
-            <span className="text-xs text-zinc-200">{t('workspace.knowledge.status.contentSearch')}</span>
+        <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <SearchIcon className={cn('h-4 w-4 shrink-0', status.search === 'ready' ? 'text-emerald-300' : status.search === 'partial' ? 'text-amber-300' : status.search === 'pending' ? 'animate-spin text-violet-300' : 'text-zinc-500')} aria-hidden="true" />
+              <span className="text-xs text-zinc-200">{t('workspace.knowledge.status.contentSearch')}</span>
+            </div>
+            <span className="text-right text-[11px] text-zinc-400">{coverageText(status.searchCoverage, t(`workspace.knowledge.status.search.${status.search}`), t)}</span>
           </div>
-          <span className="text-right text-[11px] text-zinc-400">{t(`workspace.knowledge.status.search.${status.search}`)}</span>
+          {renderOperation(searchOperation, 'workspace.knowledge.status.progress.search')}
         </div>
       </div>
 
-      {status.validThroughChapterNo !== null ? (
-        <p className="mt-3 text-xs leading-5 text-zinc-400">{t('workspace.knowledge.status.readyThrough', { chapter: status.validThroughChapterNo })}</p>
-      ) : null}
-      {(status.overall === 'failed' || status.overall === 'paused') && status.previousResultsAvailable ? (
+      {retainedResultsAvailable ? (
         <p className="mt-2 text-xs leading-5 text-zinc-400">{t('workspace.knowledge.status.previousResultsAvailable')}</p>
       ) : status.searchMayBeStale ? (
         <p className="mt-2 text-xs leading-5 text-amber-100/80">{t('workspace.knowledge.status.searchMayBeStale')}</p>
