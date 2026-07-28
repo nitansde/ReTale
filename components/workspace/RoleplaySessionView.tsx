@@ -5,6 +5,7 @@ import { ChevronDown, CornerDownRight, GitBranch, LoaderCircle, RefreshCcw, Send
 import { useI18n } from '@/lib/i18n/provider'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import type { RoleplayMessageRecord, RoleplaySessionDetail } from '@/lib/story-branch-types'
+import { resolveWorkspaceUserFacingError, type WorkspaceErrorOperation } from '@/lib/workspace-user-facing-errors'
 import { cn } from '@/lib/utils'
 
 type RoleplayMessagePayload = RoleplayMessageRecord & {
@@ -121,8 +122,7 @@ async function streamRoleplayReply(payload: Record<string, unknown>, onChunk: (c
       throw new Error(payload?.error || 'Roleplay streaming request failed')
     }
 
-    const text = await response.text()
-    throw new Error(text || 'Roleplay streaming request failed')
+    throw new Error('Roleplay streaming request failed')
   }
 
   if (!response.body) {
@@ -200,7 +200,7 @@ export function RoleplaySessionView(props: {
   readableLineageLabel?: string | null
   onMetricsChange?: (metrics: { currentText: string; inputTokens: number | null; outputTokens: number | null }) => void
 }) {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
   const { onMetricsChange } = props
   const [detail, setDetail] = useState<RoleplaySessionDetailPayload | null>(null)
   const [loading, setLoading] = useState(true)
@@ -249,7 +249,7 @@ export function RoleplaySessionView(props: {
       } catch (loadError) {
         if (cancelled) return
         setDetail(null)
-        setError(loadError instanceof Error ? loadError.message : 'Roleplay session load failed')
+        setError(resolveWorkspaceUserFacingError('roleplay-session-load', loadError, locale))
       } finally {
         if (!cancelled) {
           setLoading(false)
@@ -261,7 +261,7 @@ export function RoleplaySessionView(props: {
     return () => {
       cancelled = true
     }
-  }, [props.branchId, props.novelId, props.sessionId])
+  }, [locale, props.branchId, props.novelId, props.sessionId])
 
   useEffect(() => {
     if (!detail) return
@@ -358,6 +358,7 @@ export function RoleplaySessionView(props: {
 
     setSending(true)
     setError('')
+    let errorOperation: WorkspaceErrorOperation = 'roleplay-send'
 
     try {
       const userMessage = normalizeMessage(await appendRoleplayMessage({
@@ -394,6 +395,7 @@ export function RoleplaySessionView(props: {
       }
 
       let streamed = ''
+      errorOperation = 'roleplay-stream'
       await streamRoleplayReply(payload, (chunk) => {
         streamed += chunk
         setPendingAssistant((current) => current ? { ...current, content: streamed } : current)
@@ -401,9 +403,10 @@ export function RoleplaySessionView(props: {
 
       const assistantContent = streamed.trim()
       if (!assistantContent) {
-        throw new Error(t('roleplay.replyEmpty'))
+        throw new Error('Roleplay streaming response body is empty')
       }
 
+      errorOperation = 'roleplay-send'
       await appendRoleplayMessage({
         novelId: props.novelId,
         branchId: props.branchId,
@@ -418,12 +421,12 @@ export function RoleplaySessionView(props: {
       await refreshDetail()
     } catch (sendError) {
       setPendingAssistant(null)
-      setError(sendError instanceof Error ? sendError.message : t('errors.roleplayMessageAppendFailed'))
+      setError(resolveWorkspaceUserFacingError(errorOperation, sendError, locale))
       await refreshDetail().catch(() => undefined)
     } finally {
       setSending(false)
     }
-  }, [buildRoleplayRequestPayload, composerValue, detail, forkMessage, latestMessage, messagesById, refreshDetail])
+  }, [buildRoleplayRequestPayload, composerValue, detail, forkMessage, latestMessage, locale, messagesById, props.branchId, props.novelId, refreshDetail])
 
   const handleRegenerate = useCallback(async () => {
     if (!detail || !latestAssistant) return
@@ -442,6 +445,7 @@ export function RoleplaySessionView(props: {
       forkedFromMessageId: latestAssistant.id,
       mode: 'regenerate',
     })
+    let errorOperation: WorkspaceErrorOperation = 'roleplay-stream'
 
     try {
       const historyMessages = buildMessagePath(messagesById, parentUser.parentMessageId)
@@ -461,9 +465,10 @@ export function RoleplaySessionView(props: {
 
       const assistantContent = streamed.trim()
       if (!assistantContent) {
-        throw new Error(t('roleplay.regenerateReplyEmpty'))
+        throw new Error('Roleplay streaming response body is empty')
       }
 
+      errorOperation = 'roleplay-regenerate'
       await createLatestAssistantVariant({
         novelId: props.novelId,
         branchId: props.branchId,
@@ -477,12 +482,12 @@ export function RoleplaySessionView(props: {
       await refreshDetail()
     } catch (regenerateError) {
       setPendingAssistant(null)
-      setError(regenerateError instanceof Error ? regenerateError.message : t('errors.roleplayVariantCreationFailed'))
+      setError(resolveWorkspaceUserFacingError(errorOperation, regenerateError, locale))
       await refreshDetail().catch(() => undefined)
     } finally {
       setRegenerating(false)
     }
-  }, [buildRoleplayRequestPayload, detail, latestAssistant, messagesById, refreshDetail])
+  }, [buildRoleplayRequestPayload, detail, latestAssistant, locale, messagesById, props.branchId, props.novelId, refreshDetail, t])
 
   return (
     <div className="space-y-4 overflow-x-hidden px-3 py-3 sm:px-6 sm:py-5" data-testid="workspace-roleplay-session-view">

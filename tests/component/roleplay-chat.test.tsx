@@ -155,6 +155,83 @@ describe('RoleplaySessionView', () => {
     expect(screen.getByTestId('roleplay-regenerate-last')).toBeDisabled()
   })
 
+  it('sanitizes raw session-load diagnostics', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'SENTINEL roleplay load SQL stack' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    ))
+
+    render(
+      <RoleplaySessionView
+        novelId="novel-001"
+        branchId="novel-001:main"
+        sessionId="roleplay-session-001"
+        anchorChapterNo={10}
+      />
+    )
+
+    expect(await screen.findByText('读取角色扮演会话失败，请稍后重试。')).toBeInTheDocument()
+    expect(screen.queryByText(/SENTINEL/)).not.toBeInTheDocument()
+  })
+
+  it('does not render a non-JSON streaming response body', async () => {
+    const detail = buildSessionDetail([
+      buildMessage({ id: 'message-1', messageIndex: 1, role: 'user', content: '你昨晚为什么没有按约定现身？' }),
+      buildMessage({ id: 'message-2', messageIndex: 2, role: 'assistant', content: '我到了。', parentMessageId: 'message-1', turnIndex: 1 }),
+    ])
+
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input)
+      if (url === '/api/roleplay/sessions/roleplay-session-001?novelId=novel-001&branchId=novel-001%3Amain') {
+        return new Response(JSON.stringify(detail), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (url === '/api/roleplay/sessions/roleplay-session-001/messages' && init?.method === 'POST') {
+        return new Response(JSON.stringify(buildMessage({
+          id: 'message-3',
+          messageIndex: 3,
+          role: 'user',
+          content: '继续说。',
+          parentMessageId: 'message-2',
+          turnIndex: 2,
+        })), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (url === '/api/rewrite' && init?.method === 'POST') {
+        return new Response('<html>SENTINEL upstream path and stack</html>', {
+          status: 502,
+          headers: { 'Content-Type': 'text/html' },
+        })
+      }
+      throw new Error(`Unhandled fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <RoleplaySessionView
+        novelId="novel-001"
+        branchId="novel-001:main"
+        sessionId="roleplay-session-001"
+        anchorChapterNo={10}
+      />
+    )
+
+    expect(await screen.findByTestId('roleplay-chat-core')).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('输入角色台词、动作，或你希望推动的剧情。⌘/Ctrl + Enter 发送'), {
+      target: { value: '继续说。' },
+    })
+    fireEvent.click(screen.getByTestId('roleplay-composer-send'))
+
+    expect(await screen.findByText('角色扮演生成请求失败，请稍后重试。')).toBeInTheDocument()
+    expect(screen.queryByText(/SENTINEL/)).not.toBeInTheDocument()
+  })
+
   it('sends through roleplay session endpoints and keeps rewrite payload chat-only', async () => {
     const initialMessages = [
       buildMessage({ id: 'message-1', messageIndex: 1, role: 'user', content: '你昨晚为什么没有按约定现身？' }),
