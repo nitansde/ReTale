@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { ArrowLeft, BookOpen, Brain, Ellipsis, Gauge, PanelRightOpen, ScrollText, Settings2, Trash2, X } from 'lucide-react'
+import { ArrowLeft, BookOpen, Brain, Ellipsis, Gauge, ScrollText, Settings2, Trash2, X } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { IconButton } from '@/components/ui/IconButton'
 import { useI18n } from '@/lib/i18n/provider'
@@ -46,7 +46,7 @@ export function WorkspaceHeader({
 
   return (
     <header className="sticky top-0 z-30 mb-4 rounded-[24px] border border-white/10 bg-[#0d1017]/92 px-2 py-2 shadow-[0_20px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:px-4 sm:py-3 lg:rounded-[28px]">
-      <div className="grid grid-cols-[44px_44px_minmax(0,1fr)_44px_44px_44px] items-center gap-1 lg:hidden" data-testid="workspace-mobile-header">
+      <div className="grid grid-cols-[44px_44px_minmax(0,1fr)_44px_44px] items-center gap-1 lg:hidden" data-testid="workspace-mobile-header">
         <Link
           href="/library"
           aria-label={t('workspace.header.backToLibrary')}
@@ -59,9 +59,6 @@ export function WorkspaceHeader({
         </IconButton>
         <h1 className="min-w-0 truncate px-1 text-sm font-semibold tracking-tight text-zinc-100" title={title}>{title}</h1>
         <IconButton label={t('workspace.header.openContext')} onClick={onOpenContext}>
-          <PanelRightOpen className="h-4 w-4" aria-hidden="true" />
-        </IconButton>
-        <IconButton label={t('workspace.header.openKnowledge')} onClick={onOpenKnowledge}>
           <Brain className="h-4 w-4" aria-hidden="true" />
         </IconButton>
         <IconButton label={t('workspace.header.moreOptions')} onClick={() => setOverflowOpen(true)} aria-expanded={overflowOpen}>
@@ -120,6 +117,10 @@ export function WorkspaceHeader({
           </div>
         </section>
         <div className="mt-5 grid gap-2">
+          <button type="button" onClick={() => runOverflowAction(onOpenKnowledge)} className="flex min-h-11 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 text-left text-sm text-zinc-200 transition hover:bg-white/[0.08]">
+            <Brain className="h-4 w-4 text-violet-200" aria-hidden="true" />
+            {t('workspace.header.openKnowledge')}
+          </button>
           <button type="button" onClick={() => runOverflowAction(onOpenPresets)} className="flex min-h-11 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 text-left text-sm text-zinc-200 transition hover:bg-white/[0.08]">
             <ScrollText className="h-4 w-4 text-violet-200" aria-hidden="true" />
             {t('workspace.header.presets')}

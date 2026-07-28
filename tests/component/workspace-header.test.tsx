@@ -33,27 +33,41 @@ function renderHeader() {
 }
 
 describe('WorkspaceHeader', () => {
-  it('provides the six prioritized mobile controls with 44px targets', () => {
+  it('provides five mobile slots with four 44px controls and the requested icons', () => {
     const actions = renderHeader()
+    const header = screen.getByTestId('workspace-mobile-header')
 
-    expect(screen.getByTestId('workspace-mobile-header')).toHaveClass('grid-cols-[44px_44px_minmax(0,1fr)_44px_44px_44px]')
+    expect(header).toHaveClass('grid-cols-[44px_44px_minmax(0,1fr)_44px_44px]')
+    expect(header.children).toHaveLength(5)
     const chapterButton = screen.getByRole('button', { name: 'workspace.header.openChapters' })
+    const contextButton = screen.getByRole('button', { name: 'workspace.header.openContext' })
+    const optionsButton = screen.getByRole('button', { name: 'workspace.header.moreOptions' })
     expect(chapterButton).toHaveClass('min-h-11', 'min-w-11')
+    expect(contextButton.querySelector('.lucide-brain')).toBeInTheDocument()
+    expect(optionsButton.querySelector('.lucide-ellipsis')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'workspace.header.openKnowledge' })).not.toBeInTheDocument()
+
     fireEvent.click(chapterButton)
-    fireEvent.click(screen.getByRole('button', { name: 'workspace.header.openContext' }))
-    fireEvent.click(screen.getByRole('button', { name: 'workspace.header.openKnowledge' }))
+    fireEvent.click(contextButton)
     expect(actions.onOpenChapters).toHaveBeenCalledTimes(1)
     expect(actions.onOpenContext).toHaveBeenCalledTimes(1)
-    expect(actions.onOpenKnowledge).toHaveBeenCalledTimes(1)
+    expect(actions.onOpenKnowledge).not.toHaveBeenCalled()
   })
 
-  it('moves metrics, settings, presets, and deletion into a labelled mobile overflow dialog', () => {
+  it('opens knowledge status through overflow after closing the options dialog', () => {
     const actions = renderHeader()
     fireEvent.click(screen.getByRole('button', { name: 'workspace.header.moreOptions' }))
 
     expect(screen.getByRole('dialog', { name: 'workspace.header.overflowTitle' })).toBeInTheDocument()
     expect(screen.getByText('workspace.header.metrics')).toBeInTheDocument()
     expect(screen.getByText('workspace.header.destructiveActions')).toBeInTheDocument()
+    const knowledgeButton = screen.getByRole('button', { name: 'workspace.header.openKnowledge' })
+    expect(knowledgeButton.querySelector('.lucide-brain')).toBeInTheDocument()
+    fireEvent.click(knowledgeButton)
+    expect(actions.onOpenKnowledge).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog', { name: 'workspace.header.overflowTitle' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.header.moreOptions' }))
     fireEvent.click(screen.getByRole('button', { name: 'workspace.header.modelSettings' }))
     expect(actions.onOpenSettings).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('dialog', { name: 'workspace.header.overflowTitle' })).not.toBeInTheDocument()
