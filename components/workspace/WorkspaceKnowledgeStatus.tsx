@@ -14,11 +14,11 @@ type PrimaryAction = {
   onClick: () => void
 } | null
 
-function statusIcon(status: 'not_ready' | 'pending' | 'partial' | 'ready') {
-  if (status === 'ready') return CircleCheck
-  if (status === 'pending') return LoaderCircle
-  if (status === 'partial') return TriangleAlert
-  return Circle
+function StatusIcon({ status, className }: { status: 'not_ready' | 'pending' | 'partial' | 'ready'; className: string }) {
+  if (status === 'ready') return <CircleCheck className={className} aria-hidden="true" />
+  if (status === 'pending') return <LoaderCircle className={className} aria-hidden="true" />
+  if (status === 'partial') return <TriangleAlert className={className} aria-hidden="true" />
+  return <Circle className={className} aria-hidden="true" />
 }
 
 function getPrimaryAction(
@@ -26,7 +26,7 @@ function getPrimaryAction(
   onPrepareAnalysis: () => void,
   onPrepareSearch: () => void
 ): PrimaryAction {
-  if (status.overall === 'loading' || status.overall === 'ready') return null
+  if (status.overall === 'loading' || status.operation?.status === 'queued' || status.operation?.status === 'running') return null
 
   if (status.operation?.status === 'paused' || status.operation?.status === 'failed') {
     const isSearch = status.operation.stage === 'search'
@@ -37,6 +37,8 @@ function getPrimaryAction(
       onClick: isSearch ? onPrepareSearch : onPrepareAnalysis,
     }
   }
+
+  if (status.overall === 'ready') return null
 
   if (status.analysis === 'ready') {
     return { label: 'workspace.knowledge.status.action.prepareSearch', onClick: onPrepareSearch }
@@ -75,18 +77,20 @@ export function WorkspaceKnowledgeStatus({
 }) {
   const { t } = useI18n()
   const primaryAction = getPrimaryAction(status, onPrepareAnalysis, onPrepareSearch)
-  const AnalysisIcon = statusIcon(status.analysis)
-  const SearchIcon = statusIcon(status.search)
+  const analysisStatus = status.analysis
+  const searchStatus = status.search
   const analysisOperation = status.operation?.stage === 'analysis' ? status.operation : null
   const searchOperation = status.operation?.stage === 'search' ? status.operation : null
   const retainedResultsAvailable = status.operation
     && (status.operation.status === 'paused' || status.operation.status === 'failed')
     && (status.analysisResultsUsable || status.searchResultsUsable)
 
-  const renderOperation = (operation: typeof status.operation, progressLabel: TranslationKey) => {
+  const renderOperation = (operation: typeof status.operation, phaseProgressLabel: TranslationKey) => {
     if (!operation) return null
-    const active = operation.status === 'queued' || operation.status === 'running'
-    const progress = active ? operation.progressPercent ?? 0 : null
+    const progress = operation.status === 'running' ? operation.progressPercent : null
+    const progressLabel = operation.progressSource === 'phase'
+      ? phaseProgressLabel
+      : 'workspace.knowledge.status.progress.job'
     return (
       <div className="mt-2 border-t border-white/8 pt-2">
         <div className="flex items-center justify-between gap-3 text-[11px]">
@@ -122,22 +126,22 @@ export function WorkspaceKnowledgeStatus({
         <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-2.5">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2.5">
-              <AnalysisIcon className={cn('h-4 w-4 shrink-0', status.analysis === 'ready' ? 'text-emerald-300' : status.analysis === 'partial' ? 'text-amber-300' : 'text-zinc-500')} aria-hidden="true" />
+              <StatusIcon status={analysisStatus} className={cn('h-4 w-4 shrink-0', status.analysis === 'ready' ? 'text-emerald-300' : status.analysis === 'partial' ? 'text-amber-300' : 'text-zinc-500')} />
               <span className="text-xs text-zinc-200">{t('workspace.knowledge.status.storyAnalysis')}</span>
             </div>
             <span className="text-right text-[11px] text-zinc-400">{coverageText(status.analysisCoverage, t(`workspace.knowledge.status.analysis.${status.analysis}`), t)}</span>
           </div>
-          {renderOperation(analysisOperation, 'workspace.knowledge.status.progress.analysis')}
+          {renderOperation(analysisOperation, 'workspace.knowledge.status.progress.phase.analysis')}
         </div>
         <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-2.5">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2.5">
-              <SearchIcon className={cn('h-4 w-4 shrink-0', status.search === 'ready' ? 'text-emerald-300' : status.search === 'partial' ? 'text-amber-300' : status.search === 'pending' ? 'animate-spin text-violet-300' : 'text-zinc-500')} aria-hidden="true" />
+              <StatusIcon status={searchStatus} className={cn('h-4 w-4 shrink-0', status.search === 'ready' ? 'text-emerald-300' : status.search === 'partial' ? 'text-amber-300' : status.search === 'pending' ? 'animate-spin text-violet-300' : 'text-zinc-500')} />
               <span className="text-xs text-zinc-200">{t('workspace.knowledge.status.contentSearch')}</span>
             </div>
             <span className="text-right text-[11px] text-zinc-400">{coverageText(status.searchCoverage, t(`workspace.knowledge.status.search.${status.search}`), t)}</span>
           </div>
-          {renderOperation(searchOperation, 'workspace.knowledge.status.progress.search')}
+          {renderOperation(searchOperation, 'workspace.knowledge.status.progress.phase.search')}
         </div>
       </div>
 
