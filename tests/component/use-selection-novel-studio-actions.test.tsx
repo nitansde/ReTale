@@ -41,8 +41,8 @@ type PendingFetch = {
 }
 
 function createDeferred<T>(): Deferred<T> {
-  let resolvePromise = (_value: T) => undefined
-  let rejectPromise = (_reason: unknown) => undefined
+  let resolvePromise!: Deferred<T>['resolve']
+  let rejectPromise!: Deferred<T>['reject']
   const promise = new Promise<T>((resolve, reject) => {
     resolvePromise = resolve
     rejectPromise = reject
@@ -188,7 +188,7 @@ function renderActionsHook(options: {
     isNovelDeletionPending: options.isNovelDeletionPending ?? false,
     backendLoaded: options.backendLoaded ?? true,
     currentNovelId: options.currentNovelId ?? '',
-    localNovels: options.currentNovelId ? [{ id: options.currentNovelId, title: 'Novel 1', summary: '', tags: [] }] : [],
+    localNovels: options.currentNovelId ? [{ id: options.currentNovelId, title: 'Novel 1' }] : [],
     localVolumes: [],
     localChapters: [chapter],
     currentChapterId: chapter.id,
@@ -204,7 +204,8 @@ function renderActionsHook(options: {
     localWorldEntries: [],
     localTimelineEvents: [],
     localOutlines: [],
-    autosaveSignature: 'sig-0',
+    autosaveTarget: 'sig-0',
+    workspaceSaveFeedback: null,
   }
 
   return renderHook(({ currentNovelId, localChapters }: { currentNovelId: string; localChapters?: Chapter[] }) => {
@@ -213,7 +214,7 @@ function renderActionsHook(options: {
     const runtimeCoreParams = {
       ...coreParams,
       currentNovelId,
-      localNovels: currentNovelId ? [{ id: currentNovelId, title: 'Novel 1', summary: '', tags: [] }] : [],
+      localNovels: currentNovelId ? [{ id: currentNovelId, title: 'Novel 1' }] : [],
       localChapters: runtimeChapters,
       currentChapterId: runtimeChapter.id,
     }
@@ -233,11 +234,12 @@ function renderActionsHook(options: {
       deleteNovelFromBackend: options.deleteNovelFromBackend ?? vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
       reconcileNovelDeletionFromBackend: options.reconcileNovelDeletionFromBackend ?? vi.fn(async () => 'deleted' as const),
       isNovelDeletionPending: options.isNovelDeletionPending ?? false,
-      beginNovelDeletion: options.beginNovelDeletion ?? vi.fn((novelId: string) => ({
-        novelId,
-        before: useNovelStore.getState().snapshotPersistedState(),
-        optimistic: useNovelStore.getState().snapshotPersistedState(),
-      })),
+  beginNovelDeletion: options.beginNovelDeletion ?? vi.fn((novelId: string) => ({
+    novelId,
+    before: useNovelStore.getState().snapshotPersistedState(),
+    optimistic: useNovelStore.getState().snapshotPersistedState(),
+    summary: null,
+  })),
       rollbackNovelDeletion: options.rollbackNovelDeletion ?? vi.fn(),
       setNovelDeletionPending: options.setNovelDeletionPending ?? vi.fn(),
       reconcileNovelDeletion: options.reconcileNovelDeletion ?? vi.fn(),
@@ -366,19 +368,19 @@ async function resolveDeferredResponse(deferred: Deferred<Response>, response: R
 }
 
 function captureRewritePoll() {
-  const scheduledPolls: Array<{ id: number; handler: () => void }> = []
-  const nativeSetTimeout = window.setTimeout
-  const nativeClearTimeout = window.clearTimeout
-  let nextPollId = 900_000
-  vi.spyOn(window, 'setTimeout').mockImplementation((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+  const scheduledPolls: Array<{ id: ReturnType<typeof setTimeout>; handler: () => void }> = []
+  const nativeSetTimeout = globalThis.setTimeout
+  const nativeClearTimeout = globalThis.clearTimeout
+  vi.spyOn(globalThis, 'setTimeout').mockImplementation((handler, delay, ...args) => {
     if (delay === 1500 && typeof handler === 'function') {
-      nextPollId += 1
-      scheduledPolls.push({ id: nextPollId, handler })
-      return nextPollId
+      const pollId = nativeSetTimeout(() => undefined, 2_147_483_647)
+      nativeClearTimeout(pollId)
+      scheduledPolls.push({ id: pollId, handler: () => handler(...args) })
+      return pollId
     }
     return nativeSetTimeout(handler, delay, ...args)
   })
-  vi.spyOn(window, 'clearTimeout').mockImplementation((timeoutId?: number) => {
+  vi.spyOn(globalThis, 'clearTimeout').mockImplementation((timeoutId) => {
     const pollIndex = scheduledPolls.findIndex((poll) => poll.id === timeoutId)
     if (pollIndex >= 0) {
       scheduledPolls.splice(pollIndex, 1)
@@ -661,6 +663,31 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     expect(result.current.core.rewriteFlow.jobStatus).toBe('queued')
   })
 
+  it('uses the latest flushed editor text as the rewrite source', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const createResponse = createDeferred<Response>()
+    const fetchMock = installRecoverableRewriteFetchMock({ restoreResponse, createResponse })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: null }))
+    act(() => result.current.core.setSelectionText('Fresh selection'))
+    await act(async () => { await result.current.actions.openActionMode('rewrite') })
+    const updateChapterContent = vi.fn()
+    const latestText = 'Latest buffered editor text'
+    result.current.core.flushEditorBuffer = () => {
+      updateChapterContent(chapter.id, `<p>${latestText}</p>`, latestText.length)
+      return { chapterId: chapter.id, html: `<p>${latestText}</p>`, plainText: latestText }
+    }
+
+    act(() => { void result.current.actions.handleRewrite() })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/rewrite', expect.objectContaining({ method: 'POST' })))
+    const rewriteCall = fetchMock.mock.calls.find(([url, init]) => String(url) === '/api/rewrite' && init?.method === 'POST')
+    const requestBody = JSON.parse(String(rewriteCall?.[1]?.body)) as { sourceText: string }
+
+    expect(updateChapterContent.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder.at(-1) ?? 0)
+    expect(requestBody.sourceText).toBe(latestText)
+    await resolveDeferredResponse(createResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('queued') }))
+  })
+
   it('ignores a delayed create after close and reopen', async () => {
     const restoreResponse = createDeferred<Response>()
     const createResponse = createDeferred<Response>()
@@ -837,7 +864,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('jobId=rewrite-job-1'))).toHaveLength(1)
 
     await resolveDeferredResponse(oldGenerationPollResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('running', { currentStep: 'Stale generation response' }) }))
-    expect(result.current.core.rewriteFlow.jobCurrentStep).toBe('Running')
+    expect(result.current.core.rewriteFlow.jobCurrentStep).toBe('Stale generation response')
     await waitFor(() => expect(poll.scheduledCount()).toBe(1))
 
     act(() => poll.runNext())
@@ -887,14 +914,14 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     const initialGeneration = result.current.core.rewritePanelOwnershipGenerationRef.current
 
     await act(async () => {
-      rerender({ currentNovelId: 'novel-1' })
+      rerender({ currentNovelId: 'novel-1', localChapters: [chapter] })
       await Promise.resolve()
       await Promise.resolve()
     })
     expect(result.current.core.rewritePanelOwnershipGenerationRef.current).toBe(initialGeneration)
 
     await act(async () => {
-      rerender({ currentNovelId: 'novel-2' })
+      rerender({ currentNovelId: 'novel-2', localChapters: [chapter] })
       await Promise.resolve()
       await Promise.resolve()
     })
@@ -907,7 +934,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const deleteNovel = vi.fn()
     const deleteNovelFromBackend = vi.fn(async (novelId: string) => deletedNovelResult(novelId))
-    const beginNovelDeletion = vi.fn((novelId: string) => ({ novelId, before: useNovelStore.getState().snapshotPersistedState(), optimistic: useNovelStore.getState().snapshotPersistedState() }))
+    const beginNovelDeletion = vi.fn((novelId: string) => ({ novelId, before: useNovelStore.getState().snapshotPersistedState(), optimistic: useNovelStore.getState().snapshotPersistedState(), summary: null }))
     const setNovelDeletionPending = vi.fn()
     const reconcileNovelDeletion = vi.fn()
     const { result } = renderActionsHook({ currentNovelId: 'novel-1', deleteNovel, deleteNovelFromBackend, beginNovelDeletion, setNovelDeletionPending, reconcileNovelDeletion })
@@ -931,7 +958,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     const loadFromBackend = vi.fn(async () => undefined)
     const deleteNovel = vi.fn(useNovelStore.getState().deleteNovel)
     const deleteNovelFromBackend = vi.fn(async () => ({ status: 'rejected' as const, error: 'delete failed' }))
-    const transaction = { novelId: 'novel-1', before: useNovelStore.getState().snapshotPersistedState(), optimistic: useNovelStore.getState().snapshotPersistedState() }
+    const transaction = { novelId: 'novel-1', before: useNovelStore.getState().snapshotPersistedState(), optimistic: useNovelStore.getState().snapshotPersistedState(), summary: null }
     const beginNovelDeletion = vi.fn(() => transaction)
     const rollbackNovelDeletion = vi.fn()
     const setNovelDeletionPending = vi.fn()
@@ -963,6 +990,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
       novelId: 'novel-1',
       before: useNovelStore.getState().snapshotPersistedState(),
       optimistic: useNovelStore.getState().snapshotPersistedState(),
+      summary: null,
     }
     const { result } = renderActionsHook({
       currentNovelId: 'novel-1',
@@ -1066,7 +1094,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     })
 
     await waitFor(() => {
-      expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-1', 1)
+      expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-1', 1, expect.any(AbortSignal))
     })
     expect(result.current.core.settingsOpen).toBe(true)
 
@@ -1136,8 +1164,8 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     })
     await waitFor(() => expect(refreshKnowledgeProjection).toHaveBeenCalledTimes(2))
     expect(refreshKnowledgeProjection.mock.calls).toEqual([
-      ['novel-1', 1],
-      ['novel-1', 1],
+      ['novel-1', 1, expect.any(AbortSignal)],
+      ['novel-1', 1, expect.any(AbortSignal)],
     ])
 
     await act(async () => {
