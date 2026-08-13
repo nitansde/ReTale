@@ -80,8 +80,10 @@ export function ProjectGrid() {
   const fileRef = useRef<HTMLInputElement | null>(null)
   const {
     backendLoadError,
+    librarySummariesError,
     getNovels,
-    backendLoaded,
+    librarySummariesLoaded,
+    loadLibrarySummaries,
     loadFromBackend,
     saveToBackend,
     deleteNovelFromBackend,
@@ -118,9 +120,9 @@ export function ProjectGrid() {
   }
 
   useEffect(() => {
-    if (backendLoaded) return
-    loadFromBackend().catch(() => undefined)
-  }, [backendLoaded, loadFromBackend])
+    if (librarySummariesLoaded) return
+    loadLibrarySummaries().catch(() => undefined)
+  }, [librarySummariesLoaded, loadLibrarySummaries])
   
   useEffect(() => {
     mountedRef.current = true
@@ -132,22 +134,27 @@ export function ProjectGrid() {
     }
   }, [])
 
-  const openNovel = async (novelId: string, chapterId?: string) => {
-    const chapter = selectNovelChapter(novelId, chapterId)
-
-    if (!chapter) {
-      setOpeningNovelId(null)
-      setLibraryNotice({ variant: 'warning', message: t('library.noChapter') })
-      return false
-    }
-
+  const openNovel = async (
+    novelId: string,
+    chapterId?: string,
+    { persistSelection = true }: { persistSelection?: boolean } = {},
+  ) => {
     setOpeningNovelId(novelId)
 
     try {
+      await loadFromBackend(novelId)
+      const chapter = selectNovelChapter(novelId, chapterId)
+      if (!chapter) {
+        setOpeningNovelId(null)
+        setLibraryNotice({ variant: 'warning', message: t('library.noChapter') })
+        return false
+      }
       router.push('/workspace')
-      void saveToBackend().catch((error) => {
-        console.warn('Failed to persist the newly opened workspace selection in the background.', error)
-      })
+      if (persistSelection) {
+        void saveToBackend().catch((error) => {
+          console.warn('Failed to persist the newly opened workspace selection in the background.', error)
+        })
+      }
       return true
     } catch {
       setLibraryNotice({ variant: 'error', message: t('library.openFailed') })
@@ -213,14 +220,14 @@ export function ProjectGrid() {
   
       if (!ownsRequest()) return
       try {
-        await loadFromBackend()
+        await loadLibrarySummaries()
       } catch {
         throw createImportFailure('refresh')
       }
   
       if (!ownsRequest()) return
       if (data.chapterCount <= 120) {
-        const opened = await openNovel(data.novelId, data.chapterId)
+        const opened = await openNovel(data.novelId, data.chapterId, { persistSelection: false })
         if (!opened) {
           throw createImportFailure('handoff')
         }
@@ -274,6 +281,7 @@ export function ProjectGrid() {
       const outcome = await deleteNovelFromBackend(novelId)
       if (outcome.status === 'committed') {
         reconcileNovelDeletion(outcome.result.activeNovelId)
+        await loadLibrarySummaries().catch(() => undefined)
         setLibraryNotice({ variant: 'success', message: t('library.deleted', { title }) })
       } else if (outcome.status === 'rejected') {
         rollbackNovelDeletion(transaction)
@@ -281,11 +289,13 @@ export function ProjectGrid() {
       } else {
         try {
           const reconciliation = await reconcileNovelDeletionFromBackend(transaction)
+          await loadLibrarySummaries().catch(() => undefined)
           setLibraryNotice({
             variant: reconciliation === 'present' ? 'warning' : 'success',
             message: t(reconciliation === 'present' ? 'library.deleteFailedAuthoritative' : 'library.deleted', { title }),
           })
         } catch {
+          await loadLibrarySummaries().catch(() => undefined)
           setLibraryNotice({ variant: 'warning', message: t('library.deleteReconcileFailed', { title }) })
         }
       }
@@ -299,11 +309,11 @@ export function ProjectGrid() {
   return (
     <>
       <div className="mb-6 flex flex-col items-end gap-3">
-        {backendLoadError ? (
+        {backendLoadError || librarySummariesError ? (
           <div className="w-full max-w-xl rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-            {t('library.restoreError', { message: toUserFacingWorkspaceError(backendLoadError, locale) })}
+            {t('library.restoreError', { message: toUserFacingWorkspaceError(backendLoadError || librarySummariesError, locale) })}
           </div>
-        ) : !backendLoaded ? (
+        ) : !librarySummariesLoaded ? (
           <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300">
             {t('library.restoreLoading')}
           </div>

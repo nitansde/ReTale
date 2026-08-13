@@ -16,20 +16,22 @@ type MockChapter = {
 
 type MockStoreState = {
   backendLoadError: string
-  backendLoaded: boolean
+  librarySummariesError?: string
+  librarySummariesLoaded?: boolean
   localChapters: MockChapter[]
   getNovels: () => Array<{ id: string; title: string; summary: string; tags: string[] }>
-  loadFromBackend: () => Promise<void>
+  loadLibrarySummaries?: () => Promise<void>
+  loadFromBackend: (novelId?: string) => Promise<void>
   saveToBackend: () => Promise<void>
   deleteNovelFromBackend: (novelId: string) => Promise<
     | { status: 'committed'; result: { ok: true; deletedNovelId: string; activeNovelId: string | null; deletionState: 'deleted'; cleanupPending: boolean } }
     | { status: 'rejected'; error: string }
     | { status: 'indeterminate'; error: string }
   >
-  reconcileNovelDeletionFromBackend?: (transaction: { novelId: string; before: object; optimistic: object }) => Promise<'deleted' | 'present'>
+  reconcileNovelDeletionFromBackend?: (transaction: { novelId: string; before: object; optimistic: object; summary?: object | null }) => Promise<'deleted' | 'present'>
   isNovelDeletionPending?: boolean
-  beginNovelDeletion?: (novelId: string) => { novelId: string; before: object; optimistic: object } | null
-  rollbackNovelDeletion?: (transaction: { novelId: string; before: object; optimistic: object }) => void
+  beginNovelDeletion?: (novelId: string) => { novelId: string; before: object; optimistic: object; summary?: object | null } | null
+  rollbackNovelDeletion?: (transaction: { novelId: string; before: object; optimistic: object; summary?: object | null }) => void
   setNovelDeletionPending?: (pending: boolean) => void
   reconcileNovelDeletion?: (activeNovelId: string | null) => void
   setCurrentNovelId: (novelId: string) => void
@@ -122,15 +124,17 @@ class MockXMLHttpRequest {
 }
 
 function renderProjectGrid() {
-  mockStoreState = {
+  mockStoreState = Object.assign({
+    librarySummariesError: '',
+    librarySummariesLoaded: true,
+    loadLibrarySummaries: vi.fn(async () => undefined),
     isNovelDeletionPending: false,
-    beginNovelDeletion: (novelId) => ({ novelId, before: {}, optimistic: {} }),
+    beginNovelDeletion: (novelId: string) => ({ novelId, before: {}, optimistic: {} }),
     rollbackNovelDeletion: vi.fn(),
     reconcileNovelDeletionFromBackend: vi.fn(async () => 'deleted' as const),
     setNovelDeletionPending: vi.fn(),
     reconcileNovelDeletion: vi.fn(),
-    ...mockStoreState,
-  }
+  }, mockStoreState)
   return render(<ProjectGrid />)
 }
 
@@ -164,7 +168,6 @@ async function importTxt(container: HTMLElement, fileName = 'fixture.txt') {
 function setReadyStore(overrides: Partial<MockStoreState> = {}) {
   mockStoreState = {
     backendLoadError: '',
-    backendLoaded: true,
     localChapters: [],
     getNovels: () => [],
     loadFromBackend: vi.fn(async () => undefined),
@@ -234,7 +237,7 @@ describe('ProjectGrid chapter resolution', () => {
     expect(chapter?.id).toBe('ch-1')
   })
 
-  it('opens the imported novel from refreshed store state even if the render snapshot was stale', async () => {
+  it('opens the imported novel from refreshed store state without persisting it again', async () => {
     const setCurrentNovelId = vi.fn()
     const setCurrentChapterId = vi.fn()
     const saveToBackend = vi.fn(async () => undefined)
@@ -247,7 +250,6 @@ describe('ProjectGrid chapter resolution', () => {
 
     mockStoreState = {
       backendLoadError: '',
-      backendLoaded: true,
       localChapters: [],
       getNovels: () => [],
       loadFromBackend,
@@ -269,7 +271,7 @@ describe('ProjectGrid chapter resolution', () => {
 
     await waitFor(() => {
       expect(loadFromBackend).toHaveBeenCalledTimes(1)
-      expect(saveToBackend).toHaveBeenCalledTimes(1)
+      expect(saveToBackend).not.toHaveBeenCalled()
       expect(setCurrentNovelId).toHaveBeenCalledWith('novel-new')
       expect(setCurrentChapterId).toHaveBeenCalledWith('ch-new-1')
       expect(pushMock).toHaveBeenCalledWith('/workspace')
@@ -290,7 +292,6 @@ describe('ProjectGrid chapter resolution', () => {
 
     mockStoreState = {
       backendLoadError: '',
-      backendLoaded: true,
       localChapters: [],
       getNovels: () => [],
       loadFromBackend,
@@ -360,8 +361,8 @@ describe('ProjectGrid chapter resolution', () => {
 
   it('keeps processing visible until the backend refresh resolves', async () => {
     const refreshDeferred = createDeferredPromise<void>()
-    const loadFromBackend = vi.fn(() => refreshDeferred.promise)
-    setReadyStore({ loadFromBackend })
+    const loadLibrarySummaries = vi.fn(() => refreshDeferred.promise)
+    setReadyStore({ loadLibrarySummaries })
     MockXMLHttpRequest.autoRespond = false
 
     const { container } = renderProjectGrid()
@@ -374,7 +375,7 @@ describe('ProjectGrid chapter resolution', () => {
       await Promise.resolve()
     })
 
-    expect(loadFromBackend).toHaveBeenCalledTimes(1)
+    expect(loadLibrarySummaries).toHaveBeenCalledTimes(1)
     expect(screen.getByText('服务器处理')).toBeInTheDocument()
     expect(screen.queryByText(/服务器已解析完成/)).not.toBeInTheDocument()
 
@@ -507,9 +508,11 @@ describe('ProjectGrid chapter resolution', () => {
   it('shows a lightweight loading message while recovering the library from backend state', () => {
     mockStoreState = {
       backendLoadError: '',
-      backendLoaded: false,
+      librarySummariesError: '',
+      librarySummariesLoaded: false,
       localChapters: [],
       getNovels: () => [],
+      loadLibrarySummaries: vi.fn(async () => undefined),
       loadFromBackend: vi.fn(async () => undefined),
       saveToBackend: vi.fn(async () => undefined),
       deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
@@ -523,7 +526,7 @@ describe('ProjectGrid chapter resolution', () => {
     expect(screen.getByText('正在恢复书库与上次工作区…如果本地数据较大，可能需要几秒钟。')).toBeInTheDocument()
   })
 
-  it('navigates immediately after selecting the novel and chapter, then persists in the background', async () => {
+  it('opens an existing novel and persists its selection once in the background', async () => {
     const callOrder: string[] = []
     const setCurrentNovelId = vi.fn((novelId: string) => {
       callOrder.push(`novel:${novelId}`)
@@ -541,7 +544,6 @@ describe('ProjectGrid chapter resolution', () => {
 
     mockStoreState = {
       backendLoadError: '',
-      backendLoaded: true,
       localChapters: [{ id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 }],
       getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
       loadFromBackend: vi.fn(async () => undefined),
@@ -574,7 +576,6 @@ describe('ProjectGrid chapter resolution', () => {
 
     mockStoreState = {
       backendLoadError: '',
-      backendLoaded: true,
       localChapters: [{ id: 'ch-stale', novelId: 'novel-a', parentChapterId: null, order: 1 }],
       getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
       loadFromBackend: vi.fn(async () => undefined),
@@ -604,7 +605,7 @@ describe('ProjectGrid chapter resolution', () => {
     expect(consoleWarn).toHaveBeenCalled()
   })
 
-  it('does not reload or retry save after the handoff begins', async () => {
+  it('hydrates the selected novel once and does not retry after the handoff begins', async () => {
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const setCurrentNovelId = vi.fn()
     const setCurrentChapterId = vi.fn()
@@ -615,7 +616,6 @@ describe('ProjectGrid chapter resolution', () => {
 
     mockStoreState = {
       backendLoadError: '',
-      backendLoaded: true,
       localChapters: [{ id: 'ch-stale', novelId: 'novel-a', parentChapterId: null, order: 1 }],
       getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
       loadFromBackend,
@@ -637,12 +637,50 @@ describe('ProjectGrid chapter resolution', () => {
       expect(pushMock).toHaveBeenCalledWith('/workspace')
     })
 
-    expect(loadFromBackend).not.toHaveBeenCalled()
+    expect(loadFromBackend).toHaveBeenCalledTimes(1)
+    expect(loadFromBackend).toHaveBeenCalledWith('novel-a')
     expect(saveToBackend).toHaveBeenCalledTimes(1)
     expect(setCurrentChapterId).toHaveBeenCalledTimes(1)
     expect(setCurrentChapterId).toHaveBeenCalledWith('ch-stale')
     expect(screen.queryByText('进入工作区失败，请稍后重试。')).not.toBeInTheDocument()
     expect(consoleWarn).toHaveBeenCalled()
+  })
+
+  it('does not select, navigate, or save after targeted hydration rejects', async () => {
+    const setCurrentNovelId = vi.fn()
+    const setCurrentChapterId = vi.fn()
+    const saveToBackend = vi.fn(async () => undefined)
+    const loadFromBackend = vi.fn(async () => {
+      throw new Error('Targeted restore failed')
+    })
+
+    mockStoreState = {
+      backendLoadError: '',
+      localChapters: [{ id: 'ch-stale', novelId: 'novel-a', parentChapterId: null, order: 1 }],
+      getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
+      loadFromBackend,
+      saveToBackend,
+      deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
+      setCurrentNovelId,
+      setCurrentChapterId,
+      deleteNovel: vi.fn(),
+    }
+
+    renderProjectGrid()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Open project' }))
+      await Promise.resolve()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('进入工作区失败，请稍后重试。')).toBeInTheDocument()
+    })
+    expect(loadFromBackend).toHaveBeenCalledWith('novel-a')
+    expect(setCurrentNovelId).not.toHaveBeenCalled()
+    expect(setCurrentChapterId).not.toHaveBeenCalled()
+    expect(pushMock).not.toHaveBeenCalled()
+    expect(saveToBackend).not.toHaveBeenCalled()
   })
 
   it('shows per-card opening feedback while navigation has already started and save is still pending', async () => {
@@ -651,7 +689,6 @@ describe('ProjectGrid chapter resolution', () => {
 
     mockStoreState = {
       backendLoadError: '',
-      backendLoaded: true,
       localChapters: [{ id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 }],
       getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
       loadFromBackend: vi.fn(async () => undefined),
@@ -692,7 +729,6 @@ describe('ProjectGrid chapter resolution', () => {
 
     mockStoreState = {
       backendLoadError: '',
-      backendLoaded: true,
       localChapters: [{ id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 }],
       getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
       loadFromBackend: vi.fn(async () => undefined),
@@ -727,6 +763,38 @@ describe('ProjectGrid chapter resolution', () => {
     expect(screen.getByText('已删除《Novel A》')).toBeInTheDocument()
   })
 
+  it('sends accepted deletion for a summary-backed card without hydrated chapters', async () => {
+    const deleteNovelFromBackend = vi.fn(async (novelId: string) => deletedNovelResult(novelId))
+    const summary = { id: 'novel-summary-only', title: 'Summary Only', summary: 'Metadata', tags: [] }
+    const transaction = { novelId: summary.id, before: {}, optimistic: {}, summary }
+    const beginNovelDeletion = vi.fn(() => transaction)
+
+    mockStoreState = {
+      backendLoadError: '',
+      localChapters: [],
+      getNovels: () => [summary],
+      loadFromBackend: vi.fn(async () => undefined),
+      saveToBackend: vi.fn(async () => undefined),
+      deleteNovelFromBackend,
+      setCurrentNovelId: vi.fn(),
+      setCurrentChapterId: vi.fn(),
+      deleteNovel: vi.fn(),
+      beginNovelDeletion,
+      rollbackNovelDeletion: vi.fn(),
+      setNovelDeletionPending: vi.fn(),
+      reconcileNovelDeletion: vi.fn(),
+    }
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    renderProjectGrid()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }))
+
+    await waitFor(() => {
+      expect(beginNovelDeletion).toHaveBeenCalledWith(summary.id)
+      expect(deleteNovelFromBackend).toHaveBeenCalledWith(summary.id)
+    })
+  })
+
   it('uses targeted rollback without reloading when deletion is definitively rejected', async () => {
     const loadFromBackend = vi.fn(async () => undefined)
     const deleteNovel = vi.fn()
@@ -737,7 +805,6 @@ describe('ProjectGrid chapter resolution', () => {
 
     mockStoreState = {
       backendLoadError: '',
-      backendLoaded: true,
       localChapters: [{ id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 }],
       getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
       loadFromBackend,
@@ -772,14 +839,15 @@ describe('ProjectGrid chapter resolution', () => {
   ])('reconciles an indeterminate result with target present=$targetPresent before clearing pending', async ({ targetPresent, expectedMessage }) => {
     const reconcileDeferred = createDeferredPromise<'deleted' | 'present'>()
     const setNovelDeletionPending = vi.fn()
+    const loadLibrarySummaries = vi.fn(async () => undefined)
     const transaction = { novelId: 'novel-a', before: {}, optimistic: {} }
     const reconcileNovelDeletionFromBackend = vi.fn(() => reconcileDeferred.promise)
 
     mockStoreState = {
       backendLoadError: '',
-      backendLoaded: true,
       localChapters: [{ id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 }],
       getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
+      loadLibrarySummaries,
       loadFromBackend: vi.fn(async () => undefined),
       saveToBackend: vi.fn(async () => undefined),
       deleteNovelFromBackend: vi.fn(async () => ({ status: 'indeterminate' as const, error: 'response lost' })),
@@ -807,18 +875,51 @@ describe('ProjectGrid chapter resolution', () => {
     })
 
     expect(screen.getByText(expectedMessage)).toBeInTheDocument()
+    expect(loadLibrarySummaries).toHaveBeenCalledTimes(1)
     expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
   })
 
-  it('keeps the optimistic state and reports reconciliation failure for an indeterminate result', async () => {
-    const rollbackNovelDeletion = vi.fn()
-    const setNovelDeletionPending = vi.fn()
+  it('keeps the authoritative-present notice when the best-effort summary refresh fails', async () => {
+    const loadLibrarySummaries = vi.fn().mockRejectedValue(new Error('summary unavailable'))
+    const transaction = { novelId: 'novel-a', before: {}, optimistic: {} }
 
     mockStoreState = {
       backendLoadError: '',
-      backendLoaded: true,
+      localChapters: [],
+      getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
+      loadLibrarySummaries,
+      loadFromBackend: vi.fn(async () => undefined),
+      saveToBackend: vi.fn(async () => undefined),
+      deleteNovelFromBackend: vi.fn(async () => ({ status: 'indeterminate' as const, error: 'response lost' })),
+      reconcileNovelDeletionFromBackend: vi.fn(async () => 'present' as const),
+      setCurrentNovelId: vi.fn(),
+      setCurrentChapterId: vi.fn(),
+      deleteNovel: vi.fn(),
+      beginNovelDeletion: vi.fn(() => transaction),
+      rollbackNovelDeletion: vi.fn(),
+      setNovelDeletionPending: vi.fn(),
+      reconcileNovelDeletion: vi.fn(),
+    }
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    renderProjectGrid()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }))
+
+    expect(await screen.findByText('服务器确认《Novel A》未被删除，已恢复权威状态。')).toBeInTheDocument()
+    expect(loadLibrarySummaries).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('无法确认《Novel A》是否已删除，请刷新书库后重试。')).not.toBeInTheDocument()
+  })
+
+  it('refreshes summaries best-effort and keeps the unknown warning when reconciliation throws', async () => {
+    const rollbackNovelDeletion = vi.fn()
+    const setNovelDeletionPending = vi.fn()
+    const loadLibrarySummaries = vi.fn().mockRejectedValue(new Error('summary unavailable'))
+
+    mockStoreState = {
+      backendLoadError: '',
       localChapters: [{ id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 }],
       getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
+      loadLibrarySummaries,
       loadFromBackend: vi.fn(async () => undefined),
       saveToBackend: vi.fn(async () => undefined),
       deleteNovelFromBackend: vi.fn(async () => ({ status: 'indeterminate' as const, error: 'malformed response' })),
@@ -840,6 +941,7 @@ describe('ProjectGrid chapter resolution', () => {
       expect(screen.getByText('无法确认《Novel A》是否已删除，请刷新书库后重试。')).toBeInTheDocument()
     })
     expect(rollbackNovelDeletion).not.toHaveBeenCalled()
+    expect(loadLibrarySummaries).toHaveBeenCalledTimes(1)
     expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
   })
 })
