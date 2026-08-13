@@ -59,6 +59,7 @@ type UseWorkspaceChapterSelectionOptions = {
   currentNovelId: string | null
   currentChapterId: string | null
   setCurrentChapterId: (chapterId: string) => void
+  flushEditorBuffer: () => void
   setCenterPaneView: Dispatch<SetStateAction<WorkspaceCenterPaneView>>
   setPendingSourceJump: Dispatch<SetStateAction<PendingSourceJump | null>>
   setLeftPanelOpen: Dispatch<SetStateAction<boolean>>
@@ -71,6 +72,7 @@ export function useWorkspaceChapterSelection(options: UseWorkspaceChapterSelecti
     currentNovelId,
     currentChapterId,
     setCurrentChapterId,
+    flushEditorBuffer,
     setCenterPaneView,
     setPendingSourceJump,
     setLeftPanelOpen,
@@ -128,10 +130,11 @@ export function useWorkspaceChapterSelection(options: UseWorkspaceChapterSelecti
   }, [resetControls])
 
   const selectChapter = useCallback((chapter: Chapter) => {
+    flushEditorBuffer()
     setCurrentChapterId(chapter.id)
     resetContextForChapter(chapter)
     setLeftPanelOpen(false)
-  }, [resetContextForChapter, setCurrentChapterId, setLeftPanelOpen])
+  }, [flushEditorBuffer, resetContextForChapter, setCurrentChapterId, setLeftPanelOpen])
 
   const resolveSourceChapter = useCallback((source: { chapterId?: string | null; chapterNo: number | null }) => {
     if (source.chapterId) {
@@ -153,10 +156,11 @@ export function useWorkspaceChapterSelection(options: UseWorkspaceChapterSelecti
 
     setPendingSourceJump(target)
     setCenterPaneView('body')
+    flushEditorBuffer()
     setCurrentChapterId(targetChapter.id)
     resetContextForChapter(targetChapter)
     setLeftPanelOpen(false)
-  }, [resetContextForChapter, setCenterPaneView, setCurrentChapterId, setLeftPanelOpen, setPendingSourceJump, sortedChapters])
+  }, [flushEditorBuffer, resetContextForChapter, setCenterPaneView, setCurrentChapterId, setLeftPanelOpen, setPendingSourceJump, sortedChapters])
 
   return {
     sortedChapters,

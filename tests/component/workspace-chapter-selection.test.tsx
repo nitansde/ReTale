@@ -73,6 +73,7 @@ describe('useWorkspaceChapterSelection', () => {
     const chapterOne = buildChapter({ id: 'chapter-1', title: 'Chapter 1', content: '<p>Alpha</p>', order: 1 })
     const chapterTwo = buildChapter({ id: 'chapter-2', title: 'Chapter 2', content: '<p>Beta body</p>', order: 2 })
     const setCurrentChapterId = vi.fn<(chapterId: string) => void>()
+    const flushEditorBuffer = vi.fn()
     const setCenterPaneView = createStateSetterMock<'body' | 'graph'>()
     const setPendingSourceJump = createStateSetterMock<PendingSourceJump | null>()
     const setLeftPanelOpen = createStateSetterMock<boolean>()
@@ -84,6 +85,7 @@ describe('useWorkspaceChapterSelection', () => {
         currentNovelId: 'novel-1',
         currentChapterId: chapterOne.id,
         setCurrentChapterId,
+        flushEditorBuffer,
         setCenterPaneView,
         setPendingSourceJump,
         setLeftPanelOpen,
@@ -96,6 +98,7 @@ describe('useWorkspaceChapterSelection', () => {
     })
 
     expect(setCurrentChapterId).toHaveBeenCalledWith(chapterTwo.id)
+    expect(flushEditorBuffer).toHaveBeenCalledBefore(setCurrentChapterId)
     expect(setLeftPanelOpen).toHaveBeenCalledWith(false)
     expect(resetControls.resetPresetCompatSessionStateForChapter).toHaveBeenCalledWith(chapterTwo)
     expect(resetControls.setSelectionText).toHaveBeenCalledWith('')
@@ -121,6 +124,7 @@ describe('useWorkspaceChapterSelection', () => {
     const chapterOne = buildChapter({ id: 'chapter-1', title: 'Chapter 1', content: '<p>Alpha</p>', order: 1 })
     const chapterTwo = buildChapter({ id: 'chapter-2', title: 'Chapter 2', content: '<p>Beta body</p>', order: 2 })
     const setCurrentChapterId = vi.fn<(chapterId: string) => void>()
+    const flushEditorBuffer = vi.fn()
     const setCenterPaneView = createStateSetterMock<'body' | 'graph'>()
     const setPendingSourceJump = createStateSetterMock<PendingSourceJump | null>()
     const setLeftPanelOpen = createStateSetterMock<boolean>()
@@ -139,6 +143,7 @@ describe('useWorkspaceChapterSelection', () => {
         currentNovelId: 'novel-1',
         currentChapterId: chapterOne.id,
         setCurrentChapterId,
+        flushEditorBuffer,
         setCenterPaneView,
         setPendingSourceJump,
         setLeftPanelOpen,
@@ -153,6 +158,7 @@ describe('useWorkspaceChapterSelection', () => {
     expect(setPendingSourceJump).toHaveBeenCalledWith(target)
     expect(setCenterPaneView).toHaveBeenCalledWith('body')
     expect(setCurrentChapterId).toHaveBeenCalledWith(chapterTwo.id)
+    expect(flushEditorBuffer).toHaveBeenCalledBefore(setCurrentChapterId)
     expect(setLeftPanelOpen).toHaveBeenCalledWith(false)
     expect(resetControls.resetPresetCompatSessionStateForChapter).toHaveBeenCalledWith(chapterTwo)
     expect(resetControls.setSelectionText).toHaveBeenCalledWith('')
