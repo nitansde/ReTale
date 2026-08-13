@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState, type ChangeEvent } from 'react'
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
 import { X } from 'lucide-react'
 import { PresetCompatPresetEditor } from '@/components/workspace/PresetCompatPresetEditor'
 import { PRESET_COMPAT_EDITABLE_SURFACE_META } from '@/lib/preset-compat/surface-contract'
@@ -22,6 +22,7 @@ type PresetCompatLibraryModalProps = {
   activeSurfaceId?: PresetCompatSurfaceId | null
   activeSelection?: PresetCompatSessionWorkspaceSelection | null
   open: boolean
+  onLoad?: () => Promise<unknown>
   onClose: () => void
 }
 
@@ -54,7 +55,7 @@ async function readUploadedFileText(file: File) {
   return new Response(file).text()
 }
 
-export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelection = null, open, onClose }: PresetCompatLibraryModalProps) {
+export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelection = null, open, onLoad, onClose }: PresetCompatLibraryModalProps) {
   const { t, locale } = useI18n()
   const presetCompatLibrary = useNovelStore((state) => state.presetCompatLibrary)
   const presetCompatLibraryLoading = useNovelStore((state) => state.presetCompatLibraryLoading)
@@ -82,6 +83,10 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
     error: unknown
   } | null>(null)
   const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    if (!open || !onLoad) return
+    void onLoad().catch(() => undefined)
+  }, [onLoad, open])
   const resolvedErrorMessage = useMemo(() => {
     if (actionError) {
       return toUserFacingPresetCompatError(actionError.operation, actionError.error, locale)

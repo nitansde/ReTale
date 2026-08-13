@@ -390,6 +390,17 @@ describe('PresetCompatLibraryModal', () => {
     expect(useNovelStore.getState().presetCompatLibrary.builtinSystemPrompts.rewrite.content).toBe('No preset built-in edit.')
   })
 
+  it('loads the preset library once when the modal becomes visible', async () => {
+    const onLoad = vi.fn().mockResolvedValue(undefined)
+    const { rerender } = render(<PresetCompatLibraryModal open={false} onLoad={onLoad} onClose={vi.fn()} />)
+    expect(onLoad).not.toHaveBeenCalled()
+
+    rerender(<PresetCompatLibraryModal open onLoad={onLoad} onClose={vi.fn()} />)
+    await waitFor(() => expect(onLoad).toHaveBeenCalledTimes(1))
+    rerender(<PresetCompatLibraryModal open onLoad={onLoad} onClose={vi.fn()} />)
+    expect(onLoad).toHaveBeenCalledTimes(1)
+  })
+
   it('re-syncs the preview surface selector and clears stale preview when reopening the same preset on a different active surface', async () => {
     useNovelStore.setState({
       presetCompatLibrary: createLibrary(),
