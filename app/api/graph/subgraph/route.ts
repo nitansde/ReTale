@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { noStoreJson } from '@/lib/server/api-route'
 import { buildGraphSubgraph } from '@/lib/server/graph-context'
 import { findStoryBranch, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { runWithNovelDatabaseAccess } from '@/lib/server/database-access'
@@ -19,13 +19,13 @@ export async function GET(request: Request) {
       .filter(Boolean)
 
     if (!novelId) {
-      return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+      return noStoreJson({ ok: false, error: 'novelId is required' }, { status: 400 })
     }
     if (!Number.isFinite(chapterNo) || chapterNo < 1) {
-      return NextResponse.json({ ok: false, error: 'chapterNo must be a positive number' }, { status: 400 })
+      return noStoreJson({ ok: false, error: 'chapterNo must be a positive number' }, { status: 400 })
     }
     if (!entityIds.length) {
-      return NextResponse.json({ ok: false, error: 'entityId is required' }, { status: 400 })
+      return noStoreJson({ ok: false, error: 'entityId is required' }, { status: 400 })
     }
 
     const result = await runWithNovelDatabaseAccess(novelId, async () => {
@@ -46,12 +46,12 @@ export async function GET(request: Request) {
     })
 
     if (!result.seedEntities.length) {
-      return NextResponse.json({ ok: false, error: 'Graph entities not found for the requested branch context' }, { status: 404 })
+      return noStoreJson({ ok: false, error: 'Graph entities not found for the requested branch context' }, { status: 404 })
     }
 
-    return NextResponse.json({ ok: true, ...result })
+    return noStoreJson({ ok: true, ...result })
   } catch (error) {
-    return NextResponse.json(
+    return noStoreJson(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to load graph subgraph' },
       { status: error instanceof Error && error.message.includes('Invalid novel ID') ? 400 : error instanceof Error && (error.message.includes('not found') || error.message.includes('does not belong')) ? 404 : 500 }
     )

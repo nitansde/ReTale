@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { noStoreJson } from '@/lib/server/api-route'
 import { buildChapterGraphContext } from '@/lib/server/context-builder'
 import { buildGraphAwareContext } from '@/lib/server/graph-context'
 import { findStoryBranch, normalizeBranchId } from '@/lib/server/knowledge-store'
@@ -96,10 +97,10 @@ export async function GET(request: Request) {
     const chapterId = searchParams.get('chapterId')?.trim() ?? ''
 
     if (!novelId) {
-      return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+      return noStoreJson({ ok: false, error: 'novelId is required' }, { status: 400 })
     }
     if (!chapterId) {
-      return NextResponse.json({ ok: false, error: 'chapterId is required' }, { status: 400 })
+      return noStoreJson({ ok: false, error: 'chapterId is required' }, { status: 400 })
     }
 
     const result = await runWithNovelDatabaseAccess(novelId, () => buildChapterGraphContext({
@@ -110,9 +111,9 @@ export async function GET(request: Request) {
       confirmedOnly: searchParams.get('confirmedOnly') === 'true',
     }))
 
-    return NextResponse.json({ ok: true, ...result })
+    return noStoreJson({ ok: true, ...result })
   } catch (error) {
-    return NextResponse.json(
+    return noStoreJson(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to load chapter graph context' },
       { status: error instanceof Error && error.message.includes('Invalid novel ID') ? 400 : error instanceof Error && error.message.includes('not found') ? 404 : 500 }
     )
