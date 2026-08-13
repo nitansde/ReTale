@@ -1,5 +1,6 @@
 import { exportPresetCompatPreset, exportPresetCompatStandaloneRegex } from '@/lib/preset-compat/export'
 import type { PresetCompatLibrary } from '@/lib/preset-compat/types'
+import { requestClientGet } from '@/lib/client-request-broker'
 
 export type PresetCompatImportKind = 'preset' | 'regex'
 export type PresetCompatImportConflictPolicy = 'copy' | 'replace'
@@ -50,9 +51,12 @@ async function expectOkResponse<T>(response: Response, fallbackMessage: string):
   return data as T
 }
 
-export async function fetchPresetCompatLibrary() {
-  const response = await fetch('/api/settings/preset-compat', { cache: 'no-store' })
-  return expectOkResponse<PresetCompatLibrary>(response, 'Failed to load preset-compatible library')
+export async function fetchPresetCompatLibrary(signal?: AbortSignal) {
+  return requestClientGet('/api/settings/preset-compat', {
+    cache: 'no-cache',
+    signal,
+    parse: (response) => expectOkResponse<PresetCompatLibrary>(response, 'Failed to load preset-compatible library'),
+  })
 }
 
 export async function savePresetCompatLibrary(library: PresetCompatLibrary): Promise<SavePresetCompatLibraryResult> {

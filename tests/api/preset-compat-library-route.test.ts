@@ -137,7 +137,69 @@ describe('preset compat library route', () => {
     const response = await GET()
 
     expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('private, no-cache, max-age=0, must-revalidate')
+    expect(response.headers.get('etag')).toBe(`"preset-compat-v${saved.schemaVersion}-r${saved.revision}"`)
     await expect(response.json()).resolves.toEqual(saved)
+  })
+
+  it.each([
+    ['exact strong', '"preset-compat-v1-r1"'],
+    ['weak', 'W/"preset-compat-v1-r1"'],
+    ['list', '"stale", W/"preset-compat-v1-r1", malformed'],
+    ['wildcard', '*'],
+  ])('returns an empty 304 for a matching %s validator', async (_label, ifNoneMatch) => {
+    await createTestDatabase('retale-preset-compat-route-revalidate')
+    const { saveStoredPresetCompatLibrary } = await import('@/lib/server/preset-compat-library')
+    await saveStoredPresetCompatLibrary(createDefaultPresetCompatLibrary())
+    vi.resetModules()
+    const { GET } = await import('@/app/api/settings/preset-compat/route')
+
+    const response = await GET(new Request('http://localhost/api/settings/preset-compat', {
+      headers: { 'If-None-Match': ifNoneMatch },
+    }))
+
+    expect(response.status).toBe(304)
+    expect(response.headers.get('cache-control')).toBe('private, no-cache, max-age=0, must-revalidate')
+    expect(response.headers.get('etag')).toBe('"preset-compat-v1-r1"')
+    expect(await response.text()).toBe('')
+  })
+
+  it.each([
+    ['stale', '"preset-compat-v1-r0"'],
+    ['malformed', 'W/preset-compat-v1-r1, "unterminated'],
+    ['case-changed opaque tag', '"PRESET-COMPAT-v1-r1"'],
+  ])('returns 200 for an unmatched %s validator', async (_label, ifNoneMatch) => {
+    await createTestDatabase('retale-preset-compat-route-stale')
+    const { saveStoredPresetCompatLibrary } = await import('@/lib/server/preset-compat-library')
+    await saveStoredPresetCompatLibrary(createDefaultPresetCompatLibrary())
+    vi.resetModules()
+    const { GET } = await import('@/app/api/settings/preset-compat/route')
+
+    const response = await GET(new Request('http://localhost/api/settings/preset-compat', {
+      headers: { 'If-None-Match': ifNoneMatch },
+    }))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('etag')).toBe('"preset-compat-v1-r1"')
+  })
+
+  it('invalidates the prior validator after POST increments revision', async () => {
+    await createTestDatabase('retale-preset-compat-route-revision-invalidation')
+    const { GET, POST } = await import('@/app/api/settings/preset-compat/route')
+    const initialResponse = await GET()
+    const initialLibrary = await initialResponse.json() as ReturnType<typeof createDefaultPresetCompatLibrary>
+    const initialEtag = initialResponse.headers.get('etag') ?? ''
+
+    expect((await POST(createJsonRequest('http://localhost/api/settings/preset-compat', {
+      expectedRevision: initialLibrary.revision,
+      library: initialLibrary,
+    }))).status).toBe(200)
+
+    const response = await GET(new Request('http://localhost/api/settings/preset-compat', {
+      headers: { 'If-None-Match': initialEtag },
+    }))
+    expect(response.status).toBe(200)
+    expect(response.headers.get('etag')).toBe(`"preset-compat-v${initialLibrary.schemaVersion}-r${initialLibrary.revision + 1}"`)
   })
 
   it('saves a normalized library snapshot and bumps revision on POST', async () => {

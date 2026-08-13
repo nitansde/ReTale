@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server'
 import type { PresetCompatLibrary } from '@/lib/preset-compat/types'
 import {
+  formatRevisionEtag,
+  ifNoneMatchMatches,
+  PRIVATE_REVALIDATION_CACHE_CONTROL,
+} from '@/lib/server/api-route'
+import {
   PRESET_COMPAT_LIBRARY_V1_KEY,
   loadProtectedPresetCompatLibraryResetSnapshot,
   loadStoredPresetCompatLibrary,
@@ -22,8 +27,17 @@ function normalizeExpectedRevision(value: unknown) {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
 }
 
-export async function GET() {
-  return NextResponse.json(loadStoredPresetCompatLibrary())
+export async function GET(request: Request = new Request('http://localhost/api/settings/preset-compat')) {
+  const library = loadStoredPresetCompatLibrary()
+  const etag = formatRevisionEtag('preset-compat', library.schemaVersion, library.revision)
+  const headers = {
+    'Cache-Control': PRIVATE_REVALIDATION_CACHE_CONTROL,
+    ETag: etag,
+  }
+  if (ifNoneMatchMatches(request.headers.get('If-None-Match'), etag)) {
+    return new Response(null, { status: 304, headers })
+  }
+  return NextResponse.json(library, { headers })
 }
 
 export async function POST(request: Request) {
