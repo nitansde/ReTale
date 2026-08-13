@@ -152,6 +152,7 @@ export type NovelDeletionTransaction = {
   novelId: string
   before: PersistedNovelState
   optimistic: PersistedNovelState
+  summary: LibrarySummary | null
 }
 
 export type NovelDeletionStatus = 'ready' | 'deleting' | 'deleted'
@@ -168,6 +169,38 @@ export type NovelDeletionStatusResult = Omit<NovelDeletionStatusObservation, 'de
 
 export type NovelDeletionReconciliationResult = 'deleted' | 'present'
 
+export type WorkspacePatchCapability = 'unknown' | 'supported' | 'unsupported'
+
+export type WorkspaceSaveFeedback =
+  | { kind: 'save-failed' }
+  | { kind: 'chapter-conflict' }
+  | { kind: 'structural-conflict' }
+
+export type WorkspaceSaveConflict = {
+  kind: 'chapter' | 'structural'
+  novelId: string
+  chapterId: string | null
+  rejectedChapterFingerprint: string | null
+  currentRevision: number
+}
+
+export type WorkspaceSaveErrorCode =
+  | 'transport-indeterminate'
+  | 'invalid-response'
+  | 'http-rejected'
+  | 'stale-revision'
+  | 'conflict-blocked'
+
+export class WorkspaceSaveError extends Error {
+  readonly code: WorkspaceSaveErrorCode
+
+  constructor(code: WorkspaceSaveErrorCode, message: string) {
+    super(message)
+    this.name = 'WorkspaceSaveError'
+    this.code = code
+  }
+}
+
 export type KnowledgeProjectionResult = KnowledgeProjectionPayload & {
   knowledgeRebuildStatus: KnowledgeRebuildStatus | null
   hanlpCacheSnapshot: HanlpCacheSnapshot | null
@@ -176,25 +209,46 @@ export type KnowledgeProjectionResult = KnowledgeProjectionPayload & {
   actionError: KnowledgeActionError | null
 }
 
+export type LibrarySummary = {
+  id: string
+  title: string
+  summary: string
+  tags: string[]
+  updatedAt: string
+  wordCount: number
+  chapterCount: number
+  firstChapterId: string | null
+}
+
 export type NovelStore = PersistedNovelState & {
+  persistRevision: number
+  workspaceRevision: number | null
+  revisionNovelId: string
+  lastAcknowledgedPersistedWorkspace: PersistedNovelState | null
+  patchCapability: WorkspacePatchCapability
+  workspaceSaveConflict: WorkspaceSaveConflict | null
+  workspaceSaveFeedback: WorkspaceSaveFeedback | null
   isHydrated: boolean
   isSaving: boolean
   isNovelDeletionPending: boolean
   backendLoaded: boolean
   backendLoadError: string
+  librarySummaries: LibrarySummary[]
+  librarySummariesLoaded: boolean
+  librarySummariesError: string
   presetCompatLibrary: PresetCompatLibrary
   presetCompatLibraryDirty: boolean
   presetCompatLibraryLoading: boolean
   presetCompatLibraryError: string
 
-  getNovels: () => Array<{ id: string; title: string; summary: string; tags: string[]; updatedAt: string; wordCount: number; chapterCount: number }>
+  getNovels: () => LibrarySummary[]
   importNovelFromText: (input: { title: string; text: string; summary?: string }) => string | null
   setCurrentNovelId: (id: string) => void
   setCurrentChapterId: (id: string) => void
   setCurrentTab: (tab: WorkspaceTab) => void
   setHelperTab: (tab: HelperTab) => void
   toggleVolume: (id: string) => void
-  updateChapterContent: (id: string, html: string) => void
+  updateChapterContent: (id: string, html: string, wordCount?: number) => void
   reorderChaptersInVolume: (volumeId: string, orderedIds: string[]) => void
   setRewriteMode: (mode: RewriteMode) => void
   setRewriteTone: (tone: RewriteTone) => void
@@ -237,7 +291,8 @@ export type NovelStore = PersistedNovelState & {
     phase?: PresetCompatSessionPhase
   ) => void
   setHydrated: (value: boolean) => void
-  loadFromBackend: () => Promise<void>
+  loadLibrarySummaries: () => Promise<void>
+  loadFromBackend: (novelId?: string) => Promise<void>
   saveToBackend: () => Promise<void>
   deleteNovelFromBackend: (novelId: string) => Promise<DeleteNovelOutcome>
   reconcileNovelDeletionFromBackend: (transaction: NovelDeletionTransaction) => Promise<NovelDeletionReconciliationResult>
@@ -288,10 +343,65 @@ export type NovelStore = PersistedNovelState & {
   deleteStoryHanlpCache: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   deleteStoryExtractionCache: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
   deleteStoryEmbeddingCache: (novelId?: string) => Promise<KnowledgeProjectionResult | null>
-  refreshKnowledgeProjection: (novelId?: string, asOfChapter?: number) => Promise<KnowledgeProjectionResult>
+  refreshKnowledgeProjection: (novelId?: string, asOfChapter?: number, signal?: AbortSignal) => Promise<KnowledgeProjectionResult>
   setAISettings: (settings: AISettings) => void
   saveAISettings: () => Promise<void>
 }
 
 export type NovelStoreSet = StoreApi<NovelStore>['setState']
 export type NovelStoreGet = StoreApi<NovelStore>['getState']
+
+export type PersistedNovelStoreSet = (
+  update: (state: NovelStore) => Partial<NovelStore> | NovelStore
+) => void
+
+const PERSISTED_NOVEL_STATE_KEYS = [
+  'currentNovelId',
+  'currentChapterId',
+  'currentTab',
+  'helperTab',
+  'expandedVolumeIds',
+  'localNovels',
+  'localVolumes',
+  'localChapters',
+  'localOutlines',
+  'localCharacters',
+  'localCharacterRelations',
+  'localWorldEntries',
+  'localTimelineEvents',
+  'rewriteCandidates',
+  'rewriteHistory',
+  'trajectories',
+  'rewriteMode',
+  'rewriteTone',
+  'rewriteOutput',
+  'rewriteScope',
+  'selectionText',
+  'selectedParagraphIndex',
+  'thinkingLevel',
+  'autoContinue',
+  'keepCanon',
+  'promptText',
+  'selectedPresetId',
+  'presets',
+  'constraints',
+  'focusMode',
+  'presetCompatSessionState',
+] as const satisfies ReadonlyArray<keyof PersistedNovelState>
+
+export function createPersistedNovelStoreSet(set: NovelStoreSet): PersistedNovelStoreSet {
+  return (update) => set((state) => {
+    const nextState = update(state)
+    if (nextState === state) return state
+
+    const changed = PERSISTED_NOVEL_STATE_KEYS.some((key) => (
+      key in nextState && !Object.is(state[key], nextState[key])
+    ))
+    if (!changed) return state
+
+    return {
+      ...nextState,
+      persistRevision: state.persistRevision + 1,
+    }
+  })
+}

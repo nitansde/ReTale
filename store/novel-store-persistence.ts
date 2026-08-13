@@ -1,14 +1,17 @@
 import { normalizeAISettings } from '@/lib/ai-settings'
+import { requestClientGet } from '@/lib/client-request-broker'
 import {
   fetchPresetCompatLibrary,
   importPresetCompatPayload,
   savePresetCompatLibrary as savePresetCompatLibraryToBackend,
 } from '@/lib/preset-compat/client'
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
-import type { PersistedNovelState } from '@/lib/types'
+import type { Chapter, PersistedNovelState } from '@/lib/types'
+import { classifyWorkspacePersistence } from '@/store/workspace-persistence-classifier'
 import type {
   DeleteNovelFromBackendResult,
   DeleteNovelOutcome,
+  LibrarySummary,
   NovelDeletionStatusObservation,
   NovelDeletionStatusResult,
   NovelStore,
@@ -16,14 +19,21 @@ import type {
   NovelStoreSet,
   PresetCompatImportResult,
 } from '@/store/novel-store-types'
-import { fetchKnowledgeProjection, normalizeKnowledgeProjectionResult, resolveCurrentChapterOrder } from '@/store/novel-store-knowledge'
+import { WorkspaceSaveError as TypedWorkspaceSaveError } from '@/store/novel-store-types'
 
 const WORKSPACE_RESTORE_TIMEOUT_MS = 15_000
 const NOVEL_DELETE_TIMEOUT_MS = 15_000
 const NOVEL_DELETION_STATUS_RETRY_DELAYS_MS = [100, 250, 500] as const
+let workspaceRestoreGeneration = 0
+let activeWorkspaceRestoreController: AbortController | null = null
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasExactKeys(value: Record<string, unknown>, expectedKeys: readonly string[]) {
+  const actualKeys = Object.keys(value)
+  return actualKeys.length === expectedKeys.length && expectedKeys.every((key) => key in value)
 }
 
 function isWorkspaceResponse(value: unknown): value is Partial<PersistedNovelState> {
@@ -44,9 +54,35 @@ function isWorkspaceResponse(value: unknown): value is Partial<PersistedNovelSta
     && Array.isArray(value.trajectories)
 }
 
-function hasExactKeys(value: Record<string, unknown>, expectedKeys: readonly string[]) {
-  const actualKeys = Object.keys(value)
-  return actualKeys.length === expectedKeys.length && expectedKeys.every((key) => key in value)
+function parseLibrarySummary(value: unknown): LibrarySummary | null {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    'id', 'title', 'summary', 'tags', 'updatedAt', 'wordCount', 'chapterCount', 'firstChapterId',
+  ])) return null
+  if (typeof value.id !== 'string' || !value.id.trim()) return null
+  if (typeof value.title !== 'string' || typeof value.summary !== 'string' || typeof value.updatedAt !== 'string') return null
+  if (!Array.isArray(value.tags) || value.tags.some((tag) => typeof tag !== 'string')) return null
+  if (typeof value.wordCount !== 'number' || !Number.isFinite(value.wordCount) || !Number.isInteger(value.wordCount) || value.wordCount < 0) return null
+  if (typeof value.chapterCount !== 'number' || !Number.isFinite(value.chapterCount) || !Number.isInteger(value.chapterCount) || value.chapterCount < 0) return null
+  if (value.firstChapterId !== null && typeof value.firstChapterId !== 'string') return null
+
+  return {
+    id: value.id,
+    title: value.title,
+    summary: value.summary,
+    tags: value.tags,
+    updatedAt: value.updatedAt,
+    wordCount: value.wordCount,
+    chapterCount: value.chapterCount,
+    firstChapterId: value.firstChapterId,
+  }
+}
+
+function parseLibrarySummaryResponse(value: unknown) {
+  if (!isRecord(value) || !hasExactKeys(value, ['ok', 'activeNovelId', 'novels'])) return null
+  if (value.ok !== true || (value.activeNovelId !== null && typeof value.activeNovelId !== 'string') || !Array.isArray(value.novels)) return null
+  const novels = value.novels.map(parseLibrarySummary)
+  if (novels.some((novel) => novel === null)) return null
+  return { activeNovelId: value.activeNovelId, novels: novels as LibrarySummary[] }
 }
 
 function parseDeletionStatusSuccess(value: unknown, novelId: string): NovelDeletionStatusObservation | null {
@@ -66,23 +102,217 @@ function parseErrorResponse(value: unknown): string | null {
   return value.ok === false && typeof value.error === 'string' ? value.error : null
 }
 
-async function fetchWithWorkspaceTimeout(url: string, timeoutMessage: string) {
-  const controller = new AbortController()
-  const timeoutId = globalThis.setTimeout(() => controller.abort(), WORKSPACE_RESTORE_TIMEOUT_MS)
-
+async function fetchWithWorkspaceTimeout(url: string, timeoutMessage: string, signal?: AbortSignal) {
   try {
-    return await fetch(url, {
-      cache: 'no-store',
-      signal: controller.signal,
+    return await requestClientGet(url, {
+      signal,
+      timeoutMs: WORKSPACE_RESTORE_TIMEOUT_MS,
+      parse: async (response) => ({
+        ok: response.ok,
+        status: response.status,
+        text: await response.text(),
+        workspaceRevisionHeader: response.headers.get('X-Retale-Workspace-Revision'),
+        revisionNovelIdHeader: response.headers.get('X-Retale-Revision-Novel-Id'),
+      }),
     })
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error(timeoutMessage)
     }
     throw error
-  } finally {
-    globalThis.clearTimeout(timeoutId)
   }
+}
+
+function parseWorkspaceResponseBody(response: Awaited<ReturnType<typeof fetchWithWorkspaceTimeout>>, invalidJsonMessage: string) {
+  try {
+    return JSON.parse(response.text) as unknown
+  } catch {
+    throw new Error(invalidJsonMessage)
+  }
+}
+
+type WorkspaceRevisionAuthority = {
+  workspaceRevision: number
+  revisionNovelId: string
+}
+
+function parseSafeRevision(value: unknown) {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null
+  }
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) return null
+  const revision = Number(value)
+  return Number.isSafeInteger(revision) ? revision : null
+}
+
+function parseRevisionOwner(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function parseWorkspaceRevisionAuthority(
+  payload: unknown,
+  response: Awaited<ReturnType<typeof fetchWithWorkspaceTimeout>>,
+): WorkspaceRevisionAuthority | null {
+  const bodyRevision = isRecord(payload) && 'workspaceRevision' in payload
+    ? parseSafeRevision(payload.workspaceRevision)
+    : null
+  const bodyOwner = isRecord(payload) && 'revisionNovelId' in payload
+    ? parseRevisionOwner(payload.revisionNovelId)
+    : null
+  const headerRevision = response.workspaceRevisionHeader === null
+    ? null
+    : parseSafeRevision(response.workspaceRevisionHeader)
+  const headerOwner = response.revisionNovelIdHeader === null
+    ? null
+    : parseRevisionOwner(response.revisionNovelIdHeader)
+
+  const bodyMetadataPresent = isRecord(payload)
+    && ('workspaceRevision' in payload || 'revisionNovelId' in payload)
+  const headerMetadataPresent = response.workspaceRevisionHeader !== null
+    || response.revisionNovelIdHeader !== null
+  if (bodyMetadataPresent && (bodyRevision === null || bodyOwner === null)) return null
+  if (headerMetadataPresent && (headerRevision === null || headerOwner === null)) return null
+  if (bodyRevision !== null && headerRevision !== null && bodyRevision !== headerRevision) return null
+  if (bodyOwner !== null && headerOwner !== null && bodyOwner !== headerOwner) return null
+
+  const workspaceRevision = bodyRevision ?? headerRevision
+  const revisionNovelId = bodyOwner ?? headerOwner
+  return workspaceRevision === null || revisionNovelId === null
+    ? null
+    : { workspaceRevision, revisionNovelId }
+}
+
+function parseMutationSuccess(response: Response, payload: unknown, expectedNovelId: string) {
+  if (!response.ok || !isRecord(payload) || payload.ok !== true) return null
+  const bodyRevision = parseSafeRevision(payload.revision)
+  const bodyOwner = parseRevisionOwner(payload.novelId)
+  const headerRevision = parseSafeRevision(response.headers.get('X-Retale-Workspace-Revision'))
+  const headerOwner = parseRevisionOwner(response.headers.get('X-Retale-Revision-Novel-Id'))
+  if (bodyRevision === null || bodyOwner === null || headerRevision === null || headerOwner === null) return null
+  if (bodyRevision !== headerRevision || bodyOwner !== headerOwner || bodyOwner !== expectedNovelId) return null
+  return { workspaceRevision: bodyRevision, revisionNovelId: bodyOwner }
+}
+
+function createRevisionHeaders(workspaceRevision: number, idempotencyKey: string, revisionOwner: string) {
+  return {
+    'Content-Type': 'application/json',
+    'Idempotency-Key': idempotencyKey,
+    'X-Retale-Base-Revision': String(workspaceRevision),
+    'X-Retale-Revision-Novel-Id': revisionOwner,
+  }
+}
+
+type WorkspaceMutationMethod = 'PATCH' | 'POST'
+
+type WorkspaceMutationEnvelope = {
+  method: WorkspaceMutationMethod
+  body: string
+  idempotencyKey: string | null
+  baseRevision: number | null
+  capturedSnapshot: PersistedNovelState
+  revisionOwner: string
+  chapterId: string | null
+  chapterFingerprint: string | null
+}
+
+type WorkspaceMutationResponse = {
+  response: Response
+  payload: unknown
+}
+
+function createChapterFingerprint(chapter: Chapter) {
+  return JSON.stringify({
+    content: chapter.content,
+    wordCount: chapter.wordCount,
+    updatedAt: chapter.updatedAt,
+  })
+}
+
+function parseChapter(value: unknown): Chapter | null {
+  if (!isRecord(value)) return null
+  if (
+    typeof value.id !== 'string'
+    || typeof value.novelId !== 'string'
+    || typeof value.volumeId !== 'string'
+    || typeof value.title !== 'string'
+    || typeof value.order !== 'number'
+    || !Number.isFinite(value.order)
+    || typeof value.content !== 'string'
+    || (value.status !== 'draft' && value.status !== 'review' && value.status !== 'done')
+    || typeof value.wordCount !== 'number'
+    || !Number.isSafeInteger(value.wordCount)
+    || value.wordCount < 0
+    || typeof value.updatedAt !== 'string'
+  ) return null
+  if (value.originalContent !== undefined && typeof value.originalContent !== 'string') return null
+  if (value.kind !== undefined && value.kind !== 'main' && value.kind !== 'branch') return null
+  if (value.parentChapterId !== undefined && typeof value.parentChapterId !== 'string') return null
+  if (value.branchLabel !== undefined && typeof value.branchLabel !== 'string') return null
+  if (value.trajectory !== undefined && (!Array.isArray(value.trajectory) || value.trajectory.some((item) => typeof item !== 'string'))) return null
+
+  return {
+    id: value.id,
+    novelId: value.novelId,
+    volumeId: value.volumeId,
+    title: value.title,
+    order: value.order,
+    content: value.content,
+    ...(value.originalContent === undefined ? {} : { originalContent: value.originalContent }),
+    status: value.status,
+    wordCount: value.wordCount,
+    updatedAt: value.updatedAt,
+    ...(value.kind === undefined ? {} : { kind: value.kind }),
+    ...(value.parentChapterId === undefined ? {} : { parentChapterId: value.parentChapterId }),
+    ...(value.branchLabel === undefined ? {} : { branchLabel: value.branchLabel }),
+    ...(value.trajectory === undefined ? {} : { trajectory: value.trajectory }),
+  }
+}
+
+function parseStaleRevisionPayload(payload: unknown, requireChapter: boolean) {
+  if (!isRecord(payload) || payload.ok !== false || payload.code !== 'stale_revision' || typeof payload.error !== 'string') return null
+  const currentRevision = parseSafeRevision(payload.currentRevision)
+  if (currentRevision === null) return null
+  if (!requireChapter) return { currentRevision, chapter: null }
+  if (!('chapter' in payload)) return null
+  const chapter = payload.chapter === null ? null : parseChapter(payload.chapter)
+  if (payload.chapter !== null && chapter === null) return null
+  return { currentRevision, chapter }
+}
+
+function replaceAcknowledgedChapter(
+  baseline: PersistedNovelState,
+  chapterId: string,
+  authoritativeChapter: Chapter | null,
+) {
+  return {
+    ...baseline,
+    localChapters: authoritativeChapter
+      ? baseline.localChapters.map((chapter) => chapter.id === chapterId ? authoritativeChapter : chapter)
+      : baseline.localChapters.filter((chapter) => chapter.id !== chapterId),
+  }
+}
+
+async function executeMutationEnvelope(envelope: WorkspaceMutationEnvelope): Promise<WorkspaceMutationResponse> {
+  const response = await fetch('/api/workspace', {
+    method: envelope.method,
+    headers: envelope.baseRevision === null || envelope.idempotencyKey === null
+      ? { 'Content-Type': 'application/json' }
+      : createRevisionHeaders(envelope.baseRevision, envelope.idempotencyKey, envelope.revisionOwner),
+    body: envelope.body,
+  })
+  const rawBody = await response.text()
+  let payload: unknown
+  try {
+    payload = JSON.parse(rawBody)
+  } catch {
+    if (response.ok) throw new TypedWorkspaceSaveError('invalid-response', 'Workspace save returned an invalid response')
+    payload = null
+  }
+  return { response, payload }
+}
+
+function workspaceSaveFailure(code: ConstructorParameters<typeof TypedWorkspaceSaveError>[0], message: string) {
+  return new TypedWorkspaceSaveError(code, message)
 }
 
 async function fetchNovelDeletionStatus(novelId: string): Promise<NovelDeletionStatusObservation> {
@@ -91,9 +321,7 @@ async function fetchNovelDeletionStatus(novelId: string): Promise<NovelDeletionS
     `/api/workspace?${query.toString()}`,
     'Novel deletion status request timed out'
   )
-  const payload: unknown = await response.json().catch(() => {
-    throw new Error('Workspace deletion status endpoint returned invalid JSON')
-  })
+  const payload = parseWorkspaceResponseBody(response, 'Workspace deletion status endpoint returned invalid JSON')
 
   if (!response.ok) {
     const message = parseErrorResponse(payload)
@@ -139,9 +367,7 @@ export async function fetchAuthoritativeWorkspace(novelId: string): Promise<Pers
     `/api/workspace?${query.toString()}`,
     'Workspace reconciliation timed out'
   )
-  const payload: unknown = await response.json().catch(() => {
-    throw new Error('Workspace endpoint returned invalid JSON')
-  })
+  const payload = parseWorkspaceResponseBody(response, 'Workspace endpoint returned invalid JSON')
 
   if (!response.ok) {
     const message = parseErrorResponse(payload)
@@ -192,7 +418,7 @@ export function getWorkspaceRestoreErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Failed to restore workspace'
 }
 
-export function serializeState(state: NovelStore): PersistedNovelState {
+export function serializeState(state: PersistedNovelState): PersistedNovelState {
   return {
     currentNovelId: state.currentNovelId,
     currentChapterId: state.currentChapterId,
@@ -235,6 +461,7 @@ export function createPersistenceActions(
   initialState: PersistedNovelState
 ): Pick<NovelStore,
   'loadPresetCompatLibrary'
+  | 'loadLibrarySummaries'
   | 'loadFromBackend'
   | 'saveToBackend'
   | 'deleteNovelFromBackend'
@@ -242,6 +469,171 @@ export function createPersistenceActions(
   | 'importPresetCompatPreset'
   | 'importPresetCompatRegexBundle'
 > {
+  let saveGeneration = 0
+  let activeSaveCount = 0
+  let latestSaveOutcomeGeneration = 0
+  let latestAuthorityGeneration = 0
+  let authorityEpoch = 0
+
+  const beginSave = () => {
+    const generation = saveGeneration + 1
+    saveGeneration = generation
+    activeSaveCount += 1
+    set({ isSaving: true })
+    return generation
+  }
+
+  const finishSave = () => {
+    activeSaveCount -= 1
+    set({ isSaving: activeSaveCount > 0 })
+  }
+
+  const applySaveFailure = (generation: number, saveAuthorityEpoch: number, novelId: string) => {
+    if (saveAuthorityEpoch < authorityEpoch) return
+    if (generation < latestSaveOutcomeGeneration) return
+    set((current) => {
+      if (current.currentNovelId !== novelId) return current
+      if (
+        current.workspaceSaveConflict
+        && (current.workspaceSaveFeedback?.kind === 'chapter-conflict'
+          || current.workspaceSaveFeedback?.kind === 'structural-conflict')
+      ) return current
+      latestSaveOutcomeGeneration = generation
+      return { workspaceSaveFeedback: { kind: 'save-failed' } }
+    })
+  }
+
+  const applySaveSuccess = (
+    generation: number,
+    saveAuthorityEpoch: number,
+    capturedSnapshot: PersistedNovelState,
+    priorAuthority: {
+      workspaceRevision: number | null
+      revisionNovelId: string
+      lastAcknowledgedPersistedWorkspace: PersistedNovelState | null
+    },
+    acknowledgement: WorkspaceRevisionAuthority,
+  ) => {
+    set((current) => {
+      if (current.currentNovelId !== capturedSnapshot.currentNovelId) return current
+
+      const transfersAuthority = priorAuthority.revisionNovelId !== ''
+        && priorAuthority.revisionNovelId !== acknowledgement.revisionNovelId
+        && saveAuthorityEpoch === authorityEpoch
+        && acknowledgement.revisionNovelId === capturedSnapshot.currentNovelId
+        && current.workspaceRevision === priorAuthority.workspaceRevision
+        && current.revisionNovelId === priorAuthority.revisionNovelId
+        && current.lastAcknowledgedPersistedWorkspace === priorAuthority.lastAcknowledgedPersistedWorkspace
+      const sameOwner = !transfersAuthority
+        && priorAuthority.revisionNovelId === acknowledgement.revisionNovelId
+        && current.revisionNovelId === acknowledgement.revisionNovelId
+      const adoptsInitialAuthority = priorAuthority.revisionNovelId === ''
+        && current.revisionNovelId === ''
+        && acknowledgement.revisionNovelId === capturedSnapshot.currentNovelId
+      if (!sameOwner && !transfersAuthority && !adoptsInitialAuthority) return current
+
+      const currentRevision = transfersAuthority ? null : current.workspaceRevision
+      if (currentRevision !== null && acknowledgement.workspaceRevision < currentRevision) return current
+      if (
+        saveAuthorityEpoch < authorityEpoch
+        && currentRevision !== null
+        && acknowledgement.workspaceRevision <= currentRevision
+      ) return current
+      const advancesAuthority = currentRevision === null
+        || acknowledgement.workspaceRevision > currentRevision
+        || generation >= latestAuthorityGeneration
+      const mayClearConflict = generation >= latestSaveOutcomeGeneration
+        && (!current.workspaceSaveConflict
+          || transfersAuthority
+          || acknowledgement.workspaceRevision >= current.workspaceSaveConflict.currentRevision)
+      if (!advancesAuthority && !mayClearConflict) return current
+
+      if (advancesAuthority) latestAuthorityGeneration = generation
+      if (mayClearConflict) latestSaveOutcomeGeneration = generation
+      return {
+        ...(advancesAuthority ? {
+          workspaceRevision: acknowledgement.workspaceRevision,
+          revisionNovelId: acknowledgement.revisionNovelId,
+          lastAcknowledgedPersistedWorkspace: capturedSnapshot,
+        } : {}),
+        ...(mayClearConflict ? {
+          workspaceSaveConflict: null,
+          workspaceSaveFeedback: null,
+        } : {}),
+      }
+    })
+  }
+
+  const applyStaleResult = (params: {
+    generation: number
+    saveAuthorityEpoch: number
+    envelope: WorkspaceMutationEnvelope
+    stale: { currentRevision: number; chapter: Chapter | null }
+  }) => {
+    let conflictApplied = false
+    set((current) => {
+      if (
+        current.currentNovelId !== params.envelope.capturedSnapshot.currentNovelId
+        || current.revisionNovelId !== params.envelope.revisionOwner
+        || current.lastAcknowledgedPersistedWorkspace === null
+      ) return current
+
+      const currentRevision = current.workspaceRevision
+      if (currentRevision !== null && params.stale.currentRevision < currentRevision) return current
+      if (
+        params.saveAuthorityEpoch < authorityEpoch
+        && currentRevision !== null
+        && params.stale.currentRevision <= currentRevision
+      ) return current
+      const advancesAuthority = currentRevision === null
+        || params.stale.currentRevision > currentRevision
+        || params.generation >= latestAuthorityGeneration
+      const mayApplyConflict = params.generation >= latestSaveOutcomeGeneration
+      if (!advancesAuthority && !mayApplyConflict) return current
+
+      if (advancesAuthority) latestAuthorityGeneration = params.generation
+      if (mayApplyConflict) {
+        latestSaveOutcomeGeneration = params.generation
+        conflictApplied = true
+      }
+      const isChapterConflict = params.envelope.method === 'PATCH'
+        && params.envelope.chapterId !== null
+        && params.envelope.chapterFingerprint !== null
+      return {
+        ...(advancesAuthority ? {
+          workspaceRevision: params.stale.currentRevision,
+          revisionNovelId: params.envelope.revisionOwner,
+          lastAcknowledgedPersistedWorkspace: isChapterConflict
+            ? replaceAcknowledgedChapter(
+                current.lastAcknowledgedPersistedWorkspace,
+                params.envelope.chapterId!,
+                params.stale.chapter,
+              )
+            : current.lastAcknowledgedPersistedWorkspace,
+        } : {}),
+        ...(mayApplyConflict ? {
+          workspaceSaveConflict: isChapterConflict ? {
+            kind: 'chapter' as const,
+            novelId: params.envelope.revisionOwner,
+            chapterId: params.envelope.chapterId,
+            rejectedChapterFingerprint: params.envelope.chapterFingerprint,
+            currentRevision: params.stale.currentRevision,
+          } : {
+            kind: 'structural' as const,
+            novelId: params.envelope.revisionOwner,
+            chapterId: null,
+            rejectedChapterFingerprint: null,
+            currentRevision: params.stale.currentRevision,
+          },
+          workspaceSaveFeedback: {
+            kind: isChapterConflict ? 'chapter-conflict' as const : 'structural-conflict' as const,
+          },
+        } : {}),
+      }
+    })
+    return conflictApplied
+  }
+
   const importCompatPayload = async (
     kind: 'preset' | 'regex',
     params: Omit<Parameters<typeof importPresetCompatPayload>[0], 'kind'>
@@ -270,6 +662,39 @@ export function createPersistenceActions(
   }
 
   return {
+    loadLibrarySummaries: async () => {
+      set({ librarySummariesError: '' })
+      try {
+        const response = await fetchWithWorkspaceTimeout(
+          '/api/workspace?librarySummary=1',
+          'Library summary request timed out'
+        )
+        const payload = parseWorkspaceResponseBody(response, 'Library summary endpoint returned invalid JSON')
+        if (!response.ok) {
+          const message = parseErrorResponse(payload)
+          throw new Error(message || 'Failed to restore library summaries')
+        }
+        const result = response.status === 200 ? parseLibrarySummaryResponse(payload) : null
+        if (!result) {
+          throw new Error('Library summary endpoint returned an invalid response')
+        }
+        set({
+          librarySummaries: result.novels,
+          librarySummariesLoaded: true,
+          librarySummariesError: '',
+          currentNovelId: result.activeNovelId ?? get().currentNovelId,
+          isHydrated: true,
+        })
+      } catch (error) {
+        const message = getWorkspaceRestoreErrorMessage(error)
+        set({
+          librarySummariesLoaded: true,
+          librarySummariesError: message,
+          isHydrated: true,
+        })
+        throw error
+      }
+    },
     loadPresetCompatLibrary: async () => {
       set({ presetCompatLibraryLoading: true, presetCompatLibraryError: '' })
       try {
@@ -289,69 +714,96 @@ export function createPersistenceActions(
         throw error
       }
     },
-    loadFromBackend: async () => {
+    loadFromBackend: async (novelId) => {
+      const restoreGeneration = workspaceRestoreGeneration + 1
+      workspaceRestoreGeneration = restoreGeneration
+      const ownsRestore = () => workspaceRestoreGeneration === restoreGeneration
       set({
         backendLoadError: '',
-        presetCompatLibraryLoading: true,
-        presetCompatLibraryError: '',
       })
-      let restoredWorkspace = initialState
+      activeWorkspaceRestoreController?.abort()
       const workspaceRestoreController = new AbortController()
-      const workspaceRestoreTimeoutId = globalThis.setTimeout(() => {
-        workspaceRestoreController.abort()
-      }, WORKSPACE_RESTORE_TIMEOUT_MS)
+      activeWorkspaceRestoreController = workspaceRestoreController
 
       try {
-        const workspaceResponse = await fetch('/api/workspace', {
-          cache: 'no-store',
-          signal: workspaceRestoreController.signal,
-        })
+        const query = novelId ? `?${new URLSearchParams({ novelId }).toString()}` : ''
+        const workspaceResponse = await fetchWithWorkspaceTimeout(`/api/workspace${query}`, 'Workspace restore timed out', workspaceRestoreController.signal)
         if (!workspaceResponse.ok) {
-          const error = await workspaceResponse.json().catch(() => null) as { error?: string } | null
+          const error = (() => {
+            try { return JSON.parse(workspaceResponse.text) as { error?: string } }
+            catch { return null }
+          })()
           throw new Error(error?.error || 'Failed to restore workspace')
         }
 
-        const workspace = await workspaceResponse.json().catch(() => {
-          throw new Error('Workspace endpoint returned invalid JSON')
-        })
-        const normalizedWorkspace = normalizeWorkspaceState(workspace)
-        restoredWorkspace = normalizedWorkspace
+        const workspace = parseWorkspaceResponseBody(workspaceResponse, 'Workspace endpoint returned invalid JSON')
+        if (!isWorkspaceResponse(workspace)) throw new Error('Workspace endpoint returned an invalid workspace')
+        if (!ownsRestore()) return
+        const normalizedWorkspace = serializeState(normalizeWorkspaceState(workspace))
+        const revisionAuthority = parseWorkspaceRevisionAuthority(workspace, workspaceResponse)
+        const targetPresent = !novelId || normalizedWorkspace.localNovels.some((item) => item.id === novelId)
+          || normalizedWorkspace.localChapters.some((item) => item.novelId === novelId)
+        const authoritativeForWorkspace = revisionAuthority && (
+          normalizedWorkspace.localNovels.some((item) => item.id === revisionAuthority.revisionNovelId)
+          || normalizedWorkspace.localChapters.some((item) => item.novelId === revisionAuthority.revisionNovelId)
+        )
+        if (novelId && (!revisionAuthority || revisionAuthority.revisionNovelId !== novelId || !targetPresent)) {
+          throw new Error('Targeted workspace returned invalid revision authority')
+        }
 
+        if (authoritativeForWorkspace) authorityEpoch += 1
         set({
           ...normalizedWorkspace,
+          workspaceRevision: authoritativeForWorkspace ? revisionAuthority.workspaceRevision : null,
+          revisionNovelId: authoritativeForWorkspace ? revisionAuthority.revisionNovelId : '',
+          lastAcknowledgedPersistedWorkspace: authoritativeForWorkspace ? normalizedWorkspace : null,
+          workspaceSaveConflict: null,
+          workspaceSaveFeedback: null,
           isHydrated: true,
           backendLoaded: true,
           backendLoadError: '',
+          librarySummaries: get().librarySummaries.map((summary) => {
+            const loadedNovel = normalizedWorkspace.localNovels.find((item) => item.id === summary.id)
+            if (!loadedNovel) return summary
+            const chapters = normalizedWorkspace.localChapters
+              .filter((chapter) => chapter.novelId === summary.id && !chapter.parentChapterId)
+              .slice()
+              .sort((left, right) => left.order - right.order)
+            return {
+              ...summary,
+              title: loadedNovel.title,
+              summary: loadedNovel.summary,
+              tags: loadedNovel.tags,
+              updatedAt: chapters[0]?.updatedAt ?? summary.updatedAt,
+              wordCount: chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0),
+              chapterCount: chapters.length,
+              firstChapterId: chapters[0]?.id ?? null,
+            }
+          }),
         })
       } catch (error) {
+        if (!ownsRestore()) return
         const message = getWorkspaceRestoreErrorMessage(error)
         console.error('Workspace restore failed:', error)
         set({
           backendLoaded: true,
           isHydrated: true,
           backendLoadError: message,
-          presetCompatLibraryLoading: false,
         })
+        if (novelId) throw error
         return
-      } finally {
-        globalThis.clearTimeout(workspaceRestoreTimeoutId)
       }
 
-      const [aiResult, presetCompatResult, projectionResult] = await Promise.allSettled([
-        fetch('/api/settings/ai', { cache: 'no-store' }).then(async (response) => {
+      const [aiResult] = await Promise.allSettled([
+        requestClientGet('/api/settings/ai', { signal: workspaceRestoreController.signal, parse: async (response) => {
           if (!response.ok) {
             const error = await response.json().catch(() => null) as { error?: string } | null
             throw new Error(error?.error || 'Failed to load AI settings')
           }
           return response.json()
-        }),
-        fetchPresetCompatLibrary(),
-        fetchKnowledgeProjection({
-          novelId: restoredWorkspace.currentNovelId || undefined,
-          asOfChapter: resolveCurrentChapterOrder(restoredWorkspace, restoredWorkspace.currentNovelId || undefined),
-          statusOnly: true,
-        }),
+        }}),
       ])
+      if (!ownsRestore()) return
 
       const nextState: Partial<NovelStore> = {}
       if (aiResult.status === 'fulfilled') {
@@ -360,45 +812,169 @@ export function createPersistenceActions(
         console.error('AI settings restore failed:', aiResult.reason)
       }
 
-      if (presetCompatResult.status === 'fulfilled') {
-        nextState.presetCompatLibrary = presetCompatResult.value
-        nextState.presetCompatLibraryDirty = false
-        nextState.presetCompatLibraryError = ''
-      } else {
-        const message = presetCompatResult.reason instanceof Error
-          ? presetCompatResult.reason.message
-          : 'Failed to load preset compat library'
-        console.error('Preset compat library restore failed:', presetCompatResult.reason)
-        nextState.presetCompatLibraryError = message
-      }
-
-      nextState.presetCompatLibraryLoading = false
-
-      if (projectionResult.status === 'fulfilled') {
-        Object.assign(nextState, normalizeKnowledgeProjectionResult(projectionResult.value))
-      } else {
-        console.error('Knowledge projection restore failed:', projectionResult.reason)
-      }
-
       if (Object.keys(nextState).length) {
         set(nextState)
       }
+      if (activeWorkspaceRestoreController === workspaceRestoreController) activeWorkspaceRestoreController = null
     },
     saveToBackend: async () => {
       const state = get()
-      set({ isSaving: true })
-      try {
-        const response = await fetch('/api/workspace', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(serializeState(state)),
-        })
-        const data = (await response.json()) as { ok?: boolean; error?: string }
-        if (!response.ok || data.ok === false) {
-          throw new Error(data.error || 'Failed to save workspace')
+      const capturedSnapshot = serializeState(state)
+      const hasMatchingAuthority = state.workspaceRevision !== null
+        && state.revisionNovelId === capturedSnapshot.currentNovelId
+        && state.lastAcknowledgedPersistedWorkspace !== null
+      const classification = hasMatchingAuthority
+        ? classifyWorkspacePersistence(state.lastAcknowledgedPersistedWorkspace!, capturedSnapshot)
+        : { kind: 'post' as const }
+      const conflict = state.workspaceSaveConflict
+      if (conflict && hasMatchingAuthority) {
+        const unchangedRejectedChapter = classification.kind === 'patch'
+          && classification.chapter.id === conflict.chapterId
+          && createChapterFingerprint(classification.chapter) === conflict.rejectedChapterFingerprint
+        if (unchangedRejectedChapter) {
+          throw workspaceSaveFailure('stale-revision', 'Workspace chapter conflict remains unresolved')
         }
+        if (classification.kind !== 'patch' || classification.chapter.id !== conflict.chapterId) {
+          set({ workspaceSaveFeedback: { kind: 'structural-conflict' } })
+          throw workspaceSaveFailure('conflict-blocked', 'Workspace structural conflict requires reconciliation')
+        }
+        if (state.patchCapability === 'unsupported') {
+          set({ workspaceSaveFeedback: { kind: 'structural-conflict' } })
+          throw workspaceSaveFailure('conflict-blocked', 'Workspace structural conflict requires reconciliation')
+        }
+      }
+
+      const patchEligible = classification.kind === 'patch' && state.patchCapability !== 'unsupported'
+      const method: WorkspaceMutationMethod = patchEligible ? 'PATCH' : 'POST'
+      const idempotencyKey = hasMatchingAuthority ? crypto.randomUUID() : null
+      const baseRevision = hasMatchingAuthority ? state.workspaceRevision : null
+      const patchBody = classification.kind === 'patch' ? {
+        novelId: state.revisionNovelId,
+        chapterId: classification.chapter.id,
+        content: classification.chapter.content,
+        wordCount: classification.chapter.wordCount,
+        updatedAtLabel: classification.chapter.updatedAt,
+      } : null
+      const envelope: WorkspaceMutationEnvelope = {
+        method,
+        body: JSON.stringify(method === 'PATCH' ? patchBody : capturedSnapshot),
+        idempotencyKey,
+        baseRevision,
+        capturedSnapshot,
+        revisionOwner: state.revisionNovelId,
+        chapterId: classification.kind === 'patch' ? classification.chapter.id : null,
+        chapterFingerprint: classification.kind === 'patch' ? createChapterFingerprint(classification.chapter) : null,
+      }
+      const saveAuthorityEpoch = authorityEpoch
+      const priorAuthority = {
+        workspaceRevision: state.workspaceRevision,
+        revisionNovelId: state.revisionNovelId,
+        lastAcknowledgedPersistedWorkspace: state.lastAcknowledgedPersistedWorkspace,
+      }
+      const generation = beginSave()
+      try {
+        let activeEnvelope = envelope
+        let result: WorkspaceMutationResponse
+        try {
+          result = await executeMutationEnvelope(envelope)
+        } catch (error) {
+          if (envelope.baseRevision === null || envelope.idempotencyKey === null) throw error
+          try {
+            result = await executeMutationEnvelope(envelope)
+          } catch (retryError) {
+            applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
+            if (retryError instanceof TypedWorkspaceSaveError && retryError.code === 'invalid-response') throw retryError
+            throw workspaceSaveFailure('transport-indeterminate', 'Workspace save result could not be confirmed')
+          }
+        }
+
+        if (envelope.method === 'PATCH' && (result.response.status === 405 || result.response.status === 501)) {
+          set({ patchCapability: 'unsupported' })
+          const fallbackEnvelope: WorkspaceMutationEnvelope = {
+            ...envelope,
+            method: 'POST',
+            body: JSON.stringify(envelope.capturedSnapshot),
+            idempotencyKey: crypto.randomUUID(),
+            chapterId: null,
+            chapterFingerprint: null,
+          }
+          try {
+            result = await executeMutationEnvelope(fallbackEnvelope)
+            activeEnvelope = fallbackEnvelope
+          } catch {
+            try {
+              result = await executeMutationEnvelope(fallbackEnvelope)
+              activeEnvelope = fallbackEnvelope
+            } catch (retryError) {
+              applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
+              if (retryError instanceof TypedWorkspaceSaveError && retryError.code === 'invalid-response') throw retryError
+              throw workspaceSaveFailure('transport-indeterminate', 'Workspace save result could not be confirmed')
+            }
+          }
+        } else if (envelope.method === 'PATCH') {
+          set((current) => current.patchCapability === 'unsupported' ? current : { patchCapability: 'supported' })
+        }
+
+        if (
+          activeEnvelope.baseRevision !== null
+          && activeEnvelope.idempotencyKey !== null
+          && result.response.ok
+          && parseMutationSuccess(result.response, result.payload, activeEnvelope.revisionOwner) === null
+        ) {
+          try {
+            result = await executeMutationEnvelope(activeEnvelope)
+          } catch {
+            applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
+            throw workspaceSaveFailure('transport-indeterminate', 'Workspace save result could not be confirmed')
+          }
+          if (
+            !result.response.ok
+            || parseMutationSuccess(result.response, result.payload, activeEnvelope.revisionOwner) === null
+          ) {
+            applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
+            throw workspaceSaveFailure('invalid-response', 'Workspace save returned an invalid revision acknowledgement')
+          }
+        }
+
+        if (!result.response.ok) {
+          const stale = parseStaleRevisionPayload(result.payload, activeEnvelope.method === 'PATCH')
+          if (stale && hasMatchingAuthority) {
+            const isChapterConflict = activeEnvelope.method === 'PATCH'
+              && activeEnvelope.chapterId !== null
+              && activeEnvelope.chapterFingerprint !== null
+            const conflictApplied = applyStaleResult({ generation, saveAuthorityEpoch, envelope: activeEnvelope, stale })
+            if (isChapterConflict) {
+              throw workspaceSaveFailure('stale-revision', 'Workspace chapter conflict requires reconciliation')
+            }
+            void conflictApplied
+            throw workspaceSaveFailure('conflict-blocked', 'Workspace structural conflict requires reconciliation')
+          }
+          applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
+          const message = isRecord(result.payload) && typeof result.payload.error === 'string'
+            ? result.payload.error
+            : 'Workspace save was rejected'
+          throw workspaceSaveFailure('http-rejected', message)
+        }
+
+        if (!hasMatchingAuthority) {
+          if (!isRecord(result.payload) || result.payload.ok !== true) {
+            applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
+            throw workspaceSaveFailure('invalid-response', 'Workspace save returned an invalid response')
+          }
+          const acknowledgement = parseMutationSuccess(result.response, result.payload, capturedSnapshot.currentNovelId)
+          if (acknowledgement) {
+            applySaveSuccess(generation, saveAuthorityEpoch, capturedSnapshot, priorAuthority, acknowledgement)
+          }
+          return
+        }
+        const acknowledgement = parseMutationSuccess(result.response, result.payload, state.revisionNovelId)
+        if (!acknowledgement) {
+          applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
+          throw workspaceSaveFailure('invalid-response', 'Workspace save returned an invalid revision acknowledgement')
+        }
+        applySaveSuccess(generation, saveAuthorityEpoch, capturedSnapshot, priorAuthority, acknowledgement)
       } finally {
-        set({ isSaving: false })
+        finishSave()
       }
     },
     deleteNovelFromBackend: async (novelId) => {
