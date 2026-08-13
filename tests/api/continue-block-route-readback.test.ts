@@ -125,6 +125,7 @@ describe('/api/continue-blocks detail readback', () => {
       new Request(`http://localhost/api/continue-blocks/${created.continueBlockId}?novelId=novel-001&branchId=novel-001:main`),
       { params: Promise.resolve({ continueBlockId: created.continueBlockId }) }
     )
+    expect(detailResponse.headers.get('cache-control')).toBe('no-store')
 
     expect(detailResponse.status).toBe(200)
     const detail = await detailResponse.json() as {

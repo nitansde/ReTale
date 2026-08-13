@@ -1,5 +1,4 @@
-import { NextResponse } from 'next/server'
-import { jsonError, requireNonEmptyId } from '@/lib/server/api-route'
+import { noStoreJson, noStoreJsonError, requireNonEmptyId } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { findContinueBlockById } from '@/lib/server/continue-block-store'
 
@@ -12,20 +11,20 @@ export async function GET(request: Request, ctx: RouteContext<'/api/continue-blo
     const branchId = searchParams.get('branchId')?.trim() ?? ''
 
     if (!novelId) {
-      return jsonError('novelId is required', 400)
+      return noStoreJsonError('novelId is required', 400)
     }
     if (!branchId) {
-      return jsonError('branchId is required', 400)
+      return noStoreJsonError('branchId is required', 400)
     }
 
     const detail = findContinueBlockById(continueBlockId, createNovelDatabaseAccess(novelId))
     if (!detail || detail.novelId !== novelId || detail.branchId !== branchId) {
-      return jsonError('Continue block not found for the requested branch context', 404)
+      return noStoreJsonError('Continue block not found for the requested branch context', 404)
     }
 
-    return NextResponse.json(detail)
+    return noStoreJson(detail)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load continue block detail'
-    return jsonError(message, message.endsWith(' is required') ? 400 : 500)
+    return noStoreJsonError(message, message.endsWith(' is required') ? 400 : 500)
   }
 }
