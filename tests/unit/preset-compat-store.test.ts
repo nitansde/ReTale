@@ -446,6 +446,29 @@ describe('preset compat store lifecycle', () => {
     expect(state.backendLoadError).toBe('Workspace restore timed out')
   })
 
+  it('resolves workspace restore without waiting for a stalled AI settings request', async () => {
+    const workspacePayload = createWorkspacePayload('novel-a')
+    const settingsRequest = Promise.withResolvers<Response>()
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace?novelId=novel-a') {
+        return Promise.resolve(new Response(JSON.stringify(workspacePayload), { status: 200 }))
+      }
+      if (url === '/api/settings/ai') return settingsRequest.promise
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await useNovelStore.getState().loadFromBackend('novel-a')
+
+    expect(useNovelStore.getState()).toMatchObject({
+      currentNovelId: 'novel-a',
+      backendLoaded: true,
+      backendLoadError: '',
+    })
+    settingsRequest.resolve(new Response(JSON.stringify({}), { status: 200 }))
+    await settingsRequest.promise
+  })
+
   it('records and rejects a targeted workspace restore failure', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
@@ -479,8 +502,9 @@ describe('preset compat store lifecycle', () => {
     expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/workspace?novelId=novel-a')).toHaveLength(1)
 
     const newer = useNovelStore.getState().loadFromBackend('novel-b')
-    await Promise.resolve()
-    expect(pending.get('/api/workspace?novelId=novel-a')?.signal?.aborted).toBe(true)
+    await vi.waitFor(() => {
+      expect(pending.get('/api/workspace?novelId=novel-a')?.signal?.aborted).toBe(true)
+    })
     pending.get('/api/workspace?novelId=novel-b')?.resolve(new Response(JSON.stringify(createWorkspacePayload('novel-b'))))
     await newer
     expect(useNovelStore.getState().currentNovelId).toBe('novel-b')

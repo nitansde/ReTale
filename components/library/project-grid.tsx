@@ -103,9 +103,11 @@ export function ProjectGrid() {
   const [libraryNotice, setLibraryNotice] = useState<LibraryNotice>(null)
   const deletionInFlightRef = useRef(false)
   const importRequestSequenceRef = useRef(0)
+  const openRequestSequenceRef = useRef(0)
   const activeImportXhrRef = useRef<XMLHttpRequest | null>(null)
   const mountedRef = useRef(true)
   const isImporting = importFeedback.status === 'uploading' || importFeedback.status === 'processing'
+  const workspaceHandoffPending = openingNovelId !== null
 
   const selectNovelChapter = (novelId: string, chapterId?: string) => {
     const chapter = resolveOpenNovelChapter(useNovelStore.getState().localChapters, novelId, chapterId)
@@ -129,6 +131,7 @@ export function ProjectGrid() {
     return () => {
       mountedRef.current = false
       importRequestSequenceRef.current += 1
+      openRequestSequenceRef.current += 1
       activeImportXhrRef.current?.abort?.()
       activeImportXhrRef.current = null
     }
@@ -139,26 +142,35 @@ export function ProjectGrid() {
     chapterId?: string,
     { persistSelection = true }: { persistSelection?: boolean } = {},
   ) => {
+    const requestSequence = openRequestSequenceRef.current + 1
+    openRequestSequenceRef.current = requestSequence
+    const ownsRequest = () => mountedRef.current && openRequestSequenceRef.current === requestSequence
     setOpeningNovelId(novelId)
 
     try {
       await loadFromBackend(novelId)
+      if (!ownsRequest()) return false
       const chapter = selectNovelChapter(novelId, chapterId)
       if (!chapter) {
-        setOpeningNovelId(null)
-        setLibraryNotice({ variant: 'warning', message: t('library.noChapter') })
+        if (ownsRequest()) {
+          setOpeningNovelId(null)
+          setLibraryNotice({ variant: 'warning', message: t('library.noChapter') })
+        }
         return false
       }
-      router.push('/workspace')
+      if (!ownsRequest()) return false
       if (persistSelection) {
-        void saveToBackend().catch((error) => {
-          console.warn('Failed to persist the newly opened workspace selection in the background.', error)
-        })
+        await saveToBackend()
+        if (!ownsRequest()) return false
       }
+      router.push('/workspace')
       return true
-    } catch {
-      setLibraryNotice({ variant: 'error', message: t('library.openFailed') })
-      setOpeningNovelId(null)
+    } catch (error) {
+      console.warn('Failed to open the selected workspace.', error)
+      if (ownsRequest()) {
+        setLibraryNotice({ variant: 'error', message: t('library.openFailed') })
+        setOpeningNovelId(null)
+      }
       return false
     }
   }
@@ -220,7 +232,7 @@ export function ProjectGrid() {
   
       if (!ownsRequest()) return
       try {
-        await loadLibrarySummaries()
+        await loadLibrarySummaries({ fresh: true })
       } catch {
         throw createImportFailure('refresh')
       }
@@ -281,7 +293,7 @@ export function ProjectGrid() {
       const outcome = await deleteNovelFromBackend(novelId)
       if (outcome.status === 'committed') {
         reconcileNovelDeletion(outcome.result.activeNovelId)
-        await loadLibrarySummaries().catch(() => undefined)
+        await loadLibrarySummaries({ fresh: true }).catch(() => undefined)
         setLibraryNotice({ variant: 'success', message: t('library.deleted', { title }) })
       } else if (outcome.status === 'rejected') {
         rollbackNovelDeletion(transaction)
@@ -289,13 +301,13 @@ export function ProjectGrid() {
       } else {
         try {
           const reconciliation = await reconcileNovelDeletionFromBackend(transaction)
-          await loadLibrarySummaries().catch(() => undefined)
+          await loadLibrarySummaries({ fresh: true }).catch(() => undefined)
           setLibraryNotice({
             variant: reconciliation === 'present' ? 'warning' : 'success',
             message: t(reconciliation === 'present' ? 'library.deleteFailedAuthoritative' : 'library.deleted', { title }),
           })
         } catch {
-          await loadLibrarySummaries().catch(() => undefined)
+          await loadLibrarySummaries({ fresh: true }).catch(() => undefined)
           setLibraryNotice({ variant: 'warning', message: t('library.deleteReconcileFailed', { title }) })
         }
       }
@@ -321,7 +333,7 @@ export function ProjectGrid() {
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
-          disabled={isImporting}
+          disabled={isImporting || workspaceHandoffPending}
           className="rounded-2xl border border-indigo-400/20 bg-indigo-500/90 px-4 py-2.5 text-sm font-medium text-white shadow-[0_12px_30px_rgba(99,102,241,0.35)] transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {importFeedback.status === 'uploading'
@@ -333,6 +345,7 @@ export function ProjectGrid() {
         <input
           ref={fileRef}
           type="file"
+          disabled={isImporting || workspaceHandoffPending}
           accept=".txt,text/plain"
           className="hidden"
           onChange={(event) => {
@@ -397,6 +410,7 @@ export function ProjectGrid() {
             }}
             opening={openingNovelId === novel.id}
             deleting={isNovelDeletionPending || deletingNovelId === novel.id}
+            disabled={workspaceHandoffPending}
           />
         ))}
       </div>

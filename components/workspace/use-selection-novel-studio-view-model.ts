@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import { getClientLocale, getMessage } from '@/lib/i18n/messages'
 import type { Chapter } from '@/lib/types'
@@ -100,9 +100,11 @@ export function useSelectionNovelStudioViewModel({
     override: activeWorkspaceSelection.kind !== 'chapter' && currentBranchMetricsOverride?.nodeId === activeWorkspaceSelection.nodeId ? currentBranchMetricsOverride : null,
   })
 
-  continueBlockMetricsNodeIdRef.current = activeWorkspaceSelection.kind === 'rewrite' || activeWorkspaceSelection.kind === 'continue_block' ? activeWorkspaceSelection.nodeId : null
-  whatIfMetricsNodeIdRef.current = activeWorkspaceSelection.kind === 'what_if' ? activeWorkspaceSelection.nodeId : null
-  futureJumpMetricsNodeIdRef.current = activeWorkspaceSelection.kind === 'future_jump' ? activeWorkspaceSelection.nodeId : null
+  useEffect(() => {
+    continueBlockMetricsNodeIdRef.current = activeWorkspaceSelection.kind === 'rewrite' || activeWorkspaceSelection.kind === 'continue_block' ? activeWorkspaceSelection.nodeId : null
+    whatIfMetricsNodeIdRef.current = activeWorkspaceSelection.kind === 'what_if' ? activeWorkspaceSelection.nodeId : null
+    futureJumpMetricsNodeIdRef.current = activeWorkspaceSelection.kind === 'future_jump' ? activeWorkspaceSelection.nodeId : null
+  }, [activeWorkspaceSelection, continueBlockMetricsNodeIdRef, futureJumpMetricsNodeIdRef, whatIfMetricsNodeIdRef])
 
   const summarySource = lockedSelectionText || selectionText
   const locale = getClientLocale()

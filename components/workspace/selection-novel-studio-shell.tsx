@@ -242,6 +242,7 @@ export function selectSelectionNovelStudioStore(state: NovelStore) {
 
 export function SelectionNovelStudio() {
   const { t } = useI18n()
+  const router = useRouter()
   const {
     loadFromBackend, saveToBackend, deleteNovelFromBackend, reconcileNovelDeletionFromBackend, isNovelDeletionPending, beginNovelDeletion, rollbackNovelDeletion, setNovelDeletionPending, reconcileNovelDeletion, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId,
     setCurrentChapterId, updateChapterContent, createNewChapter, deleteChapter, deleteNovel, aiSettings, setAISettings,
@@ -253,7 +254,11 @@ export function SelectionNovelStudio() {
     persistRevision, workspaceSaveFeedback,
   } = useNovelStore(useShallow(selectSelectionNovelStudioStore))
   const autosaveTarget = `${currentNovelId}\u0000${persistRevision}`
-  const core = useSelectionNovelStudioCore({ loadFromBackend, saveToBackend, isNovelDeletionPending, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId, setCurrentChapterId, updateChapterContent, aiSettings, setAISettings, refreshKnowledgeProjection, clearPresetCompatSessionStateForSelection: (selection) => clearPresetCompatSessionStateForSelection(selection), resetPresetCompatSessionStateForSelection: (selection, surfaces) => resetPresetCompatSessionStateForSelection(selection, surfaces ?? []), presetCompatSessionState, localCharacters, localWorldEntries, localTimelineEvents, localOutlines, autosaveTarget, workspaceSaveFeedback })
+  const readAutosaveTarget = useCallback(() => {
+    const state = useNovelStore.getState()
+    return `${state.currentNovelId}\u0000${state.persistRevision}`
+  }, [])
+  const core = useSelectionNovelStudioCore({ loadFromBackend, saveToBackend, isNovelDeletionPending, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId, setCurrentChapterId, updateChapterContent, aiSettings, setAISettings, refreshKnowledgeProjection, clearPresetCompatSessionStateForSelection: (selection) => clearPresetCompatSessionStateForSelection(selection), resetPresetCompatSessionStateForSelection: (selection, surfaces) => resetPresetCompatSessionStateForSelection(selection, surfaces ?? []), presetCompatSessionState, localCharacters, localWorldEntries, localTimelineEvents, localOutlines, autosaveTarget, readAutosaveTarget, workspaceSaveFeedback })
   const {
     leftPanelOpen, setLeftPanelOpen, referencePanelOpen, setReferencePanelOpen, knowledgePanelOpen, setKnowledgePanelOpen, chapterListState, setChapterListState, centerPaneView, setCenterPaneView, refTab, setRefTab, settingsOpen, setSettingsOpen,
     selectionText, lockedSelectionText, toolbarPos, activeMode, rewritePrompt, rewriteState, rewriteFlow, generationContext,
@@ -282,7 +287,7 @@ export function SelectionNovelStudio() {
     currentNovelTimelineEvents, currentNovelCharactersSorted, currentNovelWorldEntryGroups, workspaceKnowledgeTabs,
     loadChapterGraph, resolveEdgeSourceJumpTarget, resolveEvidenceSourceJumpTarget, handleChapterGraphControlChange, handleWhatIfMetricsChange, handleContinueBlockMetricsChange, handleFutureJumpMetricsChange,
     selectedRewriteCandidate, previewRewriteContent, activeGraphContext, activePromptBlockCount, activeSeedEntityCount,
-    activeGraphEdgeCount, activeEvidenceCount, scenarioStatusLabels, providerLabel, workspaceSelection, handleTimelineSelection, deletingBranchNodeId, closePanel,
+    activeGraphEdgeCount, activeEvidenceCount, scenarioStatusLabels, providerLabel, workspaceSelection, handleTimelineSelection, deletingBranchNodeId, closePanel, saveWorkspaceBeforeNavigation,
   } = core
   const selectionView = useSelectionNovelStudioViewModel({ currentChapter, workspaceSelection, timelineNodeById, resolveSourceChapter: ({ chapterId, chapterNo }) => core.resolveSourceChapter({ chapterId, chapterNo: chapterNo ?? null }), currentNovelId, storyTimelineBranchId: core.storyTimelineBranchId, chapterText, currentBranchMetricsOverride: core.currentBranchMetricsOverride, graphSourceMeta: graphSourceMeta ?? null, continueBlockMetricsNodeIdRef: core.continueBlockMetricsNodeIdRef, whatIfMetricsNodeIdRef: core.whatIfMetricsNodeIdRef, futureJumpMetricsNodeIdRef: core.futureJumpMetricsNodeIdRef, selectionText, lockedSelectionText: core.lockedSelectionText })
   const {
@@ -363,6 +368,9 @@ export function SelectionNovelStudio() {
           }}
           onOpenSettings={() => setSettingsOpen(true)}
           onDeleteNovel={() => { void handleDeleteNovel() }}
+          onBackToLibrary={async () => {
+            if (await saveWorkspaceBeforeNavigation()) router.push('/library')
+          }}
         />
 
         <div className="grid flex-1 gap-4 lg:grid-cols-[264px_minmax(0,1.28fr)_376px] 2xl:grid-cols-[280px_minmax(0,1.32fr)_392px]">

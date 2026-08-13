@@ -24,6 +24,7 @@ export function WorkspaceHeader({
   onOpenPresets,
   onOpenSettings,
   onDeleteNovel,
+  onBackToLibrary,
 }: {
   title: string
   metrics: WorkspaceMetrics
@@ -35,9 +36,18 @@ export function WorkspaceHeader({
   onOpenPresets: () => void
   onOpenSettings: () => void
   onDeleteNovel: () => void
+  onBackToLibrary: () => Promise<void>
 }) {
   const { t } = useI18n()
   const [overflowOpen, setOverflowOpen] = useState(false)
+  const [backPending, setBackPending] = useState(false)
+
+  function handleBackNavigation(event: { preventDefault: () => void }) {
+    event.preventDefault()
+    if (backPending) return
+    setBackPending(true)
+    void onBackToLibrary().finally(() => setBackPending(false))
+  }
 
   function runOverflowAction(action: () => void) {
     setOverflowOpen(false)
@@ -49,6 +59,8 @@ export function WorkspaceHeader({
       <div className="grid grid-cols-[44px_44px_minmax(0,1fr)_44px_44px] items-center gap-1 lg:hidden" data-testid="workspace-mobile-header">
         <Link
           href="/library"
+          onNavigate={handleBackNavigation}
+          aria-busy={backPending}
           aria-label={t('workspace.header.backToLibrary')}
           className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-zinc-300 transition hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70"
         >
@@ -70,6 +82,8 @@ export function WorkspaceHeader({
         <div className="flex min-w-0 items-center gap-3">
           <Link
             href="/library"
+            onNavigate={handleBackNavigation}
+            aria-busy={backPending}
             aria-label={t('workspace.header.backToLibrary')}
             className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-zinc-300 transition hover:bg-white/[0.08]"
           >

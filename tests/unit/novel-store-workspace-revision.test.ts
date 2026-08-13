@@ -81,6 +81,13 @@ function staleResponse(currentRevision: number, chapter: PersistedNovelState['lo
   }), { status: 409 })
 }
 
+function expectSameMutationEnvelope(first: RequestInit | undefined, second: RequestInit | undefined) {
+  expect(second?.method).toBe(first?.method)
+  expect(second?.body).toBe(first?.body)
+  expect(second?.headers).toEqual(first?.headers)
+  expect(second?.keepalive).toBe(first?.keepalive)
+}
+
 describe('novel store workspace revision persistence', () => {
   beforeEach(() => {
     resetClientRequestBrokerForTests()
@@ -264,7 +271,7 @@ describe('novel store workspace revision persistence', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('POST')
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ 'X-Retale-Revision-Novel-Id': 'novel-1' })
-    expect(fetchMock.mock.calls[1]?.[1]).toEqual(fetchMock.mock.calls[0]?.[1])
+    expectSameMutationEnvelope(fetchMock.mock.calls[0]?.[1], fetchMock.mock.calls[1]?.[1])
   })
 
   it('retries malformed revision-aware POST success once with the exact same envelope', async () => {
@@ -278,17 +285,20 @@ describe('novel store workspace revision persistence', () => {
     await useNovelStore.getState().saveToBackend()
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(fetchMock.mock.calls[1]?.[1]).toEqual(fetchMock.mock.calls[0]?.[1])
+    expectSameMutationEnvelope(fetchMock.mock.calls[0]?.[1], fetchMock.mock.calls[1]?.[1])
   })
 
-  it('does not retry authorityless legacy POST transport failure', async () => {
+  it('does not retry an authorityless legacy POST and classifies transport failure as indeterminate', async () => {
     useNovelStore.getState().restorePersistedState(createWorkspace())
     const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('offline'))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(useNovelStore.getState().saveToBackend()).rejects.toThrow('offline')
+    await expect(useNovelStore.getState().saveToBackend()).rejects.toMatchObject({
+      code: 'transport-indeterminate',
+    })
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(useNovelStore.getState().workspaceSaveFeedback).toEqual({ kind: 'save-failed' })
   })
 
   it('does not retry an explicit revision-aware POST rejection', async () => {
@@ -334,6 +344,55 @@ describe('novel store workspace revision persistence', () => {
     expect(useNovelStore.getState().workspaceSaveFeedback).toEqual({ kind: 'save-failed' })
   })
 
+  it('times out and retries a revision-aware PATCH once with the same mutation envelope', async () => {
+    vi.useFakeTimers()
+    await hydrate()
+    useNovelStore.getState().updateChapterContent('chapter-1', '<p>Timed out</p>', 2)
+    const fetchMock = vi.fn<typeof fetch>((_input, init) => new Promise<Response>((_, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        const error = new Error('Aborted')
+        error.name = 'AbortError'
+        reject(error)
+      }, { once: true })
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const save = useNovelStore.getState().saveToBackend()
+    const saveExpectation = expect(save).rejects.toMatchObject({ code: 'transport-indeterminate' })
+    await vi.advanceTimersByTimeAsync(30_000)
+    await saveExpectation
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const first = fetchMock.mock.calls[0]?.[1]
+    const second = fetchMock.mock.calls[1]?.[1]
+    expect(second?.method).toBe(first?.method)
+    expect(second?.body).toBe(first?.body)
+    expect(second?.headers).toEqual(first?.headers)
+    expect(second?.signal).not.toBe(first?.signal)
+  })
+
+  it('uses keepalive for a lifecycle PATCH below the safe body limit', async () => {
+    await hydrate()
+    useNovelStore.getState().updateChapterContent('chapter-1', '<p>Lifecycle</p>', 1)
+    const fetchMock = vi.fn<typeof fetch>(async () => mutationSuccess(8))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await useNovelStore.getState().saveToBackend({ lifecycle: true })
+
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'PATCH', keepalive: true })
+  })
+
+  it('disables keepalive when a lifecycle mutation exceeds the safe body limit', async () => {
+    await hydrate()
+    useNovelStore.getState().updateChapterContent('chapter-1', `<p>${'x'.repeat(70_000)}</p>`, 1)
+    const fetchMock = vi.fn<typeof fetch>(async () => mutationSuccess(8))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await useNovelStore.getState().saveToBackend({ lifecycle: true })
+
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'PATCH', keepalive: false })
+  })
+
   it.each([405, 501])('falls back from PATCH status %s to one revision-aware POST with a new key', async (status) => {
     await hydrate()
     useNovelStore.getState().updateChapterContent('chapter-1', '<p>Local</p>', 2)
@@ -371,7 +430,7 @@ describe('novel store workspace revision persistence', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3)
     expect(fetchMock.mock.calls[1]?.[1]?.method).toBe('POST')
     expect(fetchMock.mock.calls[1]?.[1]?.headers).toMatchObject({ 'X-Retale-Revision-Novel-Id': 'novel-1' })
-    expect(fetchMock.mock.calls[2]?.[1]).toEqual(fetchMock.mock.calls[1]?.[1])
+    expectSameMutationEnvelope(fetchMock.mock.calls[1]?.[1], fetchMock.mock.calls[2]?.[1])
   })
 
   it('uses revision-aware POST for future chapter saves when PATCH is unsupported', async () => {

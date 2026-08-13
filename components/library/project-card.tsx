@@ -10,12 +10,14 @@ export function ProjectCard({
   onDelete,
   opening,
   deleting,
+  disabled,
 }: {
   novel: Novel
   onOpen: () => void
   onDelete: () => void
   opening?: boolean
   deleting?: boolean
+  disabled?: boolean
 }) {
   const { t } = useI18n()
 
@@ -25,7 +27,7 @@ export function ProjectCard({
         <button
           type="button"
           onClick={onOpen}
-          disabled={opening}
+          disabled={opening || disabled}
           aria-busy={opening}
           className="flex-1 text-left disabled:cursor-progress"
         >
@@ -70,7 +72,7 @@ export function ProjectCard({
         <button
           type="button"
           onClick={onDelete}
-          disabled={deleting || opening}
+          disabled={deleting || opening || disabled}
           className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-2 text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
           aria-label={t('library.cardDeleteAria', { title: novel.title })}
         >

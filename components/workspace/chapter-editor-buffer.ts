@@ -19,6 +19,7 @@ type BufferedChapterEditor = {
 export function createChapterEditorBuffer(options: ChapterEditorBufferOptions) {
   const setTimer = options.setTimer ?? globalThis.setTimeout
   const clearTimer = options.clearTimer ?? globalThis.clearTimeout
+  let commit = options.commit
   let timer: ReturnType<typeof setTimeout> | null = null
   let buffered: BufferedChapterEditor | null = null
   let generation = 0
@@ -34,7 +35,7 @@ export function createChapterEditorBuffer(options: ChapterEditorBufferOptions) {
     buffered = null
     if (!pending) return null
     const payload = { chapterId: pending.chapterId, ...pending.read() }
-    options.commit(payload)
+    commit(payload)
     return payload
   }
 
@@ -49,6 +50,9 @@ export function createChapterEditorBuffer(options: ChapterEditorBufferOptions) {
   }
 
   return {
+    setCommit(nextCommit: ChapterEditorBufferOptions['commit']) {
+      commit = nextCommit
+    },
     update(chapterId: string, read: BufferedChapterEditor['read']) {
       buffered = { chapterId, read }
       generation += 1

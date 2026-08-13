@@ -22,6 +22,7 @@ describe('WorkspaceCharacterReferenceCard', () => {
       classificationLabel: 'Tier 0',
       profile: {
         identity: { content: '被卷入旧案的书生' },
+        gender: { content: '男' },
         capability: { content: '洞察布局' },
         personality: { content: '越危险越冷静' },
         body: {
@@ -36,7 +37,10 @@ describe('WorkspaceCharacterReferenceCard', () => {
 
     expect(screen.getByText('被卷入旧案的书生')).toBeInTheDocument()
     expect(container.querySelector('p.text-violet-300')).not.toBeInTheDocument()
-    expect(screen.getAllByText('洞察布局')).toHaveLength(1)
+    expect(screen.getByTestId('workspace-character-gender-badge')).toHaveTextContent('男')
+    expect(screen.getByTestId('workspace-character-capability-badge')).toHaveTextContent('洞察布局')
+    expect(screen.getByTestId('workspace-character-speaking-style-badge')).toHaveTextContent('每句话都压得很稳')
+    expect(screen.getAllByText('洞察布局')).toHaveLength(2)
     expect(screen.getByText('越危险越冷静')).toBeInTheDocument()
     expect(screen.getByTestId('workspace-character-tier-tier0')).toHaveTextContent('Tier 0')
 

@@ -496,6 +496,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/rewrite\?/), expect.anything()))
+    await waitFor(() => expect(result.current.core.workspaceSelection).toEqual({ kind: 'chapter', chapterId: chapter.id, chapterNo: chapter.order }))
     await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob(status) }))
 
     await waitFor(() => {
@@ -514,6 +515,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     installRecoverableRewriteFetchMock({ restoreResponse })
     const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
 
+    await waitFor(() => expect(result.current.core.workspaceSelection).toEqual({ kind: 'chapter', chapterId: chapter.id, chapterNo: chapter.order }))
     await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
 
     await waitFor(() => {
@@ -522,6 +524,20 @@ describe('useSelectionNovelStudioActions model discovery', () => {
       expect(result.current.core.rewriteFlow.jobStatus).toBe('succeeded')
       expect(result.current.core.rewriteState.result).toBe('Recovered content')
     })
+  })
+
+  it('ignores a delayed initial restore after an explicit same-current-chapter selection before URL hydration', async () => {
+    const restoreResponse = createDeferred<Response>()
+    installRecoverableRewriteFetchMock({ restoreResponse })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+
+    expect(result.current.core.workspaceSelection).toBeNull()
+    act(() => result.current.core.handleTimelineSelection({ kind: 'chapter', chapterId: chapter.id, chapterNo: chapter.order }))
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') }))
+
+    expect(result.current.core.activeMode).toBeNull()
+    expect(result.current.core.rewriteFlow.jobId).toBeNull()
+    expect(result.current.core.ownedRecoverableRewriteJobIdRef.current).toBeNull()
   })
 
   it('ignores a delayed initial restore after a same-chapter timeline transition', async () => {

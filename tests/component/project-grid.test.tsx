@@ -20,7 +20,7 @@ type MockStoreState = {
   librarySummariesLoaded?: boolean
   localChapters: MockChapter[]
   getNovels: () => Array<{ id: string; title: string; summary: string; tags: string[] }>
-  loadLibrarySummaries?: () => Promise<void>
+  loadLibrarySummaries?: (options?: { fresh?: boolean }) => Promise<void>
   loadFromBackend: (novelId?: string) => Promise<void>
   saveToBackend: () => Promise<void>
   deleteNovelFromBackend: (novelId: string) => Promise<
@@ -48,18 +48,24 @@ vi.mock('next/navigation', () => ({
 }))
 
 vi.mock('@/components/library/project-card', () => ({
-  ProjectCard: ({ novel, onOpen, onDelete, opening, deleting }: {
+  ProjectCard: ({ novel, onOpen, onDelete, opening, deleting, disabled }: {
     novel: { id: string; title: string }
     onOpen: () => void
     onDelete: () => void
     opening?: boolean
     deleting?: boolean
+    disabled?: boolean
   }) => (
-    <div data-testid={`project-card-${novel.id}`} data-opening={opening ? 'true' : 'false'} data-deleting={deleting ? 'true' : 'false'}>
-      <button type="button" onClick={onOpen} disabled={opening} aria-busy={opening}>
+    <div
+      data-testid={`project-card-${novel.id}`}
+      data-opening={opening ? 'true' : 'false'}
+      data-deleting={deleting ? 'true' : 'false'}
+      data-disabled={disabled ? 'true' : 'false'}
+    >
+      <button type="button" onClick={onOpen} disabled={opening || disabled} aria-busy={opening}>
         {opening ? '打开中…' : 'Open project'}
       </button>
-      <button type="button" onClick={onDelete} disabled={opening || deleting}>
+      <button type="button" onClick={onDelete} disabled={opening || deleting || disabled}>
         Delete project
       </button>
     </div>
@@ -526,7 +532,7 @@ describe('ProjectGrid chapter resolution', () => {
     expect(screen.getByText('正在恢复书库与上次工作区…如果本地数据较大，可能需要几秒钟。')).toBeInTheDocument()
   })
 
-  it('opens an existing novel and persists its selection once in the background', async () => {
+  it('persists an existing novel selection before navigating', async () => {
     const callOrder: string[] = []
     const setCurrentNovelId = vi.fn((novelId: string) => {
       callOrder.push(`novel:${novelId}`)
@@ -563,10 +569,10 @@ describe('ProjectGrid chapter resolution', () => {
 
     expect(pushMock).toHaveBeenCalledWith('/workspace')
     expect(saveToBackend).toHaveBeenCalledTimes(1)
-    expect(callOrder).toEqual(['novel:novel-a', 'chapter:ch-1', 'push', 'save'])
+    expect(callOrder).toEqual(['novel:novel-a', 'chapter:ch-1', 'save', 'push'])
   })
 
-  it('keeps the existing in-memory selection and only warns when background persistence fails', async () => {
+  it('keeps the user in the library when selection persistence fails', async () => {
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const setCurrentNovelId = vi.fn()
     const setCurrentChapterId = vi.fn()
@@ -593,19 +599,17 @@ describe('ProjectGrid chapter resolution', () => {
       await Promise.resolve()
     })
 
-    await waitFor(() => {
-      expect(pushMock).toHaveBeenCalledWith('/workspace')
-    })
+    await waitFor(() => expect(screen.getByText('进入工作区失败，请稍后重试。')).toBeInTheDocument())
 
     expect(setCurrentNovelId).toHaveBeenNthCalledWith(1, 'novel-a')
     expect(saveToBackend).toHaveBeenCalledTimes(1)
     expect(setCurrentChapterId).toHaveBeenCalledTimes(1)
     expect(setCurrentChapterId).toHaveBeenCalledWith('ch-stale')
-    expect(screen.queryByText('进入工作区失败，请稍后重试。')).not.toBeInTheDocument()
+    expect(pushMock).not.toHaveBeenCalled()
     expect(consoleWarn).toHaveBeenCalled()
   })
 
-  it('hydrates the selected novel once and does not retry after the handoff begins', async () => {
+  it('hydrates the selected novel once and leaves a failed handoff available for retry', async () => {
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const setCurrentNovelId = vi.fn()
     const setCurrentChapterId = vi.fn()
@@ -633,16 +637,15 @@ describe('ProjectGrid chapter resolution', () => {
       await Promise.resolve()
     })
 
-    await waitFor(() => {
-      expect(pushMock).toHaveBeenCalledWith('/workspace')
-    })
+    await waitFor(() => expect(screen.getByText('进入工作区失败，请稍后重试。')).toBeInTheDocument())
 
     expect(loadFromBackend).toHaveBeenCalledTimes(1)
     expect(loadFromBackend).toHaveBeenCalledWith('novel-a')
     expect(saveToBackend).toHaveBeenCalledTimes(1)
     expect(setCurrentChapterId).toHaveBeenCalledTimes(1)
     expect(setCurrentChapterId).toHaveBeenCalledWith('ch-stale')
-    expect(screen.queryByText('进入工作区失败，请稍后重试。')).not.toBeInTheDocument()
+    expect(pushMock).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Open project' })).toBeEnabled()
     expect(consoleWarn).toHaveBeenCalled()
   })
 
@@ -683,7 +686,40 @@ describe('ProjectGrid chapter resolution', () => {
     expect(saveToBackend).not.toHaveBeenCalled()
   })
 
-  it('shows per-card opening feedback while navigation has already started and save is still pending', async () => {
+  it('disables every handoff control while a project open is pending', async () => {
+    const pendingLoad = createDeferredPromise<void>()
+    mockStoreState = {
+      backendLoadError: '',
+      localChapters: [{ id: 'ch-a', novelId: 'novel-a', parentChapterId: null, order: 1 }],
+      getNovels: () => [
+        { id: 'novel-a', title: 'Novel A', summary: 'Summary A', tags: [] },
+        { id: 'novel-b', title: 'Novel B', summary: 'Summary B', tags: [] },
+      ],
+      loadFromBackend: vi.fn(() => pendingLoad.promise),
+      saveToBackend: vi.fn(async () => undefined),
+      deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
+      setCurrentNovelId: vi.fn(),
+      setCurrentChapterId: vi.fn(),
+      deleteNovel: vi.fn(),
+    }
+
+    renderProjectGrid()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Open project' })[0])
+
+    expect(screen.getByRole('button', { name: '导入 TXT 小说' })).toBeDisabled()
+    expect(screen.getByTestId('project-card-novel-a')).toHaveAttribute('data-disabled', 'true')
+    expect(screen.getByTestId('project-card-novel-b')).toHaveAttribute('data-disabled', 'true')
+    for (const deleteButton of screen.getAllByRole('button', { name: 'Delete project' })) {
+      expect(deleteButton).toBeDisabled()
+    }
+
+    await act(async () => {
+      pendingLoad.resolve()
+      await pendingLoad.promise
+    })
+  })
+
+  it('shows per-card opening feedback and delays navigation while selection save is pending', async () => {
     const saveDeferred = createDeferredPromise<void>()
     const saveToBackend = vi.fn(() => saveDeferred.promise)
 
@@ -709,13 +745,14 @@ describe('ProjectGrid chapter resolution', () => {
     expect(screen.getByRole('button', { name: '打开中…' })).toHaveAttribute('aria-busy', 'true')
     expect(screen.getByRole('button', { name: 'Delete project' })).toBeDisabled()
     expect(screen.getByTestId('project-card-novel-a')).toHaveAttribute('data-opening', 'true')
-    expect(pushMock).toHaveBeenCalledWith('/workspace')
+    expect(pushMock).not.toHaveBeenCalled()
 
     await act(async () => {
       saveDeferred.resolve()
       await saveDeferred.promise
     })
 
+    expect(pushMock).toHaveBeenCalledWith('/workspace')
     expect(pushMock).toHaveBeenCalledTimes(1)
   })
 

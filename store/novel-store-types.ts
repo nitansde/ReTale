@@ -201,6 +201,10 @@ export class WorkspaceSaveError extends Error {
   }
 }
 
+export type WorkspaceSaveOptions = {
+  lifecycle?: boolean
+}
+
 export type KnowledgeProjectionResult = KnowledgeProjectionPayload & {
   knowledgeRebuildStatus: KnowledgeRebuildStatus | null
   hanlpCacheSnapshot: HanlpCacheSnapshot | null
@@ -291,9 +295,9 @@ export type NovelStore = PersistedNovelState & {
     phase?: PresetCompatSessionPhase
   ) => void
   setHydrated: (value: boolean) => void
-  loadLibrarySummaries: () => Promise<void>
+  loadLibrarySummaries: (options?: { fresh?: boolean }) => Promise<void>
   loadFromBackend: (novelId?: string) => Promise<void>
-  saveToBackend: () => Promise<void>
+  saveToBackend: (options?: WorkspaceSaveOptions) => Promise<void>
   deleteNovelFromBackend: (novelId: string) => Promise<DeleteNovelOutcome>
   reconcileNovelDeletionFromBackend: (transaction: NovelDeletionTransaction) => Promise<NovelDeletionReconciliationResult>
   beginNovelDeletion: (novelId: string) => NovelDeletionTransaction | null

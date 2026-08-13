@@ -22,6 +22,10 @@ import type {
 import { WorkspaceSaveError as TypedWorkspaceSaveError } from '@/store/novel-store-types'
 
 const WORKSPACE_RESTORE_TIMEOUT_MS = 15_000
+const AI_SETTINGS_RESTORE_TIMEOUT_MS = 5_000
+const WORKSPACE_MUTATION_TIMEOUT_MS = 15_000
+// Fetch keepalive bodies share a roughly 64 KiB browser quota; leave room for request overhead.
+const WORKSPACE_KEEPALIVE_BODY_LIMIT_BYTES = 60 * 1024
 const NOVEL_DELETE_TIMEOUT_MS = 15_000
 const NOVEL_DELETION_STATUS_RETRY_DELAYS_MS = [100, 250, 500] as const
 let workspaceRestoreGeneration = 0
@@ -102,9 +106,15 @@ function parseErrorResponse(value: unknown): string | null {
   return value.ok === false && typeof value.error === 'string' ? value.error : null
 }
 
-async function fetchWithWorkspaceTimeout(url: string, timeoutMessage: string, signal?: AbortSignal) {
+async function fetchWithWorkspaceTimeout(
+  url: string,
+  timeoutMessage: string,
+  signal?: AbortSignal,
+  options: { dedupe?: boolean } = {},
+) {
   try {
     return await requestClientGet(url, {
+      dedupe: options.dedupe,
       signal,
       timeoutMs: WORKSPACE_RESTORE_TIMEOUT_MS,
       parse: async (response) => ({
@@ -292,23 +302,43 @@ function replaceAcknowledgedChapter(
   }
 }
 
-async function executeMutationEnvelope(envelope: WorkspaceMutationEnvelope): Promise<WorkspaceMutationResponse> {
-  const response = await fetch('/api/workspace', {
-    method: envelope.method,
-    headers: envelope.baseRevision === null || envelope.idempotencyKey === null
-      ? { 'Content-Type': 'application/json' }
-      : createRevisionHeaders(envelope.baseRevision, envelope.idempotencyKey, envelope.revisionOwner),
-    body: envelope.body,
-  })
-  const rawBody = await response.text()
-  let payload: unknown
+function getUtf8ByteLength(value: string) {
+  if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(value).byteLength
+  return value.length
+}
+
+function canUseWorkspaceMutationKeepalive(envelope: WorkspaceMutationEnvelope) {
+  return getUtf8ByteLength(envelope.body) <= WORKSPACE_KEEPALIVE_BODY_LIMIT_BYTES
+}
+
+async function executeMutationEnvelope(
+  envelope: WorkspaceMutationEnvelope,
+  options: { lifecycle?: boolean } = {},
+): Promise<WorkspaceMutationResponse> {
+  const controller = new AbortController()
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), WORKSPACE_MUTATION_TIMEOUT_MS)
   try {
-    payload = JSON.parse(rawBody)
-  } catch {
-    if (response.ok) throw new TypedWorkspaceSaveError('invalid-response', 'Workspace save returned an invalid response')
-    payload = null
+    const response = await fetch('/api/workspace', {
+      method: envelope.method,
+      headers: envelope.baseRevision === null || envelope.idempotencyKey === null
+        ? { 'Content-Type': 'application/json' }
+        : createRevisionHeaders(envelope.baseRevision, envelope.idempotencyKey, envelope.revisionOwner),
+      body: envelope.body,
+      signal: controller.signal,
+      keepalive: options.lifecycle === true && canUseWorkspaceMutationKeepalive(envelope),
+    })
+    const rawBody = await response.text()
+    let payload: unknown
+    try {
+      payload = JSON.parse(rawBody)
+    } catch {
+      if (response.ok) throw new TypedWorkspaceSaveError('invalid-response', 'Workspace save returned an invalid response')
+      payload = null
+    }
+    return { response, payload }
+  } finally {
+    globalThis.clearTimeout(timeoutId)
   }
-  return { response, payload }
 }
 
 function workspaceSaveFailure(code: ConstructorParameters<typeof TypedWorkspaceSaveError>[0], message: string) {
@@ -474,6 +504,7 @@ export function createPersistenceActions(
   let latestSaveOutcomeGeneration = 0
   let latestAuthorityGeneration = 0
   let authorityEpoch = 0
+  let librarySummaryGeneration = 0
 
   const beginSave = () => {
     const generation = saveGeneration + 1
@@ -662,12 +693,17 @@ export function createPersistenceActions(
   }
 
   return {
-    loadLibrarySummaries: async () => {
+    loadLibrarySummaries: async ({ fresh = false } = {}) => {
+      const requestGeneration = librarySummaryGeneration + 1
+      librarySummaryGeneration = requestGeneration
+      const ownsRequest = () => librarySummaryGeneration === requestGeneration
       set({ librarySummariesError: '' })
       try {
         const response = await fetchWithWorkspaceTimeout(
           '/api/workspace?librarySummary=1',
-          'Library summary request timed out'
+          'Library summary request timed out',
+          undefined,
+          { dedupe: !fresh },
         )
         const payload = parseWorkspaceResponseBody(response, 'Library summary endpoint returned invalid JSON')
         if (!response.ok) {
@@ -678,6 +714,7 @@ export function createPersistenceActions(
         if (!result) {
           throw new Error('Library summary endpoint returned an invalid response')
         }
+        if (!ownsRequest()) return
         set({
           librarySummaries: result.novels,
           librarySummariesLoaded: true,
@@ -687,11 +724,13 @@ export function createPersistenceActions(
         })
       } catch (error) {
         const message = getWorkspaceRestoreErrorMessage(error)
-        set({
-          librarySummariesLoaded: true,
-          librarySummariesError: message,
-          isHydrated: true,
-        })
+        if (ownsRequest()) {
+          set({
+            librarySummariesLoaded: true,
+            librarySummariesError: message,
+            isHydrated: true,
+          })
+        }
         throw error
       }
     },
@@ -794,30 +833,26 @@ export function createPersistenceActions(
         return
       }
 
-      const [aiResult] = await Promise.allSettled([
-        requestClientGet('/api/settings/ai', { signal: workspaceRestoreController.signal, parse: async (response) => {
+      const aiSettingsRefresh = requestClientGet('/api/settings/ai', {
+        signal: workspaceRestoreController.signal,
+        timeoutMs: AI_SETTINGS_RESTORE_TIMEOUT_MS,
+        parse: async (response) => {
           if (!response.ok) {
             const error = await response.json().catch(() => null) as { error?: string } | null
             throw new Error(error?.error || 'Failed to load AI settings')
           }
           return response.json()
-        }}),
-      ])
-      if (!ownsRestore()) return
-
-      const nextState: Partial<NovelStore> = {}
-      if (aiResult.status === 'fulfilled') {
-        nextState.aiSettings = normalizeAISettings(aiResult.value)
-      } else {
-        console.error('AI settings restore failed:', aiResult.reason)
-      }
-
-      if (Object.keys(nextState).length) {
-        set(nextState)
-      }
-      if (activeWorkspaceRestoreController === workspaceRestoreController) activeWorkspaceRestoreController = null
+        },
+      }).then((value) => {
+        if (ownsRestore()) set({ aiSettings: normalizeAISettings(value) })
+      }).catch((error) => {
+        if (ownsRestore()) console.error('AI settings restore failed:', error)
+      }).finally(() => {
+        if (activeWorkspaceRestoreController === workspaceRestoreController) activeWorkspaceRestoreController = null
+      })
+      void aiSettingsRefresh
     },
-    saveToBackend: async () => {
+    saveToBackend: async (options = {}) => {
       const state = get()
       const capturedSnapshot = serializeState(state)
       const hasMatchingAuthority = state.workspaceRevision !== null
@@ -876,11 +911,15 @@ export function createPersistenceActions(
         let activeEnvelope = envelope
         let result: WorkspaceMutationResponse
         try {
-          result = await executeMutationEnvelope(envelope)
+          result = await executeMutationEnvelope(envelope, options)
         } catch (error) {
-          if (envelope.baseRevision === null || envelope.idempotencyKey === null) throw error
+          if (envelope.baseRevision === null || envelope.idempotencyKey === null) {
+            applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
+            if (error instanceof TypedWorkspaceSaveError && error.code === 'invalid-response') throw error
+            throw workspaceSaveFailure('transport-indeterminate', 'Workspace save result could not be confirmed')
+          }
           try {
-            result = await executeMutationEnvelope(envelope)
+            result = await executeMutationEnvelope(envelope, options)
           } catch (retryError) {
             applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
             if (retryError instanceof TypedWorkspaceSaveError && retryError.code === 'invalid-response') throw retryError
@@ -899,11 +938,11 @@ export function createPersistenceActions(
             chapterFingerprint: null,
           }
           try {
-            result = await executeMutationEnvelope(fallbackEnvelope)
+            result = await executeMutationEnvelope(fallbackEnvelope, options)
             activeEnvelope = fallbackEnvelope
           } catch {
             try {
-              result = await executeMutationEnvelope(fallbackEnvelope)
+              result = await executeMutationEnvelope(fallbackEnvelope, options)
               activeEnvelope = fallbackEnvelope
             } catch (retryError) {
               applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
@@ -922,7 +961,7 @@ export function createPersistenceActions(
           && parseMutationSuccess(result.response, result.payload, activeEnvelope.revisionOwner) === null
         ) {
           try {
-            result = await executeMutationEnvelope(activeEnvelope)
+            result = await executeMutationEnvelope(activeEnvelope, options)
           } catch {
             applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
             throw workspaceSaveFailure('transport-indeterminate', 'Workspace save result could not be confirmed')

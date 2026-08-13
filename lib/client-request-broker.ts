@@ -1,19 +1,20 @@
 type ClientGetOptions<T> = {
   cache?: RequestCache
+  dedupe?: boolean
   signal?: AbortSignal
   timeoutMs?: number
   parse: (response: Response) => Promise<T>
 }
 
-type InFlightEntry<T> = {
+type InFlightEntry = {
   controller: AbortController
   consumers: number
   settled: boolean
-  promise: Promise<T>
-  timeoutId: ReturnType<typeof globalThis.setTimeout> | null
+  promise: Promise<Response>
 }
 
-const inFlightGets = new Map<string, InFlightEntry<unknown>>()
+const inFlightGets = new Map<string, InFlightEntry>()
+const activeGets = new Set<InFlightEntry>()
 
 export function normalizeClientGetKey(url: string, cache: RequestCache = 'no-store') {
   const parsed = new URL(url, 'http://client.local')
@@ -27,24 +28,22 @@ export function normalizeClientGetKey(url: string, cache: RequestCache = 'no-sto
 function acquireClientGet<T>(url: string, options: ClientGetOptions<T>) {
   const cache = options.cache ?? 'no-store'
   const key = normalizeClientGetKey(url, cache)
-  let entry = inFlightGets.get(key) as InFlightEntry<T> | undefined
+  const dedupe = options.dedupe !== false
+  let entry = dedupe ? inFlightGets.get(key) : undefined
 
   if (!entry) {
     const controller = new AbortController()
-    const timeoutId = options.timeoutMs
-      ? globalThis.setTimeout(() => controller.abort(), options.timeoutMs)
-      : null
     entry = {
       controller,
       consumers: 0,
       settled: false,
-      timeoutId,
-      promise: fetch(url, { cache, signal: controller.signal }).then(options.parse),
+      promise: fetch(url, { cache, signal: controller.signal }),
     }
-    inFlightGets.set(key, entry as InFlightEntry<unknown>)
+    activeGets.add(entry)
+    if (dedupe) inFlightGets.set(key, entry)
     void entry.promise.finally(() => {
       entry!.settled = true
-      if (entry!.timeoutId) globalThis.clearTimeout(entry!.timeoutId)
+      activeGets.delete(entry!)
       if (inFlightGets.get(key) === entry) inFlightGets.delete(key)
     }).catch(() => undefined)
   }
@@ -70,19 +69,26 @@ export async function requestClientGet<T>(url: string, options: ClientGetOptions
     rejectAbort = reject
   })
   const releaseOnAbort = () => {
-    consumer.release()
     rejectAbort?.(new DOMException('Aborted', 'AbortError'))
   }
   options.signal?.addEventListener('abort', releaseOnAbort, { once: true })
+  const timeoutId = options.timeoutMs && options.timeoutMs > 0
+    ? globalThis.setTimeout(() => rejectAbort?.(new DOMException('Timed out', 'AbortError')), options.timeoutMs)
+    : null
   try {
-    return await (options.signal ? Promise.race([consumer.promise, aborted]) : consumer.promise)
+    const parsed = consumer.promise.then((response) => options.parse(response.clone()))
+    return await (options.signal || timeoutId
+      ? Promise.race([parsed, aborted])
+      : parsed)
   } finally {
+    if (timeoutId) globalThis.clearTimeout(timeoutId)
     options.signal?.removeEventListener('abort', releaseOnAbort)
     consumer.release()
   }
 }
 
 export function resetClientRequestBrokerForTests() {
-  for (const entry of inFlightGets.values()) entry.controller.abort()
+  for (const entry of activeGets) entry.controller.abort()
+  activeGets.clear()
   inFlightGets.clear()
 }

@@ -32,6 +32,24 @@ describe('client request broker', () => {
     await expect(second).resolves.toEqual({ value: 7 })
   })
 
+  it('runs each consumer parser against an independent response clone', async () => {
+    const pending = deferredResponse()
+    const fetchMock = vi.fn(() => pending.promise)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const json = requestClientGet('/api/mixed-parser', {
+      parse: async (response) => response.json() as Promise<{ value: number }>,
+    })
+    const text = requestClientGet('/api/mixed-parser', {
+      parse: async (response) => response.text(),
+    })
+
+    pending.resolve(new Response(JSON.stringify({ value: 9 })))
+    await expect(json).resolves.toEqual({ value: 9 })
+    await expect(text).resolves.toBe('{"value":9}')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('uses explicit cache modes and keeps different policies on separate transports', async () => {
     const pendingNoStore = deferredResponse()
     const pendingNoCache = deferredResponse()
@@ -72,5 +90,66 @@ describe('client request broker', () => {
     expect(transportSignal?.aborted).toBe(false)
     pending.resolve(new Response('ok'))
     await expect(second).resolves.toBe('ok')
+  })
+
+  it('keeps a shared transport alive when only one consumer times out', async () => {
+    vi.useFakeTimers()
+    const pending = deferredResponse()
+    let transportSignal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      transportSignal = init?.signal ?? undefined
+      return pending.promise
+    }))
+
+    const short = requestClientGet('/api/timeout-shared', {
+      timeoutMs: 25,
+      parse: async (response) => response.text(),
+    })
+    const patient = requestClientGet('/api/timeout-shared', {
+      timeoutMs: 1_000,
+      parse: async (response) => response.text(),
+    })
+    const shortResult = short.catch((error: unknown) => error)
+
+    await vi.advanceTimersByTimeAsync(25)
+    await expect(shortResult).resolves.toMatchObject({ name: 'AbortError' })
+    expect(transportSignal?.aborted).toBe(false)
+
+    pending.resolve(new Response('still available'))
+    await expect(patient).resolves.toBe('still available')
+    vi.useRealTimers()
+  })
+
+  it('applies the timeout to response parsing after the transport resolves', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('available')))
+    let finishParsing: (value: string) => void = () => undefined
+    const parsing = new Promise<string>((resolve) => { finishParsing = resolve })
+
+    const request = requestClientGet('/api/slow-parser', {
+      timeoutMs: 25,
+      parse: async () => parsing,
+    })
+    const result = request.catch((error: unknown) => error)
+
+    await vi.advanceTimersByTimeAsync(25)
+    await expect(result).resolves.toMatchObject({ name: 'AbortError' })
+
+    finishParsing('too late')
+    await vi.runAllTimersAsync()
+    vi.useRealTimers()
+  })
+
+  it('can bypass deduplication for an authoritative fresh read', async () => {
+    const fetchMock = vi.fn(async () => new Response('fresh'))
+    vi.stubGlobal('fetch', fetchMock)
+    const parse = async (response: Response) => response.text()
+
+    const shared = requestClientGet('/api/fresh', { parse })
+    const fresh = requestClientGet('/api/fresh', { dedupe: false, parse })
+
+    await expect(shared).resolves.toBe('fresh')
+    await expect(fresh).resolves.toBe('fresh')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

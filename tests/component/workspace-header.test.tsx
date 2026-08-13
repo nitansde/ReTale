@@ -1,8 +1,23 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { WorkspaceHeader } from '@/components/workspace/WorkspaceHeader'
+
+vi.mock('next/link', () => ({
+  default: ({ onNavigate, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
+    onNavigate?: (event: { preventDefault: () => void }) => void
+  }) => (
+    <a
+      {...props}
+      onClick={(event) => {
+        onNavigate?.({ preventDefault: () => event.preventDefault() })
+      }}
+    >
+      {children}
+    </a>
+  ),
+}))
 
 vi.mock('@/lib/i18n/provider', () => ({
   useI18n: () => ({
@@ -19,6 +34,7 @@ function renderHeader() {
     onOpenPresets: vi.fn(),
     onOpenSettings: vi.fn(),
     onDeleteNovel: vi.fn(),
+    onBackToLibrary: vi.fn().mockResolvedValue(undefined),
   }
   render(
     <WorkspaceHeader
@@ -71,5 +87,22 @@ describe('WorkspaceHeader', () => {
     fireEvent.click(screen.getByRole('button', { name: 'workspace.header.modelSettings' }))
     expect(actions.onOpenSettings).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('dialog', { name: 'workspace.header.overflowTitle' })).not.toBeInTheDocument()
+  })
+
+  it('guards client navigation until the async back callback settles', async () => {
+    let resolveBack: () => void = () => undefined
+    const pendingBack = new Promise<void>((resolve) => { resolveBack = resolve })
+    const actions = renderHeader()
+    actions.onBackToLibrary.mockReturnValueOnce(pendingBack)
+    const backLinks = screen.getAllByRole('link', { name: 'workspace.header.backToLibrary' })
+
+    fireEvent.click(backLinks[0])
+    fireEvent.click(backLinks[0])
+
+    expect(actions.onBackToLibrary).toHaveBeenCalledTimes(1)
+    expect(backLinks[0]).toHaveAttribute('aria-busy', 'true')
+
+    resolveBack()
+    await waitFor(() => expect(backLinks[0]).toHaveAttribute('aria-busy', 'false'))
   })
 })

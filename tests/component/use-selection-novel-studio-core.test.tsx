@@ -713,7 +713,7 @@ describe('useSelectionNovelStudioCore autosave drain', () => {
     await resolveDeferred(pendingSaves[2])
   })
 
-  it('does not schedule a drain after unmounting during a save', async () => {
+  it('persists the latest revision after unmounting during an older save without scheduling a timer', async () => {
     const pendingSave = createDeferred()
     const saveToBackend = vi.fn(() => pendingSave.promise)
     const { rerender, unmount } = renderAutosaveHook(saveToBackend)
@@ -724,6 +724,18 @@ describe('useSelectionNovelStudioCore autosave drain', () => {
     unmount()
 
     await resolveDeferred(pendingSave)
+    await advanceTimers(10_000)
+    expect(saveToBackend).toHaveBeenCalledTimes(2)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('contains a rejected best-effort unmount save', async () => {
+    const saveToBackend = vi.fn().mockRejectedValue(new Error('offline'))
+    const { rerender, unmount } = renderAutosaveHook(saveToBackend)
+
+    rerender({ revision: 1 })
+    unmount()
+
     await advanceTimers(10_000)
     expect(saveToBackend).toHaveBeenCalledTimes(1)
     expect(vi.getTimerCount()).toBe(0)
@@ -841,10 +853,12 @@ describe('useSelectionNovelStudioCore editor buffering', () => {
   it('flushes on debounce, pagehide, hidden visibility, and unmount', async () => {
     const editor = installEditor()
     const updateChapterContent = vi.fn()
+    const saveToBackend = vi.fn().mockResolvedValue(undefined)
     const params = buildCoreParams({
       currentNovelId: 'novel-1',
       localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
       updateChapterContent,
+      saveToBackend,
     })
     const hook = renderHook(() => useSelectionNovelStudioCore(params))
 
@@ -857,18 +871,146 @@ describe('useSelectionNovelStudioCore editor buffering', () => {
     tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
     window.dispatchEvent(new PageTransitionEvent('pagehide'))
     expect(updateChapterContent).toHaveBeenLastCalledWith('chapter-1', '<p>Page hide</p>', 8)
+    await vi.waitFor(() => expect(saveToBackend).toHaveBeenCalledWith({ lifecycle: true }))
 
     editor.setValue('<p>Hidden</p>', 'Hidden')
     tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
     const visibilityState = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
     document.dispatchEvent(new Event('visibilitychange'))
     expect(updateChapterContent).toHaveBeenLastCalledWith('chapter-1', '<p>Hidden</p>', 6)
+    await vi.waitFor(() => expect(saveToBackend).toHaveBeenCalledWith({ lifecycle: true }))
     visibilityState.mockRestore()
 
     editor.setValue('<p>Unmounted</p>', 'Unmounted')
     tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
     hook.unmount()
     expect(updateChapterContent).toHaveBeenLastCalledWith('chapter-1', '<p>Unmounted</p>', 9)
+  })
+
+  it('flushes and saves immediately before the autosave delay when navigating away', async () => {
+    const editor = installEditor()
+    const updateChapterContent = vi.fn()
+    const saveToBackend = vi.fn().mockResolvedValue(undefined)
+    let revision = 0
+    const params = buildCoreParams({
+      currentNovelId: 'novel-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
+      updateChapterContent: (...args) => {
+        updateChapterContent(...args)
+        revision += 1
+      },
+      saveToBackend,
+      readAutosaveTarget: () => `novel-1\u0000${revision}`,
+    })
+    const { result, rerender } = renderHook(
+      ({ autosaveTarget }) => useSelectionNovelStudioCore({ ...params, autosaveTarget }),
+      { initialProps: { autosaveTarget: 'novel-1\u00000' } },
+    )
+
+    editor.setValue('<p>Navigate now</p>', 'Navigate now')
+    tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
+
+    let saved = false
+    await act(async () => {
+      saved = await result.current.saveWorkspaceBeforeNavigation()
+    })
+
+    expect(saved).toBe(true)
+    expect(updateChapterContent).toHaveBeenCalledWith('chapter-1', '<p>Navigate now</p>', 11)
+    expect(saveToBackend).toHaveBeenCalledTimes(1)
+    rerender({ autosaveTarget: 'novel-1\u00001' })
+    await advanceTimers(1_200)
+    expect(saveToBackend).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for an older in-flight save and then persists the newly flushed edit', async () => {
+    const editor = installEditor()
+    const firstSave = createDeferred()
+    const saveToBackend = vi.fn()
+      .mockImplementationOnce(() => firstSave.promise)
+      .mockResolvedValueOnce(undefined)
+    const params = buildCoreParams({
+      currentNovelId: 'novel-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
+      updateChapterContent: vi.fn(),
+      saveToBackend,
+    })
+    const { result, rerender } = renderHook(
+      ({ revision }) => useSelectionNovelStudioCore({ ...params, autosaveTarget: `novel-1\u0000${revision}` }),
+      { initialProps: { revision: 0 } },
+    )
+
+    rerender({ revision: 1 })
+    await advanceTimers(1_200)
+    expect(saveToBackend).toHaveBeenCalledTimes(1)
+
+    editor.setValue('<p>Newer edit</p>', 'Newer edit')
+    tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
+    const navigationSave = result.current.saveWorkspaceBeforeNavigation()
+    expect(saveToBackend).toHaveBeenCalledTimes(1)
+
+    await resolveDeferred(firstSave)
+    await expect(navigationSave).resolves.toBe(true)
+    expect(saveToBackend).toHaveBeenCalledTimes(2)
+  })
+
+  it('drains edits entered while navigation is waiting for an older save', async () => {
+    const editor = installEditor()
+    const firstSave = createDeferred()
+    const secondSave = createDeferred()
+    const saveToBackend = vi.fn()
+      .mockImplementationOnce(() => firstSave.promise)
+      .mockImplementationOnce(() => secondSave.promise)
+      .mockResolvedValueOnce(undefined)
+    let revision = 1
+    const params = buildCoreParams({
+      currentNovelId: 'novel-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
+      updateChapterContent: vi.fn(() => { revision += 1 }),
+      saveToBackend,
+      readAutosaveTarget: () => `novel-1\u0000${revision}`,
+    })
+    const { result, rerender } = renderHook(
+      ({ autosaveTarget }) => useSelectionNovelStudioCore({ ...params, autosaveTarget }),
+      { initialProps: { autosaveTarget: 'novel-1\u00000' } },
+    )
+
+    rerender({ autosaveTarget: 'novel-1\u00001' })
+    await advanceTimers(1_200)
+    editor.setValue('<p>First navigation edit</p>', 'First navigation edit')
+    tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
+    const navigationSave = result.current.saveWorkspaceBeforeNavigation()
+
+    await resolveDeferred(firstSave)
+    await vi.waitFor(() => expect(saveToBackend).toHaveBeenCalledTimes(2))
+    editor.setValue('<p>Typed while saving</p>', 'Typed while saving')
+    tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
+    await resolveDeferred(secondSave)
+
+    await expect(navigationSave).resolves.toBe(true)
+    expect(saveToBackend).toHaveBeenCalledTimes(3)
+    expect(params.updateChapterContent).toHaveBeenCalledTimes(2)
+  })
+
+  it('blocks explicit navigation when the drained save fails', async () => {
+    const editor = installEditor()
+    const saveToBackend = vi.fn().mockRejectedValue(new Error('save failed'))
+    const params = buildCoreParams({
+      currentNovelId: 'novel-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
+      updateChapterContent: vi.fn(),
+      saveToBackend,
+    })
+    const { result } = renderHook(() => useSelectionNovelStudioCore(params))
+
+    editor.setValue('<p>Unsaved</p>', 'Unsaved')
+    tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
+
+    await act(async () => {
+      await expect(result.current.saveWorkspaceBeforeNavigation()).resolves.toBe(false)
+    })
+    expect(result.current.toast).toBe('workspace.persistence.saveFailed')
+    expect(result.current.toastVariant).toBe('error')
   })
 
   it('flushes chapter A before switching to B and prevents stale timer writes', async () => {

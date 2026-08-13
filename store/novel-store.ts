@@ -84,6 +84,7 @@ import type {
   WorkspacePatchCapability,
   WorkspaceSaveConflict,
   WorkspaceSaveFeedback,
+  WorkspaceSaveOptions,
 } from '@/store/novel-store-types'
 import { createPersistedNovelStoreSet } from '@/store/novel-store-types'
 
@@ -445,9 +446,9 @@ type NovelStore = PersistedNovelState & {
     phase?: PresetCompatSessionPhase
   ) => void
   setHydrated: (value: boolean) => void
-  loadLibrarySummaries: () => Promise<void>
+  loadLibrarySummaries: (options?: { fresh?: boolean }) => Promise<void>
   loadFromBackend: (novelId?: string) => Promise<void>
-  saveToBackend: () => Promise<void>
+  saveToBackend: (options?: WorkspaceSaveOptions) => Promise<void>
   deleteNovelFromBackend: (novelId: string) => Promise<DeleteNovelOutcome>
   reconcileNovelDeletionFromBackend: (transaction: NovelDeletionTransaction) => Promise<NovelDeletionReconciliationResult>
   beginNovelDeletion: (novelId: string) => NovelDeletionTransaction | null
