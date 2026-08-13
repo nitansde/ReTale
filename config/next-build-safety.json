@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "routes": {
+    "/workspace": {
+      "rawBytes": 1450000,
+      "gzipBytes": 410000
+    },
+    "/library": {
+      "rawBytes": 800000,
+      "gzipBytes": 230000
+    }
+  },
+  "requiredTraceAssets": [
+    {
+      "path": "hanlp_bootstrap.py",
+      "minimumManifestCount": 1
+    },
+    {
+      "path": "scripts/knowledge-worker.mjs",
+      "minimumManifestCount": 1
+    },
+    {
+      "pathPattern": "node_modules/@lancedb/lancedb-*/lancedb.*.node",
+      "minimumManifestCount": 1
+    },
+    {
+      "path": "node_modules/typescript/package.json",
+      "minimumManifestCount": 1
+    },
+    {
+      "path": "node_modules/typescript/lib/typescript.js",
+      "minimumManifestCount": 1
+    }
+  ]
+}
