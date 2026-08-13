@@ -76,11 +76,16 @@ import type {
   GenerateRewriteParams,
   ImportPayload,
   KnowledgeProjectionResult,
+  LibrarySummary,
   PresetCompatImportResult,
   DeleteNovelOutcome,
   NovelDeletionReconciliationResult,
   NovelDeletionTransaction,
+  WorkspacePatchCapability,
+  WorkspaceSaveConflict,
+  WorkspaceSaveFeedback,
 } from '@/store/novel-store-types'
+import { createPersistedNovelStoreSet } from '@/store/novel-store-types'
 
 function collectChapterSubtreeIds(chapters: Chapter[], rootChapterId: string) {
   const collected = new Set<string>([rootChapterId])
@@ -370,24 +375,34 @@ function buildStateAfterRejectedNovelDeletion(
 }
 
 type NovelStore = PersistedNovelState & {
+  persistRevision: number
+  workspaceRevision: number | null
+  revisionNovelId: string
+  lastAcknowledgedPersistedWorkspace: PersistedNovelState | null
+  patchCapability: WorkspacePatchCapability
+  workspaceSaveConflict: WorkspaceSaveConflict | null
+  workspaceSaveFeedback: WorkspaceSaveFeedback | null
   isHydrated: boolean
   isSaving: boolean
   isNovelDeletionPending: boolean
   backendLoaded: boolean
   backendLoadError: string
+  librarySummaries: LibrarySummary[]
+  librarySummariesLoaded: boolean
+  librarySummariesError: string
   presetCompatLibrary: PresetCompatLibrary
   presetCompatLibraryDirty: boolean
   presetCompatLibraryLoading: boolean
   presetCompatLibraryError: string
 
-  getNovels: () => Array<{ id: string; title: string; summary: string; tags: string[]; updatedAt: string; wordCount: number; chapterCount: number }>
+  getNovels: () => LibrarySummary[]
   importNovelFromText: (input: { title: string; text: string; summary?: string }) => string | null
   setCurrentNovelId: (id: string) => void
   setCurrentChapterId: (id: string) => void
   setCurrentTab: (tab: WorkspaceTab) => void
   setHelperTab: (tab: HelperTab) => void
   toggleVolume: (id: string) => void
-  updateChapterContent: (id: string, html: string) => void
+  updateChapterContent: (id: string, html: string, wordCount?: number) => void
   reorderChaptersInVolume: (volumeId: string, orderedIds: string[]) => void
   setRewriteMode: (mode: RewriteMode) => void
   setRewriteTone: (tone: RewriteTone) => void
@@ -430,7 +445,8 @@ type NovelStore = PersistedNovelState & {
     phase?: PresetCompatSessionPhase
   ) => void
   setHydrated: (value: boolean) => void
-  loadFromBackend: () => Promise<void>
+  loadLibrarySummaries: () => Promise<void>
+  loadFromBackend: (novelId?: string) => Promise<void>
   saveToBackend: () => Promise<void>
   deleteNovelFromBackend: (novelId: string) => Promise<DeleteNovelOutcome>
   reconcileNovelDeletionFromBackend: (transaction: NovelDeletionTransaction) => Promise<NovelDeletionReconciliationResult>
@@ -489,13 +505,57 @@ type NovelStore = PersistedNovelState & {
 
 const initialState: PersistedNovelState = createEmptyWorkspaceState()
 
-export const useNovelStore = create<NovelStore>((set, get) => ({
+function buildLibrarySummary(state: PersistedNovelState, novelId: string): LibrarySummary | null {
+  const chapters = state.localChapters
+    .filter((chapter) => chapter.novelId === novelId && !chapter.parentChapterId)
+    .slice()
+    .sort((left, right) => left.order - right.order)
+  const novelMeta = state.localNovels.find((item) => item.id === novelId)
+  if (!novelMeta && !chapters.length) return null
+
+  const firstChapterText = chapters[0] ? htmlToPlainText(chapters[0].content).replace(/\s+/g, ' ').trim() : ''
+  return {
+    id: novelId,
+    title: novelMeta?.title ?? chapters[0]?.title?.replace(/^第\s*[0-9一二三四五六七八九十百千零两]+\s*章\s*/, '') ?? tm('store.inferredNovelTitle', { suffix: novelId.slice(-4) }),
+    summary: novelMeta?.summary ?? (firstChapterText.slice(0, 120) || tm('store.newNovelSummary')),
+    tags: novelMeta?.tags ?? [tm('store.importTag'), tm('store.importTxtTag')],
+    updatedAt: chapters[0]?.updatedAt ?? formatNowLabel(),
+    wordCount: chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0),
+    chapterCount: chapters.length,
+    firstChapterId: chapters[0]?.id ?? null,
+  }
+}
+
+export const useNovelStore = create<NovelStore>((set, get) => {
+  const setPersisted = createPersistedNovelStoreSet(set)
+  let chapterIndexSource: Chapter[] | null = null
+  let chapterIndexById = new Map<string, number>()
+
+  const getChapterIndex = (chapters: Chapter[], chapterId: string) => {
+    if (chapterIndexSource !== chapters) {
+      chapterIndexById = new Map(chapters.map((chapter, index) => [chapter.id, index]))
+      chapterIndexSource = chapters
+    }
+    return chapterIndexById.get(chapterId)
+  }
+
+  return {
   ...initialState,
+  persistRevision: 0,
+  workspaceRevision: null,
+  revisionNovelId: '',
+  lastAcknowledgedPersistedWorkspace: null,
+  patchCapability: 'unknown',
+  workspaceSaveConflict: null,
+  workspaceSaveFeedback: null,
   isHydrated: false,
   isSaving: false,
   isNovelDeletionPending: false,
   backendLoaded: false,
   backendLoadError: '',
+  librarySummaries: [],
+  librarySummariesLoaded: false,
+  librarySummariesError: '',
   presetCompatLibrary: createDefaultPresetCompatLibrary(),
   presetCompatLibraryDirty: false,
   presetCompatLibraryLoading: false,
@@ -503,32 +563,18 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
 
   getNovels: () => {
     const state = get()
+    if (state.librarySummariesLoaded) {
+      return state.librarySummaries
+    }
+
     const novelIds = Array.from(new Set([
       ...state.localNovels.map((novel) => novel.id),
       ...state.localChapters.map((chapter) => chapter.novelId),
     ]))
 
-    return novelIds.map((novelId) => {
-      const chapters = state.localChapters
-        .filter((chapter) => chapter.novelId === novelId && !chapter.parentChapterId)
-        .slice()
-        .sort((a, b) => a.order - b.order)
-      const chapterCount = chapters.length
-      const wordCount = chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0)
-      const updatedAt = chapters[0]?.updatedAt ?? formatNowLabel()
-      const novelMeta = state.localNovels.find((item) => item.id === novelId)
-      const firstChapterText = chapters[0] ? htmlToPlainText(chapters[0].content).replace(/\s+/g, ' ').trim() : ''
-      const inferredTitle = novelMeta?.title ?? chapters[0]?.title?.replace(/^第\s*[0-9一二三四五六七八九十百千零两]+\s*章\s*/, '') ?? tm('store.inferredNovelTitle', { suffix: novelId.slice(-4) })
-      const inferredSummary = novelMeta?.summary ?? (firstChapterText.slice(0, 120) || tm('store.newNovelSummary'))
-      return {
-        id: novelId,
-        title: inferredTitle,
-        summary: inferredSummary,
-        tags: novelMeta?.tags ?? [tm('store.importTag'), tm('store.importTxtTag')],
-        updatedAt,
-        wordCount,
-        chapterCount,
-      }
+    return novelIds.flatMap((novelId) => {
+      const summary = buildLibrarySummary(state, novelId)
+      return summary ? [summary] : []
     })
   },
   importNovelFromText: ({ title, text, summary }) => {
@@ -589,7 +635,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       })
     }
 
-    set({
+    setPersisted(() => ({
       currentNovelId: novelId,
       currentChapterId: importedChapters[0].id,
       currentTab: 'editor',
@@ -615,12 +661,12 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         },
         ...state.trajectories,
       ],
-    })
+    }))
 
     return novelId
   },
   setHydrated: (value) => set({ isHydrated: value }),
-  setCurrentNovelId: (id) => set((state) => {
+  setCurrentNovelId: (id) => setPersisted((state) => {
     const sortedChapters = state.localChapters
       .filter((chapter) => chapter.novelId === id && !chapter.parentChapterId)
       .slice()
@@ -631,30 +677,34 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       currentChapterId: currentChapterBelongsToNovel ? state.currentChapterId : (sortedChapters[0]?.id ?? ''),
     }
   }),
-  setCurrentChapterId: (id) => set({ currentChapterId: id }),
-  setCurrentTab: (tab) => set({ currentTab: tab }),
-  setHelperTab: (tab) => set({ helperTab: tab }),
+  setCurrentChapterId: (id) => setPersisted((state) => state.currentChapterId === id ? state : { currentChapterId: id }),
+  setCurrentTab: (tab) => setPersisted((state) => state.currentTab === tab ? state : { currentTab: tab }),
+  setHelperTab: (tab) => setPersisted((state) => state.helperTab === tab ? state : { helperTab: tab }),
   toggleVolume: (id) =>
-    set((state) => ({
+    setPersisted((state) => ({
       expandedVolumeIds: state.expandedVolumeIds.includes(id)
         ? state.expandedVolumeIds.filter((volumeId) => volumeId !== id)
         : [...state.expandedVolumeIds, id],
     })),
-  updateChapterContent: (id, html) =>
-    set((state) => ({
-      localChapters: state.localChapters.map((chapter) =>
-        chapter.id === id
-          ? {
-              ...chapter,
-              content: html,
-              wordCount: countChineseFriendlyWords(htmlToPlainText(html)),
-              updatedAt: tm('store.editedUpdatedAt', { time: formatNowLabel() }),
-            }
-          : chapter
-      ),
-    })),
+  updateChapterContent: (id, html, wordCount) =>
+    setPersisted((state) => {
+      const chapterIndex = getChapterIndex(state.localChapters, id)
+      if (chapterIndex === undefined) return state
+      const chapter = state.localChapters[chapterIndex]
+      if (!chapter || chapter.content === html) return state
+      const nextChapters = state.localChapters.slice()
+      nextChapters[chapterIndex] = {
+        ...chapter,
+        content: html,
+        wordCount: wordCount ?? countChineseFriendlyWords(htmlToPlainText(html)),
+        updatedAt: tm('store.editedUpdatedAt', { time: formatNowLabel() }),
+      }
+      return {
+        localChapters: nextChapters,
+      }
+    }),
   reorderChaptersInVolume: (volumeId, orderedIds) =>
-    set((state) => {
+    setPersisted((state) => {
       const targetMap = new Map(orderedIds.map((id, index) => [id, index + 1]))
       return {
         localChapters: state.localChapters.map((chapter) =>
@@ -664,117 +714,156 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         ),
       }
     }),
-  setRewriteMode: (mode) => set({ rewriteMode: mode }),
-  setRewriteTone: (tone) => set({ rewriteTone: tone }),
-  setRewriteOutput: (output) => set({ rewriteOutput: output }),
-  setRewriteScope: (scope) => set({ rewriteScope: scope }),
-  setThinkingLevel: (level) => set({ thinkingLevel: level }),
-  toggleAutoContinue: () => set((state) => ({ autoContinue: !state.autoContinue })),
-  toggleKeepCanon: () => set((state) => ({ keepCanon: !state.keepCanon })),
-  setSelectionText: (text) => set({ selectionText: text }),
-  setSelectedParagraphIndex: (index) => set({ selectedParagraphIndex: index }),
-  setPromptText: (text) => set({ promptText: text }),
-  toggleFocusMode: () => set((state) => ({ focusMode: !state.focusMode })),
+  setRewriteMode: (mode) => setPersisted((state) => state.rewriteMode === mode ? state : { rewriteMode: mode }),
+  setRewriteTone: (tone) => setPersisted((state) => state.rewriteTone === tone ? state : { rewriteTone: tone }),
+  setRewriteOutput: (output) => setPersisted((state) => state.rewriteOutput === output ? state : { rewriteOutput: output }),
+  setRewriteScope: (scope) => setPersisted((state) => state.rewriteScope === scope ? state : { rewriteScope: scope }),
+  setThinkingLevel: (level) => setPersisted((state) => state.thinkingLevel === level ? state : { thinkingLevel: level }),
+  toggleAutoContinue: () => setPersisted((state) => ({ autoContinue: !state.autoContinue })),
+  toggleKeepCanon: () => setPersisted((state) => ({ keepCanon: !state.keepCanon })),
+  setSelectionText: (text) => setPersisted((state) => state.selectionText === text ? state : { selectionText: text }),
+  setSelectedParagraphIndex: (index) => setPersisted((state) => state.selectedParagraphIndex === index ? state : { selectedParagraphIndex: index }),
+  setPromptText: (text) => setPersisted((state) => state.promptText === text ? state : { promptText: text }),
+  toggleFocusMode: () => setPersisted((state) => ({ focusMode: !state.focusMode })),
   addCharacter: (novelId, fields) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localCharacters: [...state.localCharacters, { ...fields, id: uid('char'), novelId }],
     })),
   updateCharacter: (id, fields) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localCharacters: state.localCharacters.map((item) => (item.id === id ? { ...item, ...fields } : item)),
     })),
   deleteCharacter: (id) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localCharacters: state.localCharacters.filter((item) => item.id !== id),
     })),
   addOutlineItem: (novelId, { relatedChapterIds, ...fields }) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localOutlines: [...state.localOutlines, { ...fields, relatedChapterIds: relatedChapterIds ?? [], id: uid('outline'), novelId }],
     })),
   updateOutlineItem: (id, fields) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localOutlines: state.localOutlines.map((item) => (item.id === id ? { ...item, ...fields } : item)),
     })),
   deleteOutlineItem: (id) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localOutlines: state.localOutlines.filter((item) => item.id !== id),
     })),
   addCharacterRelation: (novelId, fields) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localCharacterRelations: [...state.localCharacterRelations, { ...fields, id: uid('rel'), novelId }],
     })),
   updateCharacterRelation: (id, fields) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localCharacterRelations: state.localCharacterRelations.map((item) => (item.id === id ? { ...item, ...fields } : item)),
     })),
   deleteCharacterRelation: (id) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localCharacterRelations: state.localCharacterRelations.filter((item) => item.id !== id),
     })),
   addWorldEntry: (novelId, fields) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localWorldEntries: [...state.localWorldEntries, { ...fields, id: uid('wld'), novelId }],
     })),
   updateWorldEntry: (id, fields) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localWorldEntries: state.localWorldEntries.map((item) => (item.id === id ? { ...item, ...fields } : item)),
     })),
   deleteWorldEntry: (id) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localWorldEntries: state.localWorldEntries.filter((item) => item.id !== id),
     })),
   addTimelineEvent: (novelId, fields) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localTimelineEvents: [...state.localTimelineEvents, { ...fields, id: uid('timeline'), novelId }],
     })),
   updateTimelineEvent: (id, fields) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localTimelineEvents: state.localTimelineEvents.map((item) => (item.id === id ? { ...item, ...fields } : item)),
     })),
   deleteTimelineEvent: (id) =>
-    set((state) => ({
+    setPersisted((state) => ({
       localTimelineEvents: state.localTimelineEvents.filter((item) => item.id !== id),
     })),
   deleteChapter: (chapterId) =>
-    set((state) => buildStateAfterChapterDeletion(state, chapterId)),
+    setPersisted((state) => buildStateAfterChapterDeletion(state, chapterId)),
   deleteNovel: (novelId) =>
-    set((state) => buildStateAfterNovelDeletion(state, novelId)),
+    setPersisted((state) => ({
+      ...buildStateAfterNovelDeletion(state, novelId),
+      librarySummaries: state.librarySummaries.filter((summary) => summary.id !== novelId),
+    })),
   beginNovelDeletion: (novelId) => {
     let transaction: NovelDeletionTransaction | null = null
-    set((state) => {
+    setPersisted((state) => {
       const before = serializeState(state)
-      if (!before.localNovels.some((item) => item.id === novelId) && !before.localChapters.some((item) => item.novelId === novelId)) {
+      const summary = state.librarySummaries.find((item) => item.id === novelId) ?? null
+      if (!summary && !before.localNovels.some((item) => item.id === novelId) && !before.localChapters.some((item) => item.novelId === novelId)) {
         return state
       }
       const optimistic = {
         ...before,
         ...buildStateAfterNovelDeletion(before, novelId),
       }
-      transaction = { novelId, before, optimistic }
-      return optimistic
+      transaction = { novelId, before, optimistic, summary }
+      return {
+        ...optimistic,
+        librarySummaries: state.librarySummaries.filter((summary) => summary.id !== novelId),
+      }
     })
     return transaction
   },
-  rollbackNovelDeletion: (transaction) => set((state) => buildStateAfterRejectedNovelDeletion(serializeState(state), transaction)),
+  rollbackNovelDeletion: (transaction) => set((state) => {
+    const restored = buildStateAfterRejectedNovelDeletion(serializeState(state), transaction)
+    const restoredSummary = buildLibrarySummary(restored, transaction.novelId) ?? transaction.summary
+    return {
+      ...restored,
+      librarySummaries: restoredSummary
+        ? [...state.librarySummaries.filter((summary) => summary.id !== transaction.novelId), restoredSummary]
+        : state.librarySummaries,
+    }
+  }),
   reconcileNovelDeletionFromBackend: async (transaction) => {
-    const status = await pollNovelDeletionStatus(transaction.novelId)
-    if (status.deletionState === 'deleted') return 'deleted'
+    try {
+      const status = await pollNovelDeletionStatus(transaction.novelId)
+      if (status.deletionState === 'deleted') return 'deleted'
 
-    const authoritative = await fetchAuthoritativeWorkspace(transaction.novelId)
-    let result: NovelDeletionReconciliationResult = 'present'
-    set((state) => {
-      const reconciliation = buildStateAfterAuthoritativeNovelDeletionReconciliation(
-        serializeState(state),
-        authoritative,
-        transaction
-      )
-      result = reconciliation.result
-      return reconciliation.state
-    })
-    return result
+      const authoritative = await fetchAuthoritativeWorkspace(transaction.novelId)
+      let result: NovelDeletionReconciliationResult = 'present'
+      set((state) => {
+        const reconciliation = buildStateAfterAuthoritativeNovelDeletionReconciliation(
+          serializeState(state),
+          authoritative,
+          transaction
+        )
+        const restoredSummary = buildLibrarySummary(reconciliation.state, transaction.novelId) ?? transaction.summary
+        result = reconciliation.result
+        return {
+          ...reconciliation.state,
+          librarySummaries: restoredSummary
+            ? [...state.librarySummaries.filter((summary) => summary.id !== transaction.novelId), restoredSummary]
+            : state.librarySummaries,
+        }
+      })
+      return result
+    } catch (error) {
+      const restoredSummary = transaction.summary
+      if (restoredSummary) {
+        set((state) => ({
+          librarySummaries: [
+            ...state.librarySummaries.filter((summary) => summary.id !== transaction.novelId),
+            restoredSummary,
+          ],
+        }))
+      }
+      throw error
+    }
   },
   snapshotPersistedState: () => serializeState(get()),
-  restorePersistedState: (snapshot) => set(snapshot),
+  restorePersistedState: (snapshot) => set({
+    ...snapshot,
+    workspaceSaveConflict: null,
+    workspaceSaveFeedback: null,
+  }),
   setNovelDeletionPending: (pending) => set({ isNovelDeletionPending: pending }),
   reconcileNovelDeletion: (activeNovelId) => set((state) => {
     if (activeNovelId === null) {
@@ -797,14 +886,14 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       currentChapterId: nextChapter?.id ?? '',
     }
   }),
-  ...createKnowledgeActions(set, get),
+  ...createKnowledgeActions(set, setPersisted, get),
   ...createAISettingsActions(set, get),
   selectRewriteCandidate: (id) =>
-    set((state) => ({
+    setPersisted((state) => ({
       rewriteCandidates: state.rewriteCandidates.map((item) => ({ ...item, selected: item.id === id })),
     })),
   applyRewriteCandidate: (id) =>
-    set((state) => {
+    setPersisted((state) => {
       const candidate = state.rewriteCandidates.find((item) => item.id === id)
       const chapter = state.localChapters.find((item) => item.id === state.currentChapterId)
       if (!candidate || !chapter) return state
@@ -823,7 +912,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       }
     }),
   insertRewriteCandidate: (id) =>
-    set((state) => {
+    setPersisted((state) => {
       const candidate = state.rewriteCandidates.find((item) => item.id === id)
       const chapter = state.localChapters.find((item) => item.id === state.currentChapterId)
       if (!candidate || !chapter) return state
@@ -846,7 +935,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     get().addChapterBranch(state.currentChapterId, tm('store.branchSuffix', { title: candidate.title }), candidate.content)
   },
   continueRewriteCandidate: (id) =>
-    set((state) => {
+    setPersisted((state) => {
       const candidate = state.rewriteCandidates.find((item) => item.id === id)
       const chapter = state.localChapters.find((item) => item.id === state.currentChapterId)
       if (!candidate || !chapter) return state
@@ -859,25 +948,25 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
         ],
       }
     }),
-  addPreset: () => set((state) => {
+  addPreset: () => setPersisted((state) => {
     const preset: RewritePreset = { id: uid('preset'), name: tm('store.customPresetName', { count: state.presets.length + 1 }), mode: state.rewriteMode, tone: state.rewriteTone, prompt: state.promptText }
     return { presets: [preset, ...state.presets], selectedPresetId: preset.id }
   }),
-  selectPreset: (id) => set((state) => {
+  selectPreset: (id) => setPersisted((state) => {
     const preset = state.presets.find((item) => item.id === id)
     if (!preset) return state
     return { selectedPresetId: id, rewriteMode: preset.mode, rewriteTone: preset.tone, promptText: preset.prompt }
   }),
-  updatePresetPrompt: (id, prompt) => set((state) => ({ presets: state.presets.map((preset) => (preset.id === id ? { ...preset, prompt } : preset)) })),
-  updatePresetName: (id, name) => set((state) => ({ presets: state.presets.map((preset) => (preset.id === id ? { ...preset, name } : preset)) })),
-  toggleConstraint: (id) => set((state) => ({ constraints: state.constraints.map((constraint) => constraint.id === id ? { ...constraint, enabled: !constraint.enabled } : constraint) })),
-  cycleConstraintStrength: (id) => set((state) => ({ constraints: state.constraints.map((constraint) => {
+  updatePresetPrompt: (id, prompt) => setPersisted((state) => ({ presets: state.presets.map((preset) => (preset.id === id ? { ...preset, prompt } : preset)) })),
+  updatePresetName: (id, name) => setPersisted((state) => ({ presets: state.presets.map((preset) => (preset.id === id ? { ...preset, name } : preset)) })),
+  toggleConstraint: (id) => setPersisted((state) => ({ constraints: state.constraints.map((constraint) => constraint.id === id ? { ...constraint, enabled: !constraint.enabled } : constraint) })),
+  cycleConstraintStrength: (id) => setPersisted((state) => ({ constraints: state.constraints.map((constraint) => {
     if (constraint.id !== id) return constraint
     const next: Record<RewriteConstraint['strength'], RewriteConstraint['strength']> = { off: 'soft', soft: 'strict', strict: 'off' }
     return { ...constraint, strength: next[constraint.strength] }
   }) })),
-  ...createRewriteActions(set, get),
-  addChapterBranch: (sourceChapterId, title, content) => set((state) => {
+  ...createRewriteActions(setPersisted, get),
+  addChapterBranch: (sourceChapterId, title, content) => setPersisted((state) => {
     const sourceChapter = state.localChapters.find((chapter) => chapter.id === sourceChapterId)
     if (!sourceChapter) return state
     const branchId = uid('branch')
@@ -886,7 +975,7 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     const nextChapter: Chapter = { ...sourceChapter, id: branchId, title: title ?? tm('store.branchTitleFallback', { title: sourceChapter.title, count: branchNumber }), content: plainTextToHtml(nextText), originalContent: sourceChapter.content, kind: 'branch', parentChapterId: sourceChapterId, branchLabel: `B${branchNumber}`, order: sourceChapter.order + branchNumber / 10, status: 'draft', updatedAt: tm('store.branchUpdatedAt', { time: formatNowLabel() }), wordCount: countChineseFriendlyWords(nextText), trajectory: [...(sourceChapter.trajectory ?? []), tm('store.branchTrajectory')] }
     return { currentChapterId: branchId, currentTab: 'editor', localChapters: [...state.localChapters, nextChapter], trajectories: [{ id: uid('traj'), chapterId: branchId, type: 'branch', title: tm('store.branchCreateTitle', { label: nextChapter.branchLabel ?? `B${branchNumber}` }), detail: tm('store.branchCreateDetail', { title: sourceChapter.title }), createdAt: formatNowLabel() }, ...state.trajectories] }
   }),
-  createNewChapter: () => set((state) => {
+  createNewChapter: () => setPersisted((state) => {
     const volumeId = state.localVolumes[0]?.id
     if (!volumeId) return state
     const sameVolume = state.localChapters.filter((chapter) => chapter.volumeId === volumeId && !chapter.parentChapterId)
@@ -894,17 +983,19 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     return { currentChapterId: nextChapter.id, currentTab: 'editor', localChapters: [...state.localChapters, nextChapter] }
   }),
   exportWorkspace: () => JSON.stringify(serializeState(get()), null, 2),
-  importWorkspace: (payload) => set((state) => normalizeWorkspaceState({
+  importWorkspace: (payload) => setPersisted((state) => normalizeWorkspaceState({
     ...serializeState(state),
     ...payload,
   })),
-  resetWorkspace: () => set((state) => ({
+  resetWorkspace: () => setPersisted((state) => ({
     ...initialState,
+    workspaceSaveConflict: null,
+    workspaceSaveFeedback: null,
     presetCompatLibrary: state.presetCompatLibrary,
     presetCompatLibraryLoading: state.presetCompatLibraryLoading,
     presetCompatLibraryError: state.presetCompatLibraryError,
   })),
-  setPresetCompatSessionPhase: (selection, surfaceId, phase, resetPending = false) => set((state) => ({
+  setPresetCompatSessionPhase: (selection, surfaceId, phase, resetPending = false) => setPersisted((state) => ({
     presetCompatSessionState: setPresetCompatSessionEntry(
       state.presetCompatSessionState,
       selection,
@@ -913,10 +1004,10 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
       resetPending
     ),
   })),
-  clearPresetCompatSessionStateForSelection: (selection) => set((state) => ({
+  clearPresetCompatSessionStateForSelection: (selection) => setPersisted((state) => ({
     presetCompatSessionState: clearPresetCompatSessionStateForSelection(state.presetCompatSessionState, selection),
   })),
-  resetPresetCompatSessionStateForSelection: (selection, surfaceIds, phase = 'new_chat') => set((state) => ({
+  resetPresetCompatSessionStateForSelection: (selection, surfaceIds, phase = 'new_chat') => setPersisted((state) => ({
     presetCompatSessionState: resetPresetCompatSessionStateForSelection(
       state.presetCompatSessionState,
       selection,
@@ -1200,4 +1291,5 @@ export const useNovelStore = create<NovelStore>((set, get) => ({
     return preset ? exportPresetCompatPresetJson(get().presetCompatLibrary, presetId) : null
   },
   exportPresetCompatStandaloneRegexBundle: (regexIds) => exportPresetCompatStandaloneRegexJson(get().presetCompatLibrary, regexIds),
-}))
+  }
+})

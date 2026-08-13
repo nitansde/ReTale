@@ -6,6 +6,7 @@ import type {
   PresetCompatRegexRecord,
 } from '@/lib/preset-compat/types'
 import { useNovelStore } from '@/store/novel-store'
+import { resetClientRequestBrokerForTests } from '@/lib/client-request-broker'
 
 function createPreset(id: string, overrides: Partial<PresetCompatPresetRecord> = {}): PresetCompatPresetRecord {
   return {
@@ -143,6 +144,12 @@ function resetStore() {
     isNovelDeletionPending: false,
     backendLoaded: false,
     backendLoadError: '',
+    workspaceRevision: null,
+    revisionNovelId: '',
+    lastAcknowledgedPersistedWorkspace: null,
+    librarySummaries: [],
+    librarySummariesLoaded: false,
+    librarySummariesError: '',
     presetCompatLibrary: createDefaultPresetCompatLibrary(),
     presetCompatLibraryLoading: false,
     presetCompatLibraryError: '',
@@ -168,20 +175,200 @@ function createWorkspacePayload(novelId = 'novel-survivor') {
       wordCount: 1,
       updatedAt: 'now',
     }],
+    workspaceRevision: 3,
+    revisionNovelId: novelId,
   }
 }
 
 describe('preset compat store lifecycle', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    resetClientRequestBrokerForTests()
     resetStore()
   })
 
   afterEach(() => {
+    resetClientRequestBrokerForTests()
     vi.useRealTimers()
   })
 
-  it('hydrates the global library during backend load and keeps workspace export/import isolated', async () => {
+  it('loads compact library summaries without hydrating chapter bodies', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace?librarySummary=1') {
+        return new Response(JSON.stringify({
+          ok: true,
+          activeNovelId: 'novel-1',
+          novels: [{
+            id: 'novel-1',
+            title: 'Compact Novel',
+            summary: 'Metadata only',
+            tags: ['fast'],
+            updatedAt: 'now',
+            wordCount: 42,
+            chapterCount: 3,
+            firstChapterId: 'chapter-1',
+          }],
+        }), { status: 200 })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await useNovelStore.getState().loadLibrarySummaries()
+
+    const state = useNovelStore.getState()
+    expect(state.librarySummariesLoaded).toBe(true)
+    expect(state.librarySummariesError).toBe('')
+    expect(state.getNovels()).toEqual([expect.objectContaining({
+      id: 'novel-1',
+      chapterCount: 3,
+      firstChapterId: 'chapter-1',
+    })])
+    expect(state.localChapters).toEqual([])
+    expect(state.backendLoaded).toBe(false)
+  })
+
+  it('begins and rolls back deletion for a summary-only library card', () => {
+    const summary = {
+      id: 'novel-summary-only',
+      title: 'Summary-only novel',
+      summary: 'Metadata only',
+      tags: ['compact'],
+      updatedAt: 'now',
+      wordCount: 42,
+      chapterCount: 3,
+      firstChapterId: 'chapter-1',
+    }
+    useNovelStore.setState({
+      currentNovelId: summary.id,
+      localNovels: [],
+      localChapters: [],
+      librarySummaries: [summary],
+      librarySummariesLoaded: true,
+    })
+
+    const transaction = useNovelStore.getState().beginNovelDeletion(summary.id)
+
+    expect(transaction).toMatchObject({ novelId: summary.id, summary })
+    expect(useNovelStore.getState().librarySummaries).toEqual([])
+
+    useNovelStore.getState().rollbackNovelDeletion(transaction!)
+
+    expect(useNovelStore.getState().librarySummaries).toEqual([summary])
+  })
+
+  it('restores a summary-only card during authoritative present reconciliation without a summary refresh', async () => {
+    const summary = {
+      id: 'novel-summary-only',
+      title: 'Captured summary',
+      summary: 'Metadata only',
+      tags: ['compact'],
+      updatedAt: 'captured',
+      wordCount: 42,
+      chapterCount: 3,
+      firstChapterId: 'chapter-captured',
+    }
+    const unrelatedSummary = { ...summary, id: 'novel-unrelated', title: 'Unrelated' }
+    useNovelStore.setState({
+      currentNovelId: summary.id,
+      localNovels: [],
+      localChapters: [],
+      librarySummaries: [summary, unrelatedSummary],
+      librarySummariesLoaded: true,
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion(summary.id)
+    expect(transaction).not.toBeNull()
+
+    const authoritative = createWorkspacePayload(summary.id)
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace?novelId=novel-summary-only&deletionStatus=1') {
+        return new Response(JSON.stringify({ ok: true, novelId: summary.id, deletionState: 'ready' }), { status: 200 })
+      }
+      if (url === '/api/workspace?novelId=novel-summary-only') {
+        return new Response(JSON.stringify(authoritative), { status: 200 })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).resolves.toBe('present')
+
+    const summaries = useNovelStore.getState().librarySummaries
+    expect(summaries.filter((item) => item.id === summary.id)).toHaveLength(1)
+    expect(summaries.find((item) => item.id === summary.id)).toMatchObject({
+      title: 'Authoritative novel',
+      firstChapterId: `${summary.id}-chapter`,
+    })
+    expect(summaries).toContainEqual(unrelatedSummary)
+  })
+
+  it('restores only the captured summary when reconciliation throws and rethrows the original error', async () => {
+    const summary = {
+      id: 'novel-summary-only',
+      title: 'Captured summary',
+      summary: 'Metadata only',
+      tags: ['compact'],
+      updatedAt: 'captured',
+      wordCount: 42,
+      chapterCount: 3,
+      firstChapterId: 'chapter-captured',
+    }
+    const unrelatedSummary = { ...summary, id: 'novel-unrelated', title: 'Unrelated' }
+    useNovelStore.setState({
+      currentNovelId: summary.id,
+      localNovels: [],
+      localChapters: [],
+      librarySummaries: [summary, unrelatedSummary],
+      librarySummariesLoaded: true,
+    })
+    const transaction = useNovelStore.getState().beginNovelDeletion(summary.id)
+    expect(transaction).not.toBeNull()
+    useNovelStore.setState({
+      currentNovelId: 'novel-post-optimistic',
+      localNovels: [{ id: 'novel-post-optimistic', title: 'Post optimistic', summary: '', tags: [] }],
+    })
+    const optimisticWorkspace = useNovelStore.getState().snapshotPersistedState()
+    const originalError = new Error('status unavailable')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(originalError))
+
+    const reconciliationError = await useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!).then(
+      () => null,
+      (error: unknown) => error
+    )
+
+    expect(reconciliationError).toBe(originalError)
+    expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimisticWorkspace)
+    expect(useNovelStore.getState().librarySummaries).toEqual([unrelatedSummary, summary])
+  })
+
+  it('rejects malformed compact library summaries without accepting partial data', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      activeNovelId: null,
+      novels: [{
+        id: 'novel-1',
+        title: 'Invalid Novel',
+        summary: '',
+        tags: [],
+        updatedAt: '',
+        wordCount: 10,
+        chapterCount: 1,
+        firstChapterId: 'chapter-1',
+        content: '<p>body must not appear here</p>',
+      }],
+    }), { status: 200 })))
+
+    await expect(useNovelStore.getState().loadLibrarySummaries()).rejects.toThrow(
+      'Library summary endpoint returned an invalid response'
+    )
+
+    const state = useNovelStore.getState()
+    expect(state.librarySummariesLoaded).toBe(true)
+    expect(state.librarySummaries).toEqual([])
+    expect(state.librarySummariesError).toBe('Library summary endpoint returned an invalid response')
+  })
+
+  it('defers the global library during backend load and keeps workspace export/import isolated', async () => {
     const workspacePayload = {
       currentNovelId: 'novel-1',
       currentChapterId: 'chapter-1',
@@ -211,28 +398,13 @@ describe('preset compat store lifecycle', () => {
       if (url === '/api/settings/ai') {
         return new Response(JSON.stringify({ provider: 'openai-compatible', model: 'gpt-4.1-mini' }), { status: 200 })
       }
-      if (url === '/api/settings/preset-compat') {
-        return new Response(JSON.stringify(presetCompatLibrary), { status: 200 })
-      }
-      if (url === '/api/knowledge-view?novelId=novel-1&asOfChapter=1&statusOnly=1') {
-        return new Response(JSON.stringify({
-          ok: true,
-          localOutlines: [],
-          localCharacters: [],
-          localCharacterRelations: [],
-          localWorldEntries: [],
-          localTimelineEvents: [],
-          knowledgeRebuildStatus: null,
-          jobOutcome: null,
-        }), { status: 200 })
-      }
       throw new Error(`Unexpected fetch: ${url}`)
     }))
 
     await useNovelStore.getState().loadFromBackend()
 
     const state = useNovelStore.getState()
-    expect(state.presetCompatLibrary.revision).toBe(3)
+    expect(state.presetCompatLibrary.revision).not.toBe(3)
     expect(state.presetCompatLibraryLoading).toBe(false)
     expect(state.presetCompatLibraryError).toBe('')
 
@@ -242,7 +414,7 @@ describe('preset compat store lifecycle', () => {
     expect(exportedWorkspace).not.toHaveProperty('presetCompatLibraryError')
 
     state.importWorkspace({ currentNovelId: 'novel-2' })
-    expect(useNovelStore.getState().presetCompatLibrary.revision).toBe(3)
+    expect(useNovelStore.getState().presetCompatLibrary.revision).not.toBe(3)
   })
 
   it('fails open when the initial workspace restore request stalls', async () => {
@@ -274,7 +446,51 @@ describe('preset compat store lifecycle', () => {
     expect(state.backendLoadError).toBe('Workspace restore timed out')
   })
 
-  it('preserves status-only knowledge restore fields during loadFromBackend', async () => {
+  it('records and rejects a targeted workspace restore failure', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace?novelId=novel-a') {
+        return new Response(JSON.stringify({ error: 'Targeted restore failed' }), { status: 500 })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await expect(useNovelStore.getState().loadFromBackend('novel-a')).rejects.toThrow('Targeted restore failed')
+
+    const state = useNovelStore.getState()
+    expect(state.backendLoaded).toBe(true)
+    expect(state.isHydrated).toBe(true)
+    expect(state.backendLoadError).toBe('Targeted restore failed')
+  })
+
+  it('shares a StrictMode-style duplicate restore and prevents an older novel response from overwriting a newer restore', async () => {
+    const pending = new Map<string, { resolve: (response: Response) => void; signal?: AbortSignal }>()
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/settings/ai') return Promise.resolve(new Response(JSON.stringify({})))
+      return new Promise<Response>((resolve) => {
+        pending.set(url, { resolve, signal: init?.signal ?? undefined })
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const duplicateOne = useNovelStore.getState().loadFromBackend('novel-a')
+    const duplicateTwo = useNovelStore.getState().loadFromBackend('novel-a')
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/workspace?novelId=novel-a')).toHaveLength(1)
+
+    const newer = useNovelStore.getState().loadFromBackend('novel-b')
+    await Promise.resolve()
+    expect(pending.get('/api/workspace?novelId=novel-a')?.signal?.aborted).toBe(true)
+    pending.get('/api/workspace?novelId=novel-b')?.resolve(new Response(JSON.stringify(createWorkspacePayload('novel-b'))))
+    await newer
+    expect(useNovelStore.getState().currentNovelId).toBe('novel-b')
+
+    pending.get('/api/workspace?novelId=novel-a')?.resolve(new Response(JSON.stringify(createWorkspacePayload('novel-a'))))
+    await Promise.all([duplicateOne, duplicateTwo])
+    expect(useNovelStore.getState().currentNovelId).toBe('novel-b')
+  })
+
+  it('does not issue a store-owned status-only knowledge request during loadFromBackend', async () => {
     const workspacePayload = {
       currentNovelId: 'novel-1',
       currentChapterId: 'chapter-1',
@@ -303,108 +519,12 @@ describe('preset compat store lifecycle', () => {
       if (url === '/api/settings/ai') {
         return new Response(JSON.stringify({ provider: 'openai-compatible', model: 'gpt-4.1-mini' }), { status: 200 })
       }
-      if (url === '/api/settings/preset-compat') {
-        return new Response(JSON.stringify(createLibrary()), { status: 200 })
-      }
-      if (url === '/api/knowledge-view?novelId=novel-1&asOfChapter=1&statusOnly=1') {
-        return new Response(JSON.stringify({
-          ok: true,
-          localOutlines: [],
-          localCharacters: [],
-          localCharacterRelations: [],
-          localWorldEntries: [],
-          localTimelineEvents: [],
-          knowledgeRebuildStatus: {
-            jobId: 'job-restore-1',
-            novelId: 'novel-1',
-            jobType: 'extract_chapter_knowledge',
-            status: 'running',
-            progress: 0.2234,
-            currentStep: '并行抽取候选知识（已完成第 702 章）',
-            createdAt: '2026-06-10T23:20:00.000Z',
-            updatedAt: '2026-06-10T23:29:11.000Z',
-            etaMinutes: null,
-            steps: [],
-          },
-          hanlpCacheSnapshot: {
-            status: 'ready',
-          },
-          knowledgeStatusOverview: {
-            knowledgeGraph: {
-              status: 'full',
-              coveredChapterCount: 702,
-              totalChapterCount: 702,
-              validThroughChapterNo: 702,
-            },
-            extractionCache: {
-              status: 'full',
-              coveredChapterCount: 702,
-              totalChapterCount: 702,
-              validThroughChapterNo: 702,
-            },
-            embeddingCache: {
-              status: 'full',
-              coveredChapterCount: 702,
-              totalChapterCount: 702,
-              validThroughChapterNo: 702,
-              provider: 'openai-compatible',
-              model: 'text-embedding-3-small',
-            },
-            retrievalIndex: {
-              status: 'full',
-              task: {
-                jobId: 'retrieval-job-1',
-                novelId: 'novel-1',
-                jobType: 'rebuild_retrieval_index',
-                status: 'queued',
-                progress: 0,
-                currentStep: '等待索引重建',
-                createdAt: '2026-06-10T23:30:00.000Z',
-                updatedAt: '2026-06-10T23:30:00.000Z',
-                etaMinutes: null,
-                steps: [],
-              },
-              indexedScopeCount: 702,
-            },
-          },
-          jobOutcome: 'running',
-          actionError: {
-            code: 'active-rebuild',
-            message: '恢复了后台任务状态',
-          },
-        }), { status: 200 })
-      }
       throw new Error(`Unexpected fetch: ${url}`)
     }))
 
     await useNovelStore.getState().loadFromBackend()
 
-    const state = useNovelStore.getState() as typeof useNovelStore.getState extends () => infer T ? T : never
-      & {
-        knowledgeRebuildStatus?: unknown
-        hanlpCacheSnapshot?: unknown
-        knowledgeStatusOverview?: { retrievalIndex?: { task?: unknown } } | null
-        jobOutcome?: unknown
-        actionError?: unknown
-      }
-    expect(state.knowledgeRebuildStatus).toMatchObject({
-      jobId: 'job-restore-1',
-      status: 'running',
-      currentStep: '并行抽取候选知识（已完成第 702 章）',
-      progress: 0.2234,
-    })
-    expect(state.hanlpCacheSnapshot).toMatchObject({
-      status: 'ready',
-    })
-    expect(state.knowledgeStatusOverview?.retrievalIndex.task).toMatchObject({
-      jobId: 'retrieval-job-1',
-      status: 'queued',
-    })
-    expect(state.jobOutcome).toBe('running')
-    expect(state.actionError).toMatchObject({
-      code: 'active-rebuild',
-      message: '恢复了后台任务状态',
-    })
+    expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining('/api/knowledge-view'), expect.anything())
   })
 
   it('loads, saves, imports, binds, edits, and exports through the dedicated preset compat slice', async () => {
@@ -436,7 +556,7 @@ describe('preset compat store lifecycle', () => {
       presetCompatLibrary: createLibrary({ revision: 2 }),
     })
 
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === '/api/settings/preset-compat' && !init?.method) {
         return new Response(JSON.stringify(savedLibrary), { status: 200 })
@@ -452,13 +572,16 @@ describe('preset compat store lifecycle', () => {
         return new Response(JSON.stringify({ ok: true, library: importedLibrary, importedIds: ['regex-3'], warnings: ['regex warning'] }), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
-    }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
 
     await useNovelStore.getState().loadPresetCompatLibrary()
     expect(useNovelStore.getState().presetCompatLibrary.revision).toBe(3)
+    expect(fetchMock).toHaveBeenCalledWith('/api/settings/preset-compat', expect.objectContaining({ cache: 'no-cache' }))
 
     await useNovelStore.getState().savePresetCompatLibrary()
     expect(useNovelStore.getState().presetCompatLibrary.revision).toBe(3)
+    expect(fetchMock.mock.calls.find(([input, init]) => String(input) === '/api/settings/preset-compat' && init?.method === 'POST')?.[1]?.cache).toBeUndefined()
 
     await expect(useNovelStore.getState().importPresetCompatPreset({ jsonText: '{"name":"preset"}' })).resolves.toEqual({
       importedIds: ['preset-2'],
@@ -468,6 +591,7 @@ describe('preset compat store lifecycle', () => {
       importedIds: ['regex-3'],
       warnings: ['regex warning'],
     })
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/settings/preset-compat/import').every(([, init]) => init?.cache === undefined)).toBe(true)
 
     useNovelStore.getState().bindPresetCompatPresetToSurface('rewrite', 'preset-2')
     useNovelStore.getState().attachPresetCompatStandaloneRegex('preset-2', 'regex-3')

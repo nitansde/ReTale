@@ -115,6 +115,15 @@ describe('preset compat session state', () => {
     ])
   })
 
+  it('preserves session state identity when clear or reset makes no semantic change', () => {
+    const chapterSelection = { kind: 'chapter' as const, chapterId: 'chapter-1' }
+    const otherSelection = { kind: 'chapter' as const, chapterId: 'chapter-2' }
+    const state = setPresetCompatSessionEntry({}, chapterSelection, 'rewrite', 'new_chat', true)
+
+    expect(clearPresetCompatSessionStateForSelection(state, otherSelection)).toBe(state)
+    expect(setPresetCompatSessionEntry(state, chapterSelection, 'rewrite', 'new_chat', true)).toBe(state)
+  })
+
   it('serializes only lightweight phase and reset metadata, then resets it without touching the preset library', () => {
     useNovelStore.setState({
       currentNovelId: 'novel-1',

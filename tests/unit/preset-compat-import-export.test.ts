@@ -123,7 +123,7 @@ describe('preset compat import/export compatibility', () => {
     expect(exported.prompts).toEqual(fixture.prompts)
     expect(exported.prompt_order).toEqual(fixture.prompt_order)
     expect(exportedExtensions.regex_scripts).toEqual(fixtureExtensions.regex_scripts)
-    expect(exported.synthetic_root_sentinel).toEqual(fixture.synthetic_root_sentinel)
+    expect((exported as Record<string, unknown>).synthetic_root_sentinel).toEqual(fixture.synthetic_root_sentinel)
     expect(exportedSPreset.ChatSquash).toEqual(fixtureSPreset.ChatSquash)
     expect(exportedSPreset.RegexBinding).toEqual(fixtureSPreset.RegexBinding)
     expect(exportedExtensions.MacroNest).toEqual(fixtureExtensions.MacroNest)
