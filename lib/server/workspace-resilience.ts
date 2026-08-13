@@ -7,6 +7,7 @@ import {
 import { safeParseJson as safeParseJsonValue, safeParseJsonObject } from '@/lib/server/json-parse'
 import {
   createNovelDatabaseAccess,
+  type DatabaseAccess,
   type SqlParam,
 } from '@/lib/server/database-access'
 import { resolveWorkspaceNovelId, scopeWorkspaceStateToNovel } from '@/lib/server/workspace-novel-scope'
@@ -40,6 +41,7 @@ function hasTransactionWrapper(db: WorkspaceRecoveryDb): db is WorkspaceRecovery
 
 type WorkspaceRuntimeStateRow = {
   id: string
+  revision: number
   currentNovelId: string
   currentChapterId: string
   currentTab: string
@@ -103,8 +105,24 @@ type WorkspaceRuntimeChapterRow = {
   trajectoryJson: string
 }
 
+export type WorkspaceLibrarySummary = {
+  id: string
+  title: string
+  summary: string
+  tags: string[]
+  updatedAt: string
+  wordCount: number
+  chapterCount: number
+  firstChapterId: string | null
+}
+
 type WorkspaceRuntimeSaveResult = {
   updatedAt: string
+}
+
+export type WorkspaceRuntimeSnapshot = WorkspaceRuntimeSaveResult & {
+  payload: PersistedNovelState
+  revision: number
 }
 
 type CountRow = {
@@ -210,10 +228,12 @@ function findWorkspaceStateForRecovery(id: string, db?: WorkspaceRecoveryDb) {
   )
 }
 
-function readWorkspaceRuntimeState(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
-  const meta = queryOneFromDb<WorkspaceRuntimeStateRow>(
-    db,
-    `SELECT id, currentNovelId, currentChapterId, currentTab, helperTab,
+export function readWorkspaceRuntimeSnapshotFromDb(
+  db: DatabaseAccess,
+  id = WORKSPACE_ID,
+): WorkspaceRuntimeSnapshot | null {
+  const meta = db.queryOne<WorkspaceRuntimeStateRow>(
+    `SELECT id, revision, currentNovelId, currentChapterId, currentTab, helperTab,
             expandedVolumeIdsJson, localOutlinesJson, localCharactersJson, localCharacterRelationsJson,
             localWorldEntriesJson, localTimelineEventsJson, rewriteCandidatesJson, rewriteHistoryJson, trajectoriesJson,
             rewriteMode, rewriteTone, rewriteOutput, rewriteScope, selectionText,
@@ -224,24 +244,21 @@ function readWorkspaceRuntimeState(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) 
      WHERE id = ?`,
     id,
   )
-  const novels = queryAllFromDb<WorkspaceRuntimeNovelRow>(
-    db,
+  const novels = db.queryAll<WorkspaceRuntimeNovelRow>(
     `SELECT id, title, summary, tagsJson, sortOrder
      FROM WorkspaceRuntimeNovel
      WHERE workspaceStateId = ?
      ORDER BY sortOrder ASC, id ASC`,
     id,
   )
-  const volumes = queryAllFromDb<WorkspaceRuntimeVolumeRow>(
-    db,
+  const volumes = db.queryAll<WorkspaceRuntimeVolumeRow>(
     `SELECT id, novelId, title, sortOrder
      FROM WorkspaceRuntimeVolume
      WHERE workspaceStateId = ?
      ORDER BY novelId ASC, sortOrder ASC, id ASC`,
     id,
   )
-  const chapters = queryAllFromDb<WorkspaceRuntimeChapterRow>(
-    db,
+  const chapters = db.queryAll<WorkspaceRuntimeChapterRow>(
     `SELECT id, novelId, volumeId, parentChapterId, kind, branchLabel, title, sortOrder,
             contentHtml, originalContentHtml, status, wordCount, updatedAtLabel, trajectoryJson
      FROM WorkspaceRuntimeChapter
@@ -254,7 +271,7 @@ function readWorkspaceRuntimeState(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) 
     return null
   }
 
-  return normalizeWorkspaceState({
+  const payload = normalizeWorkspaceState({
     ...createEmptyWorkspaceState(),
     currentNovelId: meta?.currentNovelId ?? '',
     currentChapterId: meta?.currentChapterId ?? '',
@@ -313,6 +330,76 @@ function readWorkspaceRuntimeState(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) 
     focusMode: Boolean(meta?.focusMode ?? 0),
     presetCompatSessionState: readJsonObject(meta?.presetCompatSessionStateJson ?? '{}') as PersistedNovelState['presetCompatSessionState'],
   })
+
+  return {
+    payload,
+    revision: meta?.revision ?? 0,
+    updatedAt: meta?.updatedAt ?? '',
+  }
+}
+
+function readWorkspaceRuntimeState(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
+  const targetDb = getCurrentWorkspaceDb(db)
+  if (!targetDb) return null
+  return readWorkspaceRuntimeSnapshotFromDb(targetDb as DatabaseAccess, id)?.payload ?? null
+}
+
+export function readWorkspaceLibrarySummary(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb): WorkspaceLibrarySummary | null {
+  const targetDb = getCurrentWorkspaceDb(db)
+  if (!targetDb) return null
+
+  const novel = targetDb.queryOne<WorkspaceRuntimeNovelRow>(
+    `SELECT id, title, summary, tagsJson, sortOrder
+     FROM WorkspaceRuntimeNovel
+     WHERE workspaceStateId = ?
+     ORDER BY sortOrder ASC, id ASC
+     LIMIT 1`,
+    id,
+  )
+  if (!novel) return null
+
+  const chapterSummary = targetDb.queryOne<{
+    chapterCount: number
+    wordCount: number
+    firstChapterId: string | null
+    updatedAt: string | null
+  }>(
+    `SELECT COUNT(*) AS chapterCount,
+            COALESCE(SUM(wordCount), 0) AS wordCount,
+            (
+              SELECT id
+              FROM WorkspaceRuntimeChapter
+              WHERE workspaceStateId = ? AND novelId = ? AND parentChapterId IS NULL
+              ORDER BY sortOrder ASC, id ASC
+              LIMIT 1
+            ) AS firstChapterId,
+            (
+              SELECT updatedAtLabel
+              FROM WorkspaceRuntimeChapter
+              WHERE workspaceStateId = ? AND novelId = ? AND parentChapterId IS NULL
+              ORDER BY sortOrder ASC, id ASC
+              LIMIT 1
+            ) AS updatedAt
+     FROM WorkspaceRuntimeChapter
+     WHERE workspaceStateId = ? AND novelId = ? AND parentChapterId IS NULL`,
+    id,
+    novel.id,
+    id,
+    novel.id,
+    id,
+    novel.id,
+  )
+
+  return {
+    id: novel.id,
+    title: novel.title,
+    summary: novel.summary,
+    tags: normalizeStringArray(readJsonArray(novel.tagsJson)),
+    updatedAt: chapterSummary?.updatedAt ?? '',
+    wordCount: chapterSummary?.wordCount ?? 0,
+    chapterCount: chapterSummary?.chapterCount ?? 0,
+    firstChapterId: chapterSummary?.firstChapterId ?? null,
+  }
 }
 
 export function loadWorkspaceKnowledgeSyncPayload(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
@@ -325,6 +412,148 @@ export function loadWorkspaceKnowledgeSyncPayload(id = WORKSPACE_ID, db?: Worksp
     localTimelineEvents: payload.localTimelineEvents,
     currentNovelId: payload.currentNovelId,
   }
+}
+
+export function replaceWorkspaceRuntimeStateInDb(
+  db: DatabaseAccess,
+  payload: PersistedNovelState,
+  revision: number,
+  id = WORKSPACE_ID,
+): WorkspaceRuntimeSaveResult {
+  const normalized = normalizeWorkspaceState(payload)
+  db.execute(
+    `INSERT INTO WorkspaceRuntimeState (
+       id, revision, currentNovelId, currentChapterId, currentTab, helperTab,
+       expandedVolumeIdsJson, localOutlinesJson, localCharactersJson, localCharacterRelationsJson,
+       localWorldEntriesJson, localTimelineEventsJson, rewriteCandidatesJson, rewriteHistoryJson, trajectoriesJson,
+       rewriteMode, rewriteTone, rewriteOutput, rewriteScope, selectionText,
+       selectedParagraphIndex, thinkingLevel, autoContinue, keepCanon, promptText,
+       selectedPresetId, presetsJson, constraintsJson, focusMode, presetCompatSessionStateJson
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       revision = excluded.revision,
+       currentNovelId = excluded.currentNovelId,
+       currentChapterId = excluded.currentChapterId,
+       currentTab = excluded.currentTab,
+       helperTab = excluded.helperTab,
+       expandedVolumeIdsJson = excluded.expandedVolumeIdsJson,
+       localOutlinesJson = excluded.localOutlinesJson,
+       localCharactersJson = excluded.localCharactersJson,
+       localCharacterRelationsJson = excluded.localCharacterRelationsJson,
+       localWorldEntriesJson = excluded.localWorldEntriesJson,
+       localTimelineEventsJson = excluded.localTimelineEventsJson,
+       rewriteCandidatesJson = excluded.rewriteCandidatesJson,
+       rewriteHistoryJson = excluded.rewriteHistoryJson,
+       trajectoriesJson = excluded.trajectoriesJson,
+       rewriteMode = excluded.rewriteMode,
+       rewriteTone = excluded.rewriteTone,
+       rewriteOutput = excluded.rewriteOutput,
+       rewriteScope = excluded.rewriteScope,
+       selectionText = excluded.selectionText,
+       selectedParagraphIndex = excluded.selectedParagraphIndex,
+       thinkingLevel = excluded.thinkingLevel,
+       autoContinue = excluded.autoContinue,
+       keepCanon = excluded.keepCanon,
+       promptText = excluded.promptText,
+       selectedPresetId = excluded.selectedPresetId,
+       presetsJson = excluded.presetsJson,
+       constraintsJson = excluded.constraintsJson,
+       focusMode = excluded.focusMode,
+       presetCompatSessionStateJson = excluded.presetCompatSessionStateJson,
+       updatedAt = CURRENT_TIMESTAMP`,
+    id,
+    revision,
+    normalized.currentNovelId,
+    normalized.currentChapterId,
+    normalized.currentTab,
+    normalized.helperTab,
+    JSON.stringify(normalized.expandedVolumeIds),
+    JSON.stringify(normalized.localOutlines),
+    JSON.stringify(normalized.localCharacters),
+    JSON.stringify(normalized.localCharacterRelations),
+    JSON.stringify(normalized.localWorldEntries),
+    JSON.stringify(normalized.localTimelineEvents),
+    JSON.stringify(normalized.rewriteCandidates),
+    JSON.stringify(normalized.rewriteHistory),
+    JSON.stringify(normalized.trajectories),
+    normalized.rewriteMode,
+    normalized.rewriteTone,
+    normalized.rewriteOutput,
+    normalized.rewriteScope,
+    normalized.selectionText,
+    normalized.selectedParagraphIndex,
+    normalized.thinkingLevel,
+    normalized.autoContinue ? 1 : 0,
+    normalized.keepCanon ? 1 : 0,
+    normalized.promptText,
+    normalized.selectedPresetId,
+    JSON.stringify(normalized.presets),
+    JSON.stringify(normalized.constraints),
+    normalized.focusMode ? 1 : 0,
+    JSON.stringify(normalized.presetCompatSessionState),
+  )
+
+  db.execute('DELETE FROM WorkspaceRuntimeChapter WHERE workspaceStateId = ?', id)
+  db.execute('DELETE FROM WorkspaceRuntimeVolume WHERE workspaceStateId = ?', id)
+  db.execute('DELETE FROM WorkspaceRuntimeNovel WHERE workspaceStateId = ?', id)
+
+  normalized.localNovels.forEach((novel, index) => {
+    db.execute(
+      `INSERT INTO WorkspaceRuntimeNovel (workspaceStateId, id, title, summary, tagsJson, sortOrder)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      id,
+      novel.id,
+      novel.title,
+      novel.summary,
+      JSON.stringify(novel.tags ?? []),
+      index,
+    )
+  })
+
+  normalized.localVolumes.forEach((volume, index) => {
+    db.execute(
+      `INSERT INTO WorkspaceRuntimeVolume (workspaceStateId, id, novelId, title, sortOrder)
+       VALUES (?, ?, ?, ?, ?)`,
+      id,
+      volume.id,
+      volume.novelId,
+      volume.title,
+      Number.isFinite(volume.order) ? volume.order : index + 1,
+    )
+  })
+
+  normalized.localChapters.forEach((chapter, index) => {
+    db.execute(
+      `INSERT INTO WorkspaceRuntimeChapter (
+         workspaceStateId, id, novelId, volumeId, parentChapterId, kind, branchLabel, title,
+         sortOrder, contentHtml, originalContentHtml, status, wordCount, updatedAtLabel, trajectoryJson
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      chapter.id,
+      chapter.novelId,
+      chapter.volumeId,
+      chapter.parentChapterId ?? null,
+      chapter.kind ?? null,
+      chapter.branchLabel ?? null,
+      chapter.title,
+      Number.isFinite(chapter.order) ? chapter.order : index + 1,
+      chapter.content,
+      chapter.originalContent ?? null,
+      chapter.status,
+      chapter.wordCount,
+      chapter.updatedAt,
+      JSON.stringify(chapter.trajectory ?? []),
+    )
+  })
+
+  const saved = db.queryOne<WorkspaceRuntimeSaveResult>(
+    'SELECT updatedAt FROM WorkspaceRuntimeState WHERE id = ?',
+    id,
+  )
+  if (!saved) {
+    throw new Error('Failed to save workspace runtime state')
+  }
+  return saved
 }
 
 export async function persistWorkspaceRuntimeState(
@@ -349,290 +578,28 @@ export async function persistWorkspaceRuntimeState(
     return persistWorkspaceRuntimeState(scopedPayload, id, targetDb)
   }
 
+  const existingRevision = (db as DatabaseAccess).queryOne<{ revision: number }>(
+    'SELECT revision FROM WorkspaceRuntimeState WHERE id = ?',
+    id,
+  )?.revision ?? 0
+
   if (hasTransactionWrapper(db)) {
-    await db.withTransaction(() => {
-      executeOnDb(
-        db,
-         `INSERT INTO WorkspaceRuntimeState (
-           id, currentNovelId, currentChapterId, currentTab, helperTab,
-          expandedVolumeIdsJson, localOutlinesJson, localCharactersJson, localCharacterRelationsJson,
-          localWorldEntriesJson, localTimelineEventsJson, rewriteCandidatesJson, rewriteHistoryJson, trajectoriesJson,
-          rewriteMode, rewriteTone, rewriteOutput, rewriteScope, selectionText,
-          selectedParagraphIndex, thinkingLevel, autoContinue, keepCanon, promptText,
-          selectedPresetId, presetsJson, constraintsJson, focusMode, presetCompatSessionStateJson
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          currentNovelId = excluded.currentNovelId,
-          currentChapterId = excluded.currentChapterId,
-          currentTab = excluded.currentTab,
-          helperTab = excluded.helperTab,
-          expandedVolumeIdsJson = excluded.expandedVolumeIdsJson,
-          localOutlinesJson = excluded.localOutlinesJson,
-          localCharactersJson = excluded.localCharactersJson,
-          localCharacterRelationsJson = excluded.localCharacterRelationsJson,
-          localWorldEntriesJson = excluded.localWorldEntriesJson,
-          localTimelineEventsJson = excluded.localTimelineEventsJson,
-          rewriteCandidatesJson = excluded.rewriteCandidatesJson,
-          rewriteHistoryJson = excluded.rewriteHistoryJson,
-          trajectoriesJson = excluded.trajectoriesJson,
-          rewriteMode = excluded.rewriteMode,
-          rewriteTone = excluded.rewriteTone,
-          rewriteOutput = excluded.rewriteOutput,
-          rewriteScope = excluded.rewriteScope,
-          selectionText = excluded.selectionText,
-          selectedParagraphIndex = excluded.selectedParagraphIndex,
-          thinkingLevel = excluded.thinkingLevel,
-          autoContinue = excluded.autoContinue,
-          keepCanon = excluded.keepCanon,
-          promptText = excluded.promptText,
-          selectedPresetId = excluded.selectedPresetId,
-          presetsJson = excluded.presetsJson,
-          constraintsJson = excluded.constraintsJson,
-          focusMode = excluded.focusMode,
-          presetCompatSessionStateJson = excluded.presetCompatSessionStateJson,
-          updatedAt = CURRENT_TIMESTAMP`,
-        id,
-        normalized.currentNovelId,
-        normalized.currentChapterId,
-        normalized.currentTab,
-        normalized.helperTab,
-        JSON.stringify(normalized.expandedVolumeIds),
-        JSON.stringify(normalized.localOutlines),
-        JSON.stringify(normalized.localCharacters),
-        JSON.stringify(normalized.localCharacterRelations),
-        JSON.stringify(normalized.localWorldEntries),
-        JSON.stringify(normalized.localTimelineEvents),
-        JSON.stringify(normalized.rewriteCandidates),
-        JSON.stringify(normalized.rewriteHistory),
-        JSON.stringify(normalized.trajectories),
-        normalized.rewriteMode,
-        normalized.rewriteTone,
-        normalized.rewriteOutput,
-        normalized.rewriteScope,
-        normalized.selectionText,
-        normalized.selectedParagraphIndex,
-        normalized.thinkingLevel,
-        normalized.autoContinue ? 1 : 0,
-        normalized.keepCanon ? 1 : 0,
-        normalized.promptText,
-        normalized.selectedPresetId,
-        JSON.stringify(normalized.presets),
-        JSON.stringify(normalized.constraints),
-        normalized.focusMode ? 1 : 0,
-        JSON.stringify(normalized.presetCompatSessionState),
-      )
-
-      executeOnDb(db, 'DELETE FROM WorkspaceRuntimeChapter WHERE workspaceStateId = ?', id)
-      executeOnDb(db, 'DELETE FROM WorkspaceRuntimeVolume WHERE workspaceStateId = ?', id)
-      executeOnDb(db, 'DELETE FROM WorkspaceRuntimeNovel WHERE workspaceStateId = ?', id)
-
-      normalized.localNovels.forEach((novel, index) => {
-        executeOnDb(
-          db,
-          `INSERT INTO WorkspaceRuntimeNovel (workspaceStateId, id, title, summary, tagsJson, sortOrder)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          id,
-          novel.id,
-          novel.title,
-          novel.summary,
-          JSON.stringify(novel.tags ?? []),
-          index,
-        )
-      })
-
-      normalized.localVolumes.forEach((volume, index) => {
-        executeOnDb(
-          db,
-          `INSERT INTO WorkspaceRuntimeVolume (workspaceStateId, id, novelId, title, sortOrder)
-           VALUES (?, ?, ?, ?, ?)`,
-          id,
-          volume.id,
-          volume.novelId,
-          volume.title,
-          Number.isFinite(volume.order) ? volume.order : index + 1,
-        )
-      })
-
-      normalized.localChapters.forEach((chapter, index) => {
-        executeOnDb(
-          db,
-          `INSERT INTO WorkspaceRuntimeChapter (
-             workspaceStateId, id, novelId, volumeId, parentChapterId, kind, branchLabel, title,
-             sortOrder, contentHtml, originalContentHtml, status, wordCount, updatedAtLabel, trajectoryJson
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          id,
-          chapter.id,
-          chapter.novelId,
-          chapter.volumeId,
-          chapter.parentChapterId ?? null,
-          chapter.kind ?? null,
-          chapter.branchLabel ?? null,
-          chapter.title,
-          Number.isFinite(chapter.order) ? chapter.order : index + 1,
-          chapter.content,
-          chapter.originalContent ?? null,
-          chapter.status,
-          chapter.wordCount,
-          chapter.updatedAt,
-          JSON.stringify(chapter.trajectory ?? []),
-        )
-      })
-    })
-
-    const saved = queryOneFromDb<{ updatedAt: string }>(db, 'SELECT updatedAt FROM WorkspaceRuntimeState WHERE id = ?', id)
-    if (!saved) {
-      throw new Error('Failed to save workspace runtime state')
-    }
-
-    return saved
+    return db.withTransaction(() => replaceWorkspaceRuntimeStateInDb(db as DatabaseAccess, normalized, existingRevision, id))
   }
 
   executeOnDb(db, 'BEGIN IMMEDIATE')
   try {
-    executeOnDb(
-      db,
-        `INSERT INTO WorkspaceRuntimeState (
-          id, currentNovelId, currentChapterId, currentTab, helperTab,
-         expandedVolumeIdsJson, localOutlinesJson, localCharactersJson, localCharacterRelationsJson,
-         localWorldEntriesJson, localTimelineEventsJson, rewriteCandidatesJson, rewriteHistoryJson, trajectoriesJson,
-         rewriteMode, rewriteTone, rewriteOutput, rewriteScope, selectionText,
-         selectedParagraphIndex, thinkingLevel, autoContinue, keepCanon, promptText,
-         selectedPresetId, presetsJson, constraintsJson, focusMode, presetCompatSessionStateJson
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         currentNovelId = excluded.currentNovelId,
-         currentChapterId = excluded.currentChapterId,
-         currentTab = excluded.currentTab,
-         helperTab = excluded.helperTab,
-         expandedVolumeIdsJson = excluded.expandedVolumeIdsJson,
-         localOutlinesJson = excluded.localOutlinesJson,
-         localCharactersJson = excluded.localCharactersJson,
-         localCharacterRelationsJson = excluded.localCharacterRelationsJson,
-         localWorldEntriesJson = excluded.localWorldEntriesJson,
-         localTimelineEventsJson = excluded.localTimelineEventsJson,
-         rewriteCandidatesJson = excluded.rewriteCandidatesJson,
-         rewriteHistoryJson = excluded.rewriteHistoryJson,
-         trajectoriesJson = excluded.trajectoriesJson,
-         rewriteMode = excluded.rewriteMode,
-         rewriteTone = excluded.rewriteTone,
-         rewriteOutput = excluded.rewriteOutput,
-         rewriteScope = excluded.rewriteScope,
-         selectionText = excluded.selectionText,
-         selectedParagraphIndex = excluded.selectedParagraphIndex,
-         thinkingLevel = excluded.thinkingLevel,
-         autoContinue = excluded.autoContinue,
-         keepCanon = excluded.keepCanon,
-         promptText = excluded.promptText,
-         selectedPresetId = excluded.selectedPresetId,
-         presetsJson = excluded.presetsJson,
-         constraintsJson = excluded.constraintsJson,
-         focusMode = excluded.focusMode,
-         presetCompatSessionStateJson = excluded.presetCompatSessionStateJson,
-         updatedAt = CURRENT_TIMESTAMP`,
-      id,
-      normalized.currentNovelId,
-      normalized.currentChapterId,
-      normalized.currentTab,
-      normalized.helperTab,
-      JSON.stringify(normalized.expandedVolumeIds),
-      JSON.stringify(normalized.localOutlines),
-      JSON.stringify(normalized.localCharacters),
-      JSON.stringify(normalized.localCharacterRelations),
-      JSON.stringify(normalized.localWorldEntries),
-      JSON.stringify(normalized.localTimelineEvents),
-      JSON.stringify(normalized.rewriteCandidates),
-      JSON.stringify(normalized.rewriteHistory),
-      JSON.stringify(normalized.trajectories),
-      normalized.rewriteMode,
-      normalized.rewriteTone,
-      normalized.rewriteOutput,
-      normalized.rewriteScope,
-      normalized.selectionText,
-      normalized.selectedParagraphIndex,
-      normalized.thinkingLevel,
-      normalized.autoContinue ? 1 : 0,
-      normalized.keepCanon ? 1 : 0,
-      normalized.promptText,
-      normalized.selectedPresetId,
-      JSON.stringify(normalized.presets),
-      JSON.stringify(normalized.constraints),
-      normalized.focusMode ? 1 : 0,
-      JSON.stringify(normalized.presetCompatSessionState),
-    )
-
-    executeOnDb(db, 'DELETE FROM WorkspaceRuntimeChapter WHERE workspaceStateId = ?', id)
-    executeOnDb(db, 'DELETE FROM WorkspaceRuntimeVolume WHERE workspaceStateId = ?', id)
-    executeOnDb(db, 'DELETE FROM WorkspaceRuntimeNovel WHERE workspaceStateId = ?', id)
-
-    normalized.localNovels.forEach((novel, index) => {
-      executeOnDb(
-        db,
-        `INSERT INTO WorkspaceRuntimeNovel (workspaceStateId, id, title, summary, tagsJson, sortOrder)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        id,
-        novel.id,
-        novel.title,
-        novel.summary,
-        JSON.stringify(novel.tags ?? []),
-        index,
-      )
-    })
-
-    normalized.localVolumes.forEach((volume, index) => {
-      executeOnDb(
-        db,
-        `INSERT INTO WorkspaceRuntimeVolume (workspaceStateId, id, novelId, title, sortOrder)
-         VALUES (?, ?, ?, ?, ?)`,
-        id,
-        volume.id,
-        volume.novelId,
-        volume.title,
-        Number.isFinite(volume.order) ? volume.order : index + 1,
-      )
-    })
-
-    normalized.localChapters.forEach((chapter, index) => {
-      executeOnDb(
-        db,
-        `INSERT INTO WorkspaceRuntimeChapter (
-           workspaceStateId, id, novelId, volumeId, parentChapterId, kind, branchLabel, title,
-           sortOrder, contentHtml, originalContentHtml, status, wordCount, updatedAtLabel, trajectoryJson
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        id,
-        chapter.id,
-        chapter.novelId,
-        chapter.volumeId,
-        chapter.parentChapterId ?? null,
-        chapter.kind ?? null,
-        chapter.branchLabel ?? null,
-        chapter.title,
-        Number.isFinite(chapter.order) ? chapter.order : index + 1,
-        chapter.content,
-        chapter.originalContent ?? null,
-        chapter.status,
-        chapter.wordCount,
-        chapter.updatedAt,
-        JSON.stringify(chapter.trajectory ?? []),
-      )
-    })
-
+    const saved = replaceWorkspaceRuntimeStateInDb(db as DatabaseAccess, normalized, existingRevision, id)
     executeOnDb(db, 'COMMIT')
+    return saved
   } catch (error) {
     try {
       executeOnDb(db, 'ROLLBACK')
     } catch (_rollbackError) {
       void _rollbackError
-      // Ignore rollback cleanup failures so the original transaction error is rethrown.
     }
     throw error
   }
-
-  const saved = queryOneFromDb<{ updatedAt: string }>(db, 'SELECT updatedAt FROM WorkspaceRuntimeState WHERE id = ?', id)
-  if (!saved) {
-    throw new Error('Failed to save workspace runtime state')
-  }
-
-  return saved
 }
 
 export function hasRecoverableKnowledgeWorkspaceSource(db?: WorkspaceRecoveryDb) {
@@ -757,18 +724,33 @@ export async function backfillWorkspaceRuntimeFromArtifactIfMissing(id = WORKSPA
 }
 
 export async function loadWorkspacePayloadFromRuntimeOrRecovery(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
-  const runtimeState = readWorkspaceRuntimeState(id, db)
-  if (runtimeState) {
-    return runtimeState
-  }
+  return (await loadWorkspaceSnapshotFromRuntimeOrRecovery(id, db)).payload
+}
+
+export async function loadWorkspaceSnapshotFromRuntimeOrRecovery(
+  id = WORKSPACE_ID,
+  db?: WorkspaceRecoveryDb,
+): Promise<WorkspaceRuntimeSnapshot> {
+  const targetDb = getCurrentWorkspaceDb(db)
+  const runtimeSnapshot = targetDb
+    ? readWorkspaceRuntimeSnapshotFromDb(targetDb as DatabaseAccess, id)
+    : null
+  if (runtimeSnapshot) return runtimeSnapshot
 
   const recovered = recoverWorkspaceStateFromKnowledgeStore(db)
   if (recovered) {
     await persistWorkspaceRuntimeState(recovered, id, db)
-    return recovered
+    const persistedSnapshot = targetDb
+      ? readWorkspaceRuntimeSnapshotFromDb(targetDb as DatabaseAccess, id)
+      : null
+    if (persistedSnapshot) return persistedSnapshot
   }
 
-  return createEmptyWorkspaceState()
+  return {
+    payload: recovered ?? createEmptyWorkspaceState(),
+    revision: 0,
+    updatedAt: '',
+  }
 }
 
 export function isExplicitWorkspaceResetRequest(request: Request) {
