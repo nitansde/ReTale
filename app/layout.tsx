@@ -11,13 +11,13 @@ const geistSans = Geist({
 const notoSansSC = Noto_Sans_SC({
   variable: '--font-noto-sans-sc',
   subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
+  weight: 'variable',
 })
 
 const notoSerifSC = Noto_Serif_SC({
   variable: '--font-noto-serif-sc',
   subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
+  weight: 'variable',
 })
 
 export const metadata: Metadata = {
