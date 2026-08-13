@@ -26,19 +26,22 @@ async function importWorkspaceFixture(page: Page) {
 test('workspace autosave limits save churn after a single edit', async ({ page }) => {
   fs.mkdirSync(evidenceDirectory, { recursive: true })
 
-  const workspacePostTimestamps: string[] = []
-  page.on('requestfinished', async (request) => {
-    if (request.method() !== 'POST' || !request.url().includes('/api/workspace')) return
-    const response = await request.response()
-    if (response?.ok()) {
-      workspacePostTimestamps.push(new Date().toISOString())
+  const workspaceSaveTimestamps: string[] = []
+  page.on('response', (response) => {
+    const method = response.request().method()
+    if (
+      new URL(response.url()).pathname === '/api/workspace'
+      && (method === 'PATCH' || method === 'POST')
+      && response.ok()
+    ) {
+      workspaceSaveTimestamps.push(new Date().toISOString())
     }
   })
 
   await importWorkspaceFixture(page)
   await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
 
-  const baselinePostCount = workspacePostTimestamps.length
+  const baselineSaveCount = workspaceSaveTimestamps.length
   const editor = page.locator('[contenteditable="true"]').first()
   await editor.click()
   await page.keyboard.press('End')
@@ -47,9 +50,9 @@ test('workspace autosave limits save churn after a single edit', async ({ page }
 
   await page.waitForTimeout(6500)
 
-  const postsTriggeredByEdit = workspacePostTimestamps.length - baselinePostCount
-  expect(postsTriggeredByEdit).toBeGreaterThanOrEqual(1)
-  expect(postsTriggeredByEdit).toBeLessThanOrEqual(2)
+  const savesTriggeredByEdit = workspaceSaveTimestamps.length - baselineSaveCount
+  expect(savesTriggeredByEdit).toBeGreaterThanOrEqual(1)
+  expect(savesTriggeredByEdit).toBeLessThanOrEqual(2)
   await expect(page.locator('body')).not.toContainText('Refusing to overwrite a recoverable workspace with an empty payload')
 
   await page.screenshot({
@@ -61,9 +64,9 @@ test('workspace autosave limits save churn after a single edit', async ({ page }
     path.join(evidenceDirectory, 'task-6-autosave-churn.txt'),
     [
       `workspaceUrl=${page.url()}`,
-      `baselinePostCount=${baselinePostCount}`,
-      `postsTriggeredByEdit=${postsTriggeredByEdit}`,
-      `postTimestamps=${workspacePostTimestamps.join(',')}`,
+      `baselineSaveCount=${baselineSaveCount}`,
+      `savesTriggeredByEdit=${savesTriggeredByEdit}`,
+      `saveTimestamps=${workspaceSaveTimestamps.join(',')}`,
     ].join('\n')
   )
 })

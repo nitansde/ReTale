@@ -32,9 +32,12 @@ async function replaceEditorText(page: Page, text: string) {
 }
 
 async function saveWorkspaceEdit(page: Page, text: string) {
-  const saveResponsePromise = page.waitForResponse(
-    (response) => response.url().includes('/api/workspace') && response.request().method() === 'POST' && response.ok()
-  )
+  const saveResponsePromise = page.waitForResponse((response) => {
+    const method = response.request().method()
+    return new URL(response.url()).pathname === '/api/workspace'
+      && (method === 'PATCH' || method === 'POST')
+      && response.ok()
+  })
 
   await replaceEditorText(page, text)
   return saveResponsePromise
@@ -49,11 +52,15 @@ test('rapid workspace saves persist the latest chapter content after reload', as
 
   const versions = ['最终保存版本-1', '最终保存版本-2', '最终保存版本-3']
   const saveStatuses: number[] = []
+  const saveMethods: string[] = []
 
   for (const version of versions) {
     const saveResponse = await saveWorkspaceEdit(page, version)
     saveStatuses.push(saveResponse.status())
+    saveMethods.push(saveResponse.request().method())
   }
+
+  expect(saveMethods).toEqual(versions.map(() => 'PATCH'))
 
   await page.reload({ waitUntil: 'networkidle' })
   await expect(page.getByTestId('workspace-chapter-body-view')).toContainText('最终保存版本-3')
@@ -68,6 +75,7 @@ test('rapid workspace saves persist the latest chapter content after reload', as
     [
       `workspaceUrl=${page.url()}`,
       `saveStatuses=${saveStatuses.join(',')}`,
+      `saveMethods=${saveMethods.join(',')}`,
       `reloadedHasLatest=${(await page.locator('body').innerText()).includes('最终保存版本-3')}`,
     ].join('\n')
   )
