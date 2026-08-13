@@ -337,6 +337,7 @@ describe('roleplay session API', () => {
 
     const listResponse = await listSessions(new Request(`http://localhost/api/roleplay/sessions?novelId=${FIXTURE_IDS.novelId}`))
     expect(listResponse.status).toBe(200)
+    expect(listResponse.headers.get('cache-control')).toBe('no-store')
     await expect(listResponse.json()).resolves.toMatchObject({
       sessions: [
         expect.objectContaining({
@@ -499,6 +500,7 @@ describe('roleplay session API', () => {
     )
 
     expect(getResponse.status).toBe(200)
+    expect(getResponse.headers.get('cache-control')).toBe('no-store')
     const sessionPayload = await getResponse.json() as {
       id: string
       timelineNodeId: string | null
@@ -584,6 +586,7 @@ describe('roleplay session API', () => {
       { params: Promise.resolve({ sessionId: 'missing-session' }) }
     )
     expect(missingSessionResponse.status).toBe(404)
+    expect(missingSessionResponse.headers.get('cache-control')).toBe('no-store')
     await expect(missingSessionResponse.json()).resolves.toEqual({
       ok: false,
       error: 'Roleplay session not found for the requested branch context',

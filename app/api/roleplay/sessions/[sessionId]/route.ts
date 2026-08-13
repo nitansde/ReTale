@@ -1,6 +1,5 @@
-import { NextResponse } from 'next/server'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
-import { jsonError, requireNonEmptyId } from '@/lib/server/api-route'
+import { noStoreJson, noStoreJsonError, requireNonEmptyId } from '@/lib/server/api-route'
 import type { RoleplayMessageRecord, RoleplaySessionDetail } from '@/lib/roleplay-types'
 
 type RoleplaySessionRow = {
@@ -116,10 +115,10 @@ export async function GET(request: Request, ctx: RouteContext<'/api/roleplay/ses
     const branchId = searchParams.get('branchId')?.trim() ?? ''
 
     if (!novelId) {
-      return jsonError('novelId is required', 400)
+      return noStoreJsonError('novelId is required', 400)
     }
     if (!branchId) {
-      return jsonError('branchId is required', 400)
+      return noStoreJsonError('branchId is required', 400)
     }
 
     const db = createNovelDatabaseAccess(novelId)
@@ -140,7 +139,7 @@ export async function GET(request: Request, ctx: RouteContext<'/api/roleplay/ses
     )
 
     if (!session || session.novel_id !== novelId || session.branch_id !== branchId) {
-      return NextResponse.json({ ok: false, error: 'Roleplay session not found for the requested branch context' }, { status: 404 })
+      return noStoreJson({ ok: false, error: 'Roleplay session not found for the requested branch context' }, { status: 404 })
     }
 
     const messages = db.queryAll<RoleplayMessageRow>(
@@ -151,9 +150,9 @@ export async function GET(request: Request, ctx: RouteContext<'/api/roleplay/ses
       sessionId
     )
 
-    return NextResponse.json(toRoleplaySessionPayload(toRoleplaySessionDetail(session, messages)))
+    return noStoreJson(toRoleplaySessionPayload(toRoleplaySessionDetail(session, messages)))
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load roleplay session'
-    return jsonError(message, message.endsWith(' is required') ? 400 : 500)
+    return noStoreJsonError(message, message.endsWith(' is required') ? 400 : 500)
   }
 }

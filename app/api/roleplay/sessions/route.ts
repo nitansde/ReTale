@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { isNotFoundErrorMessage, jsonError, readJsonObject, toErrorMessage } from '@/lib/server/api-route'
+import { isNotFoundErrorMessage, jsonError, noStoreJson, noStoreJsonError, readJsonObject, toErrorMessage } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { listRoleplaySessionsByNovel, createRoleplaySession } from '@/lib/server/roleplay-store'
 import type { RoleplaySourceNodeType } from '@/lib/roleplay-types'
@@ -21,13 +21,13 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const novelId = searchParams.get('novelId')?.trim() ?? ''
     if (!novelId) {
-      return jsonError('novelId is required', 400)
+      return noStoreJsonError('novelId is required', 400)
     }
 
-    return NextResponse.json({ sessions: listRoleplaySessionsByNovel(novelId, createNovelDatabaseAccess(novelId)) })
+    return noStoreJson({ sessions: listRoleplaySessionsByNovel(novelId, createNovelDatabaseAccess(novelId)) })
   } catch (error) {
     const message = toErrorMessage(error, 'Failed to load roleplay sessions')
-    return jsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
+    return noStoreJsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
   }
 }
 
