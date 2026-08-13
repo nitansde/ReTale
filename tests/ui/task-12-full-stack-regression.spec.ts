@@ -728,6 +728,23 @@ async function settleActiveKnowledgeJobs(page: Page, novelId: string) {
   expect(await readActiveKnowledgeJobs(page, novelId)).toEqual([])
 }
 
+async function ensureKnowledgeAdvancedDetailsOpen(page: Page) {
+  const advancedDetails = page.getByTestId('workspace-knowledge-advanced-details')
+  const deadline = Date.now() + 15_000
+
+  while (Date.now() < deadline) {
+    if (await advancedDetails.isVisible()) return
+
+    const toggle = page.getByRole('button', { name: 'Advanced details' })
+    if (await toggle.isVisible()) {
+      await toggle.click()
+    }
+    await page.waitForTimeout(250)
+  }
+
+  await expect(advancedDetails).toBeVisible()
+}
+
 async function resolveWorkspaceIdentity(page: Page) {
   const workspace = await fetchWorkspace(page)
   const currentChapter = workspace.localChapters.find((chapter) => chapter.id === workspace.currentChapterId)
@@ -799,7 +816,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
   const fakeProvider = await startFakeProviderServer()
   const fakeOllama = await startFakeOllamaServer()
   const knowledgePollEvents: Array<{ url: string; method: string }> = []
-  const workspacePostTimestamps: string[] = []
+  const workspaceSaveTimestamps: string[] = []
 
   page.on('response', async (response) => {
     const request = response.request()
@@ -807,11 +824,14 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
       knowledgePollEvents.push({ url: request.url(), method: request.method() })
     }
   })
-  page.on('requestfinished', async (request) => {
-    if (request.method() !== 'POST' || !request.url().includes('/api/workspace')) return
-    const response = await request.response()
-    if (response?.ok()) {
-      workspacePostTimestamps.push(new Date().toISOString())
+  page.on('response', (response) => {
+    const method = response.request().method()
+    if (
+      new URL(response.url()).pathname === '/api/workspace'
+      && (method === 'PATCH' || method === 'POST')
+      && response.ok()
+    ) {
+      workspaceSaveTimestamps.push(new Date().toISOString())
     }
   })
 
@@ -835,22 +855,27 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     const workspaceLoadMs = Date.now() - workspaceLoadStartedAt
     await expect(page.getByTestId('app-language-switcher')).toHaveCount(0)
 
-    const saveBaseline = workspacePostTimestamps.length
+    const saveBaseline = workspaceSaveTimestamps.length
     const editedText = 'Task 12 full-stack save proof: the workspace persists this edited line after reload.'
     const saveStartedAt = Date.now()
-    const saveResponsePromise = page.waitForResponse(
-      (response) => response.url().includes('/api/workspace') && response.request().method() === 'POST' && response.ok()
-    )
+    const saveResponsePromise = page.waitForResponse((response) => {
+      const method = response.request().method()
+      return new URL(response.url()).pathname === '/api/workspace'
+        && (method === 'PATCH' || method === 'POST')
+        && response.ok()
+    })
     await replaceEditorText(page, editedText)
     const saveResponse = await saveResponsePromise
     const saveLatencyMs = Date.now() - saveStartedAt
     expect(saveResponse.ok()).toBeTruthy()
-    await waitForObservedCountToStabilize(() => workspacePostTimestamps.length, {
+    await waitForObservedCountToStabilize(() => workspaceSaveTimestamps.length, {
       minCount: saveBaseline + 1,
       timeoutMs: 10_000,
     })
-    const workspacePostsTriggeredByEdit = workspacePostTimestamps.length - saveBaseline
-    const redundantSaveCountOverIdle = Math.max(0, workspacePostsTriggeredByEdit - 1)
+    const workspaceSavesTriggeredByEdit = workspaceSaveTimestamps.length - saveBaseline
+    const redundantSaveCountOverIdle = Math.max(0, workspaceSavesTriggeredByEdit - 1)
+    expect(workspaceSavesTriggeredByEdit).toBe(1)
+    expect(redundantSaveCountOverIdle).toBe(0)
 
     const workspaceExport = await timedRequest(
       'workspace-export',
@@ -1042,6 +1067,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     const importedPresetName = importedPreset?.name ?? 'synthetic-sillytavern-preset'
     const editablePromptRule = importedPreset?.promptRules.find((rule) => rule.id === 'synthetic-main' && !rule.forbidOverrides) ?? null
     expect(editablePromptRule).toBeTruthy()
+    if (!importedPresetId) throw new Error('Imported preset ID was not returned')
 
     const importedPresetButton = page.locator('button').filter({ hasText: importedPresetName }).first()
     await expect(importedPresetButton).toBeVisible()
@@ -1049,8 +1075,8 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await importedPresetButton.click()
 
     for (const surfaceId of ['rewrite', 'future_jump', 'roleplay'] as const) {
-      await page.getByTestId(`preset-compat-binding-${surfaceId}`).selectOption(importedPresetId ?? undefined)
-      await expect(page.getByTestId(`preset-compat-binding-${surfaceId}`)).toHaveValue(importedPresetId ?? '')
+      await page.getByTestId(`preset-compat-binding-${surfaceId}`).selectOption(importedPresetId)
+      await expect(page.getByTestId(`preset-compat-binding-${surfaceId}`)).toHaveValue(importedPresetId)
     }
 
     await page.getByTestId('preset-compat-runtime-openai-max-context').fill('16384')
@@ -1147,7 +1173,9 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await expect(page.getByTestId('app-language-switcher')).toHaveCount(0)
     await page.goto('/workspace', { waitUntil: 'networkidle' })
     const identity = await resolveWorkspaceIdentity(page)
-    await expect(page.getByText('Knowledge graph is not built yet')).toBeVisible()
+    const knowledgeStatus = page.getByTestId('workspace-knowledge-status')
+    await expect(knowledgeStatus).toContainText('Story knowledge is not prepared yet')
+    await expect(knowledgeStatus).toContainText('Not analyzed yet')
 
     await selectEntireChapter(page)
     await expect(page.getByTestId('workspace-chapter-rewrite-entry')).toBeVisible()
@@ -1475,7 +1503,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await expect(page.getByTestId('what-if-view').getByText('Persisted What-if session', { exact: true })).toBeVisible()
     await expect(page.getByTestId('what-if-view').getByRole('button', { name: 'Jump to Future' })).toBeVisible()
     await expect(page.getByTestId('what-if-view').getByRole('button', { name: 'Continue in Branch' })).toBeVisible()
-    await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('what-if')
+    await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('What-if branch')
     appendQaRow(qaRows, 'Rewrite success + What-if create/open', '[task-12-i18n-full-stack.png](./task-12-i18n-full-stack.png)', 'Generated a real rewrite against the fake OpenAI-compatible backend, then used the visible browser action to create and open the persisted What-if branch.')
 
     const futureJumpFixtures = seedFutureJumpFixtures(identity)
@@ -1582,8 +1610,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await page.goto('/workspace', { waitUntil: 'networkidle' })
     await dismissWorkspaceActionOverlayIfVisible(page)
     await expect(page.getByTestId('workspace-knowledge-status')).toBeVisible()
-    await page.getByRole('button', { name: 'Advanced details' }).click()
-    await expect(page.getByTestId('workspace-knowledge-advanced-details')).toBeVisible()
+    await ensureKnowledgeAdvancedDetailsOpen(page)
     const knowledgeGetResponse = await timedRequest(
       'knowledge-view-get',
       page.request.get(`/api/knowledge-view?novelId=${identity.novelId}`),
@@ -1602,6 +1629,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     apiTimings.push({ label: 'knowledge-view-delete-hanlp-cache', ms: 0, status: knowledgeDeleteHanlpResponse.status() })
     expect(knowledgeDeleteHanlpResponse.ok()).toBeTruthy()
 
+    await ensureKnowledgeAdvancedDetailsOpen(page)
     await page.getByTestId('workspace-delete-extraction-cache').click()
     await expect(page.getByRole('button', { name: 'Confirm delete LLM extraction cache' })).toBeVisible()
     const knowledgeDeleteExtractionResponsePromise = page.waitForResponse(
@@ -1612,6 +1640,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     apiTimings.push({ label: 'knowledge-view-delete-extraction-cache', ms: 0, status: knowledgeDeleteExtractionResponse.status() })
     expect(knowledgeDeleteExtractionResponse.ok()).toBeTruthy()
 
+    await ensureKnowledgeAdvancedDetailsOpen(page)
     await page.getByTestId('workspace-delete-embedding-cache').click()
     await expect(page.getByRole('button', { name: 'Confirm delete raw text embedding cache' })).toBeVisible()
     const knowledgeDeleteEmbeddingResponsePromise = page.waitForResponse(
@@ -1622,6 +1651,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     apiTimings.push({ label: 'knowledge-view-delete-embedding-cache', ms: 0, status: knowledgeDeleteEmbeddingResponse.status() })
     expect(knowledgeDeleteEmbeddingResponse.ok()).toBeTruthy()
 
+    await ensureKnowledgeAdvancedDetailsOpen(page)
     const knowledgeRebuildResponsePromise = page.waitForResponse(
       (response) => new URL(response.url()).pathname === '/api/knowledge-view' && response.request().method() === 'POST' && (response.request().postData() ?? '').includes('"action":"rebuild"') && response.ok()
     )
@@ -1796,7 +1826,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
       `- Library load time: ${libraryLoadMs} ms`,
       `- Workspace load time: ${workspaceLoadMs} ms`,
       `- Save latency after edit: ${saveLatencyMs} ms`,
-      `- Workspace POSTs triggered by one edit: ${workspacePostsTriggeredByEdit}`,
+      `- Workspace saves triggered by one edit: ${workspaceSavesTriggeredByEdit}`,
       `- Redundant save count over idle window: ${redundantSaveCountOverIdle}`,
       `- Knowledge status polling count observed after rebuild/retrieval actions: ${knowledgePollEvents.length}`,
       '',

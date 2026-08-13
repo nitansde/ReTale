@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { expect, test, type Page } from '@playwright/test'
+import { createRoleplaySafeDataPath } from '../../scripts/roleplay-safe-qa.mjs'
 
 const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/full-project-refactor')
 const fixturePath = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
@@ -15,11 +16,21 @@ function resolveTestDatabasePath() {
   return dbPath
 }
 
-async function blankWorkspaceArtifactPayload() {
+function resolveNovelDatabasePath(novelId: string) {
+  const dataDirectory = createRoleplaySafeDataPath(resolveTestDatabasePath())
+  const databasePath = path.join(dataDirectory, 'novels', novelId, 'novel.db')
+  if (!fs.existsSync(databasePath)) {
+    throw new Error(`Novel database does not exist for ${novelId}: ${databasePath}`)
+  }
+  return databasePath
+}
+
+async function blankWorkspaceArtifactPayload(novelId: string) {
+  const databasePath = resolveNovelDatabasePath(novelId)
   let lastError: unknown = null
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const database = new DatabaseSync(resolveTestDatabasePath())
+    const database = new DatabaseSync(databasePath)
     try {
       database.exec('PRAGMA busy_timeout = 5000')
       database.prepare('UPDATE WorkspaceState SET payload = NULL WHERE id = ?').run('singleton')
@@ -27,6 +38,7 @@ async function blankWorkspaceArtifactPayload() {
       const runtimeChapters = database.prepare('SELECT COUNT(*) AS count FROM WorkspaceRuntimeChapter WHERE workspaceStateId = ?').get('singleton') as { count: number }
 
       return {
+        databasePath,
         artifactPayload: payload?.payload ?? null,
         runtimeChapterCount: runtimeChapters.count,
       }
@@ -79,15 +91,20 @@ test('workspace reload uses normalized runtime state after the legacy blob is bl
   await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
 
   const editedText = 'Task4 归一化运行时验证：清空旧 blob 后依然可见。'
-  const saveResponsePromise = page.waitForResponse(
-    (response) => response.url().includes('/api/workspace') && response.request().method() === 'POST' && response.ok()
-  )
+  const saveResponsePromise = page.waitForResponse((response) => {
+    const method = response.request().method()
+    return new URL(response.url()).pathname === '/api/workspace'
+      && (method === 'PATCH' || method === 'POST')
+      && response.ok()
+  })
 
   await replaceEditorText(page, editedText)
   const saveResponse = await saveResponsePromise
   expect(saveResponse.ok()).toBeTruthy()
+  const novelId = saveResponse.headers()['x-retale-revision-novel-id']
+  expect(novelId).toBeTruthy()
 
-  const databaseState = await blankWorkspaceArtifactPayload()
+  const databaseState = await blankWorkspaceArtifactPayload(novelId)
 
   await page.reload({ waitUntil: 'networkidle' })
   await expect(page.getByTestId('workspace-chapter-body-view')).toContainText(editedText)
@@ -101,7 +118,7 @@ test('workspace reload uses normalized runtime state after the legacy blob is bl
     path.join(evidenceDirectory, 'task-4-normalized-runtime.txt'),
     [
       `workspaceUrl=${page.url()}`,
-      `databasePath=${resolveTestDatabasePath()}`,
+      `databasePath=${databaseState.databasePath}`,
       `artifactPayload=${JSON.stringify(databaseState.artifactPayload)}`,
       `runtimeChapterCount=${databaseState.runtimeChapterCount}`,
       `reloadedEditedTextVisible=${(await page.locator('body').innerText()).includes(editedText)}`,
