@@ -238,7 +238,7 @@ describe('RoleplaySessionView', () => {
       buildMessage({ id: 'message-2', messageIndex: 2, role: 'assistant', content: '我到了，只是先确认街角没有埋伏。', parentMessageId: 'message-1', turnIndex: 1 }),
     ]
     let currentDetail = buildSessionDetail(initialMessages)
-    let rewritePayload: Record<string, unknown> | null = null
+    const rewritePayloads: Record<string, unknown>[] = []
 
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input)
@@ -302,7 +302,7 @@ describe('RoleplaySessionView', () => {
       }
 
       if (url === '/api/rewrite' && init?.method === 'POST') {
-        rewritePayload = JSON.parse(String(init.body)) as Record<string, unknown>
+        rewritePayloads.push(JSON.parse(String(init.body)) as Record<string, unknown>)
         return createStreamResponse(['她没有立刻反驳，', '只是把质问压低成一声叹息。'])
       }
 
@@ -333,6 +333,8 @@ describe('RoleplaySessionView', () => {
     })
 
     expect(screen.getByPlaceholderText('输入角色台词、动作，或你希望推动的剧情。⌘/Ctrl + Enter 发送')).toHaveValue('')
+    const rewritePayload = rewritePayloads[0]
+    if (!rewritePayload) throw new Error('Rewrite payload was not captured')
     expect(rewritePayload).toMatchObject({
       novelId: 'novel-001',
       branchId: 'novel-001:main',
@@ -342,10 +344,10 @@ describe('RoleplaySessionView', () => {
       mode: 'dialogue',
       tone: 'dramatic',
     })
-    expect(rewritePayload?.generatedText).toBeUndefined()
-    expect(rewritePayload?.continueBlockId).toBeUndefined()
-    expect(rewritePayload?.targetChapterNo).toBeUndefined()
-    expect(rewritePayload?.roleplayMessages).toEqual([
+    expect(rewritePayload.generatedText).toBeUndefined()
+    expect(rewritePayload.continueBlockId).toBeUndefined()
+    expect(rewritePayload.targetChapterNo).toBeUndefined()
+    expect(rewritePayload.roleplayMessages).toEqual([
       { role: 'user', content: '你昨晚为什么没有按约定现身？' },
       { role: 'assistant', content: '我到了，只是先确认街角没有埋伏。' },
     ])

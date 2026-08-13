@@ -108,7 +108,7 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   const workspaceSaves: Array<Record<string, unknown>> = []
   const touchedNonRoleplayMutationRoutes: string[] = []
   let createPayload: Record<string, unknown> | null = null
-  let rewritePayload: Record<string, unknown> | null = null
+  const rewritePayloads: Record<string, unknown>[] = []
   let timelineState = buildTimelineState()
   let sessionDetail = buildSessionDetail([])
 
@@ -253,7 +253,7 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   })
 
   await page.route('**/api/rewrite', async (route) => {
-    rewritePayload = await route.request().postDataJSON() as Record<string, unknown>
+    rewritePayloads.push(await route.request().postDataJSON() as Record<string, unknown>)
     await route.fulfill({
       status: 200,
       contentType: 'text/plain; charset=utf-8',
@@ -327,14 +327,16 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
     sourceSelectedText: '第10章正文：夜色压下来之前，他们已经开始互相试探。',
     sourceTextSnapshot: '第10章正文：夜色压下来之前，他们已经开始互相试探。',
   })
+  const rewritePayload = rewritePayloads[0]
+  if (!rewritePayload) throw new Error('Rewrite payload was not captured')
   expect(rewritePayload).toMatchObject({
     novelId: 'novel-001',
     branchId: 'novel-001:main',
     operationType: 'roleplay',
     userInstruction: '别再试探了，现在就把真相说清楚。',
   })
-  expect(rewritePayload?.generatedText).toBeUndefined()
-  expect(rewritePayload?.continueBlockId).toBeUndefined()
+  expect(rewritePayload.generatedText).toBeUndefined()
+  expect(rewritePayload.continueBlockId).toBeUndefined()
   expect(touchedNonRoleplayMutationRoutes).toEqual([])
   expect(workspaceSaves.every((payload) => {
     const localChapters = Array.isArray(payload.localChapters) ? payload.localChapters as Array<{ content?: string }> : []
