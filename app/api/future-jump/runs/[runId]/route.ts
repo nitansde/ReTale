@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { jsonError, requireNonEmptyId } from '@/lib/server/api-route'
+import { jsonError, noStoreJson, noStoreJsonError, requireNonEmptyId } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { deleteFutureJumpRun, findFutureJumpRunById } from '@/lib/server/future-jump-store'
 import { findWhatIfSessionById } from '@/lib/server/what-if-store'
@@ -22,30 +22,30 @@ export async function GET(request: Request, ctx: RouteContext<'/api/future-jump/
     const branchId = searchParams.get('branchId')?.trim() ?? ''
 
     if (!branchId) {
-      return jsonError('branchId is required', 400)
+      return noStoreJsonError('branchId is required', 400)
     }
 
     const novelId = resolveNovelIdFromBranchId(branchId)
     if (!novelId) {
-      return jsonError('branchId must be fully qualified', 400)
+      return noStoreJsonError('branchId must be fully qualified', 400)
     }
 
     const db = createNovelDatabaseAccess(novelId)
 
     const run = findFutureJumpRunById(runId, db)
     if (!run || run.baseBranchId !== branchId) {
-      return NextResponse.json({ ok: false, error: 'Future jump run not found for the requested branch context' }, { status: 404 })
+      return noStoreJson({ ok: false, error: 'Future jump run not found for the requested branch context' }, { status: 404 })
     }
 
     const session = findWhatIfSessionById(run.sessionId, db)
     if (!session || session.baseBranchId !== branchId) {
-      return NextResponse.json({ ok: false, error: 'Future jump run is not accessible in the requested branch context' }, { status: 404 })
+      return noStoreJson({ ok: false, error: 'Future jump run is not accessible in the requested branch context' }, { status: 404 })
     }
 
-    return NextResponse.json(run)
+    return noStoreJson(run)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load future jump run'
-    return jsonError(message, message.endsWith(' is required') ? 400 : 500)
+    return noStoreJsonError(message, message.endsWith(' is required') ? 400 : 500)
   }
 }
 

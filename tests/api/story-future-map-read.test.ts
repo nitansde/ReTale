@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FUTURE_MAP_MISSING_SUMMARY_FALLBACK } from '@/lib/story-branch-types'
 import { initializeDatabase } from '@/lib/server/sqlite'
 import { persistWorkspaceRuntimeState } from '@/lib/server/workspace-resilience'
+import type { PersistedNovelState } from '@/lib/types'
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
 import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
@@ -163,7 +164,7 @@ async function seedWorkspaceDirectChapterFallbackFixture(database: DatabaseSync)
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run('workspace-outline-80', 'novel-002', 'novel-002:main', 80, '第80章 失控分岔', '', null, 'workspace-phase', '工作区阶段', 'authored', 1, '[]', '["失控分岔"]', 80)
 
-  const workspaceState = {
+  const workspaceState: Partial<PersistedNovelState> = {
     currentNovelId: 'novel-002',
     currentChapterId: 'chapter-25',
     localNovels: [{ id: 'novel-002', title: 'Workspace Future Map Novel', summary: '', tags: [] }],
@@ -261,6 +262,7 @@ describe('story-future-map-read', () => {
       new Request('http://localhost/api/story-future-map?novelId=novel-001&branchId=novel-001:main&sourceChapterNo=25&sourceChapterId=chapter-25&sourceNodeId=continue-node-025&sourceNodeType=continue_block&parentSessionId=what-if-session-001')
     )
     expect(futureMapResponse.status).toBe(200)
+    expect(futureMapResponse.headers.get('cache-control')).toBe('no-store')
 
     const futureMapPayload = await futureMapResponse.json()
     expect(futureMapPayload.branchId).toBe('novel-001:main')
@@ -288,6 +290,7 @@ describe('story-future-map-read', () => {
       { params: Promise.resolve({ runId: 'jump-run-001' }) }
     )
     expect(runResponse.status).toBe(200)
+    expect(runResponse.headers.get('cache-control')).toBe('no-store')
 
     const runPayload = await runResponse.json()
     expect(runPayload).toEqual(expect.objectContaining({
@@ -324,6 +327,7 @@ describe('story-future-map-read', () => {
       new Request('http://localhost/api/story-future-map?novelId=novel-001')
     )
     expect(missingBranchResponse.status).toBe(400)
+    expect(missingBranchResponse.headers.get('cache-control')).toBe('no-store')
     await expect(missingBranchResponse.json()).resolves.toEqual({ ok: false, error: 'branchId is required' })
 
     const missingSourceChapterResponse = await getFutureMap(
@@ -372,6 +376,7 @@ describe('story-future-map-read', () => {
       { params: Promise.resolve({ runId: 'jump-run-001' }) }
     )
     expect(missingContextResponse.status).toBe(400)
+    expect(missingContextResponse.headers.get('cache-control')).toBe('no-store')
     await expect(missingContextResponse.json()).resolves.toEqual({ ok: false, error: 'branchId is required' })
 
     const inaccessibleRunResponse = await getFutureJumpRun(

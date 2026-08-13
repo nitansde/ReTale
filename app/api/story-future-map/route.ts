@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { noStoreJson } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { findStoryBranch, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { loadFutureMapSourceData } from '@/lib/server/outline-bootstrap'
@@ -20,22 +20,22 @@ export async function GET(request: Request) {
     const parentSessionId = searchParams.get('parentSessionId')?.trim() || searchParams.get('whatIfSessionId')?.trim() || ''
 
     if (!novelId) {
-      return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+      return noStoreJson({ ok: false, error: 'novelId is required' }, { status: 400 })
     }
     if (!rawBranchId) {
-      return NextResponse.json({ ok: false, error: 'branchId is required' }, { status: 400 })
+      return noStoreJson({ ok: false, error: 'branchId is required' }, { status: 400 })
     }
 
     const branchId = normalizeBranchId(novelId, rawBranchId)
     const db = createNovelDatabaseAccess(novelId)
     const branch = findStoryBranch(branchId, db)
     if (!branch || branch.novelId !== novelId) {
-      return NextResponse.json({ ok: false, error: 'branchId does not belong to the requested novel' }, { status: 404 })
+      return noStoreJson({ ok: false, error: 'branchId does not belong to the requested novel' }, { status: 404 })
     }
 
     const sourceChapterNo = parsePositiveSourceChapterNo(searchParams.get('sourceChapterNo'))
     if (!sourceChapterNo) {
-      return NextResponse.json({ ok: false, error: 'sourceChapterNo must be a positive integer' }, { status: 400 })
+      return noStoreJson({ ok: false, error: 'sourceChapterNo must be a positive integer' }, { status: 400 })
     }
 
     const sourceChapterId = searchParams.get('sourceChapterId')?.trim() ?? ''
@@ -50,17 +50,17 @@ export async function GET(request: Request) {
         branchId,
       )
       if (!sourceChapter) {
-        return NextResponse.json({ ok: false, error: 'sourceChapterId not found for the requested branch context' }, { status: 404 })
+        return noStoreJson({ ok: false, error: 'sourceChapterId not found for the requested branch context' }, { status: 404 })
       }
       if (sourceChapter.chapterNo !== sourceChapterNo) {
-        return NextResponse.json({ ok: false, error: 'sourceChapterId must match sourceChapterNo' }, { status: 400 })
+        return noStoreJson({ ok: false, error: 'sourceChapterId must match sourceChapterNo' }, { status: 400 })
       }
     }
 
     if (parentSessionId) {
       const session = findWhatIfSessionById(parentSessionId, db)
       if (!session || session.novelId !== novelId || session.baseBranchId !== branchId) {
-        return NextResponse.json({ ok: false, error: 'parentSessionId not found for the requested branch context' }, { status: 404 })
+        return noStoreJson({ ok: false, error: 'parentSessionId not found for the requested branch context' }, { status: 404 })
       }
     }
 
@@ -102,7 +102,7 @@ export async function GET(request: Request) {
       selectedOutlineNodeId: events[0]?.id ?? null,
     }
 
-    return NextResponse.json({
+    return noStoreJson({
       ...payload,
       tracks,
       events,
@@ -110,7 +110,7 @@ export async function GET(request: Request) {
       defaults,
     })
   } catch (error) {
-    return NextResponse.json(
+    return noStoreJson(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to load story future map' },
       { status: 500 }
     )
