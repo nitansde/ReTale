@@ -54,7 +54,7 @@ describe('callGetRecoverableRewriteJobApi', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/rewrite?jobId=job-rewrite-1&novelId=novel-1&branchId=novel-1%3Amain&chapterId=chapter-1',
-      { cache: 'no-store' },
+      expect.objectContaining({ cache: 'no-store', signal: expect.any(AbortSignal) }),
     )
   })
 
@@ -74,7 +74,7 @@ describe('callGetRecoverableRewriteJobApi', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/rewrite?novelId=novel-1&branchId=novel-1%3Amain&chapterId=chapter-1',
-      { cache: 'no-store' },
+      expect.objectContaining({ cache: 'no-store', signal: expect.any(AbortSignal) }),
     )
   })
 })
@@ -85,9 +85,9 @@ describe('selection novel studio optimistic timeline helpers', () => {
       anchorChapterNo: 95,
       currentTarget: 80,
       sortedChapters: [
-        ...Array.from({ length: 120 }, (_, index) => ({ id: `volume-1-chapter-${index + 1}`, order: index + 1, volumeId: 'volume-1', parentChapterId: null })),
+        ...Array.from({ length: 120 }, (_, index) => ({ id: `volume-1-chapter-${index + 1}`, order: index + 1, volumeId: 'volume-1', parentChapterId: undefined })),
         { id: 'branch-chapter-95-a', order: 95, volumeId: 'volume-1', parentChapterId: 'volume-1-chapter-95' },
-        ...Array.from({ length: 10 }, (_, index) => ({ id: `volume-2-chapter-${index + 1}`, order: 1000 + index + 1, volumeId: 'volume-2', parentChapterId: null })),
+        ...Array.from({ length: 10 }, (_, index) => ({ id: `volume-2-chapter-${index + 1}`, order: 1000 + index + 1, volumeId: 'volume-2', parentChapterId: undefined })),
       ],
     })).toBe(95)
   })

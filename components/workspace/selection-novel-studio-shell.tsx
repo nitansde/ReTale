@@ -1,6 +1,7 @@
 "use client"
 
 import { useRouter } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
@@ -21,20 +22,13 @@ import {
   Wand2,
   X,
 } from 'lucide-react'
-import { FutureJumpView, type FutureJumpContinueContext } from '@/components/future-jump/FutureJumpView'
-import { ChapterGraphBrowser } from '@/components/graph/chapter-graph-browser'
-import { getVisibleAdvancedContextPromptBlocks, GraphReviewPanel } from '@/components/graph/graph-review-panel'
-import { FutureMapOverlay } from '@/components/what-if/FutureMapOverlay'
-import { WhatIfSessionView } from '@/components/what-if/WhatIfSessionView'
-import { ContinueBlockDetailView } from '@/components/workspace/ContinueBlockDetailView'
-import { PresetCompatLibraryModal } from '@/components/workspace/PresetCompatLibraryModal'
-import { RoleplaySessionView } from '@/components/workspace/RoleplaySessionView'
+import type { FutureJumpContinueContext } from '@/components/future-jump/FutureJumpView'
+import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/context-prompt-block-visibility'
 import { WorkspaceCenterPane } from '@/components/workspace/WorkspaceCenterPane'
 import { WorkspaceChapterNav } from '@/components/workspace/WorkspaceChapterNav'
 import { WorkspaceHeader } from '@/components/workspace/WorkspaceHeader'
 import { WorkspaceWorldEntriesPanel } from '@/components/workspace/WorkspaceWorldEntriesPanel'
 import { WorkspaceReferencePanel } from '@/components/workspace/WorkspaceReferencePanel'
-import { WorkspaceAISettingsModal } from '@/components/workspace/WorkspaceAISettingsModal'
 import { WorkspaceKnowledgeControls } from '@/components/workspace/WorkspaceKnowledgeControls'
 import { WorkspaceSelectionActions } from '@/components/workspace/WorkspaceSelectionActions'
 import { Notice } from '@/components/ui/Notice'
@@ -158,6 +152,8 @@ import type {
 } from '@/components/graph/types'
 import type { GraphEdge } from '@/lib/server/graph-types'
 import { useNovelStore } from '@/store/novel-store'
+import type { NovelStore } from '@/store/novel-store-types'
+import { useShallow } from 'zustand/react/shallow'
 import { cn, countChineseFriendlyWords, htmlToPlainText, plainTextToHtml } from '@/lib/utils'
 import type {
   ChapterTimelineItem,
@@ -184,10 +180,68 @@ import type {
   WorldEntryType,
 } from '@/lib/types'
 
+const ChapterGraphBrowser = dynamic(() => import('@/components/graph/chapter-graph-browser').then((module) => module.ChapterGraphBrowser))
+const ContinueBlockDetailView = dynamic(() => import('@/components/workspace/ContinueBlockDetailView').then((module) => module.ContinueBlockDetailView))
+const FutureJumpView = dynamic(() => import('@/components/future-jump/FutureJumpView').then((module) => module.FutureJumpView))
+const FutureMapOverlay = dynamic(() => import('@/components/what-if/FutureMapOverlay').then((module) => module.FutureMapOverlay))
+const GraphReviewPanel = dynamic(() => import('@/components/graph/graph-review-panel').then((module) => module.GraphReviewPanel))
+const PresetCompatLibraryModal = dynamic(() => import('@/components/workspace/PresetCompatLibraryModal').then((module) => module.PresetCompatLibraryModal))
+const RoleplaySessionView = dynamic(() => import('@/components/workspace/RoleplaySessionView').then((module) => module.RoleplaySessionView))
+const WhatIfSessionView = dynamic(() => import('@/components/what-if/WhatIfSessionView').then((module) => module.WhatIfSessionView))
+const WorkspaceAISettingsModal = dynamic(() => import('@/components/workspace/WorkspaceAISettingsModal').then((module) => module.WorkspaceAISettingsModal))
+
+export function selectSelectionNovelStudioStore(state: NovelStore) {
+  return {
+    loadFromBackend: state.loadFromBackend,
+    saveToBackend: state.saveToBackend,
+    deleteNovelFromBackend: state.deleteNovelFromBackend,
+    reconcileNovelDeletionFromBackend: state.reconcileNovelDeletionFromBackend,
+    isNovelDeletionPending: state.isNovelDeletionPending,
+    beginNovelDeletion: state.beginNovelDeletion,
+    rollbackNovelDeletion: state.rollbackNovelDeletion,
+    setNovelDeletionPending: state.setNovelDeletionPending,
+    reconcileNovelDeletion: state.reconcileNovelDeletion,
+    backendLoaded: state.backendLoaded,
+    currentNovelId: state.currentNovelId,
+    localNovels: state.localNovels,
+    localVolumes: state.localVolumes,
+    localChapters: state.localChapters,
+    currentChapterId: state.currentChapterId,
+    setCurrentChapterId: state.setCurrentChapterId,
+    updateChapterContent: state.updateChapterContent,
+    createNewChapter: state.createNewChapter,
+    deleteChapter: state.deleteChapter,
+    deleteNovel: state.deleteNovel,
+    aiSettings: state.aiSettings,
+    setAISettings: state.setAISettings,
+    saveAISettings: state.saveAISettings,
+    loadPresetCompatLibrary: state.loadPresetCompatLibrary,
+    savePresetCompatLibrary: state.savePresetCompatLibrary,
+    rebuildStoryKnowledge: state.rebuildStoryKnowledge,
+    rebuildStoryRetrievalIndex: state.rebuildStoryRetrievalIndex,
+    pauseStoryKnowledgeRebuild: state.pauseStoryKnowledgeRebuild,
+    abortStoryKnowledgeRebuild: state.abortStoryKnowledgeRebuild,
+    deleteStoryKnowledgeGraph: state.deleteStoryKnowledgeGraph,
+    deleteStoryHanlpCache: state.deleteStoryHanlpCache,
+    deleteStoryExtractionCache: state.deleteStoryExtractionCache,
+    deleteStoryEmbeddingCache: state.deleteStoryEmbeddingCache,
+    refreshKnowledgeProjection: state.refreshKnowledgeProjection,
+    setPresetCompatSessionPhase: state.setPresetCompatSessionPhase,
+    clearPresetCompatSessionStateForSelection: state.clearPresetCompatSessionStateForSelection,
+    resetPresetCompatSessionStateForSelection: state.resetPresetCompatSessionStateForSelection,
+    presetCompatSessionState: state.presetCompatSessionState,
+    localCharacters: state.localCharacters,
+    localWorldEntries: state.localWorldEntries,
+    localTimelineEvents: state.localTimelineEvents,
+    localOutlines: state.localOutlines,
+    persistRevision: state.persistRevision,
+    workspaceSaveFeedback: state.workspaceSaveFeedback,
+  }
+}
+
 
 export function SelectionNovelStudio() {
   const { t } = useI18n()
-  const store = useNovelStore()
   const {
     loadFromBackend, saveToBackend, deleteNovelFromBackend, reconcileNovelDeletionFromBackend, isNovelDeletionPending, beginNovelDeletion, rollbackNovelDeletion, setNovelDeletionPending, reconcileNovelDeletion, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId,
     setCurrentChapterId, updateChapterContent, createNewChapter, deleteChapter, deleteNovel, aiSettings, setAISettings,
@@ -196,9 +250,10 @@ export function SelectionNovelStudio() {
     deleteStoryExtractionCache, deleteStoryEmbeddingCache, refreshKnowledgeProjection, setPresetCompatSessionPhase,
     clearPresetCompatSessionStateForSelection, resetPresetCompatSessionStateForSelection, presetCompatSessionState,
     localCharacters, localWorldEntries, localTimelineEvents, localOutlines,
-  } = store
-  const autosaveSignature = useNovelStore((state) => JSON.stringify({ currentNovelId: state.currentNovelId, currentChapterId: state.currentChapterId, currentTab: state.currentTab, helperTab: state.helperTab, expandedVolumeIds: state.expandedVolumeIds, localNovels: state.localNovels, localVolumes: state.localVolumes, localChapters: state.localChapters, localOutlines: state.localOutlines, localCharacters: state.localCharacters, localCharacterRelations: state.localCharacterRelations, localWorldEntries: state.localWorldEntries, localTimelineEvents: state.localTimelineEvents, rewriteCandidates: state.rewriteCandidates, rewriteHistory: state.rewriteHistory, trajectories: state.trajectories, rewriteMode: state.rewriteMode, rewriteTone: state.rewriteTone, rewriteOutput: state.rewriteOutput, rewriteScope: state.rewriteScope, selectionText: state.selectionText, selectedParagraphIndex: state.selectedParagraphIndex, thinkingLevel: state.thinkingLevel, autoContinue: state.autoContinue, keepCanon: state.keepCanon, promptText: state.promptText, selectedPresetId: state.selectedPresetId, presets: state.presets, constraints: state.constraints, focusMode: state.focusMode, presetCompatSessionState: state.presetCompatSessionState }))
-  const core = useSelectionNovelStudioCore({ loadFromBackend, saveToBackend, isNovelDeletionPending, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId, setCurrentChapterId, updateChapterContent, aiSettings, setAISettings, refreshKnowledgeProjection, clearPresetCompatSessionStateForSelection: (selection) => clearPresetCompatSessionStateForSelection(selection), resetPresetCompatSessionStateForSelection: (selection, surfaces) => resetPresetCompatSessionStateForSelection(selection, surfaces ?? []), presetCompatSessionState, localCharacters, localWorldEntries, localTimelineEvents, localOutlines, autosaveSignature })
+    persistRevision, workspaceSaveFeedback,
+  } = useNovelStore(useShallow(selectSelectionNovelStudioStore))
+  const autosaveTarget = `${currentNovelId}\u0000${persistRevision}`
+  const core = useSelectionNovelStudioCore({ loadFromBackend, saveToBackend, isNovelDeletionPending, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId, setCurrentChapterId, updateChapterContent, aiSettings, setAISettings, refreshKnowledgeProjection, clearPresetCompatSessionStateForSelection: (selection) => clearPresetCompatSessionStateForSelection(selection), resetPresetCompatSessionStateForSelection: (selection, surfaces) => resetPresetCompatSessionStateForSelection(selection, surfaces ?? []), presetCompatSessionState, localCharacters, localWorldEntries, localTimelineEvents, localOutlines, autosaveTarget, workspaceSaveFeedback })
   const {
     leftPanelOpen, setLeftPanelOpen, referencePanelOpen, setReferencePanelOpen, knowledgePanelOpen, setKnowledgePanelOpen, chapterListState, setChapterListState, centerPaneView, setCenterPaneView, refTab, setRefTab, settingsOpen, setSettingsOpen,
     selectionText, lockedSelectionText, toolbarPos, activeMode, rewritePrompt, rewriteState, rewriteFlow, generationContext,
@@ -305,7 +360,6 @@ export function SelectionNovelStudio() {
           onOpenKnowledge={() => setKnowledgePanelOpen(true)}
           onOpenPresets={() => {
             setPresetCompatLibraryOpen(true)
-            void loadPresetCompatLibrary().catch(() => undefined)
           }}
           onOpenSettings={() => setSettingsOpen(true)}
           onDeleteNovel={() => { void handleDeleteNovel() }}
@@ -351,7 +405,7 @@ export function SelectionNovelStudio() {
                 </div>
               </div>
             }
-            chapterGraphView={
+            chapterGraphView={centerPaneView === 'graph' ? (
               <ChapterGraphBrowser
                 chapter={currentChapter}
                 parentChapter={parentChapter}
@@ -388,7 +442,7 @@ export function SelectionNovelStudio() {
                     : undefined
                 }
               />
-            }
+            ) : null}
             continueBlockView={
               activeWorkspaceSelection.kind === 'rewrite' || activeWorkspaceSelection.kind === 'continue_block' ? (
                 selectedContinueBlockNode?.continueBlockId ? (
@@ -783,38 +837,43 @@ export function SelectionNovelStudio() {
         </div>
       ) : null}
 
-      <WorkspaceAISettingsModal
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        onSave={() => {
-          void saveSettings()
-        }}
-        scenarioStatusLabels={scenarioStatusLabels}
-        resolvedAISettings={resolvedAISettings}
-        ollamaModelsByScenario={ollamaModelsByScenario}
-        ollamaModelsLoading={ollamaModelsLoading}
-        ollamaModelsError={ollamaModelsError}
-        openAICompatibleModelsByScenario={openAICompatibleModelsByScenario}
-        openAICompatibleModelsLoading={openAICompatibleModelsLoading}
-        updateScenarioProvider={updateScenarioProvider}
-        updateScenarioOpenAIField={updateScenarioOpenAIField}
-        updateScenarioOllamaField={updateScenarioOllamaField}
-        updateKnowledgeExtractionParallelism={updateKnowledgeExtractionParallelism}
-        updateEmbeddingBatchSize={updateEmbeddingBatchSize}
-        loadOpenAICompatibleModels={(scenario, baseUrl, apiKey) => {
-          void loadOpenAICompatibleModels(scenario, baseUrl, apiKey)
-        }}
-        loadOllamaModels={(scenario, baseUrl) => {
-          void loadOllamaModels(scenario, baseUrl)
-        }}
-      />
+      {settingsOpen ? (
+        <WorkspaceAISettingsModal
+          open
+          onClose={() => setSettingsOpen(false)}
+          onSave={() => {
+            void saveSettings()
+          }}
+          scenarioStatusLabels={scenarioStatusLabels}
+          resolvedAISettings={resolvedAISettings}
+          ollamaModelsByScenario={ollamaModelsByScenario}
+          ollamaModelsLoading={ollamaModelsLoading}
+          ollamaModelsError={ollamaModelsError}
+          openAICompatibleModelsByScenario={openAICompatibleModelsByScenario}
+          openAICompatibleModelsLoading={openAICompatibleModelsLoading}
+          updateScenarioProvider={updateScenarioProvider}
+          updateScenarioOpenAIField={updateScenarioOpenAIField}
+          updateScenarioOllamaField={updateScenarioOllamaField}
+          updateKnowledgeExtractionParallelism={updateKnowledgeExtractionParallelism}
+          updateEmbeddingBatchSize={updateEmbeddingBatchSize}
+          loadOpenAICompatibleModels={(scenario, baseUrl, apiKey) => {
+            void loadOpenAICompatibleModels(scenario, baseUrl, apiKey)
+          }}
+          loadOllamaModels={(scenario, baseUrl) => {
+            void loadOllamaModels(scenario, baseUrl)
+          }}
+        />
+      ) : null}
 
-      <PresetCompatLibraryModal
-        activeSurfaceId={activeMode ? toPresetCompatSessionSurfaceId(activeMode) : null}
-        activeSelection={activeWorkspaceSelection}
-        open={presetCompatLibraryOpen}
-        onClose={() => setPresetCompatLibraryOpen(false)}
-      />
+      {presetCompatLibraryOpen ? (
+        <PresetCompatLibraryModal
+          activeSurfaceId={activeMode ? toPresetCompatSessionSurfaceId(activeMode) : null}
+          activeSelection={activeWorkspaceSelection}
+          open
+          onLoad={loadPresetCompatLibrary}
+          onClose={() => setPresetCompatLibraryOpen(false)}
+        />
+      ) : null}
 
       {futureMapLaunch ? (
         <FutureMapOverlay

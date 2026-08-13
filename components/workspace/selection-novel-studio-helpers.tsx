@@ -48,6 +48,7 @@ import type {
   WorldEntryType,
 } from '@/lib/types'
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
+import { requestClientGet } from '@/lib/client-request-broker'
 import { getClientLocale, getMessage, type Locale, type TranslationKey, type TranslationValues } from '@/lib/i18n/messages'
 import { useI18n } from '@/lib/i18n/provider'
 
@@ -992,9 +993,6 @@ export function WorkspaceCharacterReferenceCard({
   const classificationBadgeLabel = getCharacterClassificationBadgeLabel(char)
   const aliasBadges = (char.aliases ?? []).map((alias) => alias.trim()).filter(Boolean)
   const identitySummary = getCharacterFacetContent(char.profile?.identity)
-  const genderSummary = getCharacterFacetContent(char.profile?.gender)
-  const capabilitySummary = getCharacterFacetContent(char.profile?.capability)
-  const speakingStyleSummary = getCharacterFacetContent(char.profile?.speakingStyle)
   const supplementalNote = char.note.trim()
   const noteMatchesIdentity = supplementalNote && supplementalNote === identitySummary
   const cardCanExpand = characterCardNeedsExpansion({
@@ -1020,7 +1018,7 @@ export function WorkspaceCharacterReferenceCard({
           </div>
         ) : null}
       </div>
-      {(classificationBadgeLabel || aliasBadges.length > 0 || genderSummary || capabilitySummary || speakingStyleSummary) ? (
+      {(classificationBadgeLabel || aliasBadges.length > 0) ? (
         <div className="mb-2 flex flex-wrap gap-2">
           {classificationBadgeLabel ? (
             <span
@@ -1035,9 +1033,6 @@ export function WorkspaceCharacterReferenceCard({
               {t('workspace.character.aliasBadge', { alias })}
             </span>
           ))}
-          {genderSummary ? <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{genderSummary}</span> : null}
-          {capabilitySummary ? <span className="rounded-full border border-violet-300/20 bg-violet-500/10 px-2 py-0.5 text-[10px] text-violet-200">{capabilitySummary}</span> : null}
-          {speakingStyleSummary ? <span className="rounded-full border border-sky-300/20 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-200">{speakingStyleSummary}</span> : null}
         </div>
       ) : null}
       {showProfile ? (
@@ -1256,6 +1251,7 @@ export async function callGetRecoverableRewriteJobApi(params: {
   novelId?: string
   branchId?: string
   chapterId?: string
+  signal?: AbortSignal
 }) {
   const searchParams = new URLSearchParams()
   if (params.jobId) searchParams.set('jobId', params.jobId)
@@ -1263,16 +1259,14 @@ export async function callGetRecoverableRewriteJobApi(params: {
   if (params.branchId) searchParams.set('branchId', params.branchId)
   if (params.chapterId) searchParams.set('chapterId', params.chapterId)
 
-  const response = await fetch(`/api/rewrite?${searchParams.toString()}`, {
-    cache: 'no-store',
+  return requestClientGet(`/api/rewrite?${searchParams.toString()}`, {
+    signal: params.signal,
+    parse: async (response) => {
+      const data = await response.json() as { ok?: boolean; job?: RecoverableRewriteJob | null; error?: string }
+      if (!response.ok || !data.ok) throw new Error(data.error || tm('workspace.actionError.readRecoverableRewriteJobFailed'))
+      return data.job ?? null
+    },
   })
-
-  const data = await response.json() as { ok?: boolean; job?: RecoverableRewriteJob | null; error?: string }
-  if (!response.ok || !data.ok) {
-    throw new Error(data.error || tm('workspace.actionError.readRecoverableRewriteJobFailed'))
-  }
-
-  return data.job ?? null
 }
 
 export async function callAbortRecoverableRewriteJobApi(params: { jobId: string; novelId: string; branchId: string; chapterId?: string }) {

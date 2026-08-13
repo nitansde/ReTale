@@ -3,7 +3,7 @@
 import React from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/graph-review-panel'
+import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/context-prompt-block-visibility'
 import { WorkspaceCenterPane } from '@/components/workspace/WorkspaceCenterPane'
 import {
   resolveContinueBlockSelectionAfterSave,
