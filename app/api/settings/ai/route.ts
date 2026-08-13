@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { normalizeAISettings, sanitizeAISettingsForClient } from '@/lib/ai-settings'
-import { jsonError, readJsonObject } from '@/lib/server/api-route'
+import { jsonError, noStoreJson, readJsonObject } from '@/lib/server/api-route'
 import type { AISettings, AIScenarioKey } from '@/lib/types'
 import { loadStoredAISettings, saveStoredAISettings } from '@/lib/server/ai-settings'
 import { normalizeOpenAICompatibleBaseUrl } from '@/lib/server/openai-compatible'
@@ -124,7 +124,7 @@ function normalizeScenarioPayload<K extends AIScenarioKey>(
 }
 
 export async function GET() {
-  return NextResponse.json(sanitizeAISettingsForClient(loadStoredAISettings()))
+  return noStoreJson(sanitizeAISettingsForClient(loadStoredAISettings()))
 }
 
 export async function POST(request: Request) {

@@ -61,6 +61,7 @@ describe('settings AI route validation', () => {
     const response = await GET(new Request('http://localhost/api/settings/ai/ollama-models?purpose=invalid'))
 
     expect(response.status).toBe(400)
+    expect(response.headers.get('cache-control')).toBe('no-store')
     await expect(response.json()).resolves.toEqual({ ok: false, error: 'purpose is invalid' })
     expect(listAvailableOllamaEmbeddingModels).not.toHaveBeenCalled()
     expect(listAvailableOllamaTextModels).not.toHaveBeenCalled()
@@ -114,10 +115,33 @@ describe('settings AI route validation', () => {
     const textRequest = new Request('http://localhost/api/settings/ai/ollama-models?baseUrl=http%3A%2F%2F127.0.0.1%3A11434&purpose=text')
     const embeddingRequest = new Request('http://localhost/api/settings/ai/ollama-models?baseUrl=http%3A%2F%2F127.0.0.1%3A11434&purpose=embedding')
 
-    expect((await GET(textRequest)).status).toBe(200)
+    const textResponse = await GET(textRequest)
+    expect(textResponse.status).toBe(200)
+    expect(textResponse.headers.get('cache-control')).toBe('no-store')
     expect((await GET(embeddingRequest)).status).toBe(200)
     expect(listAvailableOllamaTextModels).toHaveBeenCalledWith('http://127.0.0.1:11434', textRequest.signal)
     expect(listAvailableOllamaEmbeddingModels).toHaveBeenCalledWith('http://127.0.0.1:11434', embeddingRequest.signal)
+  })
+
+  it('returns sanitized AI settings with no-store', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: vi.fn(() => ({})),
+      AI_SETTINGS_V2_KEY: 'AI_SETTINGS_V2',
+      OLLAMA_TIMEOUT_MS_KEY: 'OLLAMA_TIMEOUT_MS',
+      loadProtectedAISettingsResetSnapshot: vi.fn(),
+      validateProtectedAISettingsResetSnapshot: vi.fn(),
+    }))
+    vi.doMock('@/lib/ai-settings', () => ({
+      normalizeAISettings: vi.fn(),
+      sanitizeAISettingsForClient: vi.fn(() => ({ rewrite: { provider: 'openai-compatible' } })),
+    }))
+
+    const { GET } = await import('@/app/api/settings/ai/route')
+    const response = await GET()
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    await expect(response.json()).resolves.toEqual({ rewrite: { provider: 'openai-compatible' } })
   })
 
 })

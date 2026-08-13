@@ -1,5 +1,4 @@
-import { NextResponse } from 'next/server'
-import { jsonError } from '@/lib/server/api-route'
+import { noStoreJson, noStoreJsonError } from '@/lib/server/api-route'
 import { listAvailableOllamaEmbeddingModels, listAvailableOllamaTextModels } from '@/lib/server/ollama-local'
 
 export async function GET(request: Request) {
@@ -8,14 +7,14 @@ export async function GET(request: Request) {
     const baseUrl = searchParams.get('baseUrl')?.trim() || undefined
     const rawPurpose = searchParams.get('purpose')?.trim() ?? ''
     if (rawPurpose && rawPurpose !== 'text' && rawPurpose !== 'embedding') {
-      return jsonError('purpose is invalid', 400)
+      return noStoreJsonError('purpose is invalid', 400)
     }
     const purpose = rawPurpose === 'embedding' ? 'embedding' : 'text'
     const result = purpose === 'embedding'
       ? await listAvailableOllamaEmbeddingModels(baseUrl, request.signal)
       : await listAvailableOllamaTextModels(baseUrl, request.signal)
-    return NextResponse.json({ ok: true, purpose, ...result })
+    return noStoreJson({ ok: true, purpose, ...result })
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : 'Failed to list local Ollama models', 500)
+    return noStoreJsonError(error instanceof Error ? error.message : 'Failed to list local Ollama models', 500)
   }
 }
