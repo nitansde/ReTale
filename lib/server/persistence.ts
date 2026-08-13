@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { safeParseJson } from '@/lib/server/json-parse'
@@ -56,6 +57,7 @@ type WorkspaceKnowledgeSyncStateRow = {
   requestedSourceUpdatedAt: string | null
   startedSourceUpdatedAt: string | null
   startedAt: string | null
+  claimToken: string | null
   syncedSourceUpdatedAt: string | null
   lastError: string | null
 }
@@ -64,6 +66,7 @@ export type WorkspaceKnowledgeSyncClaim = {
   workspaceStateId: string
   revision: number
   sourceUpdatedAt: string
+  claimToken: string
 }
 
 type AppSettingRow = {
@@ -82,8 +85,143 @@ export type WorkspaceNovelRegistryRow = {
   lanceDbPath: string
   schemaVersion: string
   migrationStatus: 'ready' | 'deleting' | 'deleted' | string
+  lifecycleToken: string | null
+  leaseExpiresAt: string | null
+  claimedAt: string | null
   createdAt: string
   updatedAt: string
+}
+
+export type WorkspaceNovelLifecycleClock = Date | string
+
+const WORKSPACE_NOVEL_CREATOR_LEASE_MS = 15 * 60 * 1000
+const WORKSPACE_NOVEL_CLEANUP_LEASE_MS = 2 * 60 * 1000
+
+function lifecycleNow(clock?: WorkspaceNovelLifecycleClock) {
+  const now = clock instanceof Date ? clock : clock ? new Date(clock) : new Date()
+  if (Number.isNaN(now.getTime())) throw new Error('Invalid workspace novel lifecycle clock')
+  return now
+}
+
+function lifecycleTimestamp(clock?: WorkspaceNovelLifecycleClock) {
+  return lifecycleNow(clock).toISOString()
+}
+
+function lifecycleLeaseTimestamp(clock: WorkspaceNovelLifecycleClock | undefined, leaseMs: number) {
+  return new Date(lifecycleNow(clock).getTime() + leaseMs).toISOString()
+}
+
+function createLifecycleToken() {
+  return randomBytes(32).toString('hex')
+}
+
+export function beginWorkspaceNovelCreation(params: { novelId: string; title?: string | null; now?: WorkspaceNovelLifecycleClock }) {
+  const novelId = validateNovelId(params.novelId)
+  const paths = getNovelStoragePaths(novelId)
+  const controlDb = createControlDatabaseAccess()
+  const creatorToken = createLifecycleToken()
+  const now = lifecycleTimestamp(params.now)
+  const leaseExpiresAt = lifecycleLeaseTimestamp(params.now, WORKSPACE_NOVEL_CREATOR_LEASE_MS)
+  return controlDb.withTransaction(() => {
+    const existing = findWorkspaceNovelRegistryRow(novelId)
+    if (existing) throw new WorkspaceNovelStateConflictError(`Novel "${novelId}" already exists`)
+    controlDb.execute(
+      `INSERT INTO NovelRegistry (
+         novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus,
+         lifecycleToken, leaseExpiresAt, claimedAt, updatedAt
+       ) VALUES (?, ?, ?, ?, ?, '1', 'creating', ?, ?, ?, ?)`,
+      novelId,
+      novelId,
+      params.title?.trim() || null,
+      paths.databasePath,
+      paths.lanceDbPath,
+      creatorToken,
+      leaseExpiresAt,
+      now,
+      now,
+    )
+    return creatorToken
+  })
+}
+
+export async function renewWorkspaceNovelCreation(
+  novelId: string,
+  creatorToken: string,
+  clock?: WorkspaceNovelLifecycleClock,
+) {
+  const stableNovelId = validateNovelId(novelId)
+  const controlDb = createControlDatabaseAccess()
+  const now = lifecycleTimestamp(clock)
+  const leaseExpiresAt = lifecycleLeaseTimestamp(clock, WORKSPACE_NOVEL_CREATOR_LEASE_MS)
+  const transition = await controlDb.withTransaction(() => controlDb.execute(
+    `UPDATE NovelRegistry
+     SET leaseExpiresAt = ?, updatedAt = ?
+     WHERE novelId = ? AND migrationStatus = 'creating' AND lifecycleToken = ?
+       AND leaseExpiresAt > ?`,
+    leaseExpiresAt,
+    now,
+    stableNovelId,
+    creatorToken,
+    now,
+  ))
+  if (transition.changes !== 1) {
+    throw new WorkspaceNovelStateConflictError(`Novel "${stableNovelId}" creation lease is no longer owned`)
+  }
+}
+
+export function publishWorkspaceNovelCreation(
+  novelId: string,
+  creatorToken: string,
+  clock?: WorkspaceNovelLifecycleClock,
+) {
+  const stableNovelId = validateNovelId(novelId)
+  const controlDb = createControlDatabaseAccess()
+  const now = lifecycleTimestamp(clock)
+  return controlDb.withTransaction(() => {
+    const transition = controlDb.execute(
+      `UPDATE NovelRegistry
+       SET migrationStatus = 'ready', lifecycleToken = NULL, leaseExpiresAt = NULL,
+           claimedAt = NULL, updatedAt = ?
+       WHERE novelId = ? AND migrationStatus = 'creating' AND lifecycleToken = ?
+         AND leaseExpiresAt > ?`,
+      now,
+      stableNovelId,
+      creatorToken,
+      now,
+    )
+    if (transition.changes !== 1) {
+      throw new WorkspaceNovelStateConflictError(`Novel "${stableNovelId}" creation is no longer publishable`)
+    }
+    upsertActiveWorkspaceNovelId(controlDb, stableNovelId)
+  })
+}
+
+export async function abortWorkspaceNovelCreation(
+  novelId: string,
+  creatorToken: string,
+  clock?: WorkspaceNovelLifecycleClock,
+) {
+  const stableNovelId = validateNovelId(novelId)
+  const controlDb = createControlDatabaseAccess()
+  const cleanupToken = createLifecycleToken()
+  const now = lifecycleTimestamp(clock)
+  const leaseExpiresAt = lifecycleLeaseTimestamp(clock, WORKSPACE_NOVEL_CLEANUP_LEASE_MS)
+  const claimed = await controlDb.withTransaction(() => controlDb.execute(
+      `UPDATE NovelRegistry
+       SET migrationStatus = 'deleting', lifecycleToken = ?, leaseExpiresAt = ?,
+           claimedAt = ?, updatedAt = ?
+       WHERE novelId = ? AND migrationStatus = 'creating' AND lifecycleToken = ?
+         AND leaseExpiresAt > ?`,
+       cleanupToken,
+       leaseExpiresAt,
+       now,
+       now,
+       stableNovelId,
+       creatorToken,
+       now,
+    ))
+  if (claimed.changes !== 1) return null
+  return cleanupWorkspaceNovelUnderGate(stableNovelId, cleanupToken, clock)
 }
 
 export class WorkspaceNovelDeletionError extends Error {
@@ -119,7 +257,7 @@ const [PRESET_COMPAT_LIBRARY_V1_KEY, AI_SETTINGS_V2_KEY, OLLAMA_TIMEOUT_MS_KEY] 
 const WORKSPACE_BACKUP_RETENTION = 20
 const WORKSPACE_KNOWLEDGE_SYNC_STALE_MS = 5 * 60 * 1000
 const WORKSPACE_NOVEL_CLEANUP_SCAN_LIMIT = 25
-let workspaceNovelCleanupScanCursor: Pick<WorkspaceNovelRegistryRow, 'migrationStatus' | 'updatedAt' | 'novelId'> | null = null
+let workspaceNovelDeletedPurgeCursor: Pick<WorkspaceNovelRegistryRow, 'updatedAt' | 'novelId'> | null = null
 const ACTIVE_WORKSPACE_NOVEL_ID_KEY = 'WORKSPACE_ACTIVE_NOVEL_ID'
 
 export type ProtectedAppSettingsResetSnapshot = {
@@ -230,7 +368,8 @@ export function assertWorkspaceNovelReadyForWrite(novelId: string) {
 
 export function listReadyWorkspaceNovelRegistry() {
   return createControlDatabaseAccess().queryAll<WorkspaceNovelRegistryRow>(
-    `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus, createdAt, updatedAt
+    `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus,
+            lifecycleToken, leaseExpiresAt, claimedAt, createdAt, updatedAt
      FROM NovelRegistry
      WHERE migrationStatus = 'ready'
      ORDER BY createdAt ASC, novelId ASC`
@@ -250,7 +389,8 @@ function assertCanonicalRegistryStoragePaths(row: WorkspaceNovelRegistryRow) {
 
 function findWorkspaceNovelRegistryRow(novelId: string) {
   return createControlDatabaseAccess().queryOne<WorkspaceNovelRegistryRow>(
-    `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus, createdAt, updatedAt
+    `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus,
+            lifecycleToken, leaseExpiresAt, claimedAt, createdAt, updatedAt
      FROM NovelRegistry
      WHERE novelId = ?`,
     novelId,
@@ -259,6 +399,8 @@ function findWorkspaceNovelRegistryRow(novelId: string) {
 
 async function cleanupWorkspaceNovelUnderGate(
   novelId: string,
+  cleanupToken: string,
+  clock?: WorkspaceNovelLifecycleClock,
   readyCompensation: {
     target: WorkspaceNovelRegistryRow
     activeSettingBefore: AppSettingRow | null
@@ -267,7 +409,14 @@ async function cleanupWorkspaceNovelUnderGate(
 ) {
   const controlDb = createControlDatabaseAccess()
   const target = findWorkspaceNovelRegistryRow(novelId)
-  if (!target || !['deleting', 'deleted'].includes(target.migrationStatus)) {
+  const now = lifecycleTimestamp(clock)
+  if (
+    !target
+    || target.migrationStatus !== 'deleting'
+    || target.lifecycleToken !== cleanupToken
+    || !target.leaseExpiresAt
+    || target.leaseExpiresAt <= now
+  ) {
     return null
   }
 
@@ -275,25 +424,40 @@ async function cleanupWorkspaceNovelUnderGate(
   assertCanonicalRegistryStoragePaths(target)
 
   try {
+    const renewed = await renewWorkspaceNovelCleanup(novelId, cleanupToken, clock)
+    if (!renewed) return null
     evictNovelStorageCache(novelId)
+    const renewedBeforeMove = await renewWorkspaceNovelCleanup(novelId, cleanupToken, clock)
+    if (!renewedBeforeMove) return null
     quarantineNovelStorage(storagePaths)
+    const renewedAfterMove = await renewWorkspaceNovelCleanup(novelId, cleanupToken, clock)
+    if (!renewedAfterMove) return null
   } catch (error) {
-    if (readyCompensation && fs.existsSync(storagePaths.novelDirectory)) {
+    if (
+      readyCompensation
+      && fs.existsSync(storagePaths.novelDirectory)
+      && !fs.existsSync(storagePaths.quarantinePath)
+    ) {
       await controlDb.withTransaction(() => {
         const compensated = controlDb.execute(
           `UPDATE NovelRegistry
-           SET safeNovelId = ?, title = ?, dbFilePath = ?, lanceDbPath = ?, schemaVersion = ?,
-               migrationStatus = ?, createdAt = ?, updatedAt = ?
-           WHERE novelId = ? AND migrationStatus = 'deleting'`,
+            SET safeNovelId = ?, title = ?, dbFilePath = ?, lanceDbPath = ?, schemaVersion = ?,
+                migrationStatus = ?, lifecycleToken = ?, leaseExpiresAt = ?, claimedAt = ?,
+                createdAt = ?, updatedAt = ?
+            WHERE novelId = ? AND migrationStatus = 'deleting' AND lifecycleToken = ?`,
           readyCompensation.target.safeNovelId,
           readyCompensation.target.title,
           readyCompensation.target.dbFilePath,
           readyCompensation.target.lanceDbPath,
           readyCompensation.target.schemaVersion,
           readyCompensation.target.migrationStatus,
+          readyCompensation.target.lifecycleToken,
+          readyCompensation.target.leaseExpiresAt,
+          readyCompensation.target.claimedAt,
           readyCompensation.target.createdAt,
           readyCompensation.target.updatedAt,
           novelId,
+          cleanupToken,
         )
         if (compensated.changes !== 1) {
           return
@@ -336,23 +500,23 @@ async function cleanupWorkspaceNovelUnderGate(
     throw error
   }
 
-  if (target.migrationStatus === 'deleting') {
-    await controlDb.withTransaction(() => {
-      controlDb.execute(
+  const finalNow = lifecycleTimestamp(clock)
+  await controlDb.withTransaction(() => {
+      const finalized = controlDb.execute(
         `UPDATE NovelRegistry
-         SET migrationStatus = 'deleted', updatedAt = CURRENT_TIMESTAMP
-         WHERE novelId = ? AND migrationStatus = 'deleting'`,
+          SET migrationStatus = 'deleted', lifecycleToken = NULL, leaseExpiresAt = NULL,
+              claimedAt = NULL, updatedAt = ?
+          WHERE novelId = ? AND migrationStatus = 'deleting' AND lifecycleToken = ?
+            AND leaseExpiresAt > ?`,
+        finalNow,
         novelId,
+        cleanupToken,
+        finalNow,
       )
-      const committed = controlDb.queryOne<{ migrationStatus: string }>(
-        'SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?',
-        novelId,
-      )
-      if (committed?.migrationStatus !== 'deleted') {
+      if (finalized.changes !== 1) {
         throw new Error(`Failed to finalize deletion tombstone for "${novelId}"`)
       }
-    })
-  }
+  })
 
   let cleanupPending = false
   try {
@@ -365,53 +529,152 @@ async function cleanupWorkspaceNovelUnderGate(
   return { cleanupPending }
 }
 
-export async function resumeWorkspaceNovelCleanup(novelId: string) {
-  const stableNovelId = validateNovelId(novelId)
-  return runWithPerNovelWriteGate(stableNovelId, () => cleanupWorkspaceNovelUnderGate(stableNovelId))
+async function renewWorkspaceNovelCleanup(
+  novelId: string,
+  cleanupToken: string,
+  clock?: WorkspaceNovelLifecycleClock,
+) {
+  const controlDb = createControlDatabaseAccess()
+  const now = lifecycleTimestamp(clock)
+  const leaseExpiresAt = lifecycleLeaseTimestamp(clock, WORKSPACE_NOVEL_CLEANUP_LEASE_MS)
+  const renewed = await controlDb.withTransaction(() => controlDb.execute(
+    `UPDATE NovelRegistry
+     SET leaseExpiresAt = ?, updatedAt = ?
+     WHERE novelId = ? AND migrationStatus = 'deleting' AND lifecycleToken = ?
+       AND leaseExpiresAt > ?`,
+    leaseExpiresAt,
+    now,
+    novelId,
+    cleanupToken,
+    now,
+  ))
+  return renewed.changes === 1
 }
 
-export async function resumePendingWorkspaceNovelCleanup() {
+async function claimExpiredWorkspaceNovelCreation(novelId: string, clock?: WorkspaceNovelLifecycleClock) {
   const controlDb = createControlDatabaseAccess()
-  const cursor = workspaceNovelCleanupScanCursor
-  const rows = cursor
+  const cleanupToken = createLifecycleToken()
+  const now = lifecycleTimestamp(clock)
+  const leaseExpiresAt = lifecycleLeaseTimestamp(clock, WORKSPACE_NOVEL_CLEANUP_LEASE_MS)
+  const claimed = await controlDb.withTransaction(() => controlDb.execute(
+    `UPDATE NovelRegistry
+     SET migrationStatus = 'deleting', lifecycleToken = ?, leaseExpiresAt = ?,
+         claimedAt = ?, updatedAt = ?
+     WHERE novelId = ? AND migrationStatus = 'creating'
+       AND (leaseExpiresAt IS NULL OR leaseExpiresAt <= ?)`,
+    cleanupToken,
+    leaseExpiresAt,
+    now,
+    now,
+    novelId,
+    now,
+  ))
+  return claimed.changes === 1 ? cleanupToken : null
+}
+
+async function claimWorkspaceNovelCleanupTakeover(novelId: string, clock?: WorkspaceNovelLifecycleClock) {
+  const controlDb = createControlDatabaseAccess()
+  const cleanupToken = createLifecycleToken()
+  const now = lifecycleTimestamp(clock)
+  const leaseExpiresAt = lifecycleLeaseTimestamp(clock, WORKSPACE_NOVEL_CLEANUP_LEASE_MS)
+  const claimed = await controlDb.withTransaction(() => controlDb.execute(
+    `UPDATE NovelRegistry
+     SET lifecycleToken = ?, leaseExpiresAt = ?, claimedAt = ?, updatedAt = ?
+     WHERE novelId = ? AND migrationStatus = 'deleting'
+       AND (lifecycleToken IS NULL OR leaseExpiresAt IS NULL OR leaseExpiresAt <= ?)`,
+    cleanupToken,
+    leaseExpiresAt,
+    now,
+    now,
+    novelId,
+    now,
+  ))
+  return claimed.changes === 1 ? cleanupToken : null
+}
+
+export async function resumeWorkspaceNovelCleanup(novelId: string, clock?: WorkspaceNovelLifecycleClock) {
+  const stableNovelId = validateNovelId(novelId)
+  return runWithPerNovelWriteGate(stableNovelId, async () => {
+    const row = findWorkspaceNovelRegistryRow(stableNovelId)
+    if (!row) return null
+    if (row.migrationStatus === 'deleted') {
+      const storagePaths = validateNovelDeletionPaths(stableNovelId)
+      assertCanonicalRegistryStoragePaths(row)
+      let cleanupPending = false
+      try {
+        purgeNovelQuarantine(storagePaths)
+      } catch (error) {
+        cleanupPending = true
+        console.error('Failed to purge quarantined novel storage:', error)
+      }
+      return { cleanupPending }
+    }
+    const cleanupToken = row.migrationStatus === 'creating'
+      ? await claimExpiredWorkspaceNovelCreation(stableNovelId, clock)
+      : row.migrationStatus === 'deleting'
+        ? await claimWorkspaceNovelCleanupTakeover(stableNovelId, clock)
+        : null
+    if (!cleanupToken) return null
+    return cleanupWorkspaceNovelUnderGate(stableNovelId, cleanupToken, clock)
+  })
+}
+
+export async function resumePendingWorkspaceNovelCleanup(clock?: WorkspaceNovelLifecycleClock) {
+  const controlDb = createControlDatabaseAccess()
+  const now = lifecycleTimestamp(clock)
+  const creatingRows = controlDb.queryAll<WorkspaceNovelRegistryRow>(
+    `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus,
+            lifecycleToken, leaseExpiresAt, claimedAt, createdAt, updatedAt
+     FROM NovelRegistry
+     WHERE migrationStatus = 'creating' AND (leaseExpiresAt IS NULL OR leaseExpiresAt <= ?)
+     ORDER BY COALESCE(leaseExpiresAt, updatedAt) ASC, novelId ASC
+     LIMIT ?`,
+    now,
+    WORKSPACE_NOVEL_CLEANUP_SCAN_LIMIT,
+  )
+  const deletingRows = controlDb.queryAll<WorkspaceNovelRegistryRow>(
+    `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus,
+            lifecycleToken, leaseExpiresAt, claimedAt, createdAt, updatedAt
+     FROM NovelRegistry
+     WHERE migrationStatus = 'deleting'
+       AND (lifecycleToken IS NULL OR leaseExpiresAt IS NULL OR leaseExpiresAt <= ?)
+     ORDER BY COALESCE(leaseExpiresAt, updatedAt) ASC, novelId ASC
+     LIMIT ?`,
+    now,
+    WORKSPACE_NOVEL_CLEANUP_SCAN_LIMIT,
+  )
+  const cursor = workspaceNovelDeletedPurgeCursor
+  const deletedRows = cursor
     ? controlDb.queryAll<WorkspaceNovelRegistryRow>(
-        `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus, createdAt, updatedAt
+        `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus,
+                lifecycleToken, leaseExpiresAt, claimedAt, createdAt, updatedAt
          FROM NovelRegistry
-         WHERE migrationStatus IN ('deleting', 'deleted')
-           AND (
-             CASE migrationStatus WHEN 'deleting' THEN 0 ELSE 1 END > ?
-             OR (CASE migrationStatus WHEN 'deleting' THEN 0 ELSE 1 END = ? AND updatedAt > ?)
-             OR (CASE migrationStatus WHEN 'deleting' THEN 0 ELSE 1 END = ? AND updatedAt = ? AND novelId > ?)
-           )
-         ORDER BY CASE migrationStatus WHEN 'deleting' THEN 0 ELSE 1 END, updatedAt ASC, novelId ASC
+          WHERE migrationStatus = 'deleted'
+            AND (
+               updatedAt > ? OR (updatedAt = ? AND novelId > ?)
+            )
+          ORDER BY updatedAt ASC, novelId ASC
          LIMIT ?`,
-        cursor.migrationStatus === 'deleting' ? 0 : 1,
-        cursor.migrationStatus === 'deleting' ? 0 : 1,
         cursor.updatedAt,
-        cursor.migrationStatus === 'deleting' ? 0 : 1,
         cursor.updatedAt,
         cursor.novelId,
         WORKSPACE_NOVEL_CLEANUP_SCAN_LIMIT,
       )
     : controlDb.queryAll<WorkspaceNovelRegistryRow>(
-        `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus, createdAt, updatedAt
+        `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus,
+                lifecycleToken, leaseExpiresAt, claimedAt, createdAt, updatedAt
          FROM NovelRegistry
-         WHERE migrationStatus IN ('deleting', 'deleted')
-         ORDER BY CASE migrationStatus WHEN 'deleting' THEN 0 ELSE 1 END, updatedAt ASC, novelId ASC
+          WHERE migrationStatus = 'deleted'
+          ORDER BY updatedAt ASC, novelId ASC
          LIMIT ?`,
         WORKSPACE_NOVEL_CLEANUP_SCAN_LIMIT,
       )
 
-  if (!rows.length) {
-    workspaceNovelCleanupScanCursor = null
-    return
-  }
-
-  workspaceNovelCleanupScanCursor = rows.length < WORKSPACE_NOVEL_CLEANUP_SCAN_LIMIT
+  workspaceNovelDeletedPurgeCursor = deletedRows.length < WORKSPACE_NOVEL_CLEANUP_SCAN_LIMIT
     ? null
-    : rows.at(-1) ?? null
+    : deletedRows.at(-1) ?? null
 
-  for (const row of rows) {
+  for (const row of [...creatingRows, ...deletingRows, ...deletedRows]) {
     try {
       if (row.migrationStatus === 'deleted') {
         const storagePaths = getNovelStoragePaths(row.novelId)
@@ -420,7 +683,7 @@ export async function resumePendingWorkspaceNovelCleanup() {
         }
       }
 
-      await resumeWorkspaceNovelCleanup(row.novelId)
+      await resumeWorkspaceNovelCleanup(row.novelId, clock)
     } catch (error) {
       console.error('Failed to resume quarantined novel cleanup:', row.novelId, error)
     }
@@ -430,6 +693,7 @@ export async function resumePendingWorkspaceNovelCleanup() {
 export async function deleteWorkspaceNovel(params: {
   novelId: string
   nextNovelId?: string | null
+  now?: WorkspaceNovelLifecycleClock
 }): Promise<WorkspaceNovelDeletionResult> {
   let novelId: string
   try {
@@ -470,6 +734,7 @@ export async function deleteWorkspaceNovel(params: {
       activeSettingBefore: AppSettingRow | null
       activeSettingPublished: AppSettingRow | null
     } | null = null
+    let cleanupToken: string | null = null
 
     if (target.migrationStatus === 'ready') {
       if (fs.existsSync(storagePaths.databasePath)) {
@@ -499,7 +764,8 @@ export async function deleteWorkspaceNovel(params: {
           throw new WorkspaceNovelDeletionError('Novel deletion is already in progress or complete', 409)
         }
         const survivors = controlDb.queryAll<WorkspaceNovelRegistryRow>(
-          `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus, createdAt, updatedAt
+          `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus,
+                  lifecycleToken, leaseExpiresAt, claimedAt, createdAt, updatedAt
            FROM NovelRegistry
            WHERE novelId != ? AND migrationStatus = 'ready'
            ORDER BY createdAt ASC, novelId ASC`,
@@ -525,12 +791,23 @@ export async function deleteWorkspaceNovel(params: {
           assertCanonicalRegistryStoragePaths(canonicalActiveSurvivor)
         }
 
-        controlDb.execute(
+        const nextCleanupToken = createLifecycleToken()
+        const now = lifecycleTimestamp(params.now)
+        const leaseExpiresAt = lifecycleLeaseTimestamp(params.now, WORKSPACE_NOVEL_CLEANUP_LEASE_MS)
+        const claimed = controlDb.execute(
           `UPDATE NovelRegistry
-           SET migrationStatus = 'deleting', updatedAt = CURRENT_TIMESTAMP
-           WHERE novelId = ? AND migrationStatus = 'ready'`,
+            SET migrationStatus = 'deleting', lifecycleToken = ?, leaseExpiresAt = ?,
+                claimedAt = ?, updatedAt = ?
+            WHERE novelId = ? AND migrationStatus = 'ready'`,
+          nextCleanupToken,
+          leaseExpiresAt,
+          now,
+          now,
           novelId,
         )
+        if (claimed.changes !== 1) {
+          throw new WorkspaceNovelDeletionError('Novel deletion is already in progress or complete', 409)
+        }
         const activeSettingPublished = canonicalActiveNovelId
           ? upsertActiveWorkspaceNovelId(controlDb, canonicalActiveNovelId)
           : null
@@ -539,6 +816,7 @@ export async function deleteWorkspaceNovel(params: {
         }
         return {
           activeNovelId: canonicalActiveNovelId,
+          cleanupToken: nextCleanupToken,
           compensation: {
             target: currentTarget,
             activeSettingBefore: activeSetting,
@@ -547,10 +825,24 @@ export async function deleteWorkspaceNovel(params: {
         }
       })
       nextActiveNovelId = transition.activeNovelId
+      cleanupToken = transition.cleanupToken
       readyCompensation = transition.compensation
+    } else if (target.migrationStatus === 'deleting') {
+      cleanupToken = await claimWorkspaceNovelCleanupTakeover(novelId, params.now)
+    } else {
+      const resumed = await resumeWorkspaceNovelCleanup(novelId, params.now)
+      return {
+        deletedNovelId: novelId,
+        activeNovelId: nextActiveNovelId,
+        deletionState: 'deleted',
+        cleanupPending: resumed?.cleanupPending ?? false,
+      }
     }
 
-    const cleanup = await cleanupWorkspaceNovelUnderGate(novelId, readyCompensation)
+    if (!cleanupToken) {
+      throw new WorkspaceNovelDeletionError('Novel deletion is already in progress or complete', 409)
+    }
+    const cleanup = await cleanupWorkspaceNovelUnderGate(novelId, cleanupToken, params.now, readyCompensation)
     if (!cleanup) {
       throw new WorkspaceNovelDeletionError('Novel deletion is already in progress or complete', 409)
     }
@@ -567,6 +859,10 @@ export async function deleteWorkspaceNovel(params: {
 export function findWorkspaceState(id = 'singleton', context: WorkspaceDbContext = {}) {
   const db = resolveWorkspaceDbContext(context)
   if (!db) return null
+  return readWorkspaceStateFromDb(db, id)
+}
+
+export function readWorkspaceStateFromDb(db: DatabaseAccess, id = 'singleton') {
   return db.queryOne<WorkspaceStateRow>('SELECT id, payload, createdAt, updatedAt FROM WorkspaceState WHERE id = ?', id)
 }
 
@@ -596,7 +892,7 @@ export function createWorkspaceState(id: string, payload: string, context: Works
   return created
 }
 
-function createWorkspaceStateBackup(db: DatabaseAccess, row: WorkspaceStateRow, reason: string) {
+export function createWorkspaceStateBackupInDb(db: DatabaseAccess, row: WorkspaceStateRow, reason: string) {
   db.execute(
     `INSERT INTO WorkspaceStateBackup (id, workspaceStateId, payload, reason, sourceUpdatedAt)
      VALUES (lower(hex(randomblob(16))), ?, ?, ?, ?)`,
@@ -607,7 +903,7 @@ function createWorkspaceStateBackup(db: DatabaseAccess, row: WorkspaceStateRow, 
   )
 }
 
-function pruneWorkspaceStateBackups(db: DatabaseAccess, id: string) {
+export function pruneWorkspaceStateBackupsInDb(db: DatabaseAccess, id = 'singleton') {
   db.execute(
     `DELETE FROM WorkspaceStateBackup
      WHERE workspaceStateId = ?
@@ -622,6 +918,23 @@ function pruneWorkspaceStateBackups(db: DatabaseAccess, id: string) {
     id,
     WORKSPACE_BACKUP_RETENTION
   )
+}
+
+export function writeWorkspaceStateInDb(db: DatabaseAccess, id: string, payload: string) {
+  db.execute(
+    `INSERT INTO WorkspaceState (id, payload)
+     VALUES (?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       payload = excluded.payload,
+       updatedAt = CURRENT_TIMESTAMP`,
+    id,
+    payload,
+  )
+  const saved = readWorkspaceStateFromDb(db, id)
+  if (!saved) {
+    throw new Error('Failed to save workspace state')
+  }
+  return saved
 }
 
 export function upsertWorkspaceState(id: string, payload: string, options: WorkspaceStateWriteOptions = {}) {
@@ -654,24 +967,12 @@ export function upsertWorkspaceState(id: string, payload: string, options: Works
 
   db.execute('BEGIN IMMEDIATE')
   try {
-    const existing = findWorkspaceState(id, { db })
+    const existing = readWorkspaceStateFromDb(db, id)
     if (existing && existing.payload !== scopedPayload.serializedPayload) {
-      createWorkspaceStateBackup(db, existing, options.backupReason ?? 'overwrite')
+      createWorkspaceStateBackupInDb(db, existing, options.backupReason ?? 'overwrite')
     }
-
-    db.execute(
-      `
-        INSERT INTO WorkspaceState (id, payload)
-        VALUES (?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          payload = excluded.payload,
-          updatedAt = CURRENT_TIMESTAMP
-      `,
-      id,
-      scopedPayload.serializedPayload
-    )
-
-    pruneWorkspaceStateBackups(db, id)
+    writeWorkspaceStateInDb(db, id, scopedPayload.serializedPayload)
+    pruneWorkspaceStateBackupsInDb(db, id)
     db.execute('COMMIT')
   } catch (error) {
     try {
@@ -693,7 +994,7 @@ export function upsertWorkspaceState(id: string, payload: string, options: Works
 function findWorkspaceKnowledgeSyncState(id: string, db: DatabaseAccess) {
   return db.queryOne<WorkspaceKnowledgeSyncStateRow>(
     `SELECT workspaceStateId, requestedRevision, startedRevision, syncedRevision,
-            requestedSourceUpdatedAt, startedSourceUpdatedAt, startedAt, syncedSourceUpdatedAt, lastError
+            requestedSourceUpdatedAt, startedSourceUpdatedAt, startedAt, claimToken, syncedSourceUpdatedAt, lastError
      FROM WorkspaceKnowledgeSyncState
      WHERE workspaceStateId = ?`,
     id
@@ -712,29 +1013,50 @@ function hasFreshWorkspaceKnowledgeSyncStart(startedAt: string | null) {
   return Date.now() - startedAtMs < WORKSPACE_KNOWLEDGE_SYNC_STALE_MS
 }
 
+export function workspaceKnowledgeSyncNeedsScheduling(id = 'singleton', context: WorkspaceDbContext = {}) {
+  const db = resolveWorkspaceDbContext(context)
+  if (!db) return false
+
+  const syncState = findWorkspaceKnowledgeSyncState(id, db)
+  if (
+    !syncState?.requestedSourceUpdatedAt
+    || syncState.requestedRevision <= syncState.syncedRevision
+  ) {
+    return false
+  }
+
+  return syncState.startedRevision !== syncState.requestedRevision
+    || !hasFreshWorkspaceKnowledgeSyncStart(syncState.startedAt)
+}
+
 export function markWorkspaceKnowledgeSyncRequested(id: string, sourceUpdatedAt: string, context: WorkspaceDbContext = {}) {
   const db = resolveWorkspaceDbContext(context)
   if (!db) {
     throw new Error('Cannot queue workspace knowledge sync without a target novel database')
   }
 
+  markWorkspaceKnowledgeSyncRequestedInDb(db, id, sourceUpdatedAt)
+}
+
+export function markWorkspaceKnowledgeSyncRequestedInDb(db: DatabaseAccess, id: string, sourceUpdatedAt: string) {
   db.execute(
-    `INSERT INTO WorkspaceKnowledgeSyncState (
+     `INSERT INTO WorkspaceKnowledgeSyncState (
        workspaceStateId,
        requestedRevision,
        requestedSourceUpdatedAt,
        startedSourceUpdatedAt,
        startedAt,
+       claimToken,
        syncedSourceUpdatedAt,
        lastError
-     ) VALUES (?, 1, ?, NULL, NULL, NULL, NULL)
+     ) VALUES (?, 1, ?, NULL, NULL, NULL, NULL, NULL)
      ON CONFLICT(workspaceStateId) DO UPDATE SET
        requestedRevision = WorkspaceKnowledgeSyncState.requestedRevision + 1,
        requestedSourceUpdatedAt = excluded.requestedSourceUpdatedAt,
        updatedAt = CURRENT_TIMESTAMP`,
      id,
      sourceUpdatedAt
-   )
+  )
 }
 
 export function claimPendingWorkspaceKnowledgeSync(id = 'singleton', context: WorkspaceDbContext = {}): WorkspaceKnowledgeSyncClaim | null {
@@ -760,6 +1082,7 @@ export function claimPendingWorkspaceKnowledgeSync(id = 'singleton', context: Wo
       return null
     }
 
+    const claimToken = randomBytes(32).toString('hex')
     db.execute(
       `INSERT INTO WorkspaceKnowledgeSyncState (
          workspaceStateId,
@@ -769,20 +1092,23 @@ export function claimPendingWorkspaceKnowledgeSync(id = 'singleton', context: Wo
          requestedSourceUpdatedAt,
          startedSourceUpdatedAt,
          startedAt,
+         claimToken,
          syncedSourceUpdatedAt,
          lastError
-       ) VALUES (?, ?, ?, 0, ?, ?, CURRENT_TIMESTAMP, NULL, NULL)
+       ) VALUES (?, ?, ?, 0, ?, ?, CURRENT_TIMESTAMP, ?, NULL, NULL)
        ON CONFLICT(workspaceStateId) DO UPDATE SET
          startedRevision = excluded.startedRevision,
          startedSourceUpdatedAt = excluded.startedSourceUpdatedAt,
          startedAt = CURRENT_TIMESTAMP,
+         claimToken = excluded.claimToken,
          lastError = NULL,
          updatedAt = CURRENT_TIMESTAMP`,
       id,
       requestedRevision,
       requestedRevision,
       requestedSourceUpdatedAt,
-      requestedSourceUpdatedAt
+      requestedSourceUpdatedAt,
+      claimToken
     )
 
     db.execute('COMMIT')
@@ -790,6 +1116,7 @@ export function claimPendingWorkspaceKnowledgeSync(id = 'singleton', context: Wo
       workspaceStateId: id,
       revision: requestedRevision,
       sourceUpdatedAt: requestedSourceUpdatedAt,
+      claimToken,
     }
   } catch (error) {
     try {
@@ -802,45 +1129,65 @@ export function claimPendingWorkspaceKnowledgeSync(id = 'singleton', context: Wo
   }
 }
 
-export function completeWorkspaceKnowledgeSync(id: string, revision: number, sourceUpdatedAt: string, context: WorkspaceDbContext = {}) {
+export function completeWorkspaceKnowledgeSync(claim: WorkspaceKnowledgeSyncClaim, context: WorkspaceDbContext = {}) {
   const db = resolveWorkspaceDbContext(context)
   if (!db) {
     throw new Error('Cannot complete workspace knowledge sync without a target novel database')
   }
 
-  db.execute(
+  const result = db.execute(
     `UPDATE WorkspaceKnowledgeSyncState
-     SET syncedRevision = ?,
-         syncedSourceUpdatedAt = ?,
+     SET syncedRevision = MAX(syncedRevision, ?),
+         syncedSourceUpdatedAt = CASE
+           WHEN ? >= syncedRevision THEN ?
+           ELSE syncedSourceUpdatedAt
+         END,
          startedRevision = NULL,
          startedSourceUpdatedAt = NULL,
          startedAt = NULL,
+         claimToken = NULL,
          lastError = NULL,
          updatedAt = CURRENT_TIMESTAMP
-     WHERE workspaceStateId = ?`,
-    revision,
-    sourceUpdatedAt,
-    id
+     WHERE workspaceStateId = ?
+       AND startedRevision = ?
+       AND startedSourceUpdatedAt = ?
+       AND claimToken = ?`,
+    claim.revision,
+    claim.revision,
+    claim.sourceUpdatedAt,
+    claim.workspaceStateId,
+    claim.revision,
+    claim.sourceUpdatedAt,
+    claim.claimToken,
   )
+  return result.changes === 1
 }
 
-export function failWorkspaceKnowledgeSync(id: string, errorMessage: string, context: WorkspaceDbContext = {}) {
+export function failWorkspaceKnowledgeSync(claim: WorkspaceKnowledgeSyncClaim, errorMessage: string, context: WorkspaceDbContext = {}) {
   const db = resolveWorkspaceDbContext(context)
   if (!db) {
     throw new Error('Cannot fail workspace knowledge sync without a target novel database')
   }
 
-  db.execute(
+  const result = db.execute(
     `UPDATE WorkspaceKnowledgeSyncState
      SET startedRevision = NULL,
          startedSourceUpdatedAt = NULL,
          startedAt = NULL,
+         claimToken = NULL,
          lastError = ?,
          updatedAt = CURRENT_TIMESTAMP
-     WHERE workspaceStateId = ?`,
+     WHERE workspaceStateId = ?
+       AND startedRevision = ?
+       AND startedSourceUpdatedAt = ?
+       AND claimToken = ?`,
     errorMessage,
-    id
+    claim.workspaceStateId,
+    claim.revision,
+    claim.sourceUpdatedAt,
+    claim.claimToken,
   )
+  return result.changes === 1
 }
 
 export function findAppSettings(keys: readonly string[]) {
