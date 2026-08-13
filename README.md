@@ -31,6 +31,8 @@ This app now behaves like a local-first rewrite product with a real backend laye
 
 ReTale requires Node.js `>=22.15.0`. Detached knowledge workers use synchronous `node:module` loader hooks to transpile the repository TypeScript graph before importing it; older Node releases do not provide the required `registerHooks` API.
 
+CI runs `npm run audit:production` immediately after `npm ci` and fails on high-severity vulnerabilities in production dependencies. Run the same gate locally after dependency changes.
+
 Copy the example file:
 
 ```bash
@@ -52,6 +54,7 @@ HANLP_BOOTSTRAP_TIMEOUT_MS="600000"
 RETALE_TASK_STALE_TIMEOUT_MS="1800000"
 RETALE_TASK_MAX_RETRIES="1"
 RETALE_DATA_DIR="data"
+RETALE_TRUSTED_ORIGINS=""
 LLM_DEBUG_LOG="0"
 LLM_DEBUG_LOG_DIR=".sisyphus/llm-debug"
 ```
@@ -75,7 +78,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:14500, or use `http://<tailscale-ip-or-hostname>:14500` from another Tailscale device on a trusted tailnet. The default daily server command is `npm run dev` (same as `npm run dev:prod`) and it always binds `0.0.0.0:14500`, always forces `DATABASE_URL=file:./dev.db`, and always uses the default Next dist directory `.next` so it stays separate from the isolated test server.
+Open http://localhost:14500. To use `http://<tailscale-ip-or-hostname>:14500` from another Tailscale device on a trusted tailnet, add that exact canonical origin to the comma-separated `RETALE_TRUSTED_ORIGINS` value. The default daily developer command is `npm run dev` (same as `npm run dev:prod`) and it always binds `0.0.0.0:14500`, always forces `DATABASE_URL=file:./dev.db`, and uses Next's development output so it stays separate from production builds and the isolated test server.
 
 ## Server modes
 
@@ -86,11 +89,11 @@ npm run dev:prod
 npm run dev:test
 ```
 
-- `npm run dev` / `npm run dev:prod` / `npm run server:prod`
+- `npm run dev` / `npm run dev:prod`
   - URL: `http://0.0.0.0:14500`
   - Legacy-source env: root `dev.db` via `DATABASE_URL=file:./dev.db`
   - Migrated runtime storage: `RETALE_DATA_DIR` (default `data/`)
-  - Next dist dir: default `.next`
+  - Next development output: `.next/dev`
 - `npm run dev:test` / `npm run server:test`
   - URL: `http://127.0.0.1:3000`
   - Legacy-source env: `.sisyphus/runtime/test-server/dev-test.db`
@@ -99,12 +102,27 @@ npm run dev:test
 
 The test wrapper overrides inherited `DATABASE_URL`, `RETALE_DATA_DIR`, and `RETALE_NEXT_DIST_DIR` with paths inside a marker-owned test root. The daily wrapper continues to force its production `DATABASE_URL` and default Next dist directory. The public scripts are fixed-mode wrappers: `--hostname/-H` and `--port/-p` are rejected instead of changing the target server profile. If port `14500` or `3000` is already occupied, the wrapper exits with a clear error instead of killing unknown processes. Internal marker-owned test path overrides remain reserved for the Playwright web-server helper.
 
-## Production check
+## Production lifecycle
+
+```bash
+npm run server:prod
+```
+
+`npm run server:prod` runs a real `next build` and only then launches `next start`. Production `start` and `server:prod` bind to `127.0.0.1:3000` by default. Unlike the fixed developer wrappers, they do not force a database or data path: set production environment values deliberately before starting. The runtime storage default remains `data/`; the repository-root `dev.db` is only a legacy compatibility environment value and is not read by the migrated runtime.
+
+Only expose this unauthenticated single-user application on a trusted network. To bind all interfaces intentionally, set `RETALE_PRODUCTION_HOST=0.0.0.0`, or pass an explicit trusted-network hostname with `npm run start -- --hostname <trusted-address>`. Keep the default loopback binding for local use and automated verification.
+
+For separate build and launch stages, use:
 
 ```bash
 npm run build
+npm run check:next-build-safety
 npm run start
 ```
+
+`npm run build` selects `tsconfig.build.json` through `RETALE_NEXT_TSCONFIG_PATH` so Next's production type check covers application and server sources without test or evidence inputs. `npm run start` launches an existing `.next` production build without rebuilding it. `npm run check:next-build-safety` scans that build's initial `/workspace` and `/library` JavaScript sizes, output-file traces, and required runtime assets, then writes hidden evidence to `.sisyphus/evidence/next-build-safety/next-build-safety.json`.
+
+Run `npm run verify:production-freshness` to exercise an isolated real `next build` / `next start` lifecycle through the installed Next CLI. The harness uses marker-owned database, data, and Next dist paths under `.sisyphus/runtime/production-smoke-runs/`, so its build neither replaces `.next` nor scans or mutates production `data/` or root `dev.db`. It starts on `127.0.0.1:3000`, checks `/library`, `/workspace`, and `/task`, then inserts an active task after the build and verifies `/task` reflects it without rebuilding. Port `3000` must be free; the harness refuses to kill an unknown listener and stops its own server on success, failure, or termination.
 
 ## Per-novel storage
 
@@ -123,7 +141,13 @@ Per-novel `lancedb/` directories are part of the runtime layout, so LanceDB-back
 - Migrated runtime storage: `data/control.db` plus `data/novels/<safeNovelId>/novel.db`
 - Per-novel LanceDB storage: `data/novels/<safeNovelId>/lancedb/`
 - Old monolithic `dev.db`: no longer used at runtime
-- Workspace state is saved through `POST /api/workspace`
+- `GET /api/workspace` restores workspace state and its current revision. An idle workspace mount reads state without issuing a write.
+- Ordinary chapter edits use revision-aware `PATCH /api/workspace` requests with `Idempotency-Key`, `X-Retale-Base-Revision`, and `X-Retale-Revision-Novel-Id` identifying the revision owner.
+- Structural workspace changes use revision-aware `POST /api/workspace` requests with the same complete three-header contract. Legacy POST requests without revision authority remain accepted with JSON Content-Type only.
+- Workspace import completes synchronously and makes the imported workspace ready at revision 1.
+- A stale revision conflict preserves local edits instead of replacing them with server state.
+- PATCH falls back to revision-aware POST only when the server reports PATCH as unsupported with HTTP 405 or 501.
+- Workspace API requests with an Origin header are accepted only from built-in local loopback origins or exact canonical origins configured through `RETALE_TRUSTED_ORIGINS`.
 - AI settings are saved through `POST /api/settings/ai`
 
 ## Notes

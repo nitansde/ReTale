@@ -33,8 +33,14 @@ jobs:
         env:
           RETALE_SKIP_HANLP_SETUP: '1'
 
+      - name: Audit production dependencies
+        run: npm run audit:production
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
+
+      - name: Run full typecheck
+        run: npm run typecheck
 
       - name: Run tests
         run: npm run test:all
@@ -42,11 +48,35 @@ jobs:
       - name: Build production application
         run: npm run build
 
+      - name: Check Next production build safety
+        run: npm run check:next-build-safety
+
+      - name: Verify production runtime freshness
+        run: npm run verify:production-freshness
+
       - name: Upload Playwright evidence
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: playwright-evidence
+          name: playwright-evidence-${{ github.sha }}
           path: .sisyphus/evidence/task-1-test-harness/ui
+          if-no-files-found: ignore
+          include-hidden-files: true
+
+      - name: Upload performance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: performance-evidence-${{ github.sha }}
+          path: .sisyphus/evidence/performance-characterization
+          if-no-files-found: ignore
+          include-hidden-files: true
+
+      - name: Upload Next build safety evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: next-build-safety-evidence-${{ github.sha }}
+          path: .sisyphus/evidence/next-build-safety
           if-no-files-found: ignore
           include-hidden-files: true
