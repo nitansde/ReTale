@@ -3,6 +3,7 @@ import path from 'node:path'
 import type * as NodeSqlite from 'node:sqlite'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 import { SCHEMA_SQL } from '@/lib/server/schema'
+import { assertOwnedTestPath } from '../../scripts/test-path-safety.mjs'
 
 type DatabaseSync = NodeSqlite.DatabaseSync
 type SqlParam = string | number | bigint | Uint8Array | null
@@ -22,6 +23,8 @@ type BootMigrationPlan = {
   hasSnapshotTable: boolean
   hasGraphContextCacheTable: boolean
   shouldRebuildWorkspaceStateArtifactTables: boolean
+  shouldRebuildWorkspaceKnowledgeSyncState: boolean
+  shouldRebuildWorkspaceChapterPatchJournal: boolean
 }
 
 const globalForSqlite = globalThis as {
@@ -136,6 +139,16 @@ function createDatabase() {
 
 export function openSqliteDatabase(filename: string) {
   const resolvedFilename = resolveDatabasePath(filename)
+  if (process.env.VITEST === 'true' && resolvedFilename !== ':memory:') {
+    const testRoot = process.env.RETALE_TEST_ROOT
+    if (!testRoot) {
+      throw new Error('Vitest SQLite access requires RETALE_TEST_ROOT')
+    }
+    assertOwnedTestPath(testRoot, resolvedFilename, {
+      repoRoot: process.cwd(),
+      label: 'Vitest SQLite database',
+    })
+  }
   if (resolvedFilename !== ':memory:') {
     fs.mkdirSync(path.dirname(resolvedFilename), { recursive: true })
   }
@@ -254,6 +267,7 @@ const BOOT_SCHEMA_INDEX_NAMES = [
   'idx_workspace_runtime_volume_state_order',
   'idx_workspace_runtime_chapter_state_novel_order',
   'idx_workspace_mutation_replay_created',
+  'idx_workspace_patch_journal_revision',
   'idx_hanlp_bootstrap_cache_lookup',
   'idx_hanlp_bootstrap_cache_last_seen',
   'idx_chapter_extraction_candidates_processing_batch',
@@ -402,6 +416,116 @@ function needsWorkspaceStateArtifactTableRebuild(database: DatabaseSync) {
     || columnIsNotNull(database, 'WorkspaceStateBackup', 'payload')
 }
 
+function needsWorkspaceKnowledgeSyncStateRebuild(database: DatabaseSync) {
+  if (!tableExists(database, 'WorkspaceKnowledgeSyncState')) return false
+  const foreignKeys = database.prepare('PRAGMA foreign_key_list(WorkspaceKnowledgeSyncState)').all() as Array<{
+    table: string
+    from: string
+    to: string
+  }>
+  return foreignKeys.length > 0
+}
+
+function rebuildWorkspaceKnowledgeSyncState(database: DatabaseSync) {
+  const requestedSourceUpdatedAt = columnExists(database, 'WorkspaceKnowledgeSyncState', 'requestedSourceUpdatedAt')
+    ? 'requestedSourceUpdatedAt'
+    : 'NULL'
+  const startedSourceUpdatedAt = columnExists(database, 'WorkspaceKnowledgeSyncState', 'startedSourceUpdatedAt')
+    ? 'startedSourceUpdatedAt'
+    : 'NULL'
+  const syncedSourceUpdatedAt = columnExists(database, 'WorkspaceKnowledgeSyncState', 'syncedSourceUpdatedAt')
+    ? 'syncedSourceUpdatedAt'
+    : 'NULL'
+  const requestedRevision = columnExists(database, 'WorkspaceKnowledgeSyncState', 'requestedRevision')
+    ? 'requestedRevision'
+    : `CASE WHEN ${requestedSourceUpdatedAt} IS NULL THEN 0 ELSE 1 END`
+  const startedRevision = columnExists(database, 'WorkspaceKnowledgeSyncState', 'startedRevision')
+    ? 'startedRevision'
+    : `CASE WHEN ${startedSourceUpdatedAt} IS NULL THEN NULL ELSE ${requestedRevision} END`
+  const syncedRevision = columnExists(database, 'WorkspaceKnowledgeSyncState', 'syncedRevision')
+    ? 'syncedRevision'
+    : `CASE WHEN ${syncedSourceUpdatedAt} IS NULL THEN 0 ELSE ${requestedRevision} END`
+  const startedAt = columnExists(database, 'WorkspaceKnowledgeSyncState', 'startedAt') ? 'startedAt' : 'NULL'
+  const claimToken = columnExists(database, 'WorkspaceKnowledgeSyncState', 'claimToken') ? 'claimToken' : 'NULL'
+  const lastError = columnExists(database, 'WorkspaceKnowledgeSyncState', 'lastError') ? 'lastError' : 'NULL'
+  const createdAt = columnExists(database, 'WorkspaceKnowledgeSyncState', 'createdAt') ? 'createdAt' : 'CURRENT_TIMESTAMP'
+  const updatedAt = columnExists(database, 'WorkspaceKnowledgeSyncState', 'updatedAt') ? 'updatedAt' : 'CURRENT_TIMESTAMP'
+
+  database.exec('DROP TABLE IF EXISTS __WorkspaceKnowledgeSyncState_without_fk')
+  database.exec(`
+    CREATE TABLE __WorkspaceKnowledgeSyncState_without_fk (
+      workspaceStateId TEXT PRIMARY KEY,
+      requestedRevision INTEGER NOT NULL DEFAULT 0,
+      startedRevision INTEGER,
+      syncedRevision INTEGER NOT NULL DEFAULT 0,
+      requestedSourceUpdatedAt TEXT,
+      startedSourceUpdatedAt TEXT,
+      startedAt TEXT,
+      claimToken TEXT,
+      syncedSourceUpdatedAt TEXT,
+      lastError TEXT,
+      createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `)
+  database.exec(`
+    INSERT INTO __WorkspaceKnowledgeSyncState_without_fk (
+      workspaceStateId, requestedRevision, startedRevision, syncedRevision,
+      requestedSourceUpdatedAt, startedSourceUpdatedAt, startedAt, claimToken,
+      syncedSourceUpdatedAt, lastError, createdAt, updatedAt
+    )
+    SELECT workspaceStateId, ${requestedRevision}, ${startedRevision}, ${syncedRevision},
+           ${requestedSourceUpdatedAt}, ${startedSourceUpdatedAt}, ${startedAt}, ${claimToken},
+           ${syncedSourceUpdatedAt}, ${lastError}, ${createdAt}, ${updatedAt}
+    FROM WorkspaceKnowledgeSyncState
+  `)
+  database.exec('DROP TABLE WorkspaceKnowledgeSyncState')
+  database.exec('ALTER TABLE __WorkspaceKnowledgeSyncState_without_fk RENAME TO WorkspaceKnowledgeSyncState')
+}
+
+function needsWorkspaceChapterPatchJournalRebuild(database: DatabaseSync) {
+  if (!tableExists(database, 'WorkspaceChapterPatchJournal')) return false
+  const foreignKeys = database.prepare('PRAGMA foreign_key_list(WorkspaceChapterPatchJournal)').all() as Array<{
+    table: string
+    from: string
+    to: string
+  }>
+  return foreignKeys.some((foreignKey) => (
+    foreignKey.table === 'WorkspaceRuntimeState'
+    && foreignKey.from === 'workspaceStateId'
+    && foreignKey.to === 'id'
+  ))
+}
+
+function rebuildWorkspaceChapterPatchJournal(database: DatabaseSync) {
+  database.exec('DROP TABLE IF EXISTS __WorkspaceChapterPatchJournal_without_runtime_fk')
+  database.exec(`
+    CREATE TABLE __WorkspaceChapterPatchJournal_without_runtime_fk (
+      workspaceStateId TEXT NOT NULL,
+      committedRevision INTEGER NOT NULL CHECK(committedRevision > 0),
+      chapterId TEXT NOT NULL,
+      novelId TEXT NOT NULL,
+      contentHtml TEXT NOT NULL,
+      wordCount INTEGER NOT NULL CHECK(wordCount >= 0),
+      updatedAtLabel TEXT NOT NULL,
+      committedAt TEXT NOT NULL,
+      createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(workspaceStateId, committedRevision)
+    ) STRICT
+  `)
+  database.exec(`
+    INSERT INTO __WorkspaceChapterPatchJournal_without_runtime_fk (
+      workspaceStateId, committedRevision, chapterId, novelId,
+      contentHtml, wordCount, updatedAtLabel, committedAt, createdAt
+    )
+    SELECT workspaceStateId, committedRevision, chapterId, novelId,
+           contentHtml, wordCount, updatedAtLabel, committedAt, createdAt
+    FROM WorkspaceChapterPatchJournal
+  `)
+  database.exec('DROP TABLE WorkspaceChapterPatchJournal')
+  database.exec('ALTER TABLE __WorkspaceChapterPatchJournal_without_runtime_fk RENAME TO WorkspaceChapterPatchJournal')
+}
+
 function rebuildWorkspaceStateArtifactTables(database: DatabaseSync) {
   if (tableExists(database, 'WorkspaceState')) {
     database.exec('DROP TABLE IF EXISTS __WorkspaceState_nullable_payload')
@@ -409,13 +533,15 @@ function rebuildWorkspaceStateArtifactTables(database: DatabaseSync) {
       CREATE TABLE __WorkspaceState_nullable_payload (
         id TEXT PRIMARY KEY DEFAULT 'singleton',
         payload TEXT,
+        revision INTEGER NOT NULL DEFAULT 0,
         createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `)
+    const workspaceStateHasRevision = columnExists(database, 'WorkspaceState', 'revision')
     database.exec(`
-      INSERT INTO __WorkspaceState_nullable_payload (id, payload, createdAt, updatedAt)
-      SELECT id, payload, createdAt, updatedAt
+      INSERT INTO __WorkspaceState_nullable_payload (id, payload, revision, createdAt, updatedAt)
+      SELECT id, payload, ${workspaceStateHasRevision ? 'revision' : '0'}, createdAt, updatedAt
       FROM WorkspaceState
     `)
     database.exec('DROP TABLE WorkspaceState')
@@ -429,15 +555,20 @@ function rebuildWorkspaceStateArtifactTables(database: DatabaseSync) {
         id TEXT PRIMARY KEY,
         workspaceStateId TEXT NOT NULL,
         payload TEXT,
+        revision INTEGER NOT NULL DEFAULT 0,
         reason TEXT NOT NULL DEFAULT 'overwrite',
         sourceUpdatedAt TEXT,
         createdAt TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
         FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceState(id) ON DELETE CASCADE
       )
     `)
+    const workspaceStateBackupHasRevision = columnExists(database, 'WorkspaceStateBackup', 'revision')
     database.exec(`
-      INSERT INTO __WorkspaceStateBackup_nullable_payload (id, workspaceStateId, payload, reason, sourceUpdatedAt, createdAt)
-      SELECT id, workspaceStateId, payload, reason, sourceUpdatedAt, createdAt
+      INSERT INTO __WorkspaceStateBackup_nullable_payload (
+        id, workspaceStateId, payload, revision, reason, sourceUpdatedAt, createdAt
+      )
+      SELECT id, workspaceStateId, payload, ${workspaceStateBackupHasRevision ? 'revision' : '0'},
+             reason, sourceUpdatedAt, createdAt
       FROM WorkspaceStateBackup
     `)
     database.exec('DROP TABLE WorkspaceStateBackup')
@@ -725,6 +856,8 @@ function getBootMigrationPlan(database: DatabaseSync): BootMigrationPlan {
     hasSnapshotTable: tableExists(database, 'ChapterSnapshot'),
     hasGraphContextCacheTable: tableExists(database, 'GraphContextCache'),
     shouldRebuildWorkspaceStateArtifactTables: needsWorkspaceStateArtifactTableRebuild(database),
+    shouldRebuildWorkspaceKnowledgeSyncState: needsWorkspaceKnowledgeSyncStateRebuild(database),
+    shouldRebuildWorkspaceChapterPatchJournal: needsWorkspaceChapterPatchJournalRebuild(database),
   }
 }
 
@@ -735,6 +868,8 @@ function bootMigrationPlanNeedsWork(plan: BootMigrationPlan) {
       || plan.hasSnapshotTable
       || plan.hasGraphContextCacheTable
       || plan.shouldRebuildWorkspaceStateArtifactTables
+      || plan.shouldRebuildWorkspaceKnowledgeSyncState
+      || plan.shouldRebuildWorkspaceChapterPatchJournal
   )
 }
 
@@ -767,6 +902,7 @@ function bootSchemaIsCurrent(database: DatabaseSync) {
     && triggerExists(database, 'trg_knowledge_entity_character_tier_update')
     && bootSchemaIndexesAreCurrent(database)
     && tableHasColumns(database, 'WorkspaceKnowledgeSyncState', ['requestedRevision', 'startedRevision', 'syncedRevision', 'claimToken'])
+    && !needsWorkspaceKnowledgeSyncStateRebuild(database)
     && tableHasColumns(database, 'WorkspaceRuntimeState', [
       'revision',
       'localOutlinesJson',
@@ -777,6 +913,8 @@ function bootSchemaIsCurrent(database: DatabaseSync) {
     ])
     && !columnIsNotNull(database, 'WorkspaceState', 'payload')
     && !columnIsNotNull(database, 'WorkspaceStateBackup', 'payload')
+    && tableHasColumns(database, 'WorkspaceState', ['revision'])
+    && tableHasColumns(database, 'WorkspaceStateBackup', ['revision'])
     && tableExists(database, 'WorkspaceRuntimeNovel')
     && tableExists(database, 'WorkspaceRuntimeVolume')
     && tableExists(database, 'WorkspaceRuntimeChapter')
@@ -790,6 +928,17 @@ function bootSchemaIsCurrent(database: DatabaseSync) {
       'responseJson',
       'createdAt',
     ])
+    && tableHasColumns(database, 'WorkspaceChapterPatchJournal', [
+      'workspaceStateId',
+      'committedRevision',
+      'chapterId',
+      'novelId',
+      'contentHtml',
+      'wordCount',
+      'updatedAtLabel',
+      'committedAt',
+    ])
+    && !needsWorkspaceChapterPatchJournalRebuild(database)
     && tableHasColumns(database, 'EntityAlias', ['createdAt', 'updatedAt'])
     && tableHasColumns(database, 'story_timeline_nodes', [
       'continue_block_id',
@@ -820,6 +969,8 @@ function runBootMigrations(database: DatabaseSync, migrationPlan = getBootMigrat
     hasSnapshotTable,
     hasGraphContextCacheTable,
     shouldRebuildWorkspaceStateArtifactTables,
+    shouldRebuildWorkspaceKnowledgeSyncState,
+    shouldRebuildWorkspaceChapterPatchJournal,
   } = migrationPlan
 
   if (!bootMigrationPlanNeedsWork(migrationPlan) && bootSchemaIsCurrent(database)) {
@@ -832,6 +983,8 @@ function runBootMigrations(database: DatabaseSync, migrationPlan = getBootMigrat
     || hasSnapshotTable
     || hasGraphContextCacheTable
     || shouldRebuildWorkspaceStateArtifactTables
+    || shouldRebuildWorkspaceKnowledgeSyncState
+    || shouldRebuildWorkspaceChapterPatchJournal
   ) {
     database.exec('PRAGMA foreign_keys = OFF')
     database.exec('BEGIN IMMEDIATE')
@@ -850,6 +1003,12 @@ function runBootMigrations(database: DatabaseSync, migrationPlan = getBootMigrat
       }
       if (shouldRebuildWorkspaceStateArtifactTables) {
         rebuildWorkspaceStateArtifactTables(database)
+      }
+      if (shouldRebuildWorkspaceKnowledgeSyncState) {
+        rebuildWorkspaceKnowledgeSyncState(database)
+      }
+      if (shouldRebuildWorkspaceChapterPatchJournal) {
+        rebuildWorkspaceChapterPatchJournal(database)
       }
       database.exec('COMMIT')
     } catch (error) {
@@ -978,7 +1137,7 @@ function runBootMigrations(database: DatabaseSync, migrationPlan = getBootMigrat
   `)
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_lookup ON hanlp_bootstrap_cache(branch_id, chapter_no, chapter_text_hash, hanlp_script_version_hash, hanlp_model_or_config_hash, output_schema_version)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_workspace_state_backup_state_created ON WorkspaceStateBackup(workspaceStateId, createdAt)')
-  database.exec('CREATE TABLE IF NOT EXISTS WorkspaceKnowledgeSyncState (workspaceStateId TEXT PRIMARY KEY, requestedRevision INTEGER NOT NULL DEFAULT 0, startedRevision INTEGER, syncedRevision INTEGER NOT NULL DEFAULT 0, requestedSourceUpdatedAt TEXT, startedSourceUpdatedAt TEXT, startedAt TEXT, claimToken TEXT, syncedSourceUpdatedAt TEXT, lastError TEXT, createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceState(id) ON DELETE CASCADE)')
+  database.exec('CREATE TABLE IF NOT EXISTS WorkspaceKnowledgeSyncState (workspaceStateId TEXT PRIMARY KEY, requestedRevision INTEGER NOT NULL DEFAULT 0, startedRevision INTEGER, syncedRevision INTEGER NOT NULL DEFAULT 0, requestedSourceUpdatedAt TEXT, startedSourceUpdatedAt TEXT, startedAt TEXT, claimToken TEXT, syncedSourceUpdatedAt TEXT, lastError TEXT, createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)')
   addColumnIfMissing(database, 'WorkspaceKnowledgeSyncState', 'requestedRevision', 'requestedRevision INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(database, 'WorkspaceKnowledgeSyncState', 'startedRevision', 'startedRevision INTEGER')
   addColumnIfMissing(database, 'WorkspaceKnowledgeSyncState', 'syncedRevision', 'syncedRevision INTEGER NOT NULL DEFAULT 0')
@@ -989,6 +1148,8 @@ function runBootMigrations(database: DatabaseSync, migrationPlan = getBootMigrat
   addColumnIfMissing(database, 'WorkspaceRuntimeState', 'localWorldEntriesJson', "localWorldEntriesJson TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(database, 'WorkspaceRuntimeState', 'localTimelineEventsJson', "localTimelineEventsJson TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(database, 'WorkspaceRuntimeState', 'revision', 'revision INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(database, 'WorkspaceState', 'revision', 'revision INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(database, 'WorkspaceStateBackup', 'revision', 'revision INTEGER NOT NULL DEFAULT 0')
   database.exec(`
     CREATE TABLE IF NOT EXISTS WorkspaceMutationReplay (
       workspaceStateId TEXT NOT NULL,
@@ -1004,6 +1165,21 @@ function runBootMigrations(database: DatabaseSync, migrationPlan = getBootMigrat
     ) STRICT
   `)
   database.exec('CREATE INDEX IF NOT EXISTS idx_workspace_mutation_replay_created ON WorkspaceMutationReplay(workspaceStateId, createdAt)')
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS WorkspaceChapterPatchJournal (
+      workspaceStateId TEXT NOT NULL,
+      committedRevision INTEGER NOT NULL CHECK(committedRevision > 0),
+      chapterId TEXT NOT NULL,
+      novelId TEXT NOT NULL,
+      contentHtml TEXT NOT NULL,
+      wordCount INTEGER NOT NULL CHECK(wordCount >= 0),
+      updatedAtLabel TEXT NOT NULL,
+      committedAt TEXT NOT NULL,
+      createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(workspaceStateId, committedRevision)
+    ) STRICT
+  `)
+  database.exec('CREATE INDEX IF NOT EXISTS idx_workspace_patch_journal_revision ON WorkspaceChapterPatchJournal(workspaceStateId, committedRevision)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_workspace_knowledge_sync_requested ON WorkspaceKnowledgeSyncState(requestedSourceUpdatedAt, syncedSourceUpdatedAt)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_last_seen ON hanlp_bootstrap_cache(branch_id, last_seen_at)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_processing_batch ON chapter_extraction_candidates(branch_id, processing_batch_id)')

@@ -533,6 +533,347 @@ afterEach(async () => {
 })
 
 describe('per-novel database concurrency matrix', () => {
+  it('serializes concurrent control-database transactions and keeps nested wrappers in the outer transaction', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-control-transactions-'))
+    cleanupDirectories.push(tempRoot)
+    process.env.RETALE_DATA_DIR = path.join(tempRoot, 'data')
+    vi.resetModules()
+
+    const { createControlDatabaseAccess } = await import('@/lib/server/database-access')
+    const firstDb = createControlDatabaseAccess()
+    const firstEntered = createDeferred<void>()
+    const releaseFirst = createDeferred<void>()
+    let secondEntered = false
+
+    const firstTransaction = firstDb.withTransaction(async () => {
+      firstDb.execute('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)', 'first', 'control-first', '1')
+      firstEntered.resolve()
+      await releaseFirst.promise
+      await createControlDatabaseAccess().withTransaction(() => {
+        firstDb.execute('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)', 'nested', 'control-nested', '1')
+      })
+    })
+    await firstEntered.promise
+
+    const secondDb = createControlDatabaseAccess()
+    const secondTransaction = secondDb.withTransaction(() => {
+      secondEntered = true
+      secondDb.execute('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)', 'second', 'control-second', '1')
+    })
+    void secondTransaction.catch(() => undefined)
+    await Promise.resolve()
+    expect(secondEntered).toBe(false)
+
+    releaseFirst.resolve()
+    await expect(firstTransaction).resolves.toBeUndefined()
+    await expect(secondTransaction).resolves.toBeUndefined()
+    expect(secondEntered).toBe(true)
+
+    const rows = firstDb.queryAll<{ key: string }>(
+      'SELECT key FROM AppSetting WHERE key LIKE ? ORDER BY key',
+      'control-%',
+    )
+    expect(rows).toEqual([
+      { key: 'control-first' },
+      { key: 'control-nested' },
+      { key: 'control-second' },
+    ])
+  })
+
+  it('does not let a deferred child inherit a completed control transaction', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-control-deferred-child-'))
+    cleanupDirectories.push(tempRoot)
+    process.env.RETALE_DATA_DIR = path.join(tempRoot, 'data')
+    vi.resetModules()
+
+    const { createControlDatabaseAccess } = await import('@/lib/server/database-access')
+    const firstDb = createControlDatabaseAccess()
+    const secondDb = createControlDatabaseAccess()
+    const deferredStarted = createDeferred<void>()
+    let deferredRejection: Promise<void> | null = null
+
+    await firstDb.withTransaction(() => {
+      firstDb.execute('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)', 'outer', 'control-outer', '1')
+      setTimeout(() => {
+        deferredRejection = secondDb.withTransaction(() => {
+          secondDb.execute('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)', 'deferred', 'control-deferred', '1')
+          throw new Error('rollback deferred control write')
+        })
+        void deferredRejection.catch(() => undefined)
+        deferredStarted.resolve()
+      }, 0)
+    })
+
+    await deferredStarted.promise
+    await expect(deferredRejection).rejects.toThrow('rollback deferred control write')
+    expect(firstDb.queryAll<{ key: string }>(
+      'SELECT key FROM AppSetting WHERE key LIKE ? ORDER BY key',
+      'control-%',
+    )).toEqual([{ key: 'control-outer' }])
+  })
+
+  it('waits for an unawaited nested control transaction before committing the outer transaction', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-control-unawaited-nested-'))
+    cleanupDirectories.push(tempRoot)
+    process.env.RETALE_DATA_DIR = path.join(tempRoot, 'data')
+    vi.resetModules()
+
+    const { createControlDatabaseAccess } = await import('@/lib/server/database-access')
+    const outerDb = createControlDatabaseAccess()
+    const nestedDb = createControlDatabaseAccess()
+    const nestedEntered = createDeferred<void>()
+    const releaseNested = createDeferred<void>()
+    let outerSettled = false
+
+    const outer = outerDb.withTransaction(() => {
+      outerDb.execute('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)', 'outer-unawaited', 'control-outer-unawaited', '1')
+      void nestedDb.withTransaction(async () => {
+        nestedEntered.resolve()
+        await releaseNested.promise
+        nestedDb.execute('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)', 'nested-unawaited', 'control-nested-unawaited', '1')
+      })
+    }).finally(() => {
+      outerSettled = true
+    })
+
+    await nestedEntered.promise
+    await Promise.resolve()
+    expect(outerSettled).toBe(false)
+    releaseNested.resolve()
+    await expect(outer).resolves.toBeUndefined()
+    expect(outerDb.queryAll<{ key: string }>(
+      'SELECT key FROM AppSetting WHERE key LIKE ? ORDER BY key',
+      'control-%-unawaited',
+    )).toEqual([
+      { key: 'control-nested-unawaited' },
+      { key: 'control-outer-unawaited' },
+    ])
+  })
+
+  it('rolls back the outer transaction when an unawaited nested control transaction fails', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-control-unawaited-failure-'))
+    cleanupDirectories.push(tempRoot)
+    process.env.RETALE_DATA_DIR = path.join(tempRoot, 'data')
+    vi.resetModules()
+
+    const { createControlDatabaseAccess } = await import('@/lib/server/database-access')
+    const outerDb = createControlDatabaseAccess()
+    const nestedDb = createControlDatabaseAccess()
+
+    await expect(outerDb.withTransaction(() => {
+      outerDb.execute('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)', 'outer-failure', 'control-outer-failure', '1')
+      void nestedDb.withTransaction(() => {
+        nestedDb.execute('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)', 'nested-failure', 'control-nested-failure', '1')
+        throw new Error('unawaited nested failure')
+      })
+    })).rejects.toThrow('unawaited nested failure')
+    expect(outerDb.queryAll<{ key: string }>(
+      'SELECT key FROM AppSetting WHERE key LIKE ? ORDER BY key',
+      'control-%-failure',
+    )).toEqual([])
+  })
+
+  it('keeps transaction queues independent for different control database files', async () => {
+    const firstDatabasePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'retale-control-a-')), 'control.db')
+    const secondDatabasePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'retale-control-b-')), 'control.db')
+    cleanupDirectories.push(path.dirname(firstDatabasePath), path.dirname(secondDatabasePath))
+    const { initializeDatabase } = await import('@/lib/server/sqlite')
+    const { CONTROL_SCHEMA_SQL } = await import('@/lib/server/schema')
+    const { createDatabaseAccess } = await import('@/lib/server/database-access')
+    const firstRawDb = initializeDatabase(new DatabaseSync(firstDatabasePath), { mode: 'control', schemaSql: CONTROL_SCHEMA_SQL })
+    const secondRawDb = initializeDatabase(new DatabaseSync(secondDatabasePath), { mode: 'control', schemaSql: CONTROL_SCHEMA_SQL })
+    cleanupDatabases.push(firstRawDb, secondRawDb)
+    const firstDb = createDatabaseAccess(firstRawDb, { serializeTransactions: true, transactionKey: firstRawDb })
+    const secondDb = createDatabaseAccess(secondRawDb, { serializeTransactions: true, transactionKey: secondRawDb })
+    const firstEntered = createDeferred<void>()
+    const releaseFirst = createDeferred<void>()
+
+    const first = firstDb.withTransaction(async () => {
+      firstEntered.resolve()
+      await releaseFirst.promise
+      firstDb.execute('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)', 'a', 'control-a', '1')
+    })
+    await firstEntered.promise
+    await expect(secondDb.withTransaction(() => {
+      secondDb.execute('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)', 'b', 'control-b', '1')
+    })).resolves.toBeUndefined()
+
+    releaseFirst.resolve()
+    await expect(first).resolves.toBeUndefined()
+  })
+
+  it('keeps nested same-novel transaction wrappers inside one database transaction', async () => {
+    const { alphaRawDb, createNovelDatabaseAccess } = await createNovelDatabases('retale-per-novel-nested-transaction')
+    const outerDb = createNovelDatabaseAccess('novel-alpha')
+    const nestedDb = createNovelDatabaseAccess('novel-alpha')
+    let beginCount = 0
+    let commitCount = 0
+    const rawDbWithAuthorizer = alphaRawDb as DatabaseSync & {
+      setAuthorizer: (callback: ((actionCode: number, arg1: string | null, arg2: string | null, databaseName: string | null, triggerName: string | null) => number) | null) => void
+    }
+    const sqliteConstants = (await import('node:sqlite') as unknown as {
+      constants: { SQLITE_OK: number; SQLITE_TRANSACTION: number }
+    }).constants
+    rawDbWithAuthorizer.setAuthorizer((actionCode, arg1) => {
+      if (actionCode === sqliteConstants.SQLITE_TRANSACTION && arg1 === 'BEGIN') beginCount += 1
+      if (actionCode === sqliteConstants.SQLITE_TRANSACTION && arg1 === 'COMMIT') commitCount += 1
+      return sqliteConstants.SQLITE_OK
+    })
+
+    try {
+      await expect(outerDb.withTransaction(async () => {
+        outerDb.execute(
+          'INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)',
+          'nested-transaction-outer',
+          'nested-transaction-outer',
+          '1',
+        )
+        await nestedDb.withTransaction(() => {
+          nestedDb.execute(
+            'INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)',
+            'nested-transaction-inner',
+            'nested-transaction-inner',
+            '1',
+          )
+        })
+      })).resolves.toBeUndefined()
+    } finally {
+      rawDbWithAuthorizer.setAuthorizer(null)
+    }
+
+    expect({ beginCount, commitCount }).toEqual({ beginCount: 1, commitCount: 1 })
+    expect(outerDb.queryAll<{ key: string }>(
+      'SELECT key FROM AppSetting WHERE key LIKE ? ORDER BY key',
+      'nested-transaction-%',
+    )).toEqual([
+      { key: 'nested-transaction-inner' },
+      { key: 'nested-transaction-outer' },
+    ])
+  })
+
+  it('waits for unawaited nested same-novel transactions and rolls back their failures', async () => {
+    const { createNovelDatabaseAccess } = await createNovelDatabases('retale-per-novel-unawaited-nested-transaction')
+    const outerDb = createNovelDatabaseAccess('novel-alpha')
+    const nestedDb = createNovelDatabaseAccess('novel-alpha')
+    const nestedEntered = createDeferred<void>()
+    const releaseNested = createDeferred<void>()
+    let outerSettled = false
+
+    const outer = outerDb.withTransaction(() => {
+      outerDb.execute(
+        'INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)',
+        'unawaited-nested-outer',
+        'unawaited-nested-outer',
+        '1',
+      )
+      void nestedDb.withTransaction(async () => {
+        nestedEntered.resolve()
+        await releaseNested.promise
+        nestedDb.execute(
+          'INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)',
+          'unawaited-nested-inner',
+          'unawaited-nested-inner',
+          '1',
+        )
+        throw new Error('rollback unawaited nested novel transaction')
+      })
+    }).finally(() => {
+      outerSettled = true
+    })
+
+    await nestedEntered.promise
+    await Promise.resolve()
+    expect(outerSettled).toBe(false)
+    releaseNested.resolve()
+    await expect(outer).rejects.toThrow('rollback unawaited nested novel transaction')
+    expect(outerDb.queryAll<{ key: string }>(
+      'SELECT key FROM AppSetting WHERE key LIKE ? ORDER BY key',
+      'unawaited-nested-%',
+    )).toEqual([])
+  })
+
+  it('drains an unawaited nested same-novel transaction before rolling back an outer failure', async () => {
+    const { createNovelDatabaseAccess } = await createNovelDatabases('retale-per-novel-outer-failure-drain')
+    const outerDb = createNovelDatabaseAccess('novel-alpha')
+    const nestedDb = createNovelDatabaseAccess('novel-alpha')
+    const nestedEntered = createDeferred<void>()
+    const releaseNested = createDeferred<void>()
+    let outerSettled = false
+
+    const outer = outerDb.withTransaction(() => {
+      outerDb.execute(
+        'INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)',
+        'outer-failure-drain',
+        'outer-failure-drain',
+        '1',
+      )
+      void nestedDb.withTransaction(async () => {
+        nestedEntered.resolve()
+        await releaseNested.promise
+        nestedDb.execute(
+          'INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)',
+          'nested-after-outer-failure',
+          'nested-after-outer-failure',
+          '1',
+        )
+      })
+      throw new Error('rollback outer after draining nested transaction')
+    }).finally(() => {
+      outerSettled = true
+    })
+
+    await nestedEntered.promise
+    await Promise.resolve()
+    expect(outerSettled).toBe(false)
+    releaseNested.resolve()
+    await expect(outer).rejects.toThrow('rollback outer after draining nested transaction')
+    expect(outerDb.queryAll<{ key: string }>(
+      'SELECT key FROM AppSetting WHERE key IN (?, ?) ORDER BY key',
+      'outer-failure-drain',
+      'nested-after-outer-failure',
+    )).toEqual([])
+  })
+
+  it('queues stale timer descendants behind a newer same-novel gate owner', async () => {
+    const { runWithPerNovelWriteGate } = await createNovelDatabases('retale-per-novel-stale-descendant')
+    const staleCallbackReady = createDeferred<void>()
+    const runStaleCallback = createDeferred<void>()
+    const staleCallbackEntered = createDeferred<void>()
+    let staleDescendant: Promise<void> | null = null
+
+    await runWithPerNovelWriteGate('novel-alpha', () => {
+      setTimeout(async () => {
+        staleCallbackReady.resolve()
+        await runStaleCallback.promise
+        staleDescendant = runWithPerNovelWriteGate('novel-alpha', () => {
+          staleCallbackEntered.resolve()
+        })
+        await staleDescendant
+      }, 0)
+    })
+    await staleCallbackReady.promise
+
+    const newerOwnerEntered = createDeferred<void>()
+    const releaseNewerOwner = createDeferred<void>()
+    const newerOwner = runWithPerNovelWriteGate('novel-alpha', async () => {
+      newerOwnerEntered.resolve()
+      await releaseNewerOwner.promise
+    })
+    await newerOwnerEntered.promise
+
+    let staleEntered = false
+    void staleCallbackEntered.promise.then(() => { staleEntered = true })
+    runStaleCallback.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(staleEntered).toBe(false)
+
+    releaseNewerOwner.resolve()
+    await newerOwner
+    await staleCallbackEntered.promise
+    await staleDescendant
+  })
+
   it.each(['publish-first', 'claim-first'] as const)('fences separate-process lifecycle races when %s', async (winner) => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `retale-lifecycle-${winner}-`))
     cleanupDirectories.push(tempRoot)

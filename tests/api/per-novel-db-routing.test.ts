@@ -391,16 +391,16 @@ describe('per-novel database resolver', () => {
     expect(() => resolver.getNovelLanceDbPath('novel-alpha')).toThrow(/not available/)
 
     const { upsertWorkspaceNovelRegistry, upsertWorkspaceState } = await import('@/lib/server/persistence')
-    upsertWorkspaceNovelRegistry({ novelId: 'novel-alpha', title: 'Must Not Revive' })
+    await upsertWorkspaceNovelRegistry({ novelId: 'novel-alpha', title: 'Must Not Revive' })
     expect(controlDb.prepare('SELECT title, migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({
       title: 'Original',
       migrationStatus: 'deleting',
     })
 
     setActiveWorkspaceNovelId(controlDb, 'novel-safe')
-    expect(() => upsertWorkspaceState('singleton', JSON.stringify(createNovelWorkspacePayload('novel-alpha')), {
+    await expect(upsertWorkspaceState('singleton', JSON.stringify(createNovelWorkspacePayload('novel-alpha')), {
       novelId: 'novel-alpha',
-    })).toThrow('Novel deletion is already in progress or complete')
+    })).rejects.toThrow('Novel deletion is already in progress or complete')
     expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({
       value: 'novel-safe',
     })
@@ -413,7 +413,7 @@ describe('per-novel database resolver', () => {
       value: 'novel-safe',
     })
 
-    upsertWorkspaceNovelRegistry({ novelId: 'novel-new', title: 'New Novel' })
+    await upsertWorkspaceNovelRegistry({ novelId: 'novel-new', title: 'New Novel' })
     expect(controlDb.prepare('SELECT title, migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-new')).toEqual({
       title: 'New Novel',
       migrationStatus: 'ready',

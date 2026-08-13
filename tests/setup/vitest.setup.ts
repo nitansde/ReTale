@@ -1,7 +1,8 @@
 import '@testing-library/jest-dom/vitest'
-import { afterEach } from 'vitest'
+import { afterEach, beforeEach } from 'vitest'
 import path from 'node:path'
 import { assertOwnedTestDatabaseUrl, assertOwnedTestPath } from '../../scripts/test-path-safety.mjs'
+import { resetControlDatabaseTransactionQueueForTests } from '@/lib/server/database-access'
 import { resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 
 const repoRoot = process.cwd()
@@ -27,6 +28,29 @@ assertOwnedTestPath(testRoot, path.resolve(repoRoot, sourceDbPath), {
   label: 'Vitest source database',
 })
 
-afterEach(() => {
+function assertOwnedRuntimeEnvironment() {
+  const currentDataDir = process.env.RETALE_DATA_DIR
+  const currentDatabaseUrl = process.env.DATABASE_URL
+  if (!currentDataDir || !currentDatabaseUrl) {
+    throw new Error('[retale-vitest] Missing owned database environment during test execution')
+  }
+
+  assertOwnedTestDatabaseUrl(testRoot!, currentDatabaseUrl, {
+    repoRoot,
+    label: 'Vitest DATABASE_URL',
+  })
+  assertOwnedTestPath(testRoot!, path.resolve(repoRoot, currentDataDir), {
+    repoRoot,
+    label: 'Vitest RETALE_DATA_DIR',
+  })
+}
+
+beforeEach(() => {
+  assertOwnedRuntimeEnvironment()
+})
+
+afterEach(async () => {
+  await resetControlDatabaseTransactionQueueForTests()
   resetNovelDatabaseTestState()
+  assertOwnedRuntimeEnvironment()
 })

@@ -1,11 +1,15 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 
+type PerNovelWriteGateOwnership = {
+  active: boolean
+}
+
 const perNovelWriteGateTails = new Map<string, Promise<void>>()
-const perNovelWriteGateScope = new AsyncLocalStorage<ReadonlySet<string>>()
+const perNovelWriteGateScope = new AsyncLocalStorage<ReadonlyMap<string, PerNovelWriteGateOwnership>>()
 
 export async function runWithPerNovelWriteGate<T>(novelId: string, callback: () => T | Promise<T>) {
-  const ownedNovelIds = perNovelWriteGateScope.getStore()
-  if (ownedNovelIds?.has(novelId)) {
+  const inheritedOwnership = perNovelWriteGateScope.getStore()
+  if (inheritedOwnership?.get(novelId)?.active) {
     return callback()
   }
 
@@ -18,10 +22,14 @@ export async function runWithPerNovelWriteGate<T>(novelId: string, callback: () 
   perNovelWriteGateTails.set(novelId, queuedTail)
 
   await previousTail.catch(() => undefined)
+  const ownership: PerNovelWriteGateOwnership = { active: true }
+  const ownedNovelIds = new Map(inheritedOwnership ?? [])
+  ownedNovelIds.set(novelId, ownership)
 
   try {
-    return await perNovelWriteGateScope.run(new Set([...(ownedNovelIds ?? []), novelId]), callback)
+    return await perNovelWriteGateScope.run(ownedNovelIds, callback)
   } finally {
+    ownership.active = false
     releaseCurrentTail()
     if (perNovelWriteGateTails.get(novelId) === queuedTail) {
       perNovelWriteGateTails.delete(novelId)

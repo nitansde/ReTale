@@ -118,9 +118,38 @@ describe('authored branching schema migrations', () => {
     ;(database as DatabaseSync & { close?: () => void }).close?.()
   })
 
+  it('creates revisioned artifacts and a patch journal that survives normalized runtime deletion', () => {
+    const databasePath = makeTempDatabasePath('retale-workspace-artifact-revision')
+    const database = initializeDatabase(new DatabaseSync(databasePath))
+
+    expect(listTableColumns(database, 'WorkspaceState').find((column) => column.name === 'revision')).toMatchObject({
+      type: 'INTEGER',
+      notnull: 1,
+      dflt_value: '0',
+    })
+    expect(listTableColumns(database, 'WorkspaceStateBackup').find((column) => column.name === 'revision')).toMatchObject({
+      type: 'INTEGER',
+      notnull: 1,
+      dflt_value: '0',
+    })
+    expect(database.prepare('PRAGMA foreign_key_list(WorkspaceChapterPatchJournal)').all()).toEqual([])
+
+    database.prepare('INSERT INTO WorkspaceRuntimeState (id) VALUES (?)').run('singleton')
+    database.prepare(
+      `INSERT INTO WorkspaceChapterPatchJournal (
+         workspaceStateId, committedRevision, chapterId, novelId,
+         contentHtml, wordCount, updatedAtLabel, committedAt
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run('singleton', 1, 'chapter-1', 'novel-1', '<p>saved</p>', 5, 'now', '2026-08-12T00:00:00.000Z')
+    database.prepare('DELETE FROM WorkspaceRuntimeState WHERE id = ?').run('singleton')
+    expect(database.prepare('SELECT committedRevision FROM WorkspaceChapterPatchJournal').get()).toEqual({ committedRevision: 1 })
+    database.close()
+  })
+
   it('adds nullable workspace knowledge sync claim ownership without changing existing rows', () => {
     const databasePath = makeTempDatabasePath('retale-workspace-sync-claim-token')
     const legacyDatabase = initializeDatabase(new DatabaseSync(databasePath))
+    legacyDatabase.prepare('INSERT INTO WorkspaceRuntimeState (id) VALUES (?)').run('singleton')
     legacyDatabase.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', '{}')
     legacyDatabase.prepare(
       `INSERT INTO WorkspaceKnowledgeSyncState (
@@ -146,6 +175,84 @@ describe('authored branching schema migrations', () => {
       startedAt: '2026-08-12 00:00:00',
       claimToken: null,
     })
+    expect(migratedDatabase.prepare('PRAGMA foreign_key_list(WorkspaceKnowledgeSyncState)').all()).toEqual([])
+    migratedDatabase.close()
+  })
+
+  it('preserves legacy workspace sync intent without a normalized runtime parent', () => {
+    const databasePath = makeTempDatabasePath('retale-workspace-sync-orphan-migration')
+    const legacyDatabase = initializeDatabase(new DatabaseSync(databasePath))
+    legacyDatabase.exec('PRAGMA foreign_keys = OFF')
+    legacyDatabase.exec(`
+      DROP TABLE WorkspaceKnowledgeSyncState;
+      CREATE TABLE WorkspaceKnowledgeSyncState (
+        workspaceStateId TEXT PRIMARY KEY,
+        requestedRevision INTEGER NOT NULL DEFAULT 0,
+        startedRevision INTEGER,
+        syncedRevision INTEGER NOT NULL DEFAULT 0,
+        requestedSourceUpdatedAt TEXT,
+        startedSourceUpdatedAt TEXT,
+        startedAt TEXT,
+        claimToken TEXT,
+        syncedSourceUpdatedAt TEXT,
+        lastError TEXT,
+        createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceState(id) ON DELETE CASCADE
+      );
+      INSERT INTO WorkspaceState (id, payload, revision) VALUES
+        ('with-runtime', '{}', 4),
+        ('without-runtime', '{}', 7);
+      INSERT INTO WorkspaceRuntimeState (id, revision) VALUES ('with-runtime', 4);
+      INSERT INTO WorkspaceKnowledgeSyncState (
+        workspaceStateId, requestedRevision, startedRevision, syncedRevision,
+        requestedSourceUpdatedAt, startedSourceUpdatedAt, startedAt, claimToken,
+        syncedSourceUpdatedAt, lastError, createdAt, updatedAt
+      ) VALUES
+        ('with-runtime', 4, NULL, 3, 'requested-4', NULL, NULL, NULL, 'synced-3', NULL, 'created-4', 'updated-4'),
+        ('without-runtime', 7, 7, 6, 'requested-7', 'started-7', '2026-08-12 00:00:00', 'claim-7', 'synced-6', 'retry me', 'created-7', 'updated-7');
+    `)
+    legacyDatabase.close()
+
+    const migratedDatabase = initializeDatabase(new DatabaseSync(databasePath))
+    expect(migratedDatabase.prepare('PRAGMA foreign_key_list(WorkspaceKnowledgeSyncState)').all()).toEqual([])
+    expect(migratedDatabase.prepare(
+      `SELECT workspaceStateId, requestedRevision, startedRevision, syncedRevision,
+              requestedSourceUpdatedAt, claimToken, lastError, createdAt, updatedAt
+       FROM WorkspaceKnowledgeSyncState
+       ORDER BY workspaceStateId`,
+    ).all()).toEqual([
+      {
+        workspaceStateId: 'with-runtime',
+        requestedRevision: 4,
+        startedRevision: null,
+        syncedRevision: 3,
+        requestedSourceUpdatedAt: 'requested-4',
+        claimToken: null,
+        lastError: null,
+        createdAt: 'created-4',
+        updatedAt: 'updated-4',
+      },
+      {
+        workspaceStateId: 'without-runtime',
+        requestedRevision: 7,
+        startedRevision: 7,
+        syncedRevision: 6,
+        requestedSourceUpdatedAt: 'requested-7',
+        claimToken: 'claim-7',
+        lastError: 'retry me',
+        createdAt: 'created-7',
+        updatedAt: 'updated-7',
+      },
+    ])
+
+    migratedDatabase.prepare('DELETE FROM WorkspaceRuntimeState WHERE id = ?').run('with-runtime')
+    expect(migratedDatabase.prepare(
+      'SELECT workspaceStateId FROM WorkspaceKnowledgeSyncState ORDER BY workspaceStateId',
+    ).all()).toEqual([
+      { workspaceStateId: 'with-runtime' },
+      { workspaceStateId: 'without-runtime' },
+    ])
     migratedDatabase.close()
   })
 

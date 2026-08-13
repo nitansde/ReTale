@@ -29,7 +29,7 @@ async function createTestDatabase(prefix: string) {
   cleanups.push(tempDatabase.cleanup)
 
   process.env.DATABASE_URL = tempDatabase.dbPath
-  delete process.env.RETALE_DATA_DIR
+  process.env.RETALE_DATA_DIR = path.join(tempDatabase.directory, 'data')
   vi.resetModules()
 
   const sqliteModule = await import('@/lib/server/sqlite')

@@ -17,9 +17,10 @@ class MockChildProcess extends EventEmitter {
 }
 
 const originalDataDir = process.env.RETALE_DATA_DIR
+const originalDatabaseUrl = process.env.DATABASE_URL
 const cleanupDirectories: string[] = []
 
-function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
+function restoreEnvVar(name: 'RETALE_DATA_DIR' | 'DATABASE_URL', originalValue: string | undefined) {
   if (originalValue === undefined) {
     delete process.env[name]
     return
@@ -40,7 +41,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.resetModules()
   restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
-  delete process.env.DATABASE_URL
+  restoreEnvVar('DATABASE_URL', originalDatabaseUrl)
   while (cleanupDirectories.length) {
     fs.rmSync(cleanupDirectories.pop()!, { recursive: true, force: true })
   }

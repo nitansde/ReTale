@@ -61,15 +61,28 @@ function getResolverCache() {
 
 function getDataRootPath() {
   const configuredBasePath = process.env.RETALE_DATA_DIR?.trim()
-  if (configuredBasePath && configuredBasePath.length > 0) {
-    return path.resolve(process.cwd(), configuredBasePath)
+  const resolvedPath = configuredBasePath && configuredBasePath.length > 0
+    ? path.resolve(process.cwd(), configuredBasePath)
+    : (() => {
+        const isBuildPhase = process.env.npm_lifecycle_event === 'build'
+          || process.env.NEXT_PHASE === 'phase-production-build'
+          || process.env.__NEXT_PRIVATE_BUILD_WORKER === '1'
+
+        return path.resolve(process.cwd(), isBuildPhase ? '.sisyphus/runtime/next-build-data' : 'data')
+      })()
+
+  if (process.env.VITEST === 'true') {
+    const testRoot = process.env.RETALE_TEST_ROOT
+    if (!testRoot) {
+      throw new Error('Vitest database resolution requires RETALE_TEST_ROOT')
+    }
+    return assertOwnedTestPath(testRoot, resolvedPath, {
+      repoRoot: process.cwd(),
+      label: 'Vitest RETALE_DATA_DIR',
+    })
   }
 
-  const isBuildPhase = process.env.npm_lifecycle_event === 'build'
-    || process.env.NEXT_PHASE === 'phase-production-build'
-    || process.env.__NEXT_PRIVATE_BUILD_WORKER === '1'
-
-  return path.resolve(process.cwd(), isBuildPhase ? '.sisyphus/runtime/next-build-data' : 'data')
+  return resolvedPath
 }
 
 function assertContainedPath(basePath: string, candidatePath: string, label: string) {
@@ -169,6 +182,16 @@ function assertNovelRegistryReadyOrMissing(novelId: string) {
 }
 
 function openResolvedDatabase(databasePath: string, options?: { schemaSql?: string; mode?: 'full' | 'control' }) {
+  if (process.env.VITEST === 'true') {
+    const testRoot = process.env.RETALE_TEST_ROOT
+    if (!testRoot) {
+      throw new Error('Vitest database resolution requires RETALE_TEST_ROOT')
+    }
+    assertOwnedTestPath(testRoot, databasePath, {
+      repoRoot: process.cwd(),
+      label: 'Vitest resolved database',
+    })
+  }
   fs.mkdirSync(path.dirname(databasePath), { recursive: true })
 
   const cacheKey = getCanonicalCacheKey(databasePath)
