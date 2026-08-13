@@ -4,8 +4,9 @@ import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/graph-review-panel'
+import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/context-prompt-block-visibility'
 import type { NoticeVariant } from '@/components/ui/Notice'
+import { createChapterEditorBuffer } from '@/components/workspace/chapter-editor-buffer'
 import { Building2, Globe, LoaderCircle, MapPin, ScrollText, Users } from 'lucide-react'
 import {
   type PendingSourceJump,
@@ -14,6 +15,7 @@ import {
   type WorkspaceFloatingPosition,
 } from '@/components/workspace/use-workspace-chapter-selection'
 import { type WorkspaceRefTab, useWorkspacePaneState } from '@/components/workspace/use-workspace-pane-state'
+import { useDesktopWorkspaceLayout } from '@/components/workspace/use-desktop-workspace-layout'
 import {
   readWorkspaceSelectionFromSearchParams,
   resolveWorkspaceSelection,
@@ -89,7 +91,7 @@ import type {
   GraphSelection,
 } from '@/components/graph/types'
 import type { GraphEdge } from '@/lib/server/graph-types'
-import { htmlToPlainText } from '@/lib/utils'
+import { countChineseFriendlyWords, htmlToPlainText } from '@/lib/utils'
 import type {
   ChapterTimelineItem,
   StoryTimelineResponse,
@@ -107,6 +109,8 @@ import type {
   WorldEntry,
 } from '@/lib/types'
 import type { KnowledgeProjectionResult } from '@/store/novel-store-types'
+import type { WorkspaceSaveFeedback } from '@/store/novel-store-types'
+import { requestClientGet } from '@/lib/client-request-broker'
 
 type SelectionNovelStudioCoreParams = {
   loadFromBackend: () => Promise<unknown>
@@ -119,10 +123,10 @@ type SelectionNovelStudioCoreParams = {
   localChapters: Chapter[]
   currentChapterId: string
   setCurrentChapterId: (chapterId: string) => void
-  updateChapterContent: (chapterId: string, content: string) => void
+  updateChapterContent: (chapterId: string, content: string, wordCount?: number) => void
   aiSettings: AISettings | undefined
   setAISettings: (settings: AISettings) => void
-  refreshKnowledgeProjection: (novelId: string, asOfChapter?: number) => Promise<KnowledgeProjectionResult>
+  refreshKnowledgeProjection: (novelId: string, asOfChapter?: number, signal?: AbortSignal) => Promise<KnowledgeProjectionResult>
   clearPresetCompatSessionStateForSelection: (selection: TimelineSelection, surfaces?: PresetCompatSurfaceId[], phase?: string) => void
   resetPresetCompatSessionStateForSelection: (selection: TimelineSelection, surfaces?: PresetCompatSurfaceId[], phase?: string) => void
   presetCompatSessionState: Record<string, { phase?: string | null } | undefined>
@@ -130,7 +134,8 @@ type SelectionNovelStudioCoreParams = {
   localWorldEntries: WorldEntry[]
   localTimelineEvents: TimelineEvent[]
   localOutlines: OutlineItem[]
-  autosaveSignature: string
+  autosaveTarget: string
+  workspaceSaveFeedback: WorkspaceSaveFeedback | null
 }
 
 type WorkspaceSelectionHistoryMode = 'push' | 'replace' | 'none'
@@ -189,10 +194,19 @@ export function mergeKnowledgeStatusOverview(
   }
 }
 
+export function resolveReferenceResourcesVisible(desktop: boolean, matchMediaAvailable: boolean, referencePanelOpen: boolean) {
+  return desktop || !matchMediaAvailable || referencePanelOpen
+}
+
+export function isReferenceMatchMediaAvailable() {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+}
+
 export function useSelectionNovelStudioCore(params: SelectionNovelStudioCoreParams) {
   const { locale, t } = useI18n()
   const scenarioMeta = getAIScenarioMeta(locale)
   const router = useRouter()
+  const desktopWorkspaceLayout = useDesktopWorkspaceLayout()
   const {
     leftPanelOpen,
     setLeftPanelOpen,
@@ -211,6 +225,11 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     confirmDeleteKnowledge,
     setConfirmDeleteKnowledge,
   } = useWorkspacePaneState()
+  const referenceResourcesVisible = resolveReferenceResourcesVisible(
+    desktopWorkspaceLayout,
+    isReferenceMatchMediaAvailable(),
+    referencePanelOpen,
+  )
   const [selectionText, setSelectionText] = useState('')
   const [lockedSelectionText, setLockedSelectionText] = useState('')
   const [toolbarPos, setToolbarPos] = useState<WorkspaceFloatingPosition | null>(null)
@@ -338,7 +357,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const editorRef = useRef<HTMLDivElement | null>(null)
   const toolbarRef = useRef<HTMLDivElement | null>(null)
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const autosaveLatestSignatureRef = useRef(params.autosaveSignature)
+  const autosaveLatestSignatureRef = useRef(params.autosaveTarget)
   const autosaveLastSavedSignatureRef = useRef<string | null>(null)
   const autosaveFailedSignatureRef = useRef<string | null>(null)
   const autosaveInFlightRef = useRef(false)
@@ -351,14 +370,39 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const hydratedRef = useRef(false)
   const workspaceSelectionHydratedRef = useRef(false)
   const workspaceSelectionHistoryModeRef = useRef<WorkspaceSelectionHistoryMode>('replace')
+  const editorChapterIdRef = useRef(params.currentChapterId)
+  const updateChapterContentRef = useRef(params.updateChapterContent)
+  const editorBufferRef = useRef(createChapterEditorBuffer({
+    delayMs: 300,
+    commit: ({ chapterId, html, plainText }) => {
+      updateChapterContentRef.current(chapterId, html, countChineseFriendlyWords(plainText))
+    },
+  }))
   const lastActiveKnowledgeJobIdRef = useRef<string | null>(null)
   const openAICompatibleModelsRequestRef = useRef<Record<AIScenarioKey, number>>({ rewrite: 0, knowledgeExtraction: 0, embeddings: 0 })
   const chapterGraphRequestRef = useRef(0)
   const storyTimelineRequestRef = useRef(0)
+  const storyTimelineAbortControllerRef = useRef<AbortController | null>(null)
+  const fullKnowledgeProjectionAbortControllerRef = useRef<AbortController | null>(null)
   const recoverablePanelHydrationGenerationRef = useRef(0)
   const rewritePanelOwnershipGenerationRef = useRef(0)
   const ownedRecoverableRewriteJobIdRef = useRef<string | null>(null)
   const resolvedAISettings = useMemo(() => normalizeAISettings(params.aiSettings), [params.aiSettings])
+
+  useEffect(() => {
+    updateChapterContentRef.current = params.updateChapterContent
+  }, [params.updateChapterContent])
+
+  const flushEditorBuffer = useCallback(() => {
+    return editorBufferRef.current.flush()
+  }, [])
+
+  useLayoutEffect(() => {
+    if (editorChapterIdRef.current !== params.currentChapterId) {
+      flushEditorBuffer()
+      editorChapterIdRef.current = params.currentChapterId
+    }
+  }, [flushEditorBuffer, params.currentChapterId])
 
   const invalidateRecoverablePanelHydration = useCallback(() => {
     recoverablePanelHydrationGenerationRef.current += 1
@@ -445,10 +489,10 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   }, [setToast])
 
   useEffect(() => {
-    autosaveLatestSignatureRef.current = params.autosaveSignature
+    autosaveLatestSignatureRef.current = params.autosaveTarget
     autosaveSaveToBackendRef.current = params.saveToBackend
     novelDeletionPendingRef.current = params.isNovelDeletionPending
-  }, [params.autosaveSignature, params.isNovelDeletionPending, params.saveToBackend])
+  }, [params.autosaveTarget, params.isNovelDeletionPending, params.saveToBackend])
 
   const scheduleAutosaveDrain = useCallback((delay: number) => {
     if (!autosaveMountedRef.current || novelDeletionPendingRef.current) return
@@ -520,7 +564,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     if (!params.backendLoaded) return
     if (!hydratedRef.current) {
       hydratedRef.current = true
-      autosaveLastSavedSignatureRef.current = params.autosaveSignature
+      autosaveLastSavedSignatureRef.current = params.autosaveTarget
       return
     }
     if (params.isNovelDeletionPending) {
@@ -530,20 +574,20 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     }
     if (
       autosaveFailedSignatureRef.current !== null
-      && params.autosaveSignature !== autosaveFailedSignatureRef.current
+      && params.autosaveTarget !== autosaveFailedSignatureRef.current
     ) {
       autosaveFailedSignatureRef.current = null
     }
     if (
-      params.autosaveSignature === autosaveLastSavedSignatureRef.current
-      || params.autosaveSignature === autosaveFailedSignatureRef.current
+      params.autosaveTarget === autosaveLastSavedSignatureRef.current
+      || params.autosaveTarget === autosaveFailedSignatureRef.current
     ) return
     scheduleAutosaveDrain(1200)
     return () => {
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
       autosaveTimerRef.current = null
     }
-  }, [params.autosaveSignature, params.backendLoaded, params.isNovelDeletionPending, scheduleAutosaveDrain])
+  }, [params.autosaveTarget, params.backendLoaded, params.isNovelDeletionPending, scheduleAutosaveDrain])
 
   const getKnowledgePollDelay = useCallback((status: KnowledgeRebuildStatus | null, actionLoading: KnowledgeActionLoading) => {
     if (actionLoading) return 1_200
@@ -568,6 +612,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     currentNovelId: params.currentNovelId,
     currentChapterId: params.currentChapterId,
     setCurrentChapterId: params.setCurrentChapterId,
+    flushEditorBuffer,
     setCenterPaneView,
     setPendingSourceJump,
     setLeftPanelOpen,
@@ -648,7 +693,10 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     const selectedChapterOrder = selectedKnowledgeStatusChapterOrder
     const requestGeneration = fullKnowledgeProjectionRequestGenerationRef.current + 1
     fullKnowledgeProjectionRequestGenerationRef.current = requestGeneration
-    const refreshedProjection = await params.refreshKnowledgeProjection(novelId, selectedChapterOrder)
+    fullKnowledgeProjectionAbortControllerRef.current?.abort()
+    const controller = new AbortController()
+    fullKnowledgeProjectionAbortControllerRef.current = controller
+    const refreshedProjection = await params.refreshKnowledgeProjection(novelId, selectedChapterOrder, controller.signal)
     if (
       (!isRequestRelevant || isRequestRelevant())
       && fullKnowledgeProjectionRequestGenerationRef.current === requestGeneration
@@ -656,6 +704,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     ) {
       applyFullKnowledgeProjectionResult(refreshedProjection)
     }
+    if (fullKnowledgeProjectionAbortControllerRef.current === controller) fullKnowledgeProjectionAbortControllerRef.current = null
   }, [applyFullKnowledgeProjectionResult, params.currentNovelId, params.refreshKnowledgeProjection, selectedKnowledgeStatusChapterOrder])
 
   useEffect(() => {
@@ -727,26 +776,28 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
             searchParams.set('asOfChapter', String(selectedChapterOrder))
           }
 
-          const response = await fetch(`/api/knowledge-view?${searchParams.toString()}`, {
-            cache: 'no-store',
+          const data = await requestClientGet(`/api/knowledge-view?${searchParams.toString()}`, {
             signal: requestAbortController.signal,
+            parse: async (response) => {
+              const payload = (await response.json()) as {
+                ok?: boolean
+                knowledgeRebuildStatus?: KnowledgeRebuildStatus | null
+                hanlpCacheSnapshot?: HanlpCacheSnapshot | null
+                knowledgeStatusOverview?: KnowledgeStatusOverview | null
+              }
+              return { response, payload }
+            },
           })
-          const data = (await response.json()) as {
-            ok?: boolean
-            knowledgeRebuildStatus?: KnowledgeRebuildStatus | null
-            hanlpCacheSnapshot?: HanlpCacheSnapshot | null
-            knowledgeStatusOverview?: KnowledgeStatusOverview | null
-          }
 
           if (cancelled) return
-          if (!response.ok || !data.ok) {
+          if (!data.response.ok || !data.payload.ok) {
             scheduleRetry()
             return
           }
 
-          const nextStatus = data.knowledgeRebuildStatus ?? null
-          setHanlpCacheSnapshot(data.hanlpCacheSnapshot ?? null)
-          setKnowledgeStatusOverview((current) => mergeKnowledgeStatusOverview(current, data.knowledgeStatusOverview))
+          const nextStatus = data.payload.knowledgeRebuildStatus ?? null
+          setHanlpCacheSnapshot(data.payload.hanlpCacheSnapshot ?? null)
+          setKnowledgeStatusOverview((current) => mergeKnowledgeStatusOverview(current, data.payload.knowledgeStatusOverview))
           const hadActiveJob = Boolean(lastActiveKnowledgeJobIdRef.current)
           const failureMessage = resolveKnowledgeRebuildFailureMessage(nextStatus)
 
@@ -879,27 +930,35 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   }, [currentChapter, handleTimelineSelection, params.currentChapterId, resolveSourceChapter, resolvedStoryTimeline.branchNodes, selectChapter])
 
   useEffect(() => {
+    if (!referenceResourcesVisible) return
     if (knowledgeRebuilding || knowledgeActionLoading || !params.backendLoaded || !params.currentNovelId || typeof selectedKnowledgeStatusChapterOrder !== 'number' || !Number.isFinite(selectedKnowledgeStatusChapterOrder)) return
     let cancelled = false
     const requestGeneration = fullKnowledgeProjectionRequestGenerationRef.current + 1
     fullKnowledgeProjectionRequestGenerationRef.current = requestGeneration
     const timer = window.setTimeout(() => {
-      void params.refreshKnowledgeProjection(params.currentNovelId, selectedKnowledgeStatusChapterOrder)
+      fullKnowledgeProjectionAbortControllerRef.current?.abort()
+      const controller = new AbortController()
+      fullKnowledgeProjectionAbortControllerRef.current = controller
+      void params.refreshKnowledgeProjection(params.currentNovelId, selectedKnowledgeStatusChapterOrder, controller.signal)
         .then((result) => {
           if (!cancelled && fullKnowledgeProjectionRequestGenerationRef.current === requestGeneration) {
             applyFullKnowledgeProjectionResult(result)
           }
         })
         .catch(() => undefined)
+        .finally(() => {
+          if (fullKnowledgeProjectionAbortControllerRef.current === controller) fullKnowledgeProjectionAbortControllerRef.current = null
+        })
     }, 0)
     return () => {
       cancelled = true
+      fullKnowledgeProjectionAbortControllerRef.current?.abort()
       window.clearTimeout(timer)
       if (fullKnowledgeProjectionRequestGenerationRef.current === requestGeneration) {
         fullKnowledgeProjectionRequestGenerationRef.current += 1
       }
     }
-  }, [applyFullKnowledgeProjectionResult, knowledgeActionLoading, knowledgeRebuilding, params.backendLoaded, params.currentNovelId, params.refreshKnowledgeProjection, selectedKnowledgeStatusChapterOrder])
+  }, [applyFullKnowledgeProjectionResult, knowledgeActionLoading, knowledgeRebuilding, params.backendLoaded, params.currentNovelId, params.refreshKnowledgeProjection, referenceResourcesVisible, selectedKnowledgeStatusChapterOrder])
 
   useEffect(() => {
     workspaceSelectionHydratedRef.current = false
@@ -951,24 +1010,31 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     }
     const requestId = storyTimelineRequestRef.current + 1
     storyTimelineRequestRef.current = requestId
+    storyTimelineAbortControllerRef.current?.abort()
+    const controller = new AbortController()
+    storyTimelineAbortControllerRef.current = controller
     try {
       const searchParams = new URLSearchParams({ novelId: params.currentNovelId, branchId: storyTimelineBranchId })
-      const response = await fetch(`/api/story-timeline?${searchParams.toString()}`, { cache: 'no-store' })
-      const data = await response.json().catch(() => null) as (StoryTimelineResponse & { error?: string }) | null
+      const result = await requestClientGet(`/api/story-timeline?${searchParams.toString()}`, {
+        signal: controller.signal,
+        parse: async (response) => ({ response, data: await response.json().catch(() => null) as (StoryTimelineResponse & { error?: string }) | null }),
+      })
       if (storyTimelineRequestRef.current !== requestId) return null
-      if (!response.ok || !data) {
+      if (!result.response.ok || !result.data) {
         setStoryTimelineData(null)
-        setStoryTimelineError(resolveWorkspaceUserFacingError('story-timeline-load', data?.error, locale))
+        setStoryTimelineError(resolveWorkspaceUserFacingError('story-timeline-load', result.data?.error, locale))
         return null
       }
-      setStoryTimelineData(data)
+      setStoryTimelineData(result.data)
       setStoryTimelineError('')
-      return data
+      return result.data
     } catch (error) {
       if (storyTimelineRequestRef.current !== requestId) return null
       setStoryTimelineData(null)
       setStoryTimelineError(resolveWorkspaceUserFacingError('story-timeline-load', error, locale))
       return null
+    } finally {
+      if (storyTimelineAbortControllerRef.current === controller) storyTimelineAbortControllerRef.current = null
     }
   }, [locale, params.currentNovelId, storyTimelineBranchId])
 
@@ -1155,17 +1221,42 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     immediatelyRender: false,
     editorProps: { attributes: { class: 'px-5 py-6 sm:px-8 sm:py-8 font-[family:var(--font-noto-serif-sc)] text-[1.05rem] leading-9 text-zinc-200 outline-none min-h-[62vh]' } },
     onUpdate({ editor }) {
-      if (currentChapter) {
-        params.updateChapterContent(currentChapter.id, editor.getHTML())
+      const chapterId = editorChapterIdRef.current
+      if (chapterId) {
+        editorBufferRef.current.update(chapterId, () => ({
+          html: editor.getHTML(),
+          plainText: editor.getText(),
+        }))
       }
+    },
+    onBlur() {
+      flushEditorBuffer()
     },
   })
 
   useEffect(() => {
-    if (editor && currentChapter && editor.getHTML() !== currentChapter.content) {
+    if (!editor || !currentChapter) return
+    const buffered = editorBufferRef.current.getBuffered()
+    if (buffered?.chapterId === currentChapter.id) return
+    if (editor.getHTML() !== currentChapter.content) {
+      editorBufferRef.current.discard()
       editor.commands.setContent(currentChapter.content, { emitUpdate: false })
     }
   }, [editor, currentChapter])
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushEditorBuffer()
+    }
+    const handlePageHide = () => flushEditorBuffer()
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('pagehide', handlePageHide)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('pagehide', handlePageHide)
+      flushEditorBuffer()
+    }
+  }, [flushEditorBuffer])
 
   useEffect(() => {
     if (centerPaneView !== 'body' || !currentChapter || !pendingSourceJump) return
@@ -1429,6 +1520,14 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     setRewriteState((current) => ({ loading: isPending, error: nextError, result: nextCandidate?.content || current.result }))
   }, [locale, t])
 
+  const workspaceSaveNotice = params.workspaceSaveFeedback?.kind === 'save-failed'
+    ? { message: t('workspace.persistence.saveFailed'), variant: 'error' as const }
+    : params.workspaceSaveFeedback?.kind === 'chapter-conflict'
+      ? { message: t('workspace.persistence.chapterConflict'), variant: 'warning' as const }
+      : params.workspaceSaveFeedback?.kind === 'structural-conflict'
+        ? { message: t('workspace.persistence.structuralConflict'), variant: 'error' as const }
+        : null
+
   return {
     currentNovelId: params.currentNovelId,
     leftPanelOpen,
@@ -1516,8 +1615,8 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     storyTimelineError,
     copied,
     setCopied,
-    toast,
-    toastVariant,
+    toast: workspaceSaveNotice?.message ?? toast,
+    toastVariant: workspaceSaveNotice?.variant ?? toastVariant,
     setToast,
     saveContinueBlockPending,
     setSaveContinueBlockPending,
@@ -1584,6 +1683,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     setEditState,
     knowledgePanelReadOnly,
     editor,
+    flushEditorBuffer,
     editorRef,
     toolbarRef,
     lastActiveKnowledgeJobIdRef,

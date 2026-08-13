@@ -5,15 +5,33 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   mergeKnowledgeStatusOverview,
+  resolveReferenceResourcesVisible,
   resolveSelectedKnowledgeProjectionChapterOrder,
   useSelectionNovelStudioCore,
 } from '@/components/workspace/use-selection-novel-studio-core'
 import type { KnowledgeRebuildStatus, KnowledgeStatusOverview, RecoverableRewriteJob } from '@/components/workspace/selection-novel-studio-helpers'
 import type { StoryTimelineResponse } from '@/lib/story-branch-types'
 import type { Chapter } from '@/lib/types'
-import type { KnowledgeProjectionResult } from '@/store/novel-store-types'
+import type { KnowledgeProjectionResult, WorkspaceSaveFeedback } from '@/store/novel-store-types'
+import { buildTenThousandCharacterEditBurst } from '@/tests/helpers/autosave-performance-fixtures'
 
 const pushMock = vi.fn()
+type MockTipTapEditor = {
+  getHTML: () => string
+  getText: () => string
+  commands: { setContent: (content: string, options: { emitUpdate: false }) => void }
+  view: { dom: HTMLDivElement }
+}
+
+type MockTipTapOptions = {
+  onUpdate?: (event: { editor: MockTipTapEditor }) => void
+  onBlur?: () => void
+}
+
+const tiptapMock = vi.hoisted(() => ({
+  editor: null as MockTipTapEditor | null,
+  options: null as MockTipTapOptions | null,
+}))
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
@@ -22,7 +40,10 @@ vi.mock('next/navigation', () => ({
 }))
 
 vi.mock('@tiptap/react', () => ({
-  useEditor: () => null,
+  useEditor: (options: NonNullable<typeof tiptapMock.options>) => {
+    tiptapMock.options = options
+    return tiptapMock.editor
+  },
 }))
 
 vi.mock('@tiptap/starter-kit', () => ({
@@ -237,16 +258,18 @@ function buildCoreParams(overrides: Partial<CoreParams> = {}): CoreParams {
     localWorldEntries: [],
     localTimelineEvents: [],
     localOutlines: [],
-    autosaveSignature: 'sig-0',
+    autosaveTarget: 'sig-0',
+    workspaceSaveFeedback: null,
     ...overrides,
   }
 }
 
 function renderAutosaveHook(saveToBackend: CoreParams['saveToBackend']) {
   const baseParams = buildCoreParams({ saveToBackend })
+  type AutosaveProps = { revision: number; novelId?: string; deletionPending?: boolean }
   return renderHook(
-    ({ signature, deletionPending = false }: { signature: string; deletionPending?: boolean }) => useSelectionNovelStudioCore({ ...baseParams, autosaveSignature: signature, isNovelDeletionPending: deletionPending }),
-    { initialProps: { signature: 'sig-0' } },
+    ({ revision, novelId = 'novel-1', deletionPending = false }: AutosaveProps) => useSelectionNovelStudioCore({ ...baseParams, autosaveTarget: `${novelId}\u0000${revision}`, isNovelDeletionPending: deletionPending }),
+    { initialProps: { revision: 0 } as AutosaveProps },
   )
 }
 
@@ -511,16 +534,16 @@ describe('useSelectionNovelStudioCore autosave drain', () => {
     })
     const { rerender } = renderAutosaveHook(saveToBackend)
 
-    rerender({ signature: 'sig-1' })
+    rerender({ revision: 1 })
     await advanceTimers(1200)
     expect(saveToBackend).toHaveBeenCalledTimes(1)
 
-    rerender({ signature: 'sig-2' })
+    rerender({ revision: 2 })
     await resolveDeferred(pendingSaves[0])
     await advanceTimers(400)
     expect(saveToBackend).toHaveBeenCalledTimes(2)
 
-    rerender({ signature: 'sig-3' })
+    rerender({ revision: 3 })
     await resolveDeferred(pendingSaves[1])
     await advanceTimers(400)
     expect(saveToBackend).toHaveBeenCalledTimes(3)
@@ -545,10 +568,10 @@ describe('useSelectionNovelStudioCore autosave drain', () => {
     })
     const { rerender } = renderAutosaveHook(saveToBackend)
 
-    rerender({ signature: 'sig-1' })
+    rerender({ revision: 1 })
     await advanceTimers(1200)
-    rerender({ signature: 'sig-2' })
-    rerender({ signature: 'sig-3' })
+    rerender({ revision: 2 })
+    rerender({ revision: 3 })
     await advanceTimers(1200)
 
     expect(saveToBackend).toHaveBeenCalledTimes(1)
@@ -566,6 +589,42 @@ describe('useSelectionNovelStudioCore autosave drain', () => {
     expect(saveToBackend).toHaveBeenCalledTimes(2)
   })
 
+  it('orders a 10,000-character burst before the latest in-flight edit without extra saves', async () => {
+    const editBurst = buildTenThousandCharacterEditBurst()
+    const pendingSaves: Deferred[] = []
+    const observedContent: string[] = []
+    let latestContent = ''
+    const saveToBackend = vi.fn(() => {
+      observedContent.push(latestContent)
+      const deferred = createDeferred()
+      pendingSaves.push(deferred)
+      return deferred.promise
+    })
+    const { rerender } = renderAutosaveHook(saveToBackend)
+
+    for (let length = 1_000; length <= editBurst.length; length += 1_000) {
+      latestContent = editBurst.slice(0, length)
+      rerender({ revision: length })
+    }
+    await advanceTimers(1200)
+
+    expect(saveToBackend).toHaveBeenCalledTimes(1)
+    expect(observedContent).toEqual([editBurst])
+
+    latestContent = `${editBurst}!`
+    rerender({ revision: 10_001 })
+    await resolveDeferred(pendingSaves[0])
+    await advanceTimers(399)
+    expect(saveToBackend).toHaveBeenCalledTimes(1)
+    await advanceTimers(1)
+
+    expect(saveToBackend).toHaveBeenCalledTimes(2)
+    expect(observedContent).toEqual([editBurst, `${editBurst}!`])
+    await resolveDeferred(pendingSaves[1])
+    await advanceTimers(10_000)
+    expect(saveToBackend).toHaveBeenCalledTimes(2)
+  })
+
   it('does not retry an unchanged failed target and saves a later edit', async () => {
     const pendingSaves: Deferred[] = []
     const saveToBackend = vi.fn(() => {
@@ -575,19 +634,59 @@ describe('useSelectionNovelStudioCore autosave drain', () => {
     })
     const { rerender } = renderAutosaveHook(saveToBackend)
 
-    rerender({ signature: 'sig-1' })
+    rerender({ revision: 1 })
     await advanceTimers(1200)
     await rejectDeferred(pendingSaves[0])
     await advanceTimers(10_000)
     expect(saveToBackend).toHaveBeenCalledTimes(1)
 
-    rerender({ signature: 'sig-2' })
+    rerender({ revision: 2 })
     await advanceTimers(1200)
     expect(saveToBackend).toHaveBeenCalledTimes(2)
 
     await resolveDeferred(pendingSaves[1])
     await advanceTimers(1000)
     expect(saveToBackend).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['save-failed', 'workspace.persistence.saveFailed', 'error'],
+    ['chapter-conflict', 'workspace.persistence.chapterConflict', 'warning'],
+    ['structural-conflict', 'workspace.persistence.structuralConflict', 'error'],
+  ] as const)('shows sanitized workspace feedback for %s', (kind, message, variant) => {
+    const params = buildCoreParams({ workspaceSaveFeedback: { kind } })
+    const { result } = renderHook(() => useSelectionNovelStudioCore(params))
+
+    expect(result.current.toast).toBe(message)
+    expect(result.current.toastVariant).toBe(variant)
+    expect(result.current.toast).not.toContain('stale_revision')
+  })
+
+  it('prioritizes workspace feedback during render and restores transient toast output when feedback clears', () => {
+    const params = buildCoreParams()
+    const { result, rerender } = renderHook(
+      ({ workspaceSaveFeedback }) => useSelectionNovelStudioCore({ ...params, workspaceSaveFeedback }),
+      { initialProps: { workspaceSaveFeedback: null as WorkspaceSaveFeedback | null } },
+    )
+
+    act(() => {
+      result.current.setToast('knowledge.updated', 'info')
+    })
+    expect(result.current.toast).toBe('knowledge.updated')
+    expect(result.current.toastVariant).toBe('info')
+
+    rerender({ workspaceSaveFeedback: { kind: 'chapter-conflict' } })
+    expect(result.current.toast).toBe('workspace.persistence.chapterConflict')
+    expect(result.current.toastVariant).toBe('warning')
+
+    rerender({ workspaceSaveFeedback: null })
+    expect(result.current.toast).toBe('knowledge.updated')
+    expect(result.current.toastVariant).toBe('info')
+
+    act(() => {
+      result.current.setToast('')
+    })
+    expect(result.current.toast).toBe('')
   })
 
   it('saves a failed signature again after changing away and returning', async () => {
@@ -599,16 +698,16 @@ describe('useSelectionNovelStudioCore autosave drain', () => {
     })
     const { rerender } = renderAutosaveHook(saveToBackend)
 
-    rerender({ signature: 'sig-1' })
+    rerender({ revision: 1 })
     await advanceTimers(1200)
     await rejectDeferred(pendingSaves[0])
 
-    rerender({ signature: 'sig-2' })
+    rerender({ revision: 2 })
     await advanceTimers(1200)
     expect(saveToBackend).toHaveBeenCalledTimes(2)
     await resolveDeferred(pendingSaves[1])
 
-    rerender({ signature: 'sig-1' })
+    rerender({ revision: 1 })
     await advanceTimers(1200)
     expect(saveToBackend).toHaveBeenCalledTimes(3)
     await resolveDeferred(pendingSaves[2])
@@ -619,9 +718,9 @@ describe('useSelectionNovelStudioCore autosave drain', () => {
     const saveToBackend = vi.fn(() => pendingSave.promise)
     const { rerender, unmount } = renderAutosaveHook(saveToBackend)
 
-    rerender({ signature: 'sig-1' })
+    rerender({ revision: 1 })
     await advanceTimers(1200)
-    rerender({ signature: 'sig-2' })
+    rerender({ revision: 2 })
     unmount()
 
     await resolveDeferred(pendingSave)
@@ -634,19 +733,19 @@ describe('useSelectionNovelStudioCore autosave drain', () => {
     const saveToBackend = vi.fn().mockResolvedValue(undefined)
     const { rerender } = renderAutosaveHook(saveToBackend)
 
-    rerender({ signature: 'sig-deleted', deletionPending: true })
+    rerender({ revision: 1, deletionPending: true })
     await advanceTimers(10_000)
     expect(saveToBackend).not.toHaveBeenCalled()
 
-    rerender({ signature: 'sig-0', deletionPending: false })
+    rerender({ revision: 0, deletionPending: false })
     await advanceTimers(10_000)
     expect(saveToBackend).not.toHaveBeenCalled()
 
-    rerender({ signature: 'sig-authoritative', deletionPending: true })
+    rerender({ revision: 2, novelId: 'authoritative', deletionPending: true })
     await advanceTimers(10_000)
     expect(saveToBackend).not.toHaveBeenCalled()
 
-    rerender({ signature: 'sig-authoritative', deletionPending: false })
+    rerender({ revision: 2, novelId: 'authoritative', deletionPending: false })
     await advanceTimers(1199)
     expect(saveToBackend).not.toHaveBeenCalled()
     await advanceTimers(1)
@@ -665,6 +764,152 @@ describe('useSelectionNovelStudioCore autosave drain', () => {
     rerender({ deletionPending: false })
 
     expect(pushMock).toHaveBeenCalledWith('/library')
+  })
+})
+
+describe('useSelectionNovelStudioCore editor buffering', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    tiptapMock.options = null
+    tiptapMock.editor = null
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/knowledge-view?')) {
+        return jsonResponse({ ok: true, knowledgeRebuildStatus: null, hanlpCacheSnapshot: null, knowledgeStatusOverview: null })
+      }
+      if (url.startsWith('/api/story-timeline?')) {
+        return jsonResponse({ novelId: 'novel-1', branchId: 'novel-1:main', chapters: [], branchNodes: [], edges: [] })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+  })
+
+  afterEach(() => {
+    vi.clearAllTimers()
+    vi.useRealTimers()
+    tiptapMock.options = null
+    tiptapMock.editor = null
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  function installEditor(initialHtml = '<p>Alpha</p>', initialText = 'Alpha') {
+    let html = initialHtml
+    let text = initialText
+    const setContent = vi.fn((content: string) => {
+      html = content
+      text = content.replace(/<[^>]+>/g, '')
+    })
+    tiptapMock.editor = {
+      getHTML: () => html,
+      getText: () => text,
+      commands: { setContent },
+      view: { dom: document.createElement('div') },
+    }
+    return {
+      setValue(nextHtml: string, nextText: string) {
+        html = nextHtml
+        text = nextText
+      },
+      setContent,
+    }
+  }
+
+  it('coalesces TipTap updates and flushes on blur without eager store writes', async () => {
+    const editor = installEditor()
+    const updateChapterContent = vi.fn()
+    const params = buildCoreParams({
+      currentNovelId: 'novel-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
+      updateChapterContent,
+    })
+    renderHook(() => useSelectionNovelStudioCore(params))
+
+    editor.setValue('<p>Draft 1</p>', 'Draft 1')
+    tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
+    editor.setValue('<p>Draft 2</p>', 'Draft 2')
+    tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
+    expect(updateChapterContent).not.toHaveBeenCalled()
+
+    tiptapMock.options?.onBlur?.()
+    expect(updateChapterContent).toHaveBeenCalledTimes(1)
+    expect(updateChapterContent).toHaveBeenCalledWith('chapter-1', '<p>Draft 2</p>', 6)
+    await advanceTimers(10_000)
+    expect(updateChapterContent).toHaveBeenCalledTimes(1)
+  })
+
+  it('flushes on debounce, pagehide, hidden visibility, and unmount', async () => {
+    const editor = installEditor()
+    const updateChapterContent = vi.fn()
+    const params = buildCoreParams({
+      currentNovelId: 'novel-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
+      updateChapterContent,
+    })
+    const hook = renderHook(() => useSelectionNovelStudioCore(params))
+
+    editor.setValue('<p>Debounced</p>', 'Debounced')
+    tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
+    await advanceTimers(300)
+    expect(updateChapterContent).toHaveBeenLastCalledWith('chapter-1', '<p>Debounced</p>', 9)
+
+    editor.setValue('<p>Page hide</p>', 'Page hide')
+    tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
+    window.dispatchEvent(new PageTransitionEvent('pagehide'))
+    expect(updateChapterContent).toHaveBeenLastCalledWith('chapter-1', '<p>Page hide</p>', 8)
+
+    editor.setValue('<p>Hidden</p>', 'Hidden')
+    tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
+    const visibilityState = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(updateChapterContent).toHaveBeenLastCalledWith('chapter-1', '<p>Hidden</p>', 6)
+    visibilityState.mockRestore()
+
+    editor.setValue('<p>Unmounted</p>', 'Unmounted')
+    tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
+    hook.unmount()
+    expect(updateChapterContent).toHaveBeenLastCalledWith('chapter-1', '<p>Unmounted</p>', 9)
+  })
+
+  it('flushes chapter A before switching to B and prevents stale timer writes', async () => {
+    const editor = installEditor()
+    const chapterA = buildChapter({ id: 'chapter-a', content: '<p>A</p>', order: 1 })
+    const chapterB = buildChapter({ id: 'chapter-b', content: '<p>B</p>', order: 2 })
+    const updateChapterContent = vi.fn()
+    const setCurrentChapterId = vi.fn()
+    const params = buildCoreParams({
+      currentNovelId: 'novel-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
+      localChapters: [chapterA, chapterB],
+      currentChapterId: chapterA.id,
+      setCurrentChapterId,
+      updateChapterContent,
+    })
+    const { result } = renderHook(() => useSelectionNovelStudioCore(params))
+
+    editor.setValue('<p>A latest</p>', 'A latest')
+    tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
+    act(() => result.current.selectChapter(chapterB))
+
+    expect(updateChapterContent).toHaveBeenCalledWith('chapter-a', '<p>A latest</p>', 7)
+    expect(updateChapterContent.mock.invocationCallOrder[0]).toBeLessThan(setCurrentChapterId.mock.invocationCallOrder[0])
+    await advanceTimers(10_000)
+    expect(updateChapterContent).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps external setContent with emitUpdate false non-dirty', async () => {
+    const editor = installEditor('<p>Stale</p>', 'Stale')
+    const updateChapterContent = vi.fn()
+    const params = buildCoreParams({
+      currentNovelId: 'novel-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
+      updateChapterContent,
+    })
+    renderHook(() => useSelectionNovelStudioCore(params))
+
+    expect(editor.setContent).toHaveBeenCalledWith('<p>Alpha</p>', { emitUpdate: false })
+    await advanceTimers(10_000)
+    expect(updateChapterContent).not.toHaveBeenCalled()
   })
 })
 
@@ -1017,13 +1262,13 @@ describe('useSelectionNovelStudioCore knowledge rebuild polling', () => {
     })
 
     expect(knowledgeSignals[0].aborted).toBe(true)
-    expect(knowledgeRequests()).toHaveLength(2)
+    expect(knowledgeRequests()).toHaveLength(1)
     expect(maximumActiveKnowledgeRequests).toBe(1)
 
     await advanceTimers(1199)
-    expect(knowledgeRequests()).toHaveLength(2)
+    expect(knowledgeRequests()).toHaveLength(1)
     await advanceTimers(1)
-    expect(knowledgeRequests()).toHaveLength(3)
+    expect(knowledgeRequests()).toHaveLength(2)
     expect(maximumActiveKnowledgeRequests).toBe(1)
 
     unmount()
@@ -1132,7 +1377,7 @@ describe('useSelectionNovelStudioCore knowledge rebuild polling', () => {
 
   it('keeps requests single-flight and stops after an in-flight unmount', async () => {
     const pendingKnowledgeResponse = createDeferred()
-    let knowledgeSignal: AbortSignal | null = null
+    const knowledgeSignals: AbortSignal[] = []
     const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
     fetchMock.mockImplementation(async (input, init) => {
       const url = String(input)
@@ -1141,7 +1386,7 @@ describe('useSelectionNovelStudioCore knowledge rebuild polling', () => {
       }
       if (url.startsWith('/api/knowledge-view?')) {
         if (!init?.signal) throw new Error('Missing knowledge poll abort signal')
-        knowledgeSignal = init.signal
+        knowledgeSignals.push(init.signal)
         init.signal.addEventListener('abort', () => {
           pendingKnowledgeResponse.reject(new DOMException('Aborted', 'AbortError'))
         }, { once: true })
@@ -1171,7 +1416,9 @@ describe('useSelectionNovelStudioCore knowledge rebuild polling', () => {
     })
     await advanceTimers(10_000)
 
-    expect(knowledgeSignal?.aborted).toBe(true)
+    const knowledgeSignal = knowledgeSignals[0]
+    if (!knowledgeSignal) throw new Error('Knowledge poll signal was not captured')
+    expect(knowledgeSignal.aborted).toBe(true)
     expect(knowledgeRequests()).toHaveLength(1)
     expect(vi.getTimerCount()).toBe(0)
   })
@@ -1224,6 +1471,13 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
       },
       timelineNodeById,
     })).toBe(3)
+  })
+
+  it('defers mobile hidden reference resources while keeping desktop and opened surfaces visible', () => {
+    expect(resolveReferenceResourcesVisible(false, true, false)).toBe(false)
+    expect(resolveReferenceResourcesVisible(false, true, true)).toBe(true)
+    expect(resolveReferenceResourcesVisible(true, true, false)).toBe(true)
+    expect(resolveReferenceResourcesVisible(false, false, false)).toBe(true)
   })
 
   it('refreshes knowledge projection with a selected non-chapter block source chapter immediately after direct selection', async () => {
@@ -1279,7 +1533,8 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
       localWorldEntries: [],
       localTimelineEvents: [],
       localOutlines: [],
-      autosaveSignature: 'sig-1',
+      autosaveTarget: 'sig-1',
+      workspaceSaveFeedback: null,
     }))
 
     await waitFor(() => {
@@ -1288,7 +1543,7 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
 
     await flushEffects()
 
-    expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-1', 1)
+    expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-1', 1, expect.any(AbortSignal))
     expect(result.current.knowledgeStatusOverview).toEqual(authoritativeOverview)
 
     act(() => {
@@ -1303,7 +1558,7 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
     await flushEffects()
 
     await waitFor(() => {
-      expect(refreshKnowledgeProjection).toHaveBeenLastCalledWith('novel-1', 2)
+      expect(refreshKnowledgeProjection).toHaveBeenLastCalledWith('novel-1', 2, expect.any(AbortSignal))
     })
   })
 
@@ -1354,13 +1609,13 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
         buildChapter({ id: 'chapter-2', order: 2, title: 'Chapter 2' }),
       ],
       refreshKnowledgeProjection,
-      autosaveSignature: 'sig-1',
+      autosaveTarget: 'sig-1',
     })
     const { result } = renderHook(() => useSelectionNovelStudioCore(params))
 
     await waitFor(() => {
       expect(result.current.timelineNodeById.get('continue-node-2')).toBeDefined()
-      expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-1', 1)
+      expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-1', 1, expect.any(AbortSignal))
     })
 
     act(() => {
@@ -1373,7 +1628,7 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
     })
 
     await waitFor(() => {
-      expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-1', 2)
+    expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-1', 2, expect.any(AbortSignal))
     })
 
     await act(async () => {
@@ -1425,12 +1680,12 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
       currentNovelId: 'novel-1',
       localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
       refreshKnowledgeProjection,
-      autosaveSignature: 'sig-1',
+      autosaveTarget: 'sig-1',
     })
     const { result } = renderHook(() => useSelectionNovelStudioCore(params))
 
     await waitFor(() => {
-      expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-1', 1)
+      expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-1', 1, expect.any(AbortSignal))
     })
 
     act(() => {
@@ -1472,12 +1727,12 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
       currentNovelId: 'novel-1',
       localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
       refreshKnowledgeProjection,
-      autosaveSignature: 'sig-1',
+      autosaveTarget: 'sig-1',
     })
     const { result } = renderHook(() => useSelectionNovelStudioCore(params))
 
     await waitFor(() => {
-      expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-1', 1)
+      expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-1', 1, expect.any(AbortSignal))
     })
 
     act(() => {
@@ -1538,7 +1793,7 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
       localChapters: [buildChapter({ id: 'novel-a-chapter-1', novelId: 'novel-a' })],
       currentChapterId: 'novel-a-chapter-1',
       refreshKnowledgeProjection,
-      autosaveSignature: 'novel-a',
+      autosaveTarget: 'novel-a',
     })
     const novelBParams = buildCoreParams({
       backendLoaded: false,
@@ -1547,7 +1802,7 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
       localChapters: [buildChapter({ id: 'novel-b-chapter-1', novelId: 'novel-b' })],
       currentChapterId: 'novel-b-chapter-1',
       refreshKnowledgeProjection,
-      autosaveSignature: 'novel-b',
+      autosaveTarget: 'novel-b',
     })
     const { result, rerender } = renderHook(
       ({ novelId }) => useSelectionNovelStudioCore(novelId === 'novel-a' ? novelAParams : novelBParams),
@@ -1556,7 +1811,7 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
 
     await waitFor(() => {
       expect(result.current.knowledgeStatusOverview).toEqual(novelAOverview)
-      expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-a', 1)
+      expect(refreshKnowledgeProjection).toHaveBeenCalledWith('novel-a', 1, expect.any(AbortSignal))
     })
 
     rerender({ novelId: 'novel-b' })
@@ -1606,7 +1861,7 @@ describe('useSelectionNovelStudioCore workspace selection history', () => {
       currentNovelId: 'novel-1',
       localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
       localChapters,
-      autosaveSignature: 'history-test',
+      autosaveTarget: 'history-test',
     })
 
     return renderHook(() => {
