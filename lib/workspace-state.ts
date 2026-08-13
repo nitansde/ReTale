@@ -134,6 +134,14 @@ export function setPresetCompatSessionEntry(
   resetPending = false
 ): PresetCompatSessionState {
   const entryKey = createPresetCompatSessionStateKey(selection, surfaceId)
+  const currentEntry = state[entryKey]
+  if (
+    currentEntry?.surfaceId === surfaceId
+    && currentEntry.phase === phase
+    && currentEntry.resetPending === resetPending
+  ) {
+    return state
+  }
 
   return {
     ...state,
@@ -150,9 +158,12 @@ export function clearPresetCompatSessionStateForSelection(
   selection: PresetCompatSessionWorkspaceSelection
 ): PresetCompatSessionState {
   const selectionPrefix = `${createPresetCompatSessionSelectionKey(selection)}::`
-  return Object.fromEntries(
-    Object.entries(state).filter(([entryKey]) => !entryKey.startsWith(selectionPrefix))
-  )
+  const matchingKeys = Object.keys(state).filter((entryKey) => entryKey.startsWith(selectionPrefix))
+  if (matchingKeys.length === 0) return state
+
+  const nextState = { ...state }
+  matchingKeys.forEach((entryKey) => delete nextState[entryKey])
+  return nextState
 }
 
 export function resetPresetCompatSessionStateForSelection(
