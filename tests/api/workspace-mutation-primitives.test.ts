@@ -69,7 +69,7 @@ describe('workspace mutation persistence primitives', () => {
     const initialPayload = createPayload('Initial', '<p>initial</p>')
     const nextPayload = createPayload('Updated', '<p>updated</p>')
     await persistWorkspaceRuntimeState(initialPayload, 'singleton', db)
-    const initialArtifact = upsertWorkspaceState('singleton', JSON.stringify(initialPayload), { db })
+    const initialArtifact = await upsertWorkspaceState('singleton', JSON.stringify(initialPayload), { db })
     database.prepare('UPDATE WorkspaceRuntimeState SET revision = 4 WHERE id = ?').run('singleton')
 
     await db.withTransaction(() => {
@@ -108,7 +108,7 @@ describe('workspace mutation persistence primitives', () => {
     const initialPayload = createPayload('Initial', '<p>initial</p>')
     const nextPayload = createPayload('Updated', '<p>updated</p>')
     await persistWorkspaceRuntimeState(initialPayload, 'singleton', db)
-    upsertWorkspaceState('singleton', JSON.stringify(initialPayload), { db })
+    await upsertWorkspaceState('singleton', JSON.stringify(initialPayload), { db })
     markWorkspaceKnowledgeSyncRequested('singleton', '2026-08-12 00:00:00', { db })
     database.prepare('UPDATE WorkspaceRuntimeState SET revision = 3 WHERE id = ?').run('singleton')
     const before = readMutationRows(database)
@@ -126,11 +126,11 @@ describe('workspace mutation persistence primitives', () => {
     const initialPayload = createPayload('Initial', '<p>initial</p>')
     const nextPayload = createPayload('Updated', '<p>updated</p>')
     await persistWorkspaceRuntimeState(initialPayload, 'singleton', db)
-    upsertWorkspaceState('singleton', JSON.stringify(initialPayload), { db, backupReason: 'workspace-save' })
+    await upsertWorkspaceState('singleton', JSON.stringify(initialPayload), { db, backupReason: 'workspace-save' })
     database.prepare('UPDATE WorkspaceRuntimeState SET revision = 8 WHERE id = ?').run('singleton')
 
     const runtimeResult = await persistWorkspaceRuntimeState(nextPayload, 'singleton', db)
-    const artifactResult = upsertWorkspaceState('singleton', JSON.stringify(nextPayload), { db, backupReason: 'workspace-save' })
+    const artifactResult = await upsertWorkspaceState('singleton', JSON.stringify(nextPayload), { db, backupReason: 'workspace-save' })
     markWorkspaceKnowledgeSyncRequested('singleton', runtimeResult.updatedAt, { db })
     const loaded = await loadWorkspacePayloadFromRuntimeOrRecovery('singleton', db)
     const runtime = readWorkspaceRuntimeSnapshotFromDb(db)
@@ -157,8 +157,25 @@ describe('workspace mutation persistence primitives', () => {
     expect(runtime).toMatchObject({ payload: loaded, revision: 8, updatedAt: runtimeResult.updatedAt })
     expect(artifactResult).toEqual(artifact)
     expect(artifact?.payload).toBe(JSON.stringify(nextPayload))
+    expect(artifact?.revision).toBe(8)
     expect(backups).toEqual([{ payload: JSON.stringify(initialPayload), reason: 'workspace-save' }])
     expect(sync).toEqual({ requestedRevision: 1, requestedSourceUpdatedAt: runtimeResult.updatedAt })
+  })
+
+  it('derives an omitted artifact revision from runtime and then preserves the artifact revision', async () => {
+    const { database, db } = createTestDatabase()
+    const initialPayload = createPayload('Initial', '<p>initial</p>')
+    const updatedPayload = createPayload('Updated', '<p>updated</p>')
+    await persistWorkspaceRuntimeState(initialPayload, 'singleton', db)
+    database.prepare('UPDATE WorkspaceRuntimeState SET revision = ? WHERE id = ?').run(11, 'singleton')
+
+    const runtimeDerived = writeWorkspaceStateInDb(db, 'singleton', JSON.stringify(initialPayload))
+    expect(runtimeDerived.revision).toBe(11)
+
+    database.prepare('DELETE FROM WorkspaceRuntimeState WHERE id = ?').run('singleton')
+    const artifactDerived = writeWorkspaceStateInDb(db, 'singleton', JSON.stringify(updatedPayload))
+    expect(artifactDerived.revision).toBe(11)
+    expect(readWorkspaceStateFromDb(db)?.revision).toBe(11)
   })
 
   it('uses revision zero for fresh and recovered baselines', async () => {

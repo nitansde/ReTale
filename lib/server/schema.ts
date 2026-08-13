@@ -58,6 +58,7 @@ export const FULL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS WorkspaceState (
   id TEXT PRIMARY KEY DEFAULT 'singleton',
   payload TEXT,
+  revision INTEGER NOT NULL DEFAULT 0,
   createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -66,25 +67,10 @@ CREATE TABLE IF NOT EXISTS WorkspaceStateBackup (
   id TEXT PRIMARY KEY,
   workspaceStateId TEXT NOT NULL,
   payload TEXT,
+  revision INTEGER NOT NULL DEFAULT 0,
   reason TEXT NOT NULL DEFAULT 'overwrite',
   sourceUpdatedAt TEXT,
   createdAt TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
-  FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceState(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS WorkspaceKnowledgeSyncState (
-  workspaceStateId TEXT PRIMARY KEY,
-  requestedRevision INTEGER NOT NULL DEFAULT 0,
-  startedRevision INTEGER,
-  syncedRevision INTEGER NOT NULL DEFAULT 0,
-  requestedSourceUpdatedAt TEXT,
-  startedSourceUpdatedAt TEXT,
-  startedAt TEXT,
-  claimToken TEXT,
-  syncedSourceUpdatedAt TEXT,
-  lastError TEXT,
-  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceState(id) ON DELETE CASCADE
 );
 
@@ -123,6 +109,21 @@ CREATE TABLE IF NOT EXISTS WorkspaceRuntimeState (
   updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS WorkspaceKnowledgeSyncState (
+  workspaceStateId TEXT PRIMARY KEY,
+  requestedRevision INTEGER NOT NULL DEFAULT 0,
+  startedRevision INTEGER,
+  syncedRevision INTEGER NOT NULL DEFAULT 0,
+  requestedSourceUpdatedAt TEXT,
+  startedSourceUpdatedAt TEXT,
+  startedAt TEXT,
+  claimToken TEXT,
+  syncedSourceUpdatedAt TEXT,
+  lastError TEXT,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS WorkspaceMutationReplay (
   workspaceStateId TEXT NOT NULL,
   idempotencyKey TEXT NOT NULL,
@@ -134,6 +135,19 @@ CREATE TABLE IF NOT EXISTS WorkspaceMutationReplay (
   createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(workspaceStateId,idempotencyKey),
   FOREIGN KEY(workspaceStateId) REFERENCES WorkspaceRuntimeState(id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS WorkspaceChapterPatchJournal (
+  workspaceStateId TEXT NOT NULL,
+  committedRevision INTEGER NOT NULL CHECK(committedRevision > 0),
+  chapterId TEXT NOT NULL,
+  novelId TEXT NOT NULL,
+  contentHtml TEXT NOT NULL,
+  wordCount INTEGER NOT NULL CHECK(wordCount >= 0),
+  updatedAtLabel TEXT NOT NULL,
+  committedAt TEXT NOT NULL,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(workspaceStateId, committedRevision)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS WorkspaceRuntimeNovel (
@@ -1018,6 +1032,7 @@ CREATE INDEX IF NOT EXISTS idx_workspace_runtime_novel_state_order ON WorkspaceR
 CREATE INDEX IF NOT EXISTS idx_workspace_runtime_volume_state_order ON WorkspaceRuntimeVolume(workspaceStateId, novelId, sortOrder, id);
 CREATE INDEX IF NOT EXISTS idx_workspace_runtime_chapter_state_novel_order ON WorkspaceRuntimeChapter(workspaceStateId, novelId, sortOrder, id);
 CREATE INDEX IF NOT EXISTS idx_workspace_mutation_replay_created ON WorkspaceMutationReplay(workspaceStateId, createdAt);
+CREATE INDEX IF NOT EXISTS idx_workspace_patch_journal_revision ON WorkspaceChapterPatchJournal(workspaceStateId, committedRevision);
 CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_last_seen ON hanlp_bootstrap_cache(branch_id, last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_lookup ON hanlp_bootstrap_results(branch_id, chapter_id, chapter_source_hash, result_kind);
 CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_job ON hanlp_bootstrap_results(knowledge_job_id, status);

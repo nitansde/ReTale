@@ -16,6 +16,7 @@ import {
 } from '@/lib/server/persistence'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import {
+  hasWorkspaceRuntimeState,
   isExplicitWorkspaceResetRequest,
   loadWorkspacePayloadFromRuntimeOrRecovery,
   loadWorkspaceSnapshotFromRuntimeOrRecovery,
@@ -286,7 +287,9 @@ async function loadWorkspaceLibrarySummaries() {
   const settledSummaries = await Promise.allSettled(
     registryRows.map(async (row) => {
       const workspaceDb = getNovelWorkspaceDb(row.novelId)
-      await loadWorkspacePayloadFromRuntimeOrRecovery('singleton', workspaceDb)
+      if (!hasWorkspaceRuntimeState('singleton', workspaceDb)) {
+        await loadWorkspacePayloadFromRuntimeOrRecovery('singleton', workspaceDb)
+      }
       scheduleWorkspaceKnowledgeSyncRecovery(row.novelId)
       return readWorkspaceLibrarySummary('singleton', workspaceDb)
     })

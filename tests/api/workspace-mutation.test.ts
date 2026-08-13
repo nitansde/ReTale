@@ -116,6 +116,7 @@ afterEach(async () => {
   try {
     const mutation = await import('@/lib/server/workspace-mutation')
     mutation.setWorkspaceMutationFaultInjectorForTests(null)
+    mutation.setWorkspaceNovelCreationHeartbeatIntervalForTests(null)
     const resolver = await import('@/lib/server/db-resolver')
     resolver.resetResolvedDatabasesForTests()
     const gate = await import('@/lib/server/per-novel-write-gate')
@@ -152,8 +153,30 @@ describe('canonical workspace mutation coordinator', () => {
       title: 'Chapter 1',
       trajectoryJson: '["keep-me"]',
     })
-    expect(artifact.localChapters[0]).toMatchObject({ content: '<p>patched</p>', wordCount: 14, updatedAt: 'patched label' })
+    expect(artifact.localChapters[0]).toMatchObject({ content: '<p>initial</p>' })
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM WorkspaceStateBackup').get()).toEqual({ count: 0 })
     expect(fixture.database.prepare('SELECT requestedRevision FROM WorkspaceKnowledgeSyncState').get()).toEqual({ requestedRevision: 2 })
+    expect(fixture.database.prepare(
+      'SELECT committedRevision, chapterId, contentHtml FROM WorkspaceChapterPatchJournal',
+    ).get()).toEqual({
+      committedRevision: 2,
+      chapterId: `${fixture.novelId}-chapter-1`,
+      contentHtml: '<p>patched</p>',
+    })
+  })
+
+  it('uses a null artifact placeholder when the first persisted operation is a chapter patch', async () => {
+    const fixture = await createMutationFixture('retale-workspace-mutation-null-artifact-placeholder')
+    const { createNovelDatabaseAccess } = await import('@/lib/server/database-access')
+    const { persistWorkspaceRuntimeState } = await import('@/lib/server/workspace-resilience')
+    const { runWorkspaceMutation } = await import('@/lib/server/workspace-mutation')
+    await persistWorkspaceRuntimeState(createPayload(fixture.novelId), 'singleton', createNovelDatabaseAccess(fixture.novelId))
+
+    await runWorkspaceMutation(chapterPatchRequest(fixture.novelId, 0, 'first-patch'))
+
+    expect(fixture.database.prepare('SELECT payload FROM WorkspaceState WHERE id = ?').get('singleton')).toBeUndefined()
+    expect(fixture.database.prepare('SELECT requestedRevision FROM WorkspaceKnowledgeSyncState').get()).toEqual({ requestedRevision: 1 })
+    expect(fixture.database.prepare('SELECT contentHtml FROM WorkspaceRuntimeChapter').get()).toEqual({ contentHtml: '<p>patched</p>' })
   })
 
   it('supports legacy and revision-aware full snapshots with shared revision semantics', async () => {
@@ -230,7 +253,7 @@ describe('canonical workspace mutation coordinator', () => {
     expect(fixture.database.prepare('SELECT revision FROM WorkspaceRuntimeState').get()).toEqual({ revision: 2 })
   })
 
-  it.each(['after_runtime', 'after_artifact', 'after_sync', 'before_replay'] as const)(
+  it.each(['after_runtime', 'after_sync', 'before_replay'] as const)(
     'rolls back every surface when failure is injected at %s',
     async (stage) => {
       const fixture = await createMutationFixture(`retale-workspace-mutation-fault-${stage}`)
@@ -248,6 +271,114 @@ describe('canonical workspace mutation coordinator', () => {
       expect(readSurfaces(fixture.database)).toEqual(before)
     },
   )
+
+  it('keeps ordinary PATCH SQL limited to runtime metadata, the targeted chapter, sync intent, and replay', async () => {
+    const fixture = await createMutationFixture('retale-workspace-mutation-lightweight-patch')
+    const { runWorkspaceMutation } = await import('@/lib/server/workspace-mutation')
+    await runWorkspaceMutation(fullSnapshotRequest(fixture.novelId))
+    const forbiddenReads: string[] = []
+    const sqliteConstants = (await import('node:sqlite') as unknown as {
+      constants: { SQLITE_OK: number; SQLITE_READ: number }
+    }).constants
+    const databaseWithAuthorizer = fixture.database as DatabaseSync & {
+      setAuthorizer(callback: ((
+        actionCode: number,
+        tableName: string | null,
+        columnName: string | null,
+      ) => number) | null): void
+    }
+    databaseWithAuthorizer.setAuthorizer((actionCode, tableName, columnName) => {
+      if (
+        actionCode === sqliteConstants.SQLITE_READ
+        && (
+          (tableName === 'WorkspaceState' && columnName === 'payload')
+          || tableName === 'WorkspaceStateBackup'
+        )
+      ) {
+        forbiddenReads.push(`${tableName}.${columnName}`)
+      }
+      return sqliteConstants.SQLITE_OK
+    })
+
+    await runWorkspaceMutation(chapterPatchRequest(fixture.novelId, 1, 'lightweight-patch'))
+    databaseWithAuthorizer.setAuthorizer(null)
+
+    expect(forbiddenReads).toEqual([])
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM WorkspaceStateBackup').get()).toEqual({ count: 0 })
+  })
+
+  it('checkpoints the complete artifact at the explicit PATCH cadence', async () => {
+    const fixture = await createMutationFixture('retale-workspace-mutation-patch-checkpoint')
+    const mutation = await import('@/lib/server/workspace-mutation')
+    await mutation.runWorkspaceMutation(fullSnapshotRequest(fixture.novelId))
+    fixture.database.prepare('UPDATE WorkspaceRuntimeState SET revision = ?').run(
+      mutation.WORKSPACE_PATCH_ARTIFACT_CHECKPOINT_INTERVAL - 1,
+    )
+
+    await mutation.runWorkspaceMutation(chapterPatchRequest(
+      fixture.novelId,
+      mutation.WORKSPACE_PATCH_ARTIFACT_CHECKPOINT_INTERVAL - 1,
+      'checkpoint-patch',
+      '<p>checkpointed</p>',
+    ))
+
+    const artifact = JSON.parse((fixture.database.prepare('SELECT payload FROM WorkspaceState').get() as { payload: string }).payload)
+    expect(artifact.localChapters[0]).toMatchObject({ content: '<p>checkpointed</p>' })
+    expect(fixture.database.prepare('SELECT revision FROM WorkspaceState WHERE id = ?').get('singleton')).toEqual({
+      revision: mutation.WORKSPACE_PATCH_ARTIFACT_CHECKPOINT_INTERVAL,
+    })
+    expect(fixture.database.prepare('SELECT reason FROM WorkspaceStateBackup ORDER BY rowid DESC LIMIT 1').get()).toEqual({
+      reason: 'workspace-patch-checkpoint',
+    })
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM WorkspaceChapterPatchJournal').get()).toEqual({ count: 0 })
+  })
+
+  it('replays the compact patch journal when the normalized runtime is lost after an acknowledged patch', async () => {
+    const fixture = await createMutationFixture('retale-workspace-mutation-patch-recovery')
+    const mutation = await import('@/lib/server/workspace-mutation')
+    const resilience = await import('@/lib/server/workspace-resilience')
+    const { createNovelDatabaseAccess } = await import('@/lib/server/database-access')
+    const db = createNovelDatabaseAccess(fixture.novelId)
+    await mutation.runWorkspaceMutation(fullSnapshotRequest(fixture.novelId))
+    await mutation.runWorkspaceMutation(chapterPatchRequest(fixture.novelId, 1, 'recoverable-patch', '<p>recovered patch</p>'))
+
+    fixture.database.prepare('DELETE FROM WorkspaceRuntimeState WHERE id = ?').run('singleton')
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM WorkspaceRuntimeChapter').get()).toEqual({ count: 0 })
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM WorkspaceChapterPatchJournal').get()).toEqual({ count: 1 })
+
+    const recovered = await resilience.loadWorkspaceSnapshotFromRuntimeOrRecovery('singleton', db)
+    expect(recovered.payload.localChapters[0]).toMatchObject({ content: '<p>recovered patch</p>' })
+    expect(recovered.revision).toBe(2)
+    expect(fixture.database.prepare('SELECT revision FROM WorkspaceRuntimeState').get()).toEqual({ revision: 2 })
+    expect(fixture.database.prepare('SELECT contentHtml FROM WorkspaceRuntimeChapter').get()).toEqual({
+      contentHtml: '<p>recovered patch</p>',
+    })
+  })
+
+  it('restores the checkpoint revision when runtime rows are lost after the patch journal is cleared', async () => {
+    const fixture = await createMutationFixture('retale-workspace-mutation-checkpoint-revision-recovery')
+    const mutation = await import('@/lib/server/workspace-mutation')
+    const resilience = await import('@/lib/server/workspace-resilience')
+    const { createNovelDatabaseAccess } = await import('@/lib/server/database-access')
+    const db = createNovelDatabaseAccess(fixture.novelId)
+    await mutation.runWorkspaceMutation(fullSnapshotRequest(fixture.novelId))
+    fixture.database.prepare('UPDATE WorkspaceRuntimeState SET revision = ?').run(
+      mutation.WORKSPACE_PATCH_ARTIFACT_CHECKPOINT_INTERVAL - 1,
+    )
+    await mutation.runWorkspaceMutation(chapterPatchRequest(
+      fixture.novelId,
+      mutation.WORKSPACE_PATCH_ARTIFACT_CHECKPOINT_INTERVAL - 1,
+      'checkpoint-recovery-patch',
+      '<p>checkpoint recovery</p>',
+    ))
+
+    fixture.database.prepare('DELETE FROM WorkspaceRuntimeState WHERE id = ?').run('singleton')
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM WorkspaceChapterPatchJournal').get()).toEqual({ count: 0 })
+
+    const recovered = await resilience.loadWorkspaceSnapshotFromRuntimeOrRecovery('singleton', db)
+    expect(recovered.revision).toBe(mutation.WORKSPACE_PATCH_ARTIFACT_CHECKPOINT_INTERVAL)
+    expect(recovered.payload.localChapters[0]).toMatchObject({ content: '<p>checkpoint recovery</p>' })
+  })
 
   it('prunes replay rows older than seven days and caps newest rows at 512 while preserving the committed row', async () => {
     const fixture = await createMutationFixture('retale-workspace-mutation-retention')

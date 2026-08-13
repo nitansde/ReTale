@@ -182,11 +182,13 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
     const novelChapters = groupedByNovel.get(novelId) ?? []
     const branchId = getMainBranchId(novelId)
     const novelMeta = novelMetaById.get(novelId)
-    upsertNovelRecord({
-      novelId,
-      title: novelMeta?.title?.trim() || novelChapters[0]?.title?.replace(/^第\s*[0-9一二三四五六七八九十百千零两]+\s*章\s*/, '') || novelId,
-    }, db)
-    upsertStoryBranch(novelId, branchId, 'main', db)
+    await db.withTransaction(() => {
+      upsertNovelRecord({
+        novelId,
+        title: novelMeta?.title?.trim() || novelChapters[0]?.title?.replace(/^第\s*[0-9一二三四五六七八九十百千零两]+\s*章\s*/, '') || novelId,
+      }, db)
+      upsertStoryBranch(novelId, branchId, 'main', db)
+    })
 
     const existing = db.queryAll<KnowledgeChapterRow>(
       'SELECT id, novelId, branchId, chapterNo, title, rawText, revision, sourceHash FROM KnowledgeChapter WHERE novelId = ? AND branchId = ? ORDER BY chapterNo ASC',

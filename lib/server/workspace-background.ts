@@ -56,7 +56,7 @@ async function runPendingWorkspaceKnowledgeSync(novelId: string) {
   const workspaceDb = createNovelDatabaseAccess(novelId)
 
   while (true) {
-    const claimed = claimPendingWorkspaceKnowledgeSync('singleton', { db: workspaceDb })
+    const claimed = await claimPendingWorkspaceKnowledgeSync('singleton', { db: workspaceDb })
     if (!claimed) return
 
     try {
@@ -70,9 +70,9 @@ async function runPendingWorkspaceKnowledgeSync(novelId: string) {
             syncScope: 'target-novel' as const,
           } satisfies WorkspaceKnowledgeSyncPayload
       await syncWorkspacePayloadToKnowledgeStore(scopedPayload, { db: workspaceDb })
-      completeWorkspaceKnowledgeSync(claimed, { db: workspaceDb })
+      await completeWorkspaceKnowledgeSync(claimed, { db: workspaceDb })
     } catch (error) {
-      failWorkspaceKnowledgeSync(
+      await failWorkspaceKnowledgeSync(
         claimed,
         error instanceof Error ? error.message : 'Unknown workspace knowledge sync failure',
         { db: workspaceDb },

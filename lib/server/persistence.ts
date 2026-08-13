@@ -25,6 +25,7 @@ import { parseScopedWorkspacePayload } from '@/lib/server/workspace-novel-scope'
 type WorkspaceStateRow = {
   id: string
   payload: string | null
+  revision: number
   createdAt: string
   updatedAt: string
 }
@@ -33,6 +34,7 @@ type WorkspaceStateBackupRow = {
   id: string
   workspaceStateId: string
   payload: string | null
+  revision: number
   reason: string
   sourceUpdatedAt: string | null
   createdAt: string
@@ -308,9 +310,10 @@ function upsertActiveWorkspaceNovelId(controlDb: DatabaseAccess, novelId: string
   return published
 }
 
-export function writeActiveWorkspaceNovelId(novelId: string) {
+export async function writeActiveWorkspaceNovelId(novelId: string) {
   const stableNovelId = validateNovelId(novelId)
-  upsertActiveWorkspaceNovelId(createControlDatabaseAccess(), stableNovelId)
+  const controlDb = createControlDatabaseAccess()
+  return controlDb.withTransaction(() => upsertActiveWorkspaceNovelId(controlDb, stableNovelId))
 }
 
 export function readWorkspaceNovelDeletionState(novelId: string): WorkspaceNovelDeletionState {
@@ -334,8 +337,10 @@ export function readWorkspaceNovelDeletionState(novelId: string): WorkspaceNovel
   return row.migrationStatus as WorkspaceNovelDeletionState
 }
 
-export function upsertWorkspaceNovelRegistry(params: { novelId: string; title?: string | null }) {
-  const controlDb = createControlDatabaseAccess()
+function upsertWorkspaceNovelRegistryInDb(
+  controlDb: DatabaseAccess,
+  params: { novelId: string; title?: string | null },
+) {
   const paths = getNovelStoragePaths(params.novelId)
   controlDb.execute(
     `INSERT INTO NovelRegistry (
@@ -354,6 +359,27 @@ export function upsertWorkspaceNovelRegistry(params: { novelId: string; title?: 
     paths.databasePath,
     paths.lanceDbPath,
   )
+}
+
+export async function upsertWorkspaceNovelRegistry(params: { novelId: string; title?: string | null }) {
+  const controlDb = createControlDatabaseAccess()
+  return controlDb.withTransaction(() => upsertWorkspaceNovelRegistryInDb(controlDb, params))
+}
+
+export async function publishWorkspaceNovelWriteTarget(params: { novelId: string; title?: string | null }) {
+  const novelId = validateNovelId(params.novelId)
+  const controlDb = createControlDatabaseAccess()
+  return controlDb.withTransaction(() => {
+    const existing = controlDb.queryOne<{ migrationStatus: string }>(
+      'SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?',
+      novelId,
+    )
+    if (existing && existing.migrationStatus !== 'ready') {
+      throw new WorkspaceNovelStateConflictError('Novel deletion is already in progress or complete')
+    }
+    upsertWorkspaceNovelRegistryInDb(controlDb, { ...params, novelId })
+    return upsertActiveWorkspaceNovelId(controlDb, novelId)
+  })
 }
 
 export function assertWorkspaceNovelReadyForWrite(novelId: string) {
@@ -863,14 +889,14 @@ export function findWorkspaceState(id = 'singleton', context: WorkspaceDbContext
 }
 
 export function readWorkspaceStateFromDb(db: DatabaseAccess, id = 'singleton') {
-  return db.queryOne<WorkspaceStateRow>('SELECT id, payload, createdAt, updatedAt FROM WorkspaceState WHERE id = ?', id)
+  return db.queryOne<WorkspaceStateRow>('SELECT id, payload, revision, createdAt, updatedAt FROM WorkspaceState WHERE id = ?', id)
 }
 
 export function findWorkspaceStateBackups(id = 'singleton', context: WorkspaceDbContext = {}) {
   const db = resolveWorkspaceDbContext(context)
   if (!db) return [] as WorkspaceStateBackupRow[]
   return db.queryAll<WorkspaceStateBackupRow>(
-    `SELECT id, workspaceStateId, payload, reason, sourceUpdatedAt, createdAt
+    `SELECT id, workspaceStateId, payload, revision, reason, sourceUpdatedAt, createdAt
      FROM WorkspaceStateBackup
      WHERE workspaceStateId = ?
      ORDER BY createdAt DESC, rowid DESC`,
@@ -894,10 +920,11 @@ export function createWorkspaceState(id: string, payload: string, context: Works
 
 export function createWorkspaceStateBackupInDb(db: DatabaseAccess, row: WorkspaceStateRow, reason: string) {
   db.execute(
-    `INSERT INTO WorkspaceStateBackup (id, workspaceStateId, payload, reason, sourceUpdatedAt)
-     VALUES (lower(hex(randomblob(16))), ?, ?, ?, ?)`,
+    `INSERT INTO WorkspaceStateBackup (id, workspaceStateId, payload, revision, reason, sourceUpdatedAt)
+     VALUES (lower(hex(randomblob(16))), ?, ?, ?, ?, ?)`,
     row.id,
     row.payload,
+    row.revision,
     reason,
     row.updatedAt
   )
@@ -920,15 +947,26 @@ export function pruneWorkspaceStateBackupsInDb(db: DatabaseAccess, id = 'singlet
   )
 }
 
-export function writeWorkspaceStateInDb(db: DatabaseAccess, id: string, payload: string) {
+export function writeWorkspaceStateInDb(db: DatabaseAccess, id: string, payload: string, revision?: number) {
+  const resolvedRevision = revision ?? db.queryOne<{ revision: number }>(
+    `SELECT COALESCE(
+       (SELECT revision FROM WorkspaceRuntimeState WHERE id = ?),
+       (SELECT revision FROM WorkspaceState WHERE id = ?),
+       0
+     ) AS revision`,
+    id,
+    id,
+  )?.revision ?? 0
   db.execute(
-    `INSERT INTO WorkspaceState (id, payload)
-     VALUES (?, ?)
+    `INSERT INTO WorkspaceState (id, payload, revision)
+     VALUES (?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        payload = excluded.payload,
+       revision = excluded.revision,
        updatedAt = CURRENT_TIMESTAMP`,
     id,
     payload,
+    resolvedRevision,
   )
   const saved = readWorkspaceStateFromDb(db, id)
   if (!saved) {
@@ -937,7 +975,7 @@ export function writeWorkspaceStateInDb(db: DatabaseAccess, id: string, payload:
   return saved
 }
 
-export function upsertWorkspaceState(id: string, payload: string, options: WorkspaceStateWriteOptions = {}) {
+export async function upsertWorkspaceState(id: string, payload: string, options: WorkspaceStateWriteOptions = {}) {
   const scopedPayload = options.db || options.novelId
     ? { serializedPayload: payload, novelId: options.novelId ?? null, title: null as string | null }
     : (() => {
@@ -956,8 +994,7 @@ export function upsertWorkspaceState(id: string, payload: string, options: Works
 
   if (novelId) {
     assertWorkspaceNovelReadyForWrite(novelId)
-    writeActiveWorkspaceNovelId(novelId)
-    upsertWorkspaceNovelRegistry({ novelId, title: scopedPayload.title })
+    await publishWorkspaceNovelWriteTarget({ novelId, title: scopedPayload.title })
   }
 
   const db = options.db ?? (novelId ? getNovelDatabaseAccess(novelId) : null)
@@ -965,24 +1002,14 @@ export function upsertWorkspaceState(id: string, payload: string, options: Works
     throw new Error('Cannot save workspace payload without a novel database')
   }
 
-  db.execute('BEGIN IMMEDIATE')
-  try {
+  await db.withTransaction(() => {
     const existing = readWorkspaceStateFromDb(db, id)
     if (existing && existing.payload !== scopedPayload.serializedPayload) {
       createWorkspaceStateBackupInDb(db, existing, options.backupReason ?? 'overwrite')
     }
     writeWorkspaceStateInDb(db, id, scopedPayload.serializedPayload)
     pruneWorkspaceStateBackupsInDb(db, id)
-    db.execute('COMMIT')
-  } catch (error) {
-    try {
-      db.execute('ROLLBACK')
-    } catch (_rollbackError) {
-      void _rollbackError
-      // Ignore rollback cleanup failures so the original transaction error is rethrown.
-    }
-    throw error
-  }
+  })
 
   const saved = findWorkspaceState(id, { db })
   if (!saved) {
@@ -1059,18 +1086,19 @@ export function markWorkspaceKnowledgeSyncRequestedInDb(db: DatabaseAccess, id: 
   )
 }
 
-export function claimPendingWorkspaceKnowledgeSync(id = 'singleton', context: WorkspaceDbContext = {}): WorkspaceKnowledgeSyncClaim | null {
+export async function claimPendingWorkspaceKnowledgeSync(
+  id = 'singleton',
+  context: WorkspaceDbContext = {},
+): Promise<WorkspaceKnowledgeSyncClaim | null> {
   const db = resolveWorkspaceDbContext(context)
   if (!db) return null
 
-  db.execute('BEGIN IMMEDIATE')
-  try {
+  return db.withTransaction(() => {
     const syncState = findWorkspaceKnowledgeSyncState(id, db)
     const requestedSourceUpdatedAt = syncState?.requestedSourceUpdatedAt ?? null
     const requestedRevision = syncState?.requestedRevision ?? 0
 
     if (!requestedSourceUpdatedAt || requestedRevision <= (syncState?.syncedRevision ?? 0)) {
-      db.execute('ROLLBACK')
       return null
     }
 
@@ -1078,7 +1106,6 @@ export function claimPendingWorkspaceKnowledgeSync(id = 'singleton', context: Wo
       syncState?.startedRevision === requestedRevision
       && hasFreshWorkspaceKnowledgeSyncStart(syncState.startedAt)
     ) {
-      db.execute('ROLLBACK')
       return null
     }
 
@@ -1111,83 +1138,82 @@ export function claimPendingWorkspaceKnowledgeSync(id = 'singleton', context: Wo
       claimToken
     )
 
-    db.execute('COMMIT')
     return {
       workspaceStateId: id,
       revision: requestedRevision,
       sourceUpdatedAt: requestedSourceUpdatedAt,
       claimToken,
     }
-  } catch (error) {
-    try {
-      db.execute('ROLLBACK')
-    } catch (_rollbackError) {
-      void _rollbackError
-      // Ignore rollback cleanup failures so the original transaction error is rethrown.
-    }
-    throw error
-  }
+  })
 }
 
-export function completeWorkspaceKnowledgeSync(claim: WorkspaceKnowledgeSyncClaim, context: WorkspaceDbContext = {}) {
+export async function completeWorkspaceKnowledgeSync(claim: WorkspaceKnowledgeSyncClaim, context: WorkspaceDbContext = {}) {
   const db = resolveWorkspaceDbContext(context)
   if (!db) {
     throw new Error('Cannot complete workspace knowledge sync without a target novel database')
   }
 
-  const result = db.execute(
-    `UPDATE WorkspaceKnowledgeSyncState
-     SET syncedRevision = MAX(syncedRevision, ?),
-         syncedSourceUpdatedAt = CASE
-           WHEN ? >= syncedRevision THEN ?
-           ELSE syncedSourceUpdatedAt
-         END,
-         startedRevision = NULL,
-         startedSourceUpdatedAt = NULL,
-         startedAt = NULL,
-         claimToken = NULL,
-         lastError = NULL,
-         updatedAt = CURRENT_TIMESTAMP
-     WHERE workspaceStateId = ?
-       AND startedRevision = ?
-       AND startedSourceUpdatedAt = ?
-       AND claimToken = ?`,
-    claim.revision,
-    claim.revision,
-    claim.sourceUpdatedAt,
-    claim.workspaceStateId,
-    claim.revision,
-    claim.sourceUpdatedAt,
-    claim.claimToken,
-  )
-  return result.changes === 1
+  return db.withTransaction(() => {
+    const result = db.execute(
+      `UPDATE WorkspaceKnowledgeSyncState
+       SET syncedRevision = MAX(syncedRevision, ?),
+           syncedSourceUpdatedAt = CASE
+             WHEN ? >= syncedRevision THEN ?
+             ELSE syncedSourceUpdatedAt
+           END,
+           startedRevision = NULL,
+           startedSourceUpdatedAt = NULL,
+           startedAt = NULL,
+           claimToken = NULL,
+           lastError = NULL,
+           updatedAt = CURRENT_TIMESTAMP
+       WHERE workspaceStateId = ?
+         AND startedRevision = ?
+         AND startedSourceUpdatedAt = ?
+         AND claimToken = ?`,
+      claim.revision,
+      claim.revision,
+      claim.sourceUpdatedAt,
+      claim.workspaceStateId,
+      claim.revision,
+      claim.sourceUpdatedAt,
+      claim.claimToken,
+    )
+    return result.changes === 1
+  })
 }
 
-export function failWorkspaceKnowledgeSync(claim: WorkspaceKnowledgeSyncClaim, errorMessage: string, context: WorkspaceDbContext = {}) {
+export async function failWorkspaceKnowledgeSync(
+  claim: WorkspaceKnowledgeSyncClaim,
+  errorMessage: string,
+  context: WorkspaceDbContext = {},
+) {
   const db = resolveWorkspaceDbContext(context)
   if (!db) {
     throw new Error('Cannot fail workspace knowledge sync without a target novel database')
   }
 
-  const result = db.execute(
-    `UPDATE WorkspaceKnowledgeSyncState
-     SET startedRevision = NULL,
-         startedSourceUpdatedAt = NULL,
-         startedAt = NULL,
-         claimToken = NULL,
-         lastError = ?,
-         updatedAt = CURRENT_TIMESTAMP
-     WHERE workspaceStateId = ?
-       AND startedRevision = ?
-       AND startedSourceUpdatedAt = ?
-       AND claimToken = ?`,
-    errorMessage,
-    claim.workspaceStateId,
-    claim.revision,
-    claim.sourceUpdatedAt,
-    claim.claimToken,
-  )
-  return result.changes === 1
+  return db.withTransaction(() => {
+    const result = db.execute(
+      `UPDATE WorkspaceKnowledgeSyncState
+       SET startedRevision = NULL,
+           startedSourceUpdatedAt = NULL,
+           startedAt = NULL,
+           claimToken = NULL,
+           lastError = ?,
+           updatedAt = CURRENT_TIMESTAMP
+       WHERE workspaceStateId = ?
+         AND startedRevision = ?
+         AND startedSourceUpdatedAt = ?
+         AND claimToken = ?`,
+      errorMessage,
+      claim.workspaceStateId,
+      claim.revision,
+      claim.sourceUpdatedAt,
+      claim.claimToken,
+    )
+    return result.changes === 1
+  })
 }
 
 export function findAppSettings(keys: readonly string[]) {

@@ -863,7 +863,7 @@ describe('workspace route', () => {
     expect(database.prepare('SELECT revision FROM WorkspaceRuntimeState').get()).toEqual({ revision: 0 })
   })
 
-  it('patches only the targeted chapter and persists revision, artifact, replay, and sync intent', async () => {
+  it('patches only the targeted chapter and persists revision, replay, and sync intent without rewriting the artifact', async () => {
     const database = await createTestDatabase('retale-workspace-route-patch-success', 'novel-patch')
     clearWorkspaceRecoveryData(database)
     const initialPayload = createWorkspacePayloadWithSideData('novel-patch', 'Patch Novel')
@@ -895,12 +895,8 @@ describe('workspace route', () => {
       updatedAtLabel: '刚刚更新',
     })
     expect(database.prepare('SELECT revision FROM WorkspaceRuntimeState').get()).toEqual({ revision: 1 })
-    expect(readWorkspaceStatePayload(database)).toMatchObject({
-      localNovels: initialPayload.localNovels,
-      localOutlines: initialPayload.localOutlines,
-      localCharacters: initialPayload.localCharacters,
-      localChapters: [expect.objectContaining({ content: '<p>修订后的正文</p>', wordCount: 7, updatedAt: '刚刚更新' })],
-    })
+    expect(readWorkspaceStatePayload(database)).toBeNull()
+    expect(readWorkspaceBackups(database)).toHaveLength(0)
     expect(database.prepare('SELECT operation, committedRevision FROM WorkspaceMutationReplay').get()).toEqual({
       operation: 'chapter-patch',
       committedRevision: 1,
@@ -1185,6 +1181,11 @@ describe('workspace route', () => {
       getNovelDb(novelId)
       seedNovelRegistryRow(controlDb, novelId, novelId)
     }
+    controlDb.prepare('UPDATE NovelRegistry SET createdAt = ? WHERE novelId IN (?, ?)').run(
+      '2026-08-12 00:00:01',
+      'novel-alpha',
+      'novel-beta',
+    )
 
     const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
     const response = await DELETE(createWorkspaceDeleteRequest('novel-target'))
@@ -1359,6 +1360,11 @@ describe('workspace route', () => {
       getNovelDb(novelId)
       seedNovelRegistryRow(controlDb, novelId, novelId)
     }
+    controlDb.prepare('UPDATE NovelRegistry SET createdAt = ? WHERE novelId IN (?, ?)').run(
+      '2026-08-12 00:00:01',
+      'novel-alpha',
+      'novel-beta',
+    )
     controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('pending', 'novel-pending')
 
     const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
@@ -1591,7 +1597,7 @@ describe('workspace route', () => {
     getNovelDb('novel-beta')
     seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
     seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta')
-    alphaDb.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', '{}')
+    alphaDb.prepare('INSERT INTO WorkspaceRuntimeState (id) VALUES (?)').run('singleton')
     alphaDb.prepare(
       `INSERT INTO WorkspaceKnowledgeSyncState (workspaceStateId, requestedRevision, syncedRevision)
        VALUES (?, ?, ?)`,
@@ -1957,6 +1963,56 @@ describe('workspace route', () => {
     expect(JSON.stringify(payload)).not.toContain('正文')
     expect(JSON.stringify(payload)).not.toContain('Branch text excluded')
     expect(afterCallbacks).toHaveLength(1)
+  })
+
+  it('does not read chapter bodies or invoke recovery when normalized library runtime exists', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-library-summary-lightweight', 'novel-large')
+    const largeContent = `<p>${'large workspace body '.repeat(50_000)}</p>`
+    await seedWorkspaceRuntimeForNovel('novel-large', {
+      ...createWorkspacePayloadWithSideData('novel-large', 'Large Library'),
+      localChapters: [{
+        ...createWorkspacePayloadWithSideData('novel-large', 'Large Library').localChapters[0],
+        content: largeContent,
+        originalContent: largeContent,
+        wordCount: 1_000_000,
+      }],
+    })
+    seedNovelRegistryRow(controlDb, 'novel-large', 'Large Library')
+    const database = getNovelDb('novel-large')
+    const sqliteConstants = (await import('node:sqlite') as unknown as {
+      constants: { SQLITE_OK: number; SQLITE_READ: number }
+    }).constants
+    const databaseWithAuthorizer = database as DatabaseSync & {
+      setAuthorizer(callback: ((
+        actionCode: number,
+        tableName: string | null,
+        columnName: string | null,
+      ) => number) | null): void
+    }
+    const forbiddenReads: string[] = []
+    databaseWithAuthorizer.setAuthorizer((actionCode, tableName, columnName) => {
+      if (
+        actionCode === sqliteConstants.SQLITE_READ
+        && (
+          (tableName === 'WorkspaceRuntimeChapter' && ['contentHtml', 'originalContentHtml'].includes(columnName ?? ''))
+          || tableName === 'KnowledgeChapter'
+          || (tableName === 'WorkspaceState' && columnName === 'payload')
+        )
+      ) {
+        forbiddenReads.push(`${tableName}.${columnName}`)
+      }
+      return sqliteConstants.SQLITE_OK
+    })
+
+    const { GET } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await GET(createWorkspaceLibrarySummaryRequest())
+    databaseWithAuthorizer.setAuthorizer(null)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      novels: [expect.objectContaining({ id: 'novel-large', wordCount: 1_000_000 })],
+    })
+    expect(forbiddenReads).toEqual([])
   })
 
   it('rejects invalid library-summary flags without opening or creating novel storage', async () => {
@@ -2345,7 +2401,9 @@ describe('workspace route', () => {
     expect(afterCallbacks).toHaveLength(1)
 
     const backgroundSync = afterCallbacks[0]()
-    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => {
+      expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledTimes(1)
+    })
 
     syncControl.resolve?.()
     await backgroundSync
@@ -2452,7 +2510,9 @@ describe('workspace route', () => {
     expect(afterCallbacks).toHaveLength(1)
 
     const backgroundSync = afterCallbacks[0]()
-    expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => {
+      expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledTimes(1)
+    })
     expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledWith(
       expect.objectContaining({
         ...firstPayload,

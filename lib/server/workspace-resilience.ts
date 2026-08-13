@@ -1,8 +1,7 @@
 import {
   assertWorkspaceNovelReadyForWrite,
+  publishWorkspaceNovelWriteTarget,
   readActiveWorkspaceNovelId,
-  upsertWorkspaceNovelRegistry,
-  writeActiveWorkspaceNovelId,
 } from '@/lib/server/persistence'
 import { safeParseJson as safeParseJsonValue, safeParseJsonObject } from '@/lib/server/json-parse'
 import {
@@ -147,8 +146,25 @@ type KnowledgeChapterRow = {
 type WorkspaceStateRow = {
   id: string
   payload: string | null
+  revision: number
   createdAt: string
   updatedAt: string
+}
+
+type WorkspaceChapterPatchJournalRow = {
+  committedRevision: number
+  chapterId: string
+  novelId: string
+  contentHtml: string
+  wordCount: number
+  updatedAtLabel: string
+}
+
+function readWorkspacePatchJournalRevision(id: string, db: WorkspaceRecoveryDb) {
+  return db.queryOne<{ revision: number | null }>(
+    'SELECT MAX(committedRevision) AS revision FROM WorkspaceChapterPatchJournal WHERE workspaceStateId = ?',
+    id,
+  )?.revision ?? null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -223,7 +239,7 @@ function findWorkspaceStateForRecovery(id: string, db?: WorkspaceRecoveryDb) {
   if (!targetDb) return null
 
   return targetDb.queryOne<WorkspaceStateRow>(
-    'SELECT id, payload, createdAt, updatedAt FROM WorkspaceState WHERE id = ?',
+    'SELECT id, payload, revision, createdAt, updatedAt FROM WorkspaceState WHERE id = ?',
     id,
   )
 }
@@ -342,6 +358,15 @@ function readWorkspaceRuntimeState(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) 
   const targetDb = getCurrentWorkspaceDb(db)
   if (!targetDb) return null
   return readWorkspaceRuntimeSnapshotFromDb(targetDb as DatabaseAccess, id)?.payload ?? null
+}
+
+export function hasWorkspaceRuntimeState(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
+  const targetDb = getCurrentWorkspaceDb(db)
+  if (!targetDb) return false
+  return targetDb.queryOne<{ present: number }>(
+    'SELECT 1 AS present FROM WorkspaceRuntimeState WHERE id = ?',
+    id,
+  ) !== null
 }
 
 export function readWorkspaceLibrarySummary(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb): WorkspaceLibrarySummary | null {
@@ -572,8 +597,10 @@ export async function persistWorkspaceRuntimeState(
     assertWorkspaceNovelReadyForWrite(targetNovelId)
     const targetDb = createNovelDatabaseAccess(targetNovelId)
 
-    writeActiveWorkspaceNovelId(targetNovelId)
-    upsertWorkspaceNovelRegistry({ novelId: targetNovelId, title: scopedPayload.localNovels[0]?.title ?? null })
+    await publishWorkspaceNovelWriteTarget({
+      novelId: targetNovelId,
+      title: scopedPayload.localNovels[0]?.title ?? null,
+    })
 
     return persistWorkspaceRuntimeState(scopedPayload, id, targetDb)
   }
@@ -595,6 +622,35 @@ export async function persistWorkspaceRuntimeState(
   } catch (error) {
     try {
       executeOnDb(db, 'ROLLBACK')
+    } catch (_rollbackError) {
+      void _rollbackError
+    }
+    throw error
+  }
+}
+
+async function persistWorkspaceRuntimeStateWithRevision(
+  payload: PersistedNovelState,
+  revision: number,
+  id = WORKSPACE_ID,
+  db?: WorkspaceRecoveryDb,
+): Promise<WorkspaceRuntimeSaveResult> {
+  const normalized = normalizeWorkspaceState(payload)
+  const targetDb = getCurrentWorkspaceDb(db)
+  if (!targetDb) {
+    throw new Error('Cannot persist recovered workspace runtime state without a target novel database')
+  }
+  const save = () => replaceWorkspaceRuntimeStateInDb(targetDb as DatabaseAccess, normalized, revision, id)
+  if (hasTransactionWrapper(targetDb)) return targetDb.withTransaction(save)
+
+  executeOnDb(targetDb, 'BEGIN IMMEDIATE')
+  try {
+    const saved = save()
+    executeOnDb(targetDb, 'COMMIT')
+    return saved
+  } catch (error) {
+    try {
+      executeOnDb(targetDb, 'ROLLBACK')
     } catch (_rollbackError) {
       void _rollbackError
     }
@@ -704,7 +760,33 @@ function readWorkspaceArtifactPayload(id = WORKSPACE_ID, db?: WorkspaceRecoveryD
     return { ok: false as const, reason: 'invalid' as const, error: parsed.error }
   }
 
-  return { ok: true as const, payload: parsed.payload }
+  const targetDb = getCurrentWorkspaceDb(db)
+  if (!targetDb) return { ok: true as const, payload: parsed.payload, revision: existing.revision }
+  const patches = targetDb.queryAll<WorkspaceChapterPatchJournalRow>(
+    `SELECT committedRevision, chapterId, novelId, contentHtml, wordCount, updatedAtLabel
+     FROM WorkspaceChapterPatchJournal
+     WHERE workspaceStateId = ?
+     ORDER BY committedRevision ASC`,
+    id,
+  )
+  const localChapters = parsed.payload.localChapters.map((chapter) => {
+    const latestPatch = patches.findLast((patch) => (
+      patch.chapterId === chapter.id && patch.novelId === chapter.novelId
+    ))
+    return latestPatch
+      ? {
+          ...chapter,
+          content: latestPatch.contentHtml,
+          wordCount: latestPatch.wordCount,
+          updatedAt: latestPatch.updatedAtLabel,
+        }
+      : chapter
+  })
+  return {
+    ok: true as const,
+    payload: patches.length ? normalizeWorkspaceState({ ...parsed.payload, localChapters }) : parsed.payload,
+    revision: patches.at(-1)?.committedRevision ?? existing.revision,
+  }
 }
 
 export async function backfillWorkspaceRuntimeFromArtifactIfMissing(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
@@ -719,7 +801,17 @@ export async function backfillWorkspaceRuntimeFromArtifactIfMissing(id = WORKSPA
     return null
   }
 
-  await persistWorkspaceRuntimeState(artifact.payload, id, db)
+  await persistWorkspaceRuntimeStateWithRevision(artifact.payload, artifact.revision, id, db)
+  return artifact.payload
+}
+
+export async function restoreWorkspaceRuntimeFromArtifactForTests(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
+  if (process.env.VITEST !== 'true') {
+    throw new Error('Forced workspace artifact recovery is only available in tests')
+  }
+  const artifact = readWorkspaceArtifactPayload(id, db)
+  if (!artifact.ok) return null
+  await persistWorkspaceRuntimeStateWithRevision(artifact.payload, artifact.revision, id, db)
   return artifact.payload
 }
 
@@ -735,7 +827,27 @@ export async function loadWorkspaceSnapshotFromRuntimeOrRecovery(
   const runtimeSnapshot = targetDb
     ? readWorkspaceRuntimeSnapshotFromDb(targetDb as DatabaseAccess, id)
     : null
-  if (runtimeSnapshot) return runtimeSnapshot
+  const journalRevision = targetDb ? readWorkspacePatchJournalRevision(id, targetDb) : null
+  if (runtimeSnapshot && (journalRevision === null || journalRevision <= runtimeSnapshot.revision)) {
+    return runtimeSnapshot
+  }
+
+  const artifact = readWorkspaceArtifactPayload(id, targetDb ?? db)
+  if (artifact.ok && journalRevision !== null && journalRevision > (runtimeSnapshot?.revision ?? -1)) {
+    await persistWorkspaceRuntimeStateWithRevision(artifact.payload, journalRevision, id, targetDb ?? db)
+    const repairedSnapshot = targetDb
+      ? readWorkspaceRuntimeSnapshotFromDb(targetDb as DatabaseAccess, id)
+      : null
+    if (repairedSnapshot) return repairedSnapshot
+  }
+
+  if (!runtimeSnapshot && artifact.ok && workspacePayloadHasLibraryContent(artifact.payload)) {
+    await persistWorkspaceRuntimeStateWithRevision(artifact.payload, artifact.revision, id, targetDb ?? db)
+    const restoredSnapshot = targetDb
+      ? readWorkspaceRuntimeSnapshotFromDb(targetDb as DatabaseAccess, id)
+      : null
+    if (restoredSnapshot) return restoredSnapshot
+  }
 
   const recovered = recoverWorkspaceStateFromKnowledgeStore(db)
   if (recovered) {

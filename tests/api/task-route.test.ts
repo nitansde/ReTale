@@ -26,7 +26,7 @@ async function activateNovel(novelId: string) {
     import('@/lib/server/db-resolver'),
     import('@/lib/server/persistence'),
   ])
-  writeActiveWorkspaceNovelId(novelId)
+  await writeActiveWorkspaceNovelId(novelId)
   controlDatabase = getControlDb()
 }
 

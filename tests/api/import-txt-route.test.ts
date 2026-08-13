@@ -144,8 +144,14 @@ function expectNoImportSideEffects(sideEffects: ReturnType<typeof mockImportSide
   expect(sideEffects.createWorkspaceNovelFromSnapshot).not.toHaveBeenCalled()
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks()
+  try {
+    const mutation = await import('@/lib/server/workspace-mutation')
+    mutation.setWorkspaceNovelCreationHeartbeatIntervalForTests(null)
+  } catch (error) {
+    void error
+  }
   vi.resetModules()
   vi.doUnmock('@/lib/server/knowledge-rebuild')
   vi.doUnmock('@/lib/server/workspace-resilience')
@@ -526,6 +532,37 @@ describe('import-txt route', () => {
     ).get()).toEqual({ requestedRevision: 1, syncedRevision: 1, startedRevision: null, lastError: null })
   })
 
+  it('renews the creation lease while a long knowledge sync is still running', async () => {
+    const { controlDb } = await createTestDataRoot('retale-import-txt-route-creation-heartbeat')
+    const syncControl = Promise.withResolvers<void>()
+    const syncWorkspacePayloadToKnowledgeStore = vi.fn((_payload: unknown) => syncControl.promise)
+    vi.doMock('@/lib/server/knowledge-rebuild', () => ({ syncWorkspacePayloadToKnowledgeStore }))
+
+    const mutation = await import('@/lib/server/workspace-mutation')
+    mutation.setWorkspaceNovelCreationHeartbeatIntervalForTests(10)
+    const { POST } = await importRouteWithAfterCallbacks()
+    const responsePromise = POST(createImportRequest())
+
+    await vi.waitFor(() => expect(syncWorkspacePayloadToKnowledgeStore).toHaveBeenCalledTimes(1))
+    const novelId = (syncWorkspacePayloadToKnowledgeStore.mock.calls[0]![0] as { currentNovelId: string }).currentNovelId
+    const initialLease = (controlDb.prepare(
+      'SELECT leaseExpiresAt FROM NovelRegistry WHERE novelId = ?',
+    ).get(novelId) as { leaseExpiresAt: string }).leaseExpiresAt
+
+    await vi.waitFor(() => {
+      const renewedLease = (controlDb.prepare(
+        'SELECT leaseExpiresAt FROM NovelRegistry WHERE novelId = ?',
+      ).get(novelId) as { leaseExpiresAt: string }).leaseExpiresAt
+      expect(renewedLease > initialLease).toBe(true)
+      expect(controlDb.prepare(
+        'SELECT migrationStatus, lifecycleToken IS NOT NULL AS owned FROM NovelRegistry WHERE novelId = ?',
+      ).get(novelId)).toEqual({ migrationStatus: 'creating', owned: 1 })
+    })
+
+    syncControl.resolve()
+    expect((await responsePromise).status).toBe(200)
+  })
+
   it('scopes a later import to its generated novel before creation and scheduling', async () => {
     const sideEffects = mockImportSideEffects()
     sideEffects.loadWorkspacePayloadFromRuntimeOrRecovery.mockResolvedValue({
@@ -769,6 +806,7 @@ describe('import-txt route', () => {
         'Content-Type': 'application/json',
         'Idempotency-Key': 'import-patch-continuity',
         'X-Retale-Base-Revision': '1',
+        'X-Retale-Revision-Novel-Id': importPayload.novelId,
       },
       body: JSON.stringify({
         novelId: importPayload.novelId,

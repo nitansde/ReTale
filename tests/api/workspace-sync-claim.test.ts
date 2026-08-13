@@ -17,13 +17,13 @@ function createFixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-workspace-sync-claim-'))
   createdDirectories.push(directory)
   const database = initializeDatabase(new DatabaseSync(path.join(directory, 'novel.db')))
-  database.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', '{}')
+  database.prepare('INSERT INTO WorkspaceRuntimeState (id) VALUES (?)').run('singleton')
   database.prepare(
     `INSERT INTO WorkspaceKnowledgeSyncState (
        workspaceStateId, requestedRevision, syncedRevision, requestedSourceUpdatedAt
      ) VALUES (?, ?, ?, ?)`,
   ).run('singleton', 2, 0, 'source-2')
-  return { database, db: createDatabaseAccess(database) }
+  return { database, db: createDatabaseAccess(database, { novelId: directory }) }
 }
 
 afterEach(() => {
@@ -33,19 +33,19 @@ afterEach(() => {
 })
 
 describe('workspace knowledge sync claim ownership', () => {
-  it('fences stale completion and failure after a newer worker reclaims the same revision', () => {
+  it('fences stale completion and failure after a newer worker reclaims the same revision', async () => {
     const { database, db } = createFixture()
-    const claimA = claimPendingWorkspaceKnowledgeSync('singleton', { db })
+    const claimA = await claimPendingWorkspaceKnowledgeSync('singleton', { db })
     expect(claimA).not.toBeNull()
     database.prepare(
       `UPDATE WorkspaceKnowledgeSyncState SET startedAt = datetime('now', '-10 minutes') WHERE workspaceStateId = ?`,
     ).run('singleton')
 
-    const claimB = claimPendingWorkspaceKnowledgeSync('singleton', { db })
+    const claimB = await claimPendingWorkspaceKnowledgeSync('singleton', { db })
     expect(claimB).not.toBeNull()
     expect(claimB?.claimToken).not.toBe(claimA?.claimToken)
-    expect(completeWorkspaceKnowledgeSync(claimA!, { db })).toBe(false)
-    expect(failWorkspaceKnowledgeSync(claimA!, 'late stale failure', { db })).toBe(false)
+    expect(await completeWorkspaceKnowledgeSync(claimA!, { db })).toBe(false)
+    expect(await failWorkspaceKnowledgeSync(claimA!, 'late stale failure', { db })).toBe(false)
     expect(database.prepare(
       `SELECT startedRevision, claimToken, lastError FROM WorkspaceKnowledgeSyncState WHERE workspaceStateId = ?`,
     ).get('singleton')).toEqual({
@@ -54,7 +54,7 @@ describe('workspace knowledge sync claim ownership', () => {
       lastError: null,
     })
 
-    expect(completeWorkspaceKnowledgeSync(claimB!, { db })).toBe(true)
+    expect(await completeWorkspaceKnowledgeSync(claimB!, { db })).toBe(true)
     expect(database.prepare(
       `SELECT syncedRevision, syncedSourceUpdatedAt, startedRevision, claimToken, lastError
        FROM WorkspaceKnowledgeSyncState WHERE workspaceStateId = ?`,
@@ -68,9 +68,9 @@ describe('workspace knowledge sync claim ownership', () => {
     database.close()
   })
 
-  it('never regresses an already advanced synced revision or its source timestamp', () => {
+  it('never regresses an already advanced synced revision or its source timestamp', async () => {
     const { database, db } = createFixture()
-    const claim = claimPendingWorkspaceKnowledgeSync('singleton', { db })
+    const claim = await claimPendingWorkspaceKnowledgeSync('singleton', { db })
     expect(claim).not.toBeNull()
     database.prepare(
       `UPDATE WorkspaceKnowledgeSyncState
@@ -78,7 +78,7 @@ describe('workspace knowledge sync claim ownership', () => {
        WHERE workspaceStateId = ?`,
     ).run(7, 'source-7', 'singleton')
 
-    expect(completeWorkspaceKnowledgeSync(claim!, { db })).toBe(true)
+    expect(await completeWorkspaceKnowledgeSync(claim!, { db })).toBe(true)
     expect(database.prepare(
       `SELECT syncedRevision, syncedSourceUpdatedAt, startedRevision, claimToken
        FROM WorkspaceKnowledgeSyncState WHERE workspaceStateId = ?`,
@@ -88,6 +88,59 @@ describe('workspace knowledge sync claim ownership', () => {
       startedRevision: null,
       claimToken: null,
     })
+    database.close()
+  })
+
+  it('queues claim and completion behind foreground novel transactions', async () => {
+    const { database, db } = createFixture()
+    const foregroundEntered = Promise.withResolvers<void>()
+    const releaseForeground = Promise.withResolvers<void>()
+    let claimSettled = false
+
+    const foreground = db.withTransaction(async () => {
+      database.prepare('UPDATE WorkspaceRuntimeState SET currentTab = ? WHERE id = ?').run('knowledge', 'singleton')
+      foregroundEntered.resolve()
+      await releaseForeground.promise
+    })
+    await foregroundEntered.promise
+
+    const claimPromise = claimPendingWorkspaceKnowledgeSync('singleton', { db }).finally(() => {
+      claimSettled = true
+    })
+    await Promise.resolve()
+    expect(claimSettled).toBe(false)
+    releaseForeground.resolve()
+    await foreground
+
+    const claim = await claimPromise
+    expect(claim).not.toBeNull()
+
+    const rollbackEntered = Promise.withResolvers<void>()
+    const releaseRollback = Promise.withResolvers<void>()
+    let completionSettled = false
+    const rollback = db.withTransaction(async () => {
+      database.prepare('UPDATE WorkspaceRuntimeState SET currentTab = ? WHERE id = ?').run('timeline', 'singleton')
+      rollbackEntered.resolve()
+      await releaseRollback.promise
+      throw new Error('foreground rollback')
+    })
+    void rollback.catch(() => undefined)
+    await rollbackEntered.promise
+
+    const completion = completeWorkspaceKnowledgeSync(claim!, { db }).finally(() => {
+      completionSettled = true
+    })
+    await Promise.resolve()
+    expect(completionSettled).toBe(false)
+    releaseRollback.resolve()
+    await expect(rollback).rejects.toThrow('foreground rollback')
+    await expect(completion).resolves.toBe(true)
+    expect(database.prepare('SELECT currentTab FROM WorkspaceRuntimeState WHERE id = ?').get('singleton')).toEqual({
+      currentTab: 'knowledge',
+    })
+    expect(database.prepare(
+      'SELECT syncedRevision, startedRevision, claimToken FROM WorkspaceKnowledgeSyncState WHERE workspaceStateId = ?',
+    ).get('singleton')).toEqual({ syncedRevision: 2, startedRevision: null, claimToken: null })
     database.close()
   })
 })

@@ -14,7 +14,10 @@ vi.mock('next/server', () => ({
   after: vi.fn((callback: () => Promise<void>) => afterCallbacks.push(callback)),
 }))
 vi.mock('@/lib/server/database-access', () => ({
-  createNovelDatabaseAccess: vi.fn((novelId: string) => ({ novelId })),
+  createNovelDatabaseAccess: vi.fn((novelId: string) => ({
+    novelId,
+    withTransaction: async <T>(callback: () => T | Promise<T>) => callback(),
+  })),
 }))
 vi.mock('@/lib/server/knowledge-rebuild', () => ({ syncWorkspacePayloadToKnowledgeStore }))
 vi.mock('@/lib/server/persistence', () => ({
@@ -86,7 +89,7 @@ describe('workspace background scheduling', () => {
     expect(completeWorkspaceKnowledgeSync).toHaveBeenNthCalledWith(
       2,
       createClaim(2),
-      { db: { novelId: 'novel-1' } },
+      { db: expect.objectContaining({ novelId: 'novel-1' }) },
     )
   })
 
@@ -108,8 +111,12 @@ describe('workspace background scheduling', () => {
 
     expect(afterCallbacks).toHaveLength(2)
     await afterCallbacks[1]()
-    expect(failWorkspaceKnowledgeSync).toHaveBeenCalledWith(createClaim(1), 'sync failed', { db: { novelId: 'novel-1' } })
-    expect(completeWorkspaceKnowledgeSync).toHaveBeenCalledWith(createClaim(2), { db: { novelId: 'novel-1' } })
+    expect(failWorkspaceKnowledgeSync).toHaveBeenCalledWith(createClaim(1), 'sync failed', {
+      db: expect.objectContaining({ novelId: 'novel-1' }),
+    })
+    expect(completeWorkspaceKnowledgeSync).toHaveBeenCalledWith(createClaim(2), {
+      db: expect.objectContaining({ novelId: 'novel-1' }),
+    })
   })
 
   it('drains a wake scheduled during the final null-claim handoff', async () => {
@@ -128,7 +135,7 @@ describe('workspace background scheduling', () => {
     expect(afterCallbacks).toHaveLength(1)
     expect(completeWorkspaceKnowledgeSync).toHaveBeenCalledWith(
       createClaim(2),
-      { db: { novelId: 'novel-1' } },
+      { db: expect.objectContaining({ novelId: 'novel-1' }) },
     )
   })
 

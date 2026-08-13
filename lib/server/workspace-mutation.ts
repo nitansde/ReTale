@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
-import { createControlDatabaseAccess, createCreatingNovelDatabaseAccess, createDatabaseAccess, type DatabaseAccess } from '@/lib/server/database-access'
-import { getNovelDb, getNovelStoragePaths, runWithCreatingNovelResolution, validateNovelId } from '@/lib/server/db-resolver'
+import { createControlDatabaseAccess, createCreatingNovelDatabaseAccess, createNovelDatabaseAccess, type DatabaseAccess } from '@/lib/server/database-access'
+import { getNovelStoragePaths, runWithCreatingNovelResolution, validateNovelId } from '@/lib/server/db-resolver'
 import { runWithPerNovelWriteGate } from '@/lib/server/per-novel-write-gate'
 import {
   createWorkspaceStateBackupInDb,
@@ -35,6 +35,8 @@ const MAX_IDEMPOTENCY_KEY_LENGTH = 256
 const MAX_WORKSPACE_STATE_ID_LENGTH = 256
 const REPLAY_RETENTION_DAYS = 7
 const REPLAY_RETENTION_LIMIT = 512
+export const WORKSPACE_PATCH_ARTIFACT_CHECKPOINT_INTERVAL = 50
+const WORKSPACE_NOVEL_CREATION_HEARTBEAT_INTERVAL_MS = 60_000
 
 export type WorkspaceMutationOperation = 'chapter-patch' | 'full-snapshot'
 export type WorkspaceMutationErrorCode =
@@ -137,12 +139,23 @@ export function setWorkspaceMutationFaultInjectorForTests(injector: WorkspaceMut
 }
 
 let workspaceNovelCreationFaultInjector: (() => void) | null = null
+let workspaceNovelCreationHeartbeatIntervalMs = WORKSPACE_NOVEL_CREATION_HEARTBEAT_INTERVAL_MS
 
 export function setWorkspaceNovelCreationFaultInjectorForTests(injector: (() => void) | null) {
   if (process.env.VITEST !== 'true' && injector !== null) {
     throw new Error('Workspace novel creation fault injection is only available in tests')
   }
   workspaceNovelCreationFaultInjector = injector
+}
+
+export function setWorkspaceNovelCreationHeartbeatIntervalForTests(intervalMs: number | null) {
+  if (process.env.VITEST !== 'true' && intervalMs !== null) {
+    throw new Error('Workspace novel creation heartbeat configuration is only available in tests')
+  }
+  if (intervalMs !== null && (!Number.isFinite(intervalMs) || intervalMs <= 0)) {
+    throw new Error('Workspace novel creation heartbeat interval must be positive')
+  }
+  workspaceNovelCreationHeartbeatIntervalMs = intervalMs ?? WORKSPACE_NOVEL_CREATION_HEARTBEAT_INTERVAL_MS
 }
 
 type ValidatedChapterPatch = Omit<ChapterPatchMutationRequest, 'workspaceStateId'> & {
@@ -165,6 +178,28 @@ type ReplayRow = {
 
 type RegistryRow = {
   migrationStatus: string
+}
+
+type RuntimeMetadataRow = {
+  revision: number
+  updatedAt: string
+}
+
+type TargetedChapterRow = {
+  id: string
+  novelId: string
+  volumeId: string
+  parentChapterId: string | null
+  kind: string | null
+  branchLabel: string | null
+  title: string
+  sortOrder: number
+  contentHtml: string
+  originalContentHtml: string | null
+  status: string
+  wordCount: number
+  updatedAtLabel: string
+  trajectoryJson: string
 }
 
 function invalidContract(message: string, context: WorkspaceMutationErrorContext = {}): never {
@@ -349,25 +384,62 @@ function hasRecoverableWorkspaceContent(db: DatabaseAccess, workspaceStateId: st
   return novelCount > 0 && chapterCount > 0
 }
 
-function findChapter(db: DatabaseAccess, workspaceStateId: string, chapterId: string) {
-  return db.queryOne<{ novelId: string }>(
-    `SELECT novelId FROM WorkspaceRuntimeChapter
+function readRuntimeMetadata(db: DatabaseAccess, workspaceStateId: string) {
+  return db.queryOne<RuntimeMetadataRow>(
+    `SELECT revision, updatedAt
+     FROM WorkspaceRuntimeState
+     WHERE id = ?`,
+    workspaceStateId,
+  )
+}
+
+function readTargetedChapter(db: DatabaseAccess, workspaceStateId: string, chapterId: string) {
+  return db.queryOne<TargetedChapterRow>(
+    `SELECT id, novelId, volumeId, parentChapterId, kind, branchLabel, title, sortOrder,
+            contentHtml, originalContentHtml, status, wordCount, updatedAtLabel, trajectoryJson
+     FROM WorkspaceRuntimeChapter
      WHERE workspaceStateId = ? AND id = ?`,
     workspaceStateId,
     chapterId,
   )
 }
 
-function applyChapterPatch(db: DatabaseAccess, request: ValidatedChapterPatch, nextRevision: number) {
-  const chapter = findChapter(db, request.workspaceStateId, request.chapterId)
-  if (!chapter || chapter.novelId !== request.novelId) {
-    throw new WorkspaceMutationError('chapter_not_found', `Chapter "${request.chapterId}" was not found`, {
-      novelId: request.novelId,
-      workspaceStateId: request.workspaceStateId,
-      chapterId: request.chapterId,
-    })
+function targetedChapterToChapter(row: TargetedChapterRow): Chapter {
+  let trajectory: string[] = []
+  try {
+    const parsed = JSON.parse(row.trajectoryJson) as unknown
+    if (Array.isArray(parsed)) {
+      trajectory = parsed.filter((value): value is string => typeof value === 'string')
+    }
+  } catch (error) {
+    void error
   }
-  db.execute(
+
+  return {
+    id: row.id,
+    novelId: row.novelId,
+    volumeId: row.volumeId,
+    ...(row.parentChapterId === null ? {} : { parentChapterId: row.parentChapterId }),
+    ...(row.kind === null ? {} : { kind: row.kind as Chapter['kind'] }),
+    ...(row.branchLabel === null ? {} : { branchLabel: row.branchLabel }),
+    title: row.title,
+    order: row.sortOrder,
+    content: row.contentHtml,
+    ...(row.originalContentHtml === null ? {} : { originalContent: row.originalContentHtml }),
+    status: row.status as Chapter['status'],
+    wordCount: row.wordCount,
+    updatedAt: row.updatedAtLabel,
+    trajectory,
+  }
+}
+
+function applyChapterPatch(
+  db: DatabaseAccess,
+  request: ValidatedChapterPatch,
+  nextRevision: number,
+  committedAt: string,
+) {
+  const chapterUpdate = db.execute(
     `UPDATE WorkspaceRuntimeChapter
      SET contentHtml = ?, wordCount = ?, updatedAtLabel = ?, updatedAt = CURRENT_TIMESTAMP
      WHERE workspaceStateId = ? AND id = ? AND novelId = ?`,
@@ -378,13 +450,44 @@ function applyChapterPatch(db: DatabaseAccess, request: ValidatedChapterPatch, n
     request.chapterId,
     request.novelId,
   )
-  db.execute(
+  if (chapterUpdate.changes !== 1) {
+    throw new WorkspaceMutationError('chapter_not_found', `Chapter "${request.chapterId}" was not found`, {
+      novelId: request.novelId,
+      workspaceStateId: request.workspaceStateId,
+      chapterId: request.chapterId,
+    })
+  }
+  const runtimeUpdate = db.execute(
     `UPDATE WorkspaceRuntimeState
-     SET revision = ?, updatedAt = CURRENT_TIMESTAMP
+     SET revision = ?, updatedAt = ?
      WHERE id = ?`,
     nextRevision,
+    committedAt,
     request.workspaceStateId,
   )
+  if (runtimeUpdate.changes !== 1) {
+    throw new WorkspaceMutationError('persistence_failed', 'Workspace runtime mutation was not persisted')
+  }
+}
+
+function persistArtifact(
+  db: DatabaseAccess,
+  request: ValidatedWorkspaceMutation,
+  payload: PersistedNovelState,
+) {
+  const serializedPayload = JSON.stringify(payload)
+  const priorArtifact = readWorkspaceStateFromDb(db, request.workspaceStateId)
+  if (priorArtifact && priorArtifact.payload !== null && priorArtifact.payload !== serializedPayload) {
+    createWorkspaceStateBackupInDb(
+      db,
+      priorArtifact,
+      request.kind === 'full-snapshot' ? request.backupReason : 'workspace-patch-checkpoint',
+    )
+  }
+  const revision = readRuntimeMetadata(db, request.workspaceStateId)?.revision ?? 0
+  writeWorkspaceStateInDb(db, request.workspaceStateId, serializedPayload, revision)
+  pruneWorkspaceStateBackupsInDb(db, request.workspaceStateId)
+  workspaceMutationFaultInjector?.('after_artifact')
 }
 
 function persistArtifactAndSync(
@@ -393,18 +496,7 @@ function persistArtifactAndSync(
   payload: PersistedNovelState,
   updatedAt: string,
 ) {
-  const serializedPayload = JSON.stringify(payload)
-  const priorArtifact = readWorkspaceStateFromDb(db, request.workspaceStateId)
-  if (priorArtifact && priorArtifact.payload !== null && priorArtifact.payload !== serializedPayload) {
-    createWorkspaceStateBackupInDb(
-      db,
-      priorArtifact,
-      request.kind === 'full-snapshot' ? request.backupReason : 'workspace-save',
-    )
-  }
-  writeWorkspaceStateInDb(db, request.workspaceStateId, serializedPayload)
-  pruneWorkspaceStateBackupsInDb(db, request.workspaceStateId)
-  workspaceMutationFaultInjector?.('after_artifact')
+  persistArtifact(db, request, payload)
   markWorkspaceKnowledgeSyncRequestedInDb(db, request.workspaceStateId, updatedAt)
   workspaceMutationFaultInjector?.('after_sync')
 }
@@ -457,6 +549,89 @@ function insertReplayAndPrune(
   )
 }
 
+function insertChapterPatchJournal(
+  db: DatabaseAccess,
+  request: ValidatedChapterPatch,
+  committedRevision: number,
+  committedAt: string,
+) {
+  db.execute(
+    `INSERT INTO WorkspaceChapterPatchJournal (
+       workspaceStateId, committedRevision, chapterId, novelId,
+       contentHtml, wordCount, updatedAtLabel, committedAt
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    request.workspaceStateId,
+    committedRevision,
+    request.chapterId,
+    request.novelId,
+    request.content,
+    request.wordCount,
+    request.updatedAtLabel,
+    committedAt,
+  )
+}
+
+function clearChapterPatchJournal(db: DatabaseAccess, workspaceStateId: string) {
+  db.execute(
+    'DELETE FROM WorkspaceChapterPatchJournal WHERE workspaceStateId = ?',
+    workspaceStateId,
+  )
+}
+
+function runChapterPatchTransaction(db: DatabaseAccess, request: ValidatedChapterPatch, requestHash: string) {
+  const current = readRuntimeMetadata(db, request.workspaceStateId)
+  if (!current) {
+    throw new WorkspaceMutationError('chapter_not_found', `Chapter "${request.chapterId}" was not found`, {
+      novelId: request.novelId,
+      workspaceStateId: request.workspaceStateId,
+      chapterId: request.chapterId,
+    })
+  }
+  if (request.baseRevision !== current.revision) {
+    const targetedChapter = readTargetedChapter(db, request.workspaceStateId, request.chapterId)
+    const chapter = targetedChapter && targetedChapter.novelId === request.novelId
+      ? targetedChapterToChapter(targetedChapter)
+      : null
+    throw new WorkspaceMutationError('stale_revision', 'Workspace revision is stale', {
+      novelId: request.novelId,
+      workspaceStateId: request.workspaceStateId,
+      chapterId: request.chapterId,
+      currentRevision: current.revision,
+      chapter,
+    })
+  }
+
+  const nextRevision = current.revision + 1
+  const committedAt = new Date().toISOString()
+  applyChapterPatch(db, request, nextRevision, committedAt)
+  workspaceMutationFaultInjector?.('after_runtime')
+  insertChapterPatchJournal(db, request, nextRevision, committedAt)
+
+  if (nextRevision % WORKSPACE_PATCH_ARTIFACT_CHECKPOINT_INTERVAL === 0) {
+    const checkpoint = readWorkspaceRuntimeSnapshotFromDb(db, request.workspaceStateId)
+    if (!checkpoint || checkpoint.revision !== nextRevision) {
+      throw new WorkspaceMutationError('persistence_failed', 'Workspace checkpoint could not read the committed runtime')
+    }
+    persistArtifact(db, request, checkpoint.payload)
+    clearChapterPatchJournal(db, request.workspaceStateId)
+  }
+
+  markWorkspaceKnowledgeSyncRequestedInDb(db, request.workspaceStateId, committedAt)
+  workspaceMutationFaultInjector?.('after_sync')
+  const result: ChapterPatchMutationResult = {
+    ok: true,
+    operation: request.kind,
+    novelId: request.novelId,
+    chapterId: request.chapterId,
+    revision: nextRevision,
+    updatedAt: committedAt,
+    replayed: false,
+    shouldScheduleKnowledgeSync: true,
+  }
+  insertReplayAndPrune(db, request, requestHash, result)
+  return result
+}
+
 function runMutationTransaction(db: DatabaseAccess, request: ValidatedWorkspaceMutation, requestHash: string) {
   if (request.idempotencyKey) {
     const replay = readReplay(db, request.workspaceStateId, request.idempotencyKey)
@@ -471,30 +646,21 @@ function runMutationTransaction(db: DatabaseAccess, request: ValidatedWorkspaceM
     }
   }
 
+  if (request.kind === 'chapter-patch') {
+    return runChapterPatchTransaction(db, request, requestHash)
+  }
+
   const current = readWorkspaceRuntimeSnapshotFromDb(db, request.workspaceStateId)
   const currentRevision = current?.revision ?? 0
-  if (request.kind === 'chapter-patch' && !current) {
-    throw new WorkspaceMutationError('chapter_not_found', `Chapter "${request.chapterId}" was not found`, {
-      novelId: request.novelId,
-      workspaceStateId: request.workspaceStateId,
-      chapterId: request.chapterId,
-    })
-  }
   if (request.baseRevision !== null && request.baseRevision !== currentRevision) {
-    const chapter = request.kind === 'chapter-patch'
-      ? current?.payload.localChapters.find((entry) => entry.id === request.chapterId) ?? null
-      : null
     throw new WorkspaceMutationError('stale_revision', 'Workspace revision is stale', {
       novelId: request.novelId,
       workspaceStateId: request.workspaceStateId,
-      chapterId: request.kind === 'chapter-patch' ? request.chapterId : undefined,
       currentRevision,
-      chapter,
     })
   }
   if (
-    request.kind === 'full-snapshot'
-    && !request.allowEmptyReset
+    !request.allowEmptyReset
     && !workspacePayloadHasLibraryContent(request.payload)
     && hasRecoverableWorkspaceContent(db, request.workspaceStateId)
   ) {
@@ -505,11 +671,7 @@ function runMutationTransaction(db: DatabaseAccess, request: ValidatedWorkspaceM
   }
 
   const nextRevision = currentRevision + 1
-  if (request.kind === 'chapter-patch') {
-    applyChapterPatch(db, request, nextRevision)
-  } else {
-    replaceWorkspaceRuntimeStateInDb(db, request.payload, nextRevision, request.workspaceStateId)
-  }
+  replaceWorkspaceRuntimeStateInDb(db, request.payload, nextRevision, request.workspaceStateId)
   workspaceMutationFaultInjector?.('after_runtime')
 
   const committedRuntime = readWorkspaceRuntimeSnapshotFromDb(db, request.workspaceStateId)
@@ -517,27 +679,17 @@ function runMutationTransaction(db: DatabaseAccess, request: ValidatedWorkspaceM
     throw new WorkspaceMutationError('persistence_failed', 'Workspace runtime mutation was not persisted')
   }
   persistArtifactAndSync(db, request, committedRuntime.payload, committedRuntime.updatedAt)
+  clearChapterPatchJournal(db, request.workspaceStateId)
 
-  const result: WorkspaceMutationResult = request.kind === 'chapter-patch'
-    ? {
-        ok: true,
-        operation: request.kind,
-        novelId: request.novelId,
-        chapterId: request.chapterId,
-        revision: nextRevision,
-        updatedAt: committedRuntime.updatedAt,
-        replayed: false,
-        shouldScheduleKnowledgeSync: true,
-      }
-    : {
-        ok: true,
-        operation: request.kind,
-        novelId: request.novelId,
-        revision: nextRevision,
-        updatedAt: committedRuntime.updatedAt,
-        replayed: false,
-        shouldScheduleKnowledgeSync: true,
-      }
+  const result: FullSnapshotMutationResult = {
+    ok: true,
+    operation: request.kind,
+    novelId: request.novelId,
+    revision: nextRevision,
+    updatedAt: committedRuntime.updatedAt,
+    replayed: false,
+    shouldScheduleKnowledgeSync: true,
+  }
   insertReplayAndPrune(db, request, requestHash, result)
   return result
 }
@@ -550,7 +702,7 @@ export async function runWorkspaceMutation(request: WorkspaceMutationRequest): P
     assertReadyRegistry(validated.novelId)
     let db: DatabaseAccess
     try {
-      db = createDatabaseAccess(getNovelDb(validated.novelId))
+      db = createNovelDatabaseAccess(validated.novelId)
     } catch (error) {
       throw new WorkspaceMutationError('persistence_failed', 'Failed to open the novel workspace database', {
         novelId: validated.novelId,
@@ -570,6 +722,48 @@ export async function runWorkspaceMutation(request: WorkspaceMutationRequest): P
       })
     }
   })
+}
+
+async function runWithWorkspaceNovelCreationHeartbeat<T>(params: {
+  novelId: string
+  creatorToken: string
+  clock?: Date | string
+  callback: () => Promise<T>
+}) {
+  if (params.clock !== undefined) {
+    return params.callback()
+  }
+
+  let stopped = false
+  let firstFailure: unknown = null
+  let renewal: Promise<void> | null = null
+  const renew = () => {
+    if (stopped || renewal || firstFailure) return
+    renewal = renewWorkspaceNovelCreation(params.novelId, params.creatorToken)
+      .catch((error) => {
+        firstFailure ??= error
+      })
+      .finally(() => {
+        renewal = null
+      })
+  }
+  const timer = setInterval(renew, workspaceNovelCreationHeartbeatIntervalMs)
+  timer.unref?.()
+
+  try {
+    const result = await params.callback()
+    stopped = true
+    clearInterval(timer)
+    if (renewal) await renewal
+    if (firstFailure) throw firstFailure
+    await renewWorkspaceNovelCreation(params.novelId, params.creatorToken)
+    return result
+  } catch (error) {
+    stopped = true
+    clearInterval(timer)
+    if (renewal) await renewal
+    throw firstFailure ?? error
+  }
 }
 
 export async function createWorkspaceNovelFromSnapshot(params: {
@@ -644,7 +838,7 @@ export async function createWorkspaceNovelFromSnapshot(params: {
         } satisfies FullSnapshotMutationResult
       })
       await renewWorkspaceNovelCreation(novelId, creatorToken, params.now)
-      const claimedSync = claimPendingWorkspaceKnowledgeSync(workspaceStateId, { db })
+      const claimedSync = await claimPendingWorkspaceKnowledgeSync(workspaceStateId, { db })
       if (!claimedSync || claimedSync.revision !== 1) {
         throw new WorkspaceMutationError('persistence_failed', 'Imported workspace knowledge sync request was not claimable', {
           novelId,
@@ -661,12 +855,17 @@ export async function createWorkspaceNovelFromSnapshot(params: {
               currentNovelId: '',
               syncScope: 'target-novel' as const,
             } satisfies WorkspaceKnowledgeSyncPayload
-        await runWithCreatingNovelResolution(novelId, () => (
-          syncWorkspacePayloadToKnowledgeStore(scopedSyncPayload, { db })
-        ))
-        completeWorkspaceKnowledgeSync(claimedSync, { db })
+        await runWithWorkspaceNovelCreationHeartbeat({
+          novelId,
+          creatorToken,
+          clock: params.now,
+          callback: () => runWithCreatingNovelResolution(novelId, () => (
+            syncWorkspacePayloadToKnowledgeStore(scopedSyncPayload, { db })
+          )),
+        })
+        await completeWorkspaceKnowledgeSync(claimedSync, { db })
       } catch (syncError) {
-        failWorkspaceKnowledgeSync(
+        await failWorkspaceKnowledgeSync(
           claimedSync,
           syncError instanceof Error ? syncError.message : 'Unknown workspace knowledge sync failure',
           { db },
@@ -675,6 +874,7 @@ export async function createWorkspaceNovelFromSnapshot(params: {
       }
       await renewWorkspaceNovelCreation(novelId, creatorToken, params.now)
       workspaceNovelCreationFaultInjector?.()
+      await renewWorkspaceNovelCreation(novelId, creatorToken, params.now)
       await publishWorkspaceNovelCreation(novelId, creatorToken, params.now)
       return result
     } catch (error) {
