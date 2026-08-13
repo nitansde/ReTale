@@ -9,6 +9,7 @@ import {
   runWithSqliteBusyRetry,
   SQLITE_BUSY_TIMEOUT_MS,
 } from '@/lib/server/sqlite'
+import { CONTROL_SCHEMA_SQL } from '@/lib/server/schema'
 import { getSourceDbPath } from '@/tests/helpers/temp-db'
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
@@ -39,7 +40,15 @@ function listIndexNames(database: DatabaseSync) {
 function listTableColumns(database: DatabaseSync, tableName: string) {
   return database
     .prepare(`PRAGMA table_info(${tableName})`)
-    .all() as Array<{ name: string; pk: number }>
+    .all() as Array<{ name: string; type: string; notnull: number; dflt_value: string | null; pk: number }>
+}
+
+function readTableStrictness(database: DatabaseSync, tableName: string) {
+  return database.prepare('SELECT strict FROM pragma_table_list WHERE name = ?').get(tableName) as { strict: number }
+}
+
+function listIndexColumns(database: DatabaseSync, indexName: string) {
+  return database.prepare(`PRAGMA index_info(${indexName})`).all() as Array<{ name: string; seqno: number }>
 }
 
 function readBusyTimeout(database: DatabaseSync) {
@@ -57,6 +66,214 @@ afterEach(() => {
 })
 
 describe('authored branching schema migrations', () => {
+  it('creates and idempotently upgrades control lifecycle ownership columns and index', () => {
+    const databasePath = makeTempDatabasePath('retale-control-lifecycle')
+    const legacyDatabase = new DatabaseSync(databasePath)
+    legacyDatabase.exec(`
+      CREATE TABLE NovelRegistry (
+        novelId TEXT PRIMARY KEY,
+        safeNovelId TEXT NOT NULL UNIQUE,
+        title TEXT,
+        dbFilePath TEXT NOT NULL UNIQUE,
+        lanceDbPath TEXT NOT NULL UNIQUE,
+        schemaVersion TEXT NOT NULL DEFAULT '1',
+        migrationStatus TEXT NOT NULL DEFAULT 'pending',
+        createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `)
+    legacyDatabase.close()
+
+    const firstOpen = initializeDatabase(new DatabaseSync(databasePath), { mode: 'control', schemaSql: CONTROL_SCHEMA_SQL })
+    expect(listTableColumns(firstOpen, 'NovelRegistry').map((column) => column.name)).toEqual(expect.arrayContaining([
+      'lifecycleToken',
+      'leaseExpiresAt',
+      'claimedAt',
+    ]))
+    expect(listIndexColumns(firstOpen, 'idx_novel_registry_lifecycle').map((column) => column.name)).toEqual([
+      'migrationStatus',
+      'leaseExpiresAt',
+      'updatedAt',
+      'novelId',
+    ])
+    firstOpen.close()
+
+    const secondOpen = initializeDatabase(new DatabaseSync(databasePath), { mode: 'control', schemaSql: CONTROL_SCHEMA_SQL })
+    expect(listTableColumns(secondOpen, 'NovelRegistry').filter((column) => column.name === 'lifecycleToken')).toHaveLength(1)
+    expect(listIndexNames(secondOpen).filter((index) => index.name === 'idx_novel_registry_lifecycle')).toHaveLength(1)
+    secondOpen.close()
+  })
+
+  it('creates workspace revision state at revision zero on a fresh database', () => {
+    const databasePath = makeTempDatabasePath('retale-workspace-revision-fresh')
+    const database = initializeDatabase(new DatabaseSync(databasePath))
+
+    database.prepare('INSERT INTO WorkspaceRuntimeState (id) VALUES (?)').run('fresh-workspace')
+    const row = database.prepare('SELECT revision FROM WorkspaceRuntimeState WHERE id = ?').get('fresh-workspace') as { revision: number }
+    const revisionColumn = listTableColumns(database, 'WorkspaceRuntimeState').find((column) => column.name === 'revision')
+
+    expect(row.revision).toBe(0)
+    expect(revisionColumn).toMatchObject({ type: 'INTEGER', notnull: 1, dflt_value: '0' })
+
+    ;(database as DatabaseSync & { close?: () => void }).close?.()
+  })
+
+  it('adds nullable workspace knowledge sync claim ownership without changing existing rows', () => {
+    const databasePath = makeTempDatabasePath('retale-workspace-sync-claim-token')
+    const legacyDatabase = initializeDatabase(new DatabaseSync(databasePath))
+    legacyDatabase.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', '{}')
+    legacyDatabase.prepare(
+      `INSERT INTO WorkspaceKnowledgeSyncState (
+         workspaceStateId, requestedRevision, startedRevision, syncedRevision,
+         requestedSourceUpdatedAt, startedSourceUpdatedAt, startedAt
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('singleton', 3, 3, 2, 'requested-at', 'started-at', '2026-08-12 00:00:00')
+    legacyDatabase.exec('ALTER TABLE WorkspaceKnowledgeSyncState DROP COLUMN claimToken')
+    legacyDatabase.close()
+
+    const migratedDatabase = initializeDatabase(new DatabaseSync(databasePath))
+    expect(listTableColumns(migratedDatabase, 'WorkspaceKnowledgeSyncState').filter((column) => column.name === 'claimToken')).toHaveLength(1)
+    expect(migratedDatabase.prepare(
+      `SELECT requestedRevision, startedRevision, syncedRevision, requestedSourceUpdatedAt,
+              startedSourceUpdatedAt, startedAt, claimToken
+       FROM WorkspaceKnowledgeSyncState WHERE workspaceStateId = ?`,
+    ).get('singleton')).toEqual({
+      requestedRevision: 3,
+      startedRevision: 3,
+      syncedRevision: 2,
+      requestedSourceUpdatedAt: 'requested-at',
+      startedSourceUpdatedAt: 'started-at',
+      startedAt: '2026-08-12 00:00:00',
+      claimToken: null,
+    })
+    migratedDatabase.close()
+  })
+
+  it('migrates a pre-change copied database workspace row to revision zero', () => {
+    const databasePath = makeTempDatabasePath('retale-workspace-revision-legacy')
+    const legacyDatabase = initializeDatabase(new DatabaseSync(databasePath))
+    legacyDatabase.exec('DROP TABLE WorkspaceMutationReplay')
+    legacyDatabase.exec('ALTER TABLE WorkspaceRuntimeState DROP COLUMN revision')
+    legacyDatabase.prepare('INSERT INTO WorkspaceRuntimeState (id) VALUES (?)').run('legacy-workspace')
+    expect(listTableColumns(legacyDatabase, 'WorkspaceRuntimeState').some((column) => column.name === 'revision')).toBe(false)
+    ;(legacyDatabase as DatabaseSync & { close?: () => void }).close?.()
+
+    const migratedDatabase = initializeDatabase(new DatabaseSync(databasePath))
+    const row = migratedDatabase.prepare('SELECT revision FROM WorkspaceRuntimeState WHERE id = ?').get('legacy-workspace') as { revision: number }
+
+    expect(row.revision).toBe(0)
+    expect(listTableColumns(migratedDatabase, 'WorkspaceRuntimeState').find((column) => column.name === 'revision')).toMatchObject({
+      type: 'INTEGER',
+      notnull: 1,
+      dflt_value: '0',
+    })
+
+    ;(migratedDatabase as DatabaseSync & { close?: () => void }).close?.()
+  })
+
+  it('creates the strict workspace mutation replay schema, constraints, and created-at index', () => {
+    const databasePath = makeTempDatabasePath('retale-workspace-replay-schema')
+    const database = initializeDatabase(new DatabaseSync(databasePath))
+    const columns = listTableColumns(database, 'WorkspaceMutationReplay')
+    const indexes = new Set(listIndexNames(database).map((entry) => entry.name))
+    const foreignKeys = database.prepare('PRAGMA foreign_key_list(WorkspaceMutationReplay)').all() as Array<{
+      table: string
+      from: string
+      to: string
+      on_delete: string
+    }>
+
+    expect(columns.map((column) => column.name)).toEqual([
+      'workspaceStateId',
+      'idempotencyKey',
+      'operation',
+      'requestHash',
+      'committedRevision',
+      'responseStatus',
+      'responseJson',
+      'createdAt',
+    ])
+    expect(columns.filter((column) => column.notnull !== 1)).toEqual([])
+    expect(columns.find((column) => column.name === 'workspaceStateId')?.pk).toBe(1)
+    expect(columns.find((column) => column.name === 'idempotencyKey')?.pk).toBe(2)
+    expect(columns.find((column) => column.name === 'createdAt')?.dflt_value).toBe('CURRENT_TIMESTAMP')
+    expect(readTableStrictness(database, 'WorkspaceMutationReplay').strict).toBe(1)
+    expect(foreignKeys).toContainEqual(expect.objectContaining({
+      table: 'WorkspaceRuntimeState',
+      from: 'workspaceStateId',
+      to: 'id',
+      on_delete: 'CASCADE',
+    }))
+    expect(indexes.has('idx_workspace_mutation_replay_created')).toBe(true)
+    expect(listIndexColumns(database, 'idx_workspace_mutation_replay_created').map((column) => column.name)).toEqual([
+      'workspaceStateId',
+      'createdAt',
+    ])
+
+    database.prepare('INSERT INTO WorkspaceRuntimeState (id) VALUES (?)').run('replay-workspace')
+    const insertReplay = database.prepare(`
+      INSERT INTO WorkspaceMutationReplay (
+        workspaceStateId, idempotencyKey, operation, requestHash,
+        committedRevision, responseStatus, responseJson
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `)
+    expect(() => insertReplay.run('replay-workspace', 'bad-operation', 'delete', 'hash', 0, 200, '{}')).toThrow()
+    expect(() => insertReplay.run('replay-workspace', 'bad-revision', 'chapter-patch', 'hash', -1, 200, '{}')).toThrow()
+    expect(() => insertReplay.run('missing-workspace', 'bad-foreign-key', 'full-snapshot', 'hash', 0, 200, '{}')).toThrow()
+
+    ;(database as DatabaseSync & { close?: () => void }).close?.()
+  })
+
+  it('preserves an advanced workspace revision across reopen', () => {
+    const databasePath = makeTempDatabasePath('retale-workspace-revision-reopen')
+    const database = initializeDatabase(new DatabaseSync(databasePath))
+    database.prepare('INSERT INTO WorkspaceRuntimeState (id) VALUES (?)').run('advanced-workspace')
+    database.prepare('UPDATE WorkspaceRuntimeState SET revision = ? WHERE id = ?').run(7, 'advanced-workspace')
+    ;(database as DatabaseSync & { close?: () => void }).close?.()
+
+    const reopenedDatabase = initializeDatabase(new DatabaseSync(databasePath))
+    const row = reopenedDatabase.prepare('SELECT revision FROM WorkspaceRuntimeState WHERE id = ?').get('advanced-workspace') as { revision: number }
+
+    expect(row.revision).toBe(7)
+
+    ;(reopenedDatabase as DatabaseSync & { close?: () => void }).close?.()
+  })
+
+  it('preserves workspace revision and replay rows across repeated initialization', () => {
+    const databasePath = makeTempDatabasePath('retale-workspace-replay-idempotence')
+    const database = initializeDatabase(new DatabaseSync(databasePath))
+    database.prepare('INSERT INTO WorkspaceRuntimeState (id, revision) VALUES (?, ?)').run('idempotent-workspace', 9)
+    database.prepare(`
+      INSERT INTO WorkspaceMutationReplay (
+        workspaceStateId, idempotencyKey, operation, requestHash,
+        committedRevision, responseStatus, responseJson, createdAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run('idempotent-workspace', 'request-1', 'full-snapshot', 'request-hash', 9, 200, '{"revision":9}', '2026-08-12 00:00:00')
+    ;(database as DatabaseSync & { close?: () => void }).close?.()
+
+    const firstReopen = initializeDatabase(new DatabaseSync(databasePath))
+    ;(firstReopen as DatabaseSync & { close?: () => void }).close?.()
+    const secondReopen = initializeDatabase(new DatabaseSync(databasePath))
+    const workspace = secondReopen.prepare('SELECT revision FROM WorkspaceRuntimeState WHERE id = ?').get('idempotent-workspace') as { revision: number }
+    const replay = secondReopen.prepare(`
+      SELECT operation, requestHash, committedRevision, responseStatus, responseJson, createdAt
+      FROM WorkspaceMutationReplay
+      WHERE workspaceStateId = ? AND idempotencyKey = ?
+    `).get('idempotent-workspace', 'request-1')
+
+    expect(workspace.revision).toBe(9)
+    expect(replay).toEqual({
+      operation: 'full-snapshot',
+      requestHash: 'request-hash',
+      committedRevision: 9,
+      responseStatus: 200,
+      responseJson: '{"revision":9}',
+      createdAt: '2026-08-12 00:00:00',
+    })
+
+    ;(secondReopen as DatabaseSync & { close?: () => void }).close?.()
+  })
+
   it('creates the authored tables and indexes on a fresh database', () => {
     const databasePath = makeTempDatabasePath('retale-authored-schema')
     const database = initializeDatabase(new DatabaseSync(databasePath))

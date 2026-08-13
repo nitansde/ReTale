@@ -151,6 +151,7 @@ export function initializeDatabase(database: DatabaseSync, options: InitializeDa
 
   if (mode === 'control') {
     execWithBusyRetry(database, schemaSql)
+    runControlMigrations(database)
     return database
   }
 
@@ -162,6 +163,17 @@ export function initializeDatabase(database: DatabaseSync, options: InitializeDa
   execWithBusyRetry(database, schemaSql)
   runBootMigrations(database, migrationPlan)
   return database
+}
+
+function runControlMigrations(database: DatabaseSync) {
+  addColumnIfMissing(database, 'NovelRegistry', 'lifecycleToken', 'lifecycleToken TEXT')
+  addColumnIfMissing(database, 'NovelRegistry', 'leaseExpiresAt', 'leaseExpiresAt TEXT')
+  addColumnIfMissing(database, 'NovelRegistry', 'claimedAt', 'claimedAt TEXT')
+  createIndexIfMissing(
+    database,
+    'idx_novel_registry_lifecycle',
+    'CREATE INDEX idx_novel_registry_lifecycle ON NovelRegistry(migrationStatus, leaseExpiresAt, updatedAt, novelId)',
+  )
 }
 
 function execWithBusyRetry(database: DatabaseSync, sql: string) {
@@ -241,6 +253,7 @@ const BOOT_SCHEMA_INDEX_NAMES = [
   'idx_workspace_runtime_novel_state_order',
   'idx_workspace_runtime_volume_state_order',
   'idx_workspace_runtime_chapter_state_novel_order',
+  'idx_workspace_mutation_replay_created',
   'idx_hanlp_bootstrap_cache_lookup',
   'idx_hanlp_bootstrap_cache_last_seen',
   'idx_chapter_extraction_candidates_processing_batch',
@@ -753,8 +766,9 @@ function bootSchemaIsCurrent(database: DatabaseSync) {
     && triggerExists(database, 'trg_knowledge_entity_character_tier_insert')
     && triggerExists(database, 'trg_knowledge_entity_character_tier_update')
     && bootSchemaIndexesAreCurrent(database)
-    && tableHasColumns(database, 'WorkspaceKnowledgeSyncState', ['requestedRevision', 'startedRevision', 'syncedRevision'])
+    && tableHasColumns(database, 'WorkspaceKnowledgeSyncState', ['requestedRevision', 'startedRevision', 'syncedRevision', 'claimToken'])
     && tableHasColumns(database, 'WorkspaceRuntimeState', [
+      'revision',
       'localOutlinesJson',
       'localCharactersJson',
       'localCharacterRelationsJson',
@@ -766,6 +780,16 @@ function bootSchemaIsCurrent(database: DatabaseSync) {
     && tableExists(database, 'WorkspaceRuntimeNovel')
     && tableExists(database, 'WorkspaceRuntimeVolume')
     && tableExists(database, 'WorkspaceRuntimeChapter')
+    && tableHasColumns(database, 'WorkspaceMutationReplay', [
+      'workspaceStateId',
+      'idempotencyKey',
+      'operation',
+      'requestHash',
+      'committedRevision',
+      'responseStatus',
+      'responseJson',
+      'createdAt',
+    ])
     && tableHasColumns(database, 'EntityAlias', ['createdAt', 'updatedAt'])
     && tableHasColumns(database, 'story_timeline_nodes', [
       'continue_block_id',
@@ -954,15 +978,32 @@ function runBootMigrations(database: DatabaseSync, migrationPlan = getBootMigrat
   `)
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_lookup ON hanlp_bootstrap_cache(branch_id, chapter_no, chapter_text_hash, hanlp_script_version_hash, hanlp_model_or_config_hash, output_schema_version)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_workspace_state_backup_state_created ON WorkspaceStateBackup(workspaceStateId, createdAt)')
-  database.exec('CREATE TABLE IF NOT EXISTS WorkspaceKnowledgeSyncState (workspaceStateId TEXT PRIMARY KEY, requestedRevision INTEGER NOT NULL DEFAULT 0, startedRevision INTEGER, syncedRevision INTEGER NOT NULL DEFAULT 0, requestedSourceUpdatedAt TEXT, startedSourceUpdatedAt TEXT, startedAt TEXT, syncedSourceUpdatedAt TEXT, lastError TEXT, createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceState(id) ON DELETE CASCADE)')
+  database.exec('CREATE TABLE IF NOT EXISTS WorkspaceKnowledgeSyncState (workspaceStateId TEXT PRIMARY KEY, requestedRevision INTEGER NOT NULL DEFAULT 0, startedRevision INTEGER, syncedRevision INTEGER NOT NULL DEFAULT 0, requestedSourceUpdatedAt TEXT, startedSourceUpdatedAt TEXT, startedAt TEXT, claimToken TEXT, syncedSourceUpdatedAt TEXT, lastError TEXT, createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceState(id) ON DELETE CASCADE)')
   addColumnIfMissing(database, 'WorkspaceKnowledgeSyncState', 'requestedRevision', 'requestedRevision INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(database, 'WorkspaceKnowledgeSyncState', 'startedRevision', 'startedRevision INTEGER')
   addColumnIfMissing(database, 'WorkspaceKnowledgeSyncState', 'syncedRevision', 'syncedRevision INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(database, 'WorkspaceKnowledgeSyncState', 'claimToken', 'claimToken TEXT')
   addColumnIfMissing(database, 'WorkspaceRuntimeState', 'localOutlinesJson', "localOutlinesJson TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(database, 'WorkspaceRuntimeState', 'localCharactersJson', "localCharactersJson TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(database, 'WorkspaceRuntimeState', 'localCharacterRelationsJson', "localCharacterRelationsJson TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(database, 'WorkspaceRuntimeState', 'localWorldEntriesJson', "localWorldEntriesJson TEXT NOT NULL DEFAULT '[]'")
   addColumnIfMissing(database, 'WorkspaceRuntimeState', 'localTimelineEventsJson', "localTimelineEventsJson TEXT NOT NULL DEFAULT '[]'")
+  addColumnIfMissing(database, 'WorkspaceRuntimeState', 'revision', 'revision INTEGER NOT NULL DEFAULT 0')
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS WorkspaceMutationReplay (
+      workspaceStateId TEXT NOT NULL,
+      idempotencyKey TEXT NOT NULL,
+      operation TEXT NOT NULL CHECK(operation IN ('chapter-patch','full-snapshot')),
+      requestHash TEXT NOT NULL,
+      committedRevision INTEGER NOT NULL CHECK(committedRevision >= 0),
+      responseStatus INTEGER NOT NULL,
+      responseJson TEXT NOT NULL,
+      createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(workspaceStateId,idempotencyKey),
+      FOREIGN KEY(workspaceStateId) REFERENCES WorkspaceRuntimeState(id) ON DELETE CASCADE
+    ) STRICT
+  `)
+  database.exec('CREATE INDEX IF NOT EXISTS idx_workspace_mutation_replay_created ON WorkspaceMutationReplay(workspaceStateId, createdAt)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_workspace_knowledge_sync_requested ON WorkspaceKnowledgeSyncState(requestedSourceUpdatedAt, syncedSourceUpdatedAt)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_last_seen ON hanlp_bootstrap_cache(branch_id, last_seen_at)')
   database.exec('CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_processing_batch ON chapter_extraction_candidates(branch_id, processing_batch_id)')

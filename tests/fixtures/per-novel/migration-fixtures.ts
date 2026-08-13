@@ -714,6 +714,8 @@ export function createPerNovelMigrationFixture(prefix: string): PerNovelMigratio
   database.exec('PRAGMA foreign_keys = ON')
   database.exec('PRAGMA busy_timeout = 5000')
   database.exec(FULL_SCHEMA_SQL)
+  database.exec('DROP TABLE WorkspaceMutationReplay')
+  database.exec('ALTER TABLE WorkspaceRuntimeState DROP COLUMN revision')
 
   database.prepare('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)').run('app-setting-1', 'AI_SETTINGS_V2', JSON.stringify({ provider: 'fixture' }))
   database.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', JSON.stringify({ currentNovelId: 'novel-alpha', localNovels: FIXTURE_NOVEL_IDS }))

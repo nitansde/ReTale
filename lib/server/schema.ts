@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS NovelRegistry (
   lanceDbPath TEXT NOT NULL UNIQUE,
   schemaVersion TEXT NOT NULL DEFAULT '1',
   migrationStatus TEXT NOT NULL DEFAULT 'pending',
+  lifecycleToken TEXT,
+  leaseExpiresAt TEXT,
+  claimedAt TEXT,
   createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -77,6 +80,7 @@ CREATE TABLE IF NOT EXISTS WorkspaceKnowledgeSyncState (
   requestedSourceUpdatedAt TEXT,
   startedSourceUpdatedAt TEXT,
   startedAt TEXT,
+  claimToken TEXT,
   syncedSourceUpdatedAt TEXT,
   lastError TEXT,
   createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -86,6 +90,7 @@ CREATE TABLE IF NOT EXISTS WorkspaceKnowledgeSyncState (
 
 CREATE TABLE IF NOT EXISTS WorkspaceRuntimeState (
   id TEXT PRIMARY KEY DEFAULT 'singleton',
+  revision INTEGER NOT NULL DEFAULT 0,
   currentNovelId TEXT NOT NULL DEFAULT '',
   currentChapterId TEXT NOT NULL DEFAULT '',
   currentTab TEXT NOT NULL DEFAULT 'editor',
@@ -117,6 +122,19 @@ CREATE TABLE IF NOT EXISTS WorkspaceRuntimeState (
   createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS WorkspaceMutationReplay (
+  workspaceStateId TEXT NOT NULL,
+  idempotencyKey TEXT NOT NULL,
+  operation TEXT NOT NULL CHECK(operation IN ('chapter-patch','full-snapshot')),
+  requestHash TEXT NOT NULL,
+  committedRevision INTEGER NOT NULL CHECK(committedRevision >= 0),
+  responseStatus INTEGER NOT NULL,
+  responseJson TEXT NOT NULL,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(workspaceStateId,idempotencyKey),
+  FOREIGN KEY(workspaceStateId) REFERENCES WorkspaceRuntimeState(id) ON DELETE CASCADE
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS WorkspaceRuntimeNovel (
   workspaceStateId TEXT NOT NULL DEFAULT 'singleton',
@@ -999,6 +1017,7 @@ CREATE INDEX IF NOT EXISTS idx_workspace_knowledge_sync_requested ON WorkspaceKn
 CREATE INDEX IF NOT EXISTS idx_workspace_runtime_novel_state_order ON WorkspaceRuntimeNovel(workspaceStateId, sortOrder, id);
 CREATE INDEX IF NOT EXISTS idx_workspace_runtime_volume_state_order ON WorkspaceRuntimeVolume(workspaceStateId, novelId, sortOrder, id);
 CREATE INDEX IF NOT EXISTS idx_workspace_runtime_chapter_state_novel_order ON WorkspaceRuntimeChapter(workspaceStateId, novelId, sortOrder, id);
+CREATE INDEX IF NOT EXISTS idx_workspace_mutation_replay_created ON WorkspaceMutationReplay(workspaceStateId, createdAt);
 CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_last_seen ON hanlp_bootstrap_cache(branch_id, last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_lookup ON hanlp_bootstrap_results(branch_id, chapter_id, chapter_source_hash, result_kind);
 CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_results_job ON hanlp_bootstrap_results(knowledge_job_id, status);
