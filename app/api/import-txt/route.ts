@@ -1,25 +1,24 @@
 import { NextResponse } from 'next/server'
 import { importNovelIntoWorkspace } from '@/lib/server/import-txt'
-import { upsertWorkspaceState } from '@/lib/server/persistence'
-import { createNovelDatabaseAccess } from '@/lib/server/database-access'
-import { syncWorkspacePayloadToKnowledgeStore } from '@/lib/server/knowledge-rebuild'
 import {
   backfillWorkspaceRuntimeFromArtifactIfMissing,
   loadWorkspacePayloadFromRuntimeOrRecovery,
-  persistWorkspaceRuntimeState,
 } from '@/lib/server/workspace-resilience'
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
 import { scopeWorkspaceStateToNovel } from '@/lib/server/workspace-novel-scope'
+import { createWorkspaceNovelFromSnapshot } from '@/lib/server/workspace-mutation'
+import {
+  ApiRequestError,
+  assertMultipartFormDataMediaType,
+  assertNormalizedWorkspaceSnapshotSemantics,
+  assertSameOriginRequest,
+  createByteLimitedRequest,
+} from '@/lib/server/api-route'
+
+export const maxDuration = 3600
 
 const MAX_TXT_FILE_SIZE_BYTES = 10 * 1024 * 1024
 const MAX_IMPORT_BODY_SIZE_BYTES = MAX_TXT_FILE_SIZE_BYTES + 256 * 1024
-
-class ImportRequestBodySizeLimitError extends Error {
-  constructor() {
-    super('TXT import request body exceeds 10.25 MiB')
-    this.name = 'ImportRequestBodySizeLimitError'
-  }
-}
 
 class TxtFileSizeLimitError extends Error {
   constructor() {
@@ -28,58 +27,11 @@ class TxtFileSizeLimitError extends Error {
   }
 }
 
-function importTooLargeResponse(error: ImportRequestBodySizeLimitError | TxtFileSizeLimitError) {
+function importTooLargeResponse(error: TxtFileSizeLimitError) {
   return NextResponse.json(
     { ok: false, error: error.message },
     { status: 413 }
   )
-}
-
-function createSizeLimitedBody(source: ReadableStream<Uint8Array>) {
-  const reader = source.getReader()
-  let bytesRead = 0
-
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const { done, value } = await reader.read()
-        if (done) {
-          controller.close()
-          return
-        }
-
-        if (bytesRead + value.byteLength > MAX_IMPORT_BODY_SIZE_BYTES) {
-          const error = new ImportRequestBodySizeLimitError()
-          await reader.cancel(error).catch(() => undefined)
-          controller.error(error)
-          return
-        }
-
-        bytesRead += value.byteLength
-        controller.enqueue(value)
-      } catch (error) {
-        controller.error(error)
-      }
-    },
-    async cancel(reason) {
-      await reader.cancel(reason)
-    },
-  })
-}
-
-function createSizeLimitedRequest(request: Request) {
-  const headers = new Headers(request.headers)
-  headers.delete('content-length')
-
-  const init: RequestInit & { duplex: 'half' } = {
-    method: request.method,
-    headers,
-    body: request.body ? createSizeLimitedBody(request.body) : null,
-    signal: request.signal,
-    duplex: 'half',
-  }
-
-  return new Request(request.url, init)
 }
 
 function countMatches(text: string, pattern: RegExp) {
@@ -113,7 +65,8 @@ async function decodeTextFile(file: File) {
   try {
     const gb = new TextDecoder('gb18030', { fatal: false }).decode(buffer)
     candidates.push({ text: gb, score: scoreDecodedText(gb) })
-  } catch {
+  } catch (error) {
+    void error
   }
 
   candidates.sort((a, b) => a.score - b.score)
@@ -127,12 +80,10 @@ async function ensureWorkspacePayload() {
 
 export async function POST(request: Request) {
   try {
-    const declaredBodySize = Number(request.headers.get('content-length'))
-    if (Number.isFinite(declaredBodySize) && declaredBodySize > MAX_IMPORT_BODY_SIZE_BYTES) {
-      return importTooLargeResponse(new ImportRequestBodySizeLimitError())
-    }
-
-    const formData = await createSizeLimitedRequest(request).formData()
+    assertSameOriginRequest(request)
+    assertMultipartFormDataMediaType(request)
+    const limitedRequest = createByteLimitedRequest(request, MAX_IMPORT_BODY_SIZE_BYTES, 'TXT import request body exceeds 10.25 MiB')
+    const formData = await limitedRequest.formData()
     const file = formData.get('file')
     if (!(file instanceof File)) {
       return NextResponse.json({ ok: false, error: 'Missing file' }, { status: 400 })
@@ -157,33 +108,34 @@ export async function POST(request: Request) {
       throw new Error('Imported workspace is missing its target novel')
     }
     const scopedState = scopeWorkspaceStateToNovel(nextState, targetNovelId)
+    assertNormalizedWorkspaceSnapshotSemantics(scopedState)
 
-    await persistWorkspaceRuntimeState(scopedState)
-    const workspaceDb = createNovelDatabaseAccess(targetNovelId)
-    upsertWorkspaceState('singleton', JSON.stringify(scopedState), {
-      backupReason: 'import-txt',
+    const result = await createWorkspaceNovelFromSnapshot({
       novelId: targetNovelId,
-      db: workspaceDb,
+      payload: scopedState,
+      title: scopedState.localNovels[0]?.title ?? null,
     })
-    await syncWorkspacePayloadToKnowledgeStore({
-      ...scopedState,
-      syncScope: 'target-novel',
-    }, { db: workspaceDb })
-
     return NextResponse.json({
       ok: true,
       novelId: targetNovelId,
       chapterId: scopedState.currentChapterId,
       chapterCount: scopedState.localChapters.filter((item: { parentChapterId?: string }) => !item.parentChapterId).length,
-    })
+      revision: result.revision,
+    }, { headers: {
+      'X-Retale-Workspace-Revision': String(result.revision),
+      'X-Retale-Revision-Novel-Id': targetNovelId,
+    } })
   } catch (error) {
-    if (error instanceof ImportRequestBodySizeLimitError || error instanceof TxtFileSizeLimitError) {
+    if (error instanceof ApiRequestError) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: error.status })
+    }
+    if (error instanceof TxtFileSizeLimitError) {
       return importTooLargeResponse(error)
     }
 
     console.error('Import error:', error)
     return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : 'Unknown error' },
+      { ok: false, error: 'Failed to import TXT workspace' },
       { status: 500 }
     )
   }
