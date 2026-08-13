@@ -453,6 +453,7 @@ describe('/api/knowledge-view', () => {
     }
 
     expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
     expect(payload.ok).toBe(true)
     expect(payload.knowledgeRebuildStatus).toMatchObject({
       jobId: 'job_split_brain_status_only',
@@ -491,6 +492,7 @@ describe('/api/knowledge-view', () => {
 
     const { GET } = await loadKnowledgeViewRoute()
     const response = await GET(new Request(`http://localhost/api/knowledge-view?novelId=${novelId}&statusOnly=1`))
+    expect(response.headers.get('cache-control')).toBe('no-store')
     const data = await response.json() as {
       ok: boolean
       knowledgeRebuildStatus: { jobId: string; status: string; errorMessage: string | null } | null

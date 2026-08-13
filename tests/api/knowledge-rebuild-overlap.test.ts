@@ -306,10 +306,11 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
             completedDocs: 1,
             cacheHits: 1,
             cacheMisses: 1,
-            failedDocs: 0,
-            totalBatches: 2,
-            completedBatches: 1,
-          })
+             failedDocs: 0,
+             totalBatches: 2,
+             completedBatches: 1,
+             degraded: false,
+           })
           await precomputeGate.promise
           return {
             totalDocs: 2,

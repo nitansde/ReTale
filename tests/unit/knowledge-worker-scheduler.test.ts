@@ -1,8 +1,11 @@
 import fs from 'node:fs'
 import { EventEmitter } from 'node:events'
+import type { SpawnOptions } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+type SpawnMock = (command: string, args: readonly string[], options: SpawnOptions) => MockChildProcess
 
 class MockChildProcess extends EventEmitter {
   unrefInvoked = false
@@ -49,7 +52,7 @@ describe('knowledge worker scheduler', () => {
     cleanupDirectories.push(tempDataRoot)
     process.env.RETALE_DATA_DIR = path.join(tempDataRoot, 'data')
     const childProcesses: MockChildProcess[] = []
-    const spawnMock = vi.fn(() => {
+    const spawnMock = vi.fn<SpawnMock>(() => {
       const child = new MockChildProcess()
       childProcesses.push(child)
       return child
@@ -125,7 +128,7 @@ describe('knowledge worker scheduler', () => {
     const singletonDbPath = path.join(tempDataRoot, 'singleton.db')
     process.env.DATABASE_URL = singletonDbPath
 
-    const spawnMock = vi.fn(() => new MockChildProcess())
+    const spawnMock = vi.fn<SpawnMock>(() => new MockChildProcess())
     vi.doMock('node:child_process', () => ({ spawn: spawnMock }))
 
     const sqliteModule = await import('@/lib/server/sqlite')
@@ -228,7 +231,7 @@ describe('knowledge worker scheduler', () => {
     const tempDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-knowledge-worker-scheduler-tokenless-'))
     cleanupDirectories.push(tempDataRoot)
     process.env.RETALE_DATA_DIR = path.join(tempDataRoot, 'data')
-    const spawnMock = vi.fn(() => new MockChildProcess())
+    const spawnMock = vi.fn<SpawnMock>(() => new MockChildProcess())
     vi.doMock('node:child_process', () => ({ spawn: spawnMock }))
 
     const scheduler = await import('@/lib/server/knowledge-worker-scheduler')
@@ -260,7 +263,7 @@ describe('knowledge worker scheduler', () => {
     const tempDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-knowledge-worker-scheduler-fence-'))
     cleanupDirectories.push(tempDataRoot)
     process.env.RETALE_DATA_DIR = path.join(tempDataRoot, 'data')
-    const spawnMock = vi.fn(() => new MockChildProcess())
+    const spawnMock = vi.fn<SpawnMock>(() => new MockChildProcess())
     vi.doMock('node:child_process', () => ({ spawn: spawnMock }))
 
     const resolver = await import('@/lib/server/db-resolver')

@@ -2,6 +2,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resetResolvedDatabasesForTests } from '@/lib/server/db-resolver'
+import type { OllamaEmbeddingResult } from '@/lib/server/ollama-local'
 import { initializeDatabase } from '@/lib/server/sqlite'
 import { registerLegacyNovelDatabase } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
@@ -292,7 +293,7 @@ async function createRetrievalIndexHarness(testName: string) {
   const aiSettings = createMockAISettings()
   const mockLanceDb = createMockLanceDb()
   const ivfFlat = vi.fn((config: Record<string, unknown>) => ({ kind: 'ivfFlat', config, callIndex: ivfFlat.mock.calls.length }))
-  const embedTextsWithOllama = vi.fn(async (input: string | string[]) => {
+  const embedTextsWithOllama = vi.fn(async (input: string | string[]): Promise<OllamaEmbeddingResult> => {
     const values = Array.isArray(input) ? input : [input]
     return {
       enabled: true,

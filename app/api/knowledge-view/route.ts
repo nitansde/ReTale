@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { jsonError, readJsonObject } from '@/lib/server/api-route'
+import { jsonError, noStoreJson, readJsonObject } from '@/lib/server/api-route'
 import {
   abortAuthoritativeKnowledgeRebuild,
   buildKnowledgeProjection,
@@ -95,9 +95,9 @@ export async function GET(request: Request) {
     const projection = novelId
       ? await runWithNovelDatabaseAccess(novelId, buildProjection)
       : await buildProjection()
-    return buildSuccessResponse(projection)
+    return noStoreJson({ ok: true, ...projection })
   } catch (error) {
-    return NextResponse.json(
+    return noStoreJson(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to load knowledge view' },
       { status: 500 }
     )
