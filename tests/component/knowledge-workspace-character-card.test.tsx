@@ -36,7 +36,7 @@ describe('WorkspaceCharacterReferenceCard', () => {
 
     expect(screen.getByText('被卷入旧案的书生')).toBeInTheDocument()
     expect(container.querySelector('p.text-violet-300')).not.toBeInTheDocument()
-    expect(screen.getAllByText('洞察布局').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('洞察布局')).toHaveLength(1)
     expect(screen.getByText('越危险越冷静')).toBeInTheDocument()
     expect(screen.getByTestId('workspace-character-tier-tier0')).toHaveTextContent('Tier 0')
 

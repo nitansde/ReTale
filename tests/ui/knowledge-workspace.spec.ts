@@ -481,7 +481,7 @@ test('saving AI settings waits for the current full knowledge projection refresh
   let postedEmbeddingModel: string | null = null
   let settingsSaved = false
   let refreshedRequest: { novelId: string; asOfChapter: string | null } | null = null
-  let releaseProjectionRefresh: (() => void) | null = null
+  let releaseProjectionRefresh!: () => void
   let markProjectionRefreshStarted: (() => void) | null = null
   const projectionRefreshStarted = new Promise<void>((resolve) => {
     markProjectionRefreshStarted = resolve
@@ -568,7 +568,7 @@ test('saving AI settings waits for the current full knowledge projection refresh
   await expect(settingsHeading).toBeVisible()
   await expect(embeddingCard).toContainText('qwen3-embedding:4b')
 
-  releaseProjectionRefresh?.()
+  releaseProjectionRefresh()
 
   await expect(embeddingCard).toContainText('0 / 1')
   await expect(embeddingCard).toContainText(/缺失|Missing/)
