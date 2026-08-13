@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type * as NodeSqlite from 'node:sqlite'
-import { getControlDb, getNovelDb } from '@/lib/server/db-resolver'
+import { getControlDb, getCreatingNovelDb, getNovelDb } from '@/lib/server/db-resolver'
 import {
   execute as executeAgainstSingleton,
   queryAll as queryAllAgainstSingleton,
@@ -85,6 +85,10 @@ export function createDatabaseAccess(database: DatabaseSync, options?: { novelId
 
 export function createNovelDatabaseAccess(novelId: string) {
   return createDatabaseAccess(getNovelDb(novelId), { novelId })
+}
+
+export function createCreatingNovelDatabaseAccess(novelId: string) {
+  return createDatabaseAccess(getCreatingNovelDb(novelId), { novelId })
 }
 
 export function createControlDatabaseAccess() {

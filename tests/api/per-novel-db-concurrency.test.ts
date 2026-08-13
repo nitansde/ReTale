@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -10,6 +11,7 @@ const cleanupDatabases: DatabaseSync[] = []
 const originalDataDir = process.env.RETALE_DATA_DIR
 const API_TEST_TIMEOUT_MS = 30_000
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
+const lifecycleRaceChildPath = path.join(process.cwd(), 'tests', 'fixtures', 'process', 'novel-lifecycle-race-child.mjs')
 
 vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
 
@@ -55,6 +57,28 @@ function openSecondaryDatabase(dbFilePath: string) {
   database.exec('PRAGMA busy_timeout = 5000')
   cleanupDatabases.push(database)
   return database
+}
+
+async function runLifecycleRaceChild(args: string[]) {
+  const child = spawn(process.execPath, [lifecycleRaceChildPath, ...args], {
+    cwd: process.cwd(),
+    env: { ...process.env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stdout = ''
+  let stderr = ''
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', (chunk: string) => { stdout += chunk })
+  child.stderr.on('data', (chunk: string) => { stderr += chunk })
+  const exit = new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+    child.once('error', reject)
+    child.once('exit', (code) => {
+      if (code === 0) resolve({ stdout, stderr })
+      else reject(new Error(`Lifecycle race child exited ${code}: ${stderr}`))
+    })
+  })
+  return { exit }
 }
 
 function seedNovel(database: DatabaseSync, novelId: string, title: string) {
@@ -509,6 +533,92 @@ afterEach(async () => {
 })
 
 describe('per-novel database concurrency matrix', () => {
+  it.each(['publish-first', 'claim-first'] as const)('fences separate-process lifecycle races when %s', async (winner) => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `retale-lifecycle-${winner}-`))
+    cleanupDirectories.push(tempRoot)
+    const dataRoot = path.join(tempRoot, 'data')
+    const novelsRoot = path.join(dataRoot, 'novels')
+    const quarantineRoot = path.join(dataRoot, '.novel-quarantine')
+    const novelId = `novel-${winner}`
+    const novelDirectory = path.join(novelsRoot, novelId)
+    const quarantinePath = path.join(quarantineRoot, novelId)
+    const controlDbPath = path.join(dataRoot, 'control.db')
+    fs.mkdirSync(novelDirectory, { recursive: true })
+    fs.writeFileSync(path.join(novelDirectory, 'sentinel.txt'), 'owned storage')
+
+    process.env.RETALE_DATA_DIR = dataRoot
+    vi.resetModules()
+    const { getControlDb } = await import('@/lib/server/db-resolver')
+    const controlDb = getControlDb()
+    const creatorToken = 'creator-token'
+    const initialLease = winner === 'publish-first'
+      ? '2026-08-12T00:15:00.000Z'
+      : '2026-08-12T00:00:00.000Z'
+    controlDb.prepare(
+      `INSERT INTO NovelRegistry (
+         novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus,
+         lifecycleToken, leaseExpiresAt, claimedAt, updatedAt
+       ) VALUES (?, ?, ?, ?, ?, '1', 'creating', ?, ?, ?, ?)`,
+    ).run(
+      novelId,
+      novelId,
+      novelId,
+      path.join(novelDirectory, 'novel.db'),
+      path.join(novelDirectory, 'lancedb'),
+      creatorToken,
+      initialLease,
+      '2026-08-12T00:00:00.000Z',
+      '2026-08-12T00:00:00.000Z',
+    )
+    const controlFile = (controlDb.prepare('PRAGMA database_list').get() as { file: string }).file
+    expect(fs.realpathSync.native(controlFile)).toBe(fs.realpathSync.native(controlDbPath))
+
+    const publishStart = path.join(tempRoot, 'publish-start')
+    const claimStart = path.join(tempRoot, 'claim-start')
+    const publishReady = path.join(tempRoot, 'publish-ready')
+    const claimReady = path.join(tempRoot, 'claim-ready')
+    const publishNow = winner === 'publish-first' ? '2026-08-12T00:05:00.000Z' : '2026-08-11T23:59:00.000Z'
+    const claimNow = winner === 'publish-first' ? '2026-08-12T00:20:00.000Z' : '2026-08-12T00:01:00.000Z'
+    const publish = await runLifecycleRaceChild([
+      'publish', controlDbPath, novelId, creatorToken, publishNow, '2026-08-12T00:07:00.000Z',
+      novelDirectory, quarantinePath, publishReady, publishStart,
+    ])
+    const claim = await runLifecycleRaceChild([
+      'claim', controlDbPath, novelId, 'cleanup-token', claimNow, '2026-08-12T00:03:00.000Z',
+      novelDirectory, quarantinePath, claimReady, claimStart,
+    ])
+    await waitForCondition(() => fs.existsSync(publishReady) && fs.existsSync(claimReady), 'lifecycle children readiness')
+    if (winner === 'publish-first') {
+      fs.writeFileSync(publishStart, winner)
+      await publish.exit
+      fs.writeFileSync(claimStart, winner)
+    } else {
+      fs.writeFileSync(claimStart, winner)
+      await claim.exit
+      fs.writeFileSync(publishStart, winner)
+    }
+    const [published, claimed] = await Promise.all([publish.exit, claim.exit])
+    const publishResult = JSON.parse(published.stdout.trim()) as { changes: number; moved: boolean }
+    const claimResult = JSON.parse(claimed.stdout.trim()) as { changes: number; moved: boolean }
+    const row = controlDb.prepare(
+      'SELECT migrationStatus, lifecycleToken FROM NovelRegistry WHERE novelId = ?',
+    ).get(novelId) as { migrationStatus: string; lifecycleToken: string | null }
+
+    if (winner === 'publish-first') {
+      expect(publishResult.changes).toBe(1)
+      expect(claimResult).toEqual(expect.objectContaining({ changes: 0, moved: false }))
+      expect(row).toEqual({ migrationStatus: 'ready', lifecycleToken: null })
+      expect(fs.existsSync(novelDirectory)).toBe(true)
+      expect(fs.existsSync(quarantinePath)).toBe(false)
+    } else {
+      expect(claimResult).toEqual(expect.objectContaining({ changes: 1, moved: true }))
+      expect(publishResult.changes).toBe(0)
+      expect(row).toEqual({ migrationStatus: 'deleting', lifecycleToken: 'cleanup-token' })
+      expect(fs.existsSync(novelDirectory)).toBe(false)
+      expect(fs.existsSync(quarantinePath)).toBe(true)
+    }
+  })
+
   it('keeps the active graph queryable and preserves chapter saves while rebuild compute is running', async () => {
     const { getNovelDb } = await createNovelDatabases('retale-per-novel-compute-overlap')
     const computeRawDb = getNovelDb('novel-compute-overlap')

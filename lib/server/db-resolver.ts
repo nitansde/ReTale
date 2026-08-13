@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs'
 import path from 'node:path'
 import type * as NodeSqlite from 'node:sqlite'
@@ -7,7 +8,7 @@ import { assertOwnedTestPath } from '../../scripts/test-path-safety.mjs'
 
 type DatabaseSync = NodeSqlite.DatabaseSync
 
-export type NovelRegistryMigrationStatus = 'ready' | 'deleting' | 'deleted' | string
+export type NovelRegistryMigrationStatus = 'creating' | 'ready' | 'deleting' | 'deleted' | string
 
 export type NovelStoragePaths = {
   dataRootPath: string
@@ -29,6 +30,17 @@ export class NovelRegistryNotReadyError extends Error {
 const globalForDbResolver = globalThis as {
   __retaleNovelDatabaseOverrides?: Map<string, DatabaseSync>
   __retaleResolvedDbs?: Map<string, DatabaseSync>
+}
+
+const creatingNovelResolutionScope = new AsyncLocalStorage<ReadonlySet<string>>()
+
+export function runWithCreatingNovelResolution<T>(novelId: string, callback: () => T): T
+export function runWithCreatingNovelResolution<T>(novelId: string, callback: () => Promise<T>): Promise<T>
+export function runWithCreatingNovelResolution<T>(novelId: string, callback: () => T | Promise<T>) {
+  const stableNovelId = validateNovelId(novelId)
+  const authorizedNovelIds = new Set(creatingNovelResolutionScope.getStore() ?? [])
+  authorizedNovelIds.add(stableNovelId)
+  return creatingNovelResolutionScope.run(authorizedNovelIds, callback)
 }
 
 function getNovelDatabaseOverrides() {
@@ -149,7 +161,9 @@ export function getNovelRegistryMigrationStatus(novelId: string) {
 
 function assertNovelRegistryReadyOrMissing(novelId: string) {
   const registry = getNovelRegistryMigrationStatus(novelId)
-  if (registry && registry.migrationStatus !== 'ready') {
+  const creatingAuthorized = registry?.migrationStatus === 'creating'
+    && creatingNovelResolutionScope.getStore()?.has(novelId)
+  if (registry && registry.migrationStatus !== 'ready' && !creatingAuthorized) {
     throw new NovelRegistryNotReadyError(novelId, registry.migrationStatus)
   }
 }
@@ -284,6 +298,17 @@ export function getNovelDb(novelId: string) {
     return override
   }
 
+  return openResolvedDatabase(getNovelStoragePaths(stableNovelId).databasePath)
+}
+
+export function getCreatingNovelDb(novelId: string) {
+  const stableNovelId = validateNovelId(novelId)
+  const registry = getNovelRegistryMigrationStatus(stableNovelId)
+  if (registry?.migrationStatus !== 'creating') {
+    throw new NovelRegistryNotReadyError(stableNovelId, registry?.migrationStatus ?? 'missing')
+  }
+  const override = globalForDbResolver.__retaleNovelDatabaseOverrides?.get(stableNovelId)
+  if (override) return override
   return openResolvedDatabase(getNovelStoragePaths(stableNovelId).databasePath)
 }
 

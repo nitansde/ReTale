@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 import { SQLITE_BUSY_TIMEOUT_MS } from '@/lib/server/sqlite'
+import type { PersistedNovelState } from '@/lib/types'
 import { hashFile } from '@/tests/helpers/temp-db'
 
 const repoRoot = process.cwd()
@@ -125,6 +126,23 @@ function setActiveWorkspaceNovelId(database: DatabaseSync, novelId: string) {
   writeAppSetting(database, 'WORKSPACE_ACTIVE_NOVEL_ID', novelId)
 }
 
+function seedReadyNovelRegistryRows(database: DatabaseSync, dataRootPath: string, novelIds: string[]) {
+  for (const novelId of novelIds) {
+    const novelDirectory = path.join(dataRootPath, 'novels', novelId)
+    database.prepare(
+      `INSERT INTO NovelRegistry (
+         novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus
+       ) VALUES (?, ?, ?, ?, ?, '1', 'ready')`
+    ).run(
+      novelId,
+      novelId,
+      novelId,
+      path.join(novelDirectory, 'novel.db'),
+      path.join(novelDirectory, 'lancedb'),
+    )
+  }
+}
+
 function createWorkspaceRequest(payload: Record<string, unknown>, headers: Record<string, string> = {}) {
   return new Request('http://localhost/api/workspace', {
     method: 'POST',
@@ -136,7 +154,7 @@ function createWorkspaceRequest(payload: Record<string, unknown>, headers: Recor
   })
 }
 
-function createNovelWorkspacePayload(novelId: string, title = novelId) {
+function createNovelWorkspacePayload(novelId: string, title = novelId): Partial<PersistedNovelState> {
   return {
     currentNovelId: novelId,
     currentChapterId: `${novelId}-chapter-1`,
@@ -325,6 +343,9 @@ describe('per-novel database resolver', () => {
       'lanceDbPath',
       'schemaVersion',
       'migrationStatus',
+      'lifecycleToken',
+      'leaseExpiresAt',
+      'claimedAt',
       'createdAt',
       'updatedAt',
     ]))
@@ -429,6 +450,7 @@ describe('per-novel database resolver', () => {
     const alphaDb = resolver.getNovelDb('novel-alpha')
     const betaDb = resolver.getNovelDb('novel-beta')
 
+    seedReadyNovelRegistryRows(controlDb, dataRootPath, ['novel-alpha', 'novel-beta'])
     setActiveWorkspaceNovelId(controlDb, 'novel-alpha')
     alphaDb.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', JSON.stringify(createNovelWorkspacePayload('novel-alpha', 'Alpha Initial')))
     betaDb.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', JSON.stringify(createNovelWorkspacePayload('novel-beta', 'Beta Initial')))
@@ -503,6 +525,7 @@ describe('per-novel database resolver', () => {
     const betaDb = resolver.getNovelDb('novel-beta')
     const betaDbPath = getDatabaseFile(betaDb)
 
+    seedReadyNovelRegistryRows(controlDb, dataRootPath, ['novel-alpha', 'novel-beta'])
     setActiveWorkspaceNovelId(controlDb, 'novel-alpha')
     alphaDb.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', JSON.stringify(createNovelWorkspacePayload('novel-alpha', 'Alpha Initial')))
     betaDb.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', JSON.stringify(createNovelWorkspacePayload('novel-beta', 'Beta Initial')))
@@ -783,6 +806,7 @@ describe('per-novel database resolver', () => {
 
     const subgraphResponse = await subgraphRoute.GET(new Request('http://localhost/api/graph/subgraph?novelId=novel-alpha&branchId=novel-alpha%3Amain&chapterNo=1&includeLowConfidence=true&entityId=shared-hero'))
     expect(subgraphResponse.status).toBe(200)
+    expect(subgraphResponse.headers.get('cache-control')).toBe('no-store')
     const subgraph = await subgraphResponse.json() as { nodes: Array<{ label: string }> }
     expect(subgraph.nodes.map((node) => node.label)).toContain('Alpha Hero')
     expect(subgraph.nodes.map((node) => node.label)).not.toContain('Beta Hero')
@@ -830,6 +854,7 @@ describe('per-novel database resolver', () => {
       { params: Promise.resolve({ sessionId: 'shared-what-if' }) },
     )
     expect(whatIfGetResponse.status).toBe(200)
+    expect(whatIfGetResponse.headers.get('cache-control')).toBe('no-store')
     await expect(whatIfGetResponse.json()).resolves.toMatchObject({ generatedText: 'Alpha generated' })
 
     const continueResponse = await continueRoute.PUT(createJsonRequest('http://localhost/api/continue-blocks', {
@@ -865,6 +890,7 @@ describe('per-novel database resolver', () => {
 
     const malformedNovelResponse = await subgraphRoute.GET(new Request('http://localhost/api/graph/subgraph?novelId=..%2Fescape&branchId=novel-alpha%3Amain&chapterNo=1&entityId=shared-hero'))
     expect(malformedNovelResponse.status).toBe(400)
+    expect(malformedNovelResponse.headers.get('cache-control')).toBe('no-store')
 
     const wrongOwnerResponse = await roleplayMessageRoute.POST(
       createJsonRequest('http://localhost/api/roleplay/sessions/shared-roleplay/messages', { novelId: 'novel-alpha', branchId: 'novel-alpha:other', role: 'user', content: 'wrong branch' }),
