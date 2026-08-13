@@ -48,7 +48,6 @@ describe('knowledge view store lightweight action responses', () => {
         wordCount: 1,
         updatedAt: 'now',
         trajectory: [],
-        parentChapterId: null,
       }],
       localCharacters: [{ id: 'char-1', novelId: 'novel-1', name: 'Existing Character', role: '主角', goal: '目标', trait: '冷静', note: '保留' }],
       localCharacterRelations: [{ id: 'rel-1', novelId: 'novel-1', fromCharacterId: 'char-1', toCharacterId: 'char-1', label: '自我认知', strength: 'weak', status: 'active', note: '', chapterIds: [] }],
@@ -156,7 +155,10 @@ describe('knowledge view store lightweight action responses', () => {
 
     await fetchKnowledgeProjection({ novelId: 'novel-1', asOfChapter: 2, statusOnly: true })
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/knowledge-view?novelId=novel-1&asOfChapter=2&statusOnly=1', { cache: 'no-store' })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/knowledge-view?novelId=novel-1&asOfChapter=2&statusOnly=1',
+      expect.objectContaining({ cache: 'no-store', signal: expect.any(AbortSignal) }),
+    )
   })
 
   it('keeps POST knowledge actions unchanged when statusOnly is provided', async () => {
@@ -254,7 +256,11 @@ describe('knowledge view store lightweight action responses', () => {
     const refresh = useNovelStore.getState().refreshKnowledgeProjection(undefined, 1)
     const deleteKnowledge = useNovelStore.getState().deleteStoryKnowledgeGraph('novel-1')
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/knowledge-view?novelId=novel-1&asOfChapter=1', { cache: 'no-store' })
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/knowledge-view?novelId=novel-1&asOfChapter=1',
+      expect.objectContaining({ cache: 'no-store', signal: expect.any(AbortSignal) }),
+    )
 
     deleteResponse.resolve(knowledgeProjectionResponse())
     await deleteKnowledge

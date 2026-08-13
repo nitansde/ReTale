@@ -7,7 +7,9 @@ import type {
   NovelStore,
   NovelStoreGet,
   NovelStoreSet,
+  PersistedNovelStoreSet,
 } from '@/store/novel-store-types'
+import { requestClientGet } from '@/lib/client-request-broker'
 
 function tm(key: import('@/lib/i18n/messages').TranslationKey, values?: import('@/lib/i18n/messages').TranslationValues) {
   return getMessage(getClientLocale(), key, values)
@@ -41,6 +43,7 @@ export async function fetchKnowledgeProjection(options?: {
   method?: 'GET' | 'POST'
   action?: 'rebuild' | 'rebuild-retrieval-index' | 'pause' | 'abort' | 'delete-knowledge' | 'delete-hanlp-cache' | 'delete-extraction-cache' | 'delete-embedding-cache'
   chapterRange?: NovelStore['rebuildStoryKnowledge'] extends (novelId?: string, options?: infer T) => Promise<unknown> ? T extends { chapterRange?: infer U } ? U : never : never
+  signal?: AbortSignal
 }): Promise<KnowledgeProjectionResult> {
   const novelId = options?.novelId
   const asOfChapter = options?.asOfChapter
@@ -70,13 +73,14 @@ export async function fetchKnowledgeProjection(options?: {
   }
   if (statusOnly) searchParams.set('statusOnly', '1')
   const search = searchParams.size ? `?${searchParams.toString()}` : ''
-  const response = await fetch(`/api/knowledge-view${search}`, { cache: 'no-store' })
-  const data = (await response.json()) as Partial<KnowledgeProjectionResult> & { ok?: boolean; error?: string }
-  if (!response.ok || !data.ok) {
-    throw new Error(data.error || 'Failed to load knowledge projection')
-  }
-
-  return normalizeKnowledgeProjectionResult(data)
+  return requestClientGet(`/api/knowledge-view${search}`, {
+    signal: options?.signal,
+    parse: async (response) => {
+      const data = (await response.json()) as Partial<KnowledgeProjectionResult> & { ok?: boolean; error?: string }
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to load knowledge projection')
+      return normalizeKnowledgeProjectionResult(data)
+    },
+  })
 }
 
 export function mergeKnowledgeProjection(state: PersistedNovelState, projection: KnowledgeProjectionPayload, novelId?: string): KnowledgeProjectionPayload {
@@ -140,7 +144,7 @@ export function resolveCurrentChapterOrder(state: Pick<PersistedNovelState, 'cur
   return fallbackChapter?.order
 }
 
-export function createKnowledgeActions(set: NovelStoreSet, get: NovelStoreGet): Pick<NovelStore,
+export function createKnowledgeActions(set: NovelStoreSet, setPersisted: PersistedNovelStoreSet, get: NovelStoreGet): Pick<NovelStore,
   'rebuildStoryKnowledge'
   | 'rebuildStoryRetrievalIndex'
   | 'pauseStoryKnowledgeRebuild'
@@ -190,23 +194,23 @@ export function createKnowledgeActions(set: NovelStoreSet, get: NovelStoreGet): 
       const projection = normalizeKnowledgeProjection(result)
 
       set((current) => isCurrentProjectionRequest(targetNovelId, generation)
-        ? {
-            ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId, result.jobOutcome !== 'completed'),
-            trajectories: result.jobOutcome === 'completed'
-              ? [
-                  {
-                    id: uid('traj'),
-                    chapterId: chaptersForNovel[0].id,
-                    type: 'note',
-                    title: tm('store.knowledgeRebuildTitle'),
-                    detail: tm('store.knowledgeRebuildDetail', { title: chaptersForNovel[0].title }),
-                    createdAt: formatNowLabel(),
-                  },
-                  ...current.trajectories,
-                ]
-              : current.trajectories,
-          }
+        ? mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId, result.jobOutcome !== 'completed')
         : {})
+      if (result.jobOutcome === 'completed' && isCurrentProjectionRequest(targetNovelId, generation)) {
+        setPersisted((current) => ({
+          trajectories: [
+            {
+              id: uid('traj'),
+              chapterId: chaptersForNovel[0].id,
+              type: 'note',
+              title: tm('store.knowledgeRebuildTitle'),
+              detail: tm('store.knowledgeRebuildDetail', { title: chaptersForNovel[0].title }),
+              createdAt: formatNowLabel(),
+            },
+            ...current.trajectories,
+          ],
+        }))
+      }
 
       return result
     },
@@ -288,10 +292,10 @@ export function createKnowledgeActions(set: NovelStoreSet, get: NovelStoreGet): 
         : {})
       return result
     },
-    refreshKnowledgeProjection: async (novelId, asOfChapter) => {
+    refreshKnowledgeProjection: async (novelId, asOfChapter, signal) => {
       const targetNovelId = novelId ?? get().currentNovelId
       const generation = beginProjectionRequest(targetNovelId)
-      const result = await fetchKnowledgeProjection({ novelId: targetNovelId, asOfChapter, method: 'GET' })
+      const result = await fetchKnowledgeProjection({ novelId: targetNovelId, asOfChapter, method: 'GET', signal })
       set((current) => isCurrentProjectionRequest(targetNovelId, generation)
         ? {
             ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId),
