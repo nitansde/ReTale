@@ -7,6 +7,8 @@ export interface RequiredTraceAsset {
   path?: string
   pathPattern?: string
   minimumManifestCount?: number
+  maximumManifestCount?: number
+  requiredManifestPatterns?: string[]
 }
 
 export interface BuildSafetyConfig {
@@ -32,7 +34,9 @@ export interface RouteBundleMeasurement {
 }
 
 export interface RouteBundleScan {
-  statsPath: string
+  source: 'turbopack-route-bundle-stats' | 'webpack-client-reference-manifests'
+  statsPath: string | null
+  manifestPaths: string[]
   routes: RouteBundleMeasurement[]
   passed: boolean
 }
@@ -49,8 +53,14 @@ export interface RequiredTraceAssetResult {
   path: string | null
   pathPattern: string | null
   minimumManifestCount: number
+  maximumManifestCount: number | null
   manifestCount: number
   manifests: string[]
+  requiredManifestMatches: Array<{
+    pattern: string
+    manifests: string[]
+    passed: boolean
+  }>
   passed: boolean
 }
 

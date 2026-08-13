@@ -19,6 +19,7 @@ const eslintConfig = defineConfig([
     ".omo/runtime/**",
     ".sisyphus/evidence/**",
     ".sisyphus/runtime/**",
+    ".sisyphus/typegen/**",
   ]),
 ]);
 

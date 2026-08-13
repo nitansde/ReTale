@@ -12,6 +12,7 @@ const runtimeDataTraceExcludes = [
   './*.sqlite',
   './*.sqlite-*',
   './.lancedb/**/*',
+  './.omo/**/*',
   './.sisyphus/**/*',
   './tests/**/*',
   './external/**/*',
@@ -24,7 +25,7 @@ const nextConfig: NextConfig = {
     '/*': ['./next.config.ts', ...runtimeDataTraceExcludes],
   },
   outputFileTracingIncludes: {
-    '/*': [
+    '/api/knowledge-view': [
       './node_modules/typescript/package.json',
       './node_modules/typescript/lib/typescript.js',
     ],

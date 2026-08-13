@@ -25,11 +25,19 @@
     },
     {
       "path": "node_modules/typescript/package.json",
-      "minimumManifestCount": 1
+      "minimumManifestCount": 1,
+      "maximumManifestCount": 1,
+      "requiredManifestPatterns": [
+        "server/app/api/knowledge-view/route.js.nft.json"
+      ]
     },
     {
       "path": "node_modules/typescript/lib/typescript.js",
-      "minimumManifestCount": 1
+      "minimumManifestCount": 1,
+      "maximumManifestCount": 1,
+      "requiredManifestPatterns": [
+        "server/app/api/knowledge-view/route.js.nft.json"
+      ]
     }
   ]
 }

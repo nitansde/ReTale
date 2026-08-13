@@ -25,12 +25,26 @@ export function main() {
     console.log(`[next-build-safety] ${route.route}: ${route.rawBytes}/${route.limits.rawBytes} raw, ${route.gzipBytes}/${route.limits.gzipBytes} gzip`)
   }
   console.log(`[next-build-safety] NFT manifests: ${evidence.traceScan.manifestCount}; unsafe paths: ${evidence.traceScan.unsafePaths.length}`)
+  for (const asset of evidence.traceScan.requiredAssets.filter((candidate) => candidate.maximumManifestCount !== null || candidate.requiredManifestMatches.length > 0)) {
+    console.log(`[next-build-safety] Trace asset ${asset.path ?? asset.pathPattern}: ${asset.manifestCount} manifest(s)${asset.maximumManifestCount === null ? '' : `, maximum ${asset.maximumManifestCount}`}`)
+  }
   console.log(`[next-build-safety] Evidence: ${path.relative(repoRoot, evidencePath)}`)
   if (!evidence.passed) {
     const failures = [
       ...evidence.bundleScan.routes.flatMap((route) => route.failures.map((failure) => `${route.route}: ${failure}`)),
       ...evidence.traceScan.unsafePaths.map((entry) => `${entry.manifest}: ${entry.resolvedPath} (${entry.reason})`),
-      ...evidence.traceScan.requiredAssets.filter((asset) => !asset.passed).map((asset) => `required trace asset missing: ${asset.path ?? asset.pathPattern}`),
+      ...evidence.traceScan.requiredAssets.flatMap((asset) => {
+        const label = asset.path ?? asset.pathPattern
+        return [
+          ...(asset.manifestCount < asset.minimumManifestCount ? [`required trace asset missing: ${label}`] : []),
+          ...(asset.maximumManifestCount !== null && asset.manifestCount > asset.maximumManifestCount
+            ? [`trace asset appears in too many manifests: ${label} (${asset.manifestCount} > ${asset.maximumManifestCount})`]
+            : []),
+          ...asset.requiredManifestMatches
+            .filter((match) => !match.passed)
+            .map((match) => `trace asset ${label} missing from required manifest: ${match.pattern}`),
+        ]
+      }),
     ]
     throw new Error(`[next-build-safety] Verification failed:\n- ${failures.join('\n- ')}`)
   }

@@ -3,7 +3,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { gzipSync } from 'node:zlib'
 
-const UNSAFE_SEGMENTS = new Set(['data', 'backups', '.lancedb', '.sisyphus', 'tests', 'external', 'corpora'])
+const UNSAFE_SEGMENTS = new Set(['data', 'backups', '.lancedb', '.omo', '.sisyphus', 'tests', 'external', 'corpora'])
 const QA_IMAGE_PATTERN = /(?:^|[/\\])(?:qa|playwright|screenshots?|evidence)(?:[/\\]|[^/\\]*[-_.])[^/\\]*\.(?:png|jpe?g|webp)$/iu
 const DATABASE_PATTERN = /(?:^|[/\\])[^/\\]*\.(?:db|sqlite|sqlite3)(?:(?:[.-])(?:wal|shm|journal))?$/iu
 const DATABASE_SIDECAR_PATTERN = /(?:^|[/\\])[^/\\]*\.(?:wal|shm)$/iu
@@ -21,6 +21,11 @@ function readJson(filePath, label) {
   } catch (error) {
     throw new Error(`[next-build-safety] Invalid JSON in ${label}: ${filePath}`, { cause: error })
   }
+}
+
+function tryReadJson(filePath, label) {
+  if (!fs.existsSync(filePath)) return null
+  return readJson(filePath, label)
 }
 
 function walkFiles(rootPath, predicate) {
@@ -117,6 +122,20 @@ export function validateBuildSafetyConfig(config) {
     if (!Number.isInteger(assertion.minimumManifestCount) || assertion.minimumManifestCount <= 0) {
       throw new Error('[next-build-safety] Each required trace asset minimumManifestCount must be a positive integer')
     }
+    if (assertion.maximumManifestCount !== undefined) {
+      if (!Number.isInteger(assertion.maximumManifestCount) || assertion.maximumManifestCount <= 0) {
+        throw new Error('[next-build-safety] Each required trace asset maximumManifestCount must be a positive integer')
+      }
+      if (assertion.maximumManifestCount < assertion.minimumManifestCount) {
+        throw new Error('[next-build-safety] Each required trace asset maximumManifestCount must be at least minimumManifestCount')
+      }
+    }
+    if (assertion.requiredManifestPatterns !== undefined) {
+      if (!Array.isArray(assertion.requiredManifestPatterns) || assertion.requiredManifestPatterns.length === 0
+        || assertion.requiredManifestPatterns.some((pattern) => typeof pattern !== 'string' || pattern.length === 0)) {
+        throw new Error('[next-build-safety] Each required trace asset requiredManifestPatterns must be a non-empty string array')
+      }
+    }
   }
   return config
 }
@@ -136,22 +155,92 @@ function getGitMetadata(repoRoot) {
   }
 }
 
+function webpackRouteEntry(route) {
+  if (route === '/') return '/page'
+  return `${route.replace(/\/$/u, '')}/page`
+}
+
+function readWebpackClientReferenceManifest(manifestPath, entryName) {
+  let source
+  try {
+    source = fs.readFileSync(manifestPath, 'utf8')
+  } catch (error) {
+    throw new Error(`[next-build-safety] Missing webpack client reference manifest: ${manifestPath}`, { cause: error })
+  }
+  const assignment = `globalThis.__RSC_MANIFEST[${JSON.stringify(entryName)}]=`
+  const assignmentIndex = source.indexOf(assignment)
+  if (assignmentIndex < 0) {
+    throw new Error(`[next-build-safety] Missing ${entryName} entry in webpack client reference manifest: ${manifestPath}`)
+  }
+  const valueStart = assignmentIndex + assignment.length
+  let value
+  try {
+    value = JSON.parse(source.slice(valueStart).replace(/;\s*$/u, ''))
+  } catch (error) {
+    throw new Error(`[next-build-safety] Invalid webpack client reference manifest JSON for ${entryName}: ${manifestPath}`, { cause: error })
+  }
+  return value
+}
+
+function loadWebpackRouteRows({ distDir, budgetConfig }) {
+  const buildManifestPath = path.join(distDir, 'build-manifest.json')
+  const appPathRoutesManifestPath = path.join(distDir, 'app-path-routes-manifest.json')
+  const buildManifest = readJson(buildManifestPath, 'webpack build manifest')
+  const appPathRoutes = readJson(appPathRoutesManifestPath, 'webpack app path routes manifest')
+  if (!Array.isArray(buildManifest.rootMainFiles)) {
+    throw new Error(`[next-build-safety] Invalid rootMainFiles in webpack build manifest: ${buildManifestPath}`)
+  }
+
+  return {
+    source: 'webpack-client-reference-manifests',
+    manifestPaths: [buildManifestPath, appPathRoutesManifestPath],
+    rows: Object.keys(budgetConfig.routes ?? {}).map((route) => {
+      const entryName = Object.entries(appPathRoutes).find(([, pathname]) => pathname === route)?.[0]
+        ?? webpackRouteEntry(route)
+      const manifestPath = path.join(
+        distDir,
+        'server',
+        'app',
+        `${entryName.replace(/^\//u, '')}_client-reference-manifest.js`,
+      )
+      const clientReferenceManifest = readWebpackClientReferenceManifest(manifestPath, entryName)
+      const clientModules = clientReferenceManifest?.clientModules
+      if (!clientModules || typeof clientModules !== 'object' || Array.isArray(clientModules)) {
+        throw new Error(`[next-build-safety] Invalid clientModules for ${route} in ${manifestPath}`)
+      }
+      const routeChunks = Object.values(clientModules).flatMap((clientModule) => {
+        if (!clientModule || !Array.isArray(clientModule.chunks)) return []
+        return clientModule.chunks.filter((chunkPath) => typeof chunkPath === 'string' && chunkPath.endsWith('.js'))
+      })
+      return {
+        route,
+        firstLoadChunkPaths: [...new Set([...buildManifest.rootMainFiles, ...routeChunks])]
+          .map((chunkPath) => path.join(distDir, chunkPath)),
+      }
+    }),
+  }
+}
+
 export function scanRouteBundles({ distDir, repoRoot = path.dirname(distDir), budgetConfig }) {
   const statsPath = path.join(distDir, 'diagnostics', 'route-bundle-stats.json')
-  const rows = readJson(statsPath, 'Next route bundle stats')
+  const turbopackRows = tryReadJson(statsPath, 'Next route bundle stats')
+  const bundleSource = turbopackRows === null
+    ? loadWebpackRouteRows({ distDir, budgetConfig })
+    : { source: 'turbopack-route-bundle-stats', manifestPaths: [statsPath], rows: turbopackRows }
+  const { rows } = bundleSource
   if (!Array.isArray(rows)) {
-    throw new Error(`[next-build-safety] Expected an array in route bundle stats: ${statsPath}`)
+    throw new Error(`[next-build-safety] Expected route bundle rows from ${bundleSource.manifestPaths.join(', ')}`)
   }
 
   const routes = []
   for (const [route, limits] of Object.entries(budgetConfig.routes ?? {})) {
     const row = rows.find((candidate) => candidate?.route === route)
     if (!row || !Array.isArray(row.firstLoadChunkPaths)) {
-      throw new Error(`[next-build-safety] Missing route bundle artifacts for ${route} in ${statsPath}`)
+      throw new Error(`[next-build-safety] Missing route bundle artifacts for ${route} in ${bundleSource.manifestPaths.join(', ')}`)
     }
     const chunkPaths = [...new Set(row.firstLoadChunkPaths)].sort()
     if (chunkPaths.length === 0) {
-      throw new Error(`[next-build-safety] Route ${route} has no initial JavaScript chunks in ${statsPath}`)
+      throw new Error(`[next-build-safety] Route ${route} has no initial JavaScript chunks in ${bundleSource.manifestPaths.join(', ')}`)
     }
     let rawBytes = 0
     let gzipBytes = 0
@@ -174,7 +263,13 @@ export function scanRouteBundles({ distDir, repoRoot = path.dirname(distDir), bu
     if (gzipBytes > limits.gzipBytes) failures.push(`gzip ${gzipBytes} > ${limits.gzipBytes}`)
     routes.push({ route, limits, rawBytes, gzipBytes, chunks, passed: failures.length === 0, failures })
   }
-  return { statsPath, routes, passed: routes.every((route) => route.passed) }
+  return {
+    source: bundleSource.source,
+    statsPath: bundleSource.source === 'turbopack-route-bundle-stats' ? statsPath : null,
+    manifestPaths: bundleSource.manifestPaths,
+    routes,
+    passed: routes.every((route) => route.passed),
+  }
 }
 
 export function scanOutputFileTraces({ distDir, repoRoot, requiredTraceAssets = [] }) {
@@ -241,13 +336,27 @@ export function scanOutputFileTraces({ distDir, repoRoot, requiredTraceAssets = 
       .map(([manifestPath]) => toPosixPath(path.relative(distDir, manifestPath)))
       .sort()
     const minimumManifestCount = assertion.minimumManifestCount ?? 1
+    const maximumManifestCount = assertion.maximumManifestCount ?? null
+    const requiredManifestMatches = (assertion.requiredManifestPatterns ?? []).map((pattern) => {
+      const manifestMatcher = globPatternToRegExp(pattern)
+      const matchingManifests = manifestsContainingAsset.filter((manifest) => manifestMatcher.test(manifest))
+      return {
+        pattern,
+        manifests: matchingManifests,
+        passed: matchingManifests.length > 0,
+      }
+    })
     return {
       path: assertion.path ?? null,
       pathPattern: assertion.pathPattern ?? null,
       minimumManifestCount,
+      maximumManifestCount,
       manifestCount: manifestsContainingAsset.length,
       manifests: manifestsContainingAsset,
-      passed: manifestsContainingAsset.length >= minimumManifestCount,
+      requiredManifestMatches,
+      passed: manifestsContainingAsset.length >= minimumManifestCount
+        && (maximumManifestCount === null || manifestsContainingAsset.length <= maximumManifestCount)
+        && requiredManifestMatches.every((match) => match.passed),
     }
   })
 

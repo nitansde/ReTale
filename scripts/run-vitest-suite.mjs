@@ -63,8 +63,13 @@ const dataDir = assertOwnedTestPath(testRoot, path.join(testRoot, 'data'), {
   repoRoot: ROOT,
   label: 'Vitest data directory',
 })
+const tempDir = assertOwnedTestPath(testRoot, path.join(testRoot, 'tmp'), {
+  repoRoot: ROOT,
+  label: 'Vitest temporary directory',
+})
 
 fs.closeSync(fs.openSync(sourceDbPath, 'wx'))
+fs.mkdirSync(tempDir, { recursive: true })
 
 const outputFile = path.join(EVIDENCE_ROOT, `${suite}-report.json`)
 
@@ -85,6 +90,9 @@ const result = spawnSync(
       RETALE_TEST_SOURCE_DB_PATH: sourceDbPath,
       DATABASE_URL: `file:${runtimeDbPath}`,
       RETALE_DATA_DIR: dataDir,
+      TMPDIR: tempDir,
+      TMP: tempDir,
+      TEMP: tempDir,
       TASK_EVIDENCE_DIR: EVIDENCE_ROOT,
     },
   }

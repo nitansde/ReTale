@@ -39,8 +39,11 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run full typecheck
+      - name: Generate Next route types and run full typecheck
         run: npm run typecheck
+
+      - name: Run lint
+        run: npm run lint
 
       - name: Run tests
         run: npm run test:all

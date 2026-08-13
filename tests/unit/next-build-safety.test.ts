@@ -100,6 +100,61 @@ describe('Next build route bundle budgets', () => {
       expect.stringMatching(/^gzip /),
     ])
   })
+
+  it('derives webpack app-route chunks when Turbopack route stats are absent', () => {
+    const root = fixtureRoot('webpack bundle fixture')
+    const distDir = path.join(root, '.next')
+    const shared = Buffer.from('webpack-shared-client-code'.repeat(20))
+    const workspace = Buffer.from('webpack-workspace-client-code'.repeat(15))
+    fs.mkdirSync(path.join(distDir, 'static', 'chunks', 'app', 'workspace'), { recursive: true })
+    fs.writeFileSync(path.join(distDir, 'static', 'chunks', 'shared.js'), shared)
+    fs.writeFileSync(path.join(distDir, 'static', 'chunks', 'app', 'workspace', 'page.js'), workspace)
+    writeJson(path.join(distDir, 'build-manifest.json'), {
+      rootMainFiles: ['static/chunks/shared.js'],
+    })
+    writeJson(path.join(distDir, 'app-path-routes-manifest.json'), {
+      '/workspace/page': '/workspace',
+    })
+    const clientReferenceManifest = {
+      clientModules: {
+        '/fixture/app/workspace/page.tsx': {
+          chunks: [
+            '1',
+            'static/chunks/shared.js',
+            '2',
+            'static/chunks/app/workspace/page.js',
+          ],
+        },
+      },
+    }
+    const manifestPath = path.join(distDir, 'server', 'app', 'workspace', 'page_client-reference-manifest.js')
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true })
+    fs.writeFileSync(
+      manifestPath,
+      `globalThis.__RSC_MANIFEST=(globalThis.__RSC_MANIFEST||{});globalThis.__RSC_MANIFEST["/workspace/page"]=${JSON.stringify(clientReferenceManifest)};`,
+    )
+
+    const result = scanRouteBundles({
+      distDir,
+      repoRoot: root,
+      budgetConfig: {
+        routes: {
+          '/workspace': {
+            rawBytes: shared.byteLength + workspace.byteLength,
+            gzipBytes: gzipSync(shared, { level: 9 }).byteLength + gzipSync(workspace, { level: 9 }).byteLength,
+          },
+        },
+      },
+    })
+
+    expect(result).toMatchObject({
+      source: 'webpack-client-reference-manifests',
+      statsPath: null,
+      passed: true,
+    })
+    expect(result.routes[0].chunks).toHaveLength(2)
+    expect(result.routes[0].rawBytes).toBe(shared.byteLength + workspace.byteLength)
+  })
 })
 
 describe('Next output-file traces', () => {
@@ -206,6 +261,7 @@ describe('Next output-file traces', () => {
     ['sqlite journal', 'runtime/control.sqlite-journal', 'database-or-sidecar'],
     ['backup', 'backups/nightly/archive.txt', 'repository-backups'],
     ['lancedb', '.lancedb/table/file.bin', 'repository-.lancedb'],
+    ['legacy runtime evidence', '.omo/runtime/fixture/control.db', 'database-or-sidecar'],
     ['sisyphus', '.sisyphus/evidence/report.json', 'repository-.sisyphus'],
     ['tests', 'tests/fixtures/corpus.txt', 'repository-tests'],
     ['external corpus', 'external/corpora/book.txt', 'repository-external'],
@@ -244,6 +300,80 @@ describe('Next output-file traces', () => {
     expect(result.requiredAssets[0].passed).toBe(false)
     expect(() => scanOutputFileTraces({ distDir: path.join(root, 'missing'), repoRoot: root }))
       .toThrow(/Missing Next build directory/)
+  })
+
+  it('caps an asset to its intended manifest and verifies the required route manifest', () => {
+    const root = fixtureRoot('bounded trace asset fixture')
+    const distDir = path.join(root, '.next')
+    const assetPath = path.join(root, 'node_modules', 'typescript', 'lib', 'typescript.js')
+    const workerManifest = path.join(distDir, 'server', 'app', 'api', 'knowledge-view', 'route.js.nft.json')
+    fs.mkdirSync(path.dirname(assetPath), { recursive: true })
+    fs.writeFileSync(assetPath, 'typescript runtime')
+    writeJson(workerManifest, {
+      version: 1,
+      files: [path.relative(path.dirname(workerManifest), assetPath)],
+    })
+    writeJson(path.join(distDir, 'server', 'app', 'library', 'page.js.nft.json'), { version: 1, files: [] })
+    writeJson(path.join(distDir, 'server', 'app', 'workspace', 'page.js.nft.json'), { version: 1, files: [] })
+
+    const result = scanOutputFileTraces({
+      distDir,
+      repoRoot: root,
+      requiredTraceAssets: [{
+        path: 'node_modules/typescript/lib/typescript.js',
+        minimumManifestCount: 1,
+        maximumManifestCount: 1,
+        requiredManifestPatterns: ['server/app/api/knowledge-view/route.js.nft.json'],
+      }],
+    })
+
+    expect(result.passed).toBe(true)
+    expect(result.requiredAssets[0]).toEqual(expect.objectContaining({
+      manifestCount: 1,
+      manifests: ['server/app/api/knowledge-view/route.js.nft.json'],
+      maximumManifestCount: 1,
+      requiredManifestMatches: [{
+        pattern: 'server/app/api/knowledge-view/route.js.nft.json',
+        manifests: ['server/app/api/knowledge-view/route.js.nft.json'],
+        passed: true,
+      }],
+      passed: true,
+    }))
+  })
+
+  it('fails when a bounded asset leaks into another route or misses its required manifest', () => {
+    const root = fixtureRoot('leaked trace asset fixture')
+    const distDir = path.join(root, '.next')
+    const assetPath = path.join(root, 'node_modules', 'typescript', 'lib', 'typescript.js')
+    const libraryManifest = path.join(distDir, 'server', 'app', 'library', 'page.js.nft.json')
+    const workspaceManifest = path.join(distDir, 'server', 'app', 'workspace', 'page.js.nft.json')
+    fs.mkdirSync(path.dirname(assetPath), { recursive: true })
+    fs.writeFileSync(assetPath, 'typescript runtime')
+    for (const manifestPath of [libraryManifest, workspaceManifest]) {
+      writeJson(manifestPath, {
+        version: 1,
+        files: [path.relative(path.dirname(manifestPath), assetPath)],
+      })
+    }
+
+    const result = scanOutputFileTraces({
+      distDir,
+      repoRoot: root,
+      requiredTraceAssets: [{
+        path: 'node_modules/typescript/lib/typescript.js',
+        minimumManifestCount: 1,
+        maximumManifestCount: 1,
+        requiredManifestPatterns: ['server/app/api/knowledge-view/route.js.nft.json'],
+      }],
+    })
+
+    expect(result.passed).toBe(false)
+    expect(result.requiredAssets[0]).toEqual(expect.objectContaining({
+      manifestCount: 2,
+      maximumManifestCount: 1,
+      requiredManifestMatches: [expect.objectContaining({ passed: false })],
+      passed: false,
+    }))
   })
 })
 
@@ -294,5 +424,15 @@ describe('build safety config validation', () => {
       routes: { '/workspace': { rawBytes: 1, gzipBytes: 1 } },
       requiredTraceAssets: [{ path: 'a', pathPattern: 'b', minimumManifestCount: 1 }],
     })).toThrow(/exactly one of path or pathPattern/)
+    expect(() => validateBuildSafetyConfig({
+      schemaVersion: 1,
+      routes: { '/workspace': { rawBytes: 1, gzipBytes: 1 } },
+      requiredTraceAssets: [{ path: 'a', minimumManifestCount: 2, maximumManifestCount: 1 }],
+    })).toThrow(/maximumManifestCount must be at least minimumManifestCount/)
+    expect(() => validateBuildSafetyConfig({
+      schemaVersion: 1,
+      routes: { '/workspace': { rawBytes: 1, gzipBytes: 1 } },
+      requiredTraceAssets: [{ path: 'a', minimumManifestCount: 1, requiredManifestPatterns: [] }],
+    })).toThrow(/requiredManifestPatterns must be a non-empty string array/)
   })
 })

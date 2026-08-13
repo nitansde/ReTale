@@ -11,6 +11,7 @@ import {
   createOwnedTestRoot,
   removeOwnedTestTree,
 } from './test-path-safety.mjs'
+import { buildNextProductionBuildArgs } from './next-production-build.mjs'
 import { assertPortAvailable, assertPortReleased } from './production-port-safety.mjs'
 
 const ROOT = process.cwd()
@@ -214,7 +215,7 @@ async function main() {
     const runtimeEnv = createRuntimeEnvironment(config)
 
     console.log(`[retale-production-smoke] Building with owned runtime ${config.testRoot}`)
-    const build = spawn(process.execPath, [NEXT_CLI_ENTRYPOINT, 'build'], {
+    const build = spawn(process.execPath, [NEXT_CLI_ENTRYPOINT, ...buildNextProductionBuildArgs()], {
       cwd: ROOT,
       env: runtimeEnv,
       stdio: 'inherit',
