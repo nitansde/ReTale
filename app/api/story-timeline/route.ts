@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { noStoreJson } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { findStoryBranch, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { abortRecoverableRewriteJobsForDeletedTimelineNode } from '@/lib/server/recoverable-rewrite-jobs'
@@ -11,23 +12,23 @@ export async function GET(request: Request) {
     const rawBranchId = searchParams.get('branchId')?.trim() ?? ''
 
     if (!novelId) {
-      return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+      return noStoreJson({ ok: false, error: 'novelId is required' }, { status: 400 })
     }
     if (!rawBranchId) {
-      return NextResponse.json({ ok: false, error: 'branchId is required' }, { status: 400 })
+      return noStoreJson({ ok: false, error: 'branchId is required' }, { status: 400 })
     }
 
     const branchId = normalizeBranchId(novelId, rawBranchId)
     const db = createNovelDatabaseAccess(novelId)
     const branch = findStoryBranch(branchId, db)
     if (!branch || branch.novelId !== novelId) {
-      return NextResponse.json({ ok: false, error: 'branchId does not belong to the requested novel' }, { status: 404 })
+      return noStoreJson({ ok: false, error: 'branchId does not belong to the requested novel' }, { status: 404 })
     }
 
     const payload = loadStoryTimeline(novelId, branchId, db)
-    return NextResponse.json(payload)
+    return noStoreJson(payload)
   } catch (error) {
-    return NextResponse.json(
+    return noStoreJson(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to load story timeline' },
       { status: 500 }
     )

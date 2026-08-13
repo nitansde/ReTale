@@ -968,7 +968,7 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
   }
   const continueBlockDetailRequests: string[] = []
   let delayNextTimelineRefresh = false
-  let releaseDelayedTimelineRefresh: (() => void) | null = null
+  let releaseDelayedTimelineRefresh!: () => void
   let markDelayedTimelineRefreshStarted: (() => void) | null = null
   const delayedTimelineRefreshStarted = new Promise<void>((resolve) => {
     markDelayedTimelineRefreshStarted = resolve
@@ -1038,7 +1038,7 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
   await expect(page).not.toHaveURL(/selectionNodeId=continue-node-1/)
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('rewrite')
   expect(continueBlockDetailRequests).toContain('rewrite-block-1')
-  releaseDelayedTimelineRefresh?.()
+  releaseDelayedTimelineRefresh()
 
   timelineState = buildDeleteAffordanceTimelinePayload()
   await page.goto(`/workspace?selectionKind=future_jump&selectionNodeId=${storyBranchFixtureIds.futureJumpNodeId}&selectionRunId=jump-run-001&selectionSourceChapterNo=10&selectionTargetChapterNo=100`, { waitUntil: 'networkidle' })
@@ -1457,7 +1457,7 @@ test('future jump view renders latest revision, revises in place, and reopens re
   let continueBlockPayload: Record<string, unknown> | null = null
   let reviseRequestCount = 0
   let delayNextTimelineRefresh = false
-  let releaseDelayedTimelineRefresh: (() => void) | null = null
+  let releaseDelayedTimelineRefresh!: () => void
   let markDelayedTimelineRefreshStarted: (() => void) | null = null
   const delayedTimelineRefreshStarted = new Promise<void>((resolve) => {
     markDelayedTimelineRefreshStarted = resolve
@@ -1665,7 +1665,7 @@ test('future jump view renders latest revision, revises in place, and reopens re
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('未来续写块正文：她被带走后，誓言开始在更远的地方回响。')
   expect(continueBlockDetailRequests).toContain('continue-block-2')
-  releaseDelayedTimelineRefresh?.()
+  releaseDelayedTimelineRefresh()
   await page.reload({ waitUntil: 'networkidle' })
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('未来续写块正文：她被带走后，誓言开始在更远的地方回响。')
@@ -1744,7 +1744,7 @@ test('continue-block continue creates a child node while regenerate updates the 
   let regeneratePayload: Record<string, unknown> | null = null
   const generationContextPayloads: Record<string, unknown>[] = []
   const rewritePayloads: Record<string, unknown>[] = []
-  let releaseInitialContextPreview: (() => void) | null = null
+  let releaseInitialContextPreview!: () => void
   let markInitialContextPreviewStarted: (() => void) | null = null
   let initialContextPreviewResolved = false
   const initialContextPreviewStarted = new Promise<void>((resolve) => {
@@ -1985,7 +1985,7 @@ test('continue-block continue creates a child node while regenerate updates the 
   await page.getByRole('button', { name: '生成版本' }).click()
   await expect.poll(() => rewritePayloads.length).toBe(1)
   expect(initialContextPreviewResolved).toBe(false)
-  releaseInitialContextPreview?.()
+  releaseInitialContextPreview()
   await expect.poll(() => initialContextPreviewResolved).toBe(true)
   await page.getByRole('button', { name: '保存为续写块' }).click()
 

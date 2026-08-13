@@ -215,6 +215,7 @@ describe('story-timeline-read', () => {
       new Request('http://localhost/api/story-timeline?novelId=novel-001&branchId=main')
     )
     expect(timelineResponse.status).toBe(200)
+    expect(timelineResponse.headers.get('cache-control')).toBe('no-store')
 
     const timelinePayload = await timelineResponse.json()
     expect(timelinePayload.branchId).toBe('novel-001:main')
@@ -291,6 +292,7 @@ describe('story-timeline-read', () => {
       { params: Promise.resolve({ sessionId: 'what-if-session-001' }) }
     )
     expect(sessionResponse.status).toBe(200)
+    expect(sessionResponse.headers.get('cache-control')).toBe('no-store')
 
     const sessionPayload = await sessionResponse.json()
     expect(sessionPayload).toEqual(expect.objectContaining({
@@ -320,6 +322,7 @@ describe('story-timeline-read', () => {
       new Request('http://localhost/api/story-timeline?novelId=novel-001')
     )
     expect(missingBranchResponse.status).toBe(400)
+    expect(missingBranchResponse.headers.get('cache-control')).toBe('no-store')
     await expect(missingBranchResponse.json()).resolves.toEqual({ ok: false, error: 'branchId is required' })
 
     const inaccessibleBranchResponse = await getStoryTimeline(
@@ -336,6 +339,7 @@ describe('story-timeline-read', () => {
       { params: Promise.resolve({ sessionId: 'what-if-session-001' }) }
     )
     expect(missingContextResponse.status).toBe(400)
+    expect(missingContextResponse.headers.get('cache-control')).toBe('no-store')
     await expect(missingContextResponse.json()).resolves.toEqual({ ok: false, error: 'novelId is required' })
 
     const inaccessibleSessionResponse = await getWhatIfSession(
