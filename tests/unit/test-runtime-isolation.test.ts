@@ -200,4 +200,30 @@ describe('owned test runtime paths', () => {
     expect(unsafeData.stderr).toMatch(/repository data directory/)
     expect(fileSnapshot(rootDatabasePath)).toEqual(databaseSnapshotBefore)
   })
+
+  it('allocates production freshness paths inside a marker-owned .sisyphus root', () => {
+    const output = execFileSync(process.execPath, ['scripts/verify-production-freshness.mjs', '--print-config'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    })
+    const config = JSON.parse(output) as {
+      testRoot: string
+      databasePath: string
+      databaseUrl: string
+      dataDir: string
+      distPath: string
+    }
+    const productionSmokeRunsRoot = path.join(repoRoot, '.sisyphus', 'runtime', 'production-smoke-runs')
+
+    try {
+      expect(() => assertOwnedTestPath(config.testRoot, config.databasePath, { repoRoot })).not.toThrow()
+      expect(() => assertOwnedTestDatabaseUrl(config.testRoot, config.databaseUrl, { repoRoot })).not.toThrow()
+      expect(() => assertOwnedTestPath(config.testRoot, config.dataDir, { repoRoot })).not.toThrow()
+      expect(() => assertOwnedTestPath(config.testRoot, config.distPath, { repoRoot })).not.toThrow()
+      expect(path.resolve(config.databasePath)).not.toBe(path.join(repoRoot, 'dev.db'))
+      expect(path.resolve(config.dataDir)).not.toBe(path.join(repoRoot, 'data'))
+    } finally {
+      removeOwnedTestTree(config.testRoot, productionSmokeRunsRoot, { repoRoot })
+    }
+  })
 })
