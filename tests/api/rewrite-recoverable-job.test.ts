@@ -12,6 +12,7 @@ const originalDataDir = process.env.RETALE_DATA_DIR
 const originalDatabaseUrl = process.env.DATABASE_URL
 
 const cleanupDirectories: string[] = []
+type TestSQLiteValue = string | number | bigint | Uint8Array | null
 
 function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
   if (originalValue === undefined) {
@@ -84,7 +85,7 @@ async function createTestDatabase(prefix: string) {
 
   return {
     database,
-    queryOne: <T>(sql: string, ...params: unknown[]) => (database.prepare(sql).get(...params) as T | undefined) ?? null,
+    queryOne: <T>(sql: string, ...params: TestSQLiteValue[]) => (database.prepare(sql).get(...params) as T | undefined) ?? null,
     resetResolvedDatabasesForTests,
   }
 }
@@ -210,6 +211,7 @@ describe('recoverable rewrite jobs', () => {
     await runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
 
     const restoredByIdResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
+    expect(restoredByIdResponse.headers.get('cache-control')).toBe('no-store')
     const restoredById = await restoredByIdResponse.json() as {
       ok: boolean
       job: { status: string; result: { content: string; provider: string; inputTokens: number | null; outputTokens: number | null } }
@@ -230,10 +232,10 @@ describe('recoverable rewrite jobs', () => {
   it('exposes partial streamed output while a recoverable rewrite job is running', async () => {
     const { queryOne } = await createTestDatabase('retale-rewrite-recoverable-streaming')
     const encoder = new TextEncoder()
-    let upstreamController: ReadableStreamDefaultController<Uint8Array> | null = null
+    const streamControl: { controller: ReadableStreamDefaultController<Uint8Array> | null } = { controller: null }
     const upstream = new ReadableStream<Uint8Array>({
       start(controller) {
-        upstreamController = controller
+        streamControl.controller = controller
       },
     })
     const fetchMock = vi.fn().mockResolvedValue(new Response(upstream, {
@@ -248,8 +250,8 @@ describe('recoverable rewrite jobs', () => {
     expect(created.ok).toBe(true)
 
     const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
-    await waitForCondition(() => fetchMock.mock.calls.length === 1 && upstreamController !== null)
-    const controller = upstreamController
+    await waitForCondition(() => fetchMock.mock.calls.length === 1 && streamControl.controller !== null)
+    const controller = streamControl.controller
     if (!controller) {
       throw new Error('Expected streaming response controller')
     }
@@ -283,10 +285,10 @@ describe('recoverable rewrite jobs', () => {
 
   it('aborts an on-the-fly recoverable rewrite job and excludes it from latest restore', async () => {
     await createTestDatabase('retale-rewrite-recoverable-abort')
-    let capturedSignal: AbortSignal | null = null
+    const fetchControl: { signal: AbortSignal | null } = { signal: null }
     const fetchMock = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
-      capturedSignal = init?.signal ?? null
-      capturedSignal?.addEventListener('abort', () => {
+      fetchControl.signal = init?.signal ?? null
+      fetchControl.signal?.addEventListener('abort', () => {
         const error = new Error('The operation was aborted')
         error.name = 'AbortError'
         reject(error)
@@ -300,14 +302,14 @@ describe('recoverable rewrite jobs', () => {
     expect(created.job.status).toBe('queued')
 
     const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
-    await waitForCondition(() => capturedSignal !== null)
+    await waitForCondition(() => fetchControl.signal !== null)
 
     const abortResponse = await DELETE(createAbortRequest(created.job.jobId))
     const aborted = await abortResponse.json() as { ok: boolean; job: { jobId: string; status: string } }
     expect(aborted.ok).toBe(true)
     expect(aborted.job.jobId).toBe(created.job.jobId)
     expect(aborted.job.status).toBe('aborted')
-    expect(capturedSignal?.aborted).toBe(true)
+    expect(fetchControl.signal?.aborted).toBe(true)
     await runPromise
 
     const restoredByIdResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
@@ -326,10 +328,10 @@ describe('recoverable rewrite jobs', () => {
 
   it('rejects abort requests outside the recoverable rewrite job scope', async () => {
     await createTestDatabase('retale-rewrite-recoverable-abort-scope')
-    let capturedSignal: AbortSignal | null = null
+    const fetchControl: { signal: AbortSignal | null } = { signal: null }
     const fetchMock = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
-      capturedSignal = init?.signal ?? null
-      capturedSignal?.addEventListener('abort', () => {
+      fetchControl.signal = init?.signal ?? null
+      fetchControl.signal?.addEventListener('abort', () => {
         const error = new Error('The operation was aborted')
         error.name = 'AbortError'
         reject(error)
@@ -341,13 +343,13 @@ describe('recoverable rewrite jobs', () => {
     const createdResponse = await POST(createRewriteRequest({ recoverableRewriteJob: true, stream: true }))
     const created = await createdResponse.json() as { job: { jobId: string; status: string } }
     const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
-    await waitForCondition(() => capturedSignal !== null)
+    await waitForCondition(() => fetchControl.signal !== null)
 
     const wrongScopeResponse = await DELETE(createAbortRequest(created.job.jobId, { branchId: 'novel-rewrite:other' }))
     const wrongScope = await wrongScopeResponse.json() as { ok: boolean; error: string }
     expect(wrongScopeResponse.status).toBe(404)
     expect(wrongScope.ok).toBe(false)
-    expect(capturedSignal?.aborted).toBe(false)
+    expect(fetchControl.signal?.aborted).toBe(false)
 
     const runningResponse = await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))
     const running = await runningResponse.json() as { job: { status: string } }
@@ -355,7 +357,7 @@ describe('recoverable rewrite jobs', () => {
 
     const abortResponse = await DELETE(createAbortRequest(created.job.jobId))
     expect(abortResponse.status).toBe(200)
-    expect(capturedSignal?.aborted).toBe(true)
+    expect(fetchControl.signal?.aborted).toBe(true)
     await runPromise
   }, 30000)
 
@@ -442,10 +444,10 @@ describe('recoverable rewrite jobs', () => {
   it('throttles tiny streamed partial updates before final completion', async () => {
     await createTestDatabase('retale-rewrite-recoverable-streaming-throttle')
     const encoder = new TextEncoder()
-    let upstreamController: ReadableStreamDefaultController<Uint8Array> | null = null
+    const streamControl: { controller: ReadableStreamDefaultController<Uint8Array> | null } = { controller: null }
     const upstream = new ReadableStream<Uint8Array>({
       start(controller) {
-        upstreamController = controller
+        streamControl.controller = controller
       },
     })
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(upstream, {
@@ -458,8 +460,8 @@ describe('recoverable rewrite jobs', () => {
     const created = await createdResponse.json() as { job: { jobId: string } }
 
     const runPromise = runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
-    await waitForCondition(() => upstreamController !== null)
-    const controller = upstreamController
+    await waitForCondition(() => streamControl.controller !== null)
+    const controller = streamControl.controller
     if (!controller) {
       throw new Error('Expected streaming response controller')
     }
@@ -775,9 +777,9 @@ describe('recoverable rewrite jobs', () => {
 
   it('claims a queued job once when multiple runners race', async () => {
     await createTestDatabase('retale-rewrite-claim-once')
-    let resolveFetch: ((response: Response) => void) | null = null
+    const fetchControl: { resolve: ((response: Response) => void) | null } = { resolve: null }
     const fetchMock = vi.fn(() => new Promise<Response>((resolve) => {
-      resolveFetch = resolve
+      fetchControl.resolve = resolve
     }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -790,7 +792,7 @@ describe('recoverable rewrite jobs', () => {
 
     await waitForCondition(() => fetchMock.mock.calls.length === 1)
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    resolveFetch?.(new Response(JSON.stringify({
+    fetchControl.resolve?.(new Response(JSON.stringify({
       choices: [{ message: { content: JSON.stringify({ result: 'claimed once result' }) } }],
     }), { status: 200 }))
     await Promise.all([firstRun, secondRun])

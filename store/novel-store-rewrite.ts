@@ -9,7 +9,7 @@ import {
   uid,
 } from '@/lib/utils'
 import type { Chapter, RewriteCandidate, RewriteHistoryEntry } from '@/lib/types'
-import type { NovelStore, NovelStoreGet, NovelStoreSet } from '@/store/novel-store-types'
+import type { NovelStore, NovelStoreGet, PersistedNovelStoreSet } from '@/store/novel-store-types'
 
 function tm(key: import('@/lib/i18n/messages').TranslationKey, values?: import('@/lib/i18n/messages').TranslationValues) {
   return getMessage(getClientLocale(), key, values)
@@ -26,7 +26,7 @@ export function getScopeSource(chapter: Chapter, scope: NovelStore['rewriteScope
   return chapterText
 }
 
-export function createRewriteActions(set: NovelStoreSet, get: NovelStoreGet): Pick<NovelStore, 'generateRewriteBatch'> {
+export function createRewriteActions(setPersisted: PersistedNovelStoreSet, get: NovelStoreGet): Pick<NovelStore, 'generateRewriteBatch'> {
   return {
     generateRewriteBatch: async ({ prompt } = {}) => {
       const state = get()
@@ -99,7 +99,7 @@ export function createRewriteActions(set: NovelStoreSet, get: NovelStoreGet): Pi
           createdAt: formatNowLabel(),
           candidateIds: nextCandidates.map((item) => item.id),
         }
-        set((current) => ({
+        setPersisted((current) => ({
           currentTab: 'rewrite',
           helperTab: 'trajectory',
           rewriteCandidates: nextCandidates,
@@ -107,7 +107,7 @@ export function createRewriteActions(set: NovelStoreSet, get: NovelStoreGet): Pi
           trajectories: [{ id: uid('traj'), chapterId: chapter.id, type: 'rewrite', title: tm('store.rewriteGeneratedTitle'), detail: tm('store.rewriteGeneratedDetail', { scope: current.rewriteScope, mode: current.rewriteMode, tone: current.rewriteTone }), createdAt: formatNowLabel() }, ...current.trajectories],
         }))
       } catch (error) {
-        set({ rewriteCandidates: [] })
+        setPersisted((current) => current.rewriteCandidates.length ? { rewriteCandidates: [] } : current)
         throw error instanceof Error ? error : new Error('Rewrite request failed')
       }
     },

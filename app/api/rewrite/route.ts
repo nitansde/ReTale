@@ -1,4 +1,5 @@
 import { after, NextResponse } from 'next/server'
+import { noStoreJson } from '@/lib/server/api-route'
 import { buildGenerationContext } from '@/lib/server/context-builder'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { createNovelDatabaseAccess, runWithNovelDatabaseAccess } from '@/lib/server/database-access'
@@ -638,13 +639,13 @@ export async function GET(request: Request) {
   const branchId = searchParams.get('branchId')?.trim()
   const chapterId = searchParams.get('chapterId')?.trim()
   if (!novelId) {
-    return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+    return noStoreJson({ ok: false, error: 'novelId is required' }, { status: 400 })
   }
   let novelDb
   try {
     novelDb = getNovelRouteDb(novelId)
   } catch (error) {
-    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : 'Invalid novelId' }, { status: 400 })
+    return noStoreJson({ ok: false, error: error instanceof Error ? error.message : 'Invalid novelId' }, { status: 400 })
   }
 
   if (jobId) {
@@ -664,9 +665,7 @@ export async function GET(request: Request) {
 
   scheduleRecoverableRewriteJobIfQueued(row)
 
-  return NextResponse.json({ ok: true, job: serializeRecoverableRewriteJob(row) }, {
-    headers: { 'Cache-Control': 'no-store' },
-  })
+  return noStoreJson({ ok: true, job: serializeRecoverableRewriteJob(row) })
 }
 
 export async function DELETE(request: Request) {
