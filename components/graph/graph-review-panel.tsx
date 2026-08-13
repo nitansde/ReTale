@@ -1,17 +1,12 @@
-import type { GraphEdgeEditDraft, GenerationContextBuildData, GenerationContextEvidence, GenerationContextPromptBlock, GraphReviewControls, GraphSelection } from '@/components/graph/types'
+import type { GraphEdgeEditDraft, GenerationContextBuildData, GenerationContextEvidence, GraphReviewControls, GraphSelection } from '@/components/graph/types'
 import { RefreshCcw } from 'lucide-react'
+import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/context-prompt-block-visibility'
 import { ContextPromptBlocks } from '@/components/graph/context-prompt-blocks'
 import { GraphEvidenceDrawer } from '@/components/graph/graph-evidence-drawer'
 import { GraphFlowCanvas } from '@/components/graph/graph-flow-canvas'
 import { GraphInspector } from '@/components/graph/graph-inspector'
 import { useI18n } from '@/lib/i18n/provider'
 import type { GraphEdge, GraphNode } from '@/lib/server/graph-types'
-
-const HIDDEN_ADVANCED_CONTEXT_BLOCK_IDS = new Set(['output-constraints'])
-
-export function getVisibleAdvancedContextPromptBlocks(blocks: GenerationContextPromptBlock[]) {
-  return blocks.filter((block) => !HIDDEN_ADVANCED_CONTEXT_BLOCK_IDS.has(block.id))
-}
 
 export function GraphReviewPanel(props: {
   context: GenerationContextBuildData

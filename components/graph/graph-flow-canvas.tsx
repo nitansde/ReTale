@@ -1,5 +1,6 @@
 "use client"
 
+import '@xyflow/react/dist/style.css'
 import { useEffect, useMemo } from 'react'
 import {
   Background,
