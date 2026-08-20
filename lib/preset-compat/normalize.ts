@@ -10,6 +10,7 @@ import {
   type PresetCompatRegexPlacement,
   type PresetCompatRegexRecord,
 } from '@/lib/preset-compat/types'
+import { createUuid } from '@/lib/utils'
 
 const ACTIVE_PROMPT_ORDER_CHARACTER_ID = 100001
 const PROMPT_EXPORT_META_KEY = '__presetCompatPromptMeta'
@@ -184,7 +185,7 @@ function pickPresetName(rawPreset: Record<string, unknown>, options: NormalizePr
 }
 
 function makeId(idFactory?: () => string) {
-  return idFactory ? idFactory() : crypto.randomUUID()
+  return idFactory ? idFactory() : createUuid()
 }
 
 function normalizePromptOrderEntries(value: unknown) {

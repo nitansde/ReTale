@@ -6,6 +6,7 @@ import {
   savePresetCompatLibrary as savePresetCompatLibraryToBackend,
 } from '@/lib/preset-compat/client'
 import { normalizeWorkspaceState } from '@/lib/workspace-state'
+import { createUuid } from '@/lib/utils'
 import type { Chapter, PersistedNovelState } from '@/lib/types'
 import { classifyWorkspacePersistence } from '@/store/workspace-persistence-classifier'
 import type {
@@ -881,7 +882,7 @@ export function createPersistenceActions(
 
       const patchEligible = classification.kind === 'patch' && state.patchCapability !== 'unsupported'
       const method: WorkspaceMutationMethod = patchEligible ? 'PATCH' : 'POST'
-      const idempotencyKey = hasMatchingAuthority ? crypto.randomUUID() : null
+      const idempotencyKey = hasMatchingAuthority ? createUuid() : null
       const baseRevision = hasMatchingAuthority ? state.workspaceRevision : null
       const patchBody = classification.kind === 'patch' ? {
         novelId: state.revisionNovelId,
@@ -933,7 +934,7 @@ export function createPersistenceActions(
             ...envelope,
             method: 'POST',
             body: JSON.stringify(envelope.capturedSnapshot),
-            idempotencyKey: crypto.randomUUID(),
+            idempotencyKey: createUuid(),
             chapterId: null,
             chapterFingerprint: null,
           }

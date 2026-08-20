@@ -5,13 +5,6 @@ import type { AISettings, AIScenarioKey } from '@/lib/types'
 import { loadStoredAISettings, saveStoredAISettings } from '@/lib/server/ai-settings'
 import { normalizeOpenAICompatibleBaseUrl } from '@/lib/server/openai-compatible'
 
-export {
-  AI_SETTINGS_V2_KEY,
-  OLLAMA_TIMEOUT_MS_KEY,
-  loadProtectedAISettingsResetSnapshot,
-  validateProtectedAISettingsResetSnapshot,
-} from '@/lib/server/ai-settings'
-
 const MAX_KNOWLEDGE_EXTRACTION_PARALLELISM = 20
 const MAX_EMBEDDING_BATCH_SIZE = 128
 

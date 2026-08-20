@@ -313,7 +313,8 @@ async function loadWorkspaceLibrarySummaries() {
   }
 }
 
-export async function GET(request: Request = new Request('http://localhost/api/workspace')) {
+export async function GET(request: Request) {
+  request ??= new Request('http://localhost/api/workspace')
   const searchParams = new URL(request.url).searchParams
   const librarySummary = searchParams.get('librarySummary')
   if (librarySummary !== null) {

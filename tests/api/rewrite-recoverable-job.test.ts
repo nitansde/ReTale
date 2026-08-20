@@ -150,7 +150,7 @@ async function importRewriteRoute(options: ImportRewriteRouteOptions = {}) {
     }
   })
 
-  return import('@/app/api/rewrite/route')
+  return import('@/app/api/rewrite/handler')
 }
 
 afterEach(async () => {

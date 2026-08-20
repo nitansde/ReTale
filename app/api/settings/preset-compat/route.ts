@@ -6,17 +6,8 @@ import {
   PRIVATE_REVALIDATION_CACHE_CONTROL,
 } from '@/lib/server/api-route'
 import {
-  PRESET_COMPAT_LIBRARY_V1_KEY,
-  loadProtectedPresetCompatLibraryResetSnapshot,
   loadStoredPresetCompatLibrary,
   saveStoredPresetCompatLibrary,
-  validateProtectedPresetCompatLibraryResetSnapshot,
-} from '@/lib/server/preset-compat-library'
-
-export {
-  PRESET_COMPAT_LIBRARY_V1_KEY,
-  loadProtectedPresetCompatLibraryResetSnapshot,
-  validateProtectedPresetCompatLibraryResetSnapshot,
 } from '@/lib/server/preset-compat-library'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -27,7 +18,8 @@ function normalizeExpectedRevision(value: unknown) {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
 }
 
-export async function GET(request: Request = new Request('http://localhost/api/settings/preset-compat')) {
+export async function GET(request: Request) {
+  request ??= new Request('http://localhost/api/settings/preset-compat')
   const library = loadStoredPresetCompatLibrary()
   const etag = formatRevisionEtag('preset-compat', library.schemaVersion, library.revision)
   const headers = {
