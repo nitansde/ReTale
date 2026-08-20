@@ -51,6 +51,7 @@ import type { FutureJumpContinueContext } from '@/components/future-jump/FutureJ
 import type { WorkspaceActionMode } from '@/components/workspace/use-workspace-chapter-selection'
 import type { NovelStore } from '@/store/novel-store-types'
 import { resolveWorkspaceUserFacingError } from '@/lib/workspace-user-facing-errors'
+import { writeTextToClipboard } from '@/lib/browser-clipboard'
 
 type ViewModelState = {
   activeWorkspaceSelection: ReturnType<typeof toChapterTimelineSelection> | Exclude<SelectionNovelStudioCoreState['workspaceSelection'], null>
@@ -271,7 +272,7 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
 
   const copyText = async (mode: 'rewrite' | 'roleplay', text: string) => {
     if (!text) return
-    await navigator.clipboard.writeText(text)
+    await writeTextToClipboard(text)
     core.setCopied(mode)
     window.setTimeout(() => core.setCopied(null), 1500)
   }

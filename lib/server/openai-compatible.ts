@@ -159,18 +159,11 @@ export function normalizeOpenAICompatibleBaseUrl(input: string) {
   }
 
   const protocol = url.protocol.toLowerCase()
-  const hostname = url.hostname.toLowerCase()
-  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname.endsWith('.localhost')
-
-  if (protocol === 'https:') {
+  if (protocol === 'http:' || protocol === 'https:') {
     return trimmed
   }
 
-  if (protocol === 'http:' && isLocalhost) {
-    return trimmed
-  }
-
-  throw new Error('Remote OpenAI-compatible Base URL must use HTTPS')
+  throw new Error('OpenAI-compatible Base URL must use HTTP or HTTPS')
 }
 
 function getConfig(

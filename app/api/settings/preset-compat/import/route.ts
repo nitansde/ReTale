@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import {
   normalizePresetCompatPresetImport,
@@ -96,7 +97,7 @@ function assignNonDestructiveRegexIds(
   return regexes.map((regexRecord) => {
     let nextId = regexRecord.id.trim()
     while (!nextId || usedIds.has(nextId)) {
-      nextId = crypto.randomUUID()
+      nextId = randomUUID()
     }
     usedIds.add(nextId)
 

@@ -154,7 +154,7 @@ Per-novel `lancedb/` directories are part of the runtime layout, so LanceDB-back
 
 - No auth, collaboration, or cloud sync: intentionally single-user.
 - Runtime storage is the per-novel `data/` layout; the old monolithic `dev.db` is not read by the app.
-- OpenAI-compatible rewrite calls expect a server implementing `POST /chat/completions`.
+- OpenAI-compatible rewrite calls accept HTTP or HTTPS base URLs and expect a server implementing `POST /chat/completions`. Use HTTP only on a trusted network because API keys and prompts are otherwise sent without transport encryption.
 - If AI config is missing or the upstream request fails, `/api/rewrite` returns a structured provider error so you can configure or fix the selected OpenAI-compatible or Ollama settings.
 - Import currently assumes valid exported JSON.
 - Preset compatibility scope, provider mappings, preserved-only behavior, provenance notes, and MVP limitations live in `docs/preset-compatibility.md`.
