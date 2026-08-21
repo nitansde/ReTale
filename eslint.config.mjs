@@ -17,6 +17,7 @@ const eslintConfig = defineConfig([
     "tests/.runtime/**",
     ".omo/evidence/**",
     ".omo/runtime/**",
+    ".omo/typegen/**",
     ".sisyphus/evidence/**",
     ".sisyphus/runtime/**",
     ".sisyphus/typegen/**",
