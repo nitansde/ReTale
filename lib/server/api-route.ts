@@ -6,13 +6,6 @@ export const MAX_WORKSPACE_CHAPTERS = 2_000
 export const MAX_WORKSPACE_CHAPTER_CONTENT_CHARS = 1_000_000
 export const MAX_WORKSPACE_AGGREGATE_CHAPTER_CHARS = 8_000_000
 
-const BUILT_IN_TRUSTED_ORIGINS = [
-  'http://localhost:14500',
-  'http://127.0.0.1:14500',
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-] as const
-
 export class ApiRequestError extends Error {
   constructor(readonly status: 400 | 403 | 413 | 415 | 422, message: string) {
     super(message)
@@ -26,53 +19,6 @@ function parseDeclaredContentLength(request: Request) {
   if (!/^\d+$/u.test(value.trim())) return null
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) ? parsed : null
-}
-
-export function assertSameOriginRequest(request: Request) {
-  const origin = request.headers.get('origin')
-  if (origin === null) return
-  let parsedOrigin: URL
-  try {
-    parsedOrigin = new URL(origin)
-  } catch (error) {
-    void error
-    throw new ApiRequestError(403, 'Request origin is not allowed')
-  }
-  if (origin !== parsedOrigin.origin) {
-    throw new ApiRequestError(403, 'Request origin is not allowed')
-  }
-
-  const host = request.headers.get('host')
-  if (host !== null && /[\u0000-\u001f\u007f\s,\\/@?#]/u.test(host)) {
-    throw new ApiRequestError(403, 'Request origin is not allowed')
-  }
-
-  const allowedOrigins = new Set<string>(BUILT_IN_TRUSTED_ORIGINS)
-  const configuredOrigins = process.env.RETALE_TRUSTED_ORIGINS
-  if (configuredOrigins !== undefined && configuredOrigins.trim() !== '') {
-    for (const configuredOrigin of configuredOrigins.split(',')) {
-      const candidate = configuredOrigin.trim()
-      let parsedCandidate: URL
-      try {
-        parsedCandidate = new URL(candidate)
-      } catch (error) {
-        void error
-        throw new ApiRequestError(403, 'Request origin is not allowed')
-      }
-      if (
-        !candidate
-        || candidate !== parsedCandidate.origin
-        || (parsedCandidate.protocol !== 'http:' && parsedCandidate.protocol !== 'https:')
-      ) {
-        throw new ApiRequestError(403, 'Request origin is not allowed')
-      }
-      allowedOrigins.add(candidate)
-    }
-  }
-
-  if (!allowedOrigins.has(parsedOrigin.origin)) {
-    throw new ApiRequestError(403, 'Request origin is not allowed')
-  }
 }
 
 export function assertJsonMediaType(request: Request) {

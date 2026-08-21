@@ -11,7 +11,6 @@ const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const MAX_TXT_FILE_SIZE_BYTES = 10 * 1024 * 1024
 const MAX_IMPORT_BODY_SIZE_BYTES = MAX_TXT_FILE_SIZE_BYTES + 256 * 1024
 const originalDataDir = process.env.RETALE_DATA_DIR
-const originalTrustedOrigins = process.env.RETALE_TRUSTED_ORIGINS
 
 async function createTestDataRoot(prefix: string, activeNovelId?: string) {
   const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
@@ -164,8 +163,6 @@ afterEach(async () => {
   vi.unstubAllEnvs()
   if (originalDataDir === undefined) delete process.env.RETALE_DATA_DIR
   else process.env.RETALE_DATA_DIR = originalDataDir
-  if (originalTrustedOrigins === undefined) delete process.env.RETALE_TRUSTED_ORIGINS
-  else process.env.RETALE_TRUSTED_ORIGINS = originalTrustedOrigins
 
   if (globalForSqlite.sqlite) {
     try {
@@ -181,86 +178,16 @@ afterEach(async () => {
 })
 
 describe('import-txt route', () => {
-  it.each([
-    'https://evil.example',
-    'null',
-    'not a url',
-    'http://localhost/path',
-    'http://user@localhost',
-    'http://LOCALHOST',
-  ])('rejects Origin %s before multipart parsing or side effects', async (origin) => {
-    const sideEffects = mockImportSideEffects()
-    const request = createImportRequest()
-    request.headers.set('origin', origin)
-    const formDataSpy = vi.spyOn(request, 'formData')
-
-    const { POST } = await import('@/app/api/import-txt/route')
-    const response = await POST(request)
-
-    expect(response.status).toBe(403)
-    expect(formDataSpy).not.toHaveBeenCalled()
-    expectNoImportSideEffects(sideEffects)
-  })
-
-  it.each(['bad.example,localhost', 'bad host', 'user@localhost', 'localhost/path'])('rejects malformed Host %s before multipart parsing or side effects', async (host) => {
-    const sideEffects = mockImportSideEffects()
-    const request = createImportRequest({ Host: host, Origin: 'http://localhost' })
-    const formDataSpy = vi.spyOn(request, 'formData')
-
-    const { POST } = await import('@/app/api/import-txt/route')
-    const response = await POST(request)
-
-    expect(response.status).toBe(403)
-    expect(formDataSpy).not.toHaveBeenCalled()
-    expectNoImportSideEffects(sideEffects)
-  })
-
-  it('does not allow X-Forwarded headers to authorize a foreign Origin', async () => {
-    const sideEffects = mockImportSideEffects()
-    const request = createImportRequest({
-      Origin: 'https://evil.example',
-      'X-Forwarded-Host': 'evil.example',
-      'X-Forwarded-Proto': 'https',
-    })
-    const formDataSpy = vi.spyOn(request, 'formData')
-
-    const { POST } = await import('@/app/api/import-txt/route')
-    const response = await POST(request)
-
-    expect(response.status).toBe(403)
-    expect(formDataSpy).not.toHaveBeenCalled()
-    expectNoImportSideEffects(sideEffects)
-  })
-
-  it('accepts a built-in canonical POST Origin independently of request URL and Host', async () => {
+  it('accepts an arbitrary cross-origin import independently of request URL and Host', async () => {
     const database = createTestDatabase('retale-import-txt-route-host-origin')
     resetWorkspaceState(database)
     vi.doMock('@/lib/server/knowledge-rebuild', () => ({
       syncWorkspacePayloadToKnowledgeStore: vi.fn(async () => {}),
     }))
     const request = createImportRequest({
-      Host: '127.0.0.1:3000',
-      Origin: 'http://127.0.0.1:3000',
+      Host: 'self-host.example',
+      Origin: 'https://frontend.example',
     }, 'http://localhost:3000/api/import-txt')
-
-    const { POST } = await import('@/app/api/import-txt/route')
-    const response = await POST(request)
-
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toMatchObject({ ok: true, chapterCount: 3 })
-  })
-
-  it('accepts an exact configured canonical Origin without trusting Host', async () => {
-    const database = createTestDatabase('retale-import-txt-route-configured-origin')
-    resetWorkspaceState(database)
-    vi.doMock('@/lib/server/knowledge-rebuild', () => ({
-      syncWorkspacePayloadToKnowledgeStore: vi.fn(async () => {}),
-    }))
-    process.env.RETALE_TRUSTED_ORIGINS = 'https://retale.example'
-    const request = createImportRequest({
-      Host: 'attacker-controlled.example',
-      Origin: 'https://retale.example',
-    })
 
     const { POST } = await import('@/app/api/import-txt/route')
     const response = await POST(request)
@@ -446,11 +373,9 @@ describe('import-txt route', () => {
         currentNovelId: 'novel_semantic_import',
         currentChapterId: 'chapter-0',
         localNovels: [{ id: 'novel_semantic_import', title: 'Semantic', summary: '', tags: [] }],
-        localVolumes: [{ id: 'volume', novelId: 'novel_semantic_import', title: 'Volume', order: 1 }],
         localChapters: Array.from({ length: 2_001 }, (_, index) => ({
           id: `chapter-${index}`,
           novelId: 'novel_semantic_import',
-          volumeId: 'volume',
           title: `Chapter ${index}`,
           order: index,
           content: '',
@@ -572,7 +497,6 @@ describe('import-txt route', () => {
       localChapters: [{
         id: 'deleted-chapter',
         novelId: 'novel_deleted',
-        volumeId: 'deleted-volume',
         title: 'Deleted chapter',
         content: '<p>stale</p>',
         order: 1,
@@ -870,7 +794,7 @@ describe('import-txt route', () => {
     database.prepare('UPDATE WorkspaceState SET payload = NULL WHERE id = ?').run('singleton')
 
     const { GET } = await import('@/app/api/workspace/route')
-    const response = await GET()
+    const response = await GET(new Request('http://localhost/api/workspace'))
     const payload = await response.json() as { localNovels: Array<{ title: string }>; localChapters: Array<{ title: string; content: string }> }
 
     expect(response.status).toBe(200)

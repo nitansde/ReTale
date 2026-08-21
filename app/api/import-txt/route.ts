@@ -11,7 +11,6 @@ import {
   ApiRequestError,
   assertMultipartFormDataMediaType,
   assertNormalizedWorkspaceSnapshotSemantics,
-  assertSameOriginRequest,
   createByteLimitedRequest,
 } from '@/lib/server/api-route'
 
@@ -80,7 +79,6 @@ async function ensureWorkspacePayload() {
 
 export async function POST(request: Request) {
   try {
-    assertSameOriginRequest(request)
     assertMultipartFormDataMediaType(request)
     const limitedRequest = createByteLimitedRequest(request, MAX_IMPORT_BODY_SIZE_BYTES, 'TXT import request body exceeds 10.25 MiB')
     const formData = await limitedRequest.formData()

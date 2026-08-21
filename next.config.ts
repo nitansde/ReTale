@@ -30,7 +30,24 @@ const nextConfig: NextConfig = {
       './node_modules/typescript/lib/typescript.js',
     ],
   },
-  allowedDevOrigins: ['localhost', '127.0.0.1', 'retale.example'],
+  allowedDevOrigins: ['**.*'],
+  headers() {
+    return [{
+      source: '/api/:path*',
+      headers: [
+        { key: 'Access-Control-Allow-Origin', value: '*' },
+        { key: 'Access-Control-Allow-Methods', value: 'GET, POST, PATCH, DELETE, OPTIONS' },
+        {
+          key: 'Access-Control-Allow-Headers',
+          value: 'Content-Type, Idempotency-Key, X-Retale-Base-Revision, X-Retale-Revision-Novel-Id, X-Retale-Resource-Novel-Id, X-Retale-Resource-Chapter-Id, X-Retale-Resource-Delete',
+        },
+        {
+          key: 'Access-Control-Expose-Headers',
+          value: 'ETag, X-Retale-Workspace-Revision, X-Retale-Revision-Novel-Id',
+        },
+      ],
+    }]
+  },
   distDir,
   typescript: {
     tsconfigPath,
