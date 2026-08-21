@@ -1,9 +1,17 @@
 "use client"
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { getMessage, isLocale, type Locale, type TranslationKey, type TranslationValues } from '@/lib/i18n/messages'
+import {
+  getMessage,
+  isLocale,
+  LOCALE_COOKIE_KEY,
+  LOCALE_STORAGE_KEY,
+  type Locale,
+  type TranslationKey,
+  type TranslationValues,
+} from '@/lib/i18n/messages'
 
-const STORAGE_KEY = 'retale.locale'
+const LOCALE_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365
 
 const defaultContextValue: I18nContextValue = {
   locale: 'zh',
@@ -19,33 +27,57 @@ type I18nContextValue = {
 
 const I18nContext = createContext<I18nContextValue>(defaultContextValue)
 
-export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(() => {
-    if (typeof window === 'undefined') {
-      return 'zh'
-    }
-
-    try {
-      const stored = window.localStorage.getItem(STORAGE_KEY)
-      return stored && isLocale(stored) ? stored : 'zh'
-    } catch {
-      return 'zh'
-    }
-  })
+export function I18nProvider({
+  children,
+  initialLocale = 'zh',
+  localeCookiePresent = false,
+}: {
+  children: ReactNode
+  initialLocale?: Locale
+  localeCookiePresent?: boolean
+}) {
+  const [locale, setLocaleState] = useState<Locale>(initialLocale)
+  const [browserStorageReady, setBrowserStorageReady] = useState(localeCookiePresent)
 
   useEffect(() => {
-    if (typeof document === 'undefined') {
-      return
-    }
+    if (localeCookiePresent) return
+    const restoreTimer = window.setTimeout(() => {
+      let nextLocale = initialLocale
+      try {
+        const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY)
+        if (stored && isLocale(stored)) nextLocale = stored
+      } catch {
+        // Ignore storage access failures in restricted or test environments.
+      }
 
+      setLocaleState(nextLocale)
+      setBrowserStorageReady(true)
+    }, 0)
+    return () => window.clearTimeout(restoreTimer)
+  }, [initialLocale, localeCookiePresent])
+
+  useEffect(() => {
     document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
     document.documentElement.dataset.locale = locale
+    if (!browserStorageReady) return
+
     try {
-      window.localStorage.setItem(STORAGE_KEY, locale)
+      window.localStorage.setItem(LOCALE_STORAGE_KEY, locale)
     } catch {
       // Ignore storage access failures in restricted or test environments.
     }
-  }, [locale])
+    document.cookie = `${LOCALE_COOKIE_KEY}=${locale}; Path=/; Max-Age=${LOCALE_COOKIE_MAX_AGE_SECONDS}; SameSite=Lax`
+  }, [browserStorageReady, locale])
+
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== LOCALE_STORAGE_KEY || !event.newValue || !isLocale(event.newValue)) return
+      setLocaleState(event.newValue)
+    }
+
+    window.addEventListener('storage', handleStorage)
+    return () => window.removeEventListener('storage', handleStorage)
+  }, [])
 
   const setLocale = useCallback((nextLocale: Locale) => {
     setLocaleState(nextLocale)
