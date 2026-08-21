@@ -1,26 +1,15 @@
 import { NextResponse } from 'next/server'
 import {
-  DELETE as deleteLegacyWorkspace,
-  GET as getLegacyWorkspace,
-  POST as saveLegacyWorkspace,
-} from '@/app/api/workspace/route'
+  deleteNovelResource,
+  getNovelResource,
+  saveNovelResource,
+} from '@/lib/server/novel-resource-handlers'
 
 export const maxDuration = 3600
 
 async function readNovelId(context: { params: Promise<{ novelId: string }> }) {
   const { novelId } = await context.params
   return novelId.trim()
-}
-
-function forwardRequestWithHeaders(request: Request, headers: Headers) {
-  const init: RequestInit & { duplex: 'half' } = {
-    method: request.method,
-    headers,
-    body: request.body,
-    signal: request.signal,
-    duplex: 'half',
-  }
-  return new Request(request.url, init)
 }
 
 const DEDUPED_CHAPTER_CONTENT_ENCODING = 'original-content-equals-content-v1'
@@ -53,9 +42,8 @@ async function toNovelResourceResponse(response: Response) {
     focusMode: _focusMode,
     selectionText: _selectionText,
     selectedParagraphIndex: _selectedParagraphIndex,
+    presetCompatSessionState: _presetCompatSessionState,
     aiSettings: _aiSettings,
-    expandedVolumeIds: _expandedVolumeIds,
-    localVolumes: _localVolumes,
     ...resource
   } = payload
   const compactedChapterContent = compactChapterContentForTransport(resource.localChapters)
@@ -77,50 +65,19 @@ export async function GET(request: Request, context: { params: Promise<{ novelId
   const novelId = await readNovelId(context)
   if (!novelId) return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
 
-  const incoming = new URL(request.url)
-  const url = new URL('/api/workspace', request.url)
-  url.searchParams.set('novelId', novelId)
-  if (incoming.searchParams.has('deletionStatus')) {
-    url.searchParams.set('deletionStatus', incoming.searchParams.get('deletionStatus') ?? '')
-  }
-  const response = await getLegacyWorkspace(new Request(url, {
-    headers: request.headers,
-    signal: request.signal,
-  }))
-  return incoming.searchParams.has('deletionStatus') ? response : toNovelResourceResponse(response)
+  const response = await getNovelResource(request, novelId)
+  return new URL(request.url).searchParams.has('deletionStatus') ? response : toNovelResourceResponse(response)
 }
 
 export async function POST(request: Request, context: { params: Promise<{ novelId: string }> }) {
   const novelId = await readNovelId(context)
   if (!novelId) return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
-  const headers = new Headers(request.headers)
-  headers.set('X-Retale-Resource-Novel-Id', novelId)
-  return saveLegacyWorkspace(forwardRequestWithHeaders(request, headers))
+  return saveNovelResource(request, novelId)
 }
 
 export async function DELETE(request: Request, context: { params: Promise<{ novelId: string }> }) {
   const novelId = await readNovelId(context)
   if (!novelId) return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
 
-  const incoming = new URL(request.url)
-  const url = new URL('/api/workspace', request.url)
-  url.searchParams.set('novelId', novelId)
-  const nextNovelId = incoming.searchParams.get('nextNovelId')
-  if (nextNovelId !== null) url.searchParams.set('nextNovelId', nextNovelId)
-  const headers = new Headers(request.headers)
-  headers.set('X-Retale-Resource-Delete', '1')
-  const response = await deleteLegacyWorkspace(new Request(url, {
-    method: 'DELETE',
-    headers,
-    signal: request.signal,
-  }))
-  if (!response.ok) return response
-  const payload = await response.json() as Record<string, unknown>
-  const { activeNovelId, ...result } = payload
-  const responseHeaders = new Headers(response.headers)
-  responseHeaders.delete('content-length')
-  return Response.json({ ...result, nextNovelId: activeNovelId }, {
-    status: response.status,
-    headers: responseHeaders,
-  })
+  return deleteNovelResource(request, novelId)
 }

@@ -5,7 +5,11 @@ import { useState, useTransition } from 'react'
 import { useI18n } from '@/lib/i18n/provider'
 import { toUserFacingError } from '@/lib/workspace-user-facing-errors'
 
-export function TaskAbortButton({ jobId }: { jobId: string }) {
+export function TaskAbortButton({ jobId, novelId, onAborted }: {
+  jobId: string
+  novelId: string
+  onAborted?: () => void
+}) {
   const { locale, t } = useI18n()
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -21,7 +25,7 @@ export function TaskAbortButton({ jobId }: { jobId: string }) {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ jobId }),
+          body: JSON.stringify({ jobId, novelId }),
         })
 
         const payload = (await response.json().catch(() => null)) as { error?: string } | null
@@ -30,6 +34,7 @@ export function TaskAbortButton({ jobId }: { jobId: string }) {
           throw new Error(payload?.error ?? t('task.abortFailed'))
         }
 
+        onAborted?.()
         router.refresh()
       } catch (error) {
         const fallback = t('task.abortFailed')

@@ -103,8 +103,6 @@ function seedRuntime(config) {
     `INSERT INTO NovelRegistry (novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus)
      VALUES (?, ?, ?, ?, ?, '1', 'ready')`
   ).run(NOVEL_ID, NOVEL_ID, 'Production Smoke Novel', novelDbPath, lanceDbPath)
-  controlDb.prepare('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)')
-    .run('production-smoke-active-novel', 'WORKSPACE_ACTIVE_NOVEL_ID', NOVEL_ID)
   controlDb.close()
 
   const novelDb = new DatabaseSync(novelDbPath)

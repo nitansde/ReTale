@@ -26,7 +26,7 @@ import {
 import { syncWorkspacePayloadToKnowledgeStore } from '@/lib/server/knowledge-rebuild'
 import type { WorkspaceKnowledgeSyncPayload } from '@/lib/server/knowledge-rebuild'
 import { scopeWorkspaceStateToNovel } from '@/lib/server/workspace-novel-scope'
-import { normalizeWorkspaceState } from '@/lib/workspace-state'
+import { normalizeWorkspaceState, serializeNovelResourceState } from '@/lib/workspace-state'
 import type { Chapter, PersistedNovelState } from '@/lib/types'
 
 const MUTATION_CONTRACT_VERSION = 1
@@ -473,7 +473,7 @@ function persistArtifact(
   request: ValidatedWorkspaceMutation,
   payload: PersistedNovelState,
 ) {
-  const serializedPayload = JSON.stringify(payload)
+  const serializedPayload = JSON.stringify(serializeNovelResourceState(payload))
   const priorArtifact = readWorkspaceStateFromDb(db, request.workspaceStateId)
   if (priorArtifact && priorArtifact.payload !== null && priorArtifact.payload !== serializedPayload) {
     createWorkspaceStateBackupInDb(

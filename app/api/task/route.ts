@@ -1,17 +1,16 @@
 import { NextResponse } from 'next/server'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { abortBackgroundTask, listActiveBackgroundTasks } from '@/lib/server/background-tasks'
-import { readActiveWorkspaceNovelId } from '@/lib/server/persistence'
 
 export const runtime = 'nodejs'
 
 const NO_STORE_HEADERS = { 'Cache-Control': 'no-store' }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const novelId = readActiveWorkspaceNovelId()
+    const novelId = new URL(request.url).searchParams.get('novelId')?.trim() ?? ''
     if (!novelId) {
-      return NextResponse.json({ ok: true, count: 0, tasks: [] }, { headers: NO_STORE_HEADERS })
+      return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400, headers: NO_STORE_HEADERS })
     }
 
     const tasks = listActiveBackgroundTasks({ novelId, db: createNovelDatabaseAccess(novelId) })
@@ -44,8 +43,8 @@ export async function POST(request: Request) {
     const novelId = body && typeof body === 'object' && !Array.isArray(body)
       ? typeof (body as { novelId?: unknown }).novelId === 'string'
         ? (body as { novelId: string }).novelId.trim()
-        : readActiveWorkspaceNovelId()
-      : readActiveWorkspaceNovelId()
+        : ''
+      : ''
 
     if (!jobId) {
       return NextResponse.json({ ok: false, error: 'jobId is required' }, { status: 400, headers: NO_STORE_HEADERS })

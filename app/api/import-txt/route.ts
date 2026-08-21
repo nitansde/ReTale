@@ -1,10 +1,6 @@
 import { NextResponse } from 'next/server'
 import { importNovelIntoWorkspace } from '@/lib/server/import-txt'
-import {
-  backfillWorkspaceRuntimeFromArtifactIfMissing,
-  loadWorkspacePayloadFromRuntimeOrRecovery,
-} from '@/lib/server/workspace-resilience'
-import { normalizeWorkspaceState } from '@/lib/workspace-state'
+import { createEmptyWorkspaceState, normalizeWorkspaceState } from '@/lib/workspace-state'
 import { scopeWorkspaceStateToNovel } from '@/lib/server/workspace-novel-scope'
 import { createWorkspaceNovelFromSnapshot } from '@/lib/server/workspace-mutation'
 import {
@@ -72,11 +68,6 @@ async function decodeTextFile(file: File) {
   return candidates[0]?.text ?? utf8
 }
 
-async function ensureWorkspacePayload() {
-  await backfillWorkspaceRuntimeFromArtifactIfMissing('singleton')
-  return loadWorkspacePayloadFromRuntimeOrRecovery('singleton')
-}
-
 export async function POST(request: Request) {
   try {
     assertMultipartFormDataMediaType(request)
@@ -95,7 +86,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: 'Empty file' }, { status: 400 })
     }
 
-    const currentState = await ensureWorkspacePayload()
+    const currentState = createEmptyWorkspaceState()
     const nextState = normalizeWorkspaceState(importNovelIntoWorkspace(currentState, {
       title: file.name.replace(/\.[^.]+$/, ''),
       text,

@@ -51,7 +51,7 @@ function createPayload(title: string, content: string) {
 
 function readMutationRows(database: DatabaseSync) {
   return {
-    runtime: database.prepare('SELECT revision, currentNovelId FROM WorkspaceRuntimeState WHERE id = ?').get('singleton'),
+    runtime: database.prepare('SELECT revision, promptText FROM WorkspaceRuntimeState WHERE id = ?').get('singleton'),
     artifact: database.prepare('SELECT payload FROM WorkspaceState WHERE id = ?').get('singleton'),
     backupCount: database.prepare('SELECT COUNT(*) AS count FROM WorkspaceStateBackup WHERE workspaceStateId = ?').get('singleton'),
     sync: database.prepare(
@@ -182,7 +182,6 @@ describe('workspace mutation persistence primitives', () => {
 
     database.exec(`
       DELETE FROM WorkspaceRuntimeChapter;
-      DELETE FROM WorkspaceRuntimeVolume;
       DELETE FROM WorkspaceRuntimeNovel;
       DELETE FROM WorkspaceRuntimeState;
       INSERT INTO NovelRecord (id, title) VALUES ('novel-recovered', 'Recovered');

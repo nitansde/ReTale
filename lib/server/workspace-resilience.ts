@@ -1,9 +1,8 @@
 import {
   assertWorkspaceNovelReadyForWrite,
   publishWorkspaceNovelWriteTarget,
-  readActiveWorkspaceNovelId,
 } from '@/lib/server/persistence'
-import { safeParseJson as safeParseJsonValue, safeParseJsonObject } from '@/lib/server/json-parse'
+import { safeParseJson as safeParseJsonValue } from '@/lib/server/json-parse'
 import {
   createNovelDatabaseAccess,
   type DatabaseAccess,
@@ -40,11 +39,6 @@ function hasTransactionWrapper(db: WorkspaceRecoveryDb): db is WorkspaceRecovery
 type WorkspaceRuntimeStateRow = {
   id: string
   revision: number
-  currentNovelId: string
-  currentChapterId: string
-  currentTab: string
-  helperTab: string
-  expandedVolumeIdsJson: string
   localOutlinesJson: string
   localCharactersJson: string
   localCharacterRelationsJson: string
@@ -57,8 +51,6 @@ type WorkspaceRuntimeStateRow = {
   rewriteTone: string
   rewriteOutput: string
   rewriteScope: string
-  selectionText: string
-  selectedParagraphIndex: number
   thinkingLevel: string
   autoContinue: number
   keepCanon: number
@@ -66,8 +58,6 @@ type WorkspaceRuntimeStateRow = {
   selectedPresetId: string
   presetsJson: string
   constraintsJson: string
-  focusMode: number
-  presetCompatSessionStateJson: string
   updatedAt: string
 }
 
@@ -79,17 +69,9 @@ type WorkspaceRuntimeNovelRow = {
   sortOrder: number
 }
 
-type WorkspaceRuntimeVolumeRow = {
-  id: string
-  novelId: string
-  title: string
-  sortOrder: number
-}
-
 type WorkspaceRuntimeChapterRow = {
   id: string
   novelId: string
-  volumeId: string
   parentChapterId: string | null
   kind: string | null
   branchLabel: string | null
@@ -199,19 +181,8 @@ function readJsonArray(value: string | null) {
   return Array.isArray(parsed) ? parsed : []
 }
 
-function readJsonObject(value: string | null) {
-  return safeParseJsonObject(value) ?? {}
-}
-
 function getCurrentWorkspaceDb(db?: WorkspaceRecoveryDb) {
-  if (db) return db
-
-  const activeNovelId = readActiveWorkspaceNovelId()
-  if (!activeNovelId) {
-    return null
-  }
-
-  return createNovelDatabaseAccess(activeNovelId)
+  return db ?? null
 }
 
 function queryOneFromDb<T>(db: WorkspaceRecoveryDb | undefined, sql: string, ...params: SqlParam[]) {
@@ -248,12 +219,11 @@ export function readWorkspaceRuntimeSnapshotFromDb(
   id = WORKSPACE_ID,
 ): WorkspaceRuntimeSnapshot | null {
   const meta = db.queryOne<WorkspaceRuntimeStateRow>(
-    `SELECT id, revision, currentNovelId, currentChapterId, currentTab, helperTab,
-            expandedVolumeIdsJson, localOutlinesJson, localCharactersJson, localCharacterRelationsJson,
+    `SELECT id, revision, localOutlinesJson, localCharactersJson, localCharacterRelationsJson,
             localWorldEntriesJson, localTimelineEventsJson, rewriteCandidatesJson, rewriteHistoryJson, trajectoriesJson,
-            rewriteMode, rewriteTone, rewriteOutput, rewriteScope, selectionText,
-            selectedParagraphIndex, thinkingLevel, autoContinue, keepCanon, promptText,
-            selectedPresetId, presetsJson, constraintsJson, focusMode, presetCompatSessionStateJson,
+            rewriteMode, rewriteTone, rewriteOutput, rewriteScope,
+            thinkingLevel, autoContinue, keepCanon, promptText,
+            selectedPresetId, presetsJson, constraintsJson,
             updatedAt
      FROM WorkspaceRuntimeState
      WHERE id = ?`,
@@ -266,15 +236,8 @@ export function readWorkspaceRuntimeSnapshotFromDb(
      ORDER BY sortOrder ASC, id ASC`,
     id,
   )
-  const volumes = db.queryAll<WorkspaceRuntimeVolumeRow>(
-    `SELECT id, novelId, title, sortOrder
-     FROM WorkspaceRuntimeVolume
-     WHERE workspaceStateId = ?
-     ORDER BY novelId ASC, sortOrder ASC, id ASC`,
-    id,
-  )
   const chapters = db.queryAll<WorkspaceRuntimeChapterRow>(
-    `SELECT id, novelId, volumeId, parentChapterId, kind, branchLabel, title, sortOrder,
+    `SELECT id, novelId, parentChapterId, kind, branchLabel, title, sortOrder,
             contentHtml, originalContentHtml, status, wordCount, updatedAtLabel, trajectoryJson
      FROM WorkspaceRuntimeChapter
      WHERE workspaceStateId = ?
@@ -282,16 +245,12 @@ export function readWorkspaceRuntimeSnapshotFromDb(
     id,
   )
 
-  if (!meta && !novels.length && !volumes.length && !chapters.length) {
+  if (!meta && !novels.length && !chapters.length) {
     return null
   }
 
   const payload = normalizeWorkspaceState({
     ...createEmptyWorkspaceState(),
-    currentNovelId: meta?.currentNovelId ?? '',
-    currentChapterId: meta?.currentChapterId ?? '',
-    currentTab: meta?.currentTab as PersistedNovelState['currentTab'] | undefined,
-    helperTab: meta?.helperTab as PersistedNovelState['helperTab'] | undefined,
     localOutlines: readJsonArray(meta?.localOutlinesJson ?? '[]') as OutlineItem[],
     localCharacters: readJsonArray(meta?.localCharactersJson ?? '[]') as Character[],
     localCharacterRelations: readJsonArray(meta?.localCharacterRelationsJson ?? '[]') as CharacterRelation[],
@@ -303,16 +262,9 @@ export function readWorkspaceRuntimeSnapshotFromDb(
       summary: novel.summary,
       tags: normalizeStringArray(readJsonArray(novel.tagsJson)),
     })),
-    localVolumes: volumes.map((volume) => ({
-      id: volume.id,
-      novelId: volume.novelId,
-      title: volume.title,
-      order: volume.sortOrder,
-    })),
     localChapters: chapters.map((chapter) => ({
       id: chapter.id,
       novelId: chapter.novelId,
-      volumeId: chapter.volumeId,
       parentChapterId: chapter.parentChapterId ?? undefined,
       kind: chapter.kind as Chapter['kind'] | undefined,
       branchLabel: chapter.branchLabel ?? undefined,
@@ -332,8 +284,6 @@ export function readWorkspaceRuntimeSnapshotFromDb(
     rewriteTone: meta?.rewriteTone as PersistedNovelState['rewriteTone'] | undefined,
     rewriteOutput: meta?.rewriteOutput as PersistedNovelState['rewriteOutput'] | undefined,
     rewriteScope: meta?.rewriteScope as PersistedNovelState['rewriteScope'] | undefined,
-    selectionText: meta?.selectionText,
-    selectedParagraphIndex: meta?.selectedParagraphIndex,
     thinkingLevel: meta?.thinkingLevel as PersistedNovelState['thinkingLevel'] | undefined,
     autoContinue: Boolean(meta?.autoContinue ?? 1),
     keepCanon: Boolean(meta?.keepCanon ?? 1),
@@ -341,8 +291,6 @@ export function readWorkspaceRuntimeSnapshotFromDb(
     selectedPresetId: meta?.selectedPresetId,
     presets: readJsonArray(meta?.presetsJson ?? '[]'),
     constraints: readJsonArray(meta?.constraintsJson ?? '[]'),
-    focusMode: Boolean(meta?.focusMode ?? 0),
-    presetCompatSessionState: readJsonObject(meta?.presetCompatSessionStateJson ?? '{}') as PersistedNovelState['presetCompatSessionState'],
   })
 
   return {
@@ -446,20 +394,14 @@ export function replaceWorkspaceRuntimeStateInDb(
   const normalized = normalizeWorkspaceState(payload)
   db.execute(
     `INSERT INTO WorkspaceRuntimeState (
-       id, revision, currentNovelId, currentChapterId, currentTab, helperTab,
-       expandedVolumeIdsJson, localOutlinesJson, localCharactersJson, localCharacterRelationsJson,
+       id, revision, localOutlinesJson, localCharactersJson, localCharacterRelationsJson,
        localWorldEntriesJson, localTimelineEventsJson, rewriteCandidatesJson, rewriteHistoryJson, trajectoriesJson,
-       rewriteMode, rewriteTone, rewriteOutput, rewriteScope, selectionText,
-       selectedParagraphIndex, thinkingLevel, autoContinue, keepCanon, promptText,
-       selectedPresetId, presetsJson, constraintsJson, focusMode, presetCompatSessionStateJson
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       rewriteMode, rewriteTone, rewriteOutput, rewriteScope,
+       thinkingLevel, autoContinue, keepCanon, promptText,
+       selectedPresetId, presetsJson, constraintsJson
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        revision = excluded.revision,
-       currentNovelId = excluded.currentNovelId,
-       currentChapterId = excluded.currentChapterId,
-       currentTab = excluded.currentTab,
-       helperTab = excluded.helperTab,
-       expandedVolumeIdsJson = excluded.expandedVolumeIdsJson,
        localOutlinesJson = excluded.localOutlinesJson,
        localCharactersJson = excluded.localCharactersJson,
        localCharacterRelationsJson = excluded.localCharacterRelationsJson,
@@ -472,8 +414,6 @@ export function replaceWorkspaceRuntimeStateInDb(
        rewriteTone = excluded.rewriteTone,
        rewriteOutput = excluded.rewriteOutput,
        rewriteScope = excluded.rewriteScope,
-       selectionText = excluded.selectionText,
-       selectedParagraphIndex = excluded.selectedParagraphIndex,
        thinkingLevel = excluded.thinkingLevel,
        autoContinue = excluded.autoContinue,
        keepCanon = excluded.keepCanon,
@@ -481,16 +421,9 @@ export function replaceWorkspaceRuntimeStateInDb(
        selectedPresetId = excluded.selectedPresetId,
        presetsJson = excluded.presetsJson,
        constraintsJson = excluded.constraintsJson,
-       focusMode = excluded.focusMode,
-       presetCompatSessionStateJson = excluded.presetCompatSessionStateJson,
        updatedAt = CURRENT_TIMESTAMP`,
     id,
     revision,
-    normalized.currentNovelId,
-    normalized.currentChapterId,
-    normalized.currentTab,
-    normalized.helperTab,
-    '[]',
     JSON.stringify(normalized.localOutlines),
     JSON.stringify(normalized.localCharacters),
     JSON.stringify(normalized.localCharacterRelations),
@@ -503,8 +436,6 @@ export function replaceWorkspaceRuntimeStateInDb(
     normalized.rewriteTone,
     normalized.rewriteOutput,
     normalized.rewriteScope,
-    normalized.selectionText,
-    normalized.selectedParagraphIndex,
     normalized.thinkingLevel,
     normalized.autoContinue ? 1 : 0,
     normalized.keepCanon ? 1 : 0,
@@ -512,12 +443,9 @@ export function replaceWorkspaceRuntimeStateInDb(
     normalized.selectedPresetId,
     JSON.stringify(normalized.presets),
     JSON.stringify(normalized.constraints),
-    normalized.focusMode ? 1 : 0,
-    JSON.stringify(normalized.presetCompatSessionState),
   )
 
   db.execute('DELETE FROM WorkspaceRuntimeChapter WHERE workspaceStateId = ?', id)
-  db.execute('DELETE FROM WorkspaceRuntimeVolume WHERE workspaceStateId = ?', id)
   db.execute('DELETE FROM WorkspaceRuntimeNovel WHERE workspaceStateId = ?', id)
 
   normalized.localNovels.forEach((novel, index) => {
@@ -536,13 +464,12 @@ export function replaceWorkspaceRuntimeStateInDb(
   normalized.localChapters.forEach((chapter, index) => {
     db.execute(
       `INSERT INTO WorkspaceRuntimeChapter (
-         workspaceStateId, id, novelId, volumeId, parentChapterId, kind, branchLabel, title,
+         workspaceStateId, id, novelId, parentChapterId, kind, branchLabel, title,
          sortOrder, contentHtml, originalContentHtml, status, wordCount, updatedAtLabel, trajectoryJson
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       chapter.id,
       chapter.novelId,
-      '',
       chapter.parentChapterId ?? null,
       chapter.kind ?? null,
       chapter.branchLabel ?? null,
@@ -574,7 +501,7 @@ export async function persistWorkspaceRuntimeState(
 ): Promise<WorkspaceRuntimeSaveResult> {
   const normalized = normalizeWorkspaceState(payload)
   if (!db) {
-    const targetNovelId = resolveWorkspaceNovelId(normalized) ?? readActiveWorkspaceNovelId()
+    const targetNovelId = resolveWorkspaceNovelId(normalized)
     if (!targetNovelId) {
       throw new Error('Cannot persist workspace runtime state without a target novel')
     }

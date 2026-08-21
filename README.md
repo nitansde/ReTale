@@ -137,7 +137,7 @@ Per-novel `lancedb/` directories are part of the runtime layout, so LanceDB-back
 
 ## Data model and browser session
 
-The primary content hierarchy is `Novel → Chapter[]`. `Volume` is no longer part of the application model. When an older snapshot contains volumes, ReTale reads the legacy volume order once, flattens chapters into a single novel-wide order, and drops the volume fields from the normalized state. Existing SQLite compatibility columns and tables are retained during the migration so old data is not deleted.
+The primary content hierarchy is `Novel → Chapter[]`. There is no `Volume` resource or volume compatibility path.
 
 Workspace-like UI state belongs to the browser rather than the server. The active novel, each novel's last-opened chapter, the active editor/helper tabs, and focus mode are stored in `localStorage` under `retale.workspace-session.v1`. Server responses cannot override that browser session.
 
@@ -149,7 +149,7 @@ The browser-facing persistence API is resource-oriented:
 - `DELETE /api/novels/:novelId` permanently deletes that novel.
 - `PATCH /api/chapters/:chapterId` saves an ordinary chapter edit.
 
-`/api/workspace` and the `WorkspaceRuntime*` SQLite schema currently remain as an internal legacy compatibility adapter for existing databases, recovery artifacts, and rolling migration tests. New client code does not use `/api/workspace`; removal of that adapter requires a later non-destructive data migration.
+There is no server workspace endpoint. Browser clients use only the novel and chapter resource APIs.
 
 ## Persistence
 

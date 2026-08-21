@@ -86,7 +86,7 @@ function chapterPatchRequest(novelId: string, baseRevision: number, key = 'patch
 
 function readSurfaces(database: DatabaseSync) {
   return {
-    runtime: database.prepare('SELECT revision, currentNovelId, updatedAt FROM WorkspaceRuntimeState WHERE id = ?').get('singleton'),
+    runtime: database.prepare('SELECT revision, promptText, updatedAt FROM WorkspaceRuntimeState WHERE id = ?').get('singleton'),
     chapter: database.prepare(
       `SELECT contentHtml, originalContentHtml, title, status, wordCount, updatedAtLabel, trajectoryJson
        FROM WorkspaceRuntimeChapter WHERE workspaceStateId = ?`,

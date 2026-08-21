@@ -122,10 +122,6 @@ function writeAppSetting(database: DatabaseSync, key: string, value: string) {
   ).run(key, value)
 }
 
-function setActiveWorkspaceNovelId(database: DatabaseSync, novelId: string) {
-  writeAppSetting(database, 'WORKSPACE_ACTIVE_NOVEL_ID', novelId)
-}
-
 function seedReadyNovelRegistryRows(database: DatabaseSync, dataRootPath: string, novelIds: string[]) {
   for (const novelId of novelIds) {
     const novelDirectory = path.join(dataRootPath, 'novels', novelId)
@@ -144,7 +140,8 @@ function seedReadyNovelRegistryRows(database: DatabaseSync, dataRootPath: string
 }
 
 function createWorkspaceRequest(payload: Record<string, unknown>, headers: Record<string, string> = {}) {
-  return new Request('http://localhost/api/workspace', {
+  const novelId = typeof payload.currentNovelId === 'string' ? payload.currentNovelId : 'novel'
+  return new Request(`http://localhost/api/novels/${novelId}`, {
     method: 'POST',
     body: JSON.stringify(payload),
     headers: {
@@ -247,7 +244,7 @@ function seedCollidingNovelRouteFixture(database: DatabaseSync, novelId: string,
   ).run('shared-continue-node', novelId, branchId, 'rewrite', 1, 1, `${marker} continue`, 1, 'shared-continue', 'RE-01', 'RE-01', 'active')
 }
 
-async function importWorkspaceRouteWithAfterCallbacks() {
+async function importNovelResourceRoutesWithAfterCallbacks() {
   const afterCallbacks: Array<() => Promise<void>> = []
 
   vi.stubEnv('NODE_ENV', 'development')
@@ -262,8 +259,13 @@ async function importWorkspaceRouteWithAfterCallbacks() {
     }
   })
 
-  const route = await import('@/app/api/workspace/route')
-  return { ...route, afterCallbacks }
+  const novelRoute = await import('@/app/api/novels/[novelId]/route')
+  return {
+    getNovel: novelRoute.GET,
+    saveNovel: novelRoute.POST,
+    deleteNovel: novelRoute.DELETE,
+    afterCallbacks,
+  }
 }
 
 afterEach(async () => {
@@ -395,21 +397,14 @@ describe('per-novel database resolver', () => {
       migrationStatus: 'deleting',
     })
 
-    setActiveWorkspaceNovelId(controlDb, 'novel-safe')
     await expect(upsertWorkspaceState('singleton', JSON.stringify(createNovelWorkspacePayload('novel-alpha')), {
       novelId: 'novel-alpha',
     })).rejects.toThrow('Novel deletion is already in progress or complete')
-    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({
-      value: 'novel-safe',
-    })
 
     const { normalizeWorkspaceState } = await import('@/lib/workspace-state')
     const { persistWorkspaceRuntimeState } = await import('@/lib/server/workspace-resilience')
     await expect(persistWorkspaceRuntimeState(normalizeWorkspaceState(createNovelWorkspacePayload('novel-alpha'))))
       .rejects.toThrow('Novel deletion is already in progress or complete')
-    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({
-      value: 'novel-safe',
-    })
 
     await upsertWorkspaceNovelRegistry({ novelId: 'novel-new', title: 'New Novel' })
     expect(controlDb.prepare('SELECT title, migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-new')).toEqual({
@@ -449,7 +444,6 @@ describe('per-novel database resolver', () => {
     const betaDb = resolver.getNovelDb('novel-beta')
 
     seedReadyNovelRegistryRows(controlDb, dataRootPath, ['novel-alpha', 'novel-beta'])
-    setActiveWorkspaceNovelId(controlDb, 'novel-alpha')
     alphaDb.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', JSON.stringify(createNovelWorkspacePayload('novel-alpha', 'Alpha Initial')))
     betaDb.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', JSON.stringify(createNovelWorkspacePayload('novel-beta', 'Beta Initial')))
 
@@ -460,18 +454,19 @@ describe('per-novel database resolver', () => {
       syncWorkspacePayloadToKnowledgeStore: vi.fn(async () => {}),
     }))
 
-    const { POST } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await POST(createWorkspaceRequest(createNovelWorkspacePayload('novel-alpha', 'Alpha Updated')))
+    const { saveNovel } = await importNovelResourceRoutesWithAfterCallbacks()
+    const response = await saveNovel(
+      createWorkspaceRequest(createNovelWorkspacePayload('novel-alpha', 'Alpha Updated')),
+      { params: Promise.resolve({ novelId: 'novel-alpha' }) },
+    )
 
     expect(response.status).toBe(200)
     expect(hashFile(betaDbPath)).toBe(betaHashBefore)
     expect(JSON.parse((alphaDb.prepare('SELECT payload FROM WorkspaceState WHERE id = ?').get('singleton') as { payload: string }).payload)).toMatchObject({
-      currentNovelId: 'novel-alpha',
       localNovels: [{ id: 'novel-alpha', title: 'Alpha Updated' }],
       localChapters: [{ id: 'novel-alpha-chapter-1', novelId: 'novel-alpha' }],
     })
     expect(JSON.parse((betaDb.prepare('SELECT payload FROM WorkspaceState WHERE id = ?').get('singleton') as { payload: string }).payload)).toMatchObject({
-      currentNovelId: 'novel-beta',
       localNovels: [{ id: 'novel-beta', title: 'Beta Initial' }],
     })
   })
@@ -484,7 +479,6 @@ describe('per-novel database resolver', () => {
     const betaDb = resolver.getNovelDb('novel-beta')
     const alphaDirectory = path.dirname(getDatabaseFile(alphaDb))
     const betaDirectory = path.dirname(getDatabaseFile(betaDb))
-    setActiveWorkspaceNovelId(controlDb, 'novel-alpha')
 
     for (const novelId of ['novel-alpha', 'novel-beta']) {
       const novelDirectory = path.join(dataRootPath, 'novels', novelId)
@@ -503,10 +497,11 @@ describe('per-novel database resolver', () => {
     fs.mkdirSync(resolver.getNovelLanceDbPath('novel-alpha'), { recursive: true })
     fs.writeFileSync(path.join(resolver.getNovelLanceDbPath('novel-alpha'), 'index.lance'), 'alpha-index')
 
-    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await DELETE(new Request('http://localhost/api/workspace?novelId=novel-alpha&nextNovelId=novel-beta', {
-      method: 'DELETE',
-    }))
+    const { deleteNovel } = await importNovelResourceRoutesWithAfterCallbacks()
+    const response = await deleteNovel(
+      new Request('http://localhost/api/novels/novel-alpha?nextNovelId=novel-beta', { method: 'DELETE' }),
+      { params: Promise.resolve({ novelId: 'novel-alpha' }) },
+    )
 
     expect(response.status).toBe(200)
     expect(fs.existsSync(alphaDirectory)).toBe(false)
@@ -524,7 +519,6 @@ describe('per-novel database resolver', () => {
     const betaDbPath = getDatabaseFile(betaDb)
 
     seedReadyNovelRegistryRows(controlDb, dataRootPath, ['novel-alpha', 'novel-beta'])
-    setActiveWorkspaceNovelId(controlDb, 'novel-alpha')
     alphaDb.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', JSON.stringify(createNovelWorkspacePayload('novel-alpha', 'Alpha Initial')))
     betaDb.prepare('INSERT INTO WorkspaceState (id, payload) VALUES (?, ?)').run('singleton', JSON.stringify(createNovelWorkspacePayload('novel-beta', 'Beta Initial')))
 
@@ -535,19 +529,27 @@ describe('per-novel database resolver', () => {
       syncWorkspacePayloadToKnowledgeStore: vi.fn(async () => {}),
     }))
 
-    const { GET, POST } = await importWorkspaceRouteWithAfterCallbacks()
+    const { getNovel, saveNovel } = await importNovelResourceRoutesWithAfterCallbacks()
 
-    const saveResponse = await POST(createWorkspaceRequest(createNovelWorkspacePayload('novel-alpha', 'Alpha Saved')))
+    const saveResponse = await saveNovel(
+      createWorkspaceRequest(createNovelWorkspacePayload('novel-alpha', 'Alpha Saved')),
+      { params: Promise.resolve({ novelId: 'novel-alpha' }) },
+    )
     expect(saveResponse.status).toBe(200)
 
-    const alphaGetResponse = await GET(new Request('http://localhost/api/workspace?novelId=novel-alpha'))
+    const alphaGetResponse = await getNovel(
+      new Request('http://localhost/api/novels/novel-alpha'),
+      { params: Promise.resolve({ novelId: 'novel-alpha' }) },
+    )
     expect(alphaGetResponse.status).toBe(200)
     await expect(alphaGetResponse.json()).resolves.toMatchObject({
-      currentNovelId: 'novel-alpha',
       localNovels: [{ id: 'novel-alpha', title: 'Alpha Saved' }],
     })
 
-    const betaGetResponse = await GET(new Request('http://localhost/api/workspace?novelId=novel-beta'))
+    const betaGetResponse = await getNovel(
+      new Request('http://localhost/api/novels/novel-beta'),
+      { params: Promise.resolve({ novelId: 'novel-beta' }) },
+    )
     expect(betaGetResponse.status).toBe(500)
     await expect(betaGetResponse.json()).resolves.toMatchObject({ ok: false })
   })

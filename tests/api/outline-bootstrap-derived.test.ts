@@ -202,8 +202,8 @@ describe('outline bootstrap derived fallback', () => {
     })
 
     const saved = database.db.queryOne<{ payload: string | null }>('SELECT payload FROM WorkspaceState WHERE id = ?', 'singleton')
-    const runtimeMeta = database.db.queryOne<{ currentNovelId: string; currentChapterId: string }>(
-      'SELECT currentNovelId, currentChapterId FROM WorkspaceRuntimeState WHERE id = ?',
+    const runtimeMeta = database.db.queryOne<{ revision: number }>(
+      'SELECT revision FROM WorkspaceRuntimeState WHERE id = ?',
       'singleton'
     )
     const runtimeChapters = database.db.queryAll<{ id: string }>(
@@ -216,7 +216,7 @@ describe('outline bootstrap derived fallback', () => {
     )
 
     expect(futureMap.events.length).toBeGreaterThan(0)
-    expect(runtimeMeta).toMatchObject({ currentNovelId: 'novel-002', currentChapterId: 'chapter-20' })
+    expect(runtimeMeta).toMatchObject({ revision: 0 })
     expect(runtimeChapters.map((chapter) => chapter.id)).toEqual(expect.arrayContaining(['chapter-20', 'chapter-35', 'chapter-120']))
     expect(saved?.payload).toBe('{not-json')
     expect(backup).toBeNull()

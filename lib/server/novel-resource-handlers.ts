@@ -9,7 +9,6 @@ import {
 import {
   deleteWorkspaceNovel,
   listReadyWorkspaceNovelRegistry,
-  readActiveWorkspaceNovelId,
   readWorkspaceNovelDeletionState,
   WorkspaceNovelDeletionError,
 } from '@/lib/server/persistence'
@@ -21,7 +20,7 @@ import {
   loadWorkspaceSnapshotFromRuntimeOrRecovery,
   readWorkspaceLibrarySummary,
 } from '@/lib/server/workspace-resilience'
-import { resolveWorkspaceNovelId } from '@/lib/server/workspace-novel-scope'
+import { resolveWorkspaceNovelId, scopeWorkspaceStateToNovel } from '@/lib/server/workspace-novel-scope'
 import { createEmptyWorkspaceState, normalizeWorkspaceState } from '@/lib/workspace-state'
 import { runWorkspaceMutation, WorkspaceMutationError } from '@/lib/server/workspace-mutation'
 import {
@@ -31,129 +30,11 @@ import {
   scheduleWorkspaceNovelCleanup,
 } from '@/lib/server/workspace-background'
 
-export const maxDuration = 3600
 const MAX_WORKSPACE_POST_BODY_BYTES = 16 * 1024 * 1024
 const MAX_WORKSPACE_PATCH_BODY_BYTES = 4 * 1024 * 1024
 
 function getNovelWorkspaceDb(novelId: string) {
   return createNovelDatabaseAccess(novelId)
-}
-
-async function loadWorkspacePayloadFromNovelRegistryFallback(activeNovelId?: string | null) {
-  const registryRows = listReadyWorkspaceNovelRegistry()
-  if (!registryRows.length) {
-    return null
-  }
-
-  const settledPayloads = await Promise.allSettled(
-    registryRows.map((row) => loadWorkspaceSnapshotFromRuntimeOrRecovery('singleton', getNovelWorkspaceDb(row.novelId)))
-  )
-
-  const localNovels = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localNovels'][number]>()
-  const localChapters = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localChapters'][number]>()
-  const localOutlines = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localOutlines'][number]>()
-  const localCharacters = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localCharacters'][number]>()
-  const localCharacterRelations = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localCharacterRelations'][number]>()
-  const localWorldEntries = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localWorldEntries'][number]>()
-  const localTimelineEvents = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localTimelineEvents'][number]>()
-  let fallbackSnapshot: Awaited<ReturnType<typeof loadWorkspaceSnapshotFromRuntimeOrRecovery>> | null = null
-  let activeSnapshot: Awaited<ReturnType<typeof loadWorkspaceSnapshotFromRuntimeOrRecovery>> | null = null
-  let fallbackNovelId: string | null = null
-
-  for (const [index, result] of settledPayloads.entries()) {
-    if (result.status === 'rejected') {
-      console.warn('Skipping registry workspace restore for novel', registryRows[index]?.novelId, result.reason)
-      continue
-    }
-
-    const registryNovelId = registryRows[index]?.novelId
-    if (registryNovelId) scheduleWorkspaceKnowledgeSyncRecovery(registryNovelId)
-
-    if (registryNovelId === activeNovelId) {
-      activeSnapshot = result.value
-    }
-
-    if (!fallbackSnapshot) {
-      fallbackSnapshot = result.value
-      fallbackNovelId = registryNovelId ?? null
-    }
-
-    for (const novel of result.value.payload.localNovels) {
-      if (!localNovels.has(novel.id)) {
-        localNovels.set(novel.id, novel)
-      }
-    }
-
-    for (const chapter of result.value.payload.localChapters) {
-      if (!localChapters.has(chapter.id)) {
-        localChapters.set(chapter.id, chapter)
-      }
-    }
-
-    for (const outline of result.value.payload.localOutlines) {
-      if (!localOutlines.has(outline.id)) {
-        localOutlines.set(outline.id, outline)
-      }
-    }
-
-    for (const character of result.value.payload.localCharacters) {
-      if (!localCharacters.has(character.id)) {
-        localCharacters.set(character.id, character)
-      }
-    }
-
-    for (const relation of result.value.payload.localCharacterRelations) {
-      if (!localCharacterRelations.has(relation.id)) {
-        localCharacterRelations.set(relation.id, relation)
-      }
-    }
-
-    for (const worldEntry of result.value.payload.localWorldEntries) {
-      if (!localWorldEntries.has(worldEntry.id)) {
-        localWorldEntries.set(worldEntry.id, worldEntry)
-      }
-    }
-
-    for (const timelineEvent of result.value.payload.localTimelineEvents) {
-      if (!localTimelineEvents.has(timelineEvent.id)) {
-        localTimelineEvents.set(timelineEvent.id, timelineEvent)
-      }
-    }
-  }
-
-  if (!localNovels.size && !localChapters.size) {
-    return null
-  }
-
-  const orderedLocalNovels = [...localNovels.values()]
-  if (activeNovelId && localNovels.has(activeNovelId)) {
-    orderedLocalNovels.sort((left, right) => {
-      const activeDiff = Number(right.id === activeNovelId) - Number(left.id === activeNovelId)
-      if (activeDiff !== 0) return activeDiff
-      return 0
-    })
-  }
-
-  const revisionSnapshot = activeSnapshot ?? fallbackSnapshot
-  const revisionNovelId = activeSnapshot ? activeNovelId : fallbackNovelId
-  const basePayload = revisionSnapshot?.payload ?? createEmptyWorkspaceState()
-
-  return {
-    payload: normalizeWorkspaceState({
-      ...basePayload,
-      currentNovelId: activeSnapshot?.payload.currentNovelId || activeNovelId || '',
-      currentChapterId: activeSnapshot?.payload.currentChapterId || '',
-      localNovels: orderedLocalNovels,
-      localChapters: [...localChapters.values()],
-      localOutlines: [...localOutlines.values()],
-      localCharacters: [...localCharacters.values()],
-      localCharacterRelations: [...localCharacterRelations.values()],
-      localWorldEntries: [...localWorldEntries.values()],
-      localTimelineEvents: [...localTimelineEvents.values()],
-    }),
-    revision: revisionSnapshot?.revision ?? 0,
-    revisionNovelId,
-  }
 }
 
 function revisionResponse(payload: ReturnType<typeof normalizeWorkspaceState>, revision: number, revisionNovelId: string) {
@@ -272,8 +153,7 @@ function mutationSuccessResponse(result: Awaited<ReturnType<typeof runWorkspaceM
   } })
 }
 
-async function loadWorkspaceLibrarySummaries() {
-  const activeNovelId = readActiveWorkspaceNovelId()
+async function loadNovelLibrarySummaries() {
   const registryRows = listReadyWorkspaceNovelRegistry()
   const settledSummaries = await Promise.allSettled(
     registryRows.map(async (row) => {
@@ -293,44 +173,29 @@ async function loadWorkspaceLibrarySummaries() {
     return result.value ? [result.value] : []
   })
 
-  if (activeNovelId) {
-    summaries.sort((left, right) => Number(right.id === activeNovelId) - Number(left.id === activeNovelId))
-  }
-
   return {
     ok: true,
-    activeNovelId,
     novels: summaries,
   }
 }
 
-export async function GET(request: Request) {
+export async function getNovelCollection() {
+  schedulePendingWorkspaceNovelCleanupScan()
+  return noStoreJson(await loadNovelLibrarySummaries())
+}
+
+export async function getNovelResource(request: Request, novelId: string) {
   const searchParams = new URL(request.url).searchParams
-  const librarySummary = searchParams.get('librarySummary')
-  if (librarySummary !== null) {
-    if (librarySummary !== '1') {
-      return noStoreJson({ ok: false, error: 'librarySummary must be 1' }, { status: 400 })
-    }
-
-    schedulePendingWorkspaceNovelCleanupScan()
-    return noStoreJson(await loadWorkspaceLibrarySummaries())
-  }
-
   const deletionStatus = searchParams.get('deletionStatus')
   if (deletionStatus !== null) {
     if (deletionStatus !== '1') {
       return noStoreJson({ ok: false, error: 'deletionStatus must be 1' }, { status: 400 })
     }
 
-    const novelId = searchParams.get('novelId')
-    if (novelId === null) {
-      return noStoreJson({ ok: false, error: 'novelId is required' }, { status: 400 })
-    }
-
     try {
       return noStoreJson({
         ok: true,
-        novelId: novelId.trim(),
+        novelId,
         deletionState: readWorkspaceNovelDeletionState(novelId),
       })
     } catch (error) {
@@ -344,70 +209,48 @@ export async function GET(request: Request) {
   schedulePendingWorkspaceNovelCleanupScan()
 
   try {
-    const requestedNovelId = searchParams.get('novelId')?.trim() || null
-    if (requestedNovelId) {
-      const snapshot = await loadWorkspaceSnapshotFromRuntimeOrRecovery('singleton', getNovelWorkspaceDb(requestedNovelId))
-      scheduleWorkspaceKnowledgeSyncRecovery(requestedNovelId)
-      return revisionResponse(snapshot.payload, snapshot.revision, requestedNovelId)
-    }
-
-    const activeNovelId = readActiveWorkspaceNovelId()
-    const registryPayload = await loadWorkspacePayloadFromNovelRegistryFallback(activeNovelId)
-    if (registryPayload) {
-      if (!registryPayload.revisionNovelId) {
-        throw new Error('Unable to determine registry workspace revision owner')
-      }
-      return revisionResponse(registryPayload.payload, registryPayload.revision, registryPayload.revisionNovelId)
-    }
-
-    if (activeNovelId) {
-      const snapshot = await loadWorkspaceSnapshotFromRuntimeOrRecovery('singleton', getNovelWorkspaceDb(activeNovelId))
-      scheduleWorkspaceKnowledgeSyncRecovery(activeNovelId)
-      return revisionResponse(snapshot.payload, snapshot.revision, activeNovelId)
-    }
-
-    const payload = await loadWorkspacePayloadFromRuntimeOrRecovery()
-    return noStoreJson(payload)
+    const snapshot = await loadWorkspaceSnapshotFromRuntimeOrRecovery('singleton', getNovelWorkspaceDb(novelId))
+    scheduleWorkspaceKnowledgeSyncRecovery(novelId)
+    return revisionResponse(snapshot.payload, snapshot.revision, novelId)
   } catch (error) {
-    console.error('Failed to restore workspace payload:', error)
-    return noStoreJson({ ok: false, error: 'Failed to restore saved workspace payload' }, { status: 500 })
+    console.error('Failed to load novel resource:', error)
+    return noStoreJson({ ok: false, error: 'Failed to load novel resource' }, { status: 500 })
   }
 }
 
-async function persistWorkspaceSnapshot(request: Request) {
+function stripBrowserSessionState(payload: ReturnType<typeof normalizeWorkspaceState>, novelId: string) {
+  return scopeWorkspaceStateToNovel(normalizeWorkspaceState({
+    ...payload,
+    currentNovelId: novelId,
+    currentChapterId: '',
+    currentTab: 'editor',
+    helperTab: 'ai',
+    focusMode: false,
+    selectionText: '',
+    selectedParagraphIndex: 0,
+    presetCompatSessionState: {},
+    aiSettings: createEmptyWorkspaceState().aiSettings,
+  }), novelId)
+}
+
+export async function saveNovelResource(request: Request, novelId: string) {
   try {
     assertJsonMediaType(request)
     const payload = await readBoundedJsonObject(request, MAX_WORKSPACE_POST_BODY_BYTES, 'Workspace JSON body exceeds 16 MiB')
     assertWorkspaceSnapshotSemantics(payload)
 
-    let normalizedPayload = normalizeWorkspaceState(payload)
-    const targetNovelId = resolveWorkspaceNovelId(normalizedPayload) ?? readActiveWorkspaceNovelId()
-    if (!targetNovelId) {
-      throw new Error('Unable to determine which novel workspace should be persisted')
-    }
-    const expectedNovelId = request.headers.get('X-Retale-Resource-Novel-Id')?.trim()
-    if (expectedNovelId && targetNovelId !== expectedNovelId) {
+    const normalizedPayload = normalizeWorkspaceState(payload)
+    const targetNovelId = resolveWorkspaceNovelId(normalizedPayload)
+    if (targetNovelId !== novelId) {
       throw new WorkspaceMutationError(
         'invalid_mutation_contract',
         'Novel resource path must match the persisted novel',
       )
     }
-    if (expectedNovelId) {
-      normalizedPayload = normalizeWorkspaceState({
-        ...normalizedPayload,
-        currentNovelId: expectedNovelId,
-        currentChapterId: '',
-        currentTab: 'editor',
-        helperTab: 'ai',
-        focusMode: false,
-        selectionText: '',
-        selectedParagraphIndex: 0,
-        aiSettings: createEmptyWorkspaceState().aiSettings,
-      })
-    }
+    const resourcePayload = stripBrowserSessionState(normalizedPayload, novelId)
 
     const revisionContract = readRevisionContract(request)
-    if (revisionContract.revisionNovelId !== null && revisionContract.revisionNovelId !== targetNovelId) {
+    if (revisionContract.revisionNovelId !== null && revisionContract.revisionNovelId !== novelId) {
       throw new WorkspaceMutationError(
         'invalid_mutation_contract',
         'X-Retale-Revision-Novel-Id must match the resolved workspace novel',
@@ -416,47 +259,42 @@ async function persistWorkspaceSnapshot(request: Request) {
     const allowReset = isExplicitWorkspaceResetRequest(request)
     const result = await runWorkspaceMutation({
       kind: 'full-snapshot',
-      novelId: targetNovelId,
-      payload: normalizedPayload,
+      novelId,
+      payload: resourcePayload,
       backupReason: allowReset ? 'explicit-reset' : 'workspace-save',
       allowEmptyReset: allowReset,
       ...revisionContract,
     })
     if (result.shouldScheduleKnowledgeSync) {
-      scheduleWorkspaceKnowledgeSync(targetNovelId)
+      scheduleWorkspaceKnowledgeSync(novelId)
     }
     return mutationSuccessResponse(result)
   } catch (error) {
     if (error instanceof ApiRequestError) {
       return NextResponse.json({
         ok: false,
-        error: error.status === 400 ? '工作区 JSON 无效，请刷新页面后重试。' : error.message,
+        error: error.status === 400 ? '小说 JSON 无效，请刷新页面后重试。' : error.message,
       }, { status: error.status })
     }
     if (error instanceof WorkspaceMutationError) {
       return mutationErrorResponse(error)
     }
-    console.error('Failed to save workspace payload:', error)
+    console.error('Failed to save novel resource:', error)
     return NextResponse.json(
-      { ok: false, error: 'Failed to save workspace payload' },
+      { ok: false, error: 'Failed to save novel resource' },
       { status: 500 }
     )
   }
 }
 
-export async function POST(request: Request) {
-  return persistWorkspaceSnapshot(request)
-}
-
-async function patchWorkspaceChapter(request: Request) {
+export async function patchChapterResource(request: Request, chapterId: string) {
   try {
     assertJsonMediaType(request)
     const payload = await readBoundedJsonObject(request, MAX_WORKSPACE_PATCH_BODY_BYTES, 'Workspace patch JSON body exceeds 4 MiB')
 
     const revisionContract = readRequiredRevisionContract(request)
     const patch = readChapterPatchBody(payload)
-    const expectedChapterId = request.headers.get('X-Retale-Resource-Chapter-Id')?.trim()
-    if (expectedChapterId && patch.chapterId !== expectedChapterId) {
+    if (patch.chapterId !== chapterId) {
       throw new WorkspaceMutationError(
         'invalid_mutation_contract',
         'Chapter resource path must match chapterId',
@@ -485,30 +323,20 @@ async function patchWorkspaceChapter(request: Request) {
     if (error instanceof WorkspaceMutationError) {
       return mutationErrorResponse(error)
     }
-    console.error('Failed to patch workspace payload:', error)
+    console.error('Failed to patch chapter resource:', error)
     return NextResponse.json(
-      { ok: false, error: 'Failed to patch workspace payload' },
+      { ok: false, error: 'Failed to patch chapter resource' },
       { status: 500 },
     )
   }
 }
 
-export async function PATCH(request: Request) {
-  return patchWorkspaceChapter(request)
-}
-
-export async function DELETE(request: Request) {
+export async function deleteNovelResource(request: Request, novelId: string) {
   try {
     const searchParams = new URL(request.url).searchParams
-    const novelId = searchParams.get('novelId')
-    if (novelId === null) {
-      return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
-    }
-
     const result = await deleteWorkspaceNovel({
       novelId,
       nextNovelId: searchParams.get('nextNovelId'),
-      preferRequestedNextNovelId: request.headers.get('X-Retale-Resource-Delete') === '1',
     })
     if (result.cleanupPending) {
       scheduleWorkspaceNovelCleanup(result.deletedNovelId)
@@ -522,9 +350,9 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ ok: false, error: error.message }, { status: error.status })
     }
 
-    console.error('Failed to permanently delete novel workspace:', error)
+    console.error('Failed to permanently delete novel:', error)
     return NextResponse.json(
-      { ok: false, error: 'Failed to permanently delete novel workspace' },
+      { ok: false, error: 'Failed to permanently delete novel' },
       { status: 500 },
     )
   }

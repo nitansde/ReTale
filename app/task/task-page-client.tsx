@@ -1,7 +1,9 @@
 "use client"
 
 import Link from 'next/link'
+import { useEffect, useState } from 'react'
 import { TaskAbortButton } from './task-abort-button'
+import { readBrowserWorkspaceSession } from '@/lib/browser-preferences'
 import { useI18n } from '@/lib/i18n/provider'
 
 type BackgroundTask = {
@@ -61,9 +63,35 @@ function TaskMetaRow({ label, value }: { label: string; value: string }) {
   )
 }
 
-export function TaskPageClient({ tasks }: { tasks: BackgroundTask[] }) {
+export function TaskPageClient() {
   const { locale, t } = useI18n()
+  const [tasks, setTasks] = useState<BackgroundTask[]>([])
+  const [novelId, setNovelId] = useState('')
   const browserLocale = locale === 'zh' ? 'zh-CN' : 'en'
+
+  useEffect(() => {
+    const currentNovelId = readBrowserWorkspaceSession().currentNovelId
+    if (!currentNovelId) return
+
+    const controller = new AbortController()
+    void fetch(`/api/task?novelId=${encodeURIComponent(currentNovelId)}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const payload = await response.json() as { tasks?: BackgroundTask[] }
+        if (response.ok && Array.isArray(payload.tasks)) {
+          setNovelId(currentNovelId)
+          setTasks(payload.tasks)
+        }
+      })
+      .catch((error) => {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) console.error(error)
+      })
+
+    return () => controller.abort()
+  }, [])
+
   const sortedTasks = [...tasks].sort((left, right) => {
     const leftTime = new Date(left.updatedAt ?? 0).getTime()
     const rightTime = new Date(right.updatedAt ?? 0).getTime()
@@ -113,8 +141,11 @@ export function TaskPageClient({ tasks }: { tasks: BackgroundTask[] }) {
 
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300">
             <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('task.jsonEndpoint')}</div>
-            <Link className="mt-1 inline-block text-indigo-200 transition hover:text-indigo-100" href="/api/task">
-              /api/task
+            <Link
+              className="mt-1 inline-block text-indigo-200 transition hover:text-indigo-100"
+              href={novelId ? `/api/task?novelId=${encodeURIComponent(novelId)}` : '/api/task'}
+            >
+              /api/task{novelId ? `?novelId=${novelId}` : ''}
             </Link>
           </div>
         </header>
@@ -163,7 +194,11 @@ export function TaskPageClient({ tasks }: { tasks: BackgroundTask[] }) {
                     </div>
 
                     <div className="flex flex-col gap-3 lg:items-end">
-                      <TaskAbortButton jobId={task.jobId} />
+                      <TaskAbortButton
+                        jobId={task.jobId}
+                        novelId={task.novelId ?? novelId}
+                        onAborted={() => setTasks((current) => current.filter((item) => item.jobId !== task.jobId))}
+                      />
                       <div className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-zinc-300 lg:min-w-56">
                         <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.16em] text-zinc-500">
                           <span>{t('task.progress')}</span>

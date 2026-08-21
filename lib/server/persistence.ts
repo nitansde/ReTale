@@ -2,7 +2,8 @@ import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { safeParseJson } from '@/lib/server/json-parse'
-import { PROTECTED_RESET_APP_SETTING_KEYS } from '@/lib/server/schema'
+import { CURRENT_NOVEL_SCHEMA_VERSION, PROTECTED_RESET_APP_SETTING_KEYS } from '@/lib/server/schema'
+import { serializeNovelResourceState } from '@/lib/workspace-state'
 import {
   createControlDatabaseAccess,
   createNovelDatabaseAccess,
@@ -131,12 +132,13 @@ export function beginWorkspaceNovelCreation(params: { novelId: string; title?: s
       `INSERT INTO NovelRegistry (
          novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus,
          lifecycleToken, leaseExpiresAt, claimedAt, updatedAt
-       ) VALUES (?, ?, ?, ?, ?, '1', 'creating', ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, 'creating', ?, ?, ?, ?)`,
       novelId,
       novelId,
       params.title?.trim() || null,
       paths.databasePath,
       paths.lanceDbPath,
+      CURRENT_NOVEL_SCHEMA_VERSION,
       creatorToken,
       leaseExpiresAt,
       now,
@@ -194,7 +196,6 @@ export function publishWorkspaceNovelCreation(
     if (transition.changes !== 1) {
       throw new WorkspaceNovelStateConflictError(`Novel "${stableNovelId}" creation is no longer publishable`)
     }
-    upsertActiveWorkspaceNovelId(controlDb, stableNovelId)
   })
 }
 
@@ -244,7 +245,7 @@ export class WorkspaceNovelStateConflictError extends Error {
 
 export type WorkspaceNovelDeletionResult = {
   deletedNovelId: string
-  activeNovelId: string | null
+  nextNovelId: string | null
   deletionState: 'deleted'
   cleanupPending: boolean
 }
@@ -260,7 +261,6 @@ const WORKSPACE_BACKUP_RETENTION = 20
 const WORKSPACE_KNOWLEDGE_SYNC_STALE_MS = 5 * 60 * 1000
 const WORKSPACE_NOVEL_CLEANUP_SCAN_LIMIT = 25
 let workspaceNovelDeletedPurgeCursor: Pick<WorkspaceNovelRegistryRow, 'updatedAt' | 'novelId'> | null = null
-const ACTIVE_WORKSPACE_NOVEL_ID_KEY = 'WORKSPACE_ACTIVE_NOVEL_ID'
 
 export type ProtectedAppSettingsResetSnapshot = {
   presetCompatLibraryV1: string | null
@@ -277,43 +277,12 @@ function resolveWorkspaceDbContext(context: WorkspaceDbContext = {}) {
     return context.db
   }
 
-  const novelId = context.novelId ?? readActiveWorkspaceNovelId()
+  const novelId = context.novelId
   if (!novelId) {
     return null
   }
 
   return getNovelDatabaseAccess(novelId)
-}
-
-export function readActiveWorkspaceNovelId() {
-  return createControlDatabaseAccess().queryOne<{ value: string }>('SELECT value FROM AppSetting WHERE key = ?', ACTIVE_WORKSPACE_NOVEL_ID_KEY)?.value ?? null
-}
-
-function upsertActiveWorkspaceNovelId(controlDb: DatabaseAccess, novelId: string) {
-  controlDb.execute(
-    `INSERT INTO AppSetting (id, key, value)
-     VALUES (lower(hex(randomblob(16))), ?, ?)
-     ON CONFLICT(key) DO UPDATE SET
-       id = excluded.id,
-       value = excluded.value,
-       updatedAt = CURRENT_TIMESTAMP`,
-    ACTIVE_WORKSPACE_NOVEL_ID_KEY,
-    novelId,
-  )
-  const published = controlDb.queryOne<AppSettingRow>(
-    'SELECT id, key, value, createdAt, updatedAt FROM AppSetting WHERE key = ?',
-    ACTIVE_WORKSPACE_NOVEL_ID_KEY,
-  )
-  if (!published) {
-    throw new Error('Failed to publish the active workspace novel')
-  }
-  return published
-}
-
-export async function writeActiveWorkspaceNovelId(novelId: string) {
-  const stableNovelId = validateNovelId(novelId)
-  const controlDb = createControlDatabaseAccess()
-  return controlDb.withTransaction(() => upsertActiveWorkspaceNovelId(controlDb, stableNovelId))
 }
 
 export function readWorkspaceNovelDeletionState(novelId: string): WorkspaceNovelDeletionState {
@@ -345,7 +314,7 @@ function upsertWorkspaceNovelRegistryInDb(
   controlDb.execute(
     `INSERT INTO NovelRegistry (
        novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus
-     ) VALUES (?, ?, ?, ?, ?, '1', 'ready')
+     ) VALUES (?, ?, ?, ?, ?, ?, 'ready')
      ON CONFLICT(novelId) DO UPDATE SET
        title = COALESCE(excluded.title, NovelRegistry.title),
         dbFilePath = excluded.dbFilePath,
@@ -358,6 +327,7 @@ function upsertWorkspaceNovelRegistryInDb(
     params.title?.trim() || null,
     paths.databasePath,
     paths.lanceDbPath,
+    CURRENT_NOVEL_SCHEMA_VERSION,
   )
 }
 
@@ -378,7 +348,6 @@ export async function publishWorkspaceNovelWriteTarget(params: { novelId: string
       throw new WorkspaceNovelStateConflictError('Novel deletion is already in progress or complete')
     }
     upsertWorkspaceNovelRegistryInDb(controlDb, { ...params, novelId })
-    return upsertActiveWorkspaceNovelId(controlDb, novelId)
   })
 }
 
@@ -429,8 +398,6 @@ async function cleanupWorkspaceNovelUnderGate(
   clock?: WorkspaceNovelLifecycleClock,
   readyCompensation: {
     target: WorkspaceNovelRegistryRow
-    activeSettingBefore: AppSettingRow | null
-    activeSettingPublished: AppSettingRow | null
   } | null = null,
 ) {
   const controlDb = createControlDatabaseAccess()
@@ -487,39 +454,6 @@ async function cleanupWorkspaceNovelUnderGate(
         )
         if (compensated.changes !== 1) {
           return
-        }
-
-        const before = readyCompensation.activeSettingBefore
-        const published = readyCompensation.activeSettingPublished
-        if (before && published) {
-          controlDb.execute(
-            `UPDATE AppSetting
-             SET id = ?, value = ?, createdAt = ?, updatedAt = ?
-             WHERE key = ? AND id = ?`,
-            before.id,
-            before.value,
-            before.createdAt,
-            before.updatedAt,
-            ACTIVE_WORKSPACE_NOVEL_ID_KEY,
-            published.id,
-          )
-        } else if (before) {
-          controlDb.execute(
-            `INSERT INTO AppSetting (id, key, value, createdAt, updatedAt)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(key) DO NOTHING`,
-            before.id,
-            before.key,
-            before.value,
-            before.createdAt,
-            before.updatedAt,
-          )
-        } else if (published) {
-          controlDb.execute(
-            'DELETE FROM AppSetting WHERE key = ? AND id = ?',
-            ACTIVE_WORKSPACE_NOVEL_ID_KEY,
-            published.id,
-          )
         }
       })
     }
@@ -719,7 +653,6 @@ export async function resumePendingWorkspaceNovelCleanup(clock?: WorkspaceNovelL
 export async function deleteWorkspaceNovel(params: {
   novelId: string
   nextNovelId?: string | null
-  preferRequestedNextNovelId?: boolean
   now?: WorkspaceNovelLifecycleClock
 }): Promise<WorkspaceNovelDeletionResult> {
   let novelId: string
@@ -755,11 +688,9 @@ export async function deleteWorkspaceNovel(params: {
     const storagePaths = validateNovelDeletionPaths(novelId)
     assertCanonicalRegistryStoragePaths(target)
 
-    let nextActiveNovelId = readActiveWorkspaceNovelId()
+    let nextNovelId: string | null = null
     let readyCompensation: {
       target: WorkspaceNovelRegistryRow
-      activeSettingBefore: AppSettingRow | null
-      activeSettingPublished: AppSettingRow | null
     } | null = null
     let cleanupToken: string | null = null
 
@@ -804,18 +735,12 @@ export async function deleteWorkspaceNovel(params: {
         if (requestedNextNovelId && !requestedSurvivor) {
           throw new WorkspaceNovelDeletionError('The requested survivor novel is not available', 409)
         }
-        const activeSetting = controlDb.queryOne<AppSettingRow>(
-          'SELECT id, key, value, createdAt, updatedAt FROM AppSetting WHERE key = ?',
-          ACTIVE_WORKSPACE_NOVEL_ID_KEY,
-        )
-        const activeSurvivor = survivors.find((row) => row.novelId === activeSetting?.value) ?? null
-        const canonicalActiveNovelId = (params.preferRequestedNextNovelId ? requestedSurvivor?.novelId : activeSurvivor?.novelId)
-          ?? (params.preferRequestedNextNovelId ? activeSurvivor?.novelId : requestedSurvivor?.novelId)
+        const canonicalNextNovelId = requestedSurvivor?.novelId
           ?? survivors[0]?.novelId
           ?? null
-        const canonicalActiveSurvivor = survivors.find((row) => row.novelId === canonicalActiveNovelId) ?? null
-        if (canonicalActiveSurvivor) {
-          assertCanonicalRegistryStoragePaths(canonicalActiveSurvivor)
+        const canonicalNextNovel = survivors.find((row) => row.novelId === canonicalNextNovelId) ?? null
+        if (canonicalNextNovel) {
+          assertCanonicalRegistryStoragePaths(canonicalNextNovel)
         }
 
         const nextCleanupToken = createLifecycleToken()
@@ -835,23 +760,15 @@ export async function deleteWorkspaceNovel(params: {
         if (claimed.changes !== 1) {
           throw new WorkspaceNovelDeletionError('Novel deletion is already in progress or complete', 409)
         }
-        const activeSettingPublished = canonicalActiveNovelId
-          ? upsertActiveWorkspaceNovelId(controlDb, canonicalActiveNovelId)
-          : null
-        if (!canonicalActiveNovelId) {
-          controlDb.execute('DELETE FROM AppSetting WHERE key = ?', ACTIVE_WORKSPACE_NOVEL_ID_KEY)
-        }
         return {
-          activeNovelId: canonicalActiveNovelId,
+          nextNovelId: canonicalNextNovelId,
           cleanupToken: nextCleanupToken,
           compensation: {
             target: currentTarget,
-            activeSettingBefore: activeSetting,
-            activeSettingPublished,
           },
         }
       })
-      nextActiveNovelId = transition.activeNovelId
+      nextNovelId = transition.nextNovelId
       cleanupToken = transition.cleanupToken
       readyCompensation = transition.compensation
     } else if (target.migrationStatus === 'deleting') {
@@ -860,7 +777,7 @@ export async function deleteWorkspaceNovel(params: {
       const resumed = await resumeWorkspaceNovelCleanup(novelId, params.now)
       return {
         deletedNovelId: novelId,
-        activeNovelId: nextActiveNovelId,
+        nextNovelId,
         deletionState: 'deleted',
         cleanupPending: resumed?.cleanupPending ?? false,
       }
@@ -876,7 +793,7 @@ export async function deleteWorkspaceNovel(params: {
 
     return {
       deletedNovelId: novelId,
-      activeNovelId: nextActiveNovelId,
+      nextNovelId,
       deletionState: 'deleted',
       cleanupPending: cleanup.cleanupPending,
     }
@@ -982,13 +899,13 @@ export async function upsertWorkspaceState(id: string, payload: string, options:
     : (() => {
         const parsed = parseScopedWorkspacePayload(payload)
         return {
-          serializedPayload: JSON.stringify(parsed.scoped),
+          serializedPayload: JSON.stringify(serializeNovelResourceState(parsed.scoped)),
           novelId: parsed.novelId,
           title: parsed.scoped.localNovels[0]?.title ?? null,
         }
       })()
 
-  const novelId = options.novelId ?? scopedPayload.novelId ?? readActiveWorkspaceNovelId()
+  const novelId = options.novelId ?? scopedPayload.novelId
   if (!novelId && !options.db) {
     throw new Error('Cannot save workspace payload without a target novel')
   }

@@ -98,7 +98,7 @@ describe('workspace knowledge sync claim ownership', () => {
     let claimSettled = false
 
     const foreground = db.withTransaction(async () => {
-      database.prepare('UPDATE WorkspaceRuntimeState SET currentTab = ? WHERE id = ?').run('knowledge', 'singleton')
+      database.prepare('UPDATE WorkspaceRuntimeState SET promptText = ? WHERE id = ?').run('knowledge', 'singleton')
       foregroundEntered.resolve()
       await releaseForeground.promise
     })
@@ -119,7 +119,7 @@ describe('workspace knowledge sync claim ownership', () => {
     const releaseRollback = Promise.withResolvers<void>()
     let completionSettled = false
     const rollback = db.withTransaction(async () => {
-      database.prepare('UPDATE WorkspaceRuntimeState SET currentTab = ? WHERE id = ?').run('timeline', 'singleton')
+      database.prepare('UPDATE WorkspaceRuntimeState SET promptText = ? WHERE id = ?').run('timeline', 'singleton')
       rollbackEntered.resolve()
       await releaseRollback.promise
       throw new Error('foreground rollback')
@@ -135,8 +135,8 @@ describe('workspace knowledge sync claim ownership', () => {
     releaseRollback.resolve()
     await expect(rollback).rejects.toThrow('foreground rollback')
     await expect(completion).resolves.toBe(true)
-    expect(database.prepare('SELECT currentTab FROM WorkspaceRuntimeState WHERE id = ?').get('singleton')).toEqual({
-      currentTab: 'knowledge',
+    expect(database.prepare('SELECT promptText FROM WorkspaceRuntimeState WHERE id = ?').get('singleton')).toEqual({
+      promptText: 'knowledge',
     })
     expect(database.prepare(
       'SELECT syncedRevision, startedRevision, claimToken FROM WorkspaceKnowledgeSyncState WHERE workspaceStateId = ?',

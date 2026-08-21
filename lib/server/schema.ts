@@ -4,6 +4,8 @@ export const PROTECTED_RESET_APP_SETTING_KEYS = [
   'OLLAMA_TIMEOUT_MS',
 ] as const
 
+export const CURRENT_NOVEL_SCHEMA_VERSION = '2'
+
 export const CONTROL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS AppSetting (
   id TEXT PRIMARY KEY,
@@ -77,11 +79,6 @@ CREATE TABLE IF NOT EXISTS WorkspaceStateBackup (
 CREATE TABLE IF NOT EXISTS WorkspaceRuntimeState (
   id TEXT PRIMARY KEY DEFAULT 'singleton',
   revision INTEGER NOT NULL DEFAULT 0,
-  currentNovelId TEXT NOT NULL DEFAULT '',
-  currentChapterId TEXT NOT NULL DEFAULT '',
-  currentTab TEXT NOT NULL DEFAULT 'editor',
-  helperTab TEXT NOT NULL DEFAULT 'ai',
-  expandedVolumeIdsJson TEXT NOT NULL DEFAULT '[]',
   localOutlinesJson TEXT NOT NULL DEFAULT '[]',
   localCharactersJson TEXT NOT NULL DEFAULT '[]',
   localCharacterRelationsJson TEXT NOT NULL DEFAULT '[]',
@@ -94,8 +91,6 @@ CREATE TABLE IF NOT EXISTS WorkspaceRuntimeState (
   rewriteTone TEXT NOT NULL DEFAULT 'keep',
   rewriteOutput TEXT NOT NULL DEFAULT 'candidate',
   rewriteScope TEXT NOT NULL DEFAULT 'paragraph',
-  selectionText TEXT NOT NULL DEFAULT '',
-  selectedParagraphIndex INTEGER NOT NULL DEFAULT 0,
   thinkingLevel TEXT NOT NULL DEFAULT 'medium',
   autoContinue INTEGER NOT NULL DEFAULT 1,
   keepCanon INTEGER NOT NULL DEFAULT 1,
@@ -103,8 +98,6 @@ CREATE TABLE IF NOT EXISTS WorkspaceRuntimeState (
   selectedPresetId TEXT NOT NULL DEFAULT '',
   presetsJson TEXT NOT NULL DEFAULT '[]',
   constraintsJson TEXT NOT NULL DEFAULT '[]',
-  focusMode INTEGER NOT NULL DEFAULT 0,
-  presetCompatSessionStateJson TEXT NOT NULL DEFAULT '{}',
   createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -163,23 +156,10 @@ CREATE TABLE IF NOT EXISTS WorkspaceRuntimeNovel (
   FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceRuntimeState(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS WorkspaceRuntimeVolume (
-  workspaceStateId TEXT NOT NULL DEFAULT 'singleton',
-  id TEXT NOT NULL,
-  novelId TEXT NOT NULL,
-  title TEXT NOT NULL,
-  sortOrder INTEGER NOT NULL DEFAULT 0,
-  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (workspaceStateId, id),
-  FOREIGN KEY (workspaceStateId) REFERENCES WorkspaceRuntimeState(id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS WorkspaceRuntimeChapter (
   workspaceStateId TEXT NOT NULL DEFAULT 'singleton',
   id TEXT NOT NULL,
   novelId TEXT NOT NULL,
-  volumeId TEXT NOT NULL,
   parentChapterId TEXT,
   kind TEXT,
   branchLabel TEXT,
@@ -1029,7 +1009,6 @@ CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_chapter ON chapter_
 CREATE INDEX IF NOT EXISTS idx_workspace_state_backup_state_created ON WorkspaceStateBackup(workspaceStateId, createdAt);
 CREATE INDEX IF NOT EXISTS idx_workspace_knowledge_sync_requested ON WorkspaceKnowledgeSyncState(requestedSourceUpdatedAt, syncedSourceUpdatedAt);
 CREATE INDEX IF NOT EXISTS idx_workspace_runtime_novel_state_order ON WorkspaceRuntimeNovel(workspaceStateId, sortOrder, id);
-CREATE INDEX IF NOT EXISTS idx_workspace_runtime_volume_state_order ON WorkspaceRuntimeVolume(workspaceStateId, novelId, sortOrder, id);
 CREATE INDEX IF NOT EXISTS idx_workspace_runtime_chapter_state_novel_order ON WorkspaceRuntimeChapter(workspaceStateId, novelId, sortOrder, id);
 CREATE INDEX IF NOT EXISTS idx_workspace_mutation_replay_created ON WorkspaceMutationReplay(workspaceStateId, createdAt);
 CREATE INDEX IF NOT EXISTS idx_workspace_patch_journal_revision ON WorkspaceChapterPatchJournal(workspaceStateId, committedRevision);

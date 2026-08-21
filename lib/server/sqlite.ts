@@ -264,7 +264,6 @@ const BOOT_SCHEMA_INDEX_NAMES = [
   'idx_workspace_state_backup_state_created',
   'idx_workspace_knowledge_sync_requested',
   'idx_workspace_runtime_novel_state_order',
-  'idx_workspace_runtime_volume_state_order',
   'idx_workspace_runtime_chapter_state_novel_order',
   'idx_workspace_mutation_replay_created',
   'idx_workspace_patch_journal_revision',
@@ -916,7 +915,6 @@ function bootSchemaIsCurrent(database: DatabaseSync) {
     && tableHasColumns(database, 'WorkspaceState', ['revision'])
     && tableHasColumns(database, 'WorkspaceStateBackup', ['revision'])
     && tableExists(database, 'WorkspaceRuntimeNovel')
-    && tableExists(database, 'WorkspaceRuntimeVolume')
     && tableExists(database, 'WorkspaceRuntimeChapter')
     && tableHasColumns(database, 'WorkspaceMutationReplay', [
       'workspaceStateId',

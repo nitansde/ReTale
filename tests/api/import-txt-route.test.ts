@@ -12,25 +12,20 @@ const MAX_TXT_FILE_SIZE_BYTES = 10 * 1024 * 1024
 const MAX_IMPORT_BODY_SIZE_BYTES = MAX_TXT_FILE_SIZE_BYTES + 256 * 1024
 const originalDataDir = process.env.RETALE_DATA_DIR
 
-async function createTestDataRoot(prefix: string, activeNovelId?: string) {
+async function createTestDataRoot(prefix: string, existingNovelId?: string) {
   const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
   cleanups.push(() => fs.rmSync(tempDirectory, { recursive: true, force: true }))
   process.env.RETALE_DATA_DIR = path.join(tempDirectory, 'data')
   vi.resetModules()
   const { getControlDb, getNovelDb } = await import('@/lib/server/db-resolver')
   const controlDb = getControlDb()
-  if (activeNovelId) {
-    const paths = path.join(process.env.RETALE_DATA_DIR, 'novels', activeNovelId)
+  if (existingNovelId) {
+    const paths = path.join(process.env.RETALE_DATA_DIR, 'novels', existingNovelId)
     controlDb.prepare(
       `INSERT INTO NovelRegistry (novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus)
        VALUES (?, ?, ?, ?, ?, '1', 'ready')`,
-    ).run(activeNovelId, activeNovelId, activeNovelId, path.join(paths, 'novel.db'), path.join(paths, 'lancedb'))
-    controlDb.prepare('INSERT INTO AppSetting (id, key, value) VALUES (?, ?, ?)').run(
-      `active-${activeNovelId}`,
-      'WORKSPACE_ACTIVE_NOVEL_ID',
-      activeNovelId,
-    )
-    getNovelDb(activeNovelId)
+    ).run(existingNovelId, existingNovelId, existingNovelId, path.join(paths, 'novel.db'), path.join(paths, 'lancedb'))
+    getNovelDb(existingNovelId)
   }
   return { controlDb, getNovelDb }
 }
@@ -59,7 +54,6 @@ function createTestDatabase(prefix: string) {
 
 function resetWorkspaceState(database: DatabaseSync) {
   database.prepare('DELETE FROM WorkspaceRuntimeChapter').run()
-  database.prepare('DELETE FROM WorkspaceRuntimeVolume').run()
   database.prepare('DELETE FROM WorkspaceRuntimeNovel').run()
   database.prepare('DELETE FROM WorkspaceRuntimeState').run()
   database.prepare('DELETE FROM WorkspaceState').run()
@@ -112,8 +106,6 @@ function createGb18030ImportRequest() {
 }
 
 function mockImportSideEffects() {
-  const backfillWorkspaceRuntimeFromArtifactIfMissing = vi.fn(async () => {})
-  const loadWorkspacePayloadFromRuntimeOrRecovery = vi.fn(async () => ({}))
   const createWorkspaceNovelFromSnapshot = vi.fn(async (params: { novelId: string }) => ({
     ok: true as const,
     operation: 'full-snapshot' as const,
@@ -124,22 +116,14 @@ function mockImportSideEffects() {
     shouldScheduleKnowledgeSync: true,
   }))
 
-  vi.doMock('@/lib/server/workspace-resilience', () => ({
-    backfillWorkspaceRuntimeFromArtifactIfMissing,
-    loadWorkspacePayloadFromRuntimeOrRecovery,
-  }))
   vi.doMock('@/lib/server/workspace-mutation', () => ({ createWorkspaceNovelFromSnapshot }))
 
   return {
-    backfillWorkspaceRuntimeFromArtifactIfMissing,
-    loadWorkspacePayloadFromRuntimeOrRecovery,
     createWorkspaceNovelFromSnapshot,
   }
 }
 
 function expectNoImportSideEffects(sideEffects: ReturnType<typeof mockImportSideEffects>) {
-  expect(sideEffects.backfillWorkspaceRuntimeFromArtifactIfMissing).not.toHaveBeenCalled()
-  expect(sideEffects.loadWorkspacePayloadFromRuntimeOrRecovery).not.toHaveBeenCalled()
   expect(sideEffects.createWorkspaceNovelFromSnapshot).not.toHaveBeenCalled()
 }
 
@@ -436,7 +420,6 @@ describe('import-txt route', () => {
       'SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?',
     ).get(syncedPayload.currentNovelId!)
     expect(creatingRow).toEqual({ migrationStatus: 'creating' })
-    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toBeUndefined()
     const { getCreatingNovelDb } = await import('@/lib/server/db-resolver')
     const novelDb = getCreatingNovelDb(syncedPayload.currentNovelId!)
     expect(novelDb.prepare('SELECT revision FROM WorkspaceRuntimeState').get()).toEqual({ revision: 1 })
@@ -488,23 +471,8 @@ describe('import-txt route', () => {
     expect((await responsePromise).status).toBe(200)
   })
 
-  it('scopes a later import to its generated novel before creation and scheduling', async () => {
+  it('creates each import as an isolated generated novel', async () => {
     const sideEffects = mockImportSideEffects()
-    sideEffects.loadWorkspacePayloadFromRuntimeOrRecovery.mockResolvedValue({
-      currentNovelId: 'novel_deleted',
-      currentChapterId: 'deleted-chapter',
-      localNovels: [{ id: 'novel_deleted', title: 'Deleted', summary: '', tags: [] }],
-      localChapters: [{
-        id: 'deleted-chapter',
-        novelId: 'novel_deleted',
-        title: 'Deleted chapter',
-        content: '<p>stale</p>',
-        order: 1,
-        status: 'draft',
-        wordCount: 1,
-        updatedAt: '2026-05-16T00:00:00.000Z',
-      }],
-    })
 
     const { POST } = await import('@/app/api/import-txt/route')
     const response = await POST(createImportRequest())
@@ -513,12 +481,10 @@ describe('import-txt route', () => {
     expect(response.status).toBe(200)
     expect(result.ok).toBe(true)
     expect(result.novelId).toMatch(/^novel_/)
-    expect(result.novelId).not.toBe('novel_deleted')
     expect(sideEffects.createWorkspaceNovelFromSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ payload: expect.objectContaining({
         currentNovelId: result.novelId,
         localNovels: [expect.objectContaining({ id: result.novelId })],
-        localChapters: expect.not.arrayContaining([expect.objectContaining({ novelId: 'novel_deleted' })]),
       }) }),
     )
     expect(sideEffects.createWorkspaceNovelFromSnapshot).toHaveBeenCalledTimes(1)
@@ -548,11 +514,10 @@ describe('import-txt route', () => {
       "SELECT novelId, migrationStatus FROM NovelRegistry WHERE novelId != 'novel-prior'",
     ).get() as { novelId: string; migrationStatus: string }
     expect(failedRow.migrationStatus).toBe('deleted')
-    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: 'novel-prior' })
     expect(fs.existsSync(path.join(process.env.RETALE_DATA_DIR ?? '', 'novels', failedRow.novelId))).toBe(false)
   })
 
-  it('commits runtime, artifact, and one sync request at revision 1 before publishing ready and active', async () => {
+  it('commits runtime, artifact, and one sync request at revision 1 before publishing ready', async () => {
     const { controlDb, getNovelDb } = await createTestDataRoot('retale-import-txt-route-atomic-surfaces')
     const { POST, afterCallbacks } = await importRouteWithAfterCallbacks()
     const response = await POST(createImportRequest())
@@ -562,7 +527,6 @@ describe('import-txt route', () => {
     expect(response.status).toBe(200)
     expect(payload.revision).toBe(1)
     expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get(payload.novelId)).toEqual({ migrationStatus: 'ready' })
-    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: payload.novelId })
     expect(novelDb.prepare('SELECT revision FROM WorkspaceRuntimeState').get()).toEqual({ revision: 1 })
     expect(novelDb.prepare('SELECT COUNT(*) AS count FROM WorkspaceRuntimeChapter').get()).toEqual({ count: 3 })
     expect(novelDb.prepare('SELECT payload IS NOT NULL AS hasPayload FROM WorkspaceState').get()).toEqual({ hasPayload: 1 })
@@ -573,13 +537,12 @@ describe('import-txt route', () => {
     expect(afterCallbacks).toHaveLength(0)
   })
 
-  it('compensates a failure after the novel transaction without replacing the prior active novel or scheduling sync', async () => {
+  it('compensates a failure after the novel transaction without disturbing existing novels or scheduling sync', async () => {
     const { controlDb } = await createTestDataRoot('retale-import-txt-route-compensation', 'novel-prior')
     const mutation = await import('@/lib/server/workspace-mutation')
     mutation.setWorkspaceNovelCreationFaultInjectorForTests(() => {
       expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE migrationStatus = ?').get('creating')).toEqual({ migrationStatus: 'creating' })
       expect(controlDb.prepare('SELECT COUNT(*) AS count FROM NovelRegistry WHERE migrationStatus = ?').get('ready')).toEqual({ count: 1 })
-      expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: 'novel-prior' })
       throw new Error('publication fault')
     })
     const { POST, afterCallbacks } = await importRouteWithAfterCallbacks()
@@ -590,7 +553,6 @@ describe('import-txt route', () => {
     const registryRows = controlDb.prepare('SELECT novelId, migrationStatus FROM NovelRegistry ORDER BY novelId').all() as Array<{ novelId: string; migrationStatus: string }>
     const failed = registryRows.find((row) => row.novelId !== 'novel-prior')
     expect(failed?.migrationStatus).toBe('deleted')
-    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: 'novel-prior' })
     expect(fs.existsSync(path.join(process.env.RETALE_DATA_DIR ?? '', 'novels', failed?.novelId ?? 'missing'))).toBe(false)
     expect(afterCallbacks).toHaveLength(0)
   })
@@ -723,8 +685,8 @@ describe('import-txt route', () => {
     const { POST } = await importRouteWithAfterCallbacks()
     const imported = await POST(createImportRequest())
     const importPayload = await imported.json() as { novelId: string; chapterId: string }
-    const workspaceRoute = await import('@/app/api/workspace/route')
-    const patch = await workspaceRoute.PATCH(new Request('http://localhost/api/workspace', {
+    const chapterRoute = await import('@/app/api/chapters/[chapterId]/route')
+    const patch = await chapterRoute.PATCH(new Request(`http://localhost/api/chapters/${importPayload.chapterId}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
@@ -739,7 +701,7 @@ describe('import-txt route', () => {
         wordCount: 8,
         updatedAtLabel: '导入后更新',
       }),
-    }))
+    }), { params: Promise.resolve({ chapterId: importPayload.chapterId }) })
 
     expect(patch.status).toBe(200)
     await expect(patch.json()).resolves.toMatchObject({ revision: 2, operation: 'chapter-patch' })
@@ -747,19 +709,7 @@ describe('import-txt route', () => {
   })
 
   it('selects GB18030 decoding when the UTF-8 candidate is mojibake', async () => {
-    const database = createTestDatabase('retale-import-txt-route-gb18030')
-    resetWorkspaceState(database)
-
-    vi.doMock('@/lib/server/workspace-resilience', async () => {
-      const actual = await vi.importActual<typeof import('@/lib/server/workspace-resilience')>(
-        '@/lib/server/workspace-resilience'
-      )
-      return {
-        ...actual,
-        backfillWorkspaceRuntimeFromArtifactIfMissing: vi.fn(async () => {}),
-        loadWorkspacePayloadFromRuntimeOrRecovery: vi.fn(async () => ({})),
-      }
-    })
+    await createTestDataRoot('retale-import-txt-route-gb18030')
     vi.doMock('@/lib/server/knowledge-rebuild', () => ({
       syncWorkspacePayloadToKnowledgeStore: vi.fn(async () => {}),
     }))
@@ -768,10 +718,15 @@ describe('import-txt route', () => {
     const response = await POST(createGb18030ImportRequest())
 
     expect(response.status).toBe(200)
-    const resilience = await vi.importActual<typeof import('@/lib/server/workspace-resilience')>(
-      '@/lib/server/workspace-resilience'
+    const importPayload = await response.json() as { novelId: string }
+    const [{ createNovelDatabaseAccess }, resilience] = await Promise.all([
+      import('@/lib/server/database-access'),
+      import('@/lib/server/workspace-resilience'),
+    ])
+    const payload = await resilience.loadWorkspacePayloadFromRuntimeOrRecovery(
+      'singleton',
+      createNovelDatabaseAccess(importPayload.novelId),
     )
-    const payload = await resilience.loadWorkspacePayloadFromRuntimeOrRecovery('singleton')
 
     expect(payload.localChapters[0]?.content).toContain('本书由【示例组】整理')
     expect(payload.localChapters[1]?.title).toBe('第1章 初遇')
@@ -790,11 +745,15 @@ describe('import-txt route', () => {
     const { POST: importTxt } = await import('@/app/api/import-txt/route')
     const importResponse = await importTxt(createImportRequest())
     expect(importResponse.status).toBe(200)
+    const importPayload = await importResponse.json() as { novelId: string }
 
     database.prepare('UPDATE WorkspaceState SET payload = NULL WHERE id = ?').run('singleton')
 
-    const { GET } = await import('@/app/api/workspace/route')
-    const response = await GET(new Request('http://localhost/api/workspace'))
+    const { GET } = await import('@/app/api/novels/[novelId]/route')
+    const response = await GET(
+      new Request(`http://localhost/api/novels/${importPayload.novelId}`),
+      { params: Promise.resolve({ novelId: importPayload.novelId }) },
+    )
     const payload = await response.json() as { localNovels: Array<{ title: string }>; localChapters: Array<{ title: string; content: string }> }
 
     expect(response.status).toBe(200)

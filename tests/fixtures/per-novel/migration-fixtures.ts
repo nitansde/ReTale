@@ -732,21 +732,15 @@ export function createPerNovelMigrationFixture(prefix: string): PerNovelMigratio
   ).run('singleton', 2, 2, 2, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', '2026-01-01T00:00:02.000Z', '2026-01-01T00:00:03.000Z', null)
   database.prepare(
     `INSERT INTO WorkspaceRuntimeState (
-      id, currentNovelId, currentChapterId, currentTab, helperTab,
-      expandedVolumeIdsJson, localOutlinesJson, localCharactersJson,
+      id, localOutlinesJson, localCharactersJson,
       localCharacterRelationsJson, localWorldEntriesJson, localTimelineEventsJson,
       rewriteCandidatesJson, rewriteHistoryJson, trajectoriesJson, rewriteMode,
-      rewriteTone, rewriteOutput, rewriteScope, selectionText, selectedParagraphIndex,
+      rewriteTone, rewriteOutput, rewriteScope,
       thinkingLevel, autoContinue, keepCanon, promptText, selectedPresetId,
-      presetsJson, constraintsJson, focusMode, presetCompatSessionStateJson
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      presetsJson, constraintsJson
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     'singleton',
-    'novel-alpha',
-    'novel-alpha-runtime-chapter-1',
-    'editor',
-    'ai',
-    JSON.stringify(['novel-alpha-volume-1', 'novel-beta-volume-1']),
     JSON.stringify([{ novelId: 'novel-alpha' }, { novelId: 'novel-beta' }]),
     JSON.stringify([{ novelId: 'novel-alpha' }, { novelId: 'novel-beta' }]),
     JSON.stringify([]),
@@ -759,17 +753,13 @@ export function createPerNovelMigrationFixture(prefix: string): PerNovelMigratio
     'keep',
     'candidate',
     'paragraph',
-    '',
-    0,
     'medium',
     1,
     1,
     'fixture prompt',
     '',
     JSON.stringify([]),
-    JSON.stringify([]),
-    0,
-    JSON.stringify({})
+    JSON.stringify([])
   )
 
   database.prepare(
@@ -782,28 +772,19 @@ export function createPerNovelMigrationFixture(prefix: string): PerNovelMigratio
   ).run('singleton', 'novel-beta', 'novel-beta title', 'beta summary', JSON.stringify(['beta']), 2)
 
   database.prepare(
-    `INSERT INTO WorkspaceRuntimeVolume (workspaceStateId, id, novelId, title, sortOrder)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run('singleton', 'novel-alpha-volume-1', 'novel-alpha', 'Alpha Volume', 1)
-  database.prepare(
-    `INSERT INTO WorkspaceRuntimeVolume (workspaceStateId, id, novelId, title, sortOrder)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run('singleton', 'novel-beta-volume-1', 'novel-beta', 'Beta Volume', 1)
-
-  database.prepare(
     `INSERT INTO WorkspaceRuntimeChapter (
-      workspaceStateId, id, novelId, volumeId, parentChapterId, kind,
+      workspaceStateId, id, novelId, parentChapterId, kind,
       branchLabel, title, sortOrder, contentHtml, originalContentHtml,
       status, wordCount, updatedAtLabel, trajectoryJson
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run('singleton', 'novel-alpha-runtime-chapter-1', 'novel-alpha', 'novel-alpha-volume-1', null, 'chapter', 'main', 'Alpha Runtime Chapter', 1, '<p>alpha</p>', null, 'draft', 10, 'now', JSON.stringify([]))
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('singleton', 'novel-alpha-runtime-chapter-1', 'novel-alpha', null, 'chapter', 'main', 'Alpha Runtime Chapter', 1, '<p>alpha</p>', null, 'draft', 10, 'now', JSON.stringify([]))
   database.prepare(
     `INSERT INTO WorkspaceRuntimeChapter (
-      workspaceStateId, id, novelId, volumeId, parentChapterId, kind,
+      workspaceStateId, id, novelId, parentChapterId, kind,
       branchLabel, title, sortOrder, contentHtml, originalContentHtml,
       status, wordCount, updatedAtLabel, trajectoryJson
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run('singleton', 'novel-beta-runtime-chapter-1', 'novel-beta', 'novel-beta-volume-1', null, 'chapter', 'main', 'Beta Runtime Chapter', 1, '<p>beta</p>', null, 'draft', 10, 'now', JSON.stringify([]))
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('singleton', 'novel-beta-runtime-chapter-1', 'novel-beta', null, 'chapter', 'main', 'Beta Runtime Chapter', 1, '<p>beta</p>', null, 'draft', 10, 'now', JSON.stringify([]))
 
   insertBaseNovelGraph(database, 'novel-alpha', 1)
   insertBaseNovelGraph(database, 'novel-beta', 2)

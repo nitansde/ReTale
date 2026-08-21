@@ -1,17 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const legacyRoutes = vi.hoisted(() => ({
-  get: vi.fn(),
-  post: vi.fn(),
-  patch: vi.fn(),
-  delete: vi.fn(),
+const resourceHandlers = vi.hoisted(() => ({
+  getCollection: vi.fn(),
+  getNovel: vi.fn(),
+  saveNovel: vi.fn(),
+  patchChapter: vi.fn(),
+  deleteNovel: vi.fn(),
 }))
 
-vi.mock('@/app/api/workspace/route', () => ({
-  GET: legacyRoutes.get,
-  POST: legacyRoutes.post,
-  PATCH: legacyRoutes.patch,
-  DELETE: legacyRoutes.delete,
+vi.mock('@/lib/server/novel-resource-handlers', () => ({
+  getNovelCollection: resourceHandlers.getCollection,
+  getNovelResource: resourceHandlers.getNovel,
+  saveNovelResource: resourceHandlers.saveNovel,
+  patchChapterResource: resourceHandlers.patchChapter,
+  deleteNovelResource: resourceHandlers.deleteNovel,
 }))
 
 import { GET as getNovels } from '@/app/api/novels/route'
@@ -22,27 +24,25 @@ import {
 } from '@/app/api/novels/[novelId]/route'
 import { PATCH as patchChapter } from '@/app/api/chapters/[chapterId]/route'
 
-describe('novel resource route adapters', () => {
+describe('novel resource routes', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('exposes a novel collection without the legacy server-side active selection', async () => {
-    legacyRoutes.get.mockResolvedValue(Response.json({
+  it('exposes the novel collection directly', async () => {
+    resourceHandlers.getCollection.mockResolvedValue(Response.json({
       ok: true,
-      activeNovelId: 'novel-a',
       novels: [{ id: 'novel-a' }],
     }, { headers: { 'Cache-Control': 'no-store' } }))
 
-    const response = await getNovels(new Request('http://localhost/api/novels'))
+    const response = await getNovels()
 
-    expect(new URL(String(legacyRoutes.get.mock.calls[0]?.[0].url)).searchParams.get('librarySummary')).toBe('1')
     await expect(response.json()).resolves.toEqual({ ok: true, novels: [{ id: 'novel-a' }] })
     expect(response.headers.get('cache-control')).toBe('no-store')
   })
 
-  it('loads a novel resource without legacy workspace session or volume fields', async () => {
-    legacyRoutes.get.mockResolvedValue(Response.json({
+  it('loads a novel resource without browser session fields', async () => {
+    resourceHandlers.getNovel.mockResolvedValue(Response.json({
       currentNovelId: 'server-selection',
       currentChapterId: 'server-chapter',
       currentTab: 'outline',
@@ -50,9 +50,8 @@ describe('novel resource route adapters', () => {
       focusMode: true,
       selectionText: 'server selection',
       selectedParagraphIndex: 4,
+      presetCompatSessionState: { stale: true },
       aiSettings: { provider: 'legacy' },
-      localVolumes: [{ id: 'legacy-volume' }],
-      expandedVolumeIds: ['legacy-volume'],
       localNovels: [{ id: 'novel-a' }],
       localChapters: [],
       workspaceRevision: 3,
@@ -63,9 +62,7 @@ describe('novel resource route adapters', () => {
       new Request('http://localhost/api/novels/novel-a'),
       { params: Promise.resolve({ novelId: 'novel-a' }) },
     )
-    const delegatedUrl = new URL(String(legacyRoutes.get.mock.calls[0]?.[0].url))
-    expect(delegatedUrl.pathname).toBe('/api/workspace')
-    expect(delegatedUrl.searchParams.get('novelId')).toBe('novel-a')
+    expect(resourceHandlers.getNovel.mock.calls[0]?.[1]).toBe('novel-a')
     await expect(response.json()).resolves.toEqual({
       localNovels: [{ id: 'novel-a' }],
       localChapters: [],
@@ -75,7 +72,7 @@ describe('novel resource route adapters', () => {
   })
 
   it('deduplicates identical original chapter content on the wire', async () => {
-    legacyRoutes.get.mockResolvedValue(Response.json({
+    resourceHandlers.getNovel.mockResolvedValue(Response.json({
       localNovels: [{ id: 'novel-a' }],
       localChapters: [{
         id: 'chapter-a',
@@ -110,16 +107,16 @@ describe('novel resource route adapters', () => {
   })
 
   it('binds novel saves, deletion, and chapter patches to their resource path identifiers', async () => {
-    legacyRoutes.post.mockImplementation(async (request: Request) => Response.json({
-      novelId: request.headers.get('X-Retale-Resource-Novel-Id'),
+    resourceHandlers.saveNovel.mockImplementation(async (_request: Request, novelId: string) => Response.json({
+      novelId,
     }))
-    legacyRoutes.patch.mockImplementation(async (request: Request) => Response.json({
-      chapterId: request.headers.get('X-Retale-Resource-Chapter-Id'),
+    resourceHandlers.patchChapter.mockImplementation(async (_request: Request, chapterId: string) => Response.json({
+      chapterId,
     }))
-    legacyRoutes.delete.mockResolvedValue(Response.json({
+    resourceHandlers.deleteNovel.mockResolvedValue(Response.json({
       ok: true,
       deletedNovelId: 'novel-a',
-      activeNovelId: 'novel-b',
+      nextNovelId: 'novel-b',
       deletionState: 'deleted',
       cleanupPending: false,
     }))
@@ -155,10 +152,6 @@ describe('novel resource route adapters', () => {
       deletionState: 'deleted',
       cleanupPending: false,
     })
-    const delegatedDelete = new URL(String(legacyRoutes.delete.mock.calls[0]?.[0].url))
-    expect(delegatedDelete.pathname).toBe('/api/workspace')
-    expect(delegatedDelete.searchParams.get('novelId')).toBe('novel-a')
-    expect(delegatedDelete.searchParams.get('nextNovelId')).toBe('novel-b')
-    expect(legacyRoutes.delete.mock.calls[0]?.[0].headers.get('X-Retale-Resource-Delete')).toBe('1')
+    expect(resourceHandlers.deleteNovel.mock.calls[0]?.[1]).toBe('novel-a')
   })
 })

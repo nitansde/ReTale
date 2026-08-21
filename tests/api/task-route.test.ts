@@ -4,7 +4,6 @@ import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/test
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
-let controlDatabase: DatabaseSync | null = null
 const originalTaskStaleTimeoutMs = process.env.RETALE_TASK_STALE_TIMEOUT_MS
 const originalTaskMaxRetries = process.env.RETALE_TASK_MAX_RETRIES
 
@@ -19,15 +18,6 @@ function createTestDatabase(prefix: string, novelIds: readonly string[]) {
   })
 
   return { database }
-}
-
-async function activateNovel(novelId: string) {
-  const [{ getControlDb }, { writeActiveWorkspaceNovelId }] = await Promise.all([
-    import('@/lib/server/db-resolver'),
-    import('@/lib/server/persistence'),
-  ])
-  await writeActiveWorkspaceNovelId(novelId)
-  controlDatabase = getControlDb()
 }
 
 async function loadTaskRoute() {
@@ -99,12 +89,14 @@ function createAbortRequest(body: Record<string, unknown>) {
   })
 }
 
+function createTaskRequest(novelId: string) {
+  return new Request(`http://localhost/api/task?novelId=${encodeURIComponent(novelId)}`)
+}
+
 afterEach(() => {
   process.env.RETALE_TASK_STALE_TIMEOUT_MS = originalTaskStaleTimeoutMs
   process.env.RETALE_TASK_MAX_RETRIES = originalTaskMaxRetries
 
-  controlDatabase?.prepare('DELETE FROM AppSetting WHERE key = ?').run('WORKSPACE_ACTIVE_NOVEL_ID')
-  controlDatabase = null
   resetNovelDatabaseTestState()
 
   for (const cleanup of cleanups.splice(0)) {
@@ -121,7 +113,6 @@ describe('/api/task', () => {
   it('returns only supported active persisted jobs ordered by recency', async () => {
     const { database } = createTestDatabase('retale-task-route-active', ['novel-background-one'])
     const { database: siblingDatabase } = createTestDatabase('retale-task-route-sibling', ['novel-background-two'])
-    await activateNovel('novel-background-one')
     const { mainBranchId: novelOneBranchId } = seedNovel(database, 'novel-background-one', 'Background One')
     const { mainBranchId: novelTwoBranchId } = seedNovel(siblingDatabase, 'novel-background-two', 'Background Two')
 
@@ -218,7 +209,7 @@ describe('/api/task', () => {
     })
 
     const { GET, runtime } = await loadTaskRoute()
-    const response = await GET()
+    const response = await GET(createTaskRequest('novel-background-one'))
     const payload = await response.json() as {
       ok: boolean
       count: number
@@ -254,7 +245,6 @@ describe('/api/task', () => {
     process.env.RETALE_TASK_MAX_RETRIES = '1'
 
     const { database } = createTestDatabase('retale-task-watchdog-list', ['novel-watchdog'])
-    await activateNovel('novel-watchdog')
     const { mainBranchId } = seedNovel(database, 'novel-watchdog', 'Watchdog Novel')
 
     insertJob(database, {
@@ -301,7 +291,7 @@ describe('/api/task', () => {
     })
 
     const { GET } = await loadTaskRoute()
-    const response = await GET()
+    const response = await GET(createTaskRequest('novel-watchdog'))
     const payload = await response.json() as {
       ok: boolean
       count: number
@@ -341,7 +331,6 @@ describe('/api/task', () => {
 
   it('aborts an active knowledge extraction task', async () => {
     const { database } = createTestDatabase('retale-task-abort-knowledge', ['novel-knowledge'])
-    await activateNovel('novel-knowledge')
     const { mainBranchId } = seedNovel(database, 'novel-knowledge', 'Knowledge Novel')
     insertJob(database, {
       id: 'job_extract_abort',
@@ -355,7 +344,7 @@ describe('/api/task', () => {
     })
 
     const { POST } = await loadTaskRoute()
-    const response = await POST(createAbortRequest({ jobId: '  job_extract_abort  ' }))
+    const response = await POST(createAbortRequest({ jobId: '  job_extract_abort  ', novelId: 'novel-knowledge' }))
     const payload = await response.json() as { ok: boolean; jobId: string; status: string; outcome: string }
     const row = database.prepare('SELECT status, progress, currentStep, errorMessage FROM KnowledgeJob WHERE id = ?').get('job_extract_abort') as {
       status: string
@@ -371,7 +360,6 @@ describe('/api/task', () => {
 
   it('does not overwrite a task that becomes terminal during abort', async () => {
     const { database } = createTestDatabase('retale-task-abort-race', ['novel-abort-race'])
-    await activateNovel('novel-abort-race')
     const { mainBranchId } = seedNovel(database, 'novel-abort-race', 'Abort Race Novel')
     insertJob(database, {
       id: 'job_abort_race',
@@ -397,7 +385,7 @@ describe('/api/task', () => {
     `)
 
     const { POST } = await loadTaskRoute()
-    const response = await POST(createAbortRequest({ jobId: 'job_abort_race' }))
+    const response = await POST(createAbortRequest({ jobId: 'job_abort_race', novelId: 'novel-abort-race' }))
     const row = database.prepare('SELECT status, progress, currentStep, errorMessage FROM KnowledgeJob WHERE id = ?').get('job_abort_race') as {
       status: string
       progress: number
@@ -412,7 +400,6 @@ describe('/api/task', () => {
 
   it('aborts an active retrieval rebuild task', async () => {
     const { database } = createTestDatabase('retale-task-abort-retrieval', ['novel-retrieval'])
-    await activateNovel('novel-retrieval')
     const { mainBranchId } = seedNovel(database, 'novel-retrieval', 'Retrieval Novel')
     insertJob(database, {
       id: 'job_retrieval_abort',
@@ -426,7 +413,7 @@ describe('/api/task', () => {
     })
 
     const { POST } = await loadTaskRoute()
-    const response = await POST(createAbortRequest({ jobId: 'job_retrieval_abort' }))
+    const response = await POST(createAbortRequest({ jobId: 'job_retrieval_abort', novelId: 'novel-retrieval' }))
     const row = database.prepare('SELECT status, progress, currentStep, errorMessage FROM KnowledgeJob WHERE id = ?').get('job_retrieval_abort') as {
       status: string
       progress: number
@@ -441,7 +428,6 @@ describe('/api/task', () => {
 
   it('aborts a rewrite task even when the recoverable helper returns null', async () => {
     const { database } = createTestDatabase('retale-task-abort-rewrite', ['novel-rewrite'])
-    await activateNovel('novel-rewrite')
     const { mainBranchId } = seedNovel(database, 'novel-rewrite', 'Rewrite Novel')
     insertJob(database, {
       id: 'job_rewrite_abort',
@@ -464,7 +450,7 @@ describe('/api/task', () => {
     })
 
     const { POST } = await loadTaskRoute()
-    const response = await POST(createAbortRequest({ jobId: 'job_rewrite_abort' }))
+    const response = await POST(createAbortRequest({ jobId: 'job_rewrite_abort', novelId: 'novel-rewrite' }))
     const row = database.prepare('SELECT status, progress, currentStep, errorMessage FROM KnowledgeJob WHERE id = ?').get('job_rewrite_abort') as {
       status: string
       progress: number
@@ -489,7 +475,6 @@ describe('/api/task', () => {
 
   it('rejects missing, unknown, unsupported, and terminal abort requests while keeping aborted idempotent', async () => {
     const { database } = createTestDatabase('retale-task-abort-errors', ['novel-errors'])
-    await activateNovel('novel-errors')
     const { mainBranchId } = seedNovel(database, 'novel-errors', 'Error Novel')
     insertJob(database, {
       id: 'job_unsupported_abort',
@@ -523,23 +508,23 @@ describe('/api/task', () => {
 
     const { POST } = await loadTaskRoute()
 
-    const missingResponse = await POST(createAbortRequest({ jobId: '   ' }))
+    const missingResponse = await POST(createAbortRequest({ jobId: '   ', novelId: 'novel-errors' }))
     expect(missingResponse.status).toBe(400)
     await expect(missingResponse.json()).resolves.toEqual({ ok: false, error: 'jobId is required' })
 
-    const unknownResponse = await POST(createAbortRequest({ jobId: 'job_missing_abort' }))
+    const unknownResponse = await POST(createAbortRequest({ jobId: 'job_missing_abort', novelId: 'novel-errors' }))
     expect(unknownResponse.status).toBe(404)
     await expect(unknownResponse.json()).resolves.toEqual({ ok: false, error: 'Background task not found' })
 
-    const unsupportedResponse = await POST(createAbortRequest({ jobId: 'job_unsupported_abort' }))
+    const unsupportedResponse = await POST(createAbortRequest({ jobId: 'job_unsupported_abort', novelId: 'novel-errors' }))
     expect(unsupportedResponse.status).toBe(409)
     await expect(unsupportedResponse.json()).resolves.toEqual({ ok: false, error: 'Job type unsupported_job_type does not support abort' })
 
-    const terminalResponse = await POST(createAbortRequest({ jobId: 'job_terminal_abort' }))
+    const terminalResponse = await POST(createAbortRequest({ jobId: 'job_terminal_abort', novelId: 'novel-errors' }))
     expect(terminalResponse.status).toBe(409)
     await expect(terminalResponse.json()).resolves.toEqual({ ok: false, error: 'Background task in status succeeded cannot be aborted' })
 
-    const abortedResponse = await POST(createAbortRequest({ jobId: 'job_already_aborted' }))
+    const abortedResponse = await POST(createAbortRequest({ jobId: 'job_already_aborted', novelId: 'novel-errors' }))
     expect(abortedResponse.status).toBe(200)
     await expect(abortedResponse.json()).resolves.toEqual({ ok: true, jobId: 'job_already_aborted', status: 'aborted', outcome: 'aborted' })
   })

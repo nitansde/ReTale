@@ -230,100 +230,14 @@ function cloneDefaultConstraints() {
   return defaultConstraints.map((constraint) => ({ ...constraint }))
 }
 
-type LegacyVolume = {
-  id: string
-  novelId: string
-  order?: number
-}
-
-type LegacyChapter = Chapter & {
-  volumeId?: unknown
-}
-
-type LegacyWorkspaceState = Partial<PersistedNovelState> & {
-  expandedVolumeIds?: unknown
-  localVolumes?: unknown
-  localChapters?: LegacyChapter[]
-}
-
-function parseLegacyVolumes(value: unknown) {
-  if (!Array.isArray(value)) return [] as LegacyVolume[]
-
-  return value.flatMap((item) => {
-    if (!isRecord(item) || typeof item.id !== 'string' || typeof item.novelId !== 'string') return []
-    return [{
-      id: item.id,
-      novelId: item.novelId,
-      order: typeof item.order === 'number' && Number.isFinite(item.order) ? item.order : undefined,
-    }]
-  })
-}
-
-function normalizeLegacyChapterOrder(chapters: LegacyChapter[], legacyVolumes: LegacyVolume[]) {
-  const hasLegacyVolumeAssignments = chapters.some((chapter) => typeof chapter.volumeId === 'string' && chapter.volumeId)
-  if (!hasLegacyVolumeAssignments) return chapters
-
-  const volumeRank = new Map<string, number>()
-  const volumesByNovel = new Map<string, LegacyVolume[]>()
-  for (const volume of legacyVolumes) {
-    const current = volumesByNovel.get(volume.novelId) ?? []
-    current.push(volume)
-    volumesByNovel.set(volume.novelId, current)
-  }
-  for (const [novelId, volumes] of volumesByNovel) {
-    volumes
-      .slice()
-      .sort((left, right) => (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER) || left.id.localeCompare(right.id))
-      .forEach((volume, index) => volumeRank.set(`${novelId}\u0000${volume.id}`, index))
-  }
-
-  const mainOrderById = new Map<string, number>()
-  const mainChaptersByNovel = new Map<string, LegacyChapter[]>()
-  for (const chapter of chapters) {
-    if (chapter.parentChapterId) continue
-    const current = mainChaptersByNovel.get(chapter.novelId) ?? []
-    current.push(chapter)
-    mainChaptersByNovel.set(chapter.novelId, current)
-  }
-
-  for (const [novelId, novelChapters] of mainChaptersByNovel) {
-    novelChapters
-      .slice()
-      .sort((left, right) => {
-        const leftVolume = typeof left.volumeId === 'string' ? left.volumeId : ''
-        const rightVolume = typeof right.volumeId === 'string' ? right.volumeId : ''
-        const volumeDiff = (volumeRank.get(`${novelId}\u0000${leftVolume}`) ?? Number.MAX_SAFE_INTEGER)
-          - (volumeRank.get(`${novelId}\u0000${rightVolume}`) ?? Number.MAX_SAFE_INTEGER)
-        if (volumeDiff !== 0) return volumeDiff
-        if (left.order !== right.order) return left.order - right.order
-        return left.id.localeCompare(right.id)
-      })
-      .forEach((chapter, index) => mainOrderById.set(chapter.id, index + 1))
-  }
-
-  const branchIndexByParent = new Map<string, number>()
-  return chapters.map((chapter) => {
-    if (!chapter.parentChapterId) {
-      return { ...chapter, order: mainOrderById.get(chapter.id) ?? chapter.order }
-    }
-    const branchIndex = (branchIndexByParent.get(chapter.parentChapterId) ?? 0) + 1
-    branchIndexByParent.set(chapter.parentChapterId, branchIndex)
-    const parentOrder = mainOrderById.get(chapter.parentChapterId)
-    return parentOrder === undefined ? chapter : { ...chapter, order: parentOrder + branchIndex / 1000 }
-  })
-}
-
-function normalizeChapters(input: LegacyChapter[], legacyVolumes: LegacyVolume[]) {
-  return normalizeLegacyChapterOrder(input, legacyVolumes).map((legacyChapter) => {
-    const { volumeId: _legacyVolumeId, ...chapter } = legacyChapter
-    return {
-      ...chapter,
-      content: normalizeLegacySingleParagraphHtml(chapter.content),
-      originalContent: chapter.originalContent
-        ? normalizeLegacySingleParagraphHtml(chapter.originalContent)
-        : chapter.originalContent,
-    }
-  })
+function normalizeChapters(input: Chapter[]) {
+  return input.map((chapter) => ({
+    ...chapter,
+    content: normalizeLegacySingleParagraphHtml(chapter.content),
+    originalContent: chapter.originalContent
+      ? normalizeLegacySingleParagraphHtml(chapter.originalContent)
+      : chapter.originalContent,
+  }))
 }
 
 export function createEmptyWorkspaceState(): PersistedNovelState {
@@ -361,18 +275,17 @@ export function createEmptyWorkspaceState(): PersistedNovelState {
   }
 }
 
-export function normalizeWorkspaceState(input?: Partial<PersistedNovelState> | LegacyWorkspaceState | null): PersistedNovelState {
+export function normalizeWorkspaceState(input?: Partial<PersistedNovelState> | null): PersistedNovelState {
   const base = createEmptyWorkspaceState()
   if (!input) return base
-  const source = input as LegacyWorkspaceState
-  const legacyVolumes = parseLegacyVolumes(source.localVolumes)
+  const source = input
 
   const normalizedState = {
     ...base,
     ...source,
     selectedParagraphIndex: typeof source.selectedParagraphIndex === 'number' ? source.selectedParagraphIndex : base.selectedParagraphIndex,
     localNovels: source.localNovels ?? base.localNovels,
-    localChapters: normalizeChapters(source.localChapters ?? base.localChapters, legacyVolumes),
+    localChapters: normalizeChapters(source.localChapters ?? base.localChapters),
     localOutlines: source.localOutlines ?? base.localOutlines,
     localCharacters: (source.localCharacters ?? base.localCharacters).map((character) => ({
       ...character,
@@ -390,11 +303,35 @@ export function normalizeWorkspaceState(input?: Partial<PersistedNovelState> | L
     aiSettings: normalizeAISettings(source.aiSettings ?? source),
   }
 
-  delete (normalizedState as Record<string, unknown>).expandedVolumeIds
-  delete (normalizedState as Record<string, unknown>).localVolumes
-
   return {
     ...normalizedState,
     ...repairCurrentWorkspaceSelection(normalizedState),
+  }
+}
+
+export function serializeNovelResourceState(input: PersistedNovelState) {
+  const state = normalizeWorkspaceState(input)
+  return {
+    localNovels: state.localNovels,
+    localChapters: state.localChapters,
+    localOutlines: state.localOutlines,
+    localCharacters: state.localCharacters,
+    localCharacterRelations: state.localCharacterRelations,
+    localWorldEntries: state.localWorldEntries,
+    localTimelineEvents: state.localTimelineEvents,
+    rewriteCandidates: state.rewriteCandidates,
+    rewriteHistory: state.rewriteHistory,
+    trajectories: state.trajectories,
+    rewriteMode: state.rewriteMode,
+    rewriteTone: state.rewriteTone,
+    rewriteOutput: state.rewriteOutput,
+    rewriteScope: state.rewriteScope,
+    thinkingLevel: state.thinkingLevel,
+    autoContinue: state.autoContinue,
+    keepCanon: state.keepCanon,
+    promptText: state.promptText,
+    selectedPresetId: state.selectedPresetId,
+    presets: state.presets,
+    constraints: state.constraints,
   }
 }

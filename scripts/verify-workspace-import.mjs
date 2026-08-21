@@ -187,13 +187,14 @@ async function readJsonResponse(response, label) {
 }
 
 async function verifyPatchAndTargetedGet(importPayload) {
-  const patchResponse = await fetch(`${SERVER_URL}/api/workspace`, {
+  const patchResponse = await fetch(`${SERVER_URL}/api/chapters/${encodeURIComponent(importPayload.chapterId)}`, {
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
       Origin: SERVER_URL,
       'Idempotency-Key': PATCH_IDEMPOTENCY_KEY,
       'X-Retale-Base-Revision': '1',
+      'X-Retale-Revision-Novel-Id': importPayload.novelId,
     },
     body: JSON.stringify({
       novelId: importPayload.novelId,
@@ -204,41 +205,40 @@ async function verifyPatchAndTargetedGet(importPayload) {
     }),
     signal: AbortSignal.timeout(30000),
   })
-  const patchPayload = await readJsonResponse(patchResponse, 'Workspace PATCH')
-  assertEqual(patchResponse.status, 200, 'Workspace PATCH status')
-  assertEqual(patchPayload.ok, true, 'Workspace PATCH ok')
-  assertEqual(patchPayload.operation, 'chapter-patch', 'Workspace PATCH operation')
-  assertEqual(patchPayload.novelId, importPayload.novelId, 'Workspace PATCH novelId')
-  assertEqual(patchPayload.chapterId, importPayload.chapterId, 'Workspace PATCH chapterId')
-  assertEqual(patchPayload.revision, 2, 'Workspace PATCH revision')
-  assertEqual(patchPayload.replayed, false, 'Workspace PATCH replayed')
-  assertNonEmptyString(patchPayload.updatedAt, 'Workspace PATCH updatedAt')
-  assertRevisionHeaders(patchResponse.headers, 2, importPayload.novelId, 'Workspace PATCH')
+  const patchPayload = await readJsonResponse(patchResponse, 'Chapter PATCH')
+  assertEqual(patchResponse.status, 200, 'Chapter PATCH status')
+  assertEqual(patchPayload.ok, true, 'Chapter PATCH ok')
+  assertEqual(patchPayload.operation, 'chapter-patch', 'Chapter PATCH operation')
+  assertEqual(patchPayload.novelId, importPayload.novelId, 'Chapter PATCH novelId')
+  assertEqual(patchPayload.chapterId, importPayload.chapterId, 'Chapter PATCH chapterId')
+  assertEqual(patchPayload.revision, 2, 'Chapter PATCH revision')
+  assertEqual(patchPayload.replayed, false, 'Chapter PATCH replayed')
+  assertNonEmptyString(patchPayload.updatedAt, 'Chapter PATCH updatedAt')
+  assertRevisionHeaders(patchResponse.headers, 2, importPayload.novelId, 'Chapter PATCH')
 
-  const workspaceUrl = new URL('/api/workspace', SERVER_URL)
-  workspaceUrl.searchParams.set('novelId', importPayload.novelId)
-  const getResponse = await fetch(workspaceUrl, {
+  const novelUrl = new URL(`/api/novels/${encodeURIComponent(importPayload.novelId)}`, SERVER_URL)
+  const getResponse = await fetch(novelUrl, {
     cache: 'no-store',
     signal: AbortSignal.timeout(30000),
   })
-  const workspacePayload = await readJsonResponse(getResponse, 'Targeted workspace GET')
-  assertEqual(getResponse.status, 200, 'Targeted workspace GET status')
-  assertEqual(workspacePayload.workspaceRevision, 2, 'Targeted workspace GET body revision')
-  assertEqual(workspacePayload.revisionNovelId, importPayload.novelId, 'Targeted workspace GET body revision owner')
-  assertRevisionHeaders(getResponse.headers, 2, importPayload.novelId, 'Targeted workspace GET')
+  const workspacePayload = await readJsonResponse(getResponse, 'Novel GET')
+  assertEqual(getResponse.status, 200, 'Novel GET status')
+  assertEqual(workspacePayload.workspaceRevision, 2, 'Novel GET body revision')
+  assertEqual(workspacePayload.revisionNovelId, importPayload.novelId, 'Novel GET body revision owner')
+  assertRevisionHeaders(getResponse.headers, 2, importPayload.novelId, 'Novel GET')
 
   if (!Array.isArray(workspacePayload.localChapters)) {
-    throw new Error('Targeted workspace GET localChapters must be an array')
+    throw new Error('Novel GET localChapters must be an array')
   }
   const patchedChapter = workspacePayload.localChapters.find((chapter) => (
     typeof chapter === 'object' && chapter !== null && chapter.id === importPayload.chapterId
   ))
   if (!patchedChapter) {
-    throw new Error(`Targeted workspace GET did not include patched chapter ${importPayload.chapterId}`)
+    throw new Error(`Novel GET did not include patched chapter ${importPayload.chapterId}`)
   }
-  assertEqual(patchedChapter.content, PATCH_CONTENT, 'Targeted workspace GET patched content')
-  assertEqual(patchedChapter.wordCount, PATCH_WORD_COUNT, 'Targeted workspace GET patched wordCount')
-  assertEqual(patchedChapter.updatedAt, PATCH_UPDATED_AT_LABEL, 'Targeted workspace GET patched updatedAt')
+  assertEqual(patchedChapter.content, PATCH_CONTENT, 'Novel GET patched content')
+  assertEqual(patchedChapter.wordCount, PATCH_WORD_COUNT, 'Novel GET patched wordCount')
+  assertEqual(patchedChapter.updatedAt, PATCH_UPDATED_AT_LABEL, 'Novel GET patched updatedAt')
 }
 
 async function main() {
