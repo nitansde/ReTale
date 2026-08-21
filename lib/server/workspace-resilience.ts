@@ -20,7 +20,6 @@ import type {
   OutlineItem,
   PersistedNovelState,
   TimelineEvent,
-  Volume,
   WorldEntry,
 } from '@/lib/types'
 
@@ -293,7 +292,6 @@ export function readWorkspaceRuntimeSnapshotFromDb(
     currentChapterId: meta?.currentChapterId ?? '',
     currentTab: meta?.currentTab as PersistedNovelState['currentTab'] | undefined,
     helperTab: meta?.helperTab as PersistedNovelState['helperTab'] | undefined,
-    expandedVolumeIds: normalizeStringArray(readJsonArray(meta?.expandedVolumeIdsJson ?? '[]')),
     localOutlines: readJsonArray(meta?.localOutlinesJson ?? '[]') as OutlineItem[],
     localCharacters: readJsonArray(meta?.localCharactersJson ?? '[]') as Character[],
     localCharacterRelations: readJsonArray(meta?.localCharacterRelationsJson ?? '[]') as CharacterRelation[],
@@ -492,7 +490,7 @@ export function replaceWorkspaceRuntimeStateInDb(
     normalized.currentChapterId,
     normalized.currentTab,
     normalized.helperTab,
-    JSON.stringify(normalized.expandedVolumeIds),
+    '[]',
     JSON.stringify(normalized.localOutlines),
     JSON.stringify(normalized.localCharacters),
     JSON.stringify(normalized.localCharacterRelations),
@@ -535,18 +533,6 @@ export function replaceWorkspaceRuntimeStateInDb(
     )
   })
 
-  normalized.localVolumes.forEach((volume, index) => {
-    db.execute(
-      `INSERT INTO WorkspaceRuntimeVolume (workspaceStateId, id, novelId, title, sortOrder)
-       VALUES (?, ?, ?, ?, ?)`,
-      id,
-      volume.id,
-      volume.novelId,
-      volume.title,
-      Number.isFinite(volume.order) ? volume.order : index + 1,
-    )
-  })
-
   normalized.localChapters.forEach((chapter, index) => {
     db.execute(
       `INSERT INTO WorkspaceRuntimeChapter (
@@ -556,7 +542,7 @@ export function replaceWorkspaceRuntimeStateInDb(
       id,
       chapter.id,
       chapter.novelId,
-      chapter.volumeId,
+      '',
       chapter.parentChapterId ?? null,
       chapter.kind ?? null,
       chapter.branchLabel ?? null,
@@ -702,21 +688,12 @@ export function recoverWorkspaceStateFromKnowledgeStore(db?: WorkspaceRecoveryDb
     tags: ['恢复', '知识库'],
   }))
 
-  const localVolumes: Volume[] = novels.map((novel) => ({
-    id: `vol_${novel.id}`,
-    novelId: novel.id,
-    title: '卷一：恢复正文',
-    order: 1,
-  }))
-  const volumeIdByNovel = new Map(localVolumes.map((volume) => [volume.novelId, volume.id]))
-
   const localChapters: Chapter[] = chapters.map((chapter) => {
     const contentText = chapter.rawText.trim() || '（本章暂无正文）'
     const content = plainTextLinesToHtml(contentText)
     return {
       id: chapter.id,
       novelId: chapter.novelId,
-      volumeId: volumeIdByNovel.get(chapter.novelId) ?? `vol_${chapter.novelId}`,
       title: chapter.title?.trim() || `第${chapter.chapterNo}章`,
       order: chapter.chapterNo,
       content,
@@ -733,9 +710,7 @@ export function recoverWorkspaceStateFromKnowledgeStore(db?: WorkspaceRecoveryDb
     currentNovelId: firstChapter?.novelId ?? '',
     currentChapterId: firstChapter?.id ?? '',
     localNovels,
-    localVolumes,
     localChapters,
-    expandedVolumeIds: localVolumes.map((volume) => volume.id),
     trajectories: firstChapter
       ? [{
         id: `traj_workspace_recovery_${Date.now()}`,

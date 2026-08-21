@@ -1,12 +1,11 @@
 import { countChineseFriendlyWords, plainTextLinesToHtml } from '@/lib/utils'
-import type { Chapter, PersistedNovelState, Volume } from '@/lib/types'
+import type { Chapter, PersistedNovelState } from '@/lib/types'
 
 const CHAPTER_HEADING_REGEX = /(第\s*[0-9一二三四五六七八九十百千零两]+\s*章[^\n]*)/g
 
 function buildImportedChapter(params: {
   id: string
   novelId: string
-  volumeId: string
   title: string
   order: number
   contentText: string
@@ -15,7 +14,6 @@ function buildImportedChapter(params: {
   return {
     id: params.id,
     novelId: params.novelId,
-    volumeId: params.volumeId,
     title: params.title,
     order: params.order,
     content: plainTextLinesToHtml(cleanText),
@@ -28,22 +26,13 @@ function buildImportedChapter(params: {
 }
 
 export function importNovelIntoWorkspace(state: PersistedNovelState, input: { title: string; text: string; summary?: string }): PersistedNovelState {
-  const volumes = state.localVolumes ?? []
-  const cleanTitle = input.title.trim() || `导入小说 ${volumes.length + 1}`
+  const cleanTitle = input.title.trim() || `导入小说 ${state.localNovels.length + 1}`
   const cleanText = input.text.replace(/\r\n?/g, '\n').trim()
   if (!cleanText) return state
 
   const now = Date.now()
   const novelId = `novel_${now}`
-  const volumeId = `vol_${now}`
   const parts = cleanText.split(CHAPTER_HEADING_REGEX).map((item) => item.trim()).filter(Boolean)
-
-  const newVolume: Volume = {
-    id: volumeId,
-    novelId,
-    title: '卷一：导入正文',
-    order: 1,
-  }
 
   const importedChapters: Chapter[] = []
   const preface = parts[0] && !CHAPTER_HEADING_REGEX.test(parts[0]) ? parts[0].trim() : ''
@@ -53,7 +42,6 @@ export function importNovelIntoWorkspace(state: PersistedNovelState, input: { ti
       buildImportedChapter({
         id: `ch_${now}_0`,
         novelId,
-        volumeId,
         title: '序章 / 简介',
         order: 1,
         contentText: preface,
@@ -71,7 +59,6 @@ export function importNovelIntoWorkspace(state: PersistedNovelState, input: { ti
         buildImportedChapter({
           id: `ch_${now}_${importedChapters.length + 1}`,
           novelId,
-          volumeId,
           title: heading,
           order: importedChapters.length + 1,
           contentText: body,
@@ -85,7 +72,6 @@ export function importNovelIntoWorkspace(state: PersistedNovelState, input: { ti
       buildImportedChapter({
         id: `ch_${now}_1`,
         novelId,
-        volumeId,
         title: '第1章 导入正文',
         order: 1,
         contentText: cleanText,
@@ -107,7 +93,6 @@ export function importNovelIntoWorkspace(state: PersistedNovelState, input: { ti
         tags: ['导入', 'TXT'],
       },
     ],
-    localVolumes: [...volumes, newVolume],
     localChapters: [...(state.localChapters ?? []), ...importedChapters],
     localOutlines: state.localOutlines ?? [],
     localCharacters: state.localCharacters ?? [],

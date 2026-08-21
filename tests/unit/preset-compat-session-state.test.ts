@@ -14,7 +14,6 @@ function createChapter(id: string, order: number) {
   return {
     id,
     novelId: 'novel-1',
-    volumeId: 'volume-1',
     title: `Chapter ${order}`,
     order,
     content: `<p>Body ${order}</p>`,
@@ -165,7 +164,6 @@ describe('preset compat session state', () => {
       currentNovelId: 'novel-1',
       currentChapterId: 'chapter-1',
       localNovels: [{ id: 'novel-1', title: 'Novel', summary: 'Summary', tags: [] }],
-      localVolumes: [{ id: 'volume-1', novelId: 'novel-1', title: 'Volume', order: 1 }],
       localChapters: [createChapter('chapter-1', 1), createChapter('chapter-2', 2)],
     })
 

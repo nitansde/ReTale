@@ -298,7 +298,6 @@ function toChapterLike(params: { chapterId: string; novelId: string; title: stri
   return {
     id: params.chapterId,
     novelId: params.novelId,
-    volumeId: 'volume-imported',
     title: params.title,
     order: params.chapterNo,
     content: plainTextToHtml(params.rawText),

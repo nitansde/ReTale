@@ -93,8 +93,9 @@ test('workspace reload uses normalized runtime state after the legacy blob is bl
   const editedText = 'Task4 归一化运行时验证：清空旧 blob 后依然可见。'
   const saveResponsePromise = page.waitForResponse((response) => {
     const method = response.request().method()
-    return new URL(response.url()).pathname === '/api/workspace'
-      && (method === 'PATCH' || method === 'POST')
+    const pathname = new URL(response.url()).pathname
+    return ((method === 'PATCH' && pathname.startsWith('/api/chapters/'))
+      || (method === 'POST' && pathname.startsWith('/api/novels/')))
       && response.ok()
   })
 

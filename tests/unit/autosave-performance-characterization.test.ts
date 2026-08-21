@@ -32,7 +32,7 @@ describe('Phase 0 autosave payload characterization', () => {
     })
     const postedBodies: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toBe('/api/workspace')
+      expect(String(input)).toBe(`/api/novels/${encodeURIComponent(editedWorkspace.currentNovelId)}`)
       expect(init?.method).toBe('POST')
       postedBodies.push(String(init?.body))
       return new Response(JSON.stringify({ ok: true }), { status: 200 })

@@ -27,7 +27,6 @@ export function buildThousandChapterWorkspace(): PersistedNovelState {
     return {
       id: chapterId,
       novelId: AUTOSAVE_PERFORMANCE_NOVEL_ID,
-      volumeId: AUTOSAVE_PERFORMANCE_VOLUME_ID,
       title: `Chapter ${chapterNumber}`,
       order: chapterNumber,
       content: `<p>${text}</p>`,
@@ -42,18 +41,11 @@ export function buildThousandChapterWorkspace(): PersistedNovelState {
     ...base,
     currentNovelId: AUTOSAVE_PERFORMANCE_NOVEL_ID,
     currentChapterId: AUTOSAVE_PERFORMANCE_CHAPTER_ID,
-    expandedVolumeIds: [AUTOSAVE_PERFORMANCE_VOLUME_ID],
     localNovels: [{
       id: AUTOSAVE_PERFORMANCE_NOVEL_ID,
       title: 'Phase 0 Autosave Performance Fixture',
       summary: 'Deterministic 1,000-chapter autosave characterization workspace.',
       tags: ['phase-0', 'performance'],
-    }],
-    localVolumes: [{
-      id: AUTOSAVE_PERFORMANCE_VOLUME_ID,
-      novelId: AUTOSAVE_PERFORMANCE_NOVEL_ID,
-      title: 'Performance Fixture Volume',
-      order: 1,
     }],
     localChapters,
   }

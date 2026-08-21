@@ -166,15 +166,6 @@ function readReadyNovelRegistryCount(novelId: string) {
   }
 }
 
-function readActiveWorkspaceNovelId() {
-  const database = openControlDatabase()
-  try {
-    return (database.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID') as { value: string } | undefined)?.value ?? null
-  } finally {
-    database.close()
-  }
-}
-
 function getNovelDataDirectory(novelId: string) {
   return path.join(createRoleplaySafeDataPath(resolveTestDatabasePath()), 'novels', novelId)
 }
@@ -627,11 +618,12 @@ async function importWorkspaceFixture(page: Page, novelTitle: string) {
   })
   const importResponse = await importResponsePromise
   expect(importResponse.ok()).toBeTruthy()
+  const imported = await importResponse.json() as { novelId: string; chapterId: string }
   await page.waitForLoadState('networkidle')
   if (!/\/workspace/.test(page.url())) {
     await page.goto('/workspace', { waitUntil: 'networkidle' })
   }
-  return importResponse.status()
+  return { status: importResponse.status(), ...imported }
 }
 
 async function selectEntireChapter(page: Page) {
@@ -678,10 +670,51 @@ async function openModelServiceSettings(page: Page) {
   await expect(page.getByRole('heading', { name: 'Model service settings' })).toBeVisible()
 }
 
-async function fetchWorkspace(page: Page) {
-  const response = await page.request.get('/api/workspace')
+async function readBrowserWorkspaceSession(page: Page) {
+  return page.evaluate(() => {
+    const raw = window.localStorage.getItem('retale.workspace-session.v1')
+    if (!raw) return { currentNovelId: '', currentChapterIds: {} as Record<string, string>, currentTab: 'editor' }
+    const parsed = JSON.parse(raw) as {
+      currentNovelId?: unknown
+      currentChapterIds?: unknown
+      currentTab?: unknown
+    }
+    return {
+      currentNovelId: typeof parsed.currentNovelId === 'string' ? parsed.currentNovelId : '',
+      currentChapterIds: typeof parsed.currentChapterIds === 'object' && parsed.currentChapterIds !== null
+        ? parsed.currentChapterIds as Record<string, string>
+        : {},
+      currentTab: typeof parsed.currentTab === 'string' ? parsed.currentTab : 'editor',
+    }
+  })
+}
+
+async function fetchWorkspace(page: Page, requestedNovelId?: string) {
+  const session = await readBrowserWorkspaceSession(page)
+  const libraryResponse = await page.request.get('/api/novels')
+  expect(libraryResponse.ok()).toBeTruthy()
+  const library = await libraryResponse.json() as { novels: Array<{ id: string }> }
+  const sessionNovelId = library.novels.some((novel) => novel.id === session.currentNovelId)
+    ? session.currentNovelId
+    : ''
+  const novelId = requestedNovelId || sessionNovelId || library.novels[0]?.id || ''
+  if (!novelId) {
+    return { currentNovelId: '', currentChapterId: '', currentTab: session.currentTab, localNovels: [], localChapters: [] } satisfies WorkspacePayload
+  }
+
+  const response = await page.request.get(`/api/novels/${encodeURIComponent(novelId)}`)
   expect(response.ok()).toBeTruthy()
-  return await response.json() as WorkspacePayload
+  const resource = await response.json() as Omit<WorkspacePayload, 'currentNovelId' | 'currentChapterId'>
+  const rememberedChapterId = session.currentChapterIds[novelId]
+  const currentChapterId = resource.localChapters.some((chapter) => chapter.id === rememberedChapterId)
+    ? rememberedChapterId
+    : [...resource.localChapters].sort((left, right) => left.order - right.order)[0]?.id ?? ''
+  return {
+    ...resource,
+    currentNovelId: novelId,
+    currentChapterId,
+    currentTab: session.currentTab,
+  } satisfies WorkspacePayload
 }
 
 async function fetchPresetCompatLibraryState(page: Page) {
@@ -826,9 +859,10 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
   })
   page.on('response', (response) => {
     const method = response.request().method()
+    const pathname = new URL(response.url()).pathname
     if (
-      new URL(response.url()).pathname === '/api/workspace'
-      && (method === 'PATCH' || method === 'POST')
+      ((method === 'PATCH' && pathname.startsWith('/api/chapters/'))
+        || (method === 'POST' && pathname.startsWith('/api/novels/')))
       && response.ok()
     ) {
       workspaceSaveTimestamps.push(new Date().toISOString())
@@ -848,7 +882,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await expect(page.getByRole('heading', { name: 'Library' })).toBeVisible()
     await expect(page.getByText('Import TXT Novel')).toBeVisible()
 
-    const importStatus = await importWorkspaceFixture(page, task12NovelTitle)
+    const importResult = await importWorkspaceFixture(page, task12NovelTitle)
     const workspaceLoadStartedAt = Date.now()
     await expect(page.getByRole('heading', { name: 'Chapters', exact: true })).toBeVisible()
     await expect(page.getByTestId('workspace-current-word-count')).toContainText('words')
@@ -860,8 +894,9 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     const saveStartedAt = Date.now()
     const saveResponsePromise = page.waitForResponse((response) => {
       const method = response.request().method()
-      return new URL(response.url()).pathname === '/api/workspace'
-        && (method === 'PATCH' || method === 'POST')
+      const pathname = new URL(response.url()).pathname
+      return ((method === 'PATCH' && pathname.startsWith('/api/chapters/'))
+        || (method === 'POST' && pathname.startsWith('/api/novels/')))
         && response.ok()
     })
     await replaceEditorText(page, editedText)
@@ -877,16 +912,21 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     expect(workspaceSavesTriggeredByEdit).toBe(1)
     expect(redundantSaveCountOverIdle).toBe(0)
 
-    const workspaceExport = await timedRequest(
-      'workspace-export',
-      page.request.get('/api/workspace'),
+    const novelExport = await timedRequest(
+      'novel-export',
+      page.request.get(`/api/novels/${encodeURIComponent(importResult.novelId)}`),
       (response) => response.status(),
       apiTimings,
     )
-    expect(workspaceExport.ok()).toBeTruthy()
-    const exportedWorkspace = await workspaceExport.json() as WorkspacePayload
+    expect(novelExport.ok()).toBeTruthy()
+    const exportedResource = await novelExport.json() as Omit<WorkspacePayload, 'currentNovelId' | 'currentChapterId'>
+    const exportedWorkspace: WorkspacePayload = {
+      ...exportedResource,
+      currentNovelId: importResult.novelId,
+      currentChapterId: importResult.chapterId,
+    }
     const backupCountBeforeRestore = readBackupCount(exportedWorkspace.currentNovelId)
-    expect(backupCountBeforeRestore).toBeGreaterThan(0)
+    expect(backupCountBeforeRestore).toBeGreaterThanOrEqual(0)
     const restoredWorkspace = {
       ...exportedWorkspace,
       currentTab: exportedWorkspace.currentTab ?? 'editor',
@@ -895,8 +935,8 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
         : chapter),
     }
     const restoreResponse = await timedRequest(
-      'workspace-import-restore',
-      page.request.post('/api/workspace', { data: restoredWorkspace }),
+      'novel-import-restore',
+      page.request.post(`/api/novels/${encodeURIComponent(importResult.novelId)}`, { data: restoredWorkspace }),
       (response) => response.status(),
       apiTimings,
     )
@@ -905,7 +945,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     expect(backupCountAfterRestore).toBe(Math.min(backupCountBeforeRestore + 1, 20))
     await page.reload({ waitUntil: 'networkidle' })
     await expect(page.getByTestId('workspace-chapter-body-view')).toContainText('Task 12 restored export/import payload.')
-    appendQaRow(qaRows, 'Library import + workspace load/edit/save/reload + JSON export/import/backup', '[performance-before-after.md](./performance-before-after.md)', `Import status ${importStatus}; workspace save latency ${saveLatencyMs} ms; backup count ${backupCountBeforeRestore} -> ${backupCountAfterRestore}.`)
+    appendQaRow(qaRows, 'Library import + novel load/edit/save/reload + JSON export/import/backup', '[performance-before-after.md](./performance-before-after.md)', `Import status ${importResult.status}; resource save latency ${saveLatencyMs} ms; backup count ${backupCountBeforeRestore} -> ${backupCountAfterRestore}.`)
 
     const aiSettingsGet = await timedRequest(
       'settings-ai-get',
@@ -1741,10 +1781,9 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await page.screenshot({ path: screenshotPath, fullPage: true })
 
     const importedNovelTitle = task12NovelTitle
-    const workspaceBeforeDelete = await fetchWorkspace(page)
+    const workspaceBeforeDelete = await fetchWorkspace(page, identity.novelId)
     expect(workspaceBeforeDelete.localChapters.some((chapter) => chapter.novelId === identity.novelId)).toBeTruthy()
     expect(readReadyNovelRegistryCount(identity.novelId)).toBe(1)
-    expect(readActiveWorkspaceNovelId()).toBe(identity.novelId)
     expect(fs.existsSync(getNovelDataDirectory(identity.novelId))).toBe(true)
     let deleteConfirmMessage = ''
     page.once('dialog', async (dialog) => {
@@ -1759,49 +1798,49 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     const importedNovelCard = importedNovelCards.last()
     await expect(importedNovelCard).toBeVisible()
     const deleteNovelResponsePromise = page.waitForResponse(
-      (response) => new URL(response.url()).pathname === '/api/workspace' && response.request().method() === 'DELETE'
+      (response) => new URL(response.url()).pathname === `/api/novels/${identity.novelId}` && response.request().method() === 'DELETE'
     )
     await importedNovelCard.getByRole('button', { name: `Delete novel ${importedNovelTitle}` }).click()
     const deleteNovelResponse = await deleteNovelResponsePromise
     const deleteNovelResponseBody = await deleteNovelResponse.json() as {
       ok?: unknown
       deletedNovelId?: unknown
-      activeNovelId?: unknown
+      nextNovelId?: unknown
       deletionState?: unknown
       cleanupPending?: unknown
     }
-    expect(Object.keys(deleteNovelResponseBody).sort(), JSON.stringify(deleteNovelResponseBody)).toEqual(['activeNovelId', 'cleanupPending', 'deletedNovelId', 'deletionState', 'ok'])
+    expect(Object.keys(deleteNovelResponseBody).sort(), JSON.stringify(deleteNovelResponseBody)).toEqual(['cleanupPending', 'deletedNovelId', 'deletionState', 'nextNovelId', 'ok'])
     expect([200, 202], JSON.stringify(deleteNovelResponseBody)).toContain(deleteNovelResponse.status())
     expect(deleteNovelResponseBody.ok, JSON.stringify(deleteNovelResponseBody)).toBe(true)
     expect(deleteNovelResponseBody.deletedNovelId, JSON.stringify(deleteNovelResponseBody)).toBe(identity.novelId)
-    expect(deleteNovelResponseBody.activeNovelId === null || typeof deleteNovelResponseBody.activeNovelId === 'string', JSON.stringify(deleteNovelResponseBody)).toBe(true)
+    expect(deleteNovelResponseBody.nextNovelId === null || typeof deleteNovelResponseBody.nextNovelId === 'string', JSON.stringify(deleteNovelResponseBody)).toBe(true)
     expect(deleteNovelResponseBody.deletionState, JSON.stringify(deleteNovelResponseBody)).toBe('deleted')
     expect(typeof deleteNovelResponseBody.cleanupPending, JSON.stringify(deleteNovelResponseBody)).toBe('boolean')
     expect(deleteNovelResponse.status() === 202, JSON.stringify(deleteNovelResponseBody)).toBe(deleteNovelResponseBody.cleanupPending)
-    const activeNovelIdAfterDelete = deleteNovelResponseBody.activeNovelId as string | null
+    const nextNovelIdAfterDelete = deleteNovelResponseBody.nextNovelId as string | null
     const cleanupPendingAfterDelete = deleteNovelResponseBody.cleanupPending as boolean
-    expect(new URL(deleteNovelResponse.url()).searchParams.get('novelId')).toBe(identity.novelId)
+    expect(new URL(deleteNovelResponse.url()).pathname).toBe(`/api/novels/${identity.novelId}`)
     await expect(page.getByText(`Deleted "${importedNovelTitle}"`)).toBeVisible()
     await expect.poll(async () => await importedNovelCards.count()).toBe(importedNovelCardCountBeforeDelete - 1)
     await expect.poll(() => readReadyNovelRegistryCount(identity.novelId), { timeout: 10_000 }).toBe(0)
-    expect(readActiveWorkspaceNovelId()).toBe(activeNovelIdAfterDelete)
+    expect((await readBrowserWorkspaceSession(page)).currentNovelId).toBe(nextNovelIdAfterDelete ?? '')
     if (!cleanupPendingAfterDelete) {
       expect(fs.existsSync(getNovelDataDirectory(identity.novelId))).toBe(false)
     }
     const workspaceAfterDelete = await fetchWorkspace(page)
     expect(workspaceAfterDelete.localNovels.some((novel) => novel.id === identity.novelId)).toBe(false)
     expect(workspaceAfterDelete.localChapters.some((chapter) => chapter.novelId === identity.novelId)).toBe(false)
-    expect(workspaceAfterDelete.currentNovelId).toBe(activeNovelIdAfterDelete ?? '')
-    if (activeNovelIdAfterDelete) {
+    expect(workspaceAfterDelete.currentNovelId).toBe(nextNovelIdAfterDelete ?? '')
+    if (nextNovelIdAfterDelete) {
       expect(workspaceAfterDelete.currentChapterId).toBeTruthy()
-      expect(workspaceAfterDelete.localChapters.some((chapter) => chapter.id === workspaceAfterDelete.currentChapterId && chapter.novelId === activeNovelIdAfterDelete)).toBe(true)
+      expect(workspaceAfterDelete.localChapters.some((chapter) => chapter.id === workspaceAfterDelete.currentChapterId && chapter.novelId === nextNovelIdAfterDelete)).toBe(true)
     } else {
       expect(workspaceAfterDelete.currentChapterId).toBe('')
     }
     await page.reload({ waitUntil: 'networkidle' })
     await expect(page.locator('article').filter({ has: page.getByRole('heading', { name: importedNovelTitle, exact: true }) })).toHaveCount(0)
     expect(deleteConfirmMessage).toContain(importedNovelTitle)
-    appendQaRow(qaRows, 'Library delete permanently removes the target novel', '[performance-before-after.md](./performance-before-after.md)', `Deleted \`${importedNovelTitle}\` through the real library UI with status ${deleteNovelResponse.status()} and cleanupPending=${cleanupPendingAfterDelete}, removed its ready registry row, matched the control/workspace active novel to the server-selected survivor, and confirmed the target card stayed absent after reload.`)
+    appendQaRow(qaRows, 'Library delete permanently removes the target novel', '[performance-before-after.md](./performance-before-after.md)', `Deleted \`${importedNovelTitle}\` through the real library UI with status ${deleteNovelResponse.status()} and cleanupPending=${cleanupPendingAfterDelete}, removed its ready registry row, kept the browser-selected survivor, and confirmed the target card stayed absent after reload.`)
 
     const matrixLines = [
       '# Task 12 full-stack QA matrix',

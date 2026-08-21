@@ -3,6 +3,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import { ensureEvidenceDir, writeEvidenceFile } from '@/tests/helpers/evidence'
 import { storyBranchFixtureIds } from '@/tests/helpers/fixture-ids'
+import { mockNovelResourceApi } from '@/tests/helpers/novel-resource-api-mock'
 import type { StoryTimelineResponse } from '@/lib/story-branch-types'
 
 const fixturePath = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
@@ -61,7 +62,6 @@ function buildEmptyWorkspacePayload() {
     currentNovelId: null,
     currentChapterId: null,
     localNovels: [],
-    localVolumes: [],
     localChapters: [],
     localOutlines: [],
     localCharacters: [],
@@ -96,7 +96,6 @@ function buildWorkspacePayload() {
     currentChapterId: 'chapter-10',
     currentTab: 'editor',
     helperTab: 'trajectory',
-    expandedVolumeIds: ['volume-001'],
     localNovels: [{
       id: 'novel-001',
       title: '合成测试故事（短样本）',
@@ -106,12 +105,10 @@ function buildWorkspacePayload() {
       wordCount: 3100,
       updatedAt: '2026-05-18',
     }],
-    localVolumes: [{ id: 'volume-001', novelId: 'novel-001', title: '第一卷', order: 1 }],
     localChapters: [
       {
         id: 'chapter-10',
         novelId: 'novel-001',
-        volumeId: 'volume-001',
         title: '第10章 结盟',
         order: 10,
         content: '<p>第10章正文</p>',
@@ -124,7 +121,6 @@ function buildWorkspacePayload() {
       {
         id: 'chapter-100',
         novelId: 'novel-001',
-        volumeId: 'volume-001',
         title: '第100章 被绑走',
         order: 100,
         content: '<p>第100章正文</p>',
@@ -630,18 +626,7 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   ]
   let rewriteIndex = 0
 
-  await page.route('**/api/workspace', async (route) => {
-    if (route.request().method() === 'POST') {
-      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
-      return
-    }
-
-    await route.fulfill({
-      status: 200,
-      body: JSON.stringify(imported ? buildWorkspacePayload() : buildEmptyWorkspacePayload()),
-      contentType: 'application/json',
-    })
-  })
+  await mockNovelResourceApi(page, () => imported ? buildWorkspacePayload() : buildEmptyWorkspacePayload())
   await page.route('**/api/settings/ai', async (route) => {
     if (route.request().method() === 'POST') {
       await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
@@ -852,7 +837,7 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   await expect(page.getByText('已保存的续写块正文：她在门后听见誓言改变了方向。').first()).toBeVisible()
   await page.getByRole('button', { name: '保存为续写块' }).click()
 
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('rewrite')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('改写分支')
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
   await expect(page.getByTestId('workspace-current-word-count')).not.toContainText('1,200 字')
@@ -874,7 +859,7 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   await expect(page.getByTestId('future-map-overlay')).toBeHidden()
 
   await page.reload({ waitUntil: 'networkidle' })
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('rewrite')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('改写分支')
   await expect(page).toHaveURL(/selectionKind=rewrite/)
   await expect(page).toHaveURL(/selectionNodeId=rewrite-node-1/)
   await expect(page.getByTestId('workspace-center-pane-kind')).toContainText('改写节点工作区')
@@ -955,18 +940,7 @@ test('continue-block rewrite does not collide with workspace autosave preset sav
     '子续写块正文：誓言之后，她选择独自离开。',
   ]
 
-  await page.route('**/api/workspace', async (route) => {
-    if (route.request().method() === 'POST') {
-      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
-      return
-    }
-
-    await route.fulfill({
-      status: 200,
-      body: JSON.stringify(imported ? buildWorkspacePayload() : buildEmptyWorkspacePayload()),
-      contentType: 'application/json',
-    })
-  })
+  await mockNovelResourceApi(page, () => imported ? buildWorkspacePayload() : buildEmptyWorkspacePayload())
   await page.route('**/api/settings/ai', async (route) => {
     if (route.request().method() === 'POST') {
       await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
@@ -1112,9 +1086,7 @@ test('focused rewrite and continue nodes launch future jump with history/direct 
   let timelineState = buildAfterContinueTimeline()
   const createPayloads: Array<Record<string, unknown>> = []
 
-  await page.route('**/api/workspace', async (route) => {
-    await route.fulfill({ json: buildWorkspacePayload() })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({ json: timelineState })
   })
@@ -1167,7 +1139,7 @@ test('focused rewrite and continue nodes launch future jump with history/direct 
   })
 
   await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-2&selectionContinueBlockId=continue-block-2&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('续写内容')
   await expect(page.getByTestId('workspace-continue-block-future-jump-entry')).toBeEnabled()
   await page.getByTestId('workspace-continue-block-future-jump-entry').click()
   await expect(page.getByTestId('future-map-overlay')).toBeVisible()
@@ -1206,14 +1178,7 @@ test('chapter prose typography matches rewrite, what-if, and future-jump readers
     edges: [{ fromNodeId: 'rewrite-node-1', toNodeId: storyBranchFixtureIds.futureJumpNodeId }],
   }
 
-  await page.route('**/api/workspace', async (route) => {
-    if (route.request().method() === 'POST') {
-      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
-      return
-    }
-
-    await route.fulfill({ status: 200, body: JSON.stringify(buildWorkspacePayload()), contentType: 'application/json' })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/settings/ai', async (route) => {
     if (route.request().method() === 'POST') {
       await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })

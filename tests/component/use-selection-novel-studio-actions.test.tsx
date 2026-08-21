@@ -116,17 +116,16 @@ function buildRecoverableRewriteStoryTimeline() {
   }
 }
 
-function deletedNovelResult(novelId: string, activeNovelId: string | null = null, cleanupPending = false) {
+function deletedNovelResult(novelId: string, nextNovelId: string | null = null, cleanupPending = false) {
   return {
     status: 'committed' as const,
-    result: { ok: true as const, deletedNovelId: novelId, activeNovelId, deletionState: 'deleted' as const, cleanupPending },
+    result: { ok: true as const, deletedNovelId: novelId, nextNovelId, deletionState: 'deleted' as const, cleanupPending },
   }
 }
 
 const chapter: Chapter = {
   id: 'chapter-1',
   novelId: 'novel-1',
-  volumeId: 'volume-1',
   title: 'Chapter 1',
   order: 1,
   content: '<p>Alpha</p>',
@@ -189,7 +188,6 @@ function renderActionsHook(options: {
     backendLoaded: options.backendLoaded ?? true,
     currentNovelId: options.currentNovelId ?? '',
     localNovels: options.currentNovelId ? [{ id: options.currentNovelId, title: 'Novel 1' }] : [],
-    localVolumes: [],
     localChapters: [chapter],
     currentChapterId: chapter.id,
     setCurrentChapterId: vi.fn(),

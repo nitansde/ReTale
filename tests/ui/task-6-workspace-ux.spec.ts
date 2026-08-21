@@ -29,9 +29,10 @@ test('workspace autosave limits save churn after a single edit', async ({ page }
   const workspaceSaveTimestamps: string[] = []
   page.on('response', (response) => {
     const method = response.request().method()
+    const pathname = new URL(response.url()).pathname
     if (
-      new URL(response.url()).pathname === '/api/workspace'
-      && (method === 'PATCH' || method === 'POST')
+      ((method === 'PATCH' && pathname.startsWith('/api/chapters/'))
+        || (method === 'POST' && pathname.startsWith('/api/novels/')))
       && response.ok()
     ) {
       workspaceSaveTimestamps.push(new Date().toISOString())

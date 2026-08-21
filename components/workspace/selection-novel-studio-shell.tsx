@@ -204,7 +204,6 @@ export function selectSelectionNovelStudioStore(state: NovelStore) {
     backendLoaded: state.backendLoaded,
     currentNovelId: state.currentNovelId,
     localNovels: state.localNovels,
-    localVolumes: state.localVolumes,
     localChapters: state.localChapters,
     currentChapterId: state.currentChapterId,
     setCurrentChapterId: state.setCurrentChapterId,
@@ -244,7 +243,7 @@ export function SelectionNovelStudio() {
   const { t } = useI18n()
   const router = useRouter()
   const {
-    loadFromBackend, saveToBackend, deleteNovelFromBackend, reconcileNovelDeletionFromBackend, isNovelDeletionPending, beginNovelDeletion, rollbackNovelDeletion, setNovelDeletionPending, reconcileNovelDeletion, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId,
+    loadFromBackend, saveToBackend, deleteNovelFromBackend, reconcileNovelDeletionFromBackend, isNovelDeletionPending, beginNovelDeletion, rollbackNovelDeletion, setNovelDeletionPending, reconcileNovelDeletion, backendLoaded, currentNovelId, localNovels, localChapters, currentChapterId,
     setCurrentChapterId, updateChapterContent, createNewChapter, deleteChapter, deleteNovel, aiSettings, setAISettings,
     saveAISettings, loadPresetCompatLibrary, savePresetCompatLibrary, rebuildStoryKnowledge, rebuildStoryRetrievalIndex,
     pauseStoryKnowledgeRebuild, abortStoryKnowledgeRebuild, deleteStoryKnowledgeGraph, deleteStoryHanlpCache,
@@ -258,7 +257,7 @@ export function SelectionNovelStudio() {
     const state = useNovelStore.getState()
     return `${state.currentNovelId}\u0000${state.persistRevision}`
   }, [])
-  const core = useSelectionNovelStudioCore({ loadFromBackend, saveToBackend, isNovelDeletionPending, backendLoaded, currentNovelId, localNovels, localVolumes, localChapters, currentChapterId, setCurrentChapterId, updateChapterContent, aiSettings, setAISettings, refreshKnowledgeProjection, clearPresetCompatSessionStateForSelection: (selection) => clearPresetCompatSessionStateForSelection(selection), resetPresetCompatSessionStateForSelection: (selection, surfaces) => resetPresetCompatSessionStateForSelection(selection, surfaces ?? []), presetCompatSessionState, localCharacters, localWorldEntries, localTimelineEvents, localOutlines, autosaveTarget, readAutosaveTarget, workspaceSaveFeedback })
+  const core = useSelectionNovelStudioCore({ loadFromBackend, saveToBackend, isNovelDeletionPending, backendLoaded, currentNovelId, localNovels, localChapters, currentChapterId, setCurrentChapterId, updateChapterContent, aiSettings, setAISettings, refreshKnowledgeProjection, clearPresetCompatSessionStateForSelection, resetPresetCompatSessionStateForSelection, presetCompatSessionState, localCharacters, localWorldEntries, localTimelineEvents, localOutlines, autosaveTarget, readAutosaveTarget, workspaceSaveFeedback })
   const {
     leftPanelOpen, setLeftPanelOpen, referencePanelOpen, setReferencePanelOpen, knowledgePanelOpen, setKnowledgePanelOpen, chapterListState, setChapterListState, centerPaneView, setCenterPaneView, refTab, setRefTab, settingsOpen, setSettingsOpen,
     selectionText, lockedSelectionText, toolbarPos, activeMode, rewritePrompt, rewriteState, rewriteFlow, generationContext,
@@ -271,7 +270,7 @@ export function SelectionNovelStudio() {
     editor, editorRef, toolbarRef, resolvedAISettings, updateScenarioProvider, updateScenarioOpenAIField,
     updateScenarioOllamaField, updateKnowledgeExtractionParallelism, updateEmbeddingBatchSize, sortedChapters,
     currentChapter, parentChapter, graphSourceMeta, selectChapter, jumpToGraphSource, hasWorkspaceContent, branchChaptersByParentId, storyTimelineBranchId, resolvedStoryTimeline,
-    timelineChapterById, timelineNodeById, storyTimelineError, novelVolumes, currentNovelMeta, chapterListTarget, chapterText,
+    timelineChapterById, timelineNodeById, storyTimelineError, currentNovelMeta, chapterListTarget, chapterText,
     mainKnowledgeRebuildStatus, knowledgeRebuildActive, knowledgeRebuildPaused, knowledgeRebuildFailed, knowledgeRebuildRangeMode,
     knowledgeRebuildFirstChapterCount, knowledgeRebuildStartChapter, knowledgeRebuildEndChapter, selectedKnowledgeRebuildChapterRangeLabel,
     knowledgeStatusOverview, currentKnowledgeJobBusy, knowledgeGraphOverview, extractionCacheOverview, embeddingCacheOverview, retrievalIndexOverview,
@@ -378,7 +377,6 @@ export function SelectionNovelStudio() {
             leftPanelOpen={leftPanelOpen}
             onClose={() => setLeftPanelOpen(false)}
             onCreateChapter={createNewChapter}
-            novelVolumes={novelVolumes}
             sortedChapters={sortedChapters}
             chapterListTarget={chapterListTarget}
             currentNovelId={currentNovelId}

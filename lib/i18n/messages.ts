@@ -1,4 +1,6 @@
 export const SUPPORTED_LOCALES = ['zh', 'en'] as const
+export const LOCALE_STORAGE_KEY = 'retale.locale'
+export const LOCALE_COOKIE_KEY = 'retale.locale'
 
 export type Locale = (typeof SUPPORTED_LOCALES)[number]
 export type TranslationValues = Record<string, string | number>
@@ -125,7 +127,7 @@ export const zhMessages = {
   'chapterNav.novel': '小说',
   'chapterNav.title': '章节导航',
   'chapterNav.newChapter': '+ 新建章节',
-  'chapterNav.volumeChapters': '{{count}} 章',
+  'chapterNav.chapterCount': '{{count}} 章',
   'chapterNav.showMore': '显示更多章节，剩余 {{count}} 章',
 
   'aiSettings.eyebrow': 'AI 设置',
@@ -659,7 +661,6 @@ export const zhMessages = {
   'store.importTag': '导入',
   'store.importTxtTag': 'TXT',
   'store.importNovelTitle': '导入小说 {{count}}',
-  'store.importVolumeTitle': '卷一：导入正文',
   'store.importEmptyChapterBody': '（本章暂无正文）',
   'store.importUpdatedAt': '{{time}} · 导入',
   'store.importTrajectory': '从 TXT 导入',
@@ -923,6 +924,8 @@ export const zhMessages = {
   'workspace.persistence.saveFailed': '自动保存失败，本地编辑已保留。',
   'workspace.persistence.chapterConflict': '工作区已在其他位置更改，本地编辑已保留。',
   'workspace.persistence.structuralConflict': '存在冲突的结构更改，请刷新并协调后再保存。',
+  'workspace.persistence.localDraftRecovered': '已从浏览器缓存恢复未保存的章节草稿。',
+  'workspace.persistence.localDraftConflictConfirm': '浏览器中存在一份未保存草稿，但服务器章节已经发生变化。是否恢复浏览器草稿并覆盖当前章节？',
   'workspace.shell.rewriteInstructionLabel': '魔改要求',
   'workspace.shell.rewriteInstructionPlaceholder': '例如：保留剧情走向，但把这段写得更压迫、更像命运在逼近。',
   'workspace.shell.advancedContext': '高级上下文',
@@ -1135,7 +1138,7 @@ export const enMessages: MessageDictionary = {
   'chapterNav.novel': 'Novel',
   'chapterNav.title': 'Chapters',
   'chapterNav.newChapter': '+ New chapter',
-  'chapterNav.volumeChapters': '{{count}} chapters',
+  'chapterNav.chapterCount': '{{count}} chapters',
   'chapterNav.showMore': 'Show more chapters, {{count}} remaining',
 
   'aiSettings.eyebrow': 'AI settings',
@@ -1669,7 +1672,6 @@ export const enMessages: MessageDictionary = {
   'store.importTag': 'Import',
   'store.importTxtTag': 'TXT',
   'store.importNovelTitle': 'Imported novel {{count}}',
-  'store.importVolumeTitle': 'Volume 1: Imported text',
   'store.importEmptyChapterBody': '(This chapter has no body text yet)',
   'store.importUpdatedAt': '{{time}} · Imported',
   'store.importTrajectory': 'Imported from TXT',
@@ -1933,6 +1935,8 @@ export const enMessages: MessageDictionary = {
   'workspace.persistence.saveFailed': 'Autosave failed. Your local edits were kept.',
   'workspace.persistence.chapterConflict': 'The workspace changed elsewhere. Your local edits were kept.',
   'workspace.persistence.structuralConflict': 'Conflicting structural changes require refresh and reconciliation.',
+  'workspace.persistence.localDraftRecovered': 'Recovered an unsaved chapter draft from browser storage.',
+  'workspace.persistence.localDraftConflictConfirm': 'An unsaved browser draft exists, but the server chapter changed. Restore the browser draft and overwrite the current chapter?',
   'workspace.shell.rewriteInstructionLabel': 'Rewrite instruction',
   'workspace.shell.rewriteInstructionPlaceholder': 'Example: keep the plot direction, but make this passage feel more oppressive, like fate is closing in.',
   'workspace.shell.advancedContext': 'Advanced context',
@@ -2039,7 +2043,7 @@ export function getClientLocale(): Locale {
 
   if (typeof window !== 'undefined') {
     try {
-      const stored = window.localStorage.getItem('retale.locale')
+      const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY)
       if (stored && isLocale(stored)) {
         return stored
       }

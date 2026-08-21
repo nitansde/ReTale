@@ -19,7 +19,6 @@ function normalizeExpectedRevision(value: unknown) {
 }
 
 export async function GET(request: Request) {
-  request ??= new Request('http://localhost/api/settings/preset-compat')
   const library = loadStoredPresetCompatLibrary()
   const etag = formatRevisionEtag('preset-compat', library.schemaVersion, library.revision)
   const headers = {

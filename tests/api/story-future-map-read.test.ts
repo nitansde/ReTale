@@ -168,12 +168,10 @@ async function seedWorkspaceDirectChapterFallbackFixture(database: DatabaseSync)
     currentNovelId: 'novel-002',
     currentChapterId: 'chapter-25',
     localNovels: [{ id: 'novel-002', title: 'Workspace Future Map Novel', summary: '', tags: [] }],
-    localVolumes: [{ id: 'volume-1', novelId: 'novel-002', title: '卷一', order: 1 }],
     localChapters: [
       {
         id: 'chapter-25',
         novelId: 'novel-002',
-        volumeId: 'volume-1',
         title: '第25章',
         order: 25,
         content: '第25章正文',
@@ -184,7 +182,6 @@ async function seedWorkspaceDirectChapterFallbackFixture(database: DatabaseSync)
       {
         id: 'chapter-80',
         novelId: 'novel-002',
-        volumeId: 'volume-1',
         title: '第80章 失控分岔',
         order: 80,
         content: '第80章正文',

@@ -9,7 +9,6 @@ import type {
   RewritePreset,
   TimelineEvent,
   TrajectoryEntry,
-  Volume,
   WorldEntry,
 } from './types'
 
@@ -34,16 +33,10 @@ export const novels: Novel[] = [
   },
 ]
 
-export const volumes: Volume[] = [
-  { id: 'vol-1', novelId: 'novel-1', title: '卷一：雾海列车', order: 1 },
-  { id: 'vol-2', novelId: 'novel-1', title: '卷二：遗忘车厢', order: 2 },
-]
-
 export const chapters: Chapter[] = [
   {
     id: 'ch-1',
     novelId: 'novel-1',
-    volumeId: 'vol-1',
     title: '第1章 雨夜站台',
     order: 1,
     status: 'done',
@@ -58,7 +51,6 @@ export const chapters: Chapter[] = [
   {
     id: 'ch-2',
     novelId: 'novel-1',
-    volumeId: 'vol-1',
     title: '第2章 无票乘客',
     order: 2,
     status: 'draft',
@@ -73,9 +65,8 @@ export const chapters: Chapter[] = [
   {
     id: 'ch-3',
     novelId: 'novel-1',
-    volumeId: 'vol-2',
     title: '第3章 第七码厢',
-    order: 1,
+    order: 3,
     status: 'review',
     wordCount: 3512,
     updatedAt: '昨天 22:10',
@@ -88,9 +79,8 @@ export const chapters: Chapter[] = [
   {
     id: 'ch-4',
     novelId: 'novel-1',
-    volumeId: 'vol-2',
     title: '第4章 回声',
-    order: 2,
+    order: 4,
     status: 'draft',
     wordCount: 1894,
     updatedAt: '昨天 20:46',

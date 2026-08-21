@@ -1,20 +1,19 @@
 "use client"
 
 import type { Dispatch, SetStateAction } from 'react'
-import { ChevronDown, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { IconButton } from '@/components/ui/IconButton'
 import { StoryTimeline } from '@/components/timeline/StoryTimeline'
 import { useDesktopWorkspaceLayout } from '@/components/workspace/use-desktop-workspace-layout'
 import { useI18n } from '@/lib/i18n/provider'
 import type { ChapterTimelineItem, StoryTimelineBranchNode, StoryTimelineEdge, TimelineSelection } from '@/lib/story-branch-types'
-import type { Chapter, Volume } from '@/lib/types'
+import type { Chapter } from '@/lib/types'
 
 type WorkspaceChapterNavProps = {
   leftPanelOpen: boolean
   onClose: () => void
   onCreateChapter: () => void
-  novelVolumes: Volume[]
   sortedChapters: Chapter[]
   chapterListTarget: number
   currentNovelId: string
@@ -35,6 +34,12 @@ type WorkspaceChapterNavProps = {
 export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
   const { t } = useI18n()
   const desktop = useDesktopWorkspaceLayout()
+  const mainlineChapters = props.sortedChapters.filter((chapter) => !chapter.parentChapterId)
+  const visibleChapters = mainlineChapters.slice(0, props.chapterListTarget)
+  const visibleAnchorChapterNos = new Set(visibleChapters.map((chapter) => chapter.order))
+  const visibleBranchNodes = props.branchNodes.filter((node) => visibleAnchorChapterNos.has(node.anchorChapterNo))
+  const visibleNodeIds = new Set(visibleBranchNodes.map((node) => node.id))
+  const hiddenCount = Math.max(0, mainlineChapters.length - visibleChapters.length)
 
   const content = (
     <>
@@ -48,67 +53,46 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
       >
         {t('chapterNav.newChapter')}
       </button>
-      <div className="space-y-3">
-        {props.novelVolumes.map((volume) => {
-          const chaptersInVolume = props.sortedChapters.filter((chapter) => chapter.volumeId === volume.id && !chapter.parentChapterId)
-          const visibleChapters = chaptersInVolume.slice(0, props.chapterListTarget)
-          const visibleAnchorChapterNos = new Set(visibleChapters.map((chapter) => chapter.order))
-          const visibleBranchNodes = props.branchNodes.filter((node) => visibleAnchorChapterNos.has(node.anchorChapterNo))
-          const visibleNodeIds = new Set(visibleBranchNodes.map((node) => node.id))
-          const hiddenCount = Math.max(0, chaptersInVolume.length - visibleChapters.length)
-
-          return (
-            <section key={volume.id} className="rounded-[24px] border border-white/8 bg-white/[0.03] p-3">
-              <div className="flex w-full items-center justify-between gap-3 rounded-2xl px-2 py-2 text-left">
-                <div>
-                  <p className="text-sm font-medium text-zinc-100">{volume.title}</p>
-                  <p className="mt-1 text-xs text-zinc-500">{t('chapterNav.volumeChapters', { count: chaptersInVolume.length })}</p>
-                </div>
-                <ChevronDown className="h-4 w-4 text-zinc-500" aria-hidden="true" />
-              </div>
-              <div className="mt-2 space-y-3">
-                {props.storyTimelineError ? (
-                  <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-3 py-3 text-sm text-amber-100">{props.storyTimelineError}</div>
-                ) : null}
-                <StoryTimeline
-                  chapters={visibleChapters.map((chapter) => props.timelineChapterById.get(chapter.id) ?? {
-                    type: 'chapter',
-                    chapterNo: chapter.order,
-                    chapterId: chapter.id,
-                    title: chapter.title,
-                    wordCount: chapter.wordCount,
-                  })}
-                  branchNodes={visibleBranchNodes}
-                  edges={props.edges.filter((edge) => visibleNodeIds.has(edge.fromNodeId) && visibleNodeIds.has(edge.toNodeId))}
-                  activeChapterId={props.currentChapterId}
-                  activeSelection={props.activeSelection}
-                  branchChaptersByParentId={props.branchChaptersByParentId}
-                  onSelectionChange={(selection) => {
-                    props.onSelectionChange(selection)
-                    props.onClose()
-                  }}
-                  onDeleteChapter={props.onDeleteChapter}
-                  onDeleteBranchChapter={props.onDeleteChapter}
-                  deletingBranchNodeId={props.deletingBranchNodeId}
-                  onDeleteBranchNode={props.onDeleteBranchNode}
-                />
-                {hiddenCount > 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => props.setChapterListState((current) => ({
-                      ...current,
-                      [props.currentNovelId]: Math.min(chaptersInVolume.length, (current[props.currentNovelId] ?? 80) + 80),
-                    }))}
-                    className="min-h-11 w-full rounded-2xl border border-dashed border-white/10 bg-black/20 px-3 text-sm text-zinc-300 transition hover:bg-white/[0.06]"
-                  >
-                    {t('chapterNav.showMore', { count: hiddenCount })}
-                  </button>
-                ) : null}
-              </div>
-            </section>
-          )
-        })}
-      </div>
+      <section className="space-y-3 rounded-[24px] border border-white/8 bg-white/[0.03] p-3">
+        <p className="px-2 text-xs text-zinc-500">{t('chapterNav.chapterCount', { count: mainlineChapters.length })}</p>
+        {props.storyTimelineError ? (
+          <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-3 py-3 text-sm text-amber-100">{props.storyTimelineError}</div>
+        ) : null}
+        <StoryTimeline
+          chapters={visibleChapters.map((chapter) => props.timelineChapterById.get(chapter.id) ?? {
+            type: 'chapter',
+            chapterNo: chapter.order,
+            chapterId: chapter.id,
+            title: chapter.title,
+            wordCount: chapter.wordCount,
+          })}
+          branchNodes={visibleBranchNodes}
+          edges={props.edges.filter((edge) => visibleNodeIds.has(edge.fromNodeId) && visibleNodeIds.has(edge.toNodeId))}
+          activeChapterId={props.currentChapterId}
+          activeSelection={props.activeSelection}
+          branchChaptersByParentId={props.branchChaptersByParentId}
+          onSelectionChange={(selection) => {
+            props.onSelectionChange(selection)
+            props.onClose()
+          }}
+          onDeleteChapter={props.onDeleteChapter}
+          onDeleteBranchChapter={props.onDeleteChapter}
+          deletingBranchNodeId={props.deletingBranchNodeId}
+          onDeleteBranchNode={props.onDeleteBranchNode}
+        />
+        {hiddenCount > 0 ? (
+          <button
+            type="button"
+            onClick={() => props.setChapterListState((current) => ({
+              ...current,
+              [props.currentNovelId]: Math.min(mainlineChapters.length, (current[props.currentNovelId] ?? 80) + 80),
+            }))}
+            className="min-h-11 w-full rounded-2xl border border-dashed border-white/10 bg-black/20 px-3 text-sm text-zinc-300 transition hover:bg-white/[0.06]"
+          >
+            {t('chapterNav.showMore', { count: hiddenCount })}
+          </button>
+        ) : null}
+      </section>
     </>
   )
 

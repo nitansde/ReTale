@@ -23,6 +23,13 @@ import {
   writeWorkspaceSelectionToSearchParams,
 } from '@/components/workspace/workspace-selection'
 import { normalizeAISettings } from '@/lib/ai-settings'
+import {
+  canRestoreChapterDraftWithoutConflict,
+  clearAcknowledgedChapterDrafts,
+  readChapterDraft,
+  removeChapterDraft,
+  writeChapterDraft,
+} from '@/lib/chapter-draft-cache'
 import { useI18n } from '@/lib/i18n/provider'
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
@@ -105,7 +112,6 @@ import type {
   Character,
   OutlineItem,
   TimelineEvent,
-  Volume,
   WorldEntry,
 } from '@/lib/types'
 import type { KnowledgeProjectionResult, WorkspaceSaveFeedback, WorkspaceSaveOptions } from '@/store/novel-store-types'
@@ -118,7 +124,6 @@ type SelectionNovelStudioCoreParams = {
   backendLoaded: boolean
   currentNovelId: string
   localNovels: Array<{ id: string; title: string }>
-  localVolumes: Volume[]
   localChapters: Chapter[]
   currentChapterId: string
   setCurrentChapterId: (chapterId: string) => void
@@ -126,8 +131,8 @@ type SelectionNovelStudioCoreParams = {
   aiSettings: AISettings | undefined
   setAISettings: (settings: AISettings) => void
   refreshKnowledgeProjection: (novelId: string, asOfChapter?: number, signal?: AbortSignal) => Promise<KnowledgeProjectionResult>
-  clearPresetCompatSessionStateForSelection: (selection: TimelineSelection, surfaces?: PresetCompatSurfaceId[], phase?: string) => void
-  resetPresetCompatSessionStateForSelection: (selection: TimelineSelection, surfaces?: PresetCompatSurfaceId[], phase?: string) => void
+  clearPresetCompatSessionStateForSelection: (selection: TimelineSelection) => void
+  resetPresetCompatSessionStateForSelection: (selection: TimelineSelection, surfaces: PresetCompatSurfaceId[]) => void
   presetCompatSessionState: Record<string, { phase?: string | null } | undefined>
   localCharacters: Character[]
   localWorldEntries: WorldEntry[]
@@ -214,6 +219,8 @@ export function isReferenceMatchMediaAvailable() {
 
 export function useSelectionNovelStudioCore(params: SelectionNovelStudioCoreParams) {
   const { locale, t } = useI18n()
+  const backendLoaded = params.backendLoaded
+  const updateChapterContent = params.updateChapterContent
   const scenarioMeta = getAIScenarioMeta(locale)
   const router = useRouter()
   const desktopWorkspaceLayout = useDesktopWorkspaceLayout()
@@ -376,6 +383,10 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const autosaveUnmountSaveRef = useRef<() => Promise<boolean>>(async () => true)
   const autosaveSaveToBackendRef = useRef(params.saveToBackend)
   const novelDeletionPendingRef = useRef(params.isNovelDeletionPending)
+  const backendLoadedRef = useRef(params.backendLoaded)
+  const currentNovelIdRef = useRef(params.currentNovelId)
+  const latestLocalChaptersRef = useRef(params.localChapters)
+  const chapterDraftFlushRef = useRef<() => void>(() => undefined)
   const fullKnowledgeProjectionRequestGenerationRef = useRef(0)
   const knowledgeProjectionNovelIdRef = useRef(params.currentNovelId)
   const hydratedRef = useRef(false)
@@ -505,7 +516,10 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     autosaveLatestSignatureRef.current = params.autosaveTarget
     autosaveSaveToBackendRef.current = params.saveToBackend
     novelDeletionPendingRef.current = params.isNovelDeletionPending
-  }, [params.autosaveTarget, params.isNovelDeletionPending, params.saveToBackend])
+    backendLoadedRef.current = params.backendLoaded
+    currentNovelIdRef.current = params.currentNovelId
+    latestLocalChaptersRef.current = params.localChapters
+  }, [params.autosaveTarget, params.backendLoaded, params.currentNovelId, params.isNovelDeletionPending, params.localChapters, params.saveToBackend])
 
   const scheduleAutosaveDrain = useCallback((delay: number) => {
     if (!autosaveMountedRef.current || novelDeletionPendingRef.current) return
@@ -528,10 +542,12 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     if (!options.force && targetSignature === autosaveLastSavedSignatureRef.current) return Promise.resolve(true)
     if (!options.retryFailed && targetSignature === autosaveFailedSignatureRef.current) return Promise.resolve(false)
 
+    const capturedChapters = latestLocalChaptersRef.current
     const savePromise = Promise.resolve().then(() => autosaveSaveToBackendRef.current(
       options.lifecycle ? { lifecycle: true } : undefined,
     ))
       .then(() => {
+        clearAcknowledgedChapterDrafts(capturedChapters)
         autosaveLastSavedSignatureRef.current = targetSignature
         if (autosaveFailedSignatureRef.current === targetSignature) {
           autosaveFailedSignatureRef.current = null
@@ -573,8 +589,10 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
 
   const flushAndSaveWorkspace = useCallback(async (showFailure: boolean, lifecycle = false) => {
     clearAutosaveTimer()
+    if (!backendLoadedRef.current || !currentNovelIdRef.current) return true
     const maximumPasses = showFailure ? MAX_NAVIGATION_SAVE_PASSES : MAX_LIFECYCLE_SAVE_PASSES
     for (let pass = 0; pass < maximumPasses; pass += 1) {
+      chapterDraftFlushRef.current()
       const flushedEditor = Boolean(flushEditorBuffer())
       const postFlushSignature = params.readAutosaveTarget?.() ?? autosaveLatestSignatureRef.current
       autosaveLatestSignatureRef.current = postFlushSignature
@@ -672,7 +690,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     return null
   }, [])
 
-  const novelVolumes = useMemo(() => params.localVolumes.filter((volume) => volume.novelId === params.currentNovelId).slice().sort((a, b) => a.order - b.order), [params.localVolumes, params.currentNovelId])
   const currentNovelMeta = useMemo(() => params.localNovels.find((novel) => novel.id === params.currentNovelId) ?? null, [params.localNovels, params.currentNovelId])
 
   const {
@@ -715,6 +732,74 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     },
   })
   const hasWorkspaceContent = params.localChapters.length > 0
+  const pendingChapterDraftRef = useRef<{
+    novelId: string
+    chapterId: string
+    baseContent: string
+    content: string
+    wordCount: number
+    savedAt: number
+  } | null>(null)
+  const chapterDraftWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const chapterDraftRecoveryAttemptRef = useRef(new Set<string>())
+
+  const flushChapterDraftCache = useCallback(() => {
+    if (chapterDraftWriteTimerRef.current) clearTimeout(chapterDraftWriteTimerRef.current)
+    chapterDraftWriteTimerRef.current = null
+    const pending = pendingChapterDraftRef.current
+    pendingChapterDraftRef.current = null
+    if (!pending || !writeChapterDraft(pending)) return
+    chapterDraftRecoveryAttemptRef.current.add(`${pending.novelId}\u0000${pending.chapterId}\u0000${pending.savedAt}`)
+  }, [])
+
+  useLayoutEffect(() => {
+    chapterDraftFlushRef.current = flushChapterDraftCache
+  }, [flushChapterDraftCache])
+
+  const scheduleChapterDraftCache = useCallback((chapter: Chapter, content: string, plainText: string) => {
+    pendingChapterDraftRef.current = {
+      novelId: chapter.novelId,
+      chapterId: chapter.id,
+      baseContent: chapter.content,
+      content,
+      wordCount: countChineseFriendlyWords(plainText),
+      savedAt: Date.now(),
+    }
+    if (chapterDraftWriteTimerRef.current) clearTimeout(chapterDraftWriteTimerRef.current)
+    chapterDraftWriteTimerRef.current = setTimeout(flushChapterDraftCache, 180)
+  }, [flushChapterDraftCache])
+
+  useLayoutEffect(() => () => {
+    flushChapterDraftCache()
+  }, [currentChapter?.id, flushChapterDraftCache])
+
+  useEffect(() => {
+    if (!backendLoaded || !currentChapter) return
+    const draft = readChapterDraft(currentChapter.novelId, currentChapter.id)
+    if (!draft) return
+    const attemptKey = `${draft.novelId}\u0000${draft.chapterId}\u0000${draft.savedAt}`
+    if (chapterDraftRecoveryAttemptRef.current.has(attemptKey)) return
+    chapterDraftRecoveryAttemptRef.current.add(attemptKey)
+
+    if (draft.content === currentChapter.content) {
+      removeChapterDraft(draft.novelId, draft.chapterId)
+      return
+    }
+
+    const shouldRestore = canRestoreChapterDraftWithoutConflict(draft, currentChapter.content)
+      || window.confirm(t('workspace.persistence.localDraftConflictConfirm'))
+    if (!shouldRestore) {
+      removeChapterDraft(draft.novelId, draft.chapterId)
+      return
+    }
+
+    const restoreTimer = window.setTimeout(() => {
+      updateChapterContent(currentChapter.id, draft.content, draft.wordCount)
+      setToast(t('workspace.persistence.localDraftRecovered'), 'warning')
+    }, 0)
+    return () => window.clearTimeout(restoreTimer)
+  }, [backendLoaded, currentChapter, setToast, t, updateChapterContent])
+
   const mainlineChapters = useMemo(() => sortedChapters.filter((chapter) => !chapter.parentChapterId), [sortedChapters])
   const selectedKnowledgeRebuildChapterRange = useMemo(() => normalizeKnowledgeRebuildChapterRangeInput({
     mode: knowledgeRebuildRangeMode,
@@ -782,6 +867,20 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     }
     if (fullKnowledgeProjectionAbortControllerRef.current === controller) fullKnowledgeProjectionAbortControllerRef.current = null
   }, [applyFullKnowledgeProjectionResult, params.currentNovelId, params.refreshKnowledgeProjection, selectedKnowledgeStatusChapterOrder])
+  const knowledgePollCallbacksRef = useRef({
+    locale,
+    refreshCurrentFullKnowledgeProjection,
+    showKnowledgeToast,
+    t,
+  })
+  useEffect(() => {
+    knowledgePollCallbacksRef.current = {
+      locale,
+      refreshCurrentFullKnowledgeProjection,
+      showKnowledgeToast,
+      t,
+    }
+  }, [locale, refreshCurrentFullKnowledgeProjection, showKnowledgeToast, t])
 
   useEffect(() => {
     if (knowledgeProjectionNovelIdRef.current === params.currentNovelId) return
@@ -891,16 +990,18 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
           if (nextStatus?.status === 'failed') {
             lastActiveKnowledgeJobIdRef.current = null
             if (hadActiveJob && !cancelled) {
-              showKnowledgeToast(resolveWorkspaceUserFacingError('knowledge-rebuild', failureMessage, locale), 2600, 'error')
+              const callbacks = knowledgePollCallbacksRef.current
+              callbacks.showKnowledgeToast(resolveWorkspaceUserFacingError('knowledge-rebuild', failureMessage, callbacks.locale), 2600, 'error')
             }
             return
           }
 
           if (hadActiveJob) {
             lastActiveKnowledgeJobIdRef.current = null
-            await refreshCurrentFullKnowledgeProjection(() => !cancelled)
+            const callbacks = knowledgePollCallbacksRef.current
+            await callbacks.refreshCurrentFullKnowledgeProjection(() => !cancelled)
             if (!cancelled && !knowledgeRebuilding && !knowledgeActionLoading) {
-              showKnowledgeToast(t('workspace.knowledge.updated'))
+              callbacks.showKnowledgeToast(callbacks.t('workspace.knowledge.updated'))
             }
             return
           }
@@ -936,7 +1037,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
         window.clearTimeout(pollTimerId)
       }
     }
-  }, [getKnowledgePollDelay, params.currentNovelId, knowledgeActionLoading, knowledgeRebuilding, locale, refreshCurrentFullKnowledgeProjection, selectedKnowledgeStatusChapterOrder, setConfirmDeleteKnowledge, showKnowledgeToast, t])
+  }, [getKnowledgePollDelay, params.currentNovelId, knowledgeActionLoading, knowledgeRebuilding, selectedKnowledgeStatusChapterOrder, setConfirmDeleteKnowledge])
 
   const handleTimelineSelection = useCallback((
     selection: TimelineSelection,
@@ -1055,10 +1156,13 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     if (!params.backendLoaded || !currentChapter || workspaceSelectionHydratedRef.current) return
     const requestedSelection = readWorkspaceSelectionFromSearchParams(new URLSearchParams(window.location.search))
     if (requestedSelection && requestedSelection.kind !== 'chapter' && !storyTimelineData) return
-    workspaceSelectionHydratedRef.current = true
-    const restoreTimer = window.setTimeout(() => restoreWorkspaceSelectionFromLocation('replace', {
-      preserveRecoverableRewriteOwnershipForCurrentChapter: true,
-    }), 0)
+    const restoreTimer = window.setTimeout(() => {
+      if (workspaceSelectionHydratedRef.current) return
+      workspaceSelectionHydratedRef.current = true
+      restoreWorkspaceSelectionFromLocation('replace', {
+        preserveRecoverableRewriteOwnershipForCurrentChapter: true,
+      })
+    }, 0)
     return () => window.clearTimeout(restoreTimer)
   }, [params.backendLoaded, currentChapter, restoreWorkspaceSelectionFromLocation, storyTimelineData])
 
@@ -1316,13 +1420,20 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     onUpdate({ editor }) {
       const chapterId = editorChapterIdRef.current
       if (chapterId) {
+        const chapter = currentChapter?.id === chapterId
+          ? currentChapter
+          : params.localChapters.find((item) => item.id === chapterId)
+        const html = editor.getHTML()
+        const plainText = editor.getText()
+        if (chapter) scheduleChapterDraftCache(chapter, html, plainText)
         editorBufferRef.current.update(chapterId, () => ({
-          html: editor.getHTML(),
-          plainText: editor.getText(),
+          html,
+          plainText,
         }))
       }
     },
     onBlur() {
+      flushChapterDraftCache()
       flushEditorBuffer()
     },
   })
@@ -1339,16 +1450,22 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
 
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') void flushAndSaveWorkspace(false, true)
+      if (document.visibilityState === 'hidden') {
+        flushChapterDraftCache()
+        void flushAndSaveWorkspace(false, true)
+      }
     }
-    const handlePageHide = () => { void flushAndSaveWorkspace(false, true) }
+    const handlePageHide = () => {
+      flushChapterDraftCache()
+      void flushAndSaveWorkspace(false, true)
+    }
     document.addEventListener('visibilitychange', handleVisibilityChange)
     window.addEventListener('pagehide', handlePageHide)
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('pagehide', handlePageHide)
     }
-  }, [flushAndSaveWorkspace])
+  }, [flushAndSaveWorkspace, flushChapterDraftCache])
 
   useEffect(() => {
     if (centerPaneView !== 'body' || !currentChapter || !pendingSourceJump) return
@@ -1788,7 +1905,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     updateEmbeddingBatchSize,
     refreshCurrentFullKnowledgeProjection,
     showKnowledgeToast,
-    novelVolumes,
     currentNovelMeta,
     sortedChapters,
     currentChapter,

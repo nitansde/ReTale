@@ -1,6 +1,6 @@
 # retale
 
-A self-hosted single-user AI novel rewrite workspace built with Next.js.
+A self-hosted single-user AI novel rewrite app built with Next.js.
 
 ## Stack
 
@@ -20,7 +20,7 @@ This app now behaves like a local-first rewrite product with a real backend laye
 - Branch chapters represented in the chapter tree
 - Rewrite control surface with modes, tones, presets, prompt editing, and constraints
 - Reference panels for outlines, characters, worldbuilding, and trajectory logs
-- Workspace persistence stored in SQLite through direct SQL server modules
+- Novel and chapter persistence stored in SQLite through direct SQL server modules
 - HanLP-assisted knowledge graph rebuilds with tiered characters, alias synchronization, candidate promotion, and persistent cache state
 - JSON export / import for workspace state
 - In-app OpenAI-compatible API settings modal
@@ -54,7 +54,6 @@ HANLP_BOOTSTRAP_TIMEOUT_MS="600000"
 RETALE_TASK_STALE_TIMEOUT_MS="1800000"
 RETALE_TASK_MAX_RETRIES="1"
 RETALE_DATA_DIR="data"
-RETALE_TRUSTED_ORIGINS=""
 LLM_DEBUG_LOG="0"
 LLM_DEBUG_LOG_DIR=".sisyphus/llm-debug"
 ```
@@ -78,7 +77,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:14500. To use `http://<tailscale-ip-or-hostname>:14500` from another Tailscale device on a trusted tailnet, add that exact canonical origin to the comma-separated `RETALE_TRUSTED_ORIGINS` value. The default daily developer command is `npm run dev` (same as `npm run dev:prod`) and it always binds `0.0.0.0:14500`, always forces `DATABASE_URL=file:./dev.db`, and uses Next's development output so it stays separate from production builds and the isolated test server.
+Open http://localhost:14500. The app does not hard-code deployment IPs or hostnames, and its API permits cross-origin requests for self-hosted deployments. The default daily developer command is `npm run dev` (same as `npm run dev:prod`) and it always binds `0.0.0.0:14500`, always forces `DATABASE_URL=file:./dev.db`, and uses Next's development output so it stays separate from production builds and the isolated test server.
 
 ## Server modes
 
@@ -136,18 +135,34 @@ The app reads and writes only this migrated per-novel layout at runtime. The old
 
 Per-novel `lancedb/` directories are part of the runtime layout, so LanceDB-backed knowledge retrieval artifacts are stored and rebuilt per novel instead of through a single global `.lancedb/` directory.
 
+## Data model and browser session
+
+The primary content hierarchy is `Novel → Chapter[]`. `Volume` is no longer part of the application model. When an older snapshot contains volumes, ReTale reads the legacy volume order once, flattens chapters into a single novel-wide order, and drops the volume fields from the normalized state. Existing SQLite compatibility columns and tables are retained during the migration so old data is not deleted.
+
+Workspace-like UI state belongs to the browser rather than the server. The active novel, each novel's last-opened chapter, the active editor/helper tabs, and focus mode are stored in `localStorage` under `retale.workspace-session.v1`. Server responses cannot override that browser session.
+
+The browser-facing persistence API is resource-oriented:
+
+- `GET /api/novels` lists compact novel summaries without a server-side active-novel field.
+- `GET /api/novels/:novelId` loads one novel aggregate and its chapters/reference data.
+- `POST /api/novels/:novelId` saves structural changes for that novel.
+- `DELETE /api/novels/:novelId` permanently deletes that novel.
+- `PATCH /api/chapters/:chapterId` saves an ordinary chapter edit.
+
+`/api/workspace` and the `WorkspaceRuntime*` SQLite schema currently remain as an internal legacy compatibility adapter for existing databases, recovery artifacts, and rolling migration tests. New client code does not use `/api/workspace`; removal of that adapter requires a later non-destructive data migration.
+
 ## Persistence
 
 - Migrated runtime storage: `data/control.db` plus `data/novels/<safeNovelId>/novel.db`
 - Per-novel LanceDB storage: `data/novels/<safeNovelId>/lancedb/`
 - Old monolithic `dev.db`: no longer used at runtime
-- `GET /api/workspace` restores workspace state and its current revision. An idle workspace mount reads state without issuing a write.
-- Ordinary chapter edits use revision-aware `PATCH /api/workspace` requests with `Idempotency-Key`, `X-Retale-Base-Revision`, and `X-Retale-Revision-Novel-Id` identifying the revision owner.
-- Structural workspace changes use revision-aware `POST /api/workspace` requests with the same complete three-header contract. Legacy POST requests without revision authority remain accepted with JSON Content-Type only.
-- Workspace import completes synchronously and makes the imported workspace ready at revision 1.
+- `GET /api/novels/:novelId` restores one novel and its current content revision. An idle editor mount reads state without issuing a write.
+- Ordinary chapter edits use revision-aware `PATCH /api/chapters/:chapterId` requests with `Idempotency-Key`, `X-Retale-Base-Revision`, and `X-Retale-Revision-Novel-Id` identifying the revision owner.
+- Structural novel changes use revision-aware `POST /api/novels/:novelId` requests with the same complete three-header contract.
+- Novel import completes synchronously and makes the imported novel ready at revision 1.
 - A stale revision conflict preserves local edits instead of replacing them with server state.
 - PATCH falls back to revision-aware POST only when the server reports PATCH as unsupported with HTTP 405 or 501.
-- Workspace API requests with an Origin header are accepted only from built-in local loopback origins or exact canonical origins configured through `RETALE_TRUSTED_ORIGINS`.
+- API responses allow cross-origin access and novel/chapter persistence does not use an Origin allowlist.
 - AI settings are saved through `POST /api/settings/ai`
 
 ## Notes

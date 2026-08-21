@@ -994,8 +994,6 @@ export function WorkspaceCharacterReferenceCard({
   const aliasBadges = (char.aliases ?? []).map((alias) => alias.trim()).filter(Boolean)
   const identitySummary = getCharacterFacetContent(char.profile?.identity)
   const genderSummary = getCharacterFacetContent(char.profile?.gender)
-  const capabilitySummary = getCharacterFacetContent(char.profile?.capability)
-  const speakingStyleSummary = getCharacterFacetContent(char.profile?.speakingStyle)
   const supplementalNote = char.note.trim()
   const noteMatchesIdentity = supplementalNote && supplementalNote === identitySummary
   const cardCanExpand = characterCardNeedsExpansion({
@@ -1021,7 +1019,7 @@ export function WorkspaceCharacterReferenceCard({
           </div>
         ) : null}
       </div>
-      {(classificationBadgeLabel || aliasBadges.length > 0 || genderSummary || capabilitySummary || speakingStyleSummary) ? (
+      {(classificationBadgeLabel || aliasBadges.length > 0 || genderSummary) ? (
         <div className="mb-2 flex flex-wrap gap-2">
           {classificationBadgeLabel ? (
             <span
@@ -1037,8 +1035,6 @@ export function WorkspaceCharacterReferenceCard({
             </span>
           ))}
           {genderSummary ? <span data-testid="workspace-character-gender-badge" className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{genderSummary}</span> : null}
-          {capabilitySummary ? <span data-testid="workspace-character-capability-badge" className="rounded-full border border-violet-300/20 bg-violet-500/10 px-2 py-0.5 text-[10px] text-violet-200">{capabilitySummary}</span> : null}
-          {speakingStyleSummary ? <span data-testid="workspace-character-speaking-style-badge" className="rounded-full border border-sky-300/20 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-200">{speakingStyleSummary}</span> : null}
         </div>
       ) : null}
       {showProfile ? (
@@ -1085,13 +1081,13 @@ export const CHAPTER_PAGE_SIZE = 80
 export function resolveChapterListTargetForAnchorVisibility(params: {
   anchorChapterNo: number
   currentTarget: number
-  sortedChapters: Array<Pick<Chapter, 'id' | 'order' | 'volumeId' | 'parentChapterId'>>
+  sortedChapters: Array<Pick<Chapter, 'id' | 'order' | 'parentChapterId'>>
 }) {
   const anchorChapter = params.sortedChapters.find((chapter) => !chapter.parentChapterId && chapter.order === params.anchorChapterNo)
   if (!anchorChapter) return params.currentTarget
 
-  const chaptersInVolume = params.sortedChapters.filter((chapter) => chapter.volumeId === anchorChapter.volumeId && !chapter.parentChapterId)
-  const anchorIndex = chaptersInVolume.findIndex((chapter) => chapter.id === anchorChapter.id)
+  const mainlineChapters = params.sortedChapters.filter((chapter) => !chapter.parentChapterId)
+  const anchorIndex = mainlineChapters.findIndex((chapter) => chapter.id === anchorChapter.id)
   if (anchorIndex < 0) return params.currentTarget
 
   return Math.max(params.currentTarget, anchorIndex + 1)

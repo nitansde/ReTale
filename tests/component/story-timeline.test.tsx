@@ -53,7 +53,6 @@ function buildBranchChapter(): Chapter {
   return {
     id: 'branch-chapter-10-b1',
     novelId: 'novel-001',
-    volumeId: 'volume-001',
     title: '第10章 结盟 · 分支 1',
     order: 10.1,
     content: '<p>branch</p>',

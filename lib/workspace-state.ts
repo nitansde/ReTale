@@ -3,6 +3,7 @@ import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import { createDefaultAISettings, normalizeAISettings } from '@/lib/ai-settings'
 import { normalizeCharacterRoleCardProfile } from '@/lib/story-knowledge'
 import type {
+  Chapter,
   PersistedNovelState,
   PresetCompatSessionEntry,
   PresetCompatSessionPhase,
@@ -229,15 +230,109 @@ function cloneDefaultConstraints() {
   return defaultConstraints.map((constraint) => ({ ...constraint }))
 }
 
+type LegacyVolume = {
+  id: string
+  novelId: string
+  order?: number
+}
+
+type LegacyChapter = Chapter & {
+  volumeId?: unknown
+}
+
+type LegacyWorkspaceState = Partial<PersistedNovelState> & {
+  expandedVolumeIds?: unknown
+  localVolumes?: unknown
+  localChapters?: LegacyChapter[]
+}
+
+function parseLegacyVolumes(value: unknown) {
+  if (!Array.isArray(value)) return [] as LegacyVolume[]
+
+  return value.flatMap((item) => {
+    if (!isRecord(item) || typeof item.id !== 'string' || typeof item.novelId !== 'string') return []
+    return [{
+      id: item.id,
+      novelId: item.novelId,
+      order: typeof item.order === 'number' && Number.isFinite(item.order) ? item.order : undefined,
+    }]
+  })
+}
+
+function normalizeLegacyChapterOrder(chapters: LegacyChapter[], legacyVolumes: LegacyVolume[]) {
+  const hasLegacyVolumeAssignments = chapters.some((chapter) => typeof chapter.volumeId === 'string' && chapter.volumeId)
+  if (!hasLegacyVolumeAssignments) return chapters
+
+  const volumeRank = new Map<string, number>()
+  const volumesByNovel = new Map<string, LegacyVolume[]>()
+  for (const volume of legacyVolumes) {
+    const current = volumesByNovel.get(volume.novelId) ?? []
+    current.push(volume)
+    volumesByNovel.set(volume.novelId, current)
+  }
+  for (const [novelId, volumes] of volumesByNovel) {
+    volumes
+      .slice()
+      .sort((left, right) => (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER) || left.id.localeCompare(right.id))
+      .forEach((volume, index) => volumeRank.set(`${novelId}\u0000${volume.id}`, index))
+  }
+
+  const mainOrderById = new Map<string, number>()
+  const mainChaptersByNovel = new Map<string, LegacyChapter[]>()
+  for (const chapter of chapters) {
+    if (chapter.parentChapterId) continue
+    const current = mainChaptersByNovel.get(chapter.novelId) ?? []
+    current.push(chapter)
+    mainChaptersByNovel.set(chapter.novelId, current)
+  }
+
+  for (const [novelId, novelChapters] of mainChaptersByNovel) {
+    novelChapters
+      .slice()
+      .sort((left, right) => {
+        const leftVolume = typeof left.volumeId === 'string' ? left.volumeId : ''
+        const rightVolume = typeof right.volumeId === 'string' ? right.volumeId : ''
+        const volumeDiff = (volumeRank.get(`${novelId}\u0000${leftVolume}`) ?? Number.MAX_SAFE_INTEGER)
+          - (volumeRank.get(`${novelId}\u0000${rightVolume}`) ?? Number.MAX_SAFE_INTEGER)
+        if (volumeDiff !== 0) return volumeDiff
+        if (left.order !== right.order) return left.order - right.order
+        return left.id.localeCompare(right.id)
+      })
+      .forEach((chapter, index) => mainOrderById.set(chapter.id, index + 1))
+  }
+
+  const branchIndexByParent = new Map<string, number>()
+  return chapters.map((chapter) => {
+    if (!chapter.parentChapterId) {
+      return { ...chapter, order: mainOrderById.get(chapter.id) ?? chapter.order }
+    }
+    const branchIndex = (branchIndexByParent.get(chapter.parentChapterId) ?? 0) + 1
+    branchIndexByParent.set(chapter.parentChapterId, branchIndex)
+    const parentOrder = mainOrderById.get(chapter.parentChapterId)
+    return parentOrder === undefined ? chapter : { ...chapter, order: parentOrder + branchIndex / 1000 }
+  })
+}
+
+function normalizeChapters(input: LegacyChapter[], legacyVolumes: LegacyVolume[]) {
+  return normalizeLegacyChapterOrder(input, legacyVolumes).map((legacyChapter) => {
+    const { volumeId: _legacyVolumeId, ...chapter } = legacyChapter
+    return {
+      ...chapter,
+      content: normalizeLegacySingleParagraphHtml(chapter.content),
+      originalContent: chapter.originalContent
+        ? normalizeLegacySingleParagraphHtml(chapter.originalContent)
+        : chapter.originalContent,
+    }
+  })
+}
+
 export function createEmptyWorkspaceState(): PersistedNovelState {
   return {
     currentNovelId: '',
     currentChapterId: '',
     currentTab: 'editor',
     helperTab: 'ai',
-    expandedVolumeIds: [],
     localNovels: [],
-    localVolumes: [],
     localChapters: [],
     localOutlines: [],
     localCharacters: [],
@@ -266,40 +361,37 @@ export function createEmptyWorkspaceState(): PersistedNovelState {
   }
 }
 
-export function normalizeWorkspaceState(input?: Partial<PersistedNovelState> | null): PersistedNovelState {
+export function normalizeWorkspaceState(input?: Partial<PersistedNovelState> | LegacyWorkspaceState | null): PersistedNovelState {
   const base = createEmptyWorkspaceState()
   if (!input) return base
+  const source = input as LegacyWorkspaceState
+  const legacyVolumes = parseLegacyVolumes(source.localVolumes)
 
   const normalizedState = {
     ...base,
-    ...input,
-    expandedVolumeIds: input.expandedVolumeIds ?? base.expandedVolumeIds,
-    selectedParagraphIndex: typeof input.selectedParagraphIndex === 'number' ? input.selectedParagraphIndex : base.selectedParagraphIndex,
-    localNovels: input.localNovels ?? base.localNovels,
-    localVolumes: input.localVolumes ?? base.localVolumes,
-    localChapters: (input.localChapters ?? base.localChapters).map((chapter) => ({
-      ...chapter,
-      content: normalizeLegacySingleParagraphHtml(chapter.content),
-      originalContent: chapter.originalContent
-        ? normalizeLegacySingleParagraphHtml(chapter.originalContent)
-        : chapter.originalContent,
-    })),
-    localOutlines: input.localOutlines ?? base.localOutlines,
-    localCharacters: (input.localCharacters ?? base.localCharacters).map((character) => ({
+    ...source,
+    selectedParagraphIndex: typeof source.selectedParagraphIndex === 'number' ? source.selectedParagraphIndex : base.selectedParagraphIndex,
+    localNovels: source.localNovels ?? base.localNovels,
+    localChapters: normalizeChapters(source.localChapters ?? base.localChapters, legacyVolumes),
+    localOutlines: source.localOutlines ?? base.localOutlines,
+    localCharacters: (source.localCharacters ?? base.localCharacters).map((character) => ({
       ...character,
       profile: character.profile ? normalizeCharacterRoleCardProfile(character.profile) : undefined,
     })),
-    localCharacterRelations: input.localCharacterRelations ?? base.localCharacterRelations,
-    localWorldEntries: input.localWorldEntries ?? base.localWorldEntries,
-    localTimelineEvents: input.localTimelineEvents ?? base.localTimelineEvents,
-    rewriteCandidates: input.rewriteCandidates ?? base.rewriteCandidates,
-    rewriteHistory: input.rewriteHistory ?? base.rewriteHistory,
-    trajectories: input.trajectories ?? base.trajectories,
-    presets: input.presets ?? base.presets,
-    constraints: input.constraints ?? base.constraints,
-    presetCompatSessionState: normalizePresetCompatSessionState(input.presetCompatSessionState),
-    aiSettings: normalizeAISettings(input.aiSettings ?? input),
+    localCharacterRelations: source.localCharacterRelations ?? base.localCharacterRelations,
+    localWorldEntries: source.localWorldEntries ?? base.localWorldEntries,
+    localTimelineEvents: source.localTimelineEvents ?? base.localTimelineEvents,
+    rewriteCandidates: source.rewriteCandidates ?? base.rewriteCandidates,
+    rewriteHistory: source.rewriteHistory ?? base.rewriteHistory,
+    trajectories: source.trajectories ?? base.trajectories,
+    presets: source.presets ?? base.presets,
+    constraints: source.constraints ?? base.constraints,
+    presetCompatSessionState: normalizePresetCompatSessionState(source.presetCompatSessionState),
+    aiSettings: normalizeAISettings(source.aiSettings ?? source),
   }
+
+  delete (normalizedState as Record<string, unknown>).expandedVolumeIds
+  delete (normalizedState as Record<string, unknown>).localVolumes
 
   return {
     ...normalizedState,

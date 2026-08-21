@@ -12,10 +12,9 @@ function createWorkspace(): PersistedNovelState {
     currentNovelId: 'novel-1',
     currentChapterId: 'chapter-1',
     localNovels: [{ id: 'novel-1', title: 'Novel', summary: '', tags: [] }],
-    localVolumes: [{ id: 'volume-1', novelId: 'novel-1', title: 'Volume', order: 1 }],
     localChapters: [
-      { id: 'chapter-1', novelId: 'novel-1', volumeId: 'volume-1', title: 'One', order: 1, content: '<p>One</p>', originalContent: '<p>Original</p>', status: 'draft', wordCount: 1, updatedAt: 'one' },
-      { id: 'chapter-2', novelId: 'novel-1', volumeId: 'volume-1', title: 'Two', order: 2, content: '<p>Two</p>', status: 'draft', wordCount: 1, updatedAt: 'two' },
+      { id: 'chapter-1', novelId: 'novel-1', title: 'One', order: 1, content: '<p>One</p>', originalContent: '<p>Original</p>', status: 'draft', wordCount: 1, updatedAt: 'one' },
+      { id: 'chapter-2', novelId: 'novel-1', title: 'Two', order: 2, content: '<p>Two</p>', status: 'draft', wordCount: 1, updatedAt: 'two' },
     ],
   }
 }
@@ -50,7 +49,7 @@ function revisionResponse(payload: unknown, revision: number, novelId = 'novel-1
 async function hydrate(workspace = createWorkspace(), revision = 7) {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
-    if (url === '/api/workspace?novelId=novel-1') {
+    if (url === '/api/novels/novel-1') {
       return revisionResponse(workspace, revision)
     }
     if (url === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
@@ -123,7 +122,7 @@ describe('novel store workspace revision persistence', () => {
     const workspace = createWorkspace()
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/workspace?novelId=novel-1') {
+      if (url === '/api/novels/novel-1') {
         return new Response(JSON.stringify({ ...workspace, workspaceRevision: 6, revisionNovelId: 'novel-1' }), { status: 200 })
       }
       if (url === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
@@ -686,7 +685,7 @@ describe('novel store workspace revision persistence', () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockImplementationOnce(() => saveRequest.promise)
       .mockImplementationOnce(async (input) => {
-        if (String(input) === '/api/workspace?novelId=novel-1') return revisionResponse(hydratedWorkspace, 8)
+        if (String(input) === '/api/novels/novel-1') return revisionResponse(hydratedWorkspace, 8)
         if (String(input) === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
         throw new Error(`Unexpected fetch: ${String(input)}`)
       })
@@ -717,7 +716,7 @@ describe('novel store workspace revision persistence', () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>()
       .mockImplementationOnce(() => saveRequest.promise)
       .mockImplementationOnce(async (input) => {
-        if (String(input) === '/api/workspace?novelId=novel-1') return revisionResponse(hydratedWorkspace, 8)
+        if (String(input) === '/api/novels/novel-1') return revisionResponse(hydratedWorkspace, 8)
         if (String(input) === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
         throw new Error(`Unexpected fetch: ${String(input)}`)
       })
@@ -750,7 +749,7 @@ describe('novel store workspace revision persistence', () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>()
       .mockImplementationOnce(() => saveRequest.promise)
       .mockImplementationOnce(async (input) => {
-        if (String(input) === '/api/workspace?novelId=novel-1') return revisionResponse(hydratedWorkspace, 7)
+        if (String(input) === '/api/novels/novel-1') return revisionResponse(hydratedWorkspace, 7)
         if (String(input) === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
         throw new Error(`Unexpected fetch: ${String(input)}`)
       })
@@ -834,14 +833,12 @@ describe('novel store workspace revision persistence', () => {
       ...workspace.localChapters[0]!,
       id: 'chapter-next',
       novelId: 'novel-2',
-      volumeId: 'volume-next',
     }
     const switchedWorkspace = {
       ...workspace,
       currentNovelId: 'novel-2',
       currentChapterId: nextChapter.id,
       localNovels: [...workspace.localNovels, { id: 'novel-2', title: 'Next', summary: '', tags: [] }],
-      localVolumes: [...workspace.localVolumes, { id: 'volume-next', novelId: 'novel-2', title: 'Next', order: 1 }],
       localChapters: [...workspace.localChapters, nextChapter],
     }
     useNovelStore.getState().restorePersistedState(switchedWorkspace)
@@ -851,7 +848,7 @@ describe('novel store workspace revision persistence', () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockImplementationOnce(() => saveRequest.promise)
       .mockImplementationOnce(async (input) => {
-        if (String(input) === '/api/workspace?novelId=novel-2') return revisionResponse(hydratedWorkspace, 4, 'novel-2')
+        if (String(input) === '/api/novels/novel-2') return revisionResponse(hydratedWorkspace, 4, 'novel-2')
         if (String(input) === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
         throw new Error(`Unexpected fetch: ${String(input)}`)
       })

@@ -129,19 +129,10 @@ function buildWorkspaceRuntimePayload(novelId: string, chapterContent: string) {
         tags: [],
       },
     ],
-    localVolumes: [
-      {
-        id: `${novelId}-volume-1`,
-        novelId,
-        title: '第一卷',
-        order: 1,
-      },
-    ],
     localChapters: [
       {
         id: `${novelId}-chapter-1`,
         novelId,
-        volumeId: `${novelId}-volume-1`,
         title: '第一章',
         order: 1,
         content: `<p>${chapterContent}</p>`,

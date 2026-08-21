@@ -11,7 +11,7 @@ afterEach(() => {
   if (originalExecCommand) {
     Object.defineProperty(document, 'execCommand', originalExecCommand)
   } else {
-    delete (document as Document & { execCommand?: (command: string) => boolean }).execCommand
+    Reflect.deleteProperty(document, 'execCommand')
   }
   document.body.replaceChildren()
 })

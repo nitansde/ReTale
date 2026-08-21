@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import {
   ApiRequestError,
   assertJsonMediaType,
-  assertSameOriginRequest,
   assertWorkspaceSnapshotSemantics,
   noStoreJson,
   readBoundedJsonObject,
@@ -51,7 +50,6 @@ async function loadWorkspacePayloadFromNovelRegistryFallback(activeNovelId?: str
   )
 
   const localNovels = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localNovels'][number]>()
-  const localVolumes = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localVolumes'][number]>()
   const localChapters = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localChapters'][number]>()
   const localOutlines = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localOutlines'][number]>()
   const localCharacters = new Map<string, ReturnType<typeof createEmptyWorkspaceState>['localCharacters'][number]>()
@@ -83,12 +81,6 @@ async function loadWorkspacePayloadFromNovelRegistryFallback(activeNovelId?: str
     for (const novel of result.value.payload.localNovels) {
       if (!localNovels.has(novel.id)) {
         localNovels.set(novel.id, novel)
-      }
-    }
-
-    for (const volume of result.value.payload.localVolumes) {
-      if (!localVolumes.has(volume.id)) {
-        localVolumes.set(volume.id, volume)
       }
     }
 
@@ -152,7 +144,6 @@ async function loadWorkspacePayloadFromNovelRegistryFallback(activeNovelId?: str
       currentNovelId: activeSnapshot?.payload.currentNovelId || activeNovelId || '',
       currentChapterId: activeSnapshot?.payload.currentChapterId || '',
       localNovels: orderedLocalNovels,
-      localVolumes: [...localVolumes.values()],
       localChapters: [...localChapters.values()],
       localOutlines: [...localOutlines.values()],
       localCharacters: [...localCharacters.values()],
@@ -314,7 +305,6 @@ async function loadWorkspaceLibrarySummaries() {
 }
 
 export async function GET(request: Request) {
-  request ??= new Request('http://localhost/api/workspace')
   const searchParams = new URL(request.url).searchParams
   const librarySummary = searchParams.get('librarySummary')
   if (librarySummary !== null) {
@@ -384,17 +374,36 @@ export async function GET(request: Request) {
   }
 }
 
-export async function POST(request: Request) {
+async function persistWorkspaceSnapshot(request: Request) {
   try {
-    assertSameOriginRequest(request)
     assertJsonMediaType(request)
     const payload = await readBoundedJsonObject(request, MAX_WORKSPACE_POST_BODY_BYTES, 'Workspace JSON body exceeds 16 MiB')
     assertWorkspaceSnapshotSemantics(payload)
 
-    const normalizedPayload = normalizeWorkspaceState(payload)
+    let normalizedPayload = normalizeWorkspaceState(payload)
     const targetNovelId = resolveWorkspaceNovelId(normalizedPayload) ?? readActiveWorkspaceNovelId()
     if (!targetNovelId) {
       throw new Error('Unable to determine which novel workspace should be persisted')
+    }
+    const expectedNovelId = request.headers.get('X-Retale-Resource-Novel-Id')?.trim()
+    if (expectedNovelId && targetNovelId !== expectedNovelId) {
+      throw new WorkspaceMutationError(
+        'invalid_mutation_contract',
+        'Novel resource path must match the persisted novel',
+      )
+    }
+    if (expectedNovelId) {
+      normalizedPayload = normalizeWorkspaceState({
+        ...normalizedPayload,
+        currentNovelId: expectedNovelId,
+        currentChapterId: '',
+        currentTab: 'editor',
+        helperTab: 'ai',
+        focusMode: false,
+        selectionText: '',
+        selectedParagraphIndex: 0,
+        aiSettings: createEmptyWorkspaceState().aiSettings,
+      })
     }
 
     const revisionContract = readRevisionContract(request)
@@ -435,14 +444,24 @@ export async function POST(request: Request) {
   }
 }
 
-export async function PATCH(request: Request) {
+export async function POST(request: Request) {
+  return persistWorkspaceSnapshot(request)
+}
+
+async function patchWorkspaceChapter(request: Request) {
   try {
-    assertSameOriginRequest(request)
     assertJsonMediaType(request)
     const payload = await readBoundedJsonObject(request, MAX_WORKSPACE_PATCH_BODY_BYTES, 'Workspace patch JSON body exceeds 4 MiB')
 
     const revisionContract = readRequiredRevisionContract(request)
     const patch = readChapterPatchBody(payload)
+    const expectedChapterId = request.headers.get('X-Retale-Resource-Chapter-Id')?.trim()
+    if (expectedChapterId && patch.chapterId !== expectedChapterId) {
+      throw new WorkspaceMutationError(
+        'invalid_mutation_contract',
+        'Chapter resource path must match chapterId',
+      )
+    }
     if (revisionContract.revisionNovelId !== patch.novelId) {
       throw new WorkspaceMutationError(
         'invalid_mutation_contract',
@@ -474,9 +493,12 @@ export async function PATCH(request: Request) {
   }
 }
 
+export async function PATCH(request: Request) {
+  return patchWorkspaceChapter(request)
+}
+
 export async function DELETE(request: Request) {
   try {
-    assertSameOriginRequest(request)
     const searchParams = new URL(request.url).searchParams
     const novelId = searchParams.get('novelId')
     if (novelId === null) {
@@ -486,6 +508,7 @@ export async function DELETE(request: Request) {
     const result = await deleteWorkspaceNovel({
       novelId,
       nextNovelId: searchParams.get('nextNovelId'),
+      preferRequestedNextNovelId: request.headers.get('X-Retale-Resource-Delete') === '1',
     })
     if (result.cleanupPending) {
       scheduleWorkspaceNovelCleanup(result.deletedNovelId)

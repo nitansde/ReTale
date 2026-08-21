@@ -8,6 +8,7 @@ import { resolvePresetCompatRuntime } from '@/lib/preset-compat/resolve-runtime'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import type { PresetCompatLibrary } from '@/lib/preset-compat/types'
 import { ensureEvidenceDir, writeEvidenceFile } from '@/tests/helpers/evidence'
+import { mockNovelResourceApi } from '@/tests/helpers/novel-resource-api-mock'
 
 const WORKTREE_ROOT = process.cwd()
 const fixturePath = path.join(WORKTREE_ROOT, 'tests/fixtures/preset-compat/synthetic-sillytavern-preset.json')
@@ -120,13 +121,10 @@ function buildWorkspacePayload() {
     currentChapterId: 'chapter-001',
     currentTab: 'editor',
     helperTab: 'trajectory',
-    expandedVolumeIds: ['volume-001'],
     localNovels: [{ id: 'novel-001', title: 'Fixture Novel', summary: 'Preset compat UI fixture', tags: ['fixture'] }],
-    localVolumes: [{ id: 'volume-001', novelId: 'novel-001', title: '第一卷', order: 1 }],
     localChapters: [{
       id: 'chapter-001',
       novelId: 'novel-001',
-      volumeId: 'volume-001',
       title: '第1章 开场',
       order: 1,
       content: '<p>这里是一段测试正文。</p>',
@@ -186,20 +184,14 @@ function buildWorkspacePayload() {
   }
 }
 
-test('workspace preset-compat library modal imports fixture JSON, edits bindings and generation settings, resets context state, and exports JSON', async ({ page }) => {
+test('workspace preset-compat library modal imports fixture JSON, edits bindings and generation settings, keeps server session state out, and exports JSON', async ({ page }) => {
   const evidenceDirectory = ensureEvidenceDir('task-9')
   const fixtureText = fs.readFileSync(fixturePath, 'utf8')
   let library = createDefaultPresetCompatLibrary()
   let presetImportCounter = 0
   let regexImportCounter = 0
 
-  await page.route('**/api/workspace', async (route) => {
-    if (route.request().method() === 'POST') {
-      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
-      return
-    }
-    await route.fulfill({ status: 200, body: JSON.stringify(buildWorkspacePayload()) })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/settings/ai', async (route) => {
     if (route.request().method() === 'POST') {
       await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
@@ -322,8 +314,8 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
 
   await expect(page.getByTestId('preset-compat-preview-surface-rewrite')).toBeVisible()
   await expect(page.getByTestId('preset-compat-preview-surface-future_jump')).toHaveCount(0)
-  await expect(page.getByTestId('preset-compat-session-state-rewrite')).toHaveText(/会话阶段：continue · 正常/)
-  await expect(page.getByTestId('preset-compat-session-reset-rewrite')).toBeVisible()
+  await expect(page.getByTestId('preset-compat-session-state-rewrite')).toHaveText(/会话阶段：new_chat · 正常/)
+  await expect(page.getByTestId('preset-compat-session-reset-rewrite')).toHaveCount(0)
   await expect(page.getByText('导入备注')).toHaveCount(0)
 
   await page.getByTestId('preset-compat-preview-surface-select').selectOption('future_jump')
@@ -336,10 +328,7 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
 
   await page.getByTestId('preset-compat-preview-surface-select').selectOption('rewrite')
   await page.getByTestId('preset-compat-preview-generate').click()
-
-  await page.getByTestId('preset-compat-session-reset-rewrite').click()
-  await page.getByTestId('preset-compat-preview-generate').click()
-  await expect(page.getByTestId('preset-compat-session-state-rewrite')).toHaveText(/会话阶段：new_chat · 待重置/)
+  await expect(page.getByTestId('preset-compat-session-reset-rewrite')).toHaveCount(0)
 
   await page.getByTestId('preset-compat-regex-import-input').setInputFiles({
     name: 'resets-example-regex.json',
@@ -441,13 +430,7 @@ test('workspace rewrite flow saves a macro-bearing preset binding and sends Alic
   let rewriteProviderPayload: ReturnType<typeof buildRewriteProviderPayload> | null = null
   let rewriteMacroRuleId: string | null = null
 
-  await page.route('**/api/workspace', async (route) => {
-    if (route.request().method() === 'POST') {
-      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
-      return
-    }
-    await route.fulfill({ status: 200, body: JSON.stringify(buildWorkspacePayload()) })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/settings/ai', async (route) => {
     if (route.request().method() === 'POST') {
       await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
@@ -659,14 +642,8 @@ test('workspace rewrite flow saves a macro-bearing preset binding and sends Alic
   await page.screenshot({ path: path.join(evidenceDirectory, 'task-11-ui-preset-macro.png'), fullPage: true })
 })
 
-test('workspace rewrite flow shows missing-provider errors from the rewrite API', async ({ page }) => {
-  await page.route('**/api/workspace', async (route) => {
-    if (route.request().method() === 'POST') {
-      await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
-      return
-    }
-    await route.fulfill({ status: 200, body: JSON.stringify(buildWorkspacePayload()) })
-  })
+test('workspace rewrite flow shows a localized creation error when the provider is missing', async ({ page }) => {
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/settings/ai', async (route) => {
     if (route.request().method() === 'POST') {
       await route.fulfill({ status: 200, body: JSON.stringify({ ok: true }) })
@@ -778,6 +755,6 @@ test('workspace rewrite flow shows missing-provider errors from the rewrite API'
   await page.getByRole('button', { name: '魔改 围绕选中片段与额外要求，产出一个完整章节重写版本。' }).click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
   await page.getByRole('button', { name: '生成版本' }).click()
-  await expect(page.getByTestId('rewrite-flow-error')).toContainText('OpenAI-compatible config not set')
-  await expect(page.getByTestId('workspace-action-overlay')).toContainText('OpenAI-compatible config not set')
+  await expect(page.getByTestId('rewrite-flow-error')).toContainText('创建可恢复改写任务失败')
+  await expect(page.getByTestId('workspace-action-overlay')).toContainText('创建可恢复改写任务失败')
 })

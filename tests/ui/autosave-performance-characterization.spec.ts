@@ -1,10 +1,9 @@
 import { expect, test } from '@playwright/test'
-import type { PersistedNovelState } from '../../lib/types'
 import {
   AUTOSAVE_EDIT_BURST_LENGTH,
-  AUTOSAVE_PERFORMANCE_CHAPTER_COUNT,
   materializeAutosavePerformanceFixtures,
 } from '../helpers/autosave-performance-fixtures'
+import { mockNovelResourceApi, type MockNovelResourceMutation } from '../helpers/novel-resource-api-mock'
 
 async function waitForObservedCountToStabilize(readCount: () => number, minCount: number) {
   const deadline = Date.now() + 15_000
@@ -25,33 +24,38 @@ async function waitForObservedCountToStabilize(readCount: () => number, minCount
     }
   }
 
-  throw new Error(`Workspace POST count did not stabilize; observed ${lastCount}, expected at least ${minCount}.`)
+  throw new Error(`Resource save count did not stabilize; observed ${lastCount}, expected at least ${minCount}.`)
 }
 
-test('Phase 0 large-workspace edit burst characterizes autosave count, order, and payload', async ({ page }) => {
+test('large-novel edit burst keeps autosaves ordered and chapter-scoped', async ({ page }) => {
   test.setTimeout(90_000)
   const fixtures = materializeAutosavePerformanceFixtures()
   let persistedWorkspace = fixtures.workspace
-  const workspacePosts: Array<{ order: number; payload: PersistedNovelState; payloadBytes: number }> = []
-  let activeWorkspacePosts = 0
-  let maximumActiveWorkspacePosts = 0
+  const resourceSaves: Array<MockNovelResourceMutation & { order: number }> = []
+  let activeResourceSaves = 0
+  let maximumActiveResourceSaves = 0
 
-  await page.route('**/api/workspace*', async (route) => {
-    const request = route.request()
-    if (request.method() === 'POST') {
-      activeWorkspacePosts += 1
-      maximumActiveWorkspacePosts = Math.max(maximumActiveWorkspacePosts, activeWorkspacePosts)
-      const body = request.postData() ?? ''
-      const payload = JSON.parse(body) as PersistedNovelState
-      workspacePosts.push({ order: workspacePosts.length + 1, payload, payloadBytes: Buffer.byteLength(body) })
-      persistedWorkspace = payload
+  await mockNovelResourceApi(page, () => persistedWorkspace, {
+    onMutation: async (mutation) => {
+      activeResourceSaves += 1
+      maximumActiveResourceSaves = Math.max(maximumActiveResourceSaves, activeResourceSaves)
+      resourceSaves.push({ ...mutation, order: resourceSaves.length + 1 })
+      if (mutation.kind === 'chapter') {
+        persistedWorkspace = {
+          ...persistedWorkspace,
+          localChapters: persistedWorkspace.localChapters.map((chapter) => chapter.id === mutation.id
+            ? {
+                ...chapter,
+                content: typeof mutation.payload.content === 'string' ? mutation.payload.content : chapter.content,
+                wordCount: typeof mutation.payload.wordCount === 'number' ? mutation.payload.wordCount : chapter.wordCount,
+                updatedAt: typeof mutation.payload.updatedAtLabel === 'string' ? mutation.payload.updatedAtLabel : chapter.updatedAt,
+              }
+            : chapter),
+        }
+      }
       await new Promise((resolve) => setTimeout(resolve, 25))
-      activeWorkspacePosts -= 1
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) })
-      return
-    }
-
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(persistedWorkspace) })
+      activeResourceSaves -= 1
+    },
   })
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({
@@ -94,23 +98,25 @@ test('Phase 0 large-workspace edit burst characterizes autosave count, order, an
   const editor = page.locator('[contenteditable="true"]').first()
   await expect(editor).toBeVisible()
 
-  const baselinePostCount = workspacePosts.length
+  const baselineSaveCount = resourceSaves.length
   await editor.click()
   await page.keyboard.press('Meta+A')
   await page.keyboard.insertText(fixtures.editBurst)
   await expect(page.getByTestId('workspace-chapter-body-view')).toContainText(fixtures.editBurst.slice(-64))
 
-  await waitForObservedCountToStabilize(() => workspacePosts.length, baselinePostCount + 1)
-  const editPosts = workspacePosts.slice(baselinePostCount)
-  expect(editPosts.length).toBeGreaterThanOrEqual(1)
-  expect(editPosts.length).toBeLessThanOrEqual(2)
-  expect(editPosts.map((post) => post.order)).toEqual(
-    Array.from({ length: editPosts.length }, (_, index) => baselinePostCount + index + 1),
+  await waitForObservedCountToStabilize(() => resourceSaves.length, baselineSaveCount + 1)
+  const editSaves = resourceSaves.slice(baselineSaveCount)
+  expect(editSaves.length).toBeGreaterThanOrEqual(1)
+  expect(editSaves.length).toBeLessThanOrEqual(2)
+  expect(editSaves.map((save) => save.order)).toEqual(
+    Array.from({ length: editSaves.length }, (_, index) => baselineSaveCount + index + 1),
   )
-  expect(maximumActiveWorkspacePosts).toBe(1)
-  expect(editPosts.every((post) => post.payload.localChapters.length === AUTOSAVE_PERFORMANCE_CHAPTER_COUNT)).toBe(true)
-  expect(editPosts.every((post) => post.payloadBytes > AUTOSAVE_EDIT_BURST_LENGTH)).toBe(true)
-  expect(editPosts.at(-1)?.payload.localChapters.find((chapter) => chapter.id === persistedWorkspace.currentChapterId)?.content).toBe(`<p>${fixtures.editBurst}</p>`)
+  expect(maximumActiveResourceSaves).toBe(1)
+  expect(editSaves.every((save) => save.kind === 'chapter' && save.id === persistedWorkspace.currentChapterId)).toBe(true)
+  expect(editSaves.every((save) => save.payload.localChapters === undefined)).toBe(true)
+  expect(editSaves.every((save) => save.payloadBytes > AUTOSAVE_EDIT_BURST_LENGTH)).toBe(true)
+  expect(editSaves.at(-1)?.payload.content).toBe(`<p>${fixtures.editBurst}</p>`)
+  expect(persistedWorkspace.localChapters.find((chapter) => chapter.id === persistedWorkspace.currentChapterId)?.content).toBe(`<p>${fixtures.editBurst}</p>`)
 
   await page.reload({ waitUntil: 'networkidle' })
   await expect(page.getByTestId('workspace-chapter-body-view')).toContainText(fixtures.editBurst.slice(-64))

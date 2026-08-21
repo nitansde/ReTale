@@ -719,6 +719,7 @@ export async function resumePendingWorkspaceNovelCleanup(clock?: WorkspaceNovelL
 export async function deleteWorkspaceNovel(params: {
   novelId: string
   nextNovelId?: string | null
+  preferRequestedNextNovelId?: boolean
   now?: WorkspaceNovelLifecycleClock
 }): Promise<WorkspaceNovelDeletionResult> {
   let novelId: string
@@ -808,8 +809,8 @@ export async function deleteWorkspaceNovel(params: {
           ACTIVE_WORKSPACE_NOVEL_ID_KEY,
         )
         const activeSurvivor = survivors.find((row) => row.novelId === activeSetting?.value) ?? null
-        const canonicalActiveNovelId = activeSurvivor?.novelId
-          ?? requestedSurvivor?.novelId
+        const canonicalActiveNovelId = (params.preferRequestedNextNovelId ? requestedSurvivor?.novelId : activeSurvivor?.novelId)
+          ?? (params.preferRequestedNextNovelId ? activeSurvivor?.novelId : requestedSurvivor?.novelId)
           ?? survivors[0]?.novelId
           ?? null
         const canonicalActiveSurvivor = survivors.find((row) => row.novelId === canonicalActiveNovelId) ?? null

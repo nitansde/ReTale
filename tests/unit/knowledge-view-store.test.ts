@@ -39,7 +39,6 @@ describe('knowledge view store lightweight action responses', () => {
       localChapters: [{
         id: 'chapter-1',
         novelId: 'novel-1',
-        volumeId: '',
         title: 'Chapter 1',
         order: 1,
         content: '<p>Body</p>',

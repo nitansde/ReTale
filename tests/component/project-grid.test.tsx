@@ -24,7 +24,7 @@ type MockStoreState = {
   loadFromBackend: (novelId?: string) => Promise<void>
   saveToBackend: () => Promise<void>
   deleteNovelFromBackend: (novelId: string) => Promise<
-    | { status: 'committed'; result: { ok: true; deletedNovelId: string; activeNovelId: string | null; deletionState: 'deleted'; cleanupPending: boolean } }
+    | { status: 'committed'; result: { ok: true; deletedNovelId: string; nextNovelId: string | null; deletionState: 'deleted'; cleanupPending: boolean } }
     | { status: 'rejected'; error: string }
     | { status: 'indeterminate'; error: string }
   >
@@ -33,7 +33,7 @@ type MockStoreState = {
   beginNovelDeletion?: (novelId: string) => { novelId: string; before: object; optimistic: object; summary?: object | null } | null
   rollbackNovelDeletion?: (transaction: { novelId: string; before: object; optimistic: object; summary?: object | null }) => void
   setNovelDeletionPending?: (pending: boolean) => void
-  reconcileNovelDeletion?: (activeNovelId: string | null) => void
+  reconcileNovelDeletion?: (nextNovelId: string | null) => void
   setCurrentNovelId: (novelId: string) => void
   setCurrentChapterId: (chapterId: string) => void
   deleteNovel: (novelId: string) => void
@@ -144,10 +144,10 @@ function renderProjectGrid() {
   return render(<ProjectGrid />)
 }
 
-function deletedNovelResult(novelId: string, activeNovelId: string | null = null, cleanupPending = false) {
+function deletedNovelResult(novelId: string, nextNovelId: string | null = null, cleanupPending = false) {
   return {
     status: 'committed' as const,
-    result: { ok: true as const, deletedNovelId: novelId, activeNovelId, deletionState: 'deleted' as const, cleanupPending },
+    result: { ok: true as const, deletedNovelId: novelId, nextNovelId, deletionState: 'deleted' as const, cleanupPending },
   }
 }
 
@@ -532,7 +532,7 @@ describe('ProjectGrid chapter resolution', () => {
     expect(screen.getByText('正在恢复书库与上次工作区…如果本地数据较大，可能需要几秒钟。')).toBeInTheDocument()
   })
 
-  it('persists an existing novel selection before navigating', async () => {
+  it('stores an existing novel selection locally before navigating', async () => {
     const callOrder: string[] = []
     const setCurrentNovelId = vi.fn((novelId: string) => {
       callOrder.push(`novel:${novelId}`)
@@ -540,9 +540,7 @@ describe('ProjectGrid chapter resolution', () => {
     const setCurrentChapterId = vi.fn((chapterId: string) => {
       callOrder.push(`chapter:${chapterId}`)
     })
-    const saveToBackend = vi.fn(async () => {
-      callOrder.push('save')
-    })
+    const saveToBackend = vi.fn(async () => undefined)
 
     pushMock.mockImplementation(() => {
       callOrder.push('push')
@@ -568,12 +566,11 @@ describe('ProjectGrid chapter resolution', () => {
     })
 
     expect(pushMock).toHaveBeenCalledWith('/workspace')
-    expect(saveToBackend).toHaveBeenCalledTimes(1)
-    expect(callOrder).toEqual(['novel:novel-a', 'chapter:ch-1', 'save', 'push'])
+    expect(saveToBackend).not.toHaveBeenCalled()
+    expect(callOrder).toEqual(['novel:novel-a', 'chapter:ch-1', 'push'])
   })
 
-  it('keeps the user in the library when selection persistence fails', async () => {
-    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('does not invoke whole-novel persistence while opening a project', async () => {
     const setCurrentNovelId = vi.fn()
     const setCurrentChapterId = vi.fn()
     const saveToBackend = vi
@@ -599,18 +596,15 @@ describe('ProjectGrid chapter resolution', () => {
       await Promise.resolve()
     })
 
-    await waitFor(() => expect(screen.getByText('进入工作区失败，请稍后重试。')).toBeInTheDocument())
-
     expect(setCurrentNovelId).toHaveBeenNthCalledWith(1, 'novel-a')
-    expect(saveToBackend).toHaveBeenCalledTimes(1)
+    expect(saveToBackend).not.toHaveBeenCalled()
     expect(setCurrentChapterId).toHaveBeenCalledTimes(1)
     expect(setCurrentChapterId).toHaveBeenCalledWith('ch-stale')
-    expect(pushMock).not.toHaveBeenCalled()
-    expect(consoleWarn).toHaveBeenCalled()
+    expect(pushMock).toHaveBeenCalledWith('/workspace')
+    expect(screen.queryByText('进入工作区失败，请稍后重试。')).not.toBeInTheDocument()
   })
 
-  it('hydrates the selected novel once and leaves a failed handoff available for retry', async () => {
-    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('hydrates the selected novel once before navigating', async () => {
     const setCurrentNovelId = vi.fn()
     const setCurrentChapterId = vi.fn()
     const loadFromBackend = vi.fn(async () => undefined)
@@ -637,16 +631,12 @@ describe('ProjectGrid chapter resolution', () => {
       await Promise.resolve()
     })
 
-    await waitFor(() => expect(screen.getByText('进入工作区失败，请稍后重试。')).toBeInTheDocument())
-
     expect(loadFromBackend).toHaveBeenCalledTimes(1)
     expect(loadFromBackend).toHaveBeenCalledWith('novel-a')
-    expect(saveToBackend).toHaveBeenCalledTimes(1)
+    expect(saveToBackend).not.toHaveBeenCalled()
     expect(setCurrentChapterId).toHaveBeenCalledTimes(1)
     expect(setCurrentChapterId).toHaveBeenCalledWith('ch-stale')
-    expect(pushMock).not.toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: 'Open project' })).toBeEnabled()
-    expect(consoleWarn).toHaveBeenCalled()
+    expect(pushMock).toHaveBeenCalledWith('/workspace')
   })
 
   it('does not select, navigate, or save after targeted hydration rejects', async () => {
@@ -719,15 +709,15 @@ describe('ProjectGrid chapter resolution', () => {
     })
   })
 
-  it('shows per-card opening feedback and delays navigation while selection save is pending', async () => {
-    const saveDeferred = createDeferredPromise<void>()
-    const saveToBackend = vi.fn(() => saveDeferred.promise)
+  it('shows per-card opening feedback and delays navigation while hydration is pending', async () => {
+    const loadDeferred = createDeferredPromise<void>()
+    const saveToBackend = vi.fn(async () => undefined)
 
     mockStoreState = {
       backendLoadError: '',
       localChapters: [{ id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 }],
       getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
-      loadFromBackend: vi.fn(async () => undefined),
+      loadFromBackend: vi.fn(() => loadDeferred.promise),
       saveToBackend,
       deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
       setCurrentNovelId: vi.fn(),
@@ -748,12 +738,13 @@ describe('ProjectGrid chapter resolution', () => {
     expect(pushMock).not.toHaveBeenCalled()
 
     await act(async () => {
-      saveDeferred.resolve()
-      await saveDeferred.promise
+      loadDeferred.resolve()
+      await loadDeferred.promise
     })
 
     expect(pushMock).toHaveBeenCalledWith('/workspace')
     expect(pushMock).toHaveBeenCalledTimes(1)
+    expect(saveToBackend).not.toHaveBeenCalled()
   })
 
   it('accepts a cleanup-pending success and reconciles the authoritative survivor', async () => {

@@ -163,11 +163,9 @@ function createWorkspacePayload(novelId = 'novel-survivor') {
     currentNovelId: novelId,
     currentChapterId: chapterId,
     localNovels: [{ id: novelId, title: 'Authoritative novel', summary: '', tags: [] }],
-    localVolumes: [{ id: `${novelId}-volume`, novelId, title: 'Volume', order: 1 }],
     localChapters: [{
       id: chapterId,
       novelId,
-      volumeId: `${novelId}-volume`,
       title: 'Chapter',
       order: 1,
       content: '<p>Authoritative</p>',
@@ -195,10 +193,9 @@ describe('preset compat store lifecycle', () => {
   it('loads compact library summaries without hydrating chapter bodies', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/workspace?librarySummary=1') {
+      if (url === '/api/novels') {
         return new Response(JSON.stringify({
           ok: true,
-          activeNovelId: 'novel-1',
           novels: [{
             id: 'novel-1',
             title: 'Compact Novel',
@@ -226,6 +223,45 @@ describe('preset compat store lifecycle', () => {
     })])
     expect(state.localChapters).toEqual([])
     expect(state.backendLoaded).toBe(false)
+  })
+
+  it('opens the first novel resource when a browser has no prior local selection', async () => {
+    const requests: string[] = []
+    useNovelStore.setState({ currentNovelId: '', currentChapterId: '' })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      requests.push(url)
+      if (url === '/api/novels') {
+        return Response.json({
+          ok: true,
+          novels: [{
+            id: 'novel-first',
+            title: 'First novel',
+            summary: '',
+            tags: [],
+            updatedAt: 'now',
+            wordCount: 1,
+            chapterCount: 1,
+            firstChapterId: 'novel-first-chapter',
+          }],
+        })
+      }
+      if (url === '/api/novels/novel-first') {
+        return Response.json(createWorkspacePayload('novel-first'))
+      }
+      if (url === '/api/settings/ai') return Response.json({})
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await useNovelStore.getState().loadFromBackend()
+
+    expect(requests.slice(0, 2)).toEqual(['/api/novels', '/api/novels/novel-first'])
+    expect(useNovelStore.getState()).toMatchObject({
+      currentNovelId: 'novel-first',
+      currentChapterId: 'novel-first-chapter',
+      backendLoaded: true,
+      backendLoadError: '',
+    })
   })
 
   it('begins and rolls back deletion for a summary-only library card', () => {
@@ -282,10 +318,10 @@ describe('preset compat store lifecycle', () => {
     const authoritative = createWorkspacePayload(summary.id)
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/workspace?novelId=novel-summary-only&deletionStatus=1') {
+      if (url === '/api/novels/novel-summary-only?deletionStatus=1') {
         return new Response(JSON.stringify({ ok: true, novelId: summary.id, deletionState: 'ready' }), { status: 200 })
       }
-      if (url === '/api/workspace?novelId=novel-summary-only') {
+      if (url === '/api/novels/novel-summary-only') {
         return new Response(JSON.stringify(authoritative), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -344,7 +380,6 @@ describe('preset compat store lifecycle', () => {
   it('rejects malformed compact library summaries without accepting partial data', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       ok: true,
-      activeNovelId: null,
       novels: [{
         id: 'novel-1',
         title: 'Invalid Novel',
@@ -370,14 +405,13 @@ describe('preset compat store lifecycle', () => {
 
   it('defers the global library during backend load and keeps workspace export/import isolated', async () => {
     const workspacePayload = {
+      ...useNovelStore.getState().snapshotPersistedState(),
       currentNovelId: 'novel-1',
       currentChapterId: 'chapter-1',
       localNovels: [{ id: 'novel-1', title: 'Novel', summary: 'Summary', tags: [] }],
-      localVolumes: [{ id: 'volume-1', novelId: 'novel-1', title: 'Volume', order: 1 }],
       localChapters: [{
         id: 'chapter-1',
         novelId: 'novel-1',
-        volumeId: 'volume-1',
         title: 'Chapter 1',
         order: 1,
         content: '<p>Body</p>',
@@ -389,11 +423,16 @@ describe('preset compat store lifecycle', () => {
       }],
     }
     const presetCompatLibrary = createLibrary({ revision: 3 })
+    useNovelStore.setState({ currentNovelId: 'novel-1' })
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/workspace') {
-        return new Response(JSON.stringify(workspacePayload), { status: 200 })
+      if (url === '/api/novels/novel-1') {
+        return new Response(JSON.stringify({
+          ...workspacePayload,
+          workspaceRevision: 3,
+          revisionNovelId: 'novel-1',
+        }), { status: 200 })
       }
       if (url === '/api/settings/ai') {
         return new Response(JSON.stringify({ provider: 'openai-compatible', model: 'gpt-4.1-mini' }), { status: 200 })
@@ -419,10 +458,11 @@ describe('preset compat store lifecycle', () => {
 
   it('fails open when the initial workspace restore request stalls', async () => {
     vi.useFakeTimers()
+    useNovelStore.setState({ currentNovelId: 'novel-a' })
 
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url !== '/api/workspace') {
+      if (url !== '/api/novels/novel-a') {
         throw new Error(`Unexpected fetch: ${url}`)
       }
 
@@ -451,7 +491,7 @@ describe('preset compat store lifecycle', () => {
     const settingsRequest = Promise.withResolvers<Response>()
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/workspace?novelId=novel-a') {
+      if (url === '/api/novels/novel-a') {
         return Promise.resolve(new Response(JSON.stringify(workspacePayload), { status: 200 }))
       }
       if (url === '/api/settings/ai') return settingsRequest.promise
@@ -472,7 +512,7 @@ describe('preset compat store lifecycle', () => {
   it('records and rejects a targeted workspace restore failure', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/workspace?novelId=novel-a') {
+      if (url === '/api/novels/novel-a') {
         return new Response(JSON.stringify({ error: 'Targeted restore failed' }), { status: 500 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -499,31 +539,30 @@ describe('preset compat store lifecycle', () => {
 
     const duplicateOne = useNovelStore.getState().loadFromBackend('novel-a')
     const duplicateTwo = useNovelStore.getState().loadFromBackend('novel-a')
-    expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/workspace?novelId=novel-a')).toHaveLength(1)
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/novels/novel-a')).toHaveLength(1)
 
     const newer = useNovelStore.getState().loadFromBackend('novel-b')
     await vi.waitFor(() => {
-      expect(pending.get('/api/workspace?novelId=novel-a')?.signal?.aborted).toBe(true)
+      expect(pending.get('/api/novels/novel-a')?.signal?.aborted).toBe(true)
     })
-    pending.get('/api/workspace?novelId=novel-b')?.resolve(new Response(JSON.stringify(createWorkspacePayload('novel-b'))))
+    pending.get('/api/novels/novel-b')?.resolve(new Response(JSON.stringify(createWorkspacePayload('novel-b'))))
     await newer
     expect(useNovelStore.getState().currentNovelId).toBe('novel-b')
 
-    pending.get('/api/workspace?novelId=novel-a')?.resolve(new Response(JSON.stringify(createWorkspacePayload('novel-a'))))
+    pending.get('/api/novels/novel-a')?.resolve(new Response(JSON.stringify(createWorkspacePayload('novel-a'))))
     await Promise.all([duplicateOne, duplicateTwo])
     expect(useNovelStore.getState().currentNovelId).toBe('novel-b')
   })
 
   it('does not issue a store-owned status-only knowledge request during loadFromBackend', async () => {
     const workspacePayload = {
+      ...useNovelStore.getState().snapshotPersistedState(),
       currentNovelId: 'novel-1',
       currentChapterId: 'chapter-1',
       localNovels: [{ id: 'novel-1', title: 'Novel', summary: 'Summary', tags: [] }],
-      localVolumes: [{ id: 'volume-1', novelId: 'novel-1', title: 'Volume', order: 1 }],
       localChapters: [{
         id: 'chapter-1',
         novelId: 'novel-1',
-        volumeId: 'volume-1',
         title: 'Chapter 1',
         order: 1,
         content: '<p>Body</p>',
@@ -534,11 +573,16 @@ describe('preset compat store lifecycle', () => {
         trajectory: [],
       }],
     }
+    useNovelStore.setState({ currentNovelId: 'novel-1' })
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/workspace') {
-        return new Response(JSON.stringify(workspacePayload), { status: 200 })
+      if (url === '/api/novels/novel-1') {
+        return new Response(JSON.stringify({
+          ...workspacePayload,
+          workspaceRevision: 3,
+          revisionNovelId: 'novel-1',
+        }), { status: 200 })
       }
       if (url === '/api/settings/ai') {
         return new Response(JSON.stringify({ provider: 'openai-compatible', model: 'gpt-4.1-mini' }), { status: 200 })
@@ -669,13 +713,14 @@ describe('preset compat store lifecycle', () => {
     const initialLibrary = createLibrary({ revision: 5 })
     const requestBodies: Array<{ url: string; body: unknown }> = []
 
+    useNovelStore.getState().restorePersistedState(createWorkspacePayload('novel-1'))
     useNovelStore.setState({
       presetCompatLibrary: initialLibrary,
     })
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === '/api/workspace' && init?.method === 'POST') {
+      if (url === '/api/novels/novel-1' && init?.method === 'POST') {
         requestBodies.push({
           url,
           body: JSON.parse(String(init.body)),
@@ -700,18 +745,19 @@ describe('preset compat store lifecycle', () => {
     await useNovelStore.getState().saveToBackend()
 
     expect(requestBodies).toHaveLength(1)
-    expect(requestBodies[0]?.url).toBe('/api/workspace')
+    expect(requestBodies[0]?.url).toBe('/api/novels/novel-1')
     expect(requestBodies[0]?.body).not.toHaveProperty('presetCompatLibrary')
     expect(useNovelStore.getState().presetCompatLibrary.revision).toBe(5)
   })
 
   it('surfaces failed workspace saves and skips projection refresh', async () => {
     const requests: string[] = []
+    useNovelStore.setState({ currentNovelId: 'novel-only' })
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       requests.push(url)
-      if (url === '/api/workspace') {
+      if (url === '/api/novels/novel-only') {
         return new Response(
           JSON.stringify({ ok: false, error: 'Refusing to overwrite a recoverable workspace with an empty payload' }),
           { status: 409 }
@@ -722,7 +768,7 @@ describe('preset compat store lifecycle', () => {
 
     await expect(useNovelStore.getState().saveToBackend()).rejects.toThrow('Refusing to overwrite a recoverable workspace with an empty payload')
 
-    expect(requests).toEqual(['/api/workspace'])
+    expect(requests).toEqual(['/api/novels/novel-only'])
     expect(useNovelStore.getState().isSaving).toBe(false)
   })
 
@@ -733,7 +779,7 @@ describe('preset compat store lifecycle', () => {
       return new Response(JSON.stringify({
         ok: true,
         deletedNovelId: 'novel target/?',
-        activeNovelId: 'novel survivor/二',
+        nextNovelId: 'novel survivor/二',
         deletionState: 'deleted',
         cleanupPending: false,
       }), { status: 200 })
@@ -745,7 +791,7 @@ describe('preset compat store lifecycle', () => {
       result: {
         ok: true,
         deletedNovelId: 'novel target/?',
-        activeNovelId: 'novel survivor/二',
+        nextNovelId: 'novel survivor/二',
         deletionState: 'deleted',
         cleanupPending: false,
       },
@@ -753,8 +799,7 @@ describe('preset compat store lifecycle', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const requestUrl = new URL(String(fetchMock.mock.calls[0]?.[0]), 'http://localhost')
-    expect(requestUrl.pathname).toBe('/api/workspace')
-    expect(requestUrl.searchParams.get('novelId')).toBe('novel target/?')
+    expect(requestUrl.pathname).toBe('/api/novels/novel%20target%2F%3F')
     expect(requestUrl.searchParams.get('nextNovelId')).toBe('novel survivor/二')
   })
 
@@ -763,7 +808,7 @@ describe('preset compat store lifecycle', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       ok: true,
       deletedNovelId: 'novel-target',
-      activeNovelId: 'novel-survivor',
+      nextNovelId: 'novel-survivor',
       deletionState: 'deleted',
       cleanupPending: true,
     }), { status: 202 })))
@@ -773,7 +818,7 @@ describe('preset compat store lifecycle', () => {
       result: {
         ok: true,
         deletedNovelId: 'novel-target',
-        activeNovelId: 'novel-survivor',
+        nextNovelId: 'novel-survivor',
         deletionState: 'deleted',
         cleanupPending: true,
       },
@@ -785,8 +830,8 @@ describe('preset compat store lifecycle', () => {
     const fetchMock = vi
       .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ ok: false, error: 'Novel is busy' }), { status: 409 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, deletedNovelId: 'wrong-id', activeNovelId: null, deletionState: 'deleted', cleanupPending: false }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, deletedNovelId: 'novel-only', activeNovelId: null, deletionState: 'deleted', cleanupPending: false }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, deletedNovelId: 'wrong-id', nextNovelId: null, deletionState: 'deleted', cleanupPending: false }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, deletedNovelId: 'novel-only', nextNovelId: null, deletionState: 'deleted', cleanupPending: false }), { status: 201 }))
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(useNovelStore.getState().deleteNovelFromBackend('novel-only')).resolves.toEqual({ status: 'rejected', error: 'Novel is busy' })
@@ -795,7 +840,7 @@ describe('preset compat store lifecycle', () => {
 
     for (const [input] of fetchMock.mock.calls) {
       const requestUrl = new URL(String(input), 'http://localhost')
-      expect(requestUrl.searchParams.get('novelId')).toBe('novel-only')
+      expect(requestUrl.pathname).toBe('/api/novels/novel-only')
       expect(requestUrl.searchParams.has('nextNovelId')).toBe(false)
     }
   })
@@ -804,43 +849,43 @@ describe('preset compat store lifecycle', () => {
     {
       name: 'missing success marker',
       status: 200,
-      body: { deletedNovelId: 'novel-only', activeNovelId: null, deletionState: 'deleted', cleanupPending: false },
+      body: { deletedNovelId: 'novel-only', nextNovelId: null, deletionState: 'deleted', cleanupPending: false },
       error: 'Failed to delete novel',
     },
     {
       name: 'non-string deleted novel ID',
       status: 200,
-      body: { ok: true, deletedNovelId: 42, activeNovelId: null, deletionState: 'deleted', cleanupPending: false },
+      body: { ok: true, deletedNovelId: 42, nextNovelId: null, deletionState: 'deleted', cleanupPending: false },
       error: 'invalid deleted novel ID',
     },
     {
-      name: 'invalid active novel ID',
+      name: 'invalid next novel ID',
       status: 200,
-      body: { ok: true, deletedNovelId: 'novel-only', activeNovelId: 42, deletionState: 'deleted', cleanupPending: false },
-      error: 'invalid active novel ID',
+      body: { ok: true, deletedNovelId: 'novel-only', nextNovelId: 42, deletionState: 'deleted', cleanupPending: false },
+      error: 'invalid next novel ID',
     },
     {
       name: 'invalid deletion state',
       status: 200,
-      body: { ok: true, deletedNovelId: 'novel-only', activeNovelId: null, deletionState: 'deleting', cleanupPending: false },
+      body: { ok: true, deletedNovelId: 'novel-only', nextNovelId: null, deletionState: 'deleting', cleanupPending: false },
       error: 'invalid deletion state',
     },
     {
       name: 'non-boolean cleanup marker',
       status: 200,
-      body: { ok: true, deletedNovelId: 'novel-only', activeNovelId: null, deletionState: 'deleted', cleanupPending: 'false' },
+      body: { ok: true, deletedNovelId: 'novel-only', nextNovelId: null, deletionState: 'deleted', cleanupPending: 'false' },
       error: 'invalid cleanup pending state',
     },
     {
       name: '200 response with cleanup pending',
       status: 200,
-      body: { ok: true, deletedNovelId: 'novel-only', activeNovelId: null, deletionState: 'deleted', cleanupPending: true },
+      body: { ok: true, deletedNovelId: 'novel-only', nextNovelId: null, deletionState: 'deleted', cleanupPending: true },
       error: 'inconsistent cleanup pending state',
     },
     {
       name: '202 response without cleanup pending',
       status: 202,
-      body: { ok: true, deletedNovelId: 'novel-only', activeNovelId: null, deletionState: 'deleted', cleanupPending: false },
+      body: { ok: true, deletedNovelId: 'novel-only', nextNovelId: null, deletionState: 'deleted', cleanupPending: false },
       error: 'inconsistent cleanup pending state',
     },
   ])('classifies deletion transport contract violations as indeterminate: $name', async ({ status, body }) => {
@@ -897,13 +942,9 @@ describe('preset compat store lifecycle', () => {
         { id: novelId, title: 'Target before', summary: '', tags: [] },
         { id: 'novel-survivor', title: 'Survivor', summary: '', tags: [] },
       ],
-      localVolumes: [
-        { id: 'volume-target', novelId, title: 'Target volume', order: 1 },
-        { id: 'volume-survivor', novelId: 'novel-survivor', title: 'Survivor volume', order: 1 },
-      ],
       localChapters: [
-        { id: 'chapter-target', novelId, volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
-        { id: 'chapter-survivor', novelId: 'novel-survivor', volumeId: 'volume-survivor', title: 'Survivor chapter', order: 1, content: '<p>Survivor before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+        { id: 'chapter-target', novelId, title: 'Target chapter', order: 1, content: '<p>Target before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+        { id: 'chapter-survivor', novelId: 'novel-survivor', title: 'Survivor chapter', order: 1, content: '<p>Survivor before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
       ],
     })
     const transaction = useNovelStore.getState().beginNovelDeletion(novelId)
@@ -914,12 +955,11 @@ describe('preset compat store lifecycle', () => {
       selectionText: 'post-optimistic selection',
       selectedParagraphIndex: 9,
       localNovels: [...state.localNovels, { id: 'novel-imported', title: 'Imported', summary: '', tags: [] }],
-      localVolumes: [...state.localVolumes, { id: 'volume-imported', novelId: 'novel-imported', title: 'Imported volume', order: 1 }],
       localChapters: [
         ...state.localChapters.map((chapter) => chapter.id === 'chapter-survivor'
           ? { ...chapter, content: '<p>Survivor edited</p>', updatedAt: 'after' }
           : chapter),
-        { id: 'chapter-imported', novelId: 'novel-imported', volumeId: 'volume-imported', title: 'Imported chapter', order: 1, content: '<p>Imported</p>', status: 'draft', wordCount: 1, updatedAt: 'after' },
+        { id: 'chapter-imported', novelId: 'novel-imported', title: 'Imported chapter', order: 1, content: '<p>Imported</p>', status: 'draft', wordCount: 1, updatedAt: 'after' },
       ],
     }))
     const authoritative = {
@@ -939,10 +979,10 @@ describe('preset compat store lifecycle', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       requests.push(url)
-      if (url === '/api/workspace?novelId=novel+target%2F%3F&deletionStatus=1') {
+      if (url === '/api/novels/novel%20target%2F%3F?deletionStatus=1') {
         return new Response(JSON.stringify({ ok: true, novelId, deletionState: 'ready' }), { status: 200 })
       }
-      if (url === '/api/workspace?novelId=novel+target%2F%3F') {
+      if (url === '/api/novels/novel%20target%2F%3F') {
         return new Response(JSON.stringify(authoritative), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -951,8 +991,8 @@ describe('preset compat store lifecycle', () => {
     await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).resolves.toBe('present')
 
     expect(requests).toEqual([
-      '/api/workspace?novelId=novel+target%2F%3F&deletionStatus=1',
-      '/api/workspace?novelId=novel+target%2F%3F',
+      '/api/novels/novel%20target%2F%3F?deletionStatus=1',
+      '/api/novels/novel%20target%2F%3F',
     ])
     const state = useNovelStore.getState()
     expect(state.currentNovelId).toBe('novel-imported')
@@ -977,8 +1017,7 @@ describe('preset compat store lifecycle', () => {
       currentNovelId: 'novel-target',
       currentChapterId: 'chapter-target',
       localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
-      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
-      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
     })
     const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
     expect(transaction).not.toBeNull()
@@ -991,7 +1030,7 @@ describe('preset compat store lifecycle', () => {
 
     await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).resolves.toBe('deleted')
 
-    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    expect(requests).toEqual(['/api/novels/novel-target?deletionStatus=1'])
     expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
   })
 
@@ -1001,8 +1040,7 @@ describe('preset compat store lifecycle', () => {
       currentNovelId: 'novel-target',
       currentChapterId: 'chapter-target',
       localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
-      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
-      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
     })
     const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
     expect(transaction).not.toBeNull()
@@ -1012,7 +1050,7 @@ describe('preset compat store lifecycle', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       requests.push(url)
-      if (url === '/api/workspace?novelId=novel-target&deletionStatus=1') {
+      if (url === '/api/novels/novel-target?deletionStatus=1') {
         statusRequestCount += 1
         return new Response(JSON.stringify({
           ok: true,
@@ -1020,7 +1058,7 @@ describe('preset compat store lifecycle', () => {
           deletionState: statusRequestCount === 1 ? 'deleting' : 'ready',
         }), { status: 200 })
       }
-      if (url === '/api/workspace?novelId=novel-target') {
+      if (url === '/api/novels/novel-target') {
         return new Response(JSON.stringify(targetedWorkspace), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -1031,16 +1069,16 @@ describe('preset compat store lifecycle', () => {
       (error) => ({ status: 'rejected' as const, error })
     )
     await vi.advanceTimersByTimeAsync(0)
-    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    expect(requests).toEqual(['/api/novels/novel-target?deletionStatus=1'])
     await vi.advanceTimersByTimeAsync(99)
     expect(requests).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(1)
 
     await expect(reconciliation).resolves.toEqual({ status: 'resolved', result: 'present' })
     expect(requests).toEqual([
-      '/api/workspace?novelId=novel-target&deletionStatus=1',
-      '/api/workspace?novelId=novel-target&deletionStatus=1',
-      '/api/workspace?novelId=novel-target',
+      '/api/novels/novel-target?deletionStatus=1',
+      '/api/novels/novel-target?deletionStatus=1',
+      '/api/novels/novel-target',
     ])
   })
 
@@ -1050,8 +1088,7 @@ describe('preset compat store lifecycle', () => {
       currentNovelId: 'novel-target',
       currentChapterId: 'chapter-target',
       localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
-      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
-      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
     })
     const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
     expect(transaction).not.toBeNull()
@@ -1073,13 +1110,13 @@ describe('preset compat store lifecycle', () => {
       (error) => ({ status: 'rejected' as const, error })
     )
     await vi.advanceTimersByTimeAsync(99)
-    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    expect(requests).toEqual(['/api/novels/novel-target?deletionStatus=1'])
     await vi.advanceTimersByTimeAsync(1)
 
     await expect(reconciliation).resolves.toEqual({ status: 'resolved', result: 'deleted' })
     expect(requests).toEqual([
-      '/api/workspace?novelId=novel-target&deletionStatus=1',
-      '/api/workspace?novelId=novel-target&deletionStatus=1',
+      '/api/novels/novel-target?deletionStatus=1',
+      '/api/novels/novel-target?deletionStatus=1',
     ])
     expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
   })
@@ -1090,8 +1127,7 @@ describe('preset compat store lifecycle', () => {
       currentNovelId: 'novel-target',
       currentChapterId: 'chapter-target',
       localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
-      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
-      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
     })
     const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
     expect(transaction).not.toBeNull()
@@ -1119,7 +1155,7 @@ describe('preset compat store lifecycle', () => {
     await vi.advanceTimersByTimeAsync(1)
     await expect(reconciliation).resolves.toMatchObject({ status: 'rejected', error: expect.any(Error) })
 
-    expect(requests).toEqual(Array(4).fill('/api/workspace?novelId=novel-target&deletionStatus=1'))
+    expect(requests).toEqual(Array(4).fill('/api/novels/novel-target?deletionStatus=1'))
     expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
   })
 
@@ -1128,8 +1164,7 @@ describe('preset compat store lifecycle', () => {
       currentNovelId: 'novel-target',
       currentChapterId: 'chapter-target',
       localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
-      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
-      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
     })
     const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
     expect(transaction).not.toBeNull()
@@ -1142,7 +1177,7 @@ describe('preset compat store lifecycle', () => {
 
     await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).rejects.toThrow()
 
-    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    expect(requests).toEqual(['/api/novels/novel-target?deletionStatus=1'])
     expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
   })
 
@@ -1156,8 +1191,7 @@ describe('preset compat store lifecycle', () => {
       currentNovelId: 'novel-target',
       currentChapterId: 'chapter-target',
       localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
-      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
-      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
     })
     const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
     expect(transaction).not.toBeNull()
@@ -1170,7 +1204,7 @@ describe('preset compat store lifecycle', () => {
 
     await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).rejects.toThrow()
 
-    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    expect(requests).toEqual(['/api/novels/novel-target?deletionStatus=1'])
     expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
   })
 
@@ -1179,8 +1213,7 @@ describe('preset compat store lifecycle', () => {
       currentNovelId: 'novel-target',
       currentChapterId: 'chapter-target',
       localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
-      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
-      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
     })
     const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
     expect(transaction).not.toBeNull()
@@ -1193,7 +1226,7 @@ describe('preset compat store lifecycle', () => {
 
     await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).rejects.toThrow('Status unavailable')
 
-    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    expect(requests).toEqual(['/api/novels/novel-target?deletionStatus=1'])
     expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
   })
 
@@ -1202,8 +1235,7 @@ describe('preset compat store lifecycle', () => {
       currentNovelId: 'novel-target',
       currentChapterId: 'chapter-target',
       localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
-      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
-      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
     })
     const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
     expect(transaction).not.toBeNull()
@@ -1213,10 +1245,10 @@ describe('preset compat store lifecycle', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       requests.push(url)
-      if (url === '/api/workspace?novelId=novel-target&deletionStatus=1') {
+      if (url === '/api/novels/novel-target?deletionStatus=1') {
         return new Response(JSON.stringify({ ok: true, novelId: 'novel-target', deletionState: 'ready' }), { status: 200 })
       }
-      if (url === '/api/workspace?novelId=novel-target') {
+      if (url === '/api/novels/novel-target') {
         return new Response(JSON.stringify(unrelatedWorkspace), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -1225,8 +1257,8 @@ describe('preset compat store lifecycle', () => {
     await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).rejects.toThrow()
 
     expect(requests).toEqual([
-      '/api/workspace?novelId=novel-target&deletionStatus=1',
-      '/api/workspace?novelId=novel-target',
+      '/api/novels/novel-target?deletionStatus=1',
+      '/api/novels/novel-target',
     ])
     expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
   })
@@ -1239,33 +1271,28 @@ describe('preset compat store lifecycle', () => {
         { id: 'novel-target', title: 'Target', summary: '', tags: [] },
         { id: 'novel-survivor', title: 'Survivor', summary: '', tags: [] },
       ],
-      localVolumes: [
-        { id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 },
-        { id: 'volume-survivor', novelId: 'novel-survivor', title: 'Survivor volume', order: 1 },
-      ],
       localChapters: [
-        { id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' },
-        { id: 'chapter-survivor-1', novelId: 'novel-survivor', volumeId: 'volume-survivor', title: 'Survivor one', order: 1, content: '<p>Before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
-        { id: 'chapter-survivor-2', novelId: 'novel-survivor', volumeId: 'volume-survivor', title: 'Survivor two', order: 2, content: '<p>Second</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+        { id: 'chapter-target', novelId: 'novel-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' },
+        { id: 'chapter-survivor-1', novelId: 'novel-survivor', title: 'Survivor one', order: 1, content: '<p>Before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+        { id: 'chapter-survivor-2', novelId: 'novel-survivor', title: 'Survivor two', order: 2, content: '<p>Second</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
       ],
     })
     const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
     expect(transaction).not.toBeNull()
     useNovelStore.setState((state) => ({
       localNovels: [...state.localNovels, { id: 'novel-imported', title: 'Imported', summary: '', tags: [] }],
-      localVolumes: [...state.localVolumes, { id: 'volume-imported', novelId: 'novel-imported', title: 'Imported volume', order: 1 }],
       localChapters: [
         ...state.localChapters.map((item) => item.id === 'chapter-survivor-1'
           ? { ...item, content: '<p>Edited after delete</p>', updatedAt: 'after' }
           : item),
-        { id: 'chapter-imported', novelId: 'novel-imported', volumeId: 'volume-imported', title: 'Imported chapter', order: 1, content: '<p>Imported</p>', status: 'draft', wordCount: 1, updatedAt: 'after' },
+        { id: 'chapter-imported', novelId: 'novel-imported', title: 'Imported chapter', order: 1, content: '<p>Imported</p>', status: 'draft', wordCount: 1, updatedAt: 'after' },
       ],
     }))
     const requests: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       requests.push(url)
-      if (url === '/api/workspace?novelId=novel-target&deletionStatus=1') {
+      if (url === '/api/novels/novel-target?deletionStatus=1') {
         return new Response(JSON.stringify({ ok: true, novelId: 'novel-target', deletionState: 'deleted' }), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -1273,7 +1300,7 @@ describe('preset compat store lifecycle', () => {
 
     await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).resolves.toBe('deleted')
 
-    expect(requests).toEqual(['/api/workspace?novelId=novel-target&deletionStatus=1'])
+    expect(requests).toEqual(['/api/novels/novel-target?deletionStatus=1'])
     const state = useNovelStore.getState()
     expect(state.currentNovelId).toBe('novel-survivor')
     expect(state.currentChapterId).toBe('chapter-survivor-1')
@@ -1318,13 +1345,9 @@ describe('preset compat store lifecycle', () => {
         { id: 'novel-target', title: 'Target before', summary: '', tags: [] },
         { id: 'novel-survivor', title: 'Survivor', summary: '', tags: [] },
       ],
-      localVolumes: [
-        { id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 },
-        { id: 'volume-survivor', novelId: 'novel-survivor', title: 'Survivor volume', order: 1 },
-      ],
       localChapters: [
-        { id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
-        { id: 'chapter-survivor', novelId: 'novel-survivor', volumeId: 'volume-survivor', title: 'Survivor chapter', order: 1, content: '<p>Survivor before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+        { id: 'chapter-target', novelId: 'novel-target', title: 'Target chapter', order: 1, content: '<p>Target before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+        { id: 'chapter-survivor', novelId: 'novel-survivor', title: 'Survivor chapter', order: 1, content: '<p>Survivor before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
       ],
     })
     const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
@@ -1334,12 +1357,11 @@ describe('preset compat store lifecycle', () => {
       currentChapterId: 'chapter-imported',
       selectionText: 'post-optimistic selection',
       localNovels: [...state.localNovels, { id: 'novel-imported', title: 'Imported', summary: '', tags: [] }],
-      localVolumes: [...state.localVolumes, { id: 'volume-imported', novelId: 'novel-imported', title: 'Imported volume', order: 1 }],
       localChapters: [
         ...state.localChapters.map((item) => item.id === 'chapter-survivor'
           ? { ...item, content: '<p>Survivor edited</p>', updatedAt: 'after' }
           : item),
-        { id: 'chapter-imported', novelId: 'novel-imported', volumeId: 'volume-imported', title: 'Imported chapter', order: 1, content: '<p>Imported</p>', status: 'draft', wordCount: 1, updatedAt: 'after' },
+        { id: 'chapter-imported', novelId: 'novel-imported', title: 'Imported chapter', order: 1, content: '<p>Imported</p>', status: 'draft', wordCount: 1, updatedAt: 'after' },
       ],
     }))
     const authoritative = {
@@ -1360,10 +1382,10 @@ describe('preset compat store lifecycle', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       requests.push(url)
-      if (url === '/api/workspace?novelId=novel-target&deletionStatus=1') {
+      if (url === '/api/novels/novel-target?deletionStatus=1') {
         return new Response(JSON.stringify({ ok: true, novelId: 'novel-target', deletionState: 'ready' }), { status: 200 })
       }
-      if (url === '/api/workspace?novelId=novel-target') {
+      if (url === '/api/novels/novel-target') {
         return new Response(JSON.stringify(authoritative), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -1372,8 +1394,8 @@ describe('preset compat store lifecycle', () => {
     await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).resolves.toBe('present')
 
     expect(requests).toEqual([
-      '/api/workspace?novelId=novel-target&deletionStatus=1',
-      '/api/workspace?novelId=novel-target',
+      '/api/novels/novel-target?deletionStatus=1',
+      '/api/novels/novel-target',
     ])
     const state = useNovelStore.getState()
     expect(state.currentNovelId).toBe('novel-imported')
@@ -1399,8 +1421,7 @@ describe('preset compat store lifecycle', () => {
       currentNovelId: 'novel-target',
       currentChapterId: 'chapter-target',
       localNovels: [{ id: 'novel-target', title: 'Target', summary: '', tags: [] }],
-      localVolumes: [{ id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 }],
-      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
+      localChapters: [{ id: 'chapter-target', novelId: 'novel-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' }],
     })
     const transaction = useNovelStore.getState().beginNovelDeletion('novel-target')
     expect(transaction).not.toBeNull()
@@ -1409,10 +1430,10 @@ describe('preset compat store lifecycle', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       requests.push(url)
-      if (url === '/api/workspace?novelId=novel-target&deletionStatus=1') {
+      if (url === '/api/novels/novel-target?deletionStatus=1') {
         return new Response(JSON.stringify({ ok: true, novelId: 'novel-target', deletionState: 'ready' }), { status: 200 })
       }
-      if (url === '/api/workspace?novelId=novel-target') {
+      if (url === '/api/novels/novel-target') {
         return new Response(JSON.stringify({ ok: true }), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -1420,8 +1441,8 @@ describe('preset compat store lifecycle', () => {
 
     await expect(useNovelStore.getState().reconcileNovelDeletionFromBackend(transaction!)).rejects.toThrow('invalid workspace')
     expect(requests).toEqual([
-      '/api/workspace?novelId=novel-target&deletionStatus=1',
-      '/api/workspace?novelId=novel-target',
+      '/api/novels/novel-target?deletionStatus=1',
+      '/api/novels/novel-target',
     ])
     expect(useNovelStore.getState().snapshotPersistedState()).toEqual(optimistic)
   })
@@ -1435,15 +1456,10 @@ describe('preset compat store lifecycle', () => {
         { id: 'novel-target', title: 'Target', summary: 'Target summary', tags: ['target'] },
         { id: 'novel-survivor', title: 'Survivor', summary: 'Survivor summary', tags: ['survivor'] },
       ],
-      localVolumes: [
-        { id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 },
-        { id: 'volume-survivor', novelId: 'novel-survivor', title: 'Survivor volume', order: 1 },
-      ],
       localChapters: [
         {
           id: 'chapter-target',
           novelId: 'novel-target',
-          volumeId: 'volume-target',
           title: 'Target chapter',
           order: 1,
           content: '<p>Target</p>',
@@ -1454,7 +1470,6 @@ describe('preset compat store lifecycle', () => {
         {
           id: 'chapter-survivor',
           novelId: 'novel-survivor',
-          volumeId: 'volume-survivor',
           title: 'Survivor chapter',
           order: 1,
           content: '<p>Survivor</p>',
@@ -1491,13 +1506,9 @@ describe('preset compat store lifecycle', () => {
         { id: 'novel-target', title: 'Target', summary: '', tags: [] },
         { id: 'novel-survivor', title: 'Survivor', summary: '', tags: [] },
       ],
-      localVolumes: [
-        { id: 'volume-target', novelId: 'novel-target', title: 'Target volume', order: 1 },
-        { id: 'volume-survivor', novelId: 'novel-survivor', title: 'Survivor volume', order: 1 },
-      ],
       localChapters: [
-        { id: 'chapter-target', novelId: 'novel-target', volumeId: 'volume-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' },
-        { id: 'chapter-survivor', novelId: 'novel-survivor', volumeId: 'volume-survivor', title: 'Survivor chapter', order: 1, content: '<p>Before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
+        { id: 'chapter-target', novelId: 'novel-target', title: 'Target chapter', order: 1, content: '<p>Target</p>', status: 'draft', wordCount: 1, updatedAt: 'now' },
+        { id: 'chapter-survivor', novelId: 'novel-survivor', title: 'Survivor chapter', order: 1, content: '<p>Before</p>', status: 'draft', wordCount: 1, updatedAt: 'before' },
       ],
     })
 
@@ -1530,7 +1541,6 @@ describe('preset compat store lifecycle', () => {
         {
           id: 'survivor-branch',
           novelId: 'novel-survivor',
-          volumeId: 'volume-survivor',
           title: 'Branch',
           order: 0,
           content: '<p>Branch</p>',
@@ -1542,7 +1552,6 @@ describe('preset compat store lifecycle', () => {
         {
           id: 'survivor-second',
           novelId: 'novel-survivor',
-          volumeId: 'volume-survivor',
           title: 'Second',
           order: 2,
           content: '<p>Second</p>',
@@ -1553,7 +1562,6 @@ describe('preset compat store lifecycle', () => {
         {
           id: 'survivor-first',
           novelId: 'novel-survivor',
-          volumeId: 'volume-survivor',
           title: 'First',
           order: 1,
           content: '<p>First</p>',
@@ -1564,7 +1572,6 @@ describe('preset compat store lifecycle', () => {
         {
           id: 'chapter-other',
           novelId: 'novel-other',
-          volumeId: 'volume-other',
           title: 'Other',
           order: 1,
           content: '<p>Other</p>',

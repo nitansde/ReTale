@@ -138,7 +138,7 @@ export type PresetCompatImportResult = {
 export type DeleteNovelFromBackendResult = {
   ok: true
   deletedNovelId: string
-  activeNovelId: string | null
+  nextNovelId: string | null
   deletionState: 'deleted'
   cleanupPending: boolean
 }
@@ -251,9 +251,8 @@ export type NovelStore = PersistedNovelState & {
   setCurrentChapterId: (id: string) => void
   setCurrentTab: (tab: WorkspaceTab) => void
   setHelperTab: (tab: HelperTab) => void
-  toggleVolume: (id: string) => void
   updateChapterContent: (id: string, html: string, wordCount?: number) => void
-  reorderChaptersInVolume: (volumeId: string, orderedIds: string[]) => void
+  reorderChapters: (novelId: string, orderedIds: string[]) => void
   setRewriteMode: (mode: RewriteMode) => void
   setRewriteTone: (tone: RewriteTone) => void
   setRewriteOutput: (output: RewriteOutput) => void
@@ -305,7 +304,7 @@ export type NovelStore = PersistedNovelState & {
   snapshotPersistedState: () => PersistedNovelState
   restorePersistedState: (snapshot: PersistedNovelState) => void
   setNovelDeletionPending: (pending: boolean) => void
-  reconcileNovelDeletion: (activeNovelId: string | null) => void
+  reconcileNovelDeletion: (nextNovelId: string | null) => void
   loadPresetCompatLibrary: () => Promise<void>
   savePresetCompatLibrary: () => Promise<void>
   importPresetCompatPreset: (params: Omit<ImportPresetCompatPayloadParams, 'kind'>) => Promise<PresetCompatImportResult>
@@ -360,13 +359,7 @@ export type PersistedNovelStoreSet = (
 ) => void
 
 const PERSISTED_NOVEL_STATE_KEYS = [
-  'currentNovelId',
-  'currentChapterId',
-  'currentTab',
-  'helperTab',
-  'expandedVolumeIds',
   'localNovels',
-  'localVolumes',
   'localChapters',
   'localOutlines',
   'localCharacters',
@@ -389,7 +382,6 @@ const PERSISTED_NOVEL_STATE_KEYS = [
   'selectedPresetId',
   'presets',
   'constraints',
-  'focusMode',
   'presetCompatSessionState',
 ] as const satisfies ReadonlyArray<keyof PersistedNovelState>
 

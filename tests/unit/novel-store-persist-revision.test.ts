@@ -123,11 +123,9 @@ describe('novel store persist revision', () => {
       currentNovelId: 'hydrated-novel',
       currentChapterId: 'hydrated-chapter',
       localNovels: [{ id: 'hydrated-novel', title: 'Hydrated', summary: '', tags: [] }],
-      localVolumes: [{ id: 'hydrated-volume', novelId: 'hydrated-novel', title: 'Volume', order: 1 }],
       localChapters: [{
         id: 'hydrated-chapter',
         novelId: 'hydrated-novel',
-        volumeId: 'hydrated-volume',
         title: 'Chapter',
         order: 1,
         content: '<p>Hydrated</p>',
@@ -138,7 +136,7 @@ describe('novel store persist revision', () => {
     }
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url.startsWith('/api/workspace')) return new Response(JSON.stringify({
+      if (url === '/api/novels/hydrated-novel') return new Response(JSON.stringify({
         ...workspace,
         workspaceRevision: 4,
         revisionNovelId: 'hydrated-novel',
@@ -156,5 +154,47 @@ describe('novel store persist revision', () => {
     expect(useNovelStore.getState().revisionNovelId).toBe('hydrated-novel')
     expect(useNovelStore.getState().lastAcknowledgedPersistedWorkspace).toEqual(workspace)
     expect(useNovelStore.getState().persistRevision).toBe(0)
+  })
+
+  it('restores deduplicated original chapter content from the transport encoding', async () => {
+    const workspace = {
+      ...createEmptyWorkspaceState(),
+      currentNovelId: 'hydrated-novel',
+      currentChapterId: 'hydrated-chapter',
+      localNovels: [{ id: 'hydrated-novel', title: 'Hydrated', summary: '', tags: [] }],
+      localChapters: [{
+        id: 'hydrated-chapter',
+        novelId: 'hydrated-novel',
+        title: 'Chapter',
+        order: 1,
+        content: '<p>Shared content</p>',
+        status: 'draft' as const,
+        wordCount: 2,
+        updatedAt: 'now',
+      }],
+    }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/novels/hydrated-novel') return new Response(JSON.stringify({
+        ...workspace,
+        chapterContentEncoding: 'original-content-equals-content-v1',
+        workspaceRevision: 4,
+        revisionNovelId: 'hydrated-novel',
+      }), { status: 200 })
+      if (url === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
+      if (url.startsWith('/api/knowledge-view')) return new Response(JSON.stringify({ ok: true }), { status: 200 })
+      if (url === '/api/settings/preset-compat') return new Response(JSON.stringify({ ok: false }), { status: 500 })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await useNovelStore.getState().loadFromBackend('hydrated-novel')
+
+    expect(useNovelStore.getState().localChapters[0]).toMatchObject({
+      content: '<p>Shared content</p>',
+      originalContent: '<p>Shared content</p>',
+    })
+    expect(useNovelStore.getState().lastAcknowledgedPersistedWorkspace?.localChapters[0]).toMatchObject({
+      originalContent: '<p>Shared content</p>',
+    })
   })
 })

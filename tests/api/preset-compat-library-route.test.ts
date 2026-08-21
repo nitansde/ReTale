@@ -134,7 +134,7 @@ describe('preset compat library route', () => {
 
     vi.resetModules()
     const { GET } = await import('@/app/api/settings/preset-compat/route')
-    const response = await GET()
+    const response = await GET(new Request('http://localhost/api/settings/preset-compat'))
 
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('private, no-cache, max-age=0, must-revalidate')
@@ -186,7 +186,7 @@ describe('preset compat library route', () => {
   it('invalidates the prior validator after POST increments revision', async () => {
     await createTestDatabase('retale-preset-compat-route-revision-invalidation')
     const { GET, POST } = await import('@/app/api/settings/preset-compat/route')
-    const initialResponse = await GET()
+    const initialResponse = await GET(new Request('http://localhost/api/settings/preset-compat'))
     const initialLibrary = await initialResponse.json() as ReturnType<typeof createDefaultPresetCompatLibrary>
     const initialEtag = initialResponse.headers.get('etag') ?? ''
 
@@ -205,7 +205,7 @@ describe('preset compat library route', () => {
   it('saves a normalized library snapshot and bumps revision on POST', async () => {
     await createTestDatabase('retale-preset-compat-route-post-save')
     const { GET, POST } = await import('@/app/api/settings/preset-compat/route')
-    const current = await (await GET()).json() as ReturnType<typeof createDefaultPresetCompatLibrary>
+    const current = await (await GET(new Request('http://localhost/api/settings/preset-compat'))).json() as ReturnType<typeof createDefaultPresetCompatLibrary>
 
     const response = await POST(createJsonRequest('http://localhost/api/settings/preset-compat', {
       expectedRevision: current.revision,
@@ -305,7 +305,7 @@ describe('preset compat library route', () => {
 
     const { runWithNovelDatabaseAccess } = await import('@/lib/server/database-access')
     const { GET, POST } = await import('@/app/api/settings/preset-compat/route')
-    const getResponse = await runWithNovelDatabaseAccess('novel-decoy', () => GET())
+    const getResponse = await runWithNovelDatabaseAccess('novel-decoy', () => GET(new Request('http://localhost/api/settings/preset-compat')))
     const loaded = await getResponse.json() as ReturnType<typeof createDefaultPresetCompatLibrary>
     const postResponse = await runWithNovelDatabaseAccess('novel-decoy', () => POST(createJsonRequest(
       'http://localhost/api/settings/preset-compat',

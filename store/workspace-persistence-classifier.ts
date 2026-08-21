@@ -9,7 +9,17 @@ function valuesEqual(left: unknown, right: unknown) {
 }
 
 function withoutSeparatelyPersistedSettings(state: PersistedNovelState) {
-  const { aiSettings: _aiSettings, ...workspace } = state
+  const {
+    aiSettings: _aiSettings,
+    currentNovelId: _currentNovelId,
+    currentChapterId: _currentChapterId,
+    currentTab: _currentTab,
+    helperTab: _helperTab,
+    focusMode: _focusMode,
+    selectionText: _selectionText,
+    selectedParagraphIndex: _selectedParagraphIndex,
+    ...workspace
+  } = state
   return workspace
 }
 

@@ -159,11 +159,9 @@ function createNovelWorkspacePayload(novelId: string, title = novelId): Partial<
     currentNovelId: novelId,
     currentChapterId: `${novelId}-chapter-1`,
     localNovels: [{ id: novelId, title, summary: `${title} summary`, tags: ['test'] }],
-    localVolumes: [{ id: `${novelId}-volume-1`, novelId, title: 'Volume 1', order: 1 }],
     localChapters: [{
       id: `${novelId}-chapter-1`,
       novelId,
-      volumeId: `${novelId}-volume-1`,
       title: 'Chapter 1',
       order: 1,
       content: `<p>${title} body</p>`,

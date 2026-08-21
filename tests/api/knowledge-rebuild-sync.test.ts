@@ -241,7 +241,6 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
         {
           id: 'ch_1',
           novelId: 'novel_imported',
-          volumeId: 'volume-1',
           title: '第1章 初遇',
           content: '<p>林澄开始记录这次练习。</p>',
           order: 1,
@@ -330,7 +329,6 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
       localChapters: [{
         id: 'ch_active_rebuild_1',
         novelId: 'novel_active_rebuild',
-        volumeId: 'volume-1',
         title: '第1章 初遇',
         content: chapterContent,
         order: 1,
@@ -427,7 +425,6 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
         {
           id: 'ch_repair_1',
           novelId: 'novel_repair',
-          volumeId: 'volume-1',
           title: '第1章 初遇',
           content: chapterContent,
           order: 1,
@@ -453,7 +450,6 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
     const localChapters = Array.from({ length: 64 }, (_, index) => ({
       id: `large_ch_${index + 1}`,
       novelId: 'novel_large_workspace',
-      volumeId: 'volume-large',
       title: `第${index + 1}章`,
       content: `<p>第 ${index + 1} 章内容。</p>`,
       order: index + 1,
@@ -518,7 +514,6 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
       localChapters: [{
         id: 'alpha-ch-1',
         novelId: 'novel-alpha',
-        volumeId: 'alpha-vol-1',
         title: 'Alpha Chapter 1',
         content: '<p>Alpha body</p>',
         order: 1,

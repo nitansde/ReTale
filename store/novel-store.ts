@@ -2,6 +2,7 @@
 
 import { create } from 'zustand'
 import { normalizeAISettings } from '@/lib/ai-settings'
+import { readBrowserWorkspaceSession, writeBrowserWorkspaceSession } from '@/lib/browser-preferences'
 import {
   exportPresetCompatPresetJson,
   exportPresetCompatStandaloneRegexJson,
@@ -146,7 +147,6 @@ function buildStateAfterNovelDeletion(state: PersistedNovelState, novelId: strin
     currentNovelId: nextCurrentChapter?.novelId ?? '',
     currentChapterId: nextCurrentChapter?.id ?? '',
     localNovels: state.localNovels.filter((item) => item.id !== novelId),
-    localVolumes: state.localVolumes.filter((item) => item.novelId !== novelId),
     localChapters: remainingChapters,
     localOutlines: state.localOutlines.filter((item) => item.novelId !== novelId),
     localCharacters: state.localCharacters.filter((item) => item.novelId !== novelId),
@@ -179,7 +179,6 @@ function buildStateAfterChapterDeletion(state: PersistedNovelState, chapterId: s
   }
 
   const remainingChapterIds = new Set(remainingChapters.map((chapter) => chapter.id))
-  const remainingVolumeIds = new Set(remainingChapters.map((chapter) => chapter.volumeId))
   const currentChapterRemoved = removedChapterIds.has(state.currentChapterId)
   const nextCurrentChapter = currentChapterRemoved
     ? pickNextAvailableChapter(remainingChapters, targetChapter.novelId)
@@ -197,7 +196,6 @@ function buildStateAfterChapterDeletion(state: PersistedNovelState, chapterId: s
     currentNovelId: nextCurrentChapter?.novelId ?? '',
     currentChapterId: nextCurrentChapter?.id ?? '',
     localNovels: state.localNovels,
-    localVolumes: state.localVolumes.filter((volume) => volume.novelId !== targetChapter.novelId || remainingVolumeIds.has(volume.id)),
     localChapters: remainingChapters,
     localOutlines: state.localOutlines.map((item) => item.novelId === targetChapter.novelId
       ? { ...item, relatedChapterIds: item.relatedChapterIds.filter((id) => !removedChapterIds.has(id)) }
@@ -325,7 +323,6 @@ function buildStateAfterAuthoritativeNovelDeletionReconciliation(
       ...current,
       ...selection,
       localNovels: mergeAuthoritativeTargetRecords(current.localNovels, transaction.before.localNovels, authoritative.localNovels, isTargetNovel),
-      localVolumes: mergeAuthoritativeTargetRecords(current.localVolumes, transaction.before.localVolumes, authoritative.localVolumes, isTargetRecord),
       localChapters: mergeAuthoritativeTargetRecords(current.localChapters, transaction.before.localChapters, authoritative.localChapters, isTargetRecord),
       localOutlines: mergeAuthoritativeTargetRecords(current.localOutlines, transaction.before.localOutlines, authoritative.localOutlines, isTargetRecord),
       localCharacters: mergeAuthoritativeTargetRecords(current.localCharacters, transaction.before.localCharacters, authoritative.localCharacters, isTargetRecord),
@@ -359,7 +356,6 @@ function buildStateAfterRejectedNovelDeletion(
     currentNovelId: valuesEqual(current.currentNovelId, optimistic.currentNovelId) ? before.currentNovelId : current.currentNovelId,
     currentChapterId: valuesEqual(current.currentChapterId, optimistic.currentChapterId) ? before.currentChapterId : current.currentChapterId,
     localNovels: restoreRemovedRecords(current.localNovels, before.localNovels, optimistic.localNovels),
-    localVolumes: restoreRemovedRecords(current.localVolumes, before.localVolumes, optimistic.localVolumes),
     localChapters: restoreRemovedRecords(current.localChapters, before.localChapters, optimistic.localChapters),
     localOutlines: restoreRemovedRecords(current.localOutlines, before.localOutlines, optimistic.localOutlines),
     localCharacters: restoreRemovedRecords(current.localCharacters, before.localCharacters, optimistic.localCharacters),
@@ -402,9 +398,8 @@ type NovelStore = PersistedNovelState & {
   setCurrentChapterId: (id: string) => void
   setCurrentTab: (tab: WorkspaceTab) => void
   setHelperTab: (tab: HelperTab) => void
-  toggleVolume: (id: string) => void
   updateChapterContent: (id: string, html: string, wordCount?: number) => void
-  reorderChaptersInVolume: (volumeId: string, orderedIds: string[]) => void
+  reorderChapters: (novelId: string, orderedIds: string[]) => void
   setRewriteMode: (mode: RewriteMode) => void
   setRewriteTone: (tone: RewriteTone) => void
   setRewriteOutput: (output: RewriteOutput) => void
@@ -456,7 +451,7 @@ type NovelStore = PersistedNovelState & {
   snapshotPersistedState: () => PersistedNovelState
   restorePersistedState: (snapshot: PersistedNovelState) => void
   setNovelDeletionPending: (pending: boolean) => void
-  reconcileNovelDeletion: (activeNovelId: string | null) => void
+  reconcileNovelDeletion: (nextNovelId: string | null) => void
   loadPresetCompatLibrary: () => Promise<void>
   savePresetCompatLibrary: () => Promise<void>
   importPresetCompatPreset: (params: Omit<ImportPresetCompatPayloadParams, 'kind'>) => Promise<PresetCompatImportResult>
@@ -580,21 +575,13 @@ export const useNovelStore = create<NovelStore>((set, get) => {
   },
   importNovelFromText: ({ title, text, summary }) => {
     const state = get()
-    const cleanTitle = title.trim() || tm('store.importNovelTitle', { count: state.localVolumes.length + 1 })
+    const cleanTitle = title.trim() || tm('store.importNovelTitle', { count: state.localNovels.length + 1 })
     const cleanText = text.trim()
     if (!cleanText) return null
 
     const novelId = uid('novel')
-    const volumeId = uid('vol')
     const chapterRegex = /(第\s*[0-9一二三四五六七八九十百千零两]+\s*章[^\n]*)/g
     const parts = cleanText.split(chapterRegex).map((item) => item.trim()).filter(Boolean)
-
-    const newVolume = {
-      id: volumeId,
-      novelId,
-      title: tm('store.importVolumeTitle'),
-      order: 1,
-    }
 
     const importedChapters: Chapter[] = []
 
@@ -607,7 +594,6 @@ export const useNovelStore = create<NovelStore>((set, get) => {
         importedChapters.push({
           id: uid('ch'),
           novelId,
-          volumeId,
           title: heading,
           order: importedChapters.length + 1,
           content: plainTextToHtml(contentText),
@@ -624,7 +610,6 @@ export const useNovelStore = create<NovelStore>((set, get) => {
       importedChapters.push({
         id: uid('ch'),
         novelId,
-        volumeId,
         title: tm('store.importFallbackChapterTitle'),
         order: 1,
         content: plainTextToHtml(cleanText),
@@ -649,7 +634,6 @@ export const useNovelStore = create<NovelStore>((set, get) => {
           tags: [tm('store.importTag'), tm('store.importTxtTag')],
         },
       ],
-      localVolumes: [...state.localVolumes, newVolume],
       localChapters: [...state.localChapters, ...importedChapters],
       trajectories: [
         {
@@ -667,26 +651,24 @@ export const useNovelStore = create<NovelStore>((set, get) => {
     return novelId
   },
   setHydrated: (value) => set({ isHydrated: value }),
-  setCurrentNovelId: (id) => setPersisted((state) => {
-    const sortedChapters = state.localChapters
-      .filter((chapter) => chapter.novelId === id && !chapter.parentChapterId)
+  setCurrentNovelId: (id) => set((state) => {
+    const chapters = state.localChapters
+      .filter((chapter) => chapter.novelId === id)
       .slice()
-      .sort((left, right) => left.order - right.order)
-    const currentChapterBelongsToNovel = sortedChapters.some((chapter) => chapter.id === state.currentChapterId)
+      .sort((left, right) => Number(Boolean(left.parentChapterId)) - Number(Boolean(right.parentChapterId)) || left.order - right.order || left.id.localeCompare(right.id))
+    const currentChapterBelongsToNovel = chapters.some((chapter) => chapter.id === state.currentChapterId)
+    const rememberedChapterId = readBrowserWorkspaceSession().currentChapterIds[id]
+    const rememberedChapter = chapters.find((chapter) => chapter.id === rememberedChapterId)
     return {
       currentNovelId: id,
-      currentChapterId: currentChapterBelongsToNovel ? state.currentChapterId : (sortedChapters[0]?.id ?? ''),
+      currentChapterId: currentChapterBelongsToNovel
+        ? state.currentChapterId
+        : rememberedChapter?.id ?? chapters[0]?.id ?? '',
     }
   }),
-  setCurrentChapterId: (id) => setPersisted((state) => state.currentChapterId === id ? state : { currentChapterId: id }),
-  setCurrentTab: (tab) => setPersisted((state) => state.currentTab === tab ? state : { currentTab: tab }),
-  setHelperTab: (tab) => setPersisted((state) => state.helperTab === tab ? state : { helperTab: tab }),
-  toggleVolume: (id) =>
-    setPersisted((state) => ({
-      expandedVolumeIds: state.expandedVolumeIds.includes(id)
-        ? state.expandedVolumeIds.filter((volumeId) => volumeId !== id)
-        : [...state.expandedVolumeIds, id],
-    })),
+  setCurrentChapterId: (id) => set((state) => state.currentChapterId === id ? state : { currentChapterId: id }),
+  setCurrentTab: (tab) => set((state) => state.currentTab === tab ? state : { currentTab: tab }),
+  setHelperTab: (tab) => set((state) => state.helperTab === tab ? state : { helperTab: tab }),
   updateChapterContent: (id, html, wordCount) =>
     setPersisted((state) => {
       const chapterIndex = getChapterIndex(state.localChapters, id)
@@ -704,12 +686,12 @@ export const useNovelStore = create<NovelStore>((set, get) => {
         localChapters: nextChapters,
       }
     }),
-  reorderChaptersInVolume: (volumeId, orderedIds) =>
+  reorderChapters: (novelId, orderedIds) =>
     setPersisted((state) => {
       const targetMap = new Map(orderedIds.map((id, index) => [id, index + 1]))
       return {
         localChapters: state.localChapters.map((chapter) =>
-          chapter.volumeId === volumeId && targetMap.has(chapter.id)
+          chapter.novelId === novelId && !chapter.parentChapterId && targetMap.has(chapter.id)
             ? { ...chapter, order: targetMap.get(chapter.id)! }
             : chapter
         ),
@@ -725,7 +707,7 @@ export const useNovelStore = create<NovelStore>((set, get) => {
   setSelectionText: (text) => setPersisted((state) => state.selectionText === text ? state : { selectionText: text }),
   setSelectedParagraphIndex: (index) => setPersisted((state) => state.selectedParagraphIndex === index ? state : { selectedParagraphIndex: index }),
   setPromptText: (text) => setPersisted((state) => state.promptText === text ? state : { promptText: text }),
-  toggleFocusMode: () => setPersisted((state) => ({ focusMode: !state.focusMode })),
+  toggleFocusMode: () => set((state) => ({ focusMode: !state.focusMode })),
   addCharacter: (novelId, fields) =>
     setPersisted((state) => ({
       localCharacters: [...state.localCharacters, { ...fields, id: uid('char'), novelId }],
@@ -866,20 +848,20 @@ export const useNovelStore = create<NovelStore>((set, get) => {
     workspaceSaveFeedback: null,
   }),
   setNovelDeletionPending: (pending) => set({ isNovelDeletionPending: pending }),
-  reconcileNovelDeletion: (activeNovelId) => set((state) => {
-    if (activeNovelId === null) {
+  reconcileNovelDeletion: (nextNovelId) => set((state) => {
+    if (nextNovelId === null) {
       return {
         currentNovelId: '',
         currentChapterId: '',
       }
     }
 
-    const activeChapter = state.currentNovelId === activeNovelId
-      ? state.localChapters.find((chapter) => chapter.id === state.currentChapterId && chapter.novelId === activeNovelId)
+    const activeChapter = state.currentNovelId === nextNovelId
+      ? state.localChapters.find((chapter) => chapter.id === state.currentChapterId && chapter.novelId === nextNovelId)
       : null
     const nextChapter = activeChapter ?? pickNextAvailableChapter(
-      state.localChapters.filter((chapter) => chapter.novelId === activeNovelId),
-      activeNovelId
+      state.localChapters.filter((chapter) => chapter.novelId === nextNovelId),
+      nextNovelId
     )
 
     return {
@@ -977,10 +959,9 @@ export const useNovelStore = create<NovelStore>((set, get) => {
     return { currentChapterId: branchId, currentTab: 'editor', localChapters: [...state.localChapters, nextChapter], trajectories: [{ id: uid('traj'), chapterId: branchId, type: 'branch', title: tm('store.branchCreateTitle', { label: nextChapter.branchLabel ?? `B${branchNumber}` }), detail: tm('store.branchCreateDetail', { title: sourceChapter.title }), createdAt: formatNowLabel() }, ...state.trajectories] }
   }),
   createNewChapter: () => setPersisted((state) => {
-    const volumeId = state.localVolumes[0]?.id
-    if (!volumeId) return state
-    const sameVolume = state.localChapters.filter((chapter) => chapter.volumeId === volumeId && !chapter.parentChapterId)
-    const nextChapter: Chapter = { id: uid('ch'), novelId: state.currentNovelId, volumeId, title: tm('store.newChapterTitle', { count: sameVolume.length + 1 }), order: sameVolume.length + 1, content: tm('store.newChapterBody'), originalContent: tm('store.newChapterBody'), status: 'draft', wordCount: 10, updatedAt: tm('store.newChapterUpdatedAt', { time: formatNowLabel() }), trajectory: [tm('store.newChapterTrajectory')] }
+    if (!state.currentNovelId) return state
+    const mainlineChapters = state.localChapters.filter((chapter) => chapter.novelId === state.currentNovelId && !chapter.parentChapterId)
+    const nextChapter: Chapter = { id: uid('ch'), novelId: state.currentNovelId, title: tm('store.newChapterTitle', { count: mainlineChapters.length + 1 }), order: mainlineChapters.length + 1, content: tm('store.newChapterBody'), originalContent: tm('store.newChapterBody'), status: 'draft', wordCount: 10, updatedAt: tm('store.newChapterUpdatedAt', { time: formatNowLabel() }), trajectory: [tm('store.newChapterTrajectory')] }
     return { currentChapterId: nextChapter.id, currentTab: 'editor', localChapters: [...state.localChapters, nextChapter] }
   }),
   exportWorkspace: () => JSON.stringify(serializeState(get()), null, 2),
@@ -988,14 +969,23 @@ export const useNovelStore = create<NovelStore>((set, get) => {
     ...serializeState(state),
     ...payload,
   })),
-  resetWorkspace: () => setPersisted((state) => ({
-    ...initialState,
-    workspaceSaveConflict: null,
-    workspaceSaveFeedback: null,
-    presetCompatLibrary: state.presetCompatLibrary,
-    presetCompatLibraryLoading: state.presetCompatLibraryLoading,
-    presetCompatLibraryError: state.presetCompatLibraryError,
-  })),
+  resetWorkspace: () => {
+    setPersisted((state) => ({
+      ...initialState,
+      workspaceSaveConflict: null,
+      workspaceSaveFeedback: null,
+      presetCompatLibrary: state.presetCompatLibrary,
+      presetCompatLibraryLoading: state.presetCompatLibraryLoading,
+      presetCompatLibraryError: state.presetCompatLibraryError,
+    }))
+    set({
+      currentNovelId: '',
+      currentChapterId: '',
+      currentTab: initialState.currentTab,
+      helperTab: initialState.helperTab,
+      focusMode: initialState.focusMode,
+    })
+  },
   setPresetCompatSessionPhase: (selection, surfaceId, phase, resetPending = false) => setPersisted((state) => ({
     presetCompatSessionState: setPresetCompatSessionEntry(
       state.presetCompatSessionState,
@@ -1293,4 +1283,35 @@ export const useNovelStore = create<NovelStore>((set, get) => {
   },
   exportPresetCompatStandaloneRegexBundle: (regexIds) => exportPresetCompatStandaloneRegexJson(get().presetCompatLibrary, regexIds),
   }
+})
+
+useNovelStore.subscribe((state, previous) => {
+  if (
+    state.currentNovelId === previous.currentNovelId
+    && state.currentChapterId === previous.currentChapterId
+    && state.currentTab === previous.currentTab
+    && state.helperTab === previous.helperTab
+    && state.focusMode === previous.focusMode
+    && state.localNovels === previous.localNovels
+  ) return
+
+  const stored = readBrowserWorkspaceSession()
+  const availableNovelIds = new Set([
+    ...state.localNovels.map((novel) => novel.id),
+    ...state.localChapters.map((chapter) => chapter.novelId),
+  ])
+  const currentChapterIds = Object.fromEntries(
+    Object.entries(stored.currentChapterIds).filter(([novelId]) => availableNovelIds.has(novelId))
+  )
+  if (state.currentNovelId && state.currentChapterId) {
+    currentChapterIds[state.currentNovelId] = state.currentChapterId
+  }
+
+  writeBrowserWorkspaceSession({
+    currentNovelId: state.currentNovelId,
+    currentChapterIds,
+    currentTab: state.currentTab,
+    helperTab: state.helperTab,
+    focusMode: state.focusMode,
+  })
 })

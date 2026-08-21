@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import type { StoryTimelineResponse } from '@/lib/story-branch-types'
+import { mockNovelResourceApi, type MockNovelResourceMutation } from '@/tests/helpers/novel-resource-api-mock'
 
 test.use({
   viewport: { width: 390, height: 844 },
@@ -10,12 +11,10 @@ function buildWorkspacePayload() {
     currentNovelId: 'novel-001',
     currentChapterId: 'chapter-10',
     localNovels: [{ id: 'novel-001', title: 'Fixture Novel', summary: 'Roleplay mobile fixture', tags: ['fixture'] }],
-    localVolumes: [{ id: 'volume-001', novelId: 'novel-001', title: '第一卷', order: 1 }],
     localChapters: [
       {
         id: 'chapter-10',
         novelId: 'novel-001',
-        volumeId: 'volume-001',
         title: '第10章 结盟',
         order: 10,
         content: '<p>第10章正文：夜色压下来之前，他们已经开始互相试探。</p>',
@@ -105,29 +104,17 @@ async function openMobileChapterDrawer(page: Page) {
 test('roleplay mobile flow reopens timeline chat and keeps chapter body unchanged', async ({ page }) => {
   const initialChapterContent = '<p>第10章正文：夜色压下来之前，他们已经开始互相试探。</p>'
   const workspacePayload = buildWorkspacePayload()
-  const workspaceSaves: Array<Record<string, unknown>> = []
+  const workspaceSaves: MockNovelResourceMutation[] = []
   const touchedNonRoleplayMutationRoutes: string[] = []
   let createPayload: Record<string, unknown> | null = null
   const rewritePayloads: Record<string, unknown>[] = []
   let timelineState = buildTimelineState()
   let sessionDetail = buildSessionDetail([])
 
-  await page.route('**/api/workspace', async (route) => {
-    if (route.request().method() === 'POST') {
-      workspaceSaves.push(await route.request().postDataJSON() as Record<string, unknown>)
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ ok: true, updatedAt: '2026-05-20T12:00:00.000Z' }),
-      })
-      return
-    }
-
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(workspacePayload),
-    })
+  await mockNovelResourceApi(page, () => workspacePayload, {
+    onMutation: (mutation) => {
+      workspaceSaves.push(mutation)
+    },
   })
 
   await page.route('**/api/story-timeline*', async (route) => {
@@ -338,8 +325,11 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   expect(rewritePayload.generatedText).toBeUndefined()
   expect(rewritePayload.continueBlockId).toBeUndefined()
   expect(touchedNonRoleplayMutationRoutes).toEqual([])
-  expect(workspaceSaves.every((payload) => {
-    const localChapters = Array.isArray(payload.localChapters) ? payload.localChapters as Array<{ content?: string }> : []
+  expect(workspaceSaves.every((mutation) => {
+    if (mutation.kind === 'chapter') return mutation.payload.content === initialChapterContent
+    const localChapters = Array.isArray(mutation.payload.localChapters)
+      ? mutation.payload.localChapters as Array<{ content?: string }>
+      : []
     return localChapters.every((chapter) => chapter.content === initialChapterContent)
   })).toBe(true)
 })

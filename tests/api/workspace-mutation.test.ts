@@ -15,13 +15,10 @@ function createPayload(novelId: string, content = '<p>initial</p>') {
   return normalizeWorkspaceState({
     currentNovelId: novelId,
     currentChapterId: `${novelId}-chapter-1`,
-    expandedVolumeIds: [`${novelId}-volume-1`],
     localNovels: [{ id: novelId, title: 'Mutation Novel', summary: 'summary', tags: ['mutation'] }],
-    localVolumes: [{ id: `${novelId}-volume-1`, novelId, title: 'Volume 1', order: 1 }],
     localChapters: [{
       id: `${novelId}-chapter-1`,
       novelId,
-      volumeId: `${novelId}-volume-1`,
       title: 'Chapter 1',
       order: 1,
       content,

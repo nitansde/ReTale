@@ -1,42 +1,27 @@
 import { expect, test } from '@playwright/test'
+import { mockNovelResourceApi } from '@/tests/helpers/novel-resource-api-mock'
 
 test.use({
   viewport: { width: 390, height: 844 },
 })
 
 test('mobile workspace header opens mutually exclusive navigation sheets', async ({ page }) => {
-  await page.route('**/api/workspace', async (route) => {
-    if (route.request().method() === 'POST') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ ok: true, updatedAt: '2026-07-27T00:00:00.000Z' }),
-      })
-      return
-    }
-
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        currentNovelId: 'novel-mobile',
-        currentChapterId: 'chapter-mobile',
-        localNovels: [{ id: 'novel-mobile', title: 'Mobile Fixture', summary: '', tags: [] }],
-        localVolumes: [{ id: 'volume-mobile', novelId: 'novel-mobile', title: '第一卷', order: 1 }],
-        localChapters: [{
-          id: 'chapter-mobile',
-          novelId: 'novel-mobile',
-          volumeId: 'volume-mobile',
-          title: '移动端章节',
-          order: 1,
-          content: '<p>用于移动端工作区验收的章节正文。</p>',
-          status: 'draft',
-          wordCount: 16,
-          updatedAt: '2026-07-27',
-        }],
-      }),
-    })
-  })
+  const workspacePayload = {
+    currentNovelId: 'novel-mobile',
+    currentChapterId: 'chapter-mobile',
+    localNovels: [{ id: 'novel-mobile', title: 'Mobile Fixture', summary: '', tags: [] }],
+    localChapters: [{
+      id: 'chapter-mobile',
+      novelId: 'novel-mobile',
+      title: '移动端章节',
+      order: 1,
+      content: '<p>用于移动端工作区验收的章节正文。</p>',
+      status: 'draft',
+      wordCount: 16,
+      updatedAt: '2026-07-27',
+    }],
+  }
+  await mockNovelResourceApi(page, () => workspacePayload)
 
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({
@@ -131,39 +116,22 @@ test('mobile workspace header opens mutually exclusive navigation sheets', async
 
 test('mobile knowledge sheet presents one phase-local progressbar and durable terminal coverage', async ({ page }) => {
   let activeRefresh = true
-
-  await page.route('**/api/workspace', async (route) => {
-    if (route.request().method() === 'POST') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ ok: true, updatedAt: '2026-07-27T00:00:00.000Z' }),
-      })
-      return
-    }
-
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        currentNovelId: 'novel-knowledge-mobile',
-        currentChapterId: 'chapter-knowledge-mobile',
-        localNovels: [{ id: 'novel-knowledge-mobile', title: 'Knowledge Mobile Fixture', summary: '', tags: [] }],
-        localVolumes: [{ id: 'volume-knowledge-mobile', novelId: 'novel-knowledge-mobile', title: '第一卷', order: 1 }],
-        localChapters: [{
-          id: 'chapter-knowledge-mobile',
-          novelId: 'novel-knowledge-mobile',
-          volumeId: 'volume-knowledge-mobile',
-          title: '知识状态移动验收',
-          order: 1,
-          content: '<p>用于验证移动知识状态展示的章节正文。</p>',
-          status: 'draft',
-          wordCount: 18,
-          updatedAt: '2026-07-27',
-        }],
-      }),
-    })
-  })
+  const workspacePayload = {
+    currentNovelId: 'novel-knowledge-mobile',
+    currentChapterId: 'chapter-knowledge-mobile',
+    localNovels: [{ id: 'novel-knowledge-mobile', title: 'Knowledge Mobile Fixture', summary: '', tags: [] }],
+    localChapters: [{
+      id: 'chapter-knowledge-mobile',
+      novelId: 'novel-knowledge-mobile',
+      title: '知识状态移动验收',
+      order: 1,
+      content: '<p>用于验证移动知识状态展示的章节正文。</p>',
+      status: 'draft',
+      wordCount: 18,
+      updatedAt: '2026-07-27',
+    }],
+  }
+  await mockNovelResourceApi(page, () => workspacePayload)
 
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({

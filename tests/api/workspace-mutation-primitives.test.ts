@@ -33,13 +33,10 @@ function createPayload(title: string, content: string) {
   return normalizeWorkspaceState({
     currentNovelId: novelId,
     currentChapterId: `${novelId}-chapter-1`,
-    expandedVolumeIds: [`${novelId}-volume-1`],
     localNovels: [{ id: novelId, title, summary: 'summary', tags: ['stage-2'] }],
-    localVolumes: [{ id: `${novelId}-volume-1`, novelId, title: 'Volume 1', order: 1 }],
     localChapters: [{
       id: `${novelId}-chapter-1`,
       novelId,
-      volumeId: `${novelId}-volume-1`,
       title: 'Chapter 1',
       order: 1,
       content,
@@ -146,7 +143,6 @@ describe('workspace mutation persistence primitives', () => {
       currentNovelId: nextPayload.currentNovelId,
       currentChapterId: nextPayload.currentChapterId,
       localNovels: nextPayload.localNovels,
-      localVolumes: nextPayload.localVolumes,
       localChapters: [expect.objectContaining({
         id: nextPayload.localChapters[0]?.id,
         content: '<p>updated</p>',

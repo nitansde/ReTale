@@ -7,9 +7,8 @@ import type { DatabaseSync } from 'node:sqlite'
 const cleanups: Array<() => void> = []
 const API_TEST_TIMEOUT_MS = 30_000
 const originalDataDir = process.env.RETALE_DATA_DIR
-const originalTrustedOrigins = process.env.RETALE_TRUSTED_ORIGINS
 
-function restoreEnvVar(name: 'RETALE_DATA_DIR' | 'RETALE_TRUSTED_ORIGINS', originalValue: string | undefined) {
+function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
   if (originalValue === undefined) {
     delete process.env[name]
     return
@@ -161,13 +160,10 @@ function createWorkspacePayloadWithSideData(novelId = 'novel-side', title = 'Sid
   return {
     currentNovelId: novelId,
     currentChapterId: `${novelId}-chapter-1`,
-    expandedVolumeIds: [`${novelId}-volume-1`],
     localNovels: [{ id: novelId, title, summary: '保留参考面板数据', tags: ['测试', '侧写'] }],
-    localVolumes: [{ id: `${novelId}-volume-1`, novelId, title: '第一卷', order: 1 }],
     localChapters: [{
       id: `${novelId}-chapter-1`,
       novelId,
-      volumeId: `${novelId}-volume-1`,
       title: '第一章',
       order: 1,
       content: '<p>正文</p>',
@@ -364,7 +360,6 @@ afterEach(() => {
   vi.unstubAllEnvs()
   vi.doUnmock('next/server')
   restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
-  restoreEnvVar('RETALE_TRUSTED_ORIGINS', originalTrustedOrigins)
 
   return import('@/lib/server/db-resolver').then((resolverModule) => {
     resolverModule.resetResolvedDatabasesForTests()
@@ -412,12 +407,12 @@ describe('workspace route', () => {
     getNovelDb('novel-beta').prepare('UPDATE WorkspaceRuntimeState SET revision = 7').run()
 
     const { GET } = await importWorkspaceRouteWithAfterCallbacks()
-    const activeResponse = await GET()
+    const activeResponse = await GET(new Request('http://localhost/api/workspace'))
     await expect(activeResponse.json()).resolves.toMatchObject({ workspaceRevision: 7, revisionNovelId: 'novel-beta' })
     expect(activeResponse.headers.get('x-retale-revision-novel-id')).toBe('novel-beta')
 
     controlDb.prepare('DELETE FROM AppSetting WHERE key = ?').run('WORKSPACE_ACTIVE_NOVEL_ID')
-    const fallbackResponse = await GET()
+    const fallbackResponse = await GET(new Request('http://localhost/api/workspace'))
     await expect(fallbackResponse.json()).resolves.toMatchObject({ workspaceRevision: 3, revisionNovelId: 'novel-alpha' })
     expect(fallbackResponse.headers.get('x-retale-revision-novel-id')).toBe('novel-alpha')
   })
@@ -578,6 +573,47 @@ describe('workspace route', () => {
     expect(afterCallbacks).toHaveLength(0)
   })
 
+  it('rejects a novel resource path that does not match the snapshot before mutation', async () => {
+    const database = await createTestDatabase('retale-workspace-route-resource-novel-mismatch', 'novel-a')
+    clearWorkspaceRecoveryData(database)
+    const { POST, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
+
+    const response = await POST(createWorkspaceRequest(createWorkspacePayload('novel-a'), {
+      'X-Retale-Resource-Novel-Id': 'novel-b',
+    }))
+
+    expect(response.status).toBe(422)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      code: 'invalid_revision_contract',
+      error: expect.stringContaining('resource path'),
+    })
+    expect(database.prepare('SELECT COUNT(*) AS count FROM WorkspaceRuntimeState').get()).toEqual({ count: 0 })
+    expect(afterCallbacks).toHaveLength(0)
+  })
+
+  it('rejects a chapter resource path that does not match the patch before mutation', async () => {
+    const database = await createTestDatabase('retale-workspace-route-resource-chapter-mismatch', 'novel-patch')
+    clearWorkspaceRecoveryData(database)
+    await seedWorkspaceRuntimeForNovel('novel-patch', createWorkspacePayloadWithSideData('novel-patch'))
+    const { PATCH, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
+
+    const response = await PATCH(createWorkspacePatchRequest(createChapterPatchPayload('novel-patch'), {
+      'Idempotency-Key': 'resource-chapter-mismatch',
+      'X-Retale-Base-Revision': '0',
+      'X-Retale-Resource-Chapter-Id': 'different-chapter',
+    }))
+
+    expect(response.status).toBe(422)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      code: 'invalid_revision_contract',
+      error: expect.stringContaining('resource path'),
+    })
+    expect(database.prepare('SELECT revision FROM WorkspaceRuntimeState WHERE id = ?').get('singleton')).toEqual({ revision: 0 })
+    expect(afterCallbacks).toHaveLength(0)
+  })
+
   it('rejects equal-revision POST owner and resolved-target mismatch before side effects', async () => {
     const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-owner-target-mismatch', 'novel-a')
     const novelADb = getNovelDb('novel-a')
@@ -601,7 +637,6 @@ describe('workspace route', () => {
       currentNovelId: 'novel-a',
       currentChapterId: 'novel-b-chapter-1',
       localNovels: [...payloadA.localNovels, ...payloadB.localNovels],
-      localVolumes: [...payloadA.localVolumes, ...payloadB.localVolumes],
       localChapters: [...payloadA.localChapters, ...payloadB.localChapters],
     }
     const { POST, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
@@ -639,71 +674,24 @@ describe('workspace route', () => {
     expect(afterCallbacks).toHaveLength(1)
   })
 
-  it.each(['POST', 'PATCH'] as const)('rejects foreign, malformed, null, and noncanonical Origin before parsing %s bodies', async (method) => {
+  it.each(['POST', 'PATCH'] as const)('accepts arbitrary cross-origin %s writes', async (method) => {
     const database = await createTestDatabase('retale-workspace-route-origin', 'novel-origin')
     clearWorkspaceRecoveryData(database)
-    const form = method === 'POST' ? createWorkspacePayload('novel-origin') : createChapterPatchPayload('novel-origin')
+    if (method === 'PATCH') await seedWorkspaceRuntime(createWorkspacePayloadWithSideData('novel-origin', 'Origin Novel'))
     const { POST, PATCH, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
-    const handler = method === 'POST' ? POST : PATCH
-    for (const origin of [
-      'https://evil.example',
-      'null',
-      'not a url',
-      'http://localhost/path',
-      'http://user@localhost',
-      'http://LOCALHOST',
-    ]) {
-      const request = method === 'POST'
-        ? createWorkspaceRequest(form, { Origin: origin })
-        : createWorkspacePatchRequest(form, {
-            Origin: origin,
-            'Idempotency-Key': 'origin-key',
-            'X-Retale-Base-Revision': '0',
-          })
-      const jsonSpy = vi.spyOn(request, 'json')
-      const response = await handler(request)
-      expect(response.status).toBe(403)
-      expect(jsonSpy).not.toHaveBeenCalled()
-    }
-    expect(database.prepare('SELECT COUNT(*) AS count FROM WorkspaceRuntimeState').get()).toEqual({ count: 0 })
-    expect(afterCallbacks).toHaveLength(0)
-  })
+    const response = method === 'POST'
+      ? await POST(createWorkspaceRequest(createWorkspacePayload('novel-origin'), {
+          Origin: 'https://frontend.example',
+        }))
+      : await PATCH(createWorkspacePatchRequest(createChapterPatchPayload('novel-origin'), {
+          Origin: 'https://frontend.example',
+          'Idempotency-Key': 'cross-origin-key',
+          'X-Retale-Base-Revision': '0',
+        }))
 
-  it.each(['bad.example,localhost', 'bad host', 'user@localhost', 'localhost/path'])('rejects malformed Host %s before parsing workspace writes', async (host) => {
-    const database = await createTestDatabase('retale-workspace-route-malformed-host', 'novel-origin')
-    clearWorkspaceRecoveryData(database)
-    const { POST, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
-    const request = createWorkspaceRequest(createWorkspacePayload('novel-origin'), {
-      Host: host,
-      Origin: 'http://localhost',
-    })
-    const jsonSpy = vi.spyOn(request, 'json')
-
-    const response = await POST(request)
-
-    expect(response.status).toBe(403)
-    expect(jsonSpy).not.toHaveBeenCalled()
-    expect(database.prepare('SELECT COUNT(*) AS count FROM WorkspaceRuntimeState').get()).toEqual({ count: 0 })
-    expect(afterCallbacks).toHaveLength(0)
-  })
-
-  it('does not allow X-Forwarded headers to authorize a foreign Origin', async () => {
-    const database = await createTestDatabase('retale-workspace-route-forwarded-origin', 'novel-origin')
-    clearWorkspaceRecoveryData(database)
-    const { POST, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
-    const request = createWorkspaceRequest(createWorkspacePayload('novel-origin'), {
-      Origin: 'https://evil.example',
-      'X-Forwarded-Host': 'evil.example',
-      'X-Forwarded-Proto': 'https',
-    })
-    const jsonSpy = vi.spyOn(request, 'json')
-
-    const response = await POST(request)
-
-    expect(response.status).toBe(403)
-    expect(jsonSpy).not.toHaveBeenCalled()
-    expect(database.prepare('SELECT COUNT(*) AS count FROM WorkspaceRuntimeState').get()).toEqual({ count: 0 })
-    expect(afterCallbacks).toHaveLength(0)
+    expect(response.status).toBe(200)
+    expect(database.prepare('SELECT revision FROM WorkspaceRuntimeState').get()).toEqual({ revision: 1 })
+    expect(afterCallbacks).toHaveLength(1)
   })
 
   it.each(['POST', 'PATCH'] as const)('requires application/json for %s while accepting media-type parameters', async (method) => {
@@ -786,7 +774,6 @@ describe('workspace route', () => {
     const chapters = Array.from({ length: 2_000 }, (_, index) => ({
       id: `chapter-${index}`,
       novelId: 'novel-semantic',
-      volumeId: 'volume-semantic',
       title: `Chapter ${index}`,
       order: index,
       content: '',
@@ -797,7 +784,6 @@ describe('workspace route', () => {
     expect((await POST(createWorkspaceRequest({
       currentNovelId: 'novel-semantic',
       localNovels: [{ id: 'novel-semantic', title: 'Semantic', summary: '', tags: [] }],
-      localVolumes: [{ id: 'volume-semantic', novelId: 'novel-semantic', title: 'Volume', order: 1 }],
       localChapters: chapters,
     }))).status).toBe(200)
     const overChapters = await POST(createWorkspaceRequest({ localNovels: [], localChapters: [...chapters, chapters[0]] }))
@@ -905,7 +891,7 @@ describe('workspace route', () => {
     expect(afterCallbacks).toHaveLength(1)
   })
 
-  it('accepts a built-in canonical PATCH Origin independently of request URL and Host', async () => {
+  it('accepts a PATCH Origin independently of request URL and Host', async () => {
     const database = await createTestDatabase('retale-workspace-route-host-origin', 'novel-patch')
     clearWorkspaceRecoveryData(database)
     await seedWorkspaceRuntime(createWorkspacePayloadWithSideData('novel-patch', 'Patch Novel'))
@@ -929,27 +915,6 @@ describe('workspace route', () => {
     expect(database.prepare(
       'SELECT contentHtml FROM WorkspaceRuntimeChapter WHERE id = ?',
     ).get('novel-patch-chapter-1')).toEqual({ contentHtml: '<p>修订后的正文</p>' })
-  })
-
-  it('accepts an exact configured canonical origin and rejects invalid trusted-origin configuration', async () => {
-    const database = await createTestDatabase('retale-workspace-route-configured-origin', 'novel-origin')
-    clearWorkspaceRecoveryData(database)
-    const { POST, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
-    process.env.RETALE_TRUSTED_ORIGINS = 'https://retale.example'
-
-    const accepted = await POST(createWorkspaceRequest(createWorkspacePayload('novel-origin'), {
-      Origin: 'https://retale.example',
-      Host: 'attacker-controlled.example',
-    }))
-    expect(accepted.status).toBe(200)
-
-    process.env.RETALE_TRUSTED_ORIGINS = 'https://retale.example/path'
-    const rejected = await POST(createWorkspaceRequest(createWorkspacePayload('novel-origin'), {
-      Origin: 'http://localhost:3000',
-    }))
-    expect(rejected.status).toBe(403)
-    expect(database.prepare('SELECT revision FROM WorkspaceRuntimeState').get()).toEqual({ revision: 1 })
-    expect(afterCallbacks).toHaveLength(1)
   })
 
   it.each([
@@ -1122,7 +1087,7 @@ describe('workspace route', () => {
     expect(afterCallbacks).toHaveLength(0)
   })
 
-  it('permanently deletes the active novel and switches to the supplied survivor without touching control settings', async () => {
+  it('accepts a cross-origin permanent delete and switches to the supplied survivor without touching control settings', async () => {
     const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-delete-active', 'novel-alpha')
     getNovelDb('novel-alpha')
     getNovelDb('novel-beta')
@@ -1136,7 +1101,9 @@ describe('workspace route', () => {
     fs.writeFileSync(path.join(alphaDirectory, 'lancedb', 'artifact.lance'), 'alpha')
 
     const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta'))
+    const response = await DELETE(createWorkspaceDeleteRequest('novel-alpha', 'novel-beta', {
+      Origin: 'https://frontend.example',
+    }))
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({
@@ -1155,24 +1122,6 @@ describe('workspace route', () => {
     expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: 'novel-beta' })
     expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('AI_SETTINGS_V2')).toEqual({ value: '{"provider":"test"}' })
     expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('PRESET_COMPAT_LIBRARY_V1')).toEqual({ value: '{"presets":[]}' })
-  })
-
-  it('rejects unauthorized DELETE before URL parsing or deletion side effects', async () => {
-    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-delete-origin', 'novel-alpha')
-    getNovelDb('novel-alpha')
-    seedNovelRegistryRow(controlDb, 'novel-alpha', 'Alpha')
-    const novelDirectory = path.join(process.env.RETALE_DATA_DIR ?? 'data', 'novels', 'novel-alpha')
-    const request = createWorkspaceDeleteRequest('novel-alpha', undefined, { Origin: 'https://evil.example' })
-    const urlSpy = vi.spyOn(URL.prototype, 'searchParams', 'get')
-    const { DELETE, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
-
-    const response = await DELETE(request)
-
-    expect(response.status).toBe(403)
-    expect(urlSpy).not.toHaveBeenCalled()
-    expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'ready' })
-    expect(fs.existsSync(novelDirectory)).toBe(true)
-    expect(afterCallbacks).toHaveLength(0)
   })
 
   it('uses the deterministic first ready survivor when deleting the active novel without an explicit successor', async () => {
@@ -1230,6 +1179,23 @@ describe('workspace route', () => {
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ ok: true, activeNovelId: 'novel-alpha' })
     expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: 'novel-alpha' })
+  })
+
+  it('uses the browser-requested survivor for resource deletion instead of the legacy active pointer', async () => {
+    const { controlDb, getNovelDb } = await createTestDataRoot('retale-workspace-route-resource-delete-survivor', 'novel-alpha')
+    for (const novelId of ['novel-alpha', 'novel-beta', 'novel-gamma']) {
+      getNovelDb(novelId)
+      seedNovelRegistryRow(controlDb, novelId, novelId)
+    }
+
+    const { DELETE } = await importWorkspaceRouteWithAfterCallbacks()
+    const response = await DELETE(createWorkspaceDeleteRequest('novel-beta', 'novel-gamma', {
+      'X-Retale-Resource-Delete': '1',
+    }))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true, activeNovelId: 'novel-gamma' })
+    expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('WORKSPACE_ACTIVE_NOVEL_ID')).toEqual({ value: 'novel-gamma' })
   })
 
   it('returns typed validation and lookup statuses without creating storage for missing novels', async () => {
@@ -1436,7 +1402,7 @@ describe('workspace route', () => {
     vi.resetModules()
 
     const { GET, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
-    const getResponse = await GET()
+    const getResponse = await GET(new Request('http://localhost/api/workspace'))
     expect(getResponse.status).toBe(200)
     expect(fs.existsSync(quarantineDirectory)).toBe(true)
     expect(afterCallbacks).toHaveLength(1)
@@ -1467,12 +1433,12 @@ describe('workspace route', () => {
     controlDb.prepare('UPDATE NovelRegistry SET migrationStatus = ? WHERE novelId = ?').run('deleted', 'novel-pending')
 
     const { GET, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
-    expect((await GET()).status).toBe(200)
+    expect((await GET(new Request('http://localhost/api/workspace'))).status).toBe(200)
     expect(afterCallbacks).toHaveLength(1)
     await afterCallbacks[0]()
     expect(fs.existsSync(quarantineDirectory)).toBe(true)
 
-    expect((await GET()).status).toBe(200)
+    expect((await GET(new Request('http://localhost/api/workspace'))).status).toBe(200)
     expect(afterCallbacks).toHaveLength(2)
     await afterCallbacks[1]()
     expect(fs.existsSync(quarantineDirectory)).toBe(false)
@@ -1724,7 +1690,7 @@ describe('workspace route', () => {
     ).run('2000-01-01T00:00:00.000Z', 'novel-alpha')
     vi.resetModules()
     const { GET, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
-    const getResponse = await GET()
+    const getResponse = await GET(new Request('http://localhost/api/workspace'))
     expect(getResponse.status).toBe(200)
     expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel-alpha')).toEqual({ migrationStatus: 'deleting' })
     expect(afterCallbacks).toHaveLength(1)
@@ -1759,7 +1725,7 @@ describe('workspace route', () => {
     await gateEntered.promise
 
     const { GET, afterCallbacks } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await GET()
+    const response = await GET(new Request('http://localhost/api/workspace'))
     expect(response.status).toBe(200)
     expect(afterCallbacks).toHaveLength(1)
     const cleanupScan = afterCallbacks[0]()
@@ -1851,7 +1817,7 @@ describe('workspace route', () => {
     seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta Library')
 
     const { GET } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await GET()
+    const response = await GET(new Request('http://localhost/api/workspace'))
     const payload = await response.json()
 
     expect(response.status).toBe(200)
@@ -1859,10 +1825,6 @@ describe('workspace route', () => {
       { id: 'novel-alpha', title: 'Alpha Library' },
       { id: 'novel-beta', title: 'Beta Library' },
     ])
-    expect(payload.localVolumes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'novel-alpha-volume-1', novelId: 'novel-alpha' }),
-      expect.objectContaining({ id: 'novel-beta-volume-1', novelId: 'novel-beta' }),
-    ]))
     expect(payload.localChapters).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'novel-alpha-chapter-1', novelId: 'novel-alpha' }),
       expect.objectContaining({ id: 'novel-beta-chapter-1', novelId: 'novel-beta' }),
@@ -1880,7 +1842,7 @@ describe('workspace route', () => {
     seedNovelRegistryRow(controlDb, 'novel-beta', 'Beta Library')
 
     const { GET } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await GET()
+    const response = await GET(new Request('http://localhost/api/workspace'))
     const payload = await response.json()
 
     expect(response.status).toBe(200)
@@ -1888,10 +1850,6 @@ describe('workspace route', () => {
       { id: 'novel-beta', title: 'Beta Library' },
       { id: 'novel-alpha', title: 'Alpha Library' },
     ])
-    expect(payload.localVolumes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'novel-alpha-volume-1', novelId: 'novel-alpha' }),
-      expect.objectContaining({ id: 'novel-beta-volume-1', novelId: 'novel-beta' }),
-    ]))
     expect(payload.localChapters).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'novel-alpha-chapter-1', novelId: 'novel-alpha' }),
       expect.objectContaining({ id: 'novel-beta-chapter-1', novelId: 'novel-beta' }),
@@ -2060,7 +2018,7 @@ describe('workspace route', () => {
     seedRecoverableKnowledge(database)
 
     const { GET } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await GET()
+    const response = await GET(new Request('http://localhost/api/workspace'))
     const payload = await response.json()
 
     expect(response.status).toBe(200)
@@ -2079,7 +2037,7 @@ describe('workspace route', () => {
     seedRecoverableKnowledge(database)
 
     const { GET } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await GET()
+    const response = await GET(new Request('http://localhost/api/workspace'))
     const payload = await response.json()
 
     expect(response.status).toBe(200)
@@ -2097,7 +2055,7 @@ describe('workspace route', () => {
     seedRecoverableKnowledge(database)
 
     const { GET } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await GET()
+    const response = await GET(new Request('http://localhost/api/workspace'))
     const payload = await response.json()
 
     expect(response.status).toBe(200)
@@ -2114,7 +2072,7 @@ describe('workspace route', () => {
     seedWorkspaceState(database, '')
 
     const { GET } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await GET()
+    const response = await GET(new Request('http://localhost/api/workspace'))
     const payload = await response.json()
 
     expect(response.status).toBe(200)
@@ -2131,7 +2089,7 @@ describe('workspace route', () => {
     seedWorkspaceState(database, '')
 
     const { GET } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await GET()
+    const response = await GET(new Request('http://localhost/api/workspace'))
     const payload = await response.json()
 
     expect(response.status).toBe(200)
@@ -2151,7 +2109,7 @@ describe('workspace route', () => {
     seedWorkspaceState(database, null)
 
     const { GET } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await GET()
+    const response = await GET(new Request('http://localhost/api/workspace'))
     const payload = await response.json()
 
     expect(response.status).toBe(200)
@@ -2171,7 +2129,7 @@ describe('workspace route', () => {
     seedWorkspaceState(database, '{not-json')
 
     const { GET } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await GET()
+    const response = await GET(new Request('http://localhost/api/workspace'))
     const payload = await response.json()
 
     expect(response.status).toBe(200)
@@ -2187,7 +2145,7 @@ describe('workspace route', () => {
 
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { GET } = await importWorkspaceRouteWithAfterCallbacks()
-    const response = await GET()
+    const response = await GET(new Request('http://localhost/api/workspace'))
     const payload = await response.json()
 
     expect(response.status).toBe(200)

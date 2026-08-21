@@ -9,10 +9,9 @@ function createWorkspace(): PersistedNovelState {
     currentNovelId: 'novel-1',
     currentChapterId: 'chapter-1',
     localNovels: [{ id: 'novel-1', title: 'Novel', summary: '', tags: [] }],
-    localVolumes: [{ id: 'volume-1', novelId: 'novel-1', title: 'Volume', order: 1 }],
     localChapters: [
-      { id: 'chapter-1', novelId: 'novel-1', volumeId: 'volume-1', title: 'One', order: 1, content: '<p>One</p>', originalContent: '<p>Original</p>', status: 'draft', wordCount: 1, updatedAt: 'one' },
-      { id: 'chapter-2', novelId: 'novel-1', volumeId: 'volume-1', title: 'Two', order: 2, content: '<p>Two</p>', status: 'draft', wordCount: 1, updatedAt: 'two' },
+      { id: 'chapter-1', novelId: 'novel-1', title: 'One', order: 1, content: '<p>One</p>', originalContent: '<p>Original</p>', status: 'draft', wordCount: 1, updatedAt: 'one' },
+      { id: 'chapter-2', novelId: 'novel-1', title: 'Two', order: 2, content: '<p>Two</p>', status: 'draft', wordCount: 1, updatedAt: 'two' },
     ],
   }
 }

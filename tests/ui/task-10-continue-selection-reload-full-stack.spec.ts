@@ -16,36 +16,36 @@ async function importWorkspaceFixture(page: Page) {
   await page.locator('input[type=file]').setInputFiles(fixturePath)
   const importResponse = await importResponsePromise
   expect(importResponse.ok()).toBeTruthy()
+  const imported = await importResponse.json() as { novelId: string; chapterId: string }
 
   await page.waitForLoadState('networkidle')
   if (!/\/workspace$/.test(page.url())) {
     await page.goto('/workspace', { waitUntil: 'networkidle' })
   }
+  return imported
 }
 
 test('real continue-block branch selections survive reload after child creation and regenerate-in-place', async ({ page }) => {
   fs.mkdirSync(evidenceDirectory, { recursive: true })
 
-  await importWorkspaceFixture(page)
+  const imported = await importWorkspaceFixture(page)
   await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
   const currentBodyText = (await page.getByTestId('workspace-chapter-body-view').innerText()).trim()
   expect(currentBodyText).toBeTruthy()
 
-  const workspaceResponse = await page.request.get('/api/workspace')
-  expect(workspaceResponse.ok()).toBeTruthy()
-  const workspace = await workspaceResponse.json() as {
-    currentNovelId: string
-    currentChapterId: string
+  const novelResponse = await page.request.get(`/api/novels/${encodeURIComponent(imported.novelId)}`)
+  expect(novelResponse.ok()).toBeTruthy()
+  const novel = await novelResponse.json() as {
     localChapters: Array<{ id: string; order: number }>
   }
-  const chapter = workspace.localChapters.find((item) => item.id === workspace.currentChapterId)
-  expect(workspace.currentNovelId).toBeTruthy()
+  const chapter = novel.localChapters.find((item) => item.id === imported.chapterId)
+  expect(imported.novelId).toBeTruthy()
   expect(chapter).toBeTruthy()
 
   const rootResponse = await page.request.post('/api/continue-blocks', {
     data: {
-      novelId: workspace.currentNovelId,
-      branchId: `${workspace.currentNovelId}:main`,
+      novelId: imported.novelId,
+      branchId: `${imported.novelId}:main`,
       sourceChapterNo: chapter?.order,
       selectedText: currentBodyText,
       originalText: currentBodyText,
@@ -63,8 +63,8 @@ test('real continue-block branch selections survive reload after child creation 
 
   const childResponse = await page.request.post('/api/continue-blocks', {
     data: {
-      novelId: workspace.currentNovelId,
-      branchId: `${workspace.currentNovelId}:main`,
+      novelId: imported.novelId,
+      branchId: `${imported.novelId}:main`,
       sourceChapterNo: chapter?.order,
       parentTimelineNodeId: root.timelineNodeId,
       selectedText: '全栈根续写版本：他推门而入时，风声比脚步更早一步抵达。',
@@ -82,17 +82,17 @@ test('real continue-block branch selections survive reload after child creation 
   }
 
   await page.goto(`/workspace?selectionKind=continue_block&selectionNodeId=${child.timelineNodeId}&selectionContinueBlockId=${child.continueBlockId}&selectionAnchorChapterNo=${chapter?.order}`, { waitUntil: 'networkidle' })
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('续写内容')
   await expect(page.getByTestId('workspace-continue-block-view')).toContainText('全栈子续写版本：灯光摇了一下，像有人先在屋里屏住了呼吸。')
   await page.reload({ waitUntil: 'networkidle' })
   await expect(page).toHaveURL(new RegExp(`selectionNodeId=${child.timelineNodeId}`))
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('续写内容')
   await expect(page.getByTestId('workspace-continue-block-view')).toContainText('全栈子续写版本：灯光摇了一下，像有人先在屋里屏住了呼吸。')
 
   const regenerateResponse = await page.request.put('/api/continue-blocks', {
     data: {
-      novelId: workspace.currentNovelId,
-      branchId: `${workspace.currentNovelId}:main`,
+      novelId: imported.novelId,
+      branchId: `${imported.novelId}:main`,
       continueBlockId: root.continueBlockId,
       selectedText: currentBodyText,
       originalText: currentBodyText,
@@ -105,11 +105,11 @@ test('real continue-block branch selections survive reload after child creation 
   expect(regenerateResponse.ok()).toBeTruthy()
 
   await page.goto(`/workspace?selectionKind=rewrite&selectionNodeId=${root.timelineNodeId}&selectionContinueBlockId=${root.continueBlockId}&selectionAnchorChapterNo=${chapter?.order}`, { waitUntil: 'networkidle' })
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('rewrite')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('改写分支')
   await expect(page).toHaveURL(new RegExp(`selectionNodeId=${root.timelineNodeId}`))
   await page.reload({ waitUntil: 'networkidle' })
   await expect(page).toHaveURL(new RegExp(`selectionNodeId=${root.timelineNodeId}`))
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('rewrite')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('改写分支')
 
   await page.screenshot({
     path: path.join(evidenceDirectory, 'task-10-continue-selection-reload.png'),

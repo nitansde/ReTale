@@ -85,9 +85,9 @@ describe('selection novel studio optimistic timeline helpers', () => {
       anchorChapterNo: 95,
       currentTarget: 80,
       sortedChapters: [
-        ...Array.from({ length: 120 }, (_, index) => ({ id: `volume-1-chapter-${index + 1}`, order: index + 1, volumeId: 'volume-1', parentChapterId: undefined })),
-        { id: 'branch-chapter-95-a', order: 95, volumeId: 'volume-1', parentChapterId: 'volume-1-chapter-95' },
-        ...Array.from({ length: 10 }, (_, index) => ({ id: `volume-2-chapter-${index + 1}`, order: 1000 + index + 1, volumeId: 'volume-2', parentChapterId: undefined })),
+        ...Array.from({ length: 120 }, (_, index) => ({ id: `volume-1-chapter-${index + 1}`, order: index + 1, parentChapterId: undefined })),
+        { id: 'branch-chapter-95-a', order: 95, parentChapterId: 'volume-1-chapter-95' },
+        ...Array.from({ length: 10 }, (_, index) => ({ id: `volume-2-chapter-${index + 1}`, order: 1000 + index + 1, parentChapterId: undefined })),
       ],
     })).toBe(95)
   })

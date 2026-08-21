@@ -23,7 +23,6 @@ export function resolveWorkspaceNovelId(state: PersistedNovelState) {
 
   const candidateNovelIds = uniqueNovelIds([
     ...normalized.localNovels.map((novel) => novel.id),
-    ...normalized.localVolumes.map((volume) => volume.novelId),
     ...normalized.localChapters.map((chapter) => chapter.novelId),
     ...normalized.localOutlines.map((outline) => outline.novelId),
     ...normalized.localCharacters.map((character) => character.novelId),
@@ -38,8 +37,6 @@ export function resolveWorkspaceNovelId(state: PersistedNovelState) {
 export function scopeWorkspaceStateToNovel(state: PersistedNovelState, novelId: string) {
   const normalized = normalizeWorkspaceState(state)
   const localNovels = normalized.localNovels.filter((novel) => novel.id === novelId)
-  const localVolumes = normalized.localVolumes.filter((volume) => volume.novelId === novelId)
-  const volumeIds = new Set(localVolumes.map((volume) => volume.id))
   const localChapters = normalized.localChapters.filter((chapter) => chapter.novelId === novelId)
   const chapterIds = new Set(localChapters.map((chapter) => chapter.id))
   const currentChapterBelongsToNovel = chapterIds.has(normalized.currentChapterId)
@@ -48,9 +45,7 @@ export function scopeWorkspaceStateToNovel(state: PersistedNovelState, novelId: 
     ...normalized,
     currentNovelId: localNovels.length > 0 || localChapters.length > 0 ? novelId : '',
     currentChapterId: currentChapterBelongsToNovel ? normalized.currentChapterId : '',
-    expandedVolumeIds: normalized.expandedVolumeIds.filter((volumeId) => volumeIds.has(volumeId)),
     localNovels,
-    localVolumes,
     localChapters,
     localOutlines: normalized.localOutlines
       .filter((outline) => outline.novelId === novelId)

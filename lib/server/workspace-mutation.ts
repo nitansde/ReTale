@@ -188,7 +188,6 @@ type RuntimeMetadataRow = {
 type TargetedChapterRow = {
   id: string
   novelId: string
-  volumeId: string
   parentChapterId: string | null
   kind: string | null
   branchLabel: string | null
@@ -395,7 +394,7 @@ function readRuntimeMetadata(db: DatabaseAccess, workspaceStateId: string) {
 
 function readTargetedChapter(db: DatabaseAccess, workspaceStateId: string, chapterId: string) {
   return db.queryOne<TargetedChapterRow>(
-    `SELECT id, novelId, volumeId, parentChapterId, kind, branchLabel, title, sortOrder,
+    `SELECT id, novelId, parentChapterId, kind, branchLabel, title, sortOrder,
             contentHtml, originalContentHtml, status, wordCount, updatedAtLabel, trajectoryJson
      FROM WorkspaceRuntimeChapter
      WHERE workspaceStateId = ? AND id = ?`,
@@ -418,7 +417,6 @@ function targetedChapterToChapter(row: TargetedChapterRow): Chapter {
   return {
     id: row.id,
     novelId: row.novelId,
-    volumeId: row.volumeId,
     ...(row.parentChapterId === null ? {} : { parentChapterId: row.parentChapterId }),
     ...(row.kind === null ? {} : { kind: row.kind as Chapter['kind'] }),
     ...(row.branchLabel === null ? {} : { branchLabel: row.branchLabel }),

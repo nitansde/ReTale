@@ -12,6 +12,7 @@ import {
 import type { KnowledgeRebuildStatus, KnowledgeStatusOverview, RecoverableRewriteJob } from '@/components/workspace/selection-novel-studio-helpers'
 import type { StoryTimelineResponse } from '@/lib/story-branch-types'
 import type { Chapter } from '@/lib/types'
+import { readChapterDraft, writeChapterDraft } from '@/lib/chapter-draft-cache'
 import type { KnowledgeProjectionResult, WorkspaceSaveFeedback } from '@/store/novel-store-types'
 import { buildTenThousandCharacterEditBurst } from '@/tests/helpers/autosave-performance-fixtures'
 
@@ -65,7 +66,6 @@ function buildChapter(overrides: Partial<Chapter>): Chapter {
   return {
     id: 'chapter-1',
     novelId: 'novel-1',
-    volumeId: 'volume-1',
     title: 'Chapter 1',
     order: 1,
     content: '<p>Alpha</p>',
@@ -243,7 +243,6 @@ function buildCoreParams(overrides: Partial<CoreParams> = {}): CoreParams {
     backendLoaded: true,
     currentNovelId: '',
     localNovels: [],
-    localVolumes: [],
     localChapters: [buildChapter({})],
     currentChapterId: 'chapter-1',
     setCurrentChapterId: vi.fn(),
@@ -268,7 +267,12 @@ function renderAutosaveHook(saveToBackend: CoreParams['saveToBackend']) {
   const baseParams = buildCoreParams({ saveToBackend })
   type AutosaveProps = { revision: number; novelId?: string; deletionPending?: boolean }
   return renderHook(
-    ({ revision, novelId = 'novel-1', deletionPending = false }: AutosaveProps) => useSelectionNovelStudioCore({ ...baseParams, autosaveTarget: `${novelId}\u0000${revision}`, isNovelDeletionPending: deletionPending }),
+    ({ revision, novelId = 'novel-1', deletionPending = false }: AutosaveProps) => useSelectionNovelStudioCore({
+      ...baseParams,
+      currentNovelId: novelId,
+      autosaveTarget: `${novelId}\u0000${revision}`,
+      isNovelDeletionPending: deletionPending,
+    }),
     { initialProps: { revision: 0 } as AutosaveProps },
   )
 }
@@ -297,6 +301,10 @@ async function rejectDeferred(deferred: Deferred) {
     await Promise.resolve()
   })
 }
+
+beforeEach(() => {
+  window.localStorage.clear()
+})
 
 describe('knowledge cache overview derivations', () => {
   afterEach(() => {
@@ -523,6 +531,22 @@ describe('useSelectionNovelStudioCore autosave drain', () => {
     vi.useRealTimers()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
+  })
+
+  it.each([
+    { backendLoaded: false, currentNovelId: 'novel-1' },
+    { backendLoaded: true, currentNovelId: '' },
+  ])('does not save an unready resource target on unmount: %o', async (overrides) => {
+    const saveToBackend = vi.fn().mockResolvedValue(undefined)
+    const { unmount } = renderHook(() => useSelectionNovelStudioCore(buildCoreParams({
+      ...overrides,
+      saveToBackend,
+      autosaveTarget: 'unready\u00001',
+    })))
+
+    unmount()
+    await advanceTimers(10_000)
+    expect(saveToBackend).not.toHaveBeenCalled()
   })
 
   it('keeps draining edits made during every in-flight save', async () => {
@@ -850,6 +874,63 @@ describe('useSelectionNovelStudioCore editor buffering', () => {
     expect(updateChapterContent).toHaveBeenCalledTimes(1)
   })
 
+  it('journals editor changes and safely restores a cached draft against the same server baseline', async () => {
+    const editor = installEditor()
+    const updateChapterContent = vi.fn()
+    const params = buildCoreParams({
+      currentNovelId: 'novel-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
+      updateChapterContent,
+    })
+    const hook = renderHook(() => useSelectionNovelStudioCore(params))
+
+    editor.setValue('<p>Journaled</p>', 'Journaled')
+    tiptapMock.options?.onUpdate?.({ editor: tiptapMock.editor! })
+    await advanceTimers(179)
+    expect(readChapterDraft('novel-1', 'chapter-1')).toBeNull()
+    await advanceTimers(1)
+    expect(readChapterDraft('novel-1', 'chapter-1')?.content).toBe('<p>Journaled</p>')
+    hook.unmount()
+
+    window.localStorage.clear()
+    writeChapterDraft({
+      novelId: 'novel-1',
+      chapterId: 'chapter-1',
+      baseContent: '<p>Alpha</p>',
+      content: '<p>Recovered</p>',
+      wordCount: 9,
+    })
+    const recoveryUpdate = vi.fn()
+    const recovered = renderHook(() => useSelectionNovelStudioCore({ ...params, updateChapterContent: recoveryUpdate }))
+
+    await advanceTimers(0)
+    expect(recoveryUpdate).toHaveBeenCalledWith('chapter-1', '<p>Recovered</p>', 9)
+    expect(recovered.result.current.toast).toBe('workspace.persistence.localDraftRecovered')
+    expect(recovered.result.current.toastVariant).toBe('warning')
+    recovered.unmount()
+  })
+
+  it('does not overwrite changed server content without confirmation', async () => {
+    writeChapterDraft({
+      novelId: 'novel-1',
+      chapterId: 'chapter-1',
+      baseContent: '<p>Older server</p>',
+      content: '<p>Local draft</p>',
+      wordCount: 8,
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const updateChapterContent = vi.fn()
+    renderHook(() => useSelectionNovelStudioCore(buildCoreParams({
+      currentNovelId: 'novel-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
+      updateChapterContent,
+    })))
+
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(updateChapterContent).not.toHaveBeenCalled()
+    expect(readChapterDraft('novel-1', 'chapter-1')).toBeNull()
+  })
+
   it('flushes on debounce, pagehide, hidden visibility, and unmount', async () => {
     const editor = installEditor()
     const updateChapterContent = vi.fn()
@@ -1066,6 +1147,50 @@ describe('useSelectionNovelStudioCore knowledge rebuild polling', () => {
     vi.useRealTimers()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
+  })
+
+  it('keeps the running-status delay when parent adapter callbacks are recreated', async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>()
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.startsWith('/api/story-timeline?')) {
+        return jsonResponse(buildStoryTimeline())
+      }
+      if (url.includes('/api/knowledge-view?') && url.includes('statusOnly=1')) {
+        return jsonResponse({
+          ok: true,
+          knowledgeRebuildStatus: buildKnowledgeRebuildStatus('running'),
+          hanlpCacheSnapshot: null,
+          knowledgeStatusOverview: buildKnowledgeStatusOverview(),
+        })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const params = buildCoreParams({
+      currentNovelId: 'novel-1',
+      localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
+    })
+    const { unmount } = renderHook(() => useSelectionNovelStudioCore({
+      ...params,
+      clearPresetCompatSessionStateForSelection: (selection) => params.clearPresetCompatSessionStateForSelection(selection),
+      resetPresetCompatSessionStateForSelection: (selection, surfaces) => params.resetPresetCompatSessionStateForSelection(selection, surfaces),
+    }))
+    const knowledgeRequests = () => fetchMock.mock.calls.filter(([input]) => (
+      String(input).includes('/api/knowledge-view?') && String(input).includes('statusOnly=1')
+    ))
+
+    await advanceTimers(0)
+    expect(knowledgeRequests()).toHaveLength(1)
+
+    await advanceTimers(1_499)
+    expect(knowledgeRequests()).toHaveLength(1)
+
+    await advanceTimers(1)
+    expect(knowledgeRequests()).toHaveLength(2)
+
+    unmount()
   })
 
   it('selects a saturated running write step before a later pending raw embedding step', () => {
@@ -1660,7 +1785,6 @@ describe('useSelectionNovelStudioCore knowledge projection selection', () => {
       backendLoaded: true,
       currentNovelId: 'novel-1',
       localNovels: [{ id: 'novel-1', title: 'Novel 1' }],
-      localVolumes: [],
       localChapters,
       currentChapterId: 'chapter-1',
       setCurrentChapterId: vi.fn(),

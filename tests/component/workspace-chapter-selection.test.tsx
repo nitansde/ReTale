@@ -29,7 +29,6 @@ function buildChapter(overrides: Partial<Chapter>): Chapter {
   return {
     id: 'chapter-1',
     novelId: 'novel-1',
-    volumeId: 'volume-1',
     title: 'Chapter 1',
     order: 1,
     content: '<p>Alpha</p>',

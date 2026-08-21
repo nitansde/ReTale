@@ -1,4 +1,5 @@
 import { normalizeAISettings } from '@/lib/ai-settings'
+import { readBrowserWorkspaceSession } from '@/lib/browser-preferences'
 import { requestClientGet } from '@/lib/client-request-broker'
 import {
   fetchPresetCompatLibrary,
@@ -29,6 +30,7 @@ const WORKSPACE_MUTATION_TIMEOUT_MS = 15_000
 const WORKSPACE_KEEPALIVE_BODY_LIMIT_BYTES = 60 * 1024
 const NOVEL_DELETE_TIMEOUT_MS = 15_000
 const NOVEL_DELETION_STATUS_RETRY_DELAYS_MS = [100, 250, 500] as const
+const DEDUPED_CHAPTER_CONTENT_ENCODING = 'original-content-equals-content-v1'
 let workspaceRestoreGeneration = 0
 let activeWorkspaceRestoreController: AbortController | null = null
 
@@ -44,10 +46,7 @@ function hasExactKeys(value: Record<string, unknown>, expectedKeys: readonly str
 function isWorkspaceResponse(value: unknown): value is Partial<PersistedNovelState> {
   if (!isRecord(value)) return false
 
-  return typeof value.currentNovelId === 'string'
-    && typeof value.currentChapterId === 'string'
-    && Array.isArray(value.localNovels)
-    && Array.isArray(value.localVolumes)
+  return Array.isArray(value.localNovels)
     && Array.isArray(value.localChapters)
     && Array.isArray(value.localOutlines)
     && Array.isArray(value.localCharacters)
@@ -57,6 +56,55 @@ function isWorkspaceResponse(value: unknown): value is Partial<PersistedNovelSta
     && Array.isArray(value.rewriteCandidates)
     && Array.isArray(value.rewriteHistory)
     && Array.isArray(value.trajectories)
+}
+
+function decodeWorkspaceChapterContent(value: unknown) {
+  if (!isRecord(value) || value.chapterContentEncoding !== DEDUPED_CHAPTER_CONTENT_ENCODING) return value
+  if (!Array.isArray(value.localChapters)) return value
+
+  return {
+    ...value,
+    localChapters: value.localChapters.map((chapter) => {
+      if (!isRecord(chapter) || typeof chapter.content !== 'string' || chapter.originalContent !== undefined) {
+        return chapter
+      }
+      return { ...chapter, originalContent: chapter.content }
+    }),
+  }
+}
+
+function applyBrowserSessionToWorkspace(workspace: PersistedNovelState, requestedNovelId?: string) {
+  const session = readBrowserWorkspaceSession()
+  const availableNovelIds = new Set([
+    ...workspace.localNovels.map((novel) => novel.id),
+    ...workspace.localChapters.map((chapter) => chapter.novelId),
+  ])
+  const currentNovelId = requestedNovelId && availableNovelIds.has(requestedNovelId)
+    ? requestedNovelId
+    : availableNovelIds.has(session.currentNovelId)
+      ? session.currentNovelId
+      : availableNovelIds.has(workspace.currentNovelId)
+        ? workspace.currentNovelId
+        : availableNovelIds.values().next().value ?? ''
+  const chapters = workspace.localChapters
+    .filter((chapter) => chapter.novelId === currentNovelId)
+    .slice()
+    .sort((left, right) => Number(Boolean(left.parentChapterId)) - Number(Boolean(right.parentChapterId)) || left.order - right.order || left.id.localeCompare(right.id))
+  const sessionChapterId = session.currentChapterIds[currentNovelId]
+  const currentChapterId = chapters.some((chapter) => chapter.id === sessionChapterId)
+    ? sessionChapterId
+    : chapters.some((chapter) => chapter.id === workspace.currentChapterId)
+      ? workspace.currentChapterId
+      : chapters[0]?.id ?? ''
+
+  return {
+    ...workspace,
+    currentNovelId,
+    currentChapterId,
+    currentTab: session.currentTab,
+    helperTab: session.helperTab,
+    focusMode: session.focusMode,
+  }
 }
 
 function parseLibrarySummary(value: unknown): LibrarySummary | null {
@@ -83,11 +131,11 @@ function parseLibrarySummary(value: unknown): LibrarySummary | null {
 }
 
 function parseLibrarySummaryResponse(value: unknown) {
-  if (!isRecord(value) || !hasExactKeys(value, ['ok', 'activeNovelId', 'novels'])) return null
-  if (value.ok !== true || (value.activeNovelId !== null && typeof value.activeNovelId !== 'string') || !Array.isArray(value.novels)) return null
+  if (!isRecord(value) || !hasExactKeys(value, ['ok', 'novels'])) return null
+  if (value.ok !== true || !Array.isArray(value.novels)) return null
   const novels = value.novels.map(parseLibrarySummary)
   if (novels.some((novel) => novel === null)) return null
-  return { activeNovelId: value.activeNovelId, novels: novels as LibrarySummary[] }
+  return { novels: novels as LibrarySummary[] }
 }
 
 function parseDeletionStatusSuccess(value: unknown, novelId: string): NovelDeletionStatusObservation | null {
@@ -244,7 +292,6 @@ function parseChapter(value: unknown): Chapter | null {
   if (
     typeof value.id !== 'string'
     || typeof value.novelId !== 'string'
-    || typeof value.volumeId !== 'string'
     || typeof value.title !== 'string'
     || typeof value.order !== 'number'
     || !Number.isFinite(value.order)
@@ -264,7 +311,6 @@ function parseChapter(value: unknown): Chapter | null {
   return {
     id: value.id,
     novelId: value.novelId,
-    volumeId: value.volumeId,
     title: value.title,
     order: value.order,
     content: value.content,
@@ -319,7 +365,10 @@ async function executeMutationEnvelope(
   const controller = new AbortController()
   const timeoutId = globalThis.setTimeout(() => controller.abort(), WORKSPACE_MUTATION_TIMEOUT_MS)
   try {
-    const response = await fetch('/api/workspace', {
+    const resourceUrl = envelope.method === 'PATCH' && envelope.chapterId
+      ? `/api/chapters/${encodeURIComponent(envelope.chapterId)}`
+      : `/api/novels/${encodeURIComponent(envelope.capturedSnapshot.currentNovelId)}`
+    const response = await fetch(resourceUrl, {
       method: envelope.method,
       headers: envelope.baseRevision === null || envelope.idempotencyKey === null
         ? { 'Content-Type': 'application/json' }
@@ -347,9 +396,8 @@ function workspaceSaveFailure(code: ConstructorParameters<typeof TypedWorkspaceS
 }
 
 async function fetchNovelDeletionStatus(novelId: string): Promise<NovelDeletionStatusObservation> {
-  const query = new URLSearchParams({ novelId, deletionStatus: '1' })
   const response = await fetchWithWorkspaceTimeout(
-    `/api/workspace?${query.toString()}`,
+    `/api/novels/${encodeURIComponent(novelId)}?deletionStatus=1`,
     'Novel deletion status request timed out'
   )
   const payload = parseWorkspaceResponseBody(response, 'Workspace deletion status endpoint returned invalid JSON')
@@ -393,12 +441,13 @@ export async function pollNovelDeletionStatus(novelId: string): Promise<NovelDel
 }
 
 export async function fetchAuthoritativeWorkspace(novelId: string): Promise<PersistedNovelState> {
-  const query = new URLSearchParams({ novelId })
   const response = await fetchWithWorkspaceTimeout(
-    `/api/workspace?${query.toString()}`,
+    `/api/novels/${encodeURIComponent(novelId)}`,
     'Workspace reconciliation timed out'
   )
-  const payload = parseWorkspaceResponseBody(response, 'Workspace endpoint returned invalid JSON')
+  const payload = decodeWorkspaceChapterContent(
+    parseWorkspaceResponseBody(response, 'Workspace endpoint returned invalid JSON')
+  )
 
   if (!response.ok) {
     const message = parseErrorResponse(payload)
@@ -428,14 +477,14 @@ function parseDeleteRejection(status: number, payload: unknown): DeleteNovelOutc
 function validateDeleteSuccess(status: number, payload: unknown, novelId: string): DeleteNovelFromBackendResult | null {
   if ((status !== 200 && status !== 202) || !isRecord(payload) || payload.ok !== true) return null
   if (payload.deletedNovelId !== novelId) return null
-  if (payload.activeNovelId !== null && typeof payload.activeNovelId !== 'string') return null
+  if (payload.nextNovelId !== null && typeof payload.nextNovelId !== 'string') return null
   if (payload.deletionState !== 'deleted' || typeof payload.cleanupPending !== 'boolean') return null
   if ((status === 202) !== payload.cleanupPending) return null
 
   return {
     ok: true,
     deletedNovelId: novelId,
-    activeNovelId: payload.activeNovelId,
+    nextNovelId: payload.nextNovelId,
     deletionState: 'deleted',
     cleanupPending: payload.cleanupPending,
   }
@@ -455,9 +504,7 @@ export function serializeState(state: PersistedNovelState): PersistedNovelState 
     currentChapterId: state.currentChapterId,
     currentTab: state.currentTab,
     helperTab: state.helperTab,
-    expandedVolumeIds: state.expandedVolumeIds,
     localNovels: state.localNovels,
-    localVolumes: state.localVolumes,
     localChapters: state.localChapters,
     localOutlines: state.localOutlines,
     localCharacters: state.localCharacters,
@@ -701,7 +748,7 @@ export function createPersistenceActions(
       set({ librarySummariesError: '' })
       try {
         const response = await fetchWithWorkspaceTimeout(
-          '/api/workspace?librarySummary=1',
+          '/api/novels',
           'Library summary request timed out',
           undefined,
           { dedupe: !fresh },
@@ -716,11 +763,18 @@ export function createPersistenceActions(
           throw new Error('Library summary endpoint returned an invalid response')
         }
         if (!ownsRequest()) return
+        const browserSession = readBrowserWorkspaceSession()
+        const currentStateNovelId = get().currentNovelId
+        const currentNovelId = result.novels.some((novel) => novel.id === browserSession.currentNovelId)
+          ? browserSession.currentNovelId
+          : result.novels.some((novel) => novel.id === currentStateNovelId)
+            ? currentStateNovelId
+            : result.novels[0]?.id ?? ''
         set({
           librarySummaries: result.novels,
           librarySummariesLoaded: true,
           librarySummariesError: '',
-          currentNovelId: result.activeNovelId ?? get().currentNovelId,
+          currentNovelId,
           isHydrated: true,
         })
       } catch (error) {
@@ -766,8 +820,47 @@ export function createPersistenceActions(
       activeWorkspaceRestoreController = workspaceRestoreController
 
       try {
-        const query = novelId ? `?${new URLSearchParams({ novelId }).toString()}` : ''
-        const workspaceResponse = await fetchWithWorkspaceTimeout(`/api/workspace${query}`, 'Workspace restore timed out', workspaceRestoreController.signal)
+        const browserSession = readBrowserWorkspaceSession()
+        let targetNovelId = novelId || browserSession.currentNovelId || get().currentNovelId
+        if (!targetNovelId) {
+          const libraryResponse = await fetchWithWorkspaceTimeout(
+            '/api/novels',
+            'Novel library restore timed out',
+            workspaceRestoreController.signal,
+          )
+          const libraryPayload = parseWorkspaceResponseBody(libraryResponse, 'Novel library endpoint returned invalid JSON')
+          if (!libraryResponse.ok) {
+            const message = parseErrorResponse(libraryPayload)
+            throw new Error(message || 'Failed to restore novel library')
+          }
+          const library = parseLibrarySummaryResponse(libraryPayload)
+          if (!library) throw new Error('Novel library endpoint returned an invalid response')
+          if (!ownsRestore()) return
+          targetNovelId = library.novels[0]?.id ?? ''
+          set({
+            librarySummaries: library.novels,
+            librarySummariesLoaded: true,
+            librarySummariesError: '',
+          })
+          if (!targetNovelId) {
+            set({
+              currentNovelId: '',
+              currentChapterId: '',
+              isHydrated: true,
+              backendLoaded: true,
+              backendLoadError: '',
+            })
+            if (activeWorkspaceRestoreController === workspaceRestoreController) {
+              activeWorkspaceRestoreController = null
+            }
+            return
+          }
+        }
+        const workspaceResponse = await fetchWithWorkspaceTimeout(
+          `/api/novels/${encodeURIComponent(targetNovelId)}`,
+          'Workspace restore timed out',
+          workspaceRestoreController.signal,
+        )
         if (!workspaceResponse.ok) {
           const error = (() => {
             try { return JSON.parse(workspaceResponse.text) as { error?: string } }
@@ -776,24 +869,27 @@ export function createPersistenceActions(
           throw new Error(error?.error || 'Failed to restore workspace')
         }
 
-        const workspace = parseWorkspaceResponseBody(workspaceResponse, 'Workspace endpoint returned invalid JSON')
+        const workspace = decodeWorkspaceChapterContent(
+          parseWorkspaceResponseBody(workspaceResponse, 'Workspace endpoint returned invalid JSON')
+        )
         if (!isWorkspaceResponse(workspace)) throw new Error('Workspace endpoint returned an invalid workspace')
         if (!ownsRestore()) return
         const normalizedWorkspace = serializeState(normalizeWorkspaceState(workspace))
+        const browserWorkspace = applyBrowserSessionToWorkspace(normalizedWorkspace, targetNovelId)
         const revisionAuthority = parseWorkspaceRevisionAuthority(workspace, workspaceResponse)
-        const targetPresent = !novelId || normalizedWorkspace.localNovels.some((item) => item.id === novelId)
-          || normalizedWorkspace.localChapters.some((item) => item.novelId === novelId)
+        const targetPresent = normalizedWorkspace.localNovels.some((item) => item.id === targetNovelId)
+          || normalizedWorkspace.localChapters.some((item) => item.novelId === targetNovelId)
         const authoritativeForWorkspace = revisionAuthority && (
           normalizedWorkspace.localNovels.some((item) => item.id === revisionAuthority.revisionNovelId)
           || normalizedWorkspace.localChapters.some((item) => item.novelId === revisionAuthority.revisionNovelId)
         )
-        if (novelId && (!revisionAuthority || revisionAuthority.revisionNovelId !== novelId || !targetPresent)) {
+        if (!revisionAuthority || revisionAuthority.revisionNovelId !== targetNovelId || !targetPresent) {
           throw new Error('Targeted workspace returned invalid revision authority')
         }
 
         if (authoritativeForWorkspace) authorityEpoch += 1
         set({
-          ...normalizedWorkspace,
+          ...browserWorkspace,
           workspaceRevision: authoritativeForWorkspace ? revisionAuthority.workspaceRevision : null,
           revisionNovelId: authoritativeForWorkspace ? revisionAuthority.revisionNovelId : '',
           lastAcknowledgedPersistedWorkspace: authoritativeForWorkspace ? normalizedWorkspace : null,
@@ -1018,7 +1114,7 @@ export function createPersistenceActions(
       }
     },
     deleteNovelFromBackend: async (novelId) => {
-      const query = new URLSearchParams({ novelId })
+      const query = new URLSearchParams()
       const nextNovelId = get().currentNovelId
       if (nextNovelId) {
         query.set('nextNovelId', nextNovelId)
@@ -1028,7 +1124,8 @@ export function createPersistenceActions(
       const timeoutId = globalThis.setTimeout(() => controller.abort(), NOVEL_DELETE_TIMEOUT_MS)
 
       try {
-        const response = await fetch(`/api/workspace?${query.toString()}`, {
+        const suffix = query.size ? `?${query.toString()}` : ''
+        const response = await fetch(`/api/novels/${encodeURIComponent(novelId)}${suffix}`, {
           method: 'DELETE',
           signal: controller.signal,
         })

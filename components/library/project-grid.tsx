@@ -85,7 +85,6 @@ export function ProjectGrid() {
     librarySummariesLoaded,
     loadLibrarySummaries,
     loadFromBackend,
-    saveToBackend,
     deleteNovelFromBackend,
     reconcileNovelDeletionFromBackend,
     isNovelDeletionPending,
@@ -140,7 +139,6 @@ export function ProjectGrid() {
   const openNovel = async (
     novelId: string,
     chapterId?: string,
-    { persistSelection = true }: { persistSelection?: boolean } = {},
   ) => {
     const requestSequence = openRequestSequenceRef.current + 1
     openRequestSequenceRef.current = requestSequence
@@ -159,10 +157,6 @@ export function ProjectGrid() {
         return false
       }
       if (!ownsRequest()) return false
-      if (persistSelection) {
-        await saveToBackend()
-        if (!ownsRequest()) return false
-      }
       router.push('/workspace')
       return true
     } catch (error) {
@@ -239,7 +233,7 @@ export function ProjectGrid() {
   
       if (!ownsRequest()) return
       if (data.chapterCount <= 120) {
-        const opened = await openNovel(data.novelId, data.chapterId, { persistSelection: false })
+        const opened = await openNovel(data.novelId, data.chapterId)
         if (!opened) {
           throw createImportFailure('handoff')
         }
@@ -292,7 +286,7 @@ export function ProjectGrid() {
     try {
       const outcome = await deleteNovelFromBackend(novelId)
       if (outcome.status === 'committed') {
-        reconcileNovelDeletion(outcome.result.activeNovelId)
+        reconcileNovelDeletion(outcome.result.nextNovelId)
         await loadLibrarySummaries({ fresh: true }).catch(() => undefined)
         setLibraryNotice({ variant: 'success', message: t('library.deleted', { title }) })
       } else if (outcome.status === 'rejected') {

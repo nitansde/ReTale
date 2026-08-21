@@ -4,6 +4,7 @@ import { test, expect } from '@playwright/test'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import { DEFAULT_REWRITE_PROMPT } from '@/components/workspace/selection-novel-studio'
 import { storyBranchFixtureIds } from '@/tests/helpers/fixture-ids'
+import { mockNovelResourceApi } from '@/tests/helpers/novel-resource-api-mock'
 import type { StoryTimelineResponse } from '@/lib/story-branch-types'
 
 const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/task-15-branch-ux-playwright-future-map')
@@ -167,12 +168,10 @@ function buildWorkspacePayload() {
     currentNovelId: 'novel-001',
     currentChapterId: 'chapter-10',
     localNovels: [{ id: 'novel-001', title: 'Fixture Novel', summary: 'Timeline fixture novel', tags: ['fixture'] }],
-    localVolumes: [{ id: 'volume-001', novelId: 'novel-001', title: '第一卷', order: 1 }],
     localChapters: [
       {
         id: 'chapter-10',
         novelId: 'novel-001',
-        volumeId: 'volume-001',
         title: '第10章 结盟',
         order: 10,
         content: '<p>第10章正文</p>',
@@ -183,7 +182,6 @@ function buildWorkspacePayload() {
       {
         id: 'chapter-100',
         novelId: 'novel-001',
-        volumeId: 'volume-001',
         title: '第100章 被绑走',
         order: 100,
         content: '<p>第100章正文</p>',
@@ -194,7 +192,6 @@ function buildWorkspacePayload() {
       {
         id: 'branch-chapter-10-b1',
         novelId: 'novel-001',
-        volumeId: 'volume-001',
         title: '第10章 结盟 · 分支 1',
         order: 10.1,
         content: '<p>分支正文</p>',
@@ -798,9 +795,7 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
     latestRevisionNo: 1,
   })
 
-  await page.route('**/api/workspace', async (route) => {
-    await route.fulfill({ json: buildWorkspacePayload() })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({
       json: createdContinueBlock ? buildContinueBlockTimelinePayload() : buildStoryTimelinePayload({ includeWhatIf: false, includeFutureJump: false }),
@@ -905,7 +900,7 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
   })
 
   await expect(page.getByTestId('workspace-action-overlay')).toBeHidden()
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('续写内容')
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
@@ -974,9 +969,7 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
     markDelayedTimelineRefreshStarted = resolve
   })
 
-  await page.route('**/api/workspace', async (route) => {
-    await route.fulfill({ json: buildWorkspacePayload() })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {
     if (route.request().method() === 'DELETE') {
       const { nodeId } = route.request().postDataJSON() as { nodeId: string }
@@ -1036,7 +1029,7 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
   await expect(page).toHaveURL(/selectionKind=rewrite/)
   await expect(page).toHaveURL(/selectionNodeId=rewrite-node-1/)
   await expect(page).not.toHaveURL(/selectionNodeId=continue-node-1/)
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('rewrite')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('改写分支')
   expect(continueBlockDetailRequests).toContain('rewrite-block-1')
   releaseDelayedTimelineRefresh()
 
@@ -1046,7 +1039,7 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
   await page.getByLabel(/(删除|Delete) Future jump .*JUMP-01/i).click()
   await expect(page).toHaveURL(/selectionKind=what_if/)
   await expect(page).toHaveURL(new RegExp(`selectionNodeId=${storyBranchFixtureIds.whatIfNodeId}`))
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('what-if')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('假设分支')
 
   timelineState = buildDeleteAffordanceTimelinePayload()
   await page.goto('/workspace?selectionKind=rewrite&selectionNodeId=rewrite-node-1&selectionContinueBlockId=rewrite-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
@@ -1067,7 +1060,7 @@ test('delete affordances stay visible across rewrite/continue/what-if/future-jum
   await expect(page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`)).toContainText('JUMP-01')
   await page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`).click()
   await expect(page.getByTestId('workspace-future-jump-view')).toBeVisible()
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('future-jump')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('未来跳转')
 })
 
 test('full speculative branching flow persists through revise, reload, and reopened jump selection', async ({ page }) => {
@@ -1080,9 +1073,7 @@ test('full speculative branching flow persists through revise, reload, and reope
   let revisePayload: Record<string, unknown> | null = null
   let currentDetail = buildFutureJumpRunDetail(2)
 
-  await page.route('**/api/workspace', async (route) => {
-    await route.fulfill({ json: buildWorkspacePayload() })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({
       json: buildStoryTimelinePayload({
@@ -1300,7 +1291,7 @@ test('full speculative branching flow persists through revise, reload, and reope
   await expect(page.getByTestId('workspace-action-overlay')).toBeHidden()
   await expect(ifNode).toBeVisible()
   await expect(page.getByTestId('what-if-view')).toBeVisible()
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('what-if')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('假设分支')
   await expect(page.getByText('魔改后的 What-if 正文')).toBeVisible()
   await expect(page.getByTestId('what-if-delta-list')).toBeVisible()
   await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 321 tokens')
@@ -1345,7 +1336,7 @@ test('full speculative branching flow persists through revise, reload, and reope
   await expect(page.getByTestId('future-map-overlay')).toBeHidden()
   await expect(jumpNode).toBeVisible()
   await expect(page.getByTestId('workspace-future-jump-view')).toBeVisible()
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('future-jump')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('未来跳转')
   await expect(jumpNode).toHaveAttribute('data-active', 'true')
   await expect(edge).toHaveAttribute('data-active', 'true')
   await expect(jumpNode).toContainText('JUMP-01')
@@ -1383,9 +1374,7 @@ test('full speculative branching flow persists through revise, reload, and reope
 test('future map shows derived provenance badges on inferred candidates', async ({ page }) => {
   fs.mkdirSync(evidenceDirectory, { recursive: true })
 
-  await page.route('**/api/workspace', async (route) => {
-    await route.fulfill({ json: buildWorkspacePayload() })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({ json: buildStoryTimelinePayload({ includeWhatIf: true, includeFutureJump: false }) })
   })
@@ -1465,9 +1454,7 @@ test('future jump view renders latest revision, revises in place, and reopens re
   const continueBlockDetails: Record<string, ReturnType<typeof buildContinueBlockDetail>> = {}
   const continueBlockDetailRequests: string[] = []
 
-  await page.route('**/api/workspace', async (route) => {
-    await route.fulfill({ json: buildWorkspacePayload() })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {
     if (delayNextTimelineRefresh) {
       delayNextTimelineRefresh = false
@@ -1675,9 +1662,7 @@ test('future jump view renders latest revision, revises in place, and reopens re
 test('continue-block selection restores on reload and exposes the reader action matrix', async ({ page }) => {
   let continueBlockDetailRequestCount = 0
 
-  await page.route('**/api/workspace', async (route) => {
-    await route.fulfill({ json: buildWorkspacePayload() })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({ json: buildContinueBlockTimelinePayload() })
   })
@@ -1718,7 +1703,7 @@ test('continue-block selection restores on reload and exposes the reader action 
 
   await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
 
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('续写内容')
   await expect(page.getByTestId('workspace-continue-block-actions')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
@@ -1731,7 +1716,7 @@ test('continue-block selection restores on reload and exposes the reader action 
   await page.reload({ waitUntil: 'networkidle' })
 
   await expect(page).toHaveURL(/selectionKind=continue_block/)
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('续写内容')
   await expect(page.getByTestId('workspace-continue-block-actions')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
@@ -1769,9 +1754,7 @@ test('continue-block continue creates a child node while regenerate updates the 
   }
   const continueBlockDetailRequests: string[] = []
 
-  await page.route('**/api/workspace', async (route) => {
-    await route.fulfill({ json: buildWorkspacePayload() })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({ json: timelineState })
   })
@@ -2072,9 +2055,7 @@ test('mixed continue and future-jump trees keep continue-block navigation select
   }
   const continueBlockDetailRequests: string[] = []
 
-  await page.route('**/api/workspace', async (route) => {
-    await route.fulfill({ json: buildWorkspacePayload() })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({ json: buildMixedContinueTreeTimelinePayload() })
   })
@@ -2111,7 +2092,7 @@ test('mixed continue and future-jump trees keep continue-block navigation select
 
   await expect(page).toHaveURL(/selectionKind=continue_block/)
   await expect(page).toHaveURL(/selectionNodeId=continue-node-2/)
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('续写内容')
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('未来续写块正文：她被带走后，誓言开始在更远的地方回响。')
   expect(continueBlockDetailRequests).toContain('continue-block-2')
@@ -2119,7 +2100,7 @@ test('mixed continue and future-jump trees keep continue-block navigation select
   await page.reload({ waitUntil: 'networkidle' })
 
   await expect(page).toHaveURL(/selectionNodeId=continue-node-2/)
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('continue-block')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('续写内容')
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('未来续写块正文：她被带走后，誓言开始在更远的地方回响。')
   expect(continueBlockDetailRequests.filter((id) => id === 'continue-block-2').length).toBeGreaterThanOrEqual(2)
@@ -2150,9 +2131,7 @@ test('future jump launched from a continue node stays attached under that curren
     timelineNodeId: storyBranchFixtureIds.futureJumpNodeId,
   }
 
-  await page.route('**/api/workspace', async (route) => {
-    await route.fulfill({ json: buildWorkspacePayload() })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({ json: timelineState })
   })
@@ -2242,15 +2221,13 @@ test('future jump launched from a continue node stays attached under that curren
 
   await expect(page.getByTestId(`timeline-edge-continue-node-1-${storyBranchFixtureIds.futureJumpNodeId}`)).toBeVisible()
   await expect(page.getByTestId('workspace-future-jump-view')).toBeVisible()
-  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('future-jump')
+  await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('未来跳转')
 })
 
 test('focused future jump chooser history mode from what-if binds the chapter immediately', async ({ page }) => {
   let createPayload: Record<string, unknown> | null = null
 
-  await page.route('**/api/workspace', async (route) => {
-    await route.fulfill({ json: buildWorkspacePayload() })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({ json: buildStoryTimelinePayload({ includeWhatIf: true, includeFutureJump: false }) })
   })
@@ -2302,9 +2279,7 @@ test('focused future jump chooser history mode from what-if binds the chapter im
 test('focused future jump chooser direct-chapter mode shows real summaries and keeps invalid state deterministic', async ({ page }) => {
   let createPayload: Record<string, unknown> | null = null
 
-  await page.route('**/api/workspace', async (route) => {
-    await route.fulfill({ json: buildWorkspacePayload() })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({ json: buildStoryTimelinePayload({ includeWhatIf: true, includeFutureJump: false }) })
   })
@@ -2362,9 +2337,7 @@ test('focused future jump chooser direct-chapter mode shows real summaries and k
 
 test('focused Future Map overlay is single-column without mobile overflow and preserves desktop columns', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.route('**/api/workspace', async (route) => {
-    await route.fulfill({ json: buildWorkspacePayload() })
-  })
+  await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {
     await route.fulfill({ json: buildStoryTimelinePayload({ includeWhatIf: true, includeFutureJump: false }) })
   })

@@ -8,13 +8,6 @@ export type Novel = {
   chapterCount: number
 }
 
-export type Volume = {
-  id: string
-  novelId: string
-  title: string
-  order: number
-}
-
 export type LocalNovelMeta = {
   id: string
   title: string
@@ -28,7 +21,6 @@ export type ChapterKind = 'main' | 'branch'
 export type Chapter = {
   id: string
   novelId: string
-  volumeId: string
   title: string
   order: number
   content: string
@@ -325,9 +317,7 @@ export type PersistedNovelState = {
   currentChapterId: string
   currentTab: WorkspaceTab
   helperTab: HelperTab
-  expandedVolumeIds: string[]
   localNovels: LocalNovelMeta[]
-  localVolumes: Volume[]
   localChapters: Chapter[]
   localOutlines: OutlineItem[]
   localCharacters: Character[]
