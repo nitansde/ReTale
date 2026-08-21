@@ -1,6 +1,7 @@
 import type { Chapter, PersistedNovelState } from '@/lib/types'
 
 export type WorkspacePersistenceClassification =
+  | { kind: 'none' }
   | { kind: 'patch'; chapter: Chapter }
   | { kind: 'post' }
 
@@ -18,6 +19,7 @@ function withoutSeparatelyPersistedSettings(state: PersistedNovelState) {
     focusMode: _focusMode,
     selectionText: _selectionText,
     selectedParagraphIndex: _selectedParagraphIndex,
+    presetCompatSessionState: _presetCompatSessionState,
     ...workspace
   } = state
   return workspace
@@ -58,5 +60,5 @@ export function classifyWorkspacePersistence(
     changedChapter = currentChapter
   }
 
-  return changedChapter ? { kind: 'patch', chapter: changedChapter } : { kind: 'post' }
+  return changedChapter ? { kind: 'patch', chapter: changedChapter } : { kind: 'none' }
 }

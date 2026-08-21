@@ -104,6 +104,12 @@ function applyBrowserSessionToWorkspace(workspace: PersistedNovelState, requeste
     currentTab: session.currentTab,
     helperTab: session.helperTab,
     focusMode: session.focusMode,
+    presetCompatSessionState: Object.prototype.hasOwnProperty.call(
+      session.presetCompatSessionStates,
+      currentNovelId,
+    )
+      ? session.presetCompatSessionStates[currentNovelId]!
+      : workspace.presetCompatSessionState,
   }
 }
 
@@ -585,7 +591,7 @@ export function createPersistenceActions(
   const applySaveSuccess = (
     generation: number,
     saveAuthorityEpoch: number,
-    capturedSnapshot: PersistedNovelState,
+    envelope: WorkspaceMutationEnvelope,
     priorAuthority: {
       workspaceRevision: number | null
       revisionNovelId: string
@@ -594,6 +600,7 @@ export function createPersistenceActions(
     acknowledgement: WorkspaceRevisionAuthority,
   ) => {
     set((current) => {
+      const capturedSnapshot = envelope.capturedSnapshot
       if (current.currentNovelId !== capturedSnapshot.currentNovelId) return current
 
       const transfersAuthority = priorAuthority.revisionNovelId !== ''
@@ -629,11 +636,21 @@ export function createPersistenceActions(
 
       if (advancesAuthority) latestAuthorityGeneration = generation
       if (mayClearConflict) latestSaveOutcomeGeneration = generation
+      const acknowledgedChapter = envelope.method === 'PATCH' && envelope.chapterId
+        ? capturedSnapshot.localChapters.find((chapter) => chapter.id === envelope.chapterId) ?? null
+        : null
+      const acknowledgedWorkspace = acknowledgedChapter && current.lastAcknowledgedPersistedWorkspace
+        ? replaceAcknowledgedChapter(
+            current.lastAcknowledgedPersistedWorkspace,
+            envelope.chapterId!,
+            acknowledgedChapter,
+          )
+        : capturedSnapshot
       return {
         ...(advancesAuthority ? {
           workspaceRevision: acknowledgement.workspaceRevision,
           revisionNovelId: acknowledgement.revisionNovelId,
-          lastAcknowledgedPersistedWorkspace: capturedSnapshot,
+          lastAcknowledgedPersistedWorkspace: acknowledgedWorkspace,
         } : {}),
         ...(mayClearConflict ? {
           workspaceSaveConflict: null,
@@ -958,6 +975,7 @@ export function createPersistenceActions(
       const classification = hasMatchingAuthority
         ? classifyWorkspacePersistence(state.lastAcknowledgedPersistedWorkspace!, capturedSnapshot)
         : { kind: 'post' as const }
+      if (classification.kind === 'none') return
       const conflict = state.workspaceSaveConflict
       if (conflict && hasMatchingAuthority) {
         const unchangedRejectedChapter = classification.kind === 'patch'
@@ -1099,7 +1117,7 @@ export function createPersistenceActions(
           }
           const acknowledgement = parseMutationSuccess(result.response, result.payload, capturedSnapshot.currentNovelId)
           if (acknowledgement) {
-            applySaveSuccess(generation, saveAuthorityEpoch, capturedSnapshot, priorAuthority, acknowledgement)
+            applySaveSuccess(generation, saveAuthorityEpoch, activeEnvelope, priorAuthority, acknowledgement)
           }
           return
         }
@@ -1108,7 +1126,7 @@ export function createPersistenceActions(
           applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
           throw workspaceSaveFailure('invalid-response', 'Workspace save returned an invalid revision acknowledgement')
         }
-        applySaveSuccess(generation, saveAuthorityEpoch, capturedSnapshot, priorAuthority, acknowledgement)
+        applySaveSuccess(generation, saveAuthorityEpoch, activeEnvelope, priorAuthority, acknowledgement)
       } finally {
         finishSave()
       }

@@ -986,26 +986,35 @@ export const useNovelStore = create<NovelStore>((set, get) => {
       focusMode: initialState.focusMode,
     })
   },
-  setPresetCompatSessionPhase: (selection, surfaceId, phase, resetPending = false) => setPersisted((state) => ({
-    presetCompatSessionState: setPresetCompatSessionEntry(
+  setPresetCompatSessionPhase: (selection, surfaceId, phase, resetPending = false) => set((state) => {
+    const presetCompatSessionState = setPresetCompatSessionEntry(
       state.presetCompatSessionState,
       selection,
       surfaceId,
       phase,
       resetPending
-    ),
-  })),
-  clearPresetCompatSessionStateForSelection: (selection) => setPersisted((state) => ({
-    presetCompatSessionState: clearPresetCompatSessionStateForSelection(state.presetCompatSessionState, selection),
-  })),
-  resetPresetCompatSessionStateForSelection: (selection, surfaceIds, phase = 'new_chat') => setPersisted((state) => ({
-    presetCompatSessionState: resetPresetCompatSessionStateForSelection(
+    )
+    return presetCompatSessionState === state.presetCompatSessionState
+      ? state
+      : { presetCompatSessionState }
+  }),
+  clearPresetCompatSessionStateForSelection: (selection) => set((state) => {
+    const presetCompatSessionState = clearPresetCompatSessionStateForSelection(state.presetCompatSessionState, selection)
+    return presetCompatSessionState === state.presetCompatSessionState
+      ? state
+      : { presetCompatSessionState }
+  }),
+  resetPresetCompatSessionStateForSelection: (selection, surfaceIds, phase = 'new_chat') => set((state) => {
+    const presetCompatSessionState = resetPresetCompatSessionStateForSelection(
       state.presetCompatSessionState,
       selection,
       surfaceIds,
       phase
-    ),
-  })),
+    )
+    return presetCompatSessionState === state.presetCompatSessionState
+      ? state
+      : { presetCompatSessionState }
+  }),
   ...createPersistenceActions(set, get, initialState),
   bindPresetCompatPresetToSurface: (surfaceId, presetId) => set((state) => {
     const binding = state.presetCompatLibrary.surfaceBindings[surfaceId]
@@ -1292,6 +1301,7 @@ useNovelStore.subscribe((state, previous) => {
     && state.currentTab === previous.currentTab
     && state.helperTab === previous.helperTab
     && state.focusMode === previous.focusMode
+    && state.presetCompatSessionState === previous.presetCompatSessionState
     && state.localNovels === previous.localNovels
   ) return
 
@@ -1306,6 +1316,12 @@ useNovelStore.subscribe((state, previous) => {
   if (state.currentNovelId && state.currentChapterId) {
     currentChapterIds[state.currentNovelId] = state.currentChapterId
   }
+  const presetCompatSessionStates = Object.fromEntries(
+    Object.entries(stored.presetCompatSessionStates).filter(([novelId]) => availableNovelIds.has(novelId))
+  )
+  if (state.currentNovelId) {
+    presetCompatSessionStates[state.currentNovelId] = state.presetCompatSessionState
+  }
 
   writeBrowserWorkspaceSession({
     currentNovelId: state.currentNovelId,
@@ -1313,5 +1329,6 @@ useNovelStore.subscribe((state, previous) => {
     currentTab: state.currentTab,
     helperTab: state.helperTab,
     focusMode: state.focusMode,
+    presetCompatSessionStates,
   })
 })

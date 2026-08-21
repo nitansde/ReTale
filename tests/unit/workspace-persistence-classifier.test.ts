@@ -18,7 +18,6 @@ function createWorkspace(): PersistedNovelState {
 
 describe('workspace persistence classifier', () => {
   const postCases: Array<[string, (workspace: PersistedNovelState) => void]> = [
-    ['selection change', (workspace) => { workspace.currentChapterId = 'chapter-2' }],
     ['novel metadata change', (workspace) => { workspace.localNovels[0]!.title = 'Renamed' }],
     ['chapter creation', (workspace) => { workspace.localChapters.push({ ...workspace.localChapters[1]!, id: 'chapter-3' }) }],
     ['chapter deletion', (workspace) => { workspace.localChapters.pop() }],
@@ -38,6 +37,21 @@ describe('workspace persistence classifier', () => {
     const current = structuredClone(baseline)
     mutate(current)
     expect(classifyWorkspacePersistence(baseline, current)).toEqual({ kind: 'post' })
+  })
+
+  it('skips persistence when only browser-local workspace session fields change', () => {
+    const baseline = createWorkspace()
+    const current = structuredClone(baseline)
+    current.currentChapterId = 'chapter-2'
+    current.presetCompatSessionState = {
+      'chapter:chapter-2::rewrite': {
+        surfaceId: 'rewrite',
+        phase: 'new_chat',
+        resetPending: true,
+      },
+    }
+
+    expect(classifyWorkspacePersistence(baseline, current)).toEqual({ kind: 'none' })
   })
 
   it('classifies coalesced edits to one existing chapter as PATCH', () => {

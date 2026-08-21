@@ -131,6 +131,41 @@ export function mergeKnowledgeProjectionPreservingExistingIfEmpty(
   return mergeKnowledgeProjection(state, projection, novelId)
 }
 
+function mergeAuthoritativeKnowledgeProjection(
+  state: NovelStore,
+  projection: KnowledgeProjectionPayload,
+  novelId?: string,
+  preserveExistingIfProjectionEmpty = false,
+) {
+  const mergedProjection = mergeKnowledgeProjectionPreservingExistingIfEmpty(
+    state,
+    projection,
+    novelId,
+    preserveExistingIfProjectionEmpty,
+  )
+  const acknowledgedProjection = state.lastAcknowledgedPersistedWorkspace
+    && (!novelId || state.revisionNovelId === novelId)
+    ? mergeKnowledgeProjectionPreservingExistingIfEmpty(
+        state.lastAcknowledgedPersistedWorkspace,
+        projection,
+        novelId,
+        preserveExistingIfProjectionEmpty,
+      )
+    : null
+
+  return {
+    ...mergedProjection,
+    ...(acknowledgedProjection && state.lastAcknowledgedPersistedWorkspace
+      ? {
+          lastAcknowledgedPersistedWorkspace: {
+            ...state.lastAcknowledgedPersistedWorkspace,
+            ...acknowledgedProjection,
+          },
+        }
+      : {}),
+  }
+}
+
 export function resolveCurrentChapterOrder(state: Pick<PersistedNovelState, 'currentNovelId' | 'currentChapterId' | 'localChapters'>, novelId?: string) {
   const targetNovelId = novelId ?? state.currentNovelId
   const currentChapter = state.localChapters.find((chapter) => chapter.id === state.currentChapterId)
@@ -176,9 +211,12 @@ export function createKnowledgeActions(set: NovelStoreSet, setPersisted: Persist
   ) => {
     const projection = normalizeKnowledgeProjection(result)
     set((current) => isCurrentProjectionRequest(targetNovelId, generation)
-      ? {
-          ...mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId, preserveExistingIfProjectionEmpty),
-        }
+      ? mergeAuthoritativeKnowledgeProjection(
+          current,
+          projection,
+          targetNovelId,
+          preserveExistingIfProjectionEmpty,
+        )
       : {})
   }
 
@@ -194,7 +232,12 @@ export function createKnowledgeActions(set: NovelStoreSet, setPersisted: Persist
       const projection = normalizeKnowledgeProjection(result)
 
       set((current) => isCurrentProjectionRequest(targetNovelId, generation)
-        ? mergeKnowledgeProjectionPreservingExistingIfEmpty(current, projection, targetNovelId, result.jobOutcome !== 'completed')
+        ? mergeAuthoritativeKnowledgeProjection(
+            current,
+            projection,
+            targetNovelId,
+            result.jobOutcome !== 'completed',
+          )
         : {})
       if (result.jobOutcome === 'completed' && isCurrentProjectionRequest(targetNovelId, generation)) {
         setPersisted((current) => ({
@@ -255,7 +298,7 @@ export function createKnowledgeActions(set: NovelStoreSet, setPersisted: Persist
       const generation = beginProjectionRequest(targetNovelId)
       const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-knowledge' })
       set((current) => isCurrentProjectionRequest(targetNovelId, generation)
-        ? { ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId) }
+        ? mergeAuthoritativeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId)
         : {})
       return result
     },
@@ -266,7 +309,7 @@ export function createKnowledgeActions(set: NovelStoreSet, setPersisted: Persist
       const generation = beginProjectionRequest(targetNovelId)
       const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-hanlp-cache' })
       set((current) => isCurrentProjectionRequest(targetNovelId, generation)
-        ? { ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId) }
+        ? mergeAuthoritativeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId)
         : {})
       return result
     },
@@ -277,7 +320,7 @@ export function createKnowledgeActions(set: NovelStoreSet, setPersisted: Persist
       const generation = beginProjectionRequest(targetNovelId)
       const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-extraction-cache' })
       set((current) => isCurrentProjectionRequest(targetNovelId, generation)
-        ? { ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId) }
+        ? mergeAuthoritativeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId)
         : {})
       return result
     },
@@ -288,7 +331,7 @@ export function createKnowledgeActions(set: NovelStoreSet, setPersisted: Persist
       const generation = beginProjectionRequest(targetNovelId)
       const result = await fetchKnowledgeProjection({ novelId: targetNovelId, method: 'POST', action: 'delete-embedding-cache' })
       set((current) => isCurrentProjectionRequest(targetNovelId, generation)
-        ? { ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId) }
+        ? mergeAuthoritativeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId)
         : {})
       return result
     },
@@ -297,9 +340,7 @@ export function createKnowledgeActions(set: NovelStoreSet, setPersisted: Persist
       const generation = beginProjectionRequest(targetNovelId)
       const result = await fetchKnowledgeProjection({ novelId: targetNovelId, asOfChapter, method: 'GET', signal })
       set((current) => isCurrentProjectionRequest(targetNovelId, generation)
-        ? {
-            ...mergeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId),
-          }
+        ? mergeAuthoritativeKnowledgeProjection(current, normalizeKnowledgeProjection(result), targetNovelId)
         : {})
       return result
     },

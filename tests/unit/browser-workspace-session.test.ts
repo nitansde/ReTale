@@ -97,6 +97,7 @@ describe('browser workspace session', () => {
       currentTab: 'rewrite',
       helperTab: 'stats',
       focusMode: true,
+      presetCompatSessionStates: {},
     })).toBe(true)
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -122,5 +123,66 @@ describe('browser workspace session', () => {
       focusMode: true,
       persistRevision: 0,
     })
+  })
+
+  it('keeps preset compatibility session metadata in the browser per novel', async () => {
+    const serverWorkspace = createWorkspace()
+    const browserPresetState = {
+      'chapter:chapter-a-2::rewrite': {
+        surfaceId: 'rewrite' as const,
+        phase: 'continue' as const,
+        resetPending: false,
+      },
+    }
+    expect(writeBrowserWorkspaceSession({
+      currentNovelId: 'novel-a',
+      currentChapterIds: { 'novel-a': 'chapter-a-2' },
+      currentTab: 'editor',
+      helperTab: 'ai',
+      focusMode: false,
+      presetCompatSessionStates: { 'novel-a': browserPresetState },
+    })).toBe(true)
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/novels/novel-a') {
+        return new Response(JSON.stringify({
+          ...serverWorkspace,
+          presetCompatSessionState: {
+            'chapter:chapter-a-1::rewrite': {
+              surfaceId: 'rewrite',
+              phase: 'new_chat',
+              resetPending: true,
+            },
+          },
+          workspaceRevision: 7,
+          revisionNovelId: 'novel-a',
+        }), { status: 200 })
+      }
+      if (url === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await useNovelStore.getState().loadFromBackend('novel-a')
+    expect(useNovelStore.getState().presetCompatSessionState).toEqual(browserPresetState)
+
+    useNovelStore.getState().resetPresetCompatSessionStateForSelection(
+      { kind: 'chapter', chapterId: 'chapter-a-2' },
+      ['rewrite'],
+    )
+
+    expect(useNovelStore.getState().persistRevision).toBe(0)
+    expect(JSON.parse(window.localStorage.getItem(WORKSPACE_SESSION_STORAGE_KEY) ?? '{}'))
+      .toMatchObject({
+        presetCompatSessionStates: {
+          'novel-a': {
+            'chapter:chapter-a-2::rewrite': {
+              surfaceId: 'rewrite',
+              phase: 'new_chat',
+              resetPending: true,
+            },
+          },
+        },
+      })
   })
 })

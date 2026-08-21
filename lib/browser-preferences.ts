@@ -1,4 +1,5 @@
-import type { HelperTab, WorkspaceTab } from '@/lib/types'
+import type { HelperTab, PresetCompatSessionState, WorkspaceTab } from '@/lib/types'
+import { normalizePresetCompatSessionState } from '@/lib/workspace-state'
 
 export const WORKSPACE_PREFERENCES_STORAGE_KEY = 'retale.workspace-preferences.v1'
 export const WORKSPACE_SESSION_STORAGE_KEY = 'retale.workspace-session.v1'
@@ -19,6 +20,7 @@ export type BrowserWorkspaceSession = {
   currentTab: WorkspaceTab
   helperTab: HelperTab
   focusMode: boolean
+  presetCompatSessionStates: Record<string, PresetCompatSessionState>
 }
 
 export const DEFAULT_BROWSER_WORKSPACE_PREFERENCES: BrowserWorkspacePreferences = {
@@ -34,6 +36,7 @@ export const DEFAULT_BROWSER_WORKSPACE_SESSION: BrowserWorkspaceSession = {
   currentTab: 'editor',
   helperTab: 'ai',
   focusMode: false,
+  presetCompatSessionStates: {},
 }
 
 const VALID_CENTER_PANE_VIEWS = new Set<BrowserWorkspaceCenterPaneView>(['body', 'graph'])
@@ -76,6 +79,14 @@ export function parseBrowserWorkspaceSession(value: unknown): BrowserWorkspaceSe
   for (const [novelId, chapterId] of Object.entries(value.currentChapterIds)) {
     if (novelId && typeof chapterId === 'string' && chapterId) currentChapterIds[novelId] = chapterId
   }
+  const presetCompatSessionStates: Record<string, PresetCompatSessionState> = {}
+  if (isRecord(value.presetCompatSessionStates)) {
+    for (const [novelId, sessionState] of Object.entries(value.presetCompatSessionStates)) {
+      if (novelId && isRecord(sessionState)) {
+        presetCompatSessionStates[novelId] = normalizePresetCompatSessionState(sessionState)
+      }
+    }
+  }
 
   return {
     version: 1,
@@ -84,6 +95,7 @@ export function parseBrowserWorkspaceSession(value: unknown): BrowserWorkspaceSe
     currentTab: value.currentTab as WorkspaceTab,
     helperTab: value.helperTab as HelperTab,
     focusMode: value.focusMode,
+    presetCompatSessionStates,
   }
 }
 
@@ -137,6 +149,7 @@ export function writeBrowserWorkspaceSession(session: Omit<BrowserWorkspaceSessi
       currentTab: session.currentTab,
       helperTab: session.helperTab,
       focusMode: session.focusMode,
+      presetCompatSessionStates: session.presetCompatSessionStates,
     } satisfies BrowserWorkspaceSession))
     return true
   } catch {

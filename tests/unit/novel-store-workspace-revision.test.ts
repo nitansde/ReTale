@@ -160,6 +160,62 @@ describe('novel store workspace revision persistence', () => {
     })
   })
 
+  it('keeps chapter autosave on PATCH after an authoritative knowledge projection refresh', async () => {
+    await hydrate()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      localCharacters: [{
+        id: 'character-1',
+        novelId: 'novel-1',
+        name: 'Projection character',
+        role: 'Lead',
+        goal: '',
+        trait: '',
+        note: '',
+      }],
+    }), { status: 200 })))
+    await useNovelStore.getState().refreshKnowledgeProjection('novel-1', 1)
+    useNovelStore.getState().updateChapterContent('chapter-1', '<p>Edited after projection</p>', 3)
+
+    const fetchMock = vi.fn<typeof fetch>(async () => mutationSuccess(8))
+    vi.stubGlobal('fetch', fetchMock)
+    await useNovelStore.getState().saveToBackend()
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/chapters/chapter-1')
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('PATCH')
+    expect(useNovelStore.getState().lastAcknowledgedPersistedWorkspace?.localCharacters).toEqual([
+      expect.objectContaining({ id: 'character-1', name: 'Projection character' }),
+    ])
+  })
+
+  it('merges a PATCH acknowledgement into a newer authoritative projection baseline', async () => {
+    await hydrate()
+    useNovelStore.getState().updateChapterContent('chapter-1', '<p>Pending chapter edit</p>', 3)
+    const saveRequest = Promise.withResolvers<Response>()
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(() => saveRequest.promise))
+
+    const save = useNovelStore.getState().saveToBackend()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      localWorldEntries: [{
+        id: 'world-1',
+        novelId: 'novel-1',
+        title: 'Projection world',
+        type: 'location',
+        content: 'Server-side projection',
+      }],
+    }), { status: 200 })))
+    await useNovelStore.getState().refreshKnowledgeProjection('novel-1', 1)
+    saveRequest.resolve(mutationSuccess(8))
+    await save
+
+    const acknowledged = useNovelStore.getState().lastAcknowledgedPersistedWorkspace
+    expect(acknowledged?.localChapters[0]?.content).toBe('<p>Pending chapter edit</p>')
+    expect(acknowledged?.localWorldEntries).toEqual([
+      expect.objectContaining({ id: 'world-1', title: 'Projection world' }),
+    ])
+  })
+
   it.each([
     ['structural change', () => useNovelStore.getState().createNewChapter()],
     ['two chapter changes', () => {
