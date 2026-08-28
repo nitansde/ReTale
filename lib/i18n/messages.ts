@@ -454,7 +454,8 @@ export const zhMessages = {
   'graph.readOnlyMode': '只读',
 
   'workspace.chapterActionsEyebrow': '章节动作',
-  'workspace.chapterActionsDescription': '正文与图谱浏览继续沿用原来的章节工作流；这里仍然只在章节模式下暴露选区操作。',
+  'workspace.chapterActionsReady': '已选中正文',
+  'workspace.chapterActionsIdle': '先选中文字',
   'workspace.continueBlock': '续写块',
   'workspace.instructionPreview': '指令预览',
   'workspace.continueBlockActionsEyebrow': '续写块动作',
@@ -1465,7 +1466,8 @@ export const enMessages: MessageDictionary = {
   'graph.readOnlyMode': 'read-only',
 
   'workspace.chapterActionsEyebrow': 'Chapter actions',
-  'workspace.chapterActionsDescription': 'Body and graph browsing still follow the existing chapter workflow. Selection actions remain available only in chapter mode here.',
+  'workspace.chapterActionsReady': 'Text selected',
+  'workspace.chapterActionsIdle': 'Select text',
   'workspace.continueBlock': 'Continue block',
   'workspace.instructionPreview': 'Instruction preview',
   'workspace.continueBlockActionsEyebrow': 'Continue block actions',

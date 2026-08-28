@@ -8,7 +8,6 @@ import type { TimelineSelection } from '@/lib/story-branch-types'
 
 type WorkspaceSelectionActionsProps = {
   selection: TimelineSelection
-  currentChapterOrder: number | null
   selectedTimelineDisplayLabel: string
   selectedTimelineNodeTitle: string | null
   selectedTimelineInstructionPreview: string
@@ -28,16 +27,22 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
   const { t } = useI18n()
 
   if (props.selection.kind === 'chapter') {
+    const hasSelection = Boolean(props.selectionText.trim())
+
     return (
-      <div className="mb-4 rounded-[24px] border border-violet-400/20 bg-violet-500/10 p-4">
-        <div className="flex items-center justify-between gap-2">
-          <div>
-              <p className="text-[11px] uppercase tracking-[0.22em] text-violet-200/70">{t('workspace.chapterActionsEyebrow')}</p>
-              <p className="mt-1 text-sm text-zinc-300">{t('workspace.chapterActionsDescription')}</p>
-          </div>
-          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] text-zinc-300">{props.currentChapterOrder ? t('workspace.timeline.chapterLabel', { count: props.currentChapterOrder }) : '—'}</span>
+      <div
+        className="mb-3 flex items-center gap-2 rounded-2xl border border-violet-400/20 bg-violet-500/[0.08] px-2.5 py-2 sm:px-3"
+        data-testid="workspace-chapter-actions"
+      >
+        <div className="mr-auto flex min-w-0 items-center gap-2 px-1">
+          <span className="hidden shrink-0 text-[10px] font-medium uppercase tracking-[0.18em] text-violet-200/70 sm:inline">
+            {t('workspace.chapterActionsEyebrow')}
+          </span>
+          <span className={cn('truncate text-[11px]', hasSelection ? 'text-zinc-300' : 'text-zinc-500')}>
+            {hasSelection ? t('workspace.chapterActionsReady') : t('workspace.chapterActionsIdle')}
+          </span>
         </div>
-        <div className="mt-3 grid gap-2">
+        <div className="flex shrink-0 items-center gap-1.5">
           {WORKSPACE_CHAPTER_ACTION_ENTRY_MODES.map((mode) => {
             const meta = ACTION_META[mode]
             const Icon = meta.icon
@@ -48,23 +53,20 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
                 data-testid={CHAPTER_ACTION_ENTRY_TEST_IDS[mode]}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
-                  if (!props.selectionText.trim()) return
+                  if (!hasSelection) return
                   props.onOpenActionMode(mode)
                 }}
                 className={cn(
-                  'flex items-center gap-3 rounded-2xl border px-4 py-3 text-left transition',
+                  'inline-flex min-h-9 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-medium transition sm:px-3',
                   props.activeMode === mode
-                    ? 'border-violet-300/30 bg-white/[0.08]'
-                    : 'border-white/8 bg-black/20 hover:bg-white/[0.06]',
-                  (!props.selectionText.trim() || (mode === 'roleplay' && props.roleplaySessionStarting)) && 'cursor-not-allowed opacity-50'
+                    ? 'border-violet-300/30 bg-violet-500/20 text-white'
+                    : 'border-white/10 bg-black/20 text-zinc-200 hover:bg-white/[0.08]',
+                  (!hasSelection || (mode === 'roleplay' && props.roleplaySessionStarting)) && 'cursor-not-allowed opacity-45'
                 )}
-                disabled={!props.selectionText.trim() || (mode === 'roleplay' && props.roleplaySessionStarting)}
+                disabled={!hasSelection || (mode === 'roleplay' && props.roleplaySessionStarting)}
               >
-                <div className="rounded-xl bg-white/10 p-2 text-violet-200"><Icon className="h-4 w-4" /></div>
-                <div>
-                  <p className="text-sm font-medium text-zinc-100">{meta.label}</p>
-                  <p className="mt-1 text-xs leading-5 text-zinc-400">{meta.description}</p>
-                </div>
+                <Icon className="h-3.5 w-3.5 text-violet-200" aria-hidden="true" />
+                <span>{meta.label}</span>
               </button>
             )
           })}

@@ -406,6 +406,7 @@ export function SelectionNovelStudio() {
             branchInstructionText={selectedTimelineInstructionText || null}
             chapterBodyView={
               <div className="px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-chapter-body-view">
+                {selectionActions}
                 <div className="min-h-[62vh] rounded-[28px] border border-white/8 bg-[#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                   <EditorContent editor={editor} />
                 </div>
@@ -530,7 +531,7 @@ export function SelectionNovelStudio() {
             knowledgeOpen={knowledgePanelOpen}
             onKnowledgeClose={() => setKnowledgePanelOpen(false)}
             contextLabel={contextLabel}
-            selectionActions={selectionActions}
+            selectionActions={activeWorkspaceSelection.kind === 'chapter' ? null : selectionActions}
             knowledgeControls={knowledgeControls}
             references={(
               <>

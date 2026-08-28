@@ -1253,6 +1253,8 @@ test('full speculative branching flow persists through revise, reload, and reope
   await expect(page.getByTestId('workspace-chapter-roleplay-entry')).toBeVisible()
   await expect(page.getByTestId('workspace-chapter-rewrite-entry')).toContainText('魔改')
   await expect(page.getByTestId('workspace-chapter-roleplay-entry')).toContainText('角色扮演')
+  await expect(page.getByTestId('workspace-chapter-body-view').getByTestId('workspace-chapter-actions')).toBeVisible()
+  await expect(page.getByTestId('workspace-reference-panel').getByTestId('workspace-chapter-actions')).toHaveCount(0)
   await expect(page.getByTestId('workspace-chapter-body-view')).not.toContainText('未来跳转')
 
   await page.getByTestId('workspace-chapter-rewrite-entry').click()
