@@ -271,6 +271,9 @@ function installIdleWorkspaceFetchMock() {
     if (url.startsWith('/api/story-timeline?')) {
       return jsonResponse({ novelId: 'novel-1', branchId: 'novel-1:main', chapters: [], branchNodes: [], edges: [] })
     }
+    if (url === '/api/writing-skills?status=ACTIVE') {
+      return jsonResponse({ ok: true, cards: [] })
+    }
     throw new Error(`Unexpected fetch: ${url}`)
   }))
 }
@@ -295,6 +298,9 @@ function installRecoverableRewriteFetchMock(options: {
     if (url.startsWith('/api/story-timeline?') && method === 'GET') {
       if (options.storyTimelineResponse) return options.storyTimelineResponse.promise
       return Promise.resolve(jsonResponse({ novelId: 'novel-1', branchId: 'novel-1:main', chapters: [], branchNodes: [], edges: [] }))
+    }
+    if (url === '/api/writing-skills?status=ACTIVE' && method === 'GET') {
+      return Promise.resolve(jsonResponse({ ok: true, cards: [] }))
     }
     if (url.startsWith('/api/rewrite?') && method === 'GET') {
       if (url.includes('jobId=')) {
@@ -685,6 +691,8 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: null }))
     act(() => result.current.core.setSelectionText('Fresh selection'))
     await act(async () => { await result.current.actions.openActionMode('rewrite') })
+    act(() => result.current.core.setSelectedWritingSkillCardId('writing-skill-card-1'))
+    act(() => result.current.core.setWritingSkillExampleCount(4))
     const updateChapterContent = vi.fn()
     const latestText = 'Latest buffered editor text'
     result.current.core.flushEditorBuffer = () => {
@@ -695,10 +703,16 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     act(() => { void result.current.actions.handleRewrite() })
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/rewrite', expect.objectContaining({ method: 'POST' })))
     const rewriteCall = fetchMock.mock.calls.find(([url, init]) => String(url) === '/api/rewrite' && init?.method === 'POST')
-    const requestBody = JSON.parse(String(rewriteCall?.[1]?.body)) as { sourceText: string }
+    const requestBody = JSON.parse(String(rewriteCall?.[1]?.body)) as {
+      sourceText: string
+      writingSkillCardId?: string
+      writingSkillExampleCount?: number
+    }
 
     expect(updateChapterContent.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder.at(-1) ?? 0)
     expect(requestBody.sourceText).toBe(latestText)
+    expect(requestBody.writingSkillCardId).toBe('writing-skill-card-1')
+    expect(requestBody.writingSkillExampleCount).toBe(4)
     await resolveDeferredResponse(createResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('queued') }))
   })
 
