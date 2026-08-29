@@ -261,6 +261,8 @@ export function SelectionNovelStudio() {
   const {
     leftPanelOpen, setLeftPanelOpen, referencePanelOpen, setReferencePanelOpen, knowledgePanelOpen, setKnowledgePanelOpen, chapterListState, setChapterListState, centerPaneView, setCenterPaneView, refTab, setRefTab, settingsOpen, setSettingsOpen,
     selectionText, lockedSelectionText, toolbarPos, activeMode, rewritePrompt, rewriteState, rewriteFlow, generationContext,
+    writingSkillCards, writingSkillCardsLoading, writingSkillCardsError, selectedWritingSkillCardId,
+    setSelectedWritingSkillCardId, writingSkillExampleCount, setWritingSkillExampleCount,
     graphContext, contextPreviewLoading, contextPreviewError, graphReviewLoading, graphReviewControls, contextPanelOpen,
     setContextPanelOpen, graphSelection, setGraphSelection, evidenceDrawerOpen, setEvidenceDrawerOpen, disabledContextBlockIds, setDisabledContextBlockIds, excludedGraphEdgeIds, excludedEvidenceIds, graphMutationPendingId, graphMutationError, chapterGraphData,
     chapterGraphLoading, chapterGraphError, chapterGraphControls, chapterGraphSelection, setChapterGraphSelection, copied, setCopied, toast, toastVariant,
@@ -947,6 +949,35 @@ export function SelectionNovelStudio() {
                   <span className="mb-2 block text-sm text-zinc-300">{t('workspace.shell.rewriteInstructionLabel')}</span>
                   <textarea value={rewritePrompt} onChange={(event) => handleRewritePromptChange(event.target.value)} className="h-28 w-full rounded-[24px] border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.rewriteInstructionPlaceholder')} />
                 </label>
+
+                <div className="grid gap-3 rounded-[24px] border border-white/8 bg-black/20 p-4 sm:grid-cols-[1fr_auto]">
+                  <label className="block">
+                    <span className="mb-2 block text-sm text-zinc-300">{t('workspace.shell.writingSkillLabel')}</span>
+                    <select
+                      value={selectedWritingSkillCardId}
+                      onChange={(event) => setSelectedWritingSkillCardId(event.target.value)}
+                      disabled={writingSkillCardsLoading}
+                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-3 py-2.5 text-sm text-zinc-100 outline-none disabled:opacity-60"
+                    >
+                      <option value="">{writingSkillCardsLoading ? t('workspace.shell.writingSkillLoading') : t('workspace.shell.writingSkillNone')}</option>
+                      {writingSkillCards.map((card) => (
+                        <option key={card.id} value={card.id}>{card.title}</option>
+                      ))}
+                    </select>
+                    {writingSkillCardsError ? <p className="mt-2 text-xs text-rose-300">{writingSkillCardsError}</p> : null}
+                  </label>
+                  <label className="block sm:w-36">
+                    <span className="mb-2 block text-sm text-zinc-300">{t('workspace.shell.writingSkillExampleCount')}</span>
+                    <select
+                      value={writingSkillExampleCount}
+                      onChange={(event) => setWritingSkillExampleCount(Number(event.target.value))}
+                      disabled={!selectedWritingSkillCardId}
+                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-3 py-2.5 text-sm text-zinc-100 outline-none disabled:opacity-40"
+                    >
+                      {[1, 2, 3, 4, 5].map((count) => <option key={count} value={count}>{count}</option>)}
+                    </select>
+                  </label>
+                </div>
 
                 {generationContext && activeGraphContext ? (
                   <div className="rounded-[24px] border border-amber-400/18 bg-amber-500/[0.08] p-3">

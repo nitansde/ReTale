@@ -41,6 +41,9 @@ export type RecoverableRewriteJobPayload = {
     branchContextNodeId: string | null
     branchContextInclusion: string | null
     continueBlockId: string | null
+    writingSkillCardId?: string | null
+    writingSkillExampleCount?: number | null
+    writingSkillSeed?: number | null
     createdAt: string
   }
   stream?: boolean
@@ -138,6 +141,13 @@ export function normalizeRecoverableRewriteJobPayload(payloadJson: string | null
       branchContextNodeId: typeof panelRecord.branchContextNodeId === 'string' ? panelRecord.branchContextNodeId : null,
       branchContextInclusion: typeof panelRecord.branchContextInclusion === 'string' ? panelRecord.branchContextInclusion : null,
       continueBlockId: typeof panelRecord.continueBlockId === 'string' ? panelRecord.continueBlockId : null,
+      writingSkillCardId: typeof panelRecord.writingSkillCardId === 'string' ? panelRecord.writingSkillCardId : null,
+      writingSkillExampleCount: typeof panelRecord.writingSkillExampleCount === 'number' && Number.isFinite(panelRecord.writingSkillExampleCount)
+        ? Math.floor(panelRecord.writingSkillExampleCount)
+        : null,
+      writingSkillSeed: typeof panelRecord.writingSkillSeed === 'number' && Number.isFinite(panelRecord.writingSkillSeed)
+        ? Math.floor(panelRecord.writingSkillSeed)
+        : null,
       createdAt: String(panelRecord.createdAt ?? ''),
     },
     stream: record.stream === true,

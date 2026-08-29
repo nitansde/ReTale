@@ -32,6 +32,7 @@ import {
 } from '@/lib/chapter-draft-cache'
 import { useI18n } from '@/lib/i18n/provider'
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
+import type { WritingSkillCard } from '@/lib/writing-skill-types'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import { createPresetCompatSessionStateKey } from '@/lib/workspace-state'
 import { resolveWorkspaceUserFacingError } from '@/lib/workspace-user-facing-errors'
@@ -263,6 +264,11 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     jobStatus: null,
     jobCurrentStep: null,
   })
+  const [writingSkillCards, setWritingSkillCards] = useState<WritingSkillCard[]>([])
+  const [writingSkillCardsLoading, setWritingSkillCardsLoading] = useState(true)
+  const [writingSkillCardsError, setWritingSkillCardsError] = useState('')
+  const [selectedWritingSkillCardId, setSelectedWritingSkillCardId] = useState('')
+  const [writingSkillExampleCount, setWritingSkillExampleCount] = useState(3)
   const [generationContext, setGenerationContext] = useState<GenerationContextBuildData | null>(null)
   const [graphContext, setGraphContext] = useState<GenerationContextBuildData['graphContext'] | null>(null)
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false)
@@ -366,6 +372,35 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const [openAICompatibleModelsLoading, setOpenAICompatibleModelsLoading] = useState<Record<AIScenarioKey, boolean>>({ rewrite: false, knowledgeExtraction: false, embeddings: false })
   const [editState, setEditState] = useState<{ type: 'char' | 'outline' | 'world' | 'relation' | 'timeline' | null; id: string | null; form: Record<string, string> }>({ type: null, id: null, form: {} })
   const knowledgePanelReadOnly = true
+
+  useEffect(() => {
+    if (activeMode !== 'rewrite') return
+    let cancelled = false
+    const load = async () => {
+      try {
+        const response = await fetch('/api/writing-skills?status=ACTIVE', { cache: 'no-store' })
+        const data = await response.json() as { ok?: boolean; cards?: WritingSkillCard[]; error?: string }
+        if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to load writing skill cards')
+        if (cancelled) return
+        const cards = data.cards ?? []
+        setWritingSkillCards(cards)
+        setWritingSkillCardsError('')
+        setSelectedWritingSkillCardId((current) => (
+          current && cards.some((card) => card.id === current) ? current : ''
+        ))
+      } catch (error) {
+        if (cancelled) return
+        setWritingSkillCards([])
+        setWritingSkillCardsError(error instanceof Error ? error.message : 'Failed to load writing skill cards')
+      } finally {
+        if (!cancelled) setWritingSkillCardsLoading(false)
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [activeMode])
 
   useEffect(() => {
     workspaceSelectionRef.current = workspaceSelection
@@ -1719,6 +1754,8 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     if (job.panel.rewriteLaunchSource === 'chapter' || job.panel.rewriteLaunchSource === 'what_if' || job.panel.rewriteLaunchSource === 'future_jump' || job.panel.rewriteLaunchSource === 'continue_block') {
       setRewriteLaunchSource(job.panel.rewriteLaunchSource)
     }
+    setSelectedWritingSkillCardId(job.panel.writingSkillCardId ?? '')
+    if (job.panel.writingSkillExampleCount) setWritingSkillExampleCount(job.panel.writingSkillExampleCount)
   }, [t])
 
   const syncRewriteJobFromRecoverableJob = useCallback((job: RecoverableRewriteJob) => {
@@ -1769,6 +1806,13 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     setRewriteState,
     rewriteFlow,
     setRewriteFlow,
+    writingSkillCards,
+    writingSkillCardsLoading,
+    writingSkillCardsError,
+    selectedWritingSkillCardId,
+    setSelectedWritingSkillCardId,
+    writingSkillExampleCount,
+    setWritingSkillExampleCount,
     generationContext,
     setGenerationContext,
     graphContext,

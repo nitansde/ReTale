@@ -100,6 +100,9 @@ export type RecoverableRewriteJob = {
     branchContextNodeId: string | null
     branchContextInclusion: string | null
     continueBlockId: string | null
+    writingSkillCardId?: string | null
+    writingSkillExampleCount?: number | null
+    writingSkillSeed?: number | null
     createdAt: string
   }
   result: RecoverableRewriteResult | null
