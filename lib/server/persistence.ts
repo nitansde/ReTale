@@ -1295,6 +1295,8 @@ export async function resetBusinessDataPreservingProtectedSettings() {
     )
     const snapshot = readProtectedAppSettingsResetSnapshot(controlDb)
     validateProtectedAppSettingsResetSnapshot(snapshot)
+    controlDb.execute('DELETE FROM WritingSkillDistillationJob')
+    controlDb.execute('DELETE FROM WritingSkillCard')
     clearNonProtectedAppSettings(controlDb)
     restoreProtectedAppSettings(controlDb, snapshot)
     assertProtectedAppSettingsRestored(controlDb, snapshot)

@@ -49,9 +49,92 @@ CREATE TABLE IF NOT EXISTS MigrationAudit (
   FOREIGN KEY (manifestId) REFERENCES MigrationManifest(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS WritingSkillCard (
+  id TEXT PRIMARY KEY,
+  libraryId TEXT NOT NULL,
+  libraryVersion TEXT NOT NULL,
+  libraryName TEXT NOT NULL,
+  title TEXT NOT NULL,
+  userInstruction TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  applicationScope TEXT NOT NULL,
+  rulesJson TEXT NOT NULL,
+  avoidJson TEXT NOT NULL,
+  defaultExampleCount INTEGER NOT NULL DEFAULT 3,
+  modelConfigId TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  sourceJobId TEXT,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS WritingSkillMaterialBook (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  author TEXT,
+  rawText TEXT NOT NULL,
+  contentHash TEXT NOT NULL,
+  chapterCount INTEGER NOT NULL,
+  estimatedTokens INTEGER NOT NULL,
+  byteSize INTEGER NOT NULL,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS WritingSkillCardSource (
+  skillCardId TEXT NOT NULL,
+  sourceType TEXT NOT NULL,
+  sourceId TEXT NOT NULL,
+  sourceVersion TEXT NOT NULL,
+  sourceName TEXT NOT NULL,
+  sourceOrder INTEGER NOT NULL,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (skillCardId, sourceType, sourceId),
+  FOREIGN KEY (skillCardId) REFERENCES WritingSkillCard(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS WritingSkillExample (
+  id TEXT PRIMARY KEY,
+  skillCardId TEXT NOT NULL,
+  rangeRefJson TEXT NOT NULL,
+  displayRef TEXT NOT NULL,
+  score REAL NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (skillCardId) REFERENCES WritingSkillCard(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS WritingSkillDistillationJob (
+  id TEXT PRIMARY KEY,
+  libraryId TEXT NOT NULL,
+  libraryVersion TEXT,
+  userInstruction TEXT NOT NULL,
+  modelConfigId TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  message TEXT NOT NULL DEFAULT '',
+  randomSeed INTEGER NOT NULL,
+  roundCount INTEGER NOT NULL DEFAULT 0,
+  sampledRangesJson TEXT NOT NULL DEFAULT '[]',
+  candidateRefsJson TEXT NOT NULL DEFAULT '[]',
+  inputTokens INTEGER NOT NULL DEFAULT 0,
+  outputTokens INTEGER NOT NULL DEFAULT 0,
+  requestJson TEXT NOT NULL DEFAULT '{}',
+  resultCardId TEXT,
+  errorMessage TEXT,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (resultCardId) REFERENCES WritingSkillCard(id) ON DELETE SET NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_novel_registry_status ON NovelRegistry(migrationStatus, updatedAt);
 CREATE INDEX IF NOT EXISTS idx_migration_manifest_scope_version ON MigrationManifest(scope, version);
 CREATE INDEX IF NOT EXISTS idx_migration_audit_scope_created ON MigrationAudit(scope, createdAt);
+CREATE INDEX IF NOT EXISTS idx_writing_skill_card_library_status ON WritingSkillCard(libraryId, status, updatedAt);
+CREATE INDEX IF NOT EXISTS idx_writing_skill_material_book_updated ON WritingSkillMaterialBook(updatedAt, id);
+CREATE INDEX IF NOT EXISTS idx_writing_skill_card_source_card_order ON WritingSkillCardSource(skillCardId, sourceOrder);
+CREATE INDEX IF NOT EXISTS idx_writing_skill_card_source_lookup ON WritingSkillCardSource(sourceType, sourceId);
+CREATE INDEX IF NOT EXISTS idx_writing_skill_example_card_enabled ON WritingSkillExample(skillCardId, enabled, score);
+CREATE INDEX IF NOT EXISTS idx_writing_skill_job_library_status ON WritingSkillDistillationJob(libraryId, status, updatedAt);
 `
 
 const CHARACTER_IMPORTANCE_TIER_SQL = "'protagonist', 'important', 'arc'"
