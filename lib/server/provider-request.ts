@@ -19,16 +19,19 @@ type ProviderRequestMessage = {
 export class ProviderRequestError extends Error {
   code: 'timeout' | 'aborted' | 'network' | 'http' | 'empty' | 'invalid_json'
   status?: number
+  responseBody?: string
 
   constructor(
     code: ProviderRequestError['code'],
     message: string,
     status?: number,
+    responseBody?: string,
   ) {
     super(message)
     this.name = 'ProviderRequestError'
     this.code = code
     this.status = status
+    this.responseBody = responseBody
   }
 }
 
@@ -135,7 +138,12 @@ export async function requestProviderEndpoint(params: {
 
     if (!response.ok) {
       const rawText = await response.text().catch(() => '')
-      const error = new ProviderRequestError('http', `${params.action} failed with HTTP ${response.status}`, response.status)
+      const error = new ProviderRequestError(
+        'http',
+        `${params.action} failed with HTTP ${response.status}`,
+        response.status,
+        rawText,
+      )
       await writeLlmDebugLog({
         folder: params.debug?.folder ?? params.provider,
         provider: params.provider,
