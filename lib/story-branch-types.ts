@@ -51,6 +51,7 @@ export type ChapterTimelineItem = {
   chapterId: string
   title: string
   wordCount: number
+  summary?: string | null
 }
 
 export type StoryTimelineNodeRecord = {

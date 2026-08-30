@@ -19,9 +19,14 @@ export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
 }>((props, ref) => {
   const { t } = useI18n()
   const chapterSelected = props.activeChapterId === props.chapter.chapterId
+  const branchChapterSelected = props.branchChapters.some((chapter) => chapter.id === props.activeChapterId)
 
   return (
-    <article data-testid={`timeline-chapter-${props.chapter.chapterNo}`} className="relative z-10 space-y-3">
+    <article
+      data-testid={`timeline-chapter-${props.chapter.chapterNo}`}
+      data-navigation-current={chapterSelected || branchChapterSelected ? 'true' : undefined}
+      className="relative z-10 space-y-3"
+    >
       <div className="space-y-2">
         <div className="flex items-start gap-2">
           <button
@@ -35,6 +40,9 @@ export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
           >
             <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('workspace.timeline.chapterLabel', { count: props.chapter.chapterNo })}</p>
             <p className="mt-1 text-sm font-medium text-zinc-100">{props.chapter.title}</p>
+            {props.chapter.summary ? (
+              <p className="mt-2 line-clamp-2 text-xs leading-5 text-zinc-400">{props.chapter.summary}</p>
+            ) : null}
             <p className="mt-2 text-xs text-zinc-500">{t('workspace.wordCount', { count: props.chapter.wordCount })}</p>
           </button>
           <button

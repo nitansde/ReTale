@@ -1,11 +1,16 @@
 "use client"
 
-import type { Dispatch, SetStateAction } from 'react'
-import { X } from 'lucide-react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { ChevronLeft, ChevronRight, LocateFixed, Search, X } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { IconButton } from '@/components/ui/IconButton'
 import { StoryTimeline } from '@/components/timeline/StoryTimeline'
 import { useDesktopWorkspaceLayout } from '@/components/workspace/use-desktop-workspace-layout'
+import {
+  CHAPTER_NAVIGATION_WINDOW_SIZE,
+  filterChapterNavigationItems,
+  resolveCenteredChapterWindowStart,
+} from '@/lib/chapter-navigation'
 import { useI18n } from '@/lib/i18n/provider'
 import type { ChapterTimelineItem, StoryTimelineBranchNode, StoryTimelineEdge, TimelineSelection } from '@/lib/story-branch-types'
 import type { Chapter } from '@/lib/types'
@@ -15,9 +20,7 @@ type WorkspaceChapterNavProps = {
   onClose: () => void
   onCreateChapter: () => void
   sortedChapters: Chapter[]
-  chapterListTarget: number
   currentNovelId: string
-  setChapterListState: Dispatch<SetStateAction<Record<string, number>>>
   storyTimelineError: string
   branchNodes: StoryTimelineBranchNode[]
   edges: StoryTimelineEdge[]
@@ -34,12 +37,97 @@ type WorkspaceChapterNavProps = {
 export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
   const { t } = useI18n()
   const desktop = useDesktopWorkspaceLayout()
-  const mainlineChapters = props.sortedChapters.filter((chapter) => !chapter.parentChapterId)
-  const visibleChapters = mainlineChapters.slice(0, props.chapterListTarget)
-  const visibleAnchorChapterNos = new Set(visibleChapters.map((chapter) => chapter.order))
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null)
+  const mainlineChapters = useMemo(
+    () => props.sortedChapters.filter((chapter) => !chapter.parentChapterId),
+    [props.sortedChapters],
+  )
+  const navigationChapters = useMemo(
+    () => mainlineChapters.map<ChapterTimelineItem>((chapter) => props.timelineChapterById.get(chapter.id) ?? {
+      type: 'chapter',
+      chapterNo: chapter.order,
+      chapterId: chapter.id,
+      title: chapter.title,
+      wordCount: chapter.wordCount,
+      summary: null,
+    }),
+    [mainlineChapters, props.timelineChapterById],
+  )
+  const currentChapter = props.sortedChapters.find((chapter) => chapter.id === props.currentChapterId) ?? null
+  const currentMainlineChapterId = currentChapter?.parentChapterId ?? currentChapter?.id ?? props.currentChapterId
+  const centeredWindowStart = useMemo(
+    () => resolveCenteredChapterWindowStart(navigationChapters, currentMainlineChapterId),
+    [currentMainlineChapterId, navigationChapters],
+  )
+  const navigationScopeKey = `${props.currentNovelId}\u0000${currentMainlineChapterId}\u0000${props.leftPanelOpen ? 'open' : 'closed'}`
+  const [navigationState, setNavigationState] = useState(() => ({
+    scopeKey: navigationScopeKey,
+    searchQuery: '',
+    windowStart: centeredWindowStart,
+  }))
+  const activeNavigationState = navigationState.scopeKey === navigationScopeKey
+    ? navigationState
+    : { scopeKey: navigationScopeKey, searchQuery: '', windowStart: centeredWindowStart }
+  const searchQuery = activeNavigationState.searchQuery
+  const windowStart = activeNavigationState.windowStart
+  const updateNavigationState = (updates: Partial<Pick<typeof navigationState, 'searchQuery' | 'windowStart'>>) => {
+    setNavigationState((current) => ({
+      ...(current.scopeKey === navigationScopeKey
+        ? current
+        : { scopeKey: navigationScopeKey, searchQuery: '', windowStart: centeredWindowStart }),
+      ...updates,
+    }))
+  }
+
+  const normalizedWindowStart = Math.min(
+    Math.max(0, navigationChapters.length - CHAPTER_NAVIGATION_WINDOW_SIZE),
+    Math.max(0, windowStart),
+  )
+  const searchMatches = useMemo(
+    () => filterChapterNavigationItems(navigationChapters, searchQuery),
+    [navigationChapters, searchQuery],
+  )
+  const searching = Boolean(searchQuery.trim())
+  const visibleChapters = searching
+    ? searchMatches.slice(0, CHAPTER_NAVIGATION_WINDOW_SIZE)
+    : navigationChapters.slice(normalizedWindowStart, normalizedWindowStart + CHAPTER_NAVIGATION_WINDOW_SIZE)
+  const visibleAnchorChapterNos = new Set(visibleChapters.map((chapter) => chapter.chapterNo))
   const visibleBranchNodes = props.branchNodes.filter((node) => visibleAnchorChapterNos.has(node.anchorChapterNo))
   const visibleNodeIds = new Set(visibleBranchNodes.map((node) => node.id))
-  const hiddenCount = Math.max(0, mainlineChapters.length - visibleChapters.length)
+  const visibleStartChapterNo = visibleChapters[0]?.chapterNo ?? null
+  const visibleEndChapterNo = visibleChapters.at(-1)?.chapterNo ?? null
+  const canShowPrevious = !searching && normalizedWindowStart > 0
+  const canShowNext = !searching
+    && normalizedWindowStart + CHAPTER_NAVIGATION_WINDOW_SIZE < navigationChapters.length
+  const alreadyCentered = !searching && normalizedWindowStart === centeredWindowStart
+
+  useLayoutEffect(() => {
+    if (!desktop && !props.leftPanelOpen) return
+    const container = timelineScrollRef.current
+    if (!container) return
+    const activeItem = container.querySelector<HTMLElement>('[data-navigation-current="true"]')
+    if (!activeItem) {
+      container.scrollTop = 0
+      return
+    }
+
+    const containerBounds = container.getBoundingClientRect()
+    const itemBounds = activeItem.getBoundingClientRect()
+    const centeredOffset = itemBounds.top - containerBounds.top - (container.clientHeight - itemBounds.height) / 2
+    container.scrollTop = Math.max(0, container.scrollTop + centeredOffset)
+  }, [
+    desktop,
+    normalizedWindowStart,
+    props.currentChapterId,
+    props.leftPanelOpen,
+    props.timelineChapterById,
+    searchQuery,
+  ])
+
+  const selectChapter = (chapter: ChapterTimelineItem) => {
+    props.onSelectionChange({ kind: 'chapter', chapterId: chapter.chapterId, chapterNo: chapter.chapterNo })
+    props.onClose()
+  }
 
   const content = (
     <>
@@ -54,43 +142,115 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
         {t('chapterNav.newChapter')}
       </button>
       <section className="space-y-3 rounded-[24px] border border-white/8 bg-white/[0.03] p-3">
-        <p className="px-2 text-xs text-zinc-500">{t('chapterNav.chapterCount', { count: mainlineChapters.length })}</p>
+        <div className="flex items-center justify-between gap-3 px-1">
+          <p className="text-xs text-zinc-500">{t('chapterNav.chapterCount', { count: mainlineChapters.length })}</p>
+          <button
+            type="button"
+            disabled={alreadyCentered}
+            onClick={() => {
+              updateNavigationState({ searchQuery: '', windowStart: centeredWindowStart })
+            }}
+            className="inline-flex min-h-8 items-center gap-1.5 rounded-xl border border-white/8 bg-black/20 px-2.5 text-[11px] text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-default disabled:opacity-45"
+          >
+            <LocateFixed className="h-3.5 w-3.5" aria-hidden="true" />
+            {t('chapterNav.currentChapter')}
+          </button>
+        </div>
+
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" aria-hidden="true" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => updateNavigationState({ searchQuery: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && visibleChapters[0]) selectChapter(visibleChapters[0])
+            }}
+            aria-label={t('chapterNav.searchLabel')}
+            placeholder={t('chapterNav.searchPlaceholder')}
+            className="min-h-11 w-full rounded-2xl border border-white/8 bg-black/25 py-2 pl-10 pr-10 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-violet-400/35 focus:bg-black/35"
+          />
+          {searchQuery ? (
+            <button
+              type="button"
+              onClick={() => updateNavigationState({ searchQuery: '' })}
+              aria-label={t('chapterNav.clearSearch')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl p-2 text-zinc-500 transition hover:bg-white/[0.06] hover:text-zinc-200"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+
+        <p className="px-1 text-[11px] leading-5 text-zinc-500">
+          {searching
+            ? searchMatches.length > CHAPTER_NAVIGATION_WINDOW_SIZE
+              ? t('chapterNav.searchResultsLimited', { visible: CHAPTER_NAVIGATION_WINDOW_SIZE, count: searchMatches.length })
+              : t('chapterNav.searchResults', { count: searchMatches.length })
+            : visibleStartChapterNo !== null && visibleEndChapterNo !== null
+              ? t('chapterNav.visibleRange', { start: visibleStartChapterNo, end: visibleEndChapterNo })
+              : t('chapterNav.noChapters')}
+        </p>
+
         {props.storyTimelineError ? (
           <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-3 py-3 text-sm text-amber-100">{props.storyTimelineError}</div>
         ) : null}
-        <StoryTimeline
-          chapters={visibleChapters.map((chapter) => props.timelineChapterById.get(chapter.id) ?? {
-            type: 'chapter',
-            chapterNo: chapter.order,
-            chapterId: chapter.id,
-            title: chapter.title,
-            wordCount: chapter.wordCount,
-          })}
-          branchNodes={visibleBranchNodes}
-          edges={props.edges.filter((edge) => visibleNodeIds.has(edge.fromNodeId) && visibleNodeIds.has(edge.toNodeId))}
-          activeChapterId={props.currentChapterId}
-          activeSelection={props.activeSelection}
-          branchChaptersByParentId={props.branchChaptersByParentId}
-          onSelectionChange={(selection) => {
-            props.onSelectionChange(selection)
-            props.onClose()
-          }}
-          onDeleteChapter={props.onDeleteChapter}
-          onDeleteBranchChapter={props.onDeleteChapter}
-          deletingBranchNodeId={props.deletingBranchNodeId}
-          onDeleteBranchNode={props.onDeleteBranchNode}
-        />
-        {hiddenCount > 0 ? (
-          <button
-            type="button"
-            onClick={() => props.setChapterListState((current) => ({
-              ...current,
-              [props.currentNovelId]: Math.min(mainlineChapters.length, (current[props.currentNovelId] ?? 80) + 80),
-            }))}
-            className="min-h-11 w-full rounded-2xl border border-dashed border-white/10 bg-black/20 px-3 text-sm text-zinc-300 transition hover:bg-white/[0.06]"
-          >
-            {t('chapterNav.showMore', { count: hiddenCount })}
-          </button>
+
+        <div
+          ref={timelineScrollRef}
+          className="max-h-[calc(100vh-21rem)] min-h-48 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]"
+          data-testid="chapter-navigation-scroll"
+        >
+          {visibleChapters.length ? (
+            <StoryTimeline
+              chapters={visibleChapters}
+              branchNodes={visibleBranchNodes}
+              edges={props.edges.filter((edge) => visibleNodeIds.has(edge.fromNodeId) && visibleNodeIds.has(edge.toNodeId))}
+              activeChapterId={props.currentChapterId}
+              activeSelection={props.activeSelection}
+              branchChaptersByParentId={props.branchChaptersByParentId}
+              onSelectionChange={(selection) => {
+                props.onSelectionChange(selection)
+                props.onClose()
+              }}
+              onDeleteChapter={props.onDeleteChapter}
+              onDeleteBranchChapter={props.onDeleteChapter}
+              deletingBranchNodeId={props.deletingBranchNodeId}
+              onDeleteBranchNode={props.onDeleteBranchNode}
+            />
+          ) : (
+            <div className="flex min-h-48 items-center justify-center rounded-2xl border border-dashed border-white/8 bg-black/15 px-4 text-center text-sm leading-6 text-zinc-500">
+              {searching ? t('chapterNav.noSearchResults') : t('chapterNav.noChapters')}
+            </div>
+          )}
+        </div>
+
+        {!searching && navigationChapters.length > CHAPTER_NAVIGATION_WINDOW_SIZE ? (
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              disabled={!canShowPrevious}
+              onClick={() => updateNavigationState({ windowStart: Math.max(0, normalizedWindowStart - CHAPTER_NAVIGATION_WINDOW_SIZE) })}
+              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-2xl border border-white/8 bg-black/20 px-3 text-xs text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+              {t('chapterNav.previousRange')}
+            </button>
+            <button
+              type="button"
+              disabled={!canShowNext}
+              onClick={() => updateNavigationState({
+                windowStart: Math.min(
+                  Math.max(0, navigationChapters.length - CHAPTER_NAVIGATION_WINDOW_SIZE),
+                  normalizedWindowStart + CHAPTER_NAVIGATION_WINDOW_SIZE,
+                ),
+              })}
+              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-2xl border border-white/8 bg-black/20 px-3 text-xs text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              {t('chapterNav.nextRange')}
+              <ChevronRight className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
         ) : null}
       </section>
     </>
@@ -98,7 +258,7 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
 
   if (desktop) {
     return (
-      <aside className="rounded-[30px] border border-white/10 bg-[#11141d] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.3)]" data-testid="workspace-chapter-nav">
+      <aside className="sticky top-3 self-start rounded-[30px] border border-white/10 bg-[#11141d] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.3)]" data-testid="workspace-chapter-nav">
         <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">{t('chapterNav.novel')}</p>
         <h2 className="mb-4 mt-1 text-lg font-semibold text-zinc-100">{t('chapterNav.title')}</h2>
         {content}

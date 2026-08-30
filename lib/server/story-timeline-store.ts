@@ -1,4 +1,5 @@
 import { execute, queryAll, queryOne } from '@/lib/server/database-access'
+import { resolveChapterNavigationSummary } from '@/lib/chapter-navigation'
 import { safeParseJson } from '@/lib/server/json-parse'
 import {
   buildStoryBranchReadableLineageLabel,
@@ -105,6 +106,7 @@ type KnowledgeChapterRow = {
   chapterNo: number
   title: string | null
   rawText: string | null
+  summary: string | null
 }
 
 type RoleplayTimelineSessionRow = {
@@ -672,7 +674,7 @@ export function updateStoryTimelineNodePresentation(
 
 function loadTimelineChapters(novelId: string, branchId: string, db: Db): ChapterTimelineItem[] {
   const rows = db.queryAll<KnowledgeChapterRow>(
-    `SELECT id, chapterNo, title, rawText
+    `SELECT id, chapterNo, title, rawText, summary
      FROM KnowledgeChapter
      WHERE novelId = ? AND branchId = ?
      ORDER BY chapterNo ASC, id ASC`,
@@ -686,6 +688,7 @@ function loadTimelineChapters(novelId: string, branchId: string, db: Db): Chapte
     chapterId: row.id,
     title: row.title?.trim() || `第 ${row.chapterNo} 章`,
     wordCount: countChineseFriendlyWords(row.rawText ?? ''),
+    summary: resolveChapterNavigationSummary(row.summary, row.rawText),
   }))
 }
 

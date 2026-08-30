@@ -20,6 +20,8 @@ const continueBlockDetail: ContinueBlockDetail = {
   latestText: '第二版续写正文',
   inputTokens: 120,
   outputTokens: 240,
+  writingSkillCardIds: [],
+  writingSkillExampleCount: 5,
   latestRevisionNo: 2,
   status: 'revised',
   createdAt: '2026-05-15T01:23:45.000Z',

@@ -16,6 +16,7 @@ type MockChapter = {
 
 type MockStoreState = {
   backendLoadError: string
+  currentChapterId?: string
   librarySummariesError?: string
   librarySummariesLoaded?: boolean
   localChapters: MockChapter[]
@@ -568,6 +569,46 @@ describe('ProjectGrid chapter resolution', () => {
     expect(pushMock).toHaveBeenCalledWith('/workspace')
     expect(saveToBackend).not.toHaveBeenCalled()
     expect(callOrder).toEqual(['novel:novel-a', 'chapter:ch-1', 'push'])
+  })
+
+  it('keeps the chapter restored by targeted hydration instead of reopening chapter one', async () => {
+    const setCurrentNovelId = vi.fn()
+    const setCurrentChapterId = vi.fn()
+    const loadFromBackend = vi.fn(async () => {
+      mockStoreState = {
+        ...mockStoreState,
+        currentChapterId: 'ch-88',
+        localChapters: [
+          { id: 'ch-1', novelId: 'novel-a', parentChapterId: null, order: 1 },
+          { id: 'ch-88', novelId: 'novel-a', parentChapterId: null, order: 88 },
+        ],
+      }
+    })
+
+    mockStoreState = {
+      backendLoadError: '',
+      currentChapterId: 'ch-1',
+      localChapters: [],
+      getNovels: () => [{ id: 'novel-a', title: 'Novel A', summary: 'Summary', tags: [] }],
+      loadFromBackend,
+      saveToBackend: vi.fn(async () => undefined),
+      deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
+      setCurrentNovelId,
+      setCurrentChapterId,
+      deleteNovel: vi.fn(),
+    }
+
+    renderProjectGrid()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Open project' }))
+      await Promise.resolve()
+    })
+
+    expect(loadFromBackend).toHaveBeenCalledWith('novel-a')
+    expect(setCurrentNovelId).toHaveBeenCalledWith('novel-a')
+    expect(setCurrentChapterId).toHaveBeenCalledWith('ch-88')
+    expect(pushMock).toHaveBeenCalledWith('/workspace')
   })
 
   it('does not invoke whole-novel persistence while opening a project', async () => {

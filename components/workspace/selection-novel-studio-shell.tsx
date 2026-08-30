@@ -260,7 +260,7 @@ export function SelectionNovelStudio() {
   }, [])
   const core = useSelectionNovelStudioCore({ loadFromBackend, saveToBackend, isNovelDeletionPending, backendLoaded, currentNovelId, localNovels, localChapters, currentChapterId, setCurrentChapterId, updateChapterContent, aiSettings, setAISettings, refreshKnowledgeProjection, clearPresetCompatSessionStateForSelection, resetPresetCompatSessionStateForSelection, presetCompatSessionState, localCharacters, localWorldEntries, localTimelineEvents, localOutlines, autosaveTarget, readAutosaveTarget, workspaceSaveFeedback })
   const {
-    leftPanelOpen, setLeftPanelOpen, referencePanelOpen, setReferencePanelOpen, knowledgePanelOpen, setKnowledgePanelOpen, chapterListState, setChapterListState, centerPaneView, setCenterPaneView, refTab, setRefTab, settingsOpen, setSettingsOpen,
+    leftPanelOpen, setLeftPanelOpen, referencePanelOpen, setReferencePanelOpen, knowledgePanelOpen, setKnowledgePanelOpen, centerPaneView, setCenterPaneView, refTab, setRefTab, settingsOpen, setSettingsOpen,
     selectionText, lockedSelectionText, toolbarPos, activeMode, rewritePrompt, rewriteState, rewriteFlow, generationContext,
     writingSkillCards, writingSkillCardsLoading, writingSkillCardsError, selectedWritingSkillCardIds,
     writingSkillExampleCount,
@@ -273,7 +273,7 @@ export function SelectionNovelStudio() {
     editor, editorRef, toolbarRef, resolvedAISettings, updateScenarioProvider, updateScenarioOpenAIField,
     updateScenarioOllamaField, updateKnowledgeExtractionParallelism, updateEmbeddingBatchSize, sortedChapters,
     currentChapter, parentChapter, graphSourceMeta, selectChapter, jumpToGraphSource, hasWorkspaceContent, branchChaptersByParentId, storyTimelineBranchId, resolvedStoryTimeline,
-    timelineChapterById, timelineNodeById, storyTimelineError, currentNovelMeta, chapterListTarget, chapterText,
+    timelineChapterById, timelineNodeById, storyTimelineError, currentNovelMeta, chapterText,
     mainKnowledgeRebuildStatus, knowledgeRebuildActive, knowledgeRebuildPaused, knowledgeRebuildFailed, knowledgeRebuildRangeMode,
     knowledgeRebuildFirstChapterCount, knowledgeRebuildStartChapter, knowledgeRebuildEndChapter, selectedKnowledgeRebuildChapterRangeLabel,
     knowledgeStatusOverview, currentKnowledgeJobBusy, knowledgeGraphOverview, extractionCacheOverview, embeddingCacheOverview, retrievalIndexOverview,
@@ -381,9 +381,7 @@ export function SelectionNovelStudio() {
             onClose={() => setLeftPanelOpen(false)}
             onCreateChapter={createNewChapter}
             sortedChapters={sortedChapters}
-            chapterListTarget={chapterListTarget}
             currentNovelId={currentNovelId}
-            setChapterListState={setChapterListState}
             storyTimelineError={storyTimelineError}
             branchNodes={resolvedStoryTimeline.branchNodes}
             edges={resolvedStoryTimeline.edges}

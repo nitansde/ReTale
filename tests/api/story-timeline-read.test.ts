@@ -221,6 +221,7 @@ describe('story-timeline-read', () => {
     expect(timelinePayload.branchId).toBe('novel-001:main')
     expect(timelinePayload.chapters.map((chapter: { chapterNo: number }) => chapter.chapterNo)).toEqual([10, 100])
     expect(timelinePayload.chapters[0].wordCount).toBeGreaterThan(0)
+    expect(timelinePayload.chapters[0].summary).toBe('第10章摘要')
     expect(timelinePayload.branchNodes).toEqual([
       expect.objectContaining({
         id: 'if_fixture_001',

@@ -20,7 +20,7 @@ export function resolveOpenNovelChapter(
   chapterId?: string,
 ) {
   if (chapterId) {
-    return localChapters.find((item) => item.id === chapterId) ?? null
+    return localChapters.find((item) => item.id === chapterId && item.novelId === novelId) ?? null
   }
 
   return localChapters
@@ -108,8 +108,10 @@ export function ProjectGrid() {
   const isImporting = importFeedback.status === 'uploading' || importFeedback.status === 'processing'
   const workspaceHandoffPending = openingNovelId !== null
 
-  const selectNovelChapter = (novelId: string, chapterId?: string) => {
-    const chapter = resolveOpenNovelChapter(useNovelStore.getState().localChapters, novelId, chapterId)
+  const selectNovelChapter = (novelId: string, chapterId?: string, fallbackWhenMissing = false) => {
+    const localChapters = useNovelStore.getState().localChapters
+    const chapter = resolveOpenNovelChapter(localChapters, novelId, chapterId)
+      ?? (fallbackWhenMissing ? resolveOpenNovelChapter(localChapters, novelId) : null)
 
     if (!chapter) {
       return null
@@ -148,7 +150,8 @@ export function ProjectGrid() {
     try {
       await loadFromBackend(novelId)
       if (!ownsRequest()) return false
-      const chapter = selectNovelChapter(novelId, chapterId)
+      const restoredChapterId = chapterId ?? useNovelStore.getState().currentChapterId
+      const chapter = selectNovelChapter(novelId, restoredChapterId, chapterId === undefined)
       if (!chapter) {
         if (ownsRequest()) {
           setOpeningNovelId(null)
