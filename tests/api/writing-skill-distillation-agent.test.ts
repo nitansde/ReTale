@@ -104,7 +104,7 @@ function refsFromNumberedMaterial(content: string) {
 }
 
 function refsFromEvidence(content: string) {
-  return Array.from(content.matchAll(/^=== EVIDENCE \d+: ([^ /]+) \/ /gm), (match) => match[1])
+  return Array.from(content.matchAll(/^=== EVIDENCE \d+: ([^ ]+) ===$/gm), (match) => match[1])
 }
 
 function createDistillationResult(refs: string[]): SkillDistillationResult {
@@ -129,6 +129,7 @@ function createDistillationResult(refs: string[]): SkillDistillationResult {
 function createGateway(input: {
   contextWindow: number
   scan: (refs: string[], scanIndex: number) => MaterialScanResult
+  distill?: (refs: string[], distillIndex: number) => SkillDistillationResult
 }) {
   const scanCalls: string[][] = []
   let distillCalls = 0
@@ -161,7 +162,7 @@ function createGateway(input: {
       const refs = refsFromEvidence(userContent)
       distillCalls += 1
       return {
-        data: createDistillationResult(refs) as T,
+        data: (input.distill?.(refs, distillCalls - 1) ?? createDistillationResult(refs)) as T,
         usage: { inputTokens: refs.length * 12, outputTokens: 40 },
       }
     },
@@ -206,11 +207,9 @@ describe('WritingSkillDistillationAgent workflows', () => {
       scan: (refs) => ({
         normalizedTopic: '人物五官与面部神态',
         coverage: 'sufficient',
-        candidates: refs.map((ref, index) => ({
+        candidates: refs.map((ref) => ({
           startRef: ref,
           endRef: ref,
-          aspect: `角度-${index + 1}`,
-          relevance: 0.95 - index * 0.01,
         })),
       }),
     })
@@ -224,6 +223,7 @@ describe('WritingSkillDistillationAgent workflows', () => {
     expect(mock.getDistillCalls()).toBe(1)
 
     const card = readWritingSkillCardDetail(job.resultCardId!, db)!
+    expect(card.defaultExampleCount).toBe(5)
     expect(card.rules.every((rule) => rule.evidenceRefs.length > 0)).toBe(true)
     expect(card.examples).toHaveLength(6)
     expect(card.examples.every((example) => example.rangeRef.libraryVersion === library.version)).toBe(true)
@@ -241,6 +241,11 @@ describe('WritingSkillDistillationAgent workflows', () => {
     expect(runtime.examples).toHaveLength(2)
     expect(runtime.prompt).toContain(runtime.examples[0].anonymizedText)
     expect(runtime.prompt).not.toContain(runtime.examples[0].displayRef)
+
+    await updateWritingSkillCard(card.id, { defaultExampleCount: 10 }, db)
+    expect(readWritingSkillCardDetail(card.id, db)?.defaultExampleCount).toBe(10)
+    await expect(updateWritingSkillCard(card.id, { defaultExampleCount: 11 }, db))
+      .rejects.toThrow('Example count must be between 1 and 10')
   })
 
   it('distills one global skill card from multiple selected books and preserves both source records', async () => {
@@ -260,11 +265,9 @@ describe('WritingSkillDistillationAgent workflows', () => {
       scan: (refs) => ({
         normalizedTopic: '人物五官与面部神态',
         coverage: 'sufficient',
-        candidates: refs.map((ref, index) => ({
+        candidates: refs.map((ref) => ({
           startRef: ref,
           endRef: ref,
-          aspect: `多书角度-${index + 1}`,
-          relevance: 0.95 - index * 0.01,
         })),
       }),
     })
@@ -320,11 +323,9 @@ describe('WritingSkillDistillationAgent workflows', () => {
             data: {
               normalizedTopic: '人物五官与面部神态',
               coverage: 'sufficient',
-              candidates: refs.map((ref, index) => ({
+              candidates: refs.map((ref) => ({
                 startRef: ref,
                 endRef: ref,
-                aspect: `核心证据-${index + 1}`,
-                relevance: 0.95 - index * 0.01,
               })),
             } as T,
             usage: { inputTokens: 10, outputTokens: 10 },
@@ -353,34 +354,44 @@ describe('WritingSkillDistillationAgent workflows', () => {
 
   it('samples non-overlapping rounds until material exhaustion and remains seed-reproducible', async () => {
     const firstDb = createTestDb('retale-writing-skill-large-first').db
-    const library = createLibrary({ chapterCount: 15, estimatedTokens: 200 })
+    const library = createLibrary({ chapterCount: 15, estimatedTokens: 5_000 })
     const createLargeGateway = () => createGateway({
       contextWindow: 4096,
       scan: (refs, scanIndex) => ({
         normalizedTopic: '人物五官与面部神态',
         coverage: scanIndex >= 2 ? 'sufficient' : 'insufficient',
-        candidates: refs.slice(0, 3).map((ref, index) => ({
+        candidates: refs.slice(0, 3).map((ref) => ({
           startRef: ref,
           endRef: ref,
-          aspect: `轮次角度-${scanIndex + 1}-${index + 1}`,
-          relevance: 0.9 - index * 0.02,
         })),
       }),
     })
     const firstMock = createLargeGateway()
-    const firstJob = await runAgent({ db: firstDb, library, gateway: firstMock.gateway, seed: 98765 })
+    const firstJob = await runAgent({
+      db: firstDb,
+      library,
+      gateway: firstMock.gateway,
+      seed: 98765,
+      scanContextWindow: '32k',
+    })
 
     expect(firstJob.status).toBe('COMPLETED')
-    expect(firstJob.roundCount).toBe(3)
-    expect(firstJob.sampledRanges).toHaveLength(3)
+    expect(firstJob.roundCount).toBeGreaterThan(1)
+    expect(firstJob.sampledRanges).toHaveLength(firstJob.roundCount)
     expect(firstJob.sampledRanges.every((sample) => sample.mode === 'sampled')).toBe(true)
     const allChapterIds = firstJob.sampledRanges.flatMap((sample) => sample.chapterIds)
     expect(new Set(allChapterIds).size).toBe(allChapterIds.length)
-    expect(firstJob.sampledRanges.every((sample) => sample.estimatedTokens <= 1381)).toBe(true)
+    expect(firstJob.sampledRanges.every((sample) => sample.estimatedTokens <= 25_936)).toBe(true)
 
     const secondDb = createTestDb('retale-writing-skill-large-second').db
     const secondMock = createLargeGateway()
-    const secondJob = await runAgent({ db: secondDb, library, gateway: secondMock.gateway, seed: 98765 })
+    const secondJob = await runAgent({
+      db: secondDb,
+      library,
+      gateway: secondMock.gateway,
+      seed: 98765,
+      scanContextWindow: '32k',
+    })
     expect(secondJob.sampledRanges.map((sample) => sample.displayRefs)).toEqual(
       firstJob.sampledRanges.map((sample) => sample.displayRefs),
     )
@@ -394,11 +405,9 @@ describe('WritingSkillDistillationAgent workflows', () => {
       scan: (refs) => ({
         normalizedTopic: '人物五官与面部神态',
         coverage: 'sufficient',
-        candidates: refs.slice(0, 24).map((ref, index) => ({
+        candidates: refs.slice(0, 24).map((ref) => ({
           startRef: ref,
           endRef: ref,
-          aspect: `预算证据-${index + 1}`,
-          relevance: 0.95 - index * 0.01,
         })),
       }),
     })
@@ -432,11 +441,9 @@ describe('WritingSkillDistillationAgent workflows', () => {
         return {
           normalizedTopic: '人物五官与面部神态',
           coverage: 'sufficient',
-          candidates: refs.slice(0, 24).map((ref, index) => ({
+          candidates: refs.slice(0, 24).map((ref) => ({
             startRef: ref,
             endRef: ref,
-            aspect: `降档证据-${index + 1}`,
-            relevance: 0.95 - index * 0.01,
           })),
         }
       },
@@ -457,6 +464,86 @@ describe('WritingSkillDistillationAgent workflows', () => {
     expect(job.sampledRanges.every((sample) => sample.estimatedTokens <= 26_880)).toBe(true)
   })
 
+  it('normalizes DeepSeek-style paragraph refs and drops hallucinated candidates without failing the round', async () => {
+    const { db } = createTestDb('retale-writing-skill-scan-ref-normalization')
+    const library = createLibrary({ chapterCount: 400, estimatedTokens: 400 })
+    let sawNormalizer = false
+    let scanAttempts = 0
+    const gateway: ModelGateway = {
+      getCapabilities: async () => ({
+        contextWindow: 1_000_000,
+        maxOutputTokens: 4096,
+        supportsStructuredOutput: true,
+        supportsToolCalling: false,
+      }),
+      generateStructured: async <T,>(options: {
+        modelConfigId: string
+        messages: WritingSkillChatMessage[]
+        schemaName: string
+        schema: Record<string, unknown>
+        runtimeSchema: z.ZodType<T>
+        maxOutputTokens: number
+        temperature?: number
+        signal?: AbortSignal
+        normalizeParsedOutput?: (value: unknown) => unknown
+      }): Promise<StructuredGenerationResult<T>> => {
+        const userContent = options.messages.find((message) => message.role === 'user')?.content ?? ''
+        if (options.schemaName === 'writing_skill_material_scan') {
+          const refs = refsFromNumberedMaterial(userContent)
+          sawNormalizer = typeof options.normalizeParsedOutput === 'function'
+          scanAttempts += 1
+          const raw = {
+            normalizedTopic: '人物五官与面部神态',
+            coverage: 'sufficient',
+            candidates: scanAttempts === 1
+              ? [{
+                  startRef: 'W01-C999-P999',
+                  endRef: 'W01-C999-P999',
+                }]
+              : [
+                ...refs.slice(0, 8).map((ref) => {
+                  const match = ref.match(/^W(\d+)-C(\d+)-P(\d+)$/)!
+                  const looseRef = `w${Number(match[1])}-c${Number(match[2])}-p${Number(match[3])}`
+                  return {
+                    startRef: looseRef,
+                    endRef: looseRef,
+                  }
+                }),
+                {
+                  startRef: 'W01-C999-P999',
+                  endRef: 'W01-C999-P999',
+                },
+              ],
+          }
+          const normalized = options.normalizeParsedOutput?.(raw) ?? raw
+          return {
+            data: options.runtimeSchema.parse(normalized),
+            usage: { inputTokens: 100, outputTokens: 20 },
+          }
+        }
+        const refs = refsFromEvidence(userContent)
+        return {
+          data: createDistillationResult(refs) as T,
+          usage: { inputTokens: 100, outputTokens: 40 },
+        }
+      },
+    }
+
+    const job = await runAgent({
+      db,
+      library,
+      gateway,
+      scanContextWindow: '256k',
+      scanTotalBudget: '256k',
+    })
+
+    expect(sawNormalizer).toBe(true)
+    expect(scanAttempts).toBeGreaterThan(1)
+    expect(job.status).toBe('COMPLETED')
+    expect(job.candidateCount).toBeGreaterThanOrEqual(8)
+    expect(job.candidateRefs).not.toContain('W01-C999-P999')
+  })
+
   it('automatically rechecks a large zero-candidate scan with smaller material instead of reporting false insufficiency', async () => {
     const { db } = createTestDb('retale-writing-skill-empty-scan-repair')
     const library = createLibrary({ chapterCount: 400, estimatedTokens: 400 })
@@ -471,13 +558,40 @@ describe('WritingSkillDistillationAgent workflows', () => {
         : {
             normalizedTopic: '人物五官与面部神态',
             coverage: 'sufficient',
-            candidates: refs.slice(0, 24).map((ref, index) => ({
+            candidates: refs.slice(0, 24).map((ref) => ({
               startRef: ref,
               endRef: ref,
-              aspect: `复查证据-${index + 1}`,
-              relevance: 0.95 - index * 0.01,
             })),
           },
+    })
+
+    const job = await runAgent({
+      db,
+      library,
+      gateway: mock.gateway,
+      scanContextWindow: '128k',
+      scanTotalBudget: '256k',
+    })
+
+    expect(job.status).toBe('COMPLETED')
+    expect(mock.scanCalls.length).toBeGreaterThan(1)
+    expect(mock.scanCalls[1].length).toBeLessThan(mock.scanCalls[0].length)
+    expect(job.candidateCount).toBeGreaterThanOrEqual(24)
+  })
+
+  it('automatically rechecks a large sparse scan until it approaches the target candidate pool', async () => {
+    const { db } = createTestDb('retale-writing-skill-sparse-scan-repair')
+    const library = createLibrary({ chapterCount: 400, estimatedTokens: 400 })
+    const mock = createGateway({
+      contextWindow: 200_000,
+      scan: (refs, scanIndex) => ({
+        normalizedTopic: '人物五官与面部神态',
+        coverage: 'sufficient',
+        candidates: refs.slice(0, scanIndex === 0 ? 4 : 24).map((ref) => ({
+          startRef: ref,
+          endRef: ref,
+        })),
+      }),
     })
 
     const job = await runAgent({
@@ -522,11 +636,9 @@ describe('WritingSkillDistillationAgent workflows', () => {
       scan: (refs) => ({
         normalizedTopic: '人物五官与面部神态',
         coverage: 'insufficient',
-        candidates: refs.map((ref, index) => ({
+        candidates: refs.map((ref) => ({
           startRef: ref,
           endRef: ref,
-          aspect: `弱证据-${index + 1}`,
-          relevance: 0.7,
         })),
       }),
     })
@@ -592,7 +704,7 @@ describe('WritingSkillDistillationAgent workflows', () => {
     expect(mock.getDistillCalls()).toBe(1)
   })
 
-  it('repairs a source-leaking distillation once before saving', async () => {
+  it('uses one schema-valid distillation without semantic post-processing', async () => {
     const { db } = createTestDb('retale-writing-skill-leak-repair')
     const library = createLibrary({
       chapterCount: 8,
@@ -624,11 +736,9 @@ describe('WritingSkillDistillationAgent workflows', () => {
             data: {
               normalizedTopic: '人物五官与面部神态',
               coverage: 'sufficient',
-              candidates: refs.map((ref, index) => ({
+              candidates: refs.map((ref) => ({
                 startRef: ref,
                 endRef: ref,
-                aspect: `角度-${index + 1}`,
-                relevance: 0.9,
               })),
             } as T,
             usage: { inputTokens: 10, outputTokens: 10 },
@@ -644,8 +754,50 @@ describe('WritingSkillDistillationAgent workflows', () => {
 
     const job = await runAgent({ db, library, gateway })
     expect(job.status).toBe('COMPLETED')
-    expect(distillCalls).toBe(2)
-    expect(readWritingSkillCardDetail(job.resultCardId!, db)?.title).toBe('作者甲 · 五官描写')
+    expect(distillCalls).toBe(1)
+    expect(readWritingSkillCardDetail(job.resultCardId!, db)?.title).toBe(library.paragraphs[0].anonymizedText)
+  })
+
+  it('does not run a second semantic-review request after a schema-valid result', async () => {
+    const { db } = createTestDb('retale-writing-skill-topic-repair')
+    const library = createLibrary({
+      chapterCount: 8,
+      estimatedTokens: 20,
+      textPrefix: '人物眉眼鼻唇与面部神态描写素材',
+    })
+    const mock = createGateway({
+      contextWindow: 32_000,
+      scan: (refs) => ({
+        normalizedTopic: '人物五官与面部神态',
+        coverage: 'sufficient',
+        candidates: refs.map((ref) => ({
+          startRef: ref,
+          endRef: ref,
+        })),
+      }),
+      distill: (refs, distillIndex) => {
+        if (distillIndex > 0) return createDistillationResult(refs)
+        return {
+          title: '数据质量规则集',
+          summary: '本规则集汇总了从业务数据抽取的若干关键模式，覆盖数据完整性、格式规范、业务逻辑一致性以及异常数据识别。每条规则均引用来源证据并说明适用场景，便于在数据质量监控中复用，提升数据治理效率和准确性，为组织的数据资产提供可靠保障。',
+          rules: Array.from({ length: 4 }, (_, index) => ({
+            text: `关键字段规则 ${index + 1}：字段不得为空并应进入异常处理流程。`,
+            evidenceRefs: [refs[index % refs.length]],
+          })),
+          applicationScope: '适用于业务数据质量监控、字段格式校验以及异常数据处理流程。',
+          avoid: ['避免忽略空值', '避免跳过校验规则'],
+          exampleCandidates: refs.slice(0, 6).map((ref, index) => ({ ref, score: 0.9 - index * 0.03 })),
+          confidence: 0.9,
+        }
+      },
+    })
+
+    const job = await runAgent({ db, library, gateway: mock.gateway })
+
+    expect(job.status).toBe('COMPLETED')
+    expect(mock.getDistillCalls()).toBe(1)
+    const card = readWritingSkillCardDetail(job.resultCardId!, db)!
+    expect(card.title).toBe('数据质量规则集')
   })
 })
 

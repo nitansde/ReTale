@@ -50,8 +50,6 @@ export type ValidatedCandidateRange = {
   chapterIndex: number
   startParagraphIndex: number
   endParagraphIndex: number
-  aspect: string
-  relevance: number
 }
 
 export type SampledMaterial = {
@@ -587,8 +585,6 @@ export function mergeWritingSkillCandidateRanges(candidates: ValidatedCandidateR
     previous.displayRef = previous.startParagraphIndex === previous.endParagraphIndex
       ? startDisplay
       : `${startDisplay}:P${padRef(previous.endParagraphIndex, 3)}`
-    previous.relevance = Math.max(previous.relevance, candidate.relevance)
-    previous.aspect = Array.from(new Set([previous.aspect, candidate.aspect].filter(Boolean))).join('；')
   }
   return merged
 }
@@ -603,7 +599,6 @@ export function validateWritingSkillScanResult(input: {
     const startRef = candidate.startRef.trim().toUpperCase()
     const endRef = candidate.endRef.trim().toUpperCase()
     if (!allowedRefs.has(startRef) || !allowedRefs.has(endRef)) return []
-    if (!Number.isFinite(candidate.relevance) || candidate.relevance < 0 || candidate.relevance > 1) return []
     const start = input.library.paragraphByDisplayRef.get(startRef)
     const end = input.library.paragraphByDisplayRef.get(endRef)
     if (!start || !end || start.chapterId !== end.chapterId || start.paragraphIndex > end.paragraphIndex) return []
@@ -621,8 +616,6 @@ export function validateWritingSkillScanResult(input: {
       chapterIndex: start.chapterIndex,
       startParagraphIndex: start.paragraphIndex,
       endParagraphIndex: end.paragraphIndex,
-      aspect: candidate.aspect.trim().slice(0, 120),
-      relevance: candidate.relevance,
     } satisfies ValidatedCandidateRange]
   })
   return mergeWritingSkillCandidateRanges(valid)
@@ -632,24 +625,7 @@ export function selectWritingSkillEvidenceRanges(
   candidates: ValidatedCandidateRange[],
   maxRanges: number,
 ) {
-  const ordered = candidates.slice().sort((left, right) => right.relevance - left.relevance)
-  const selected: ValidatedCandidateRange[] = []
-  const usedChapters = new Set<string>()
-  const usedAspects = new Set<string>()
-
-  for (const candidate of ordered) {
-    if (selected.length >= maxRanges) break
-    if (!usedChapters.has(candidate.chapterId) || !usedAspects.has(candidate.aspect)) {
-      selected.push(candidate)
-      usedChapters.add(candidate.chapterId)
-      usedAspects.add(candidate.aspect)
-    }
-  }
-  for (const candidate of ordered) {
-    if (selected.length >= maxRanges) break
-    if (!selected.some((item) => item.displayRef === candidate.displayRef)) selected.push(candidate)
-  }
-  return selected
+  return candidates.slice(0, maxRanges)
 }
 
 export function compileEvidenceMaterial(library: MaterialLibrary, ranges: ValidatedCandidateRange[]) {
@@ -666,7 +642,7 @@ export function compileEvidenceMaterial(library: MaterialLibrary, ranges: Valida
       ? resolved.end.paragraphIndex - resolved.start.paragraphIndex + 1
       : 0
     return [
-      `=== EVIDENCE ${index + 1}: ${range.displayRef} / ${range.aspect} ===`,
+      `=== EVIDENCE ${index + 1}: ${range.displayRef} ===`,
       ...paragraphs.flatMap((paragraph) => {
         const isCore = Boolean(
           resolved

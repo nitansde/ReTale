@@ -136,8 +136,6 @@ export type MaterialScanResult = {
   candidates: Array<{
     startRef: string
     endRef: string
-    aspect: string
-    relevance: number
   }>
 }
 

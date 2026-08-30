@@ -11,7 +11,6 @@ import {
   compileEvidenceMaterial,
   compileNumberedMaterial,
   deriveWritingSkillRoundSeed,
-  getRangeParagraphs,
   loadMaterialLibrary,
   mergeWritingSkillCandidateRanges,
   rangeContainsDisplayRef,
@@ -40,6 +39,7 @@ import {
   buildSkillDistillationJsonSchema,
   buildSkillDistillationPrompt,
   buildSkillDistillationRuntimeSchema,
+  normalizeMaterialScanParsedOutput,
 } from '@/lib/server/writing-skill-prompts'
 import {
   markWritingSkillCardsStaleForLibraryVersion,
@@ -77,76 +77,6 @@ function findContainingCandidate(
   return candidates.find((candidate) => rangeContainsDisplayRef(candidate, ref, library)) ?? null
 }
 
-function normalizeComparableText(value: string) {
-  return value.replace(/[\s\p{P}\p{S}]/gu, '')
-}
-
-function hasSourceLeak(output: string, sourceTexts: string[], ngramLength: number) {
-  const normalizedOutput = normalizeComparableText(output)
-  if (normalizedOutput.length < ngramLength) return false
-  for (const sourceText of sourceTexts) {
-    const normalizedSource = normalizeComparableText(sourceText)
-    for (let index = 0; index + ngramLength <= normalizedSource.length; index += 1) {
-      if (normalizedOutput.includes(normalizedSource.slice(index, index + ngramLength))) return true
-    }
-  }
-  return false
-}
-
-function validateDistillationResult(input: {
-  result: SkillDistillationResult
-  candidates: ValidatedCandidateRange[]
-  library: MaterialLibrary
-}) {
-  const issues: string[] = []
-  const evidenceTexts = input.candidates.flatMap((candidate) => (
-    getRangeParagraphs(input.library, candidate.displayRef, 1).map((paragraph) => paragraph.anonymizedText)
-  ))
-  const evidenceOutput = [
-    input.result.title,
-    input.result.summary,
-    input.result.applicationScope,
-    ...input.result.rules.map((rule) => rule.text),
-    ...input.result.avoid,
-  ].join('\n')
-  if (hasSourceLeak(evidenceOutput, evidenceTexts, WRITING_SKILL_DEFAULTS.sourceLeakNgramLength)) {
-    issues.push('总结或规则与素材原文出现过长连续重合，必须改写为抽象方法')
-  }
-
-  for (const [index, rule] of input.result.rules.entries()) {
-    if (!rule.evidenceRefs.length) issues.push(`第 ${index + 1} 条规则缺少证据引用`)
-    for (const ref of rule.evidenceRefs) {
-      if (!resolveMaterialRange(input.library, ref) || !findContainingCandidate(ref, input.candidates, input.library)) {
-        issues.push(`规则引用 ${ref} 不属于候选证据`)
-      }
-    }
-  }
-
-  const uniqueExamples = new Set<string>()
-  const chapterCounts = new Map<string, number>()
-  for (const example of input.result.exampleCandidates) {
-    const resolved = resolveMaterialRange(input.library, example.ref)
-    if (!resolved || !findContainingCandidate(example.ref, input.candidates, input.library)) {
-      issues.push(`范文引用 ${example.ref} 不属于候选证据`)
-      continue
-    }
-    uniqueExamples.add(resolved.displayRef)
-    chapterCounts.set(resolved.start.chapterId, (chapterCounts.get(resolved.start.chapterId) ?? 0) + 1)
-  }
-  if (uniqueExamples.size < WRITING_SKILL_DEFAULTS.minExamplePoolSize) {
-    issues.push(`有效范文引用少于 ${WRITING_SKILL_DEFAULTS.minExamplePoolSize} 组`)
-  }
-  const maxChapterCount = Math.max(0, ...chapterCounts.values())
-  if (
-    input.result.exampleCandidates.length >= 8
-    && maxChapterCount > Math.ceil(input.result.exampleCandidates.length * 0.5)
-    && new Set(input.candidates.map((candidate) => candidate.chapterId)).size > 1
-  ) {
-    issues.push('范文引用过度集中在同一章节，需要增加章节多样性')
-  }
-  return Array.from(new Set(issues))
-}
-
 function normalizeValidatedDistillationResult(input: {
   result: SkillDistillationResult
   candidates: ValidatedCandidateRange[]
@@ -172,7 +102,6 @@ function normalizeValidatedDistillationResult(input: {
 function candidateFromDisplayRef(
   library: MaterialLibrary,
   displayRef: string,
-  aspect = '已有技巧卡证据',
 ) {
   const resolved = resolveMaterialRange(library, displayRef)
   if (!resolved) return null
@@ -183,8 +112,6 @@ function candidateFromDisplayRef(
     chapterIndex: resolved.start.chapterIndex,
     startParagraphIndex: resolved.start.paragraphIndex,
     endParagraphIndex: resolved.end.paragraphIndex,
-    aspect,
-    relevance: 1,
   } satisfies ValidatedCandidateRange
 }
 
@@ -312,7 +239,7 @@ export class WritingSkillDistillationAgent {
               status: 'SCANNING_MATERIAL',
               message: attempt === 1
                 ? '正在从素材库中寻找相关写法……'
-                : `正在缩小本轮素材并自动修复（第 ${attempt} 次）……`,
+                : `正在缩小本轮素材继续查找（第 ${attempt} 次）……`,
             }, this.dependencies.db)
             const prompt = buildMaterialScanPrompt({
               userInstruction: initialJob.userInstruction,
@@ -329,7 +256,8 @@ export class WritingSkillDistillationAgent {
                 schemaName: 'writing_skill_material_scan',
                 schema: buildMaterialScanJsonSchema(allowedRefs) as unknown as Record<string, unknown>,
                 runtimeSchema: buildMaterialScanRuntimeSchema(allowedRefs),
-                maxOutputTokens: WRITING_SKILL_DEFAULTS.expectedScanOutputTokens,
+                normalizeParsedOutput: (value) => normalizeMaterialScanParsedOutput(value, allowedRefs),
+                maxOutputTokens: 0,
                 temperature: WRITING_SKILL_DEFAULTS.scanTemperature,
               })
             } catch (error) {
@@ -355,11 +283,15 @@ export class WritingSkillDistillationAgent {
             inputTokens += scan.usage.inputTokens
             outputTokens += scan.usage.outputTokens
             scannedTokens += sample.estimatedTokens
-            validRoundCandidates = validateWritingSkillScanResult({
+            const attemptCandidates = validateWritingSkillScanResult({
               library,
               sample,
               result: scan.data,
             })
+            validRoundCandidates = mergeWritingSkillCandidateRanges([
+              ...validRoundCandidates,
+              ...attemptCandidates,
+            ])
             const totalRemaining = totalScanBudget === null
               ? Number.POSITIVE_INFINITY
               : totalScanBudget - scannedTokens
@@ -419,17 +351,16 @@ export class WritingSkillDistillationAgent {
       const allowedEvidenceRefs = evidenceRanges.map((candidate) => candidate.displayRef)
       const evidenceMaterial = compileEvidenceMaterial(library, evidenceRanges)
 
-      const distill = async (validationIssues?: string[]) => {
+      const distill = async () => {
         updateWritingSkillJob(jobId, {
           status: 'DISTILLING_SKILL',
-          message: validationIssues?.length ? '正在修复技巧总结……' : '正在整理写作技巧……',
+          message: '正在整理写作技巧……',
         }, this.dependencies.db)
         const prompt = buildSkillDistillationPrompt({
           libraryName: library.name,
           userInstruction: initialJob.userInstruction,
           evidenceMaterial,
           refineInstruction,
-          validationIssues,
         })
         const generated = await this.gateway.generateStructured<SkillDistillationResult>({
           modelConfigId: initialJob.modelConfigId,
@@ -440,7 +371,7 @@ export class WritingSkillDistillationAgent {
           schemaName: 'writing_skill_distillation',
           schema: buildSkillDistillationJsonSchema(allowedEvidenceRefs) as unknown as Record<string, unknown>,
           runtimeSchema: buildSkillDistillationRuntimeSchema(allowedEvidenceRefs),
-          maxOutputTokens: WRITING_SKILL_DEFAULTS.expectedDistillOutputTokens,
+          maxOutputTokens: 0,
           temperature: WRITING_SKILL_DEFAULTS.distillTemperature,
         })
         inputTokens += generated.usage.inputTokens
@@ -452,27 +383,7 @@ export class WritingSkillDistillationAgent {
         })
       }
 
-      let result = await distill()
-      updateWritingSkillJob(jobId, {
-        status: 'VALIDATING_RESULT',
-        message: '正在验证技巧与证据引用……',
-        inputTokens,
-        outputTokens,
-      }, this.dependencies.db)
-      let validationIssues = validateDistillationResult({ result, candidates: evidenceRanges, library })
-      if (validationIssues.length) {
-        result = await distill(validationIssues)
-        updateWritingSkillJob(jobId, {
-          status: 'VALIDATING_RESULT',
-          message: '正在验证修复后的技巧总结……',
-          inputTokens,
-          outputTokens,
-        }, this.dependencies.db)
-        validationIssues = validateDistillationResult({ result, candidates: evidenceRanges, library })
-      }
-      if (validationIssues.length) {
-        throw new Error(`技巧总结未通过验证：${validationIssues.join('；')}`)
-      }
+      const result = await distill()
 
       this.assertActive(jobId)
       updateWritingSkillJob(jobId, {

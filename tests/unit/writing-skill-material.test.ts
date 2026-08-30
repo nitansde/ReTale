@@ -1,7 +1,9 @@
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import {
+  DEFAULT_WRITING_SKILL_CONTEXT_WINDOW,
   calculateWritingSkillScanChunkBudget,
+  normalizeWritingSkillContextWindow,
   resolveWritingSkillTotalBudget,
 } from '@/lib/writing-skill-defaults'
 import { createDatabaseAccess } from '@/lib/server/database-access'
@@ -27,11 +29,13 @@ import {
   loadWritingSkillMaterialCollection,
 } from '@/lib/server/writing-skill-sources'
 import {
+  buildMaterialScanRuntimeSchema,
   buildMaterialScanPrompt,
   buildPlainJsonStructuredOutputInstruction,
   buildSkillDistillationJsonSchema,
   buildSkillDistillationPrompt,
   buildSkillDistillationRuntimeSchema,
+  normalizeMaterialScanParsedOutput,
 } from '@/lib/server/writing-skill-prompts'
 import {
   listWritingSkillCards,
@@ -256,9 +260,15 @@ describe('writing skill material references and budgets', () => {
       supportsStructuredOutput: true,
       supportsToolCalling: false,
     }
-    expect(calculateWritingSkillScanChunkBudget(capabilities)).toBe(168_000)
-    expect(calculateWritingSkillScanChunkBudget(capabilities, '32k')).toBe(22_864)
-    expect(calculateWritingSkillScanChunkBudget(capabilities, '1m')).toBe(168_000)
+    expect(DEFAULT_WRITING_SKILL_CONTEXT_WINDOW).toBe('256k')
+    expect(normalizeWritingSkillContextWindow('auto')).toBe('256k')
+    expect(calculateWritingSkillScanChunkBudget(capabilities)).toBe(215_040)
+    expect(calculateWritingSkillScanChunkBudget(capabilities, '32k')).toBe(18_768)
+    expect(calculateWritingSkillScanChunkBudget(capabilities, '1m')).toBe(840_000)
+    expect(calculateWritingSkillScanChunkBudget({
+      ...capabilities,
+      contextWindow: 1_000_000,
+    }, '1m')).toBe(840_000)
     expect(resolveWritingSkillTotalBudget('128k')).toBe(128_000)
     expect(resolveWritingSkillTotalBudget('2m')).toBe(2_000_000)
     expect(resolveWritingSkillTotalBudget('full')).toBeNull()
@@ -395,7 +405,7 @@ describe('writing skill material references and budgets', () => {
   })
 
   it('drops invalid scan references and merges adjacent or overlapping candidates', () => {
-    const library = createLibrary({ chapterCount: 2, paragraphsPerChapter: 5 })
+    const library = createLibrary({ chapterCount: 2, paragraphsPerChapter: 9 })
     const sample = sampleWritingSkillMaterial({ library, tokenBudget: 10_000, seed: 1 })
     const candidates = validateWritingSkillScanResult({
       library,
@@ -404,22 +414,22 @@ describe('writing skill material references and budgets', () => {
         normalizedTopic: '面部神态',
         coverage: 'sufficient',
         candidates: [
-          { startRef: 'W01-C001-P001', endRef: 'W01-C001-P002', aspect: '眉眼', relevance: 0.8 },
-          { startRef: 'W01-C001-P002', endRef: 'W01-C001-P004', aspect: '视线', relevance: 0.9 },
-          { startRef: 'W01-C001-P005', endRef: 'W01-C002-P001', aspect: '跨章', relevance: 0.9 },
-          { startRef: 'W01-C002-P004', endRef: 'W01-C002-P002', aspect: '倒置', relevance: 0.9 },
-          { startRef: 'W01-C099-P001', endRef: 'W01-C099-P001', aspect: '不存在', relevance: 0.9 },
-          { startRef: 'W01-C002-P001', endRef: 'W01-C002-P001', aspect: '分数错误', relevance: 1.2 },
+          { startRef: 'W01-C001-P001', endRef: 'W01-C001-P002' },
+          { startRef: 'W01-C001-P002', endRef: 'W01-C001-P004' },
+          { startRef: 'W01-C001-P005', endRef: 'W01-C002-P001' },
+          { startRef: 'W01-C002-P004', endRef: 'W01-C002-P002' },
+          { startRef: 'W01-C099-P001', endRef: 'W01-C099-P001' },
+          { startRef: 'W01-C002-P001', endRef: 'W01-C002-P006' },
+          { startRef: 'W01-C002-P005', endRef: 'W01-C002-P008' },
         ],
       },
     })
 
-    expect(candidates).toHaveLength(1)
+    expect(candidates).toHaveLength(2)
     expect(candidates[0]).toMatchObject({
       displayRef: 'W01-C001-P001:P004',
-      relevance: 0.9,
-      aspect: '眉眼；视线',
     })
+    expect(candidates.map((candidate) => candidate.displayRef)).toContain('W01-C002-P001:P008')
   })
 
   it('keeps adjacent context readable without exposing it as citable evidence', () => {
@@ -435,8 +445,6 @@ describe('writing skill material references and budgets', () => {
       chapterIndex: resolved.start.chapterIndex,
       startParagraphIndex: resolved.start.paragraphIndex,
       endParagraphIndex: resolved.end.paragraphIndex,
-      aspect: '连续动作',
-      relevance: 0.9,
     }])
 
     expect(material).toContain('- W01-C001-P002:P004')
@@ -448,6 +456,7 @@ describe('writing skill material references and budgets', () => {
     expect(material).not.toContain('[W01-C001-P001]')
     expect(material).not.toContain('[W01-C001-P005]')
   })
+
 })
 
 describe('writing skill runtime example selection', () => {
@@ -468,13 +477,53 @@ describe('writing skill runtime example selection', () => {
 })
 
 describe('writing skill prompts', () => {
+  it('canonicalizes trustworthy scan refs and discards hallucinated or ambiguous refs', () => {
+    const allowedRefs = ['W01-C001-P001', 'W01-C002-P001']
+    const normalized = normalizeMaterialScanParsedOutput({
+      normalizedTopic: '人物五官与面部神态',
+      coverage: 'sufficient',
+      candidates: [
+        {
+          startRef: '[w1-c1-p1]',
+          endRef: 'C001-P001',
+        },
+        {
+          startRef: 'W01-C999-P001',
+          endRef: 'W01-C999-P001',
+        },
+      ],
+    }, allowedRefs)
+
+    expect(normalized).toMatchObject({
+      coverage: 'sufficient',
+      candidates: [{
+        startRef: 'W01-C001-P001',
+        endRef: 'W01-C001-P001',
+      }],
+    })
+    expect(buildMaterialScanRuntimeSchema(allowedRefs).safeParse(normalized).success).toBe(true)
+
+    expect(normalizeMaterialScanParsedOutput({
+      normalizedTopic: '人物五官与面部神态',
+      coverage: 'sufficient',
+      candidates: [{
+        startRef: 'C001-P001',
+        endRef: 'C001-P001',
+      }],
+    }, ['W01-C001-P001', 'W02-C001-P001'])).toMatchObject({
+      coverage: 'insufficient',
+      candidates: [],
+    })
+  })
+
   it('keeps scan, distillation, plain-JSON, and rewrite-skill prompt contracts stable', () => {
     const scan = buildMaterialScanPrompt({
       userInstruction: '五官',
       numberedMaterial: '[W01-C001-P001]\n[人物A]抬眼。',
     })
-    expect(scan.system).toContain('只返回段落编号和简短的分析标签')
+    expect(scan.system).toContain('只返回片段的起止段落编号，不需要标签、分类或解释')
     expect(scan.system).toContain('不得引用、复述或改写任何素材原文')
+    expect(scan.system).toContain('至少返回 6 组')
     expect(scan.user).toMatchInlineSnapshot(`
       "用户希望提炼的写作方向：
       五官
@@ -489,11 +538,9 @@ describe('writing skill prompts', () => {
       userInstruction: '五官',
       evidenceMaterial: '=== EVIDENCE 1: W01-C001-P001 / 眼神 ===',
       refineInstruction: '更强调情绪变化',
-      validationIssues: ['第 1 条规则缺少证据引用'],
     })
     expect(distill.system).toContain('不得引用、复述或改写素材原文')
     expect(distill.system).toContain('只能逐字复制 EVIDENCE 标题中的核心候选范围编号')
-    expect(distill.system).toContain('只修复以下问题，不能引入新证据')
     expect(distill.user).toMatchInlineSnapshot(`
       "素材库名称：
       作者甲素材库
@@ -538,6 +585,7 @@ describe('writing skill prompts', () => {
     })).toMatchInlineSnapshot(`
       "当前模型不保证原生结构化输出。
       请只返回一个合法 JSON 对象，不要使用 Markdown 代码块，不要输出解释。
+      请使用紧凑 JSON，避免无意义的缩进、空白和换行，以免输出被截断。
       JSON 必须满足以下 Schema：
       {\"type\":\"object\",\"required\":[\"coverage\"]}"
     `)

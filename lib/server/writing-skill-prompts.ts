@@ -7,8 +7,6 @@ export const materialScanResultSchema = z.object({
   candidates: z.array(z.object({
     startRef: z.string().trim().min(1).max(40),
     endRef: z.string().trim().min(1).max(40),
-    aspect: z.string().trim().min(1).max(120),
-    relevance: z.number().min(0).max(1),
   }).strict()).max(WRITING_SKILL_DEFAULTS.maxCandidatesPerRound),
 }).strict()
 
@@ -41,12 +39,10 @@ export const MATERIAL_SCAN_JSON_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['startRef', 'endRef', 'aspect', 'relevance'],
+        required: ['startRef', 'endRef'],
         properties: {
           startRef: { type: 'string' },
           endRef: { type: 'string' },
-          aspect: { type: 'string' },
-          relevance: { type: 'number', minimum: 0, maximum: 1 },
         },
       },
     },
@@ -55,6 +51,61 @@ export const MATERIAL_SCAN_JSON_SCHEMA = {
 
 function uniqueMaterialRefs(allowedRefs: string[]) {
   return Array.from(new Set(allowedRefs.map((ref) => ref.trim().toUpperCase()).filter(Boolean)))
+}
+
+function formatLooseMaterialRef(workIndex: number, chapterIndex: number, paragraphIndex: number) {
+  if (workIndex < 1 || chapterIndex < 1 || paragraphIndex < 1) return null
+  return `W${String(workIndex).padStart(2, '0')}-C${String(chapterIndex).padStart(3, '0')}-P${String(paragraphIndex).padStart(3, '0')}`
+}
+
+function normalizeLooseMaterialRef(value: unknown, allowedRefs: string[]) {
+  if (typeof value !== 'string') return null
+  const allowed = new Set(allowedRefs)
+  const cleaned = value
+    .trim()
+    .replace(/^[\[【`'\"]+|[\]】`'\"]+$/g, '')
+    .replace(/[‐‑‒–—﹘﹣－]/g, '-')
+    .replace(/\s+/g, '')
+    .toUpperCase()
+  if (allowed.has(cleaned)) return cleaned
+
+  const full = cleaned.match(/^W0*(\d+)[-_:]?C0*(\d+)[-_:]?P0*(\d+)$/)
+  if (full) {
+    const formatted = formatLooseMaterialRef(
+      Number.parseInt(full[1], 10),
+      Number.parseInt(full[2], 10),
+      Number.parseInt(full[3], 10),
+    )
+    return formatted && allowed.has(formatted) ? formatted : null
+  }
+
+  const withoutWork = cleaned.match(/^C0*(\d+)[-_:]?P0*(\d+)$/)
+  if (!withoutWork) return null
+  const suffix = `-C${String(Number.parseInt(withoutWork[1], 10)).padStart(3, '0')}-P${String(Number.parseInt(withoutWork[2], 10)).padStart(3, '0')}`
+  const matches = allowedRefs.filter((ref) => ref.endsWith(suffix))
+  return matches.length === 1 ? matches[0] : null
+}
+
+export function normalizeMaterialScanParsedOutput(value: unknown, allowedRefs: string[]) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const record = value as Record<string, unknown>
+  if (!Array.isArray(record.candidates)) return value
+  const refs = uniqueMaterialRefs(allowedRefs)
+  const candidates = record.candidates.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return [candidate]
+    const candidateRecord = candidate as Record<string, unknown>
+    const startRef = normalizeLooseMaterialRef(candidateRecord.startRef, refs)
+    const endRef = normalizeLooseMaterialRef(candidateRecord.endRef, refs)
+    if (!startRef || !endRef) return []
+    return [{ ...candidateRecord, startRef, endRef }]
+  })
+  return {
+    ...record,
+    coverage: record.coverage === 'sufficient' && candidates.length === 0
+      ? 'insufficient'
+      : record.coverage,
+    candidates,
+  }
 }
 
 export function buildMaterialScanJsonSchema(allowedRefs: string[]) {
@@ -241,13 +292,15 @@ export function buildMaterialScanPrompt(input: {
       '你的任务是找出真正体现该写作方向的代表性段落。',
       '要求：',
       '1. 根据语义理解用户方向，不要只进行字面关键词匹配。',
-      '2. 可以识别用户未明确列出的相关表现形式。',
-      '3. 只返回段落编号和简短的分析标签。',
+      '2. 选择真正体现该方向的代表性原文片段，不要选择只在背景中偶然提及该方向的段落。',
+      '3. 只返回片段的起止段落编号，不需要标签、分类或解释。',
       '4. 不得引用、复述或改写任何素材原文。',
       '5. 不得返回输入中不存在的段落编号。',
+      '5.1 startRef 和 endRef 必须只复制方括号中的完整编号，例如 [W01-C021-P006] 应填写 W01-C021-P006；不要省略 W、C、P，不要自行改写编号。无法确认精确编号时应舍弃该候选。',
       '6. 如果素材中缺少足够证据，应明确返回 insufficient。',
+      `6.1 素材充足时至少返回 ${WRITING_SKILL_DEFAULTS.minCandidates} 组、最多返回 ${WRITING_SKILL_DEFAULTS.maxCandidatesPerRound} 组代表性片段。`,
       '7. 不要补充通用写作知识。',
-      '8. 优先选择具有完整写作结构的连续段落，而不是单独一句漂亮句子。',
+      '8. 候选范围要紧凑，只包含完成该写作动作所必需的连续段落。',
       `9. 最多返回 ${WRITING_SKILL_DEFAULTS.maxCandidatesPerRound} 组候选范围。`,
       '只输出符合指定 JSON Schema 的 JSON 对象。',
     ].join('\n'),
@@ -266,15 +319,7 @@ export function buildSkillDistillationPrompt(input: {
   userInstruction: string
   evidenceMaterial: string
   refineInstruction?: string | null
-  validationIssues?: string[]
 }) {
-  const repairBlock = input.validationIssues?.length
-    ? [
-        '',
-        '上一次结果未通过后端验证，请只修复以下问题，不能引入新证据：',
-        ...input.validationIssues.map((issue, index) => `${index + 1}. ${issue}`),
-      ]
-    : []
   return {
     system: [
       '你是一个小说写作技巧蒸馏器。',
@@ -292,8 +337,8 @@ export function buildSkillDistillationPrompt(input: {
       '9. 避免将作品中的人物、设定或剧情当成写作技巧。',
       '10. 输出应当可以直接插入另一本小说的魔改 Prompt。',
       `11. summary 为 100–400 字，rules 为 4–8 条，avoid 为 2–5 条，exampleCandidates 为 ${WRITING_SKILL_DEFAULTS.minExamplePoolSize}–${WRITING_SKILL_DEFAULTS.maxExamplePoolSize} 组。`,
+      `12. 围绕用户指定的方向“${input.userInstruction}”总结。`,
       '只输出符合指定 JSON Schema 的 JSON 对象。',
-      ...repairBlock,
     ].join('\n'),
     user: [
       '素材库名称：',
@@ -315,6 +360,7 @@ export function buildPlainJsonStructuredOutputInstruction(schema: Record<string,
   return [
     '当前模型不保证原生结构化输出。',
     '请只返回一个合法 JSON 对象，不要使用 Markdown 代码块，不要输出解释。',
+    '请使用紧凑 JSON，避免无意义的缩进、空白和换行，以免输出被截断。',
     'JSON 必须满足以下 Schema：',
     JSON.stringify(schema),
   ].join('\n')

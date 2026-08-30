@@ -1,13 +1,15 @@
-export const WRITING_SKILL_CONTEXT_WINDOWS = ['auto', '32k', '64k', '96k', '128k', '256k', '512k', '1m'] as const
+export const WRITING_SKILL_CONTEXT_WINDOWS = ['32k', '64k', '96k', '128k', '256k', '512k', '1m'] as const
 export type WritingSkillContextWindow = (typeof WRITING_SKILL_CONTEXT_WINDOWS)[number]
 
 export const WRITING_SKILL_TOTAL_BUDGETS = ['128k', '256k', '512k', '1m', '2m', 'full'] as const
 export type WritingSkillTotalBudget = (typeof WRITING_SKILL_TOTAL_BUDGETS)[number]
 
-export const DEFAULT_WRITING_SKILL_CONTEXT_WINDOW: WritingSkillContextWindow = 'auto'
+export const DEFAULT_WRITING_SKILL_CONTEXT_WINDOW: WritingSkillContextWindow = '256k'
 export const DEFAULT_WRITING_SKILL_TOTAL_BUDGET: WritingSkillTotalBudget = '512k'
 
-const WRITING_SKILL_CONTEXT_WINDOW_TOKENS: Record<Exclude<WritingSkillContextWindow, 'auto'>, number> = {
+export const WRITING_SKILL_RUNTIME_EXAMPLE_COUNTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const
+
+const WRITING_SKILL_CONTEXT_WINDOW_TOKENS: Record<WritingSkillContextWindow, number> = {
   '32k': 32_000,
   '64k': 64_000,
   '96k': 96_000,
@@ -28,25 +30,23 @@ const WRITING_SKILL_TOTAL_BUDGET_TOKENS: Record<Exclude<WritingSkillTotalBudget,
 export const WRITING_SKILL_DEFAULTS = {
   scanInputRatio: 0.84,
   contextReserveRatio: 0.12,
-  minCandidates: 8,
-  targetCandidates: 24,
+  minCandidates: 6,
   maxCandidatesPerRound: 48,
   maxScanRounds: 64,
-  maxAdaptiveScanRetries: 3,
+  maxAdaptiveScanRetries: 4,
   minAdaptiveScanBudget: 8_000,
   zeroCandidateRetryThreshold: 8_000,
   maxDistillRanges: 30,
   minExamplePoolSize: 6,
   targetExamplePoolSize: 12,
   maxExamplePoolSize: 20,
-  defaultRuntimeExampleCount: 3,
-  maxRuntimeExampleCount: 5,
+  defaultRuntimeExampleCount: 5,
+  maxRuntimeExampleCount: 10,
   scanTemperature: 0.1,
   distillTemperature: 0.3,
-  expectedScanOutputTokens: 4096,
-  expectedDistillOutputTokens: 4096,
+  expectedScanOutputTokens: 8192,
+  expectedDistillOutputTokens: 8192,
   fixedPromptOverheadTokens: 1200,
-  sourceLeakNgramLength: 18,
 } as const
 
 export function normalizeWritingSkillContextWindow(value: unknown): WritingSkillContextWindow {
@@ -72,10 +72,7 @@ export function calculateWritingSkillScanChunkBudget(
   capabilities: ModelCapabilities,
   contextWindow: WritingSkillContextWindow = DEFAULT_WRITING_SKILL_CONTEXT_WINDOW,
 ) {
-  const requestedContextWindow = contextWindow === 'auto'
-    ? capabilities.contextWindow
-    : WRITING_SKILL_CONTEXT_WINDOW_TOKENS[contextWindow]
-  const selectedContextWindow = Math.min(requestedContextWindow, capabilities.contextWindow)
+  const selectedContextWindow = WRITING_SKILL_CONTEXT_WINDOW_TOKENS[contextWindow]
   const safetyReserve = Math.floor(
     selectedContextWindow * WRITING_SKILL_DEFAULTS.contextReserveRatio,
   )

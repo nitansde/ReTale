@@ -35,6 +35,7 @@ export interface ModelGateway {
     maxOutputTokens: number
     temperature?: number
     signal?: AbortSignal
+    normalizeParsedOutput?: (value: unknown) => unknown
   }): Promise<StructuredGenerationResult<T>>
 }
 
@@ -56,6 +57,33 @@ function normalizeToken(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
     : 0
+}
+
+function extractProviderErrorDetail(responseBody: string | undefined) {
+  const trimmed = responseBody?.trim()
+  if (!trimmed) return ''
+  const parsed = safeParseJson(trimmed)
+  const record = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : null
+  const nestedError = record?.error && typeof record.error === 'object' && !Array.isArray(record.error)
+    ? record.error as Record<string, unknown>
+    : null
+  const detail = [nestedError?.message, record?.message, record?.detail, record?.error]
+    .find((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+  const candidate = (detail ?? (/^[^<{]{1,500}$/.test(trimmed) ? trimmed : ''))
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!candidate || /authorization\s*:|bearer\s+|api[_-]?key\s*[=:]|token\s*=/i.test(candidate)) return ''
+  return candidate.slice(0, 500)
+}
+
+function enrichProviderRequestError(error: unknown, model: string) {
+  if (!(error instanceof ProviderRequestError)) return error
+  const detail = extractProviderErrorDetail(error.responseBody)
+  const status = error.status ? `HTTP ${error.status}` : error.code
+  error.message = `模型 ${model} 请求失败（${status}）${detail ? `：${detail}` : ''}`
+  return error
 }
 
 function resolveScenario(modelConfigId: string): 'knowledgeExtraction' | 'rewrite' {
@@ -90,8 +118,9 @@ function inferContextWindow(model: string) {
   const configured = Number.parseInt(process.env.RETALE_WRITING_SKILL_CONTEXT_WINDOW ?? '', 10)
   const configuredWindow = Number.isFinite(configured) && configured >= 4096 ? configured : null
   const normalized = model.toLowerCase()
-  if (/deepseek/.test(normalized)) return Math.min(configuredWindow ?? 96_000, 96_000)
   if (configuredWindow !== null) return configuredWindow
+  if (/deepseek.*(?:v?4).*flash/.test(normalized)) return 1_000_000
+  if (/deepseek/.test(normalized)) return 96_000
   if (/gpt-4\.1|gpt-5|gemini-2\.5|gemini-3/.test(normalized)) return 1_000_000
   if (/gpt-oss/.test(normalized)) return 131_072
   if (/o3|o4|claude-3|claude-4|qwen3|qwen2\.5/.test(normalized)) return 200_000
@@ -104,13 +133,22 @@ export function isWritingSkillContextLimitError(error: unknown) {
   if (!(error instanceof Error)) return false
   const providerBody = error instanceof ProviderRequestError ? error.responseBody ?? '' : ''
   const message = `${error.message}\n${providerBody}`.toLowerCase()
-  const explicitlyMentionsContext = /context|token|maximum|max(?:imum)? length|too long|超出|上下文|长度/.test(message)
+  const explicitlyMentionsContextLimit = [
+    /context[_\s-]*(?:length|window)?[^\n]{0,100}(?:exceed|limit|maximum|too (?:large|long)|overflow)/,
+    /(?:exceed|limit|maximum|too (?:large|long)|overflow)[^\n]{0,100}context/,
+    /(?:prompt|input|request)(?: is)? too (?:large|long)/,
+    /sequence(?: length)?[^\n]{0,100}(?:exceed|limit|maximum|too (?:large|long))/,
+    /(?:maximum|max)[_\s-]*(?:sequence|input|prompt|token)[_\s-]*(?:length|count)/,
+    /(?:token|prompt|input)[^\n]{0,100}(?:budget|limit)[^\n]{0,100}(?:exceed|overflow)/,
+    /(?:超出|超过)[^\n]{0,80}(?:上下文|长度|token|令牌|输入)/,
+    /(?:上下文|输入|提示词|token|令牌)[^\n]{0,80}(?:过长|过大|超限|上限)/,
+  ].some((pattern) => pattern.test(message))
   if (error instanceof ProviderRequestError) {
     return error.code === 'http'
       && [400, 413, 422].includes(error.status ?? 0)
-      && explicitlyMentionsContext
+      && explicitlyMentionsContextLimit
   }
-  return explicitlyMentionsContext && /exceed|limit|maximum|too long|超出|过长|上限/.test(message)
+  return explicitlyMentionsContextLimit
 }
 
 function inferMaxOutputTokens(model: string) {
@@ -121,7 +159,7 @@ function inferMaxOutputTokens(model: string) {
 
 function inferStructuredOutput(provider: ResolvedModelConfig['provider'], model: string) {
   if (provider === 'ollama') return true
-  return /^(gpt-|o\d|chatgpt-|claude-|gemini-|qwen|deepseek)/i.test(model.trim())
+  return /^(gpt-|o\d|chatgpt-|claude-|gemini-|qwen)/i.test(model.trim())
 }
 
 export function inferWritingSkillModelCapabilities(config: Pick<ResolvedModelConfig, 'provider' | 'model'>): ModelCapabilities {
@@ -130,6 +168,15 @@ export function inferWritingSkillModelCapabilities(config: Pick<ResolvedModelCon
     maxOutputTokens: inferMaxOutputTokens(config.model),
     supportsStructuredOutput: inferStructuredOutput(config.provider, config.model),
     supportsToolCalling: false,
+  }
+}
+
+export function getWritingSkillModelSummary(modelConfigId = getDefaultWritingSkillModelConfigId()) {
+  const config = resolveWritingSkillModelConfig(modelConfigId)
+  return {
+    modelConfigId,
+    provider: config.provider,
+    model: config.model,
   }
 }
 
@@ -214,7 +261,7 @@ export class ConfiguredWritingSkillModelGateway implements ModelGateway {
     const requestBody = {
       model: input.config.model,
       temperature: input.temperature,
-      max_tokens: input.maxOutputTokens,
+      ...(input.maxOutputTokens > 0 ? { max_tokens: input.maxOutputTokens } : {}),
       messages: input.messages,
       ...(input.structured ? {
         response_format: {
@@ -283,7 +330,7 @@ export class ConfiguredWritingSkillModelGateway implements ModelGateway {
       ...(input.structured ? { format: input.schema } : { format: 'json' }),
       options: {
         temperature: input.temperature,
-        num_predict: input.maxOutputTokens,
+        ...(input.maxOutputTokens > 0 ? { num_predict: input.maxOutputTokens } : {}),
       },
     }
     const { response, cleanup } = await requestProviderEndpoint({
@@ -335,9 +382,13 @@ export class ConfiguredWritingSkillModelGateway implements ModelGateway {
     signal?: AbortSignal
     attempt: number
   }) {
-    return input.config.provider === 'openai-compatible'
-      ? this.requestOpenAICompatible(input)
-      : this.requestOllama(input)
+    try {
+      return await (input.config.provider === 'openai-compatible'
+        ? this.requestOpenAICompatible(input)
+        : this.requestOllama(input))
+    } catch (error) {
+      throw enrichProviderRequestError(error, input.config.model)
+    }
   }
 
   async generateStructured<T>(options: {
@@ -349,41 +400,42 @@ export class ConfiguredWritingSkillModelGateway implements ModelGateway {
     maxOutputTokens: number
     temperature?: number
     signal?: AbortSignal
+    normalizeParsedOutput?: (value: unknown) => unknown
   }): Promise<StructuredGenerationResult<T>> {
     const config = resolveWritingSkillModelConfig(options.modelConfigId)
     const capabilities = inferWritingSkillModelCapabilities(config)
     const temperature = options.temperature ?? 0
-    const plainMessages = capabilities.supportsStructuredOutput
-      ? options.messages
-      : options.messages.map((message, index) => index === 0
-        ? { ...message, content: `${message.content}\n\n${buildPlainJsonStructuredOutputInstruction(options.schema)}` }
-        : message)
+    let useStructuredOutput = capabilities.supportsStructuredOutput
+    const buildPlainMessages = () => options.messages.map((message, index) => index === 0
+      ? { ...message, content: `${message.content}\n\n${buildPlainJsonStructuredOutputInstruction(options.schema)}` }
+      : message)
+    let requestMessages = useStructuredOutput ? options.messages : buildPlainMessages()
 
     let first: RawModelResponse
     try {
       first = await this.requestRaw({
         config,
-        messages: plainMessages,
+        messages: requestMessages,
         schemaName: options.schemaName,
         schema: options.schema,
         maxOutputTokens: Math.min(options.maxOutputTokens, capabilities.maxOutputTokens),
         temperature,
-        structured: capabilities.supportsStructuredOutput,
+        structured: useStructuredOutput,
         signal: options.signal,
         attempt: 1,
       })
     } catch (error) {
-      const structuredUnsupported = capabilities.supportsStructuredOutput
+      const structuredUnsupported = useStructuredOutput
         && error instanceof ProviderRequestError
         && error.code === 'http'
         && (error.status === 400 || error.status === 404 || error.status === 422)
         && !isWritingSkillContextLimitError(error)
       if (!structuredUnsupported) throw error
+      useStructuredOutput = false
+      requestMessages = buildPlainMessages()
       first = await this.requestRaw({
         config,
-        messages: options.messages.map((message, index) => index === 0
-          ? { ...message, content: `${message.content}\n\n${buildPlainJsonStructuredOutputInstruction(options.schema)}` }
-          : message),
+        messages: requestMessages,
         schemaName: options.schemaName,
         schema: options.schema,
         maxOutputTokens: Math.min(options.maxOutputTokens, capabilities.maxOutputTokens),
@@ -395,7 +447,10 @@ export class ConfiguredWritingSkillModelGateway implements ModelGateway {
     }
 
     const parsed = parseJsonContent(first.content)
-    const validated = options.runtimeSchema.safeParse(parsed)
+    const normalizedParsed = options.normalizeParsedOutput
+      ? options.normalizeParsedOutput(parsed)
+      : parsed
+    const validated = options.runtimeSchema.safeParse(normalizedParsed)
     if (validated.success) {
       return {
         data: validated.data,
@@ -404,21 +459,15 @@ export class ConfiguredWritingSkillModelGateway implements ModelGateway {
     }
 
     const repairMessages: WritingSkillChatMessage[] = [
-      {
-        role: 'system',
-        content: [
-          '你是 JSON 格式修复器。',
-          '只修复结构、字段类型、缺失字段和长度约束。',
-          '不得添加素材原文、解释或 Markdown。',
-          buildPlainJsonStructuredOutputInstruction(options.schema),
-        ].join('\n'),
-      },
+      ...requestMessages,
       {
         role: 'user',
         content: [
+          '上一次输出未通过 JSON 结构验证。',
+          '请重新从本对话最初提供的原始任务与原始素材生成完整结果。',
+          '不得把上一次 AI 输出作为提炼对象，也不得沿用其中没有原文证据支持的内容。',
+          '只返回完整、合法、符合 Schema 的 JSON 对象，不要输出解释或 Markdown。',
           `验证错误：${formatSchemaIssues(validated.error)}`,
-          '待修复输出：',
-          first.content,
         ].join('\n\n'),
       },
     ]
@@ -429,12 +478,15 @@ export class ConfiguredWritingSkillModelGateway implements ModelGateway {
       schema: options.schema,
       maxOutputTokens: Math.min(options.maxOutputTokens, capabilities.maxOutputTokens),
       temperature: 0,
-      structured: capabilities.supportsStructuredOutput,
+      structured: useStructuredOutput,
       signal: options.signal,
       attempt: 2,
     })
     const repairedParsed = parseJsonContent(repaired.content)
-    const repairedValidated = options.runtimeSchema.safeParse(repairedParsed)
+    const normalizedRepairedParsed = options.normalizeParsedOutput
+      ? options.normalizeParsedOutput(repairedParsed)
+      : repairedParsed
+    const repairedValidated = options.runtimeSchema.safeParse(normalizedRepairedParsed)
     if (!repairedValidated.success) {
       throw new Error(`模型结构化输出修复失败：${formatSchemaIssues(repairedValidated.error)}`)
     }
@@ -448,6 +500,6 @@ export class ConfiguredWritingSkillModelGateway implements ModelGateway {
   }
 }
 
-export function getDefaultWritingSkillModelConfigId(scenario: AIScenarioKey = 'knowledgeExtraction') {
+export function getDefaultWritingSkillModelConfigId(scenario: AIScenarioKey = 'rewrite') {
   return scenario === 'rewrite' ? 'rewrite' : 'knowledgeExtraction'
 }

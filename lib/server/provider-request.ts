@@ -282,8 +282,20 @@ export async function parseProviderJsonResponse<T>(params: {
   }
 
   try {
+    const data = JSON.parse(rawText) as T
+    await writeLlmDebugLog({
+      folder: params.debug?.folder ?? params.provider,
+      provider: params.provider,
+      model: params.model,
+      streamed: params.streamed,
+      stage: params.debug?.stage,
+      attempt: params.debug?.attempt,
+      presetCompat: params.debug?.presetCompat,
+      request: params.request,
+      response: { status: params.response.status, rawText, parsed: data },
+    })
     return {
-      data: JSON.parse(rawText) as T,
+      data,
       rawText,
     }
   } catch {
