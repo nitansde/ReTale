@@ -227,7 +227,7 @@ function renderActionsHook(options: {
         selectedContinueBlockNode: null,
         selectedContinueBlockFutureMapLaunch: null,
         selectedTimelineDisplayLabel: '',
-        selectedTimelineInstructionPreview: '',
+        selectedTimelineInstructionText: '',
       },
       loadFromBackend: coreParams.loadFromBackend,
       saveToBackend: coreParams.saveToBackend,
@@ -653,7 +653,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
         selectedContinueBlockNode,
         selectedContinueBlockFutureMapLaunch: null,
         selectedTimelineDisplayLabel: 'CONT-01',
-        selectedTimelineInstructionPreview: 'Continue the parent branch',
+        selectedTimelineInstructionText: 'Continue the parent branch',
       },
     })
 

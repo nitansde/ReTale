@@ -3,7 +3,7 @@
 import { forwardRef } from 'react'
 import { GitBranch, LoaderCircle, Sparkles, Trash2 } from 'lucide-react'
 import { useI18n } from '@/lib/i18n/provider'
-import { formatStoryBranchInstructionPreview, resolveStoryBranchDisplayLabel } from '@/lib/story-branch-labels'
+import { normalizeStoryBranchInstructionText, resolveStoryBranchDisplayLabel } from '@/lib/story-branch-labels'
 import type { StoryTimelineBranchNode } from '@/lib/story-branch-types'
 import { cn } from '@/lib/utils'
 
@@ -37,7 +37,7 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
           ? t('workspace.timeline.branchKind.roleplaySession')
           : t('workspace.timeline.branchKind.futureJump')
   const displayLabel = resolveStoryBranchDisplayLabel(props.node)
-  const instructionPreview = formatStoryBranchInstructionPreview(props.node.userInstruction ?? props.node.subtitle)
+  const instructionText = normalizeStoryBranchInstructionText(props.node.userInstruction ?? props.node.subtitle)
 
   return (
     <div
@@ -81,8 +81,12 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
               {branchKindLabel}
             </p>
             <p className="mt-1 text-sm font-medium text-zinc-50">{displayLabel}</p>
-            {instructionPreview ? <p className="mt-2 text-xs leading-5 text-zinc-300">{t('workspace.instructionPreview')} · {instructionPreview}</p> : null}
-            {!instructionPreview && props.node.subtitle ? <p className="mt-2 text-xs leading-5 text-zinc-300">{props.node.subtitle}</p> : null}
+            {instructionText ? (
+              <div className="mt-2 rounded-xl border border-white/8 bg-black/15 px-2.5 py-2">
+                <p className="text-[10px] uppercase tracking-[0.14em] text-zinc-500">{t('workspace.userRequest')}</p>
+                <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-zinc-300">{instructionText}</p>
+              </div>
+            ) : null}
           </div>
         </div>
       </button>

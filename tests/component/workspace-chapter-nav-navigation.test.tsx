@@ -27,13 +27,18 @@ function mainlineChapter(chapterNo: number): Chapter {
 }
 
 function timelineChapter(chapterNo: number): ChapterTimelineItem {
+  const completeLongSummary = '主角在旧港口确认失踪者留下的暗号，并由此判断真正的接头地点不在仓库，而是在潮水退去后才会显露的礁洞。'
   return {
     type: 'chapter',
     chapterId: `chapter-${chapterNo}`,
     chapterNo,
     title: `第${chapterNo}章 标题`,
     wordCount: chapterNo * 10,
-    summary: chapterNo === 5 ? '早期线索在旧码头出现。' : `第${chapterNo}章的一句话情节。`,
+    summary: chapterNo === 5
+      ? '早期线索在旧码头出现。'
+      : chapterNo === 150
+        ? completeLongSummary
+        : `第${chapterNo}章的一句话情节。`,
   }
 }
 
@@ -93,7 +98,9 @@ describe('workspace chapter navigation', () => {
 
     expect(screen.queryByTestId('timeline-chapter-1')).not.toBeInTheDocument()
     expect(screen.getByTestId('timeline-chapter-150')).toHaveAttribute('data-navigation-current', 'true')
-    expect(screen.getByText('第150章的一句话情节。')).toBeInTheDocument()
+    const completeSummary = screen.getByText('主角在旧港口确认失踪者留下的暗号，并由此判断真正的接头地点不在仓库，而是在潮水退去后才会显露的礁洞。')
+    expect(completeSummary).toBeInTheDocument()
+    expect(completeSummary).not.toHaveClass('line-clamp-2')
     expect(screen.getByText('魔改版本')).toBeInTheDocument()
     expect(screen.queryByText('魔改摘要不应显示')).not.toBeInTheDocument()
 

@@ -107,6 +107,8 @@ type KnowledgeChapterRow = {
   title: string | null
   rawText: string | null
   summary: string | null
+  knowledgeStatus: string
+  summaryProvider: string | null
 }
 
 type RoleplayTimelineSessionRow = {
@@ -674,10 +676,24 @@ export function updateStoryTimelineNodePresentation(
 
 function loadTimelineChapters(novelId: string, branchId: string, db: Db): ChapterTimelineItem[] {
   const rows = db.queryAll<KnowledgeChapterRow>(
-    `SELECT id, chapterNo, title, rawText, summary
-     FROM KnowledgeChapter
-     WHERE novelId = ? AND branchId = ?
-     ORDER BY chapterNo ASC, id ASC`,
+    `SELECT chapter.id,
+            chapter.chapterNo,
+            chapter.title,
+            chapter.rawText,
+            chapter.summary,
+            chapter.knowledgeStatus,
+            (
+              SELECT candidate.provider
+              FROM chapter_extraction_candidates candidate
+              WHERE candidate.branch_id = chapter.branchId
+                AND candidate.chapter_id = chapter.id
+                AND candidate.status = 'persisted'
+              ORDER BY candidate.updated_at DESC, candidate.created_at DESC, candidate.id DESC
+              LIMIT 1
+            ) AS summaryProvider
+     FROM KnowledgeChapter chapter
+     WHERE chapter.novelId = ? AND chapter.branchId = ?
+     ORDER BY chapter.chapterNo ASC, chapter.id ASC`,
     novelId,
     branchId
   )
@@ -688,7 +704,9 @@ function loadTimelineChapters(novelId: string, branchId: string, db: Db): Chapte
     chapterId: row.id,
     title: row.title?.trim() || `第 ${row.chapterNo} 章`,
     wordCount: countChineseFriendlyWords(row.rawText ?? ''),
-    summary: resolveChapterNavigationSummary(row.summary, row.rawText),
+    summary: row.knowledgeStatus === 'ready' && row.summaryProvider !== 'fallback'
+      ? resolveChapterNavigationSummary(row.summary)
+      : null,
   }))
 }
 

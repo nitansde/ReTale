@@ -159,8 +159,33 @@ describe('ContinueBlockDetailView', () => {
     })
 
     expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('第二版续写正文')
+    expect(screen.getByTestId('continue-block-user-request')).toHaveTextContent('把誓言后的情绪变化压进同一场景。')
     expect(screen.getByTestId('continue-block-revision-history')).toHaveTextContent('第一版续写正文')
     expect(screen.getByTestId('continue-block-history-item-1')).toHaveTextContent('第 1 版 · initial')
+  })
+
+  it('shows the complete multi-line user request instead of a shortened prompt preview', async () => {
+    const fullUserRequest = '保持人物克制，不要立刻解释误会。\n\n让旧徽章触发一段完整回忆，并在结尾留下下一章可接续的动作。'
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ...continueBlockDetail, userInstruction: fullUserRequest }),
+    } as Response)
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <ContinueBlockDetailView
+        novelId="novel-001"
+        branchId="novel-001:main"
+        continueBlockId="continue-block-001"
+        latestRevisionNo={2}
+        anchorChapterNo={10}
+        readableLineageLabel="RE-01"
+      />
+    )
+
+    const request = await screen.findByTestId('continue-block-user-request')
+    expect(request).toHaveTextContent('保持人物克制，不要立刻解释误会。 让旧徽章触发一段完整回忆，并在结尾留下下一章可接续的动作。')
+    expect(request).not.toHaveTextContent('…')
   })
 
   it('refetches persisted detail when latestRevisionNo changes for the same continueBlockId', async () => {

@@ -62,6 +62,25 @@ function seedTimelineFixture(database: DatabaseSync) {
   ).run('chapter-100', 'novel-001', 'novel-001:main', 100, '第100章 被绑走', '女主在第100章被反派绑走。', '第100章摘要', 1, 0, null, 'hash-100', 'ready')
 
   database.prepare(
+    `INSERT INTO chapter_extraction_candidates (
+      id, novel_id, branch_id, chapter_id, chapter_no, chapter_revision,
+      chapter_source_hash, extraction_json, status, provider, model
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    'candidate-chapter-100-fallback',
+    'novel-001',
+    'novel-001:main',
+    'chapter-100',
+    100,
+    1,
+    'candidate-hash-100',
+    '{}',
+    'persisted',
+    'fallback',
+    null,
+  )
+
+  database.prepare(
     `INSERT INTO what_if_sessions (
       id, novel_id, base_branch_id, source_chapter_no, title, premise,
       selected_text, original_text, generated_text, status
@@ -222,6 +241,7 @@ describe('story-timeline-read', () => {
     expect(timelinePayload.chapters.map((chapter: { chapterNo: number }) => chapter.chapterNo)).toEqual([10, 100])
     expect(timelinePayload.chapters[0].wordCount).toBeGreaterThan(0)
     expect(timelinePayload.chapters[0].summary).toBe('第10章摘要')
+    expect(timelinePayload.chapters[1].summary).toBeNull()
     expect(timelinePayload.branchNodes).toEqual([
       expect.objectContaining({
         id: 'if_fixture_001',

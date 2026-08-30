@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  CHAPTER_NAVIGATION_SUMMARY_MAX_LENGTH,
   filterChapterNavigationItems,
   resolveCenteredChapterWindowStart,
   resolveChapterNavigationSummary,
@@ -19,20 +18,15 @@ function chapter(chapterNo: number, summary = ''): ChapterTimelineItem {
 }
 
 describe('chapter navigation helpers', () => {
-  it('reuses the stored chapter summary and keeps only one concise sentence', () => {
+  it('reuses the complete stored chapter summary without truncating it', () => {
     expect(resolveChapterNavigationSummary(
-      '女主在雨夜发现密室。随后她决定独自追查。',
-      '不应使用的正文',
-    )).toBe('女主在雨夜发现密室。')
+      '女主在雨夜发现密室。随后她决定独自追查，并在旧相框背面发现新的线索。',
+    )).toBe('女主在雨夜发现密室。随后她决定独自追查，并在旧相框背面发现新的线索。')
   })
 
-  it('falls back to a bounded first-sentence excerpt without model work', () => {
-    const rawText = `${'线索'.repeat(60)}。第二句不应出现。`
-    const summary = resolveChapterNavigationSummary(null, rawText)
-
-    expect(summary).not.toBeNull()
-    expect(Array.from(summary ?? '')).toHaveLength(CHAPTER_NAVIGATION_SUMMARY_MAX_LENGTH)
-    expect(summary?.endsWith('…')).toBe(true)
+  it('does not derive a navigation summary from chapter body text', () => {
+    expect(resolveChapterNavigationSummary(null)).toBeNull()
+    expect(resolveChapterNavigationSummary('   ')).toBeNull()
   })
 
   it('centers a bounded window on the current chapter in a long novel', () => {

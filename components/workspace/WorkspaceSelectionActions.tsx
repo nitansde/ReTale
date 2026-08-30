@@ -10,7 +10,7 @@ type WorkspaceSelectionActionsProps = {
   selection: TimelineSelection
   selectedTimelineDisplayLabel: string
   selectedTimelineNodeTitle: string | null
-  selectedTimelineInstructionPreview: string
+  selectedTimelineInstructionText: string
   selectionText: string
   activeMode: WorkspaceActionMode | null
   roleplaySessionStarting: boolean
@@ -82,7 +82,7 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
           <div>
             <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">{t('workspace.continueBlockActionsEyebrow')}</p>
             <h3 className="mt-1 text-sm font-medium text-zinc-100">{props.selectedTimelineDisplayLabel || props.selectedTimelineNodeTitle || t('workspace.continueBlock')}</h3>
-            {props.selectedTimelineInstructionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">{t('workspace.instructionPreview')} · {props.selectedTimelineInstructionPreview}</p> : null}
+            {props.selectedTimelineInstructionText ? <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-fuchsia-100"><span className="font-medium">{t('workspace.userRequest')}</span> · {props.selectedTimelineInstructionText}</p> : null}
             <p className="mt-2 text-xs leading-6 text-zinc-300">{t('workspace.continueBlockActionsDescription')}</p>
           </div>
           <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{props.selectedTimelineDisplayLabel || t('workspace.continueBlock')}</span>
@@ -104,7 +104,7 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
           <div>
              <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">{t('workspace.whatIfActionsEyebrow')}</p>
              <h3 className="mt-1 text-sm font-medium text-zinc-100">{props.selectedTimelineDisplayLabel || props.selectedTimelineNodeTitle || t('workspace.whatIfSession')}</h3>
-             {props.selectedTimelineInstructionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">{t('workspace.instructionPreview')} · {props.selectedTimelineInstructionPreview}</p> : null}
+             {props.selectedTimelineInstructionText ? <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-fuchsia-100"><span className="font-medium">{t('workspace.userRequest')}</span> · {props.selectedTimelineInstructionText}</p> : null}
              <p className="mt-2 text-xs leading-6 text-zinc-300">{t('workspace.whatIfActionsDescription')}</p>
           </div>
           <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{props.selectedTimelineDisplayLabel || t('workspace.whatIfSession')}</span>
@@ -123,7 +123,7 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
           <div>
              <p className="text-[11px] uppercase tracking-[0.22em] text-sky-200/70">{t('workspace.futureJumpActionsEyebrow')}</p>
              <h3 className="mt-1 text-sm font-medium text-zinc-100">{props.selectedTimelineDisplayLabel || props.selectedTimelineNodeTitle || t('workspace.futureJumpRun')}</h3>
-             {props.selectedTimelineInstructionPreview ? <p className="mt-2 text-xs leading-6 text-sky-100">{t('workspace.instructionPreview')} · {props.selectedTimelineInstructionPreview}</p> : null}
+             {props.selectedTimelineInstructionText ? <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-sky-100"><span className="font-medium">{t('workspace.userRequest')}</span> · {props.selectedTimelineInstructionText}</p> : null}
              <p className="mt-2 text-xs leading-6 text-zinc-300">{t('workspace.futureJumpActionsDescription')}</p>
           </div>
           <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1 text-[11px] text-sky-100">{props.selectedTimelineDisplayLabel || t('workspace.futureJumpRun')}</span>
@@ -142,7 +142,7 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
         <div>
           <p className="text-[11px] uppercase tracking-[0.22em] text-emerald-200/70">{t('workspace.roleplayActionsEyebrow')}</p>
           <h3 className="mt-1 text-sm font-medium text-zinc-100">{props.selectedTimelineDisplayLabel || props.selectedTimelineNodeTitle || t('workspace.roleplaySession')}</h3>
-          {props.selectedTimelineInstructionPreview ? <p className="mt-2 text-xs leading-6 text-emerald-100">{t('workspace.firstMessagePreview')} · {props.selectedTimelineInstructionPreview}</p> : null}
+          {props.selectedTimelineInstructionText ? <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-emerald-100">{t('workspace.firstMessagePreview')} · {props.selectedTimelineInstructionText}</p> : null}
           <p className="mt-2 text-xs leading-6 text-zinc-300">{t('workspace.roleplayActionsDescription')}</p>
         </div>
         <span className="rounded-full border border-emerald-300/20 bg-black/20 px-3 py-1 text-[11px] text-emerald-100">{props.selectedTimelineDisplayLabel || t('workspace.roleplaySession')}</span>

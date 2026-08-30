@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react'
 import { BookOpen, GitBranch, Globe } from 'lucide-react'
 import { useI18n } from '@/lib/i18n/provider'
-import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
+import { normalizeStoryBranchInstructionText } from '@/lib/story-branch-labels'
 import { cn } from '@/lib/utils'
 import type { TimelineSelection } from '@/lib/story-branch-types'
 
@@ -32,7 +32,7 @@ export function WorkspaceCenterPane(props: {
     : t('workspace.centerPane.chapterGraphDescription')
   let statusSummary = props.centerPaneView === 'body' ? props.chapterSelectionSummary : props.chapterGraphSummary
   const branchReadableLabel = props.branchReadableLabel?.trim() || ''
-  const instructionPreview = formatStoryBranchInstructionPreview(props.branchInstructionText)
+  const instructionText = normalizeStoryBranchInstructionText(props.branchInstructionText)
 
   if (props.selection.kind === 'what_if') {
     eyebrow = t('workspace.centerPane.whatIfEyebrow')
@@ -68,7 +68,12 @@ export function WorkspaceCenterPane(props: {
           <div>
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500" data-testid="workspace-center-pane-kind">{eyebrow}</p>
             <h2 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-100">{title}</h2>
-            {!isChapter && instructionPreview ? <p className="mt-2 text-sm text-zinc-200">{t('workspace.instructionPreview')} · {instructionPreview}</p> : null}
+            {!isChapter && instructionText ? (
+              <div className="mt-3 max-w-2xl rounded-[18px] border border-fuchsia-300/14 bg-fuchsia-500/[0.07] px-3.5 py-3">
+                <p className="text-[10px] uppercase tracking-[0.14em] text-fuchsia-200/60">{t('workspace.userRequest')}</p>
+                <p className="mt-1.5 whitespace-pre-wrap break-words text-sm leading-6 text-zinc-200">{instructionText}</p>
+              </div>
+            ) : null}
             <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">{description}</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
@@ -92,7 +97,6 @@ export function WorkspaceCenterPane(props: {
               <div className="inline-flex items-center gap-2 rounded-[22px] border border-fuchsia-300/20 bg-fuchsia-500/10 px-4 py-3 text-xs text-fuchsia-100">
                 <GitBranch className="h-4 w-4" />
                 <span className="font-medium">{branchReadableLabel || t('workspace.centerPane.branchView')}</span>
-                {instructionPreview ? <span className="text-fuchsia-100/70">· {instructionPreview}</span> : null}
               </div>
             )}
             <div className="rounded-[22px] border border-white/10 bg-black/20 px-4 py-3 text-xs leading-6 text-zinc-400">

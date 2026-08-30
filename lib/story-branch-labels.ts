@@ -57,8 +57,18 @@ export function resolveStoryBranchDisplayLabel(node: StoryBranchDisplayNode) {
   return node.title?.trim() ?? ''
 }
 
+export function normalizeStoryBranchInstructionText(value: string | null | undefined) {
+  return value
+    ?.replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim() ?? ''
+}
+
 export function formatStoryBranchInstructionPreview(value: string | null | undefined, maxChars = 15) {
-  const normalized = value?.replace(/\s+/g, ' ').trim() ?? ''
+  const normalized = normalizeStoryBranchInstructionText(value).replace(/\s+/g, ' ')
   if (!normalized) return ''
 
   const characters = Array.from(normalized)

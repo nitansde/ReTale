@@ -1,30 +1,15 @@
 import type { ChapterTimelineItem } from '@/lib/story-branch-types'
 
 export const CHAPTER_NAVIGATION_WINDOW_SIZE = 80
-export const CHAPTER_NAVIGATION_SUMMARY_MAX_LENGTH = 96
 
 function normalizeNavigationText(value: string | null | undefined) {
   return value?.replace(/\s+/gu, ' ').trim() ?? ''
 }
 
-function takeFirstSentence(value: string) {
-  const match = value.match(/^(.{8,}?(?:[。！？!?]|\.(?=\s|$))[”’」』】）》）)]*)/u)
-  return match?.[1]?.trim() || value
-}
-
-function truncateNavigationText(value: string, maxLength: number) {
-  const characters = Array.from(value)
-  if (characters.length <= maxLength) return value
-  return `${characters.slice(0, Math.max(1, maxLength - 1)).join('').trimEnd()}…`
-}
-
 export function resolveChapterNavigationSummary(
   summary: string | null | undefined,
-  rawText: string | null | undefined,
 ) {
-  const source = normalizeNavigationText(summary) || normalizeNavigationText(rawText)
-  if (!source) return null
-  return truncateNavigationText(takeFirstSentence(source), CHAPTER_NAVIGATION_SUMMARY_MAX_LENGTH)
+  return normalizeNavigationText(summary) || null
 }
 
 export function resolveCenteredChapterWindowStart<T extends { chapterId: string }>(

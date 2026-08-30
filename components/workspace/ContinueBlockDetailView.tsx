@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Clock3, LoaderCircle } from 'lucide-react'
 import { useI18n } from '@/lib/i18n/provider'
-import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
+import { normalizeStoryBranchInstructionText } from '@/lib/story-branch-labels'
 import type { ContinueBlockDetail, ContinueBlockRecord } from '@/lib/story-branch-types'
 import { resolveWorkspaceUserFacingError } from '@/lib/workspace-user-facing-errors'
 import { cn, splitPlainTextParagraphs } from '@/lib/utils'
@@ -114,7 +114,7 @@ export function ContinueBlockDetailView(props: {
   }, [effectiveDetail, onMetricsChange])
 
   const readableLabel = props.readableLineageLabel?.trim() || ''
-  const instructionPreview = formatStoryBranchInstructionPreview(effectiveDetail?.userInstruction ?? props.nodeSubtitle)
+  const userRequest = normalizeStoryBranchInstructionText(effectiveDetail?.userInstruction ?? props.nodeSubtitle)
   const revisionEntries = useMemo(
     () => [...(detail?.revisions ?? [])].sort((left, right) => right.revisionNo - left.revisionNo),
     [detail?.revisions]
@@ -129,8 +129,13 @@ export function ContinueBlockDetailView(props: {
           <div className="max-w-3xl">
             <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">{t('continue.savedEyebrow')}</p>
             <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{readableLabel || effectiveDetail?.title || props.nodeTitle || t('continue.defaultTitle')}</h3>
-            {instructionPreview ? <p className="mt-2 text-sm text-fuchsia-100">{t('continue.instructionPreview')} · {instructionPreview}</p> : null}
             <p className="mt-3 text-sm leading-7 text-zinc-300">{effectiveDetail?.subtitle?.trim() || props.nodeSubtitle?.trim() || t('continue.defaultSubtitle')}</p>
+            {userRequest ? (
+              <div className="mt-4 rounded-[20px] border border-fuchsia-300/16 bg-black/20 px-4 py-3" data-testid="continue-block-user-request">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-fuchsia-200/65">{t('continue.userRequest')}</p>
+                <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-fuchsia-50">{userRequest}</p>
+              </div>
+            ) : null}
             <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-zinc-300">
               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">reader mode</span>
               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{t('continue.revision', { count: effectiveDetail?.latestRevisionNo ?? 1 })}</span>
@@ -163,7 +168,6 @@ export function ContinueBlockDetailView(props: {
           <section className="rounded-[28px] border border-white/8 bg-[#0b0d12] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:p-6">
             <div className="mb-3 flex items-center justify-between gap-3">
               <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('continue.latestRevision')}</p>
-              {instructionPreview ? <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{t('continue.instructionPreview')} {instructionPreview}</span> : null}
             </div>
             <div className="rounded-[24px] border border-white/8 bg-black/20 p-5">
               {renderReaderBodyParagraphs(effectiveReaderText || t('continue.emptyBody'), 'text-zinc-200', 'workspace-continue-block-reader-body')}
@@ -182,13 +186,18 @@ export function ContinueBlockDetailView(props: {
 
               <div className="mt-4 space-y-4">
                 {historyEntries.map((revision) => {
-                  const revisionPreview = formatStoryBranchInstructionPreview(revision.userInstruction)
+                  const revisionUserRequest = normalizeStoryBranchInstructionText(revision.userInstruction)
                   return (
                     <article key={`${revision.revisionNo}-${revision.createdAt}`} className="rounded-[24px] border border-white/8 bg-black/20 p-4" data-testid={`continue-block-history-item-${revision.revisionNo}`}>
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <p className="text-sm font-medium text-zinc-100">{t('continue.historyRevision', { count: revision.revisionNo, kind: revision.revisionKind })}</p>
-                          {revisionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">{t('continue.instructionPreview')} · {revisionPreview}</p> : null}
+                          {revisionUserRequest ? (
+                            <div className="mt-3 rounded-[18px] border border-fuchsia-300/14 bg-fuchsia-500/[0.08] px-3 py-2.5">
+                              <p className="text-[10px] uppercase tracking-[0.14em] text-fuchsia-200/60">{t('continue.userRequest')}</p>
+                              <p className="mt-1.5 whitespace-pre-wrap break-words text-xs leading-6 text-fuchsia-50">{revisionUserRequest}</p>
+                            </div>
+                          ) : null}
                         </div>
                         <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-400">
                           <Clock3 className="h-3.5 w-3.5" />

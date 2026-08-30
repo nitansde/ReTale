@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo } from 'react'
-import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
+import { normalizeStoryBranchInstructionText } from '@/lib/story-branch-labels'
 import { getClientLocale, getMessage } from '@/lib/i18n/messages'
 import type { Chapter } from '@/lib/types'
 import type { StoryTimelineBranchNode, TimelineSelection } from '@/lib/story-branch-types'
@@ -91,7 +91,7 @@ export function useSelectionNovelStudioViewModel({
   }, [activeWorkspaceSelection, currentNovelId, resolveSourceChapter, selectedContinueBlockNode, storyTimelineBranchId])
   const selectedTimelineLineageLabel = selectedTimelineNode?.readableLineageLabel?.trim() || selectedTimelineNode?.readableLabel?.trim() || selectedTimelineNode?.title?.trim() || ''
   const selectedTimelineDisplayLabel = selectedTimelineNode?.readableLabel?.trim() || selectedTimelineLineageLabel || selectedTimelineNode?.title?.trim() || ''
-  const selectedTimelineInstructionPreview = formatStoryBranchInstructionPreview(selectedTimelineNode?.userInstruction?.trim() || selectedTimelineNode?.subtitle?.trim() || '')
+  const selectedTimelineInstructionText = normalizeStoryBranchInstructionText(selectedTimelineNode?.userInstruction?.trim() || selectedTimelineNode?.subtitle?.trim() || '')
   const workspaceHeaderTitle = activeWorkspaceSelection.kind === 'chapter' ? currentChapter?.title ?? '' : selectedTimelineDisplayLabel || selectedTimelineNode?.title || currentChapter?.title || ''
   const currentNodeMetrics = resolveCurrentNodeMetrics({
     selection: activeWorkspaceSelection,
@@ -124,8 +124,7 @@ export function useSelectionNovelStudioViewModel({
     selectedContinueBlockNode,
     selectedContinueBlockFutureMapLaunch,
     selectedTimelineDisplayLabel,
-    selectedTimelineInstructionText: selectedTimelineNode?.userInstruction?.trim() || selectedTimelineNode?.subtitle?.trim() || '',
-    selectedTimelineInstructionPreview,
+    selectedTimelineInstructionText,
     workspaceHeaderTitle,
     currentNodeMetrics,
     chapterSelectionSummary,
