@@ -621,17 +621,10 @@ export function validateWritingSkillScanResult(input: {
   return mergeWritingSkillCandidateRanges(valid)
 }
 
-export function selectWritingSkillEvidenceRanges(
-  candidates: ValidatedCandidateRange[],
-  maxRanges: number,
-) {
-  return candidates.slice(0, maxRanges)
-}
-
 export function compileEvidenceMaterial(library: MaterialLibrary, ranges: ValidatedCandidateRange[]) {
   const citationGuide = [
     '=== ALLOWED CORE EVIDENCE REFERENCES ===',
-    'evidenceRefs 和 exampleCandidates.ref 只能逐字复制下列核心候选范围编号；上下文段落仅用于理解，不可引用：',
+    'evidenceRefs 只能逐字复制下列核心候选范围编号；上下文段落仅用于理解，不可引用：',
     ...ranges.map((range) => `- ${range.displayRef}`),
   ].join('\n')
   const evidence = ranges.map((range, index) => {
@@ -662,14 +655,4 @@ export function compileEvidenceMaterial(library: MaterialLibrary, ranges: Valida
     ].join('\n')
   }).join('\n\n')
   return `${citationGuide}\n\n${evidence}`
-}
-
-export function rangeContainsDisplayRef(container: ValidatedCandidateRange, value: string, library: MaterialLibrary) {
-  const resolved = resolveMaterialRange(library, value)
-  return Boolean(
-    resolved
-    && resolved.start.chapterId === container.chapterId
-    && resolved.start.paragraphIndex >= container.startParagraphIndex
-    && resolved.end.paragraphIndex <= container.endParagraphIndex,
-  )
 }

@@ -374,8 +374,6 @@ describe('writing skill material references and budgets', () => {
           rules: [{ text: '让环境变化承接人物感受。', evidenceRefs: ['W01-C001-P001'] }],
           applicationScope: '适用于场景进入与情绪转折。',
           avoid: ['避免堆砌无关景物'],
-          exampleCandidates: [{ ref: 'W01-C001-P001', score: 0.9 }],
-          confidence: 0.9,
         },
         sources: [
           {
@@ -541,6 +539,8 @@ describe('writing skill prompts', () => {
     })
     expect(distill.system).toContain('不得引用、复述或改写素材原文')
     expect(distill.system).toContain('只能逐字复制 EVIDENCE 标题中的核心候选范围编号')
+    expect(distill.system).toContain('全部核心候选都会直接保存为参考范文')
+    expect(distill.system).not.toContain('exampleCandidates')
     expect(distill.user).toMatchInlineSnapshot(`
       "素材库名称：
       作者甲素材库
@@ -559,8 +559,8 @@ describe('writing skill prompts', () => {
     const allowedRefs = ['W01-C021-P007:P009', 'W01-C022-P074:P075']
     const dynamicSchema = buildSkillDistillationJsonSchema(allowedRefs)
     expect(dynamicSchema.properties.rules.items.properties.evidenceRefs.items.enum).toEqual(allowedRefs)
-    expect(dynamicSchema.properties.exampleCandidates.items.properties.ref.enum).toEqual(allowedRefs)
-    expect(dynamicSchema.properties.exampleCandidates.items.properties).not.toHaveProperty('tags')
+    expect(dynamicSchema.properties).not.toHaveProperty('exampleCandidates')
+    expect(dynamicSchema.properties).not.toHaveProperty('confidence')
     const runtimeSchema = buildSkillDistillationRuntimeSchema(allowedRefs)
     const invalidContextResult = {
       title: '测试技巧',
@@ -571,11 +571,6 @@ describe('writing skill prompts', () => {
       })),
       applicationScope: '适用于需要通过连续细节推进叙事并表现人物状态的场景。',
       avoid: ['避免静态罗列', '避免照抄素材'],
-      exampleCandidates: Array.from({ length: 6 }, (_, index) => ({
-        ref: allowedRefs[index % allowedRefs.length],
-        score: 0.9,
-      })),
-      confidence: 0.9,
     }
     expect(runtimeSchema.safeParse(invalidContextResult).success).toBe(false)
 

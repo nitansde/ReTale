@@ -145,11 +145,6 @@ export type SkillDistillationResult = {
   rules: WritingSkillRule[]
   applicationScope: string
   avoid: string[]
-  exampleCandidates: Array<{
-    ref: string
-    score: number
-  }>
-  confidence: number
 }
 
 export type WritingSkillRuntimeRecord = {

@@ -108,7 +108,6 @@ function refsFromEvidence(content: string) {
 }
 
 function createDistillationResult(refs: string[]): SkillDistillationResult {
-  const examples = refs.slice(0, 6)
   return {
     title: '作者甲 · 五官描写',
     summary: '这张技巧卡概括素材中反复出现的组织方式：先选择少量具有辨识度的细节，再让观察顺序、动作变化、环境反馈与人物当下情绪互相支撑，使描写服务于叙事推进而不是停留在静态罗列。这样的处理会保留人物既定设定，并将抽象判断转化为可执行的写作步骤。',
@@ -118,11 +117,6 @@ function createDistillationResult(refs: string[]): SkillDistillationResult {
     })),
     applicationScope: '适用于人物出场、近距离观察、视线互动和情绪发生转折的段落。',
     avoid: ['避免依次罗列全部五官', '避免复制素材中的独特措辞'],
-    exampleCandidates: examples.map((ref, index) => ({
-      ref,
-      score: 0.95 - index * 0.03,
-    })),
-    confidence: 0.9,
   }
 }
 
@@ -225,7 +219,9 @@ describe('WritingSkillDistillationAgent workflows', () => {
     const card = readWritingSkillCardDetail(job.resultCardId!, db)!
     expect(card.defaultExampleCount).toBe(5)
     expect(card.rules.every((rule) => rule.evidenceRefs.length > 0)).toBe(true)
-    expect(card.examples).toHaveLength(6)
+    expect(card.examples).toHaveLength(8)
+    expect(card.examples.every((example) => example.score === 1)).toBe(true)
+    expect(card.examples.map((example) => example.displayRef).sort()).toEqual(job.candidateRefs.slice().sort())
     expect(card.examples.every((example) => example.rangeRef.libraryVersion === library.version)).toBe(true)
 
     const cardColumns = database.prepare('PRAGMA table_info(WritingSkillCard)').all() as Array<{ name: string }>
@@ -661,17 +657,17 @@ describe('WritingSkillDistillationAgent workflows', () => {
       modelConfigId: 'knowledgeExtraction',
       sourceJobId: 'source-job',
       result: initialResult,
-      examples: initialResult.exampleCandidates.map((example, index) => ({
+      examples: library.paragraphs.map((paragraph) => ({
         rangeRef: {
           libraryId: library.id,
           libraryVersion: library.version,
           workId: library.workId,
-          chapterId: `chapter-${index + 1}`,
-          startParagraphId: `paragraph-${index + 1}`,
-          endParagraphId: `paragraph-${index + 1}`,
+          chapterId: paragraph.chapterId,
+          startParagraphId: paragraph.id,
+          endParagraphId: paragraph.id,
         },
-        displayRef: example.ref,
-        score: example.score,
+        displayRef: paragraph.displayRef,
+        score: 1,
       })),
     }, db)
     const mock = createGateway({
@@ -786,8 +782,6 @@ describe('WritingSkillDistillationAgent workflows', () => {
           })),
           applicationScope: '适用于业务数据质量监控、字段格式校验以及异常数据处理流程。',
           avoid: ['避免忽略空值', '避免跳过校验规则'],
-          exampleCandidates: refs.slice(0, 6).map((ref, index) => ({ ref, score: 0.9 - index * 0.03 })),
-          confidence: 0.9,
         }
       },
     })
@@ -804,7 +798,8 @@ describe('WritingSkillDistillationAgent workflows', () => {
 describe('writing skill store persistence', () => {
   it('permanently deletes a card and cascades its saved examples', async () => {
     const { db, database } = createTestDb('retale-writing-skill-delete')
-    const result = createDistillationResult(Array.from({ length: 8 }, (_, index) => formatMaterialParagraphRef(index + 1, 1)))
+    const refs = Array.from({ length: 8 }, (_, index) => formatMaterialParagraphRef(index + 1, 1))
+    const result = createDistillationResult(refs)
     const card = await saveWritingSkillCard({
       libraryId: 'library-1',
       libraryVersion: 'version-1',
@@ -813,7 +808,7 @@ describe('writing skill store persistence', () => {
       modelConfigId: 'knowledgeExtraction',
       sourceJobId: 'job-1',
       result,
-      examples: result.exampleCandidates.map((example, index) => ({
+      examples: refs.map((displayRef, index) => ({
         rangeRef: {
           libraryId: 'library-1',
           libraryVersion: 'version-1',
@@ -822,8 +817,8 @@ describe('writing skill store persistence', () => {
           startParagraphId: `paragraph-${index + 1}`,
           endParagraphId: `paragraph-${index + 1}`,
         },
-        displayRef: example.ref,
-        score: example.score,
+        displayRef,
+        score: 1,
       })),
     }, db)
 
@@ -837,7 +832,8 @@ describe('writing skill store persistence', () => {
   it('round-trips only paragraph range references and never persists source prose', async () => {
     const { db, database } = createTestDb('retale-writing-skill-store')
     const proseSentinel = 'THIS-SOURCE-PROSE-MUST-NEVER-BE-PERSISTED'
-    const result = createDistillationResult(Array.from({ length: 8 }, (_, index) => formatMaterialParagraphRef(index + 1, 1)))
+    const refs = Array.from({ length: 8 }, (_, index) => formatMaterialParagraphRef(index + 1, 1))
+    const result = createDistillationResult(refs)
     const card = await saveWritingSkillCard({
       libraryId: 'library-1',
       libraryVersion: 'version-1',
@@ -846,7 +842,7 @@ describe('writing skill store persistence', () => {
       modelConfigId: 'knowledgeExtraction',
       sourceJobId: 'job-1',
       result,
-      examples: result.exampleCandidates.map((example, index) => ({
+      examples: refs.map((displayRef, index) => ({
         rangeRef: {
           libraryId: 'library-1',
           libraryVersion: 'version-1',
@@ -855,8 +851,8 @@ describe('writing skill store persistence', () => {
           startParagraphId: `paragraph-${index + 1}`,
           endParagraphId: `paragraph-${index + 1}`,
         },
-        displayRef: example.ref,
-        score: example.score,
+        displayRef,
+        score: 1,
       })),
     }, db)
 
@@ -883,17 +879,17 @@ describe('writing skill store persistence', () => {
       modelConfigId: 'knowledgeExtraction',
       sourceJobId: 'job-1',
       result,
-      examples: result.exampleCandidates.map((example, index) => ({
+      examples: library.paragraphs.map((paragraph) => ({
         rangeRef: {
           libraryId: library.id,
           libraryVersion: library.version,
           workId: library.workId,
-          chapterId: `chapter-${index + 1}`,
-          startParagraphId: `paragraph-${index + 1}`,
-          endParagraphId: `paragraph-${index + 1}`,
+          chapterId: paragraph.chapterId,
+          startParagraphId: paragraph.id,
+          endParagraphId: paragraph.id,
         },
-        displayRef: example.ref,
-        score: example.score,
+        displayRef: paragraph.displayRef,
+        score: 1,
       })),
     }, db)
     await updateWritingSkillCard(card.id, {
@@ -901,7 +897,7 @@ describe('writing skill store persistence', () => {
     }, db)
 
     const selected = selectSkillExamples({ cardId: card.id, count: 6, seed: 1, db, library })
-    expect(selected).toHaveLength(5)
+    expect(selected).toHaveLength(6)
     expect(selected.some((example) => example.id === card.examples[0].id)).toBe(false)
 
     const staleLibrary = createLibrary({ chapterCount: 8, estimatedTokens: 20, version: 'library-version-2' })

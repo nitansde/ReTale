@@ -19,11 +19,6 @@ export const skillDistillationResultSchema = z.object({
   }).strict()).min(4).max(8),
   applicationScope: z.string().trim().min(20).max(400),
   avoid: z.array(z.string().trim().min(1).max(180)).min(2).max(5),
-  exampleCandidates: z.array(z.object({
-    ref: z.string().trim().min(1).max(80),
-    score: z.number().min(0).max(1),
-  }).strict()).min(WRITING_SKILL_DEFAULTS.minExamplePoolSize).max(WRITING_SKILL_DEFAULTS.maxExamplePoolSize),
-  confidence: z.number().min(0).max(1),
 }).strict()
 
 export const MATERIAL_SCAN_JSON_SCHEMA = {
@@ -168,8 +163,6 @@ export const SKILL_DISTILLATION_JSON_SCHEMA = {
     'rules',
     'applicationScope',
     'avoid',
-    'exampleCandidates',
-    'confidence',
   ],
   properties: {
     title: { type: 'string', minLength: 1, maxLength: 120 },
@@ -200,21 +193,6 @@ export const SKILL_DISTILLATION_JSON_SCHEMA = {
       maxItems: 5,
       items: { type: 'string', minLength: 1, maxLength: 180 },
     },
-    exampleCandidates: {
-      type: 'array',
-      minItems: WRITING_SKILL_DEFAULTS.minExamplePoolSize,
-      maxItems: WRITING_SKILL_DEFAULTS.maxExamplePoolSize,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['ref', 'score'],
-        properties: {
-          ref: { type: 'string' },
-          score: { type: 'number', minimum: 0, maximum: 1 },
-        },
-      },
-    },
-    confidence: { type: 'number', minimum: 0, maximum: 1 },
   },
 } as const
 
@@ -241,16 +219,6 @@ export function buildSkillDistillationJsonSchema(allowedEvidenceRefs: string[]) 
           },
         },
       },
-      exampleCandidates: {
-        ...SKILL_DISTILLATION_JSON_SCHEMA.properties.exampleCandidates,
-        items: {
-          ...SKILL_DISTILLATION_JSON_SCHEMA.properties.exampleCandidates.items,
-          properties: {
-            ...SKILL_DISTILLATION_JSON_SCHEMA.properties.exampleCandidates.items.properties,
-            ref: { type: 'string', enum: allowedRefs },
-          },
-        },
-      },
     },
   }
 }
@@ -267,15 +235,6 @@ export function buildSkillDistillationRuntimeSchema(allowedEvidenceRefs: string[
             message: `必须使用允许的核心证据范围编号：${Array.from(allowedRefs).join(', ')}`,
           })
         }
-      }
-    }
-    for (const [exampleIndex, example] of result.exampleCandidates.entries()) {
-      if (!allowedRefs.has(example.ref)) {
-        context.addIssue({
-          code: 'custom',
-          path: ['exampleCandidates', exampleIndex, 'ref'],
-          message: `必须使用允许的核心证据范围编号：${Array.from(allowedRefs).join(', ')}`,
-        })
       }
     }
   })
@@ -332,11 +291,11 @@ export function buildSkillDistillationPrompt(input: {
       '4. 优先总结在多个独立片段中重复出现的方法。',
       '5. 可以总结结构、细节选择、叙事顺序、修辞方式、动作与情绪之间的关系。',
       '6. 不得引用、复述或改写素材原文。',
-      '7. Few-shot 候选只返回段落编号。',
-      '8. evidenceRefs 和 exampleCandidates.ref 只能逐字复制 EVIDENCE 标题中的核心候选范围编号；不得引用 CONTEXT 段落，也不得自行缩写或拆分范围。',
+      '7. 第一阶段筛选出的全部核心候选都会直接保存为参考范文，你不需要再次选择、排序或评分。',
+      '8. evidenceRefs 只能逐字复制 EVIDENCE 标题中的核心候选范围编号；不得引用 CONTEXT 段落，也不得自行缩写或拆分范围。',
       '9. 避免将作品中的人物、设定或剧情当成写作技巧。',
       '10. 输出应当可以直接插入另一本小说的魔改 Prompt。',
-      `11. summary 为 100–400 字，rules 为 4–8 条，avoid 为 2–5 条，exampleCandidates 为 ${WRITING_SKILL_DEFAULTS.minExamplePoolSize}–${WRITING_SKILL_DEFAULTS.maxExamplePoolSize} 组。`,
+      '11. summary 为 100–400 字，rules 为 4–8 条，avoid 为 2–5 条。',
       `12. 围绕用户指定的方向“${input.userInstruction}”总结。`,
       '只输出符合指定 JSON Schema 的 JSON 对象。',
     ].join('\n'),

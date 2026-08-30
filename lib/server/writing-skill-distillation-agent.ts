@@ -13,10 +13,8 @@ import {
   deriveWritingSkillRoundSeed,
   loadMaterialLibrary,
   mergeWritingSkillCandidateRanges,
-  rangeContainsDisplayRef,
   resolveMaterialRange,
   sampleWritingSkillMaterial,
-  selectWritingSkillEvidenceRanges,
   toSampledRangeRecord,
   validateWritingSkillScanResult,
   type MaterialLibrary,
@@ -69,17 +67,8 @@ export function createWritingSkillRandomSeed() {
   return randomBytes(4).readUInt32BE(0) & 0x7fffffff
 }
 
-function findContainingCandidate(
-  ref: string,
-  candidates: ValidatedCandidateRange[],
-  library: MaterialLibrary,
-) {
-  return candidates.find((candidate) => rangeContainsDisplayRef(candidate, ref, library)) ?? null
-}
-
 function normalizeValidatedDistillationResult(input: {
   result: SkillDistillationResult
-  candidates: ValidatedCandidateRange[]
   library: MaterialLibrary
 }) {
   const rules = input.result.rules.map((rule) => ({
@@ -88,15 +77,7 @@ function normalizeValidatedDistillationResult(input: {
       resolveMaterialRange(input.library, ref)?.displayRef ?? ref.trim()
     )))),
   }))
-  const seenExamples = new Set<string>()
-  const examples = input.result.exampleCandidates.flatMap((example) => {
-    const resolved = resolveMaterialRange(input.library, example.ref)
-    if (!resolved || seenExamples.has(resolved.displayRef)) return []
-    if (!findContainingCandidate(resolved.displayRef, input.candidates, input.library)) return []
-    seenExamples.add(resolved.displayRef)
-    return [{ ...example, ref: resolved.displayRef }]
-  })
-  return { ...input.result, rules, exampleCandidates: examples }
+  return { ...input.result, rules }
 }
 
 function candidateFromDisplayRef(
@@ -202,7 +183,7 @@ export class WritingSkillDistillationAgent {
         candidates = mergeWritingSkillCandidateRanges(
           refs.map((ref) => candidateFromDisplayRef(library, ref)).filter((candidate): candidate is ValidatedCandidateRange => candidate !== null),
         )
-        if (candidates.length < WRITING_SKILL_DEFAULTS.minExamplePoolSize) {
+        if (candidates.length < WRITING_SKILL_DEFAULTS.minCandidates) {
           throw new InsufficientWritingSkillEvidenceError('已有证据不足以安全调整，请使用“换一批素材重做”')
         }
         updateWritingSkillJob(jobId, {
@@ -328,9 +309,7 @@ export class WritingSkillDistillationAgent {
         }
       }
 
-      const minimumRequiredCandidates = refineInstruction
-        ? WRITING_SKILL_DEFAULTS.minExamplePoolSize
-        : WRITING_SKILL_DEFAULTS.minCandidates
+      const minimumRequiredCandidates = WRITING_SKILL_DEFAULTS.minCandidates
       if (!hasSufficientCoverage || candidates.length < minimumRequiredCandidates) {
         throw new InsufficientWritingSkillEvidenceError(
           `这个素材库中没有找到足够多与“${initialJob.userInstruction}”相关的代表性内容。可以换一个方向，或者换一批素材重新尝试。`,
@@ -344,10 +323,7 @@ export class WritingSkillDistillationAgent {
         inputTokens,
         outputTokens,
       }, this.dependencies.db)
-      const evidenceRanges = selectWritingSkillEvidenceRanges(
-        candidates,
-        WRITING_SKILL_DEFAULTS.maxDistillRanges,
-      )
+      const evidenceRanges = candidates
       const allowedEvidenceRefs = evidenceRanges.map((candidate) => candidate.displayRef)
       const evidenceMaterial = compileEvidenceMaterial(library, evidenceRanges)
 
@@ -378,7 +354,6 @@ export class WritingSkillDistillationAgent {
         outputTokens += generated.usage.outputTokens
         return normalizeValidatedDistillationResult({
           result: generated.data,
-          candidates: evidenceRanges,
           library,
         })
       }
@@ -392,12 +367,12 @@ export class WritingSkillDistillationAgent {
         inputTokens,
         outputTokens,
       }, this.dependencies.db)
-      const examples = result.exampleCandidates.flatMap((example) => {
-        const resolved = resolveMaterialRange(library, example.ref)
+      const examples = evidenceRanges.flatMap((candidate) => {
+        const resolved = resolveMaterialRange(library, candidate.displayRef)
         return resolved ? [{
           rangeRef: resolved.rangeRef,
           displayRef: resolved.displayRef,
-          score: example.score,
+          score: 1,
         }] : []
       })
       const card = await saveWritingSkillCard({
