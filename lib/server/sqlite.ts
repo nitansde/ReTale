@@ -307,6 +307,7 @@ const BOOT_SCHEMA_INDEX_NAMES = [
   'idx_knowledge_world_branch_valid_until',
   'idx_job_novel_status',
   'idx_job_branch_status',
+  'idx_generation_context_snapshot_scope',
   'idx_story_timeline_nodes_label_scope',
   'idx_story_timeline_nodes_anchor_chapter',
   'idx_story_timeline_nodes_parent',
@@ -938,6 +939,15 @@ function bootSchemaIsCurrent(database: DatabaseSync) {
     ])
     && !needsWorkspaceChapterPatchJournalRebuild(database)
     && tableHasColumns(database, 'EntityAlias', ['createdAt', 'updatedAt'])
+    && tableHasColumns(database, 'GenerationContextSnapshot', [
+      'novelId',
+      'branchId',
+      'chapterId',
+      'requestFingerprint',
+      'knowledgeFingerprint',
+      'contextJson',
+      'expiresAt',
+    ])
     && tableHasColumns(database, 'story_timeline_nodes', [
       'continue_block_id',
       'readable_label',

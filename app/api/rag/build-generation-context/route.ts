@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server'
-import { buildGenerationContext } from '@/lib/server/context-builder'
+import { buildGenerationContext, type GenerationContextRagArtifacts } from '@/lib/server/context-builder'
 import { runWithNovelDatabaseAccess } from '@/lib/server/database-access'
+import {
+  createGenerationContextSnapshot,
+  loadGenerationContextSnapshot,
+} from '@/lib/server/generation-context-snapshot'
 import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
 import {
   createWritingSkillRuntimeSeed,
@@ -61,7 +65,7 @@ export async function POST(request: Request) {
       ? Math.floor(rawWritingSkillExampleCount)
       : undefined
 
-    const result = await runWithNovelDatabaseAccess(novelId, () => buildGenerationContext({
+    const contextRequest = {
       novelId,
       branchId: body.branchId ? String(body.branchId) : undefined,
       chapterId,
@@ -78,9 +82,28 @@ export async function POST(request: Request) {
       writingSkillCardIds,
       writingSkillExampleCount,
       writingSkillSeed,
-    }))
+    } as const
+    const { result, contextSnapshotId } = await runWithNovelDatabaseAccess(novelId, async () => {
+      const cachedRagArtifacts = loadGenerationContextSnapshot({
+        snapshotId: typeof body.contextSnapshotId === 'string' ? body.contextSnapshotId : null,
+        request: contextRequest,
+      })
+      let ragArtifacts: GenerationContextRagArtifacts | null = null
+      const result = await buildGenerationContext(contextRequest, {
+        cachedRagArtifacts,
+        onRagArtifacts: (artifacts) => {
+          ragArtifacts = artifacts
+        },
+      })
+      return {
+        result,
+        contextSnapshotId: ragArtifacts
+          ? createGenerationContextSnapshot({ request: contextRequest, artifacts: ragArtifacts })
+          : null,
+      }
+    })
 
-    return NextResponse.json({ ok: true, ...result })
+    return NextResponse.json({ ok: true, ...result, contextSnapshotId })
   } catch (error) {
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to build generation context' },

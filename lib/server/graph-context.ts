@@ -93,22 +93,52 @@ function dedupeById<T extends { id: string }>(items: T[]) {
   })
 }
 
-function loadChapterSeedEntities(params: { novelId: string; branchId: string; chapterNo: number }) {
-  const fallback = queryAll<KnowledgeEntityRow>(
+function loadChapterSeedEntities(params: { novelId: string; branchId: string; chapterId?: string; chapterNo: number }) {
+  const chapterEntityScope = params.chapterId
+    ? {
+        sql: `
+          SELECT entityId
+          FROM EntityMention
+          WHERE branchId = ? AND chapterId = ?
+            AND resolutionKind = 'resolved' AND entityId IS NOT NULL
+          UNION
+          SELECT a.entityId
+          FROM EntityAppearance a
+          JOIN KnowledgeEntity appearanceEntity ON appearanceEntity.id = a.entityId
+          WHERE appearanceEntity.novelId = ? AND appearanceEntity.branchId = ? AND a.chapterId = ?
+        `,
+        values: [params.branchId, params.chapterId, params.novelId, params.branchId, params.chapterId],
+      }
+    : {
+        sql: `
+          SELECT entityId
+          FROM EntityMention
+          WHERE branchId = ? AND chapterNo = ?
+            AND resolutionKind = 'resolved' AND entityId IS NOT NULL
+          UNION
+          SELECT a.entityId
+          FROM EntityAppearance a
+          JOIN KnowledgeEntity appearanceEntity ON appearanceEntity.id = a.entityId
+          WHERE appearanceEntity.novelId = ? AND appearanceEntity.branchId = ? AND a.chapterNo = ?
+        `,
+        values: [params.branchId, params.chapterNo, params.novelId, params.branchId, params.chapterNo],
+      }
+  const chapterEntities = queryAll<KnowledgeEntityRow>(
     `
       SELECT e.id, e.entityType, e.canonicalName, e.importanceTier, e.importance, e.userConfirmed, e.firstSeenChapter, e.lastSeenChapter
-      FROM EntityAppearance a
-      JOIN KnowledgeEntity e ON e.id = a.entityId
-      WHERE e.novelId = ? AND e.branchId = ? AND a.chapterNo = ?
+      FROM KnowledgeEntity e
+      JOIN (${chapterEntityScope.sql}) chapterEntity ON chapterEntity.entityId = e.id
+      WHERE e.novelId = ? AND e.branchId = ? AND e.entityType = 'character'
       ORDER BY e.importance DESC, e.lastSeenChapter DESC, e.canonicalName ASC
-      LIMIT 5
     `,
+    ...chapterEntityScope.values,
     params.novelId,
     params.branchId,
-    params.chapterNo
   )
 
-  return attachAliasesToGraphNodes(dedupeById(fallback.map((row, index) => toGraphNode(row, 5 - index))))
+  return attachAliasesToGraphNodes(
+    dedupeById(chapterEntities.map((row, index) => toGraphNode(row, Math.max(chapterEntities.length - index, 1))))
+  )
 }
 
 function scoreSeedEntity(params: {
@@ -474,6 +504,7 @@ export async function buildGraphAwareContext(request: GraphAwareRequest): Promis
 export async function buildChapterScopedGraphContext(params: {
   novelId: string
   branchId: string
+  chapterId?: string
   chapterNo: number
   maxHops?: 1 | 2
   includeLowConfidence?: boolean
@@ -482,6 +513,7 @@ export async function buildChapterScopedGraphContext(params: {
   const seedEntities = loadChapterSeedEntities({
     novelId: params.novelId,
     branchId: params.branchId,
+    chapterId: params.chapterId,
     chapterNo: params.chapterNo,
   })
 

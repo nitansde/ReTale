@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { buildChapterScopedGraphContext, buildGraphAwareContext } from '@/lib/server/graph-context'
 import { loadExplicitAuthoredContext, type ExplicitAuthoredContext } from '@/lib/server/authored-context'
 import { loadEntityStatesByEntityIds } from '@/lib/server/graph-store'
@@ -99,6 +100,34 @@ export type GenerationContextBuildResult = {
   graphContext: GraphAwareResult
   lanceEvidence: GenerationContextEvidence[]
   tokenEstimate: number
+}
+
+export type GenerationContextRagArtifacts = {
+  version: 1
+  graph: {
+    cacheKey: string
+    knowledgeFingerprint: string
+    context: GraphAwareResult
+  }
+  evidence: {
+    cacheKey: string
+    retrievalFingerprint: string
+    matches: GenerationContextEvidence[]
+    warning?: string
+  }
+}
+
+export type GenerationContextRagCacheUsage = {
+  graph: 'hit' | 'miss'
+  evidence: 'hit' | 'miss'
+}
+
+export type GenerationContextBuildOptions = {
+  cachedRagArtifacts?: GenerationContextRagArtifacts | null
+  onRagArtifacts?: (
+    artifacts: GenerationContextRagArtifacts,
+    usage: GenerationContextRagCacheUsage,
+  ) => void
 }
 
 export type ChapterGraphContextRequest = {
@@ -343,6 +372,186 @@ function uniqueStrings(values: Array<string | null | undefined>) {
   }
 
   return next
+}
+
+function stableCacheValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableCacheValue)
+  if (!value || typeof value !== 'object') return value
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right, 'en-US'))
+      .map(([key, nestedValue]) => [key, stableCacheValue(nestedValue)])
+  )
+}
+
+function hashGenerationContextCacheValue(value: unknown) {
+  return createHash('sha256').update(JSON.stringify(stableCacheValue(value))).digest('hex')
+}
+
+function loadAggregateVersion(sql: string, ...params: Array<string | number>) {
+  return queryOne<Record<string, unknown>>(sql, ...params) ?? {}
+}
+
+function buildGraphKnowledgeFingerprint(params: {
+  novelId: string
+  branchId: string
+  chapterId: string
+  chapterNo: number
+}) {
+  return hashGenerationContextCacheValue({
+    chapter: queryOne<Record<string, unknown>>(
+      `
+        SELECT id, sourceHash, revision, knowledgeStatus
+        FROM KnowledgeChapter
+        WHERE id = ? AND novelId = ? AND branchId = ?
+        LIMIT 1
+      `,
+      params.chapterId,
+      params.novelId,
+      params.branchId,
+    ),
+    chapterMentions: queryAll<Record<string, unknown>>(
+      `
+        SELECT id, entityId, mentionText, resolutionKind, evidenceSpanId, evidenceQuote
+        FROM EntityMention
+        WHERE novelId = ? AND branchId = ? AND chapterId = ?
+        ORDER BY id ASC
+      `,
+      params.novelId,
+      params.branchId,
+      params.chapterId,
+    ),
+    chapterAppearances: queryAll<Record<string, unknown>>(
+      `
+        SELECT a.id, a.entityId, a.lineStart, a.lineEnd, a.evidenceSpanId
+        FROM EntityAppearance a
+        JOIN KnowledgeEntity e ON e.id = a.entityId
+        WHERE e.novelId = ? AND e.branchId = ? AND a.chapterId = ?
+        ORDER BY a.id ASC
+      `,
+      params.novelId,
+      params.branchId,
+      params.chapterId,
+    ),
+    entities: loadAggregateVersion(
+      `SELECT COUNT(*) AS count, MAX(updatedAt) AS updatedAt
+       FROM KnowledgeEntity
+       WHERE novelId = ? AND branchId = ? AND firstSeenChapter <= ?`,
+      params.novelId,
+      params.branchId,
+      params.chapterNo,
+    ),
+    aliases: loadAggregateVersion(
+      `SELECT COUNT(*) AS count, MAX(a.updatedAt) AS updatedAt
+       FROM EntityAlias a
+       JOIN KnowledgeEntity e ON e.id = a.entityId
+       WHERE e.novelId = ? AND e.branchId = ?
+         AND (a.sourceChapter IS NULL OR a.sourceChapter <= ?)`,
+      params.novelId,
+      params.branchId,
+      params.chapterNo,
+    ),
+    aliasMappings: loadAggregateVersion(
+      `SELECT COUNT(*) AS count, MAX(updatedAt) AS updatedAt
+       FROM EntityAliasMapping
+       WHERE novelId = ? AND branchId = ?
+         AND (sourceChapter IS NULL OR sourceChapter <= ?)`,
+      params.novelId,
+      params.branchId,
+      params.chapterNo,
+    ),
+    links: loadAggregateVersion(
+      `SELECT COUNT(*) AS count, MAX(updatedAt) AS updatedAt
+       FROM EntityLink
+       WHERE novelId = ? AND branchId = ?
+         AND validFromChapter <= ? AND validUntilChapter > ?
+         AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+         AND confidence >= 0.4
+         AND TRIM(linkType) NOT IN ('', '关系', '人物关系', '角色关系', '关联', '联系', '相关')`,
+      params.novelId,
+      params.branchId,
+      params.chapterNo,
+      params.chapterNo,
+    ),
+    states: loadAggregateVersion(
+      `SELECT COUNT(*) AS count, MAX(updatedAt) AS updatedAt
+       FROM EntityState
+       WHERE novelId = ? AND branchId = ?
+         AND validFromChapter <= ? AND validUntilChapter > ?
+         AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+         AND confidence >= 0.4`,
+      params.novelId,
+      params.branchId,
+      params.chapterNo,
+      params.chapterNo,
+    ),
+  })
+}
+
+function buildRetrievalFingerprint(params: {
+  novelId: string
+  branchId: string
+  chapterNo: number
+  authoredContext: ExplicitAuthoredContext | null
+}) {
+  return hashGenerationContextCacheValue({
+    activeIndex: queryAll<Record<string, unknown>>(
+      `
+        SELECT scopeKey, tableName, scopeStartChapter, scopeEndChapter, updatedAt
+        FROM ActiveRetrievalIndex
+        WHERE branchId = ?
+        ORDER BY scopeKey ASC
+      `,
+      params.branchId,
+    ),
+    pendingIndex: queryAll<Record<string, unknown>>(
+      `
+        SELECT scopeKey, tableName, phase, rowCount, textIndexCompleted, vectorIndexCompleted,
+               rebuildFingerprint, updatedAt
+        FROM PendingRetrievalIndex
+        WHERE branchId = ?
+        ORDER BY scopeKey ASC
+      `,
+      params.branchId,
+    ),
+    facts: loadAggregateVersion(
+      `SELECT COUNT(*) AS count, MAX(updatedAt) AS updatedAt
+       FROM KnowledgeFact
+       WHERE novelId = ? AND branchId = ? AND validFromChapter <= ? AND validUntilChapter > ?`,
+      params.novelId,
+      params.branchId,
+      params.chapterNo,
+      params.chapterNo,
+    ),
+    links: loadAggregateVersion(
+      `SELECT COUNT(*) AS count, MAX(updatedAt) AS updatedAt
+       FROM EntityLink
+       WHERE novelId = ? AND branchId = ? AND validFromChapter <= ? AND validUntilChapter > ?`,
+      params.novelId,
+      params.branchId,
+      params.chapterNo,
+      params.chapterNo,
+    ),
+    events: loadAggregateVersion(
+      `SELECT COUNT(*) AS count, MAX(updatedAt) AS updatedAt
+       FROM KnowledgeEvent
+       WHERE novelId = ? AND branchId = ? AND chapterNo <= ?`,
+      params.novelId,
+      params.branchId,
+      params.chapterNo,
+    ),
+    worlds: loadAggregateVersion(
+      `SELECT COUNT(*) AS count, MAX(updatedAt) AS updatedAt
+       FROM KnowledgeWorld
+       WHERE novelId = ? AND branchId = ? AND validFromChapter <= ? AND validUntilChapter > ?`,
+      params.novelId,
+      params.branchId,
+      params.chapterNo,
+      params.chapterNo,
+    ),
+    authoredSeeds: params.authoredContext?.retrievalSeeds ?? [],
+  })
 }
 
 function buildNeighborhoodExcerpt(text: string, maxLines = 10) {
@@ -756,6 +965,69 @@ function loadEntitiesWithAliases(
   }))
 }
 
+function loadEntitiesWithAliasesByIds(params: {
+  novelId: string
+  branchId: string
+  chapterNo: number
+  entityIds: string[]
+  db?: KnowledgeExtractionStoryStateDb
+}) {
+  const entityIds = Array.from(new Set(params.entityIds.map((entityId) => entityId.trim()).filter(Boolean)))
+  if (!entityIds.length) return [] as EntityRow[]
+
+  const db = params.db ?? { queryAll }
+  const entities = db.queryAll<{
+    id: string
+    canonicalName: string
+    lastSeenChapter: number | null
+  }>(
+    `
+      SELECT id, canonicalName, lastSeenChapter
+      FROM KnowledgeEntity
+      WHERE novelId = ? AND branchId = ? AND firstSeenChapter <= ?
+        AND id IN (${entityIds.map(() => '?').join(', ')})
+      ORDER BY importance DESC, lastSeenChapter DESC, canonicalName ASC
+    `,
+    params.novelId,
+    params.branchId,
+    params.chapterNo,
+    ...entityIds,
+  )
+
+  if (!entities.length) return [] as EntityRow[]
+
+  const resolvedEntityIds = entities.map((entity) => entity.id)
+  const aliases = db.queryAll<{ entityId: string; alias: string }>(
+    `
+      SELECT entityId, alias
+      FROM EntityAlias
+      WHERE entityId IN (${resolvedEntityIds.map(() => '?').join(', ')})
+        AND sourceChapter <= ?
+    `,
+    ...resolvedEntityIds,
+    params.chapterNo,
+  )
+  const aliasesByEntityId = new Map<string, Array<{ alias: string }>>()
+  for (const alias of aliases) {
+    const current = aliasesByEntityId.get(alias.entityId) ?? []
+    current.push({ alias: alias.alias })
+    aliasesByEntityId.set(alias.entityId, current)
+  }
+  const profileByEntityId = loadCharacterProfilesByEntityId({
+    novelId: params.novelId,
+    branchId: params.branchId,
+    entityIds: resolvedEntityIds,
+    chapterNo: params.chapterNo,
+    db,
+  })
+
+  return entities.map((entity) => ({
+    ...entity,
+    aliases: aliasesByEntityId.get(entity.id) ?? [],
+    profile: profileByEntityId.get(entity.id),
+  }))
+}
+
 function selectStoryStateEntities(params: {
   entities: EntityRow[]
   currentChapterText: string
@@ -932,7 +1204,10 @@ export function buildKnowledgeExtractionStoryState(request: KnowledgeExtractionS
   })
 }
 
-export async function buildGenerationContext(request: GenerationContextRequest): Promise<GenerationContextBuildResult> {
+export async function buildGenerationContext(
+  request: GenerationContextRequest,
+  options: GenerationContextBuildOptions = {},
+): Promise<GenerationContextBuildResult> {
   const effectiveOperationType = resolveGenerationContextOperationType(request.operationType)
   const roleplayContextBlock = effectiveOperationType === 'roleplay'
     ? buildRoleplayContextBlock(request.roleplayMessages)
@@ -1054,22 +1329,69 @@ export async function buildGenerationContext(request: GenerationContextRequest):
     branchContextNodeId: request.branchContextNodeId,
     branchContextInclusion: request.branchContextInclusion,
   })
-  const graphContext = await buildGraphAwareContext({
+  const isContinuationTask = isContinuationRewriteTask({
+    selectedText: request.selectedText,
+    hasContinuationSource: Boolean(request.branchContextNodeId),
+  })
+  const graphCacheKey = hashGenerationContextCacheValue({
+    version: 1,
     novelId: request.novelId,
     branchId,
+    chapterId: chapter.id,
     chapterNo: chapter.chapterNo,
-    selectedText: request.selectedText,
-    nearbyText: neighborhoodText,
-    operationType: effectiveOperationType,
-    maxHops: 1,
-    includeLowConfidence: false,
+    strategy: isContinuationTask ? 'chapter-characters' : 'selection-entities',
+    operationType: isContinuationTask ? null : effectiveOperationType,
+    selectedText: isContinuationTask ? null : request.selectedText,
+    neighborhoodText: isContinuationTask ? null : neighborhoodText,
   })
+  const graphKnowledgeFingerprint = buildGraphKnowledgeFingerprint({
+    novelId: request.novelId,
+    branchId,
+    chapterId: chapter.id,
+    chapterNo: chapter.chapterNo,
+  })
+  const cachedGraph = options.cachedRagArtifacts?.version === 1
+    ? options.cachedRagArtifacts.graph
+    : null
+  const graphCacheHit = Boolean(
+    cachedGraph
+    && cachedGraph.cacheKey === graphCacheKey
+    && cachedGraph.knowledgeFingerprint === graphKnowledgeFingerprint
+  )
+  const graphContext = graphCacheHit
+    ? cachedGraph!.context
+    : isContinuationTask
+      ? await buildChapterScopedGraphContext({
+          novelId: request.novelId,
+          branchId,
+          chapterId: chapter.id,
+          chapterNo: chapter.chapterNo,
+          maxHops: 1,
+          includeLowConfidence: false,
+        })
+      : await buildGraphAwareContext({
+          novelId: request.novelId,
+          branchId,
+          chapterNo: chapter.chapterNo,
+          selectedText: request.selectedText,
+          nearbyText: neighborhoodText,
+          operationType: effectiveOperationType,
+          maxHops: 1,
+          includeLowConfidence: false,
+        })
   const currentSummary = chapter.summary?.trim() || '当前章节尚未生成摘要。'
   const entityContext = `${request.selectedText}\n${neighborhoodText}`
-  const matchedEntities = entities.filter((entity) => {
-    if (entityContext.includes(entity.canonicalName)) return true
-    return entity.aliases.some((alias) => entityContext.includes(alias.alias))
-  })
+  const matchedEntities = isContinuationTask
+    ? loadEntitiesWithAliasesByIds({
+        novelId: request.novelId,
+        branchId,
+        chapterNo: chapter.chapterNo,
+        entityIds: graphContext.seedEntities.map((entity) => entity.id),
+      })
+    : entities.filter((entity) => {
+        if (entityContext.includes(entity.canonicalName)) return true
+        return entity.aliases.some((alias) => entityContext.includes(alias.alias))
+      })
   const relatedEntityIds = new Set(matchedEntities.map((item) => item.id))
   const matchedStates = matchedEntities.length
     ? loadEntityStatesByEntityIds({
@@ -1078,7 +1400,7 @@ export async function buildGenerationContext(request: GenerationContextRequest):
         chapterNo: chapter.chapterNo,
         includeLowConfidence: false,
         entityIds: matchedEntities.map((entity) => entity.id),
-        limit: 24,
+        limit: Math.max(matchedEntities.length * 4, 24),
       })
     : []
   const latestStateByEntityId = new Map<string, EntityStatePreviewRow>()
@@ -1104,7 +1426,7 @@ export async function buildGenerationContext(request: GenerationContextRequest):
   }).slice(0, 8)
 
   const chapterState: ChapterStatePromptData = {
-    major_characters: matchedEntities.slice(0, 8).map((entity) => ({
+    major_characters: matchedEntities.map((entity) => ({
       name: entity.canonicalName,
       aliases: entity.aliases.map((alias) => alias.alias),
       status: latestStateByEntityId.get(entity.id)?.stateValue ?? '未知',
@@ -1152,12 +1474,6 @@ export async function buildGenerationContext(request: GenerationContextRequest):
     chapterNo: chapter.chapterNo,
   })
 
-  const graphContextForEvidenceQuery = {
-    ...graphContext,
-    contextText: graphContextText,
-    edges: graphContext.edges.filter((edge) => edge.includeInPrompt && !excludedGraphEdgeIds.has(edge.id)),
-  }
-
   const warnings: string[] = []
   const evidenceQuery = buildEnrichedEvidenceQuery({
     userInstruction: request.userInstruction,
@@ -1166,24 +1482,74 @@ export async function buildGenerationContext(request: GenerationContextRequest):
     matchedEntities,
     relatedEvents,
     relatedWorlds,
-    graphContext: graphContextForEvidenceQuery,
+    graphContext,
   })
-  const lanceEvidenceResult = await searchLanceEvidence({
+  const evidenceCacheKey = hashGenerationContextCacheValue({
+    version: 1,
     novelId: request.novelId,
     branchId,
     maxChapterNo: chapter.chapterNo,
     query: evidenceQuery.query,
     queryTerms: evidenceQuery.queryTerms,
     graphTerms: evidenceQuery.graphTerms,
+    whatIfSessionId: request.whatIfSessionId?.trim() || null,
+    futureJumpRunId: request.futureJumpRunId?.trim() || null,
     limit: 10,
-    whatIfSessionId: request.whatIfSessionId,
-    futureJumpRunId: request.futureJumpRunId,
   })
+  const retrievalFingerprint = buildRetrievalFingerprint({
+    novelId: request.novelId,
+    branchId,
+    chapterNo: chapter.chapterNo,
+    authoredContext,
+  })
+  const cachedEvidence = options.cachedRagArtifacts?.version === 1
+    ? options.cachedRagArtifacts.evidence
+    : null
+  const evidenceCacheHit = Boolean(
+    cachedEvidence
+    && cachedEvidence.cacheKey === evidenceCacheKey
+    && cachedEvidence.retrievalFingerprint === retrievalFingerprint
+  )
+  const lanceEvidenceResult = evidenceCacheHit
+    ? {
+        matches: cachedEvidence!.matches,
+        warning: cachedEvidence!.warning,
+      }
+    : await searchLanceEvidence({
+        novelId: request.novelId,
+        branchId,
+        maxChapterNo: chapter.chapterNo,
+        query: evidenceQuery.query,
+        queryTerms: evidenceQuery.queryTerms,
+        graphTerms: evidenceQuery.graphTerms,
+        limit: 10,
+        whatIfSessionId: request.whatIfSessionId,
+        futureJumpRunId: request.futureJumpRunId,
+      })
   const lanceEvidence = lanceEvidenceResult.matches
   if (lanceEvidenceResult.warning) {
     warnings.push(lanceEvidenceResult.warning)
   }
   const promptEvidence = lanceEvidence.filter((item) => !excludedEvidenceIds.has(item.id))
+
+  const ragArtifacts: GenerationContextRagArtifacts = {
+    version: 1,
+    graph: {
+      cacheKey: graphCacheKey,
+      knowledgeFingerprint: graphKnowledgeFingerprint,
+      context: graphContext,
+    },
+    evidence: {
+      cacheKey: evidenceCacheKey,
+      retrievalFingerprint,
+      matches: lanceEvidence,
+      ...(lanceEvidenceResult.warning ? { warning: lanceEvidenceResult.warning } : {}),
+    },
+  }
+  options.onRagArtifacts?.(ragArtifacts, {
+    graph: graphCacheHit ? 'hit' : 'miss',
+    evidence: evidenceCacheHit ? 'hit' : 'miss',
+  })
 
   warnings.push(...graphContext.warnings)
 
@@ -1196,11 +1562,6 @@ export async function buildGenerationContext(request: GenerationContextRequest):
         content: renderBlock('选中文本', [request.selectedText]),
       }]
     : []
-
-  const isContinuationTask = isContinuationRewriteTask({
-    selectedText: request.selectedText,
-    hasContinuationSource: Boolean(request.branchContextNodeId),
-  })
 
   const userInstructionBlock: GenerationContextBlock = {
     id: 'user-instruction',
@@ -1388,6 +1749,7 @@ export async function buildChapterGraphContext(request: ChapterGraphContextReque
   const graphContext = await buildChapterScopedGraphContext({
     novelId: request.novelId,
     branchId: chapter.branchId,
+    chapterId: chapter.id,
     chapterNo: chapter.chapterNo,
     maxHops: request.maxHops ?? 1,
     includeLowConfidence: request.includeLowConfidence ?? false,

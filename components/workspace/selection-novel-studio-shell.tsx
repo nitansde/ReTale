@@ -1112,8 +1112,8 @@ export function SelectionNovelStudio() {
                 ) : null}
 
                 <div className="flex flex-wrap gap-2">
-                  <button onClick={handleRewrite} disabled={rewriteFlow.loading} className="inline-flex items-center gap-2 rounded-2xl bg-violet-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60">
-                    {rewriteFlow.loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {t('workspace.shell.generateVersion')}
+                  <button onClick={handleRewrite} disabled={rewriteFlow.loading || contextPreviewLoading} className="inline-flex items-center gap-2 rounded-2xl bg-violet-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60">
+                    {rewriteFlow.loading || contextPreviewLoading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {t('workspace.shell.generateVersion')}
                   </button>
                   {rewriteFlow.loading && rewriteFlow.jobId ? (
                     <button onClick={handleAbortRewriteGeneration} className="inline-flex items-center gap-2 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100 transition hover:bg-rose-500/20">

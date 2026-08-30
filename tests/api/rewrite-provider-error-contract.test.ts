@@ -83,6 +83,82 @@ afterEach(() => {
 })
 
 describe('/api/rewrite provider error contract', () => {
+  it('reuses preview RAG artifacts while rebuilding the generation prompt', async () => {
+    const cachedContext = {
+      novelId: 'novel-rewrite-provider-contract',
+      branchId: 'novel-rewrite-provider-contract:main',
+      chapterId: 'chapter-1',
+      chapterNo: 1,
+      selectedLineStart: 1,
+      selectedLineEnd: 1,
+      warnings: [],
+      promptBlocks: [{ id: 'current-summary', label: 'Summary', enabled: true, priority: 'high' as const, content: '# Summary\nCached context marker' }],
+      assembledContext: '# Summary\nCached context marker',
+      graphContext: { seedEntities: [], nodes: [], edges: [], contextText: '', warnings: [], tokenEstimate: 0, status: 'ready' as const },
+      lanceEvidence: [],
+      tokenEstimate: 4,
+    }
+    const cachedRagArtifacts = {
+      version: 1 as const,
+      graph: {
+        cacheKey: 'graph-cache-key',
+        knowledgeFingerprint: 'graph-knowledge-fingerprint',
+        context: cachedContext.graphContext,
+      },
+      evidence: {
+        cacheKey: 'evidence-cache-key',
+        retrievalFingerprint: 'evidence-retrieval-fingerprint',
+        matches: [],
+      },
+    }
+    const buildGenerationContext = vi.fn(() => cachedContext)
+    const loadGenerationContextSnapshot = vi.fn(() => cachedRagArtifacts)
+    vi.doMock('@/lib/server/context-builder', () => ({ buildGenerationContext }))
+    vi.doMock('@/lib/server/generation-context-snapshot', () => ({ loadGenerationContextSnapshot }))
+    vi.doMock('@/lib/server/database-access', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/database-access')>()
+      return {
+        ...actual,
+        runWithNovelDatabaseAccess: (_novelId: string, callback: () => unknown) => callback(),
+      }
+    })
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ result: '使用缓存完成' }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await importRouteWithProvider('openai-compatible')
+    const response = await POST(createRequest({
+      chapterId: 'chapter-1',
+      branchId: 'novel-rewrite-provider-contract:main',
+      contextSnapshotId: 'generation-context-1',
+    }))
+
+    expect(response.status).toBe(200)
+    expect(loadGenerationContextSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      snapshotId: 'generation-context-1',
+      request: expect.objectContaining({
+        novelId: 'novel-rewrite-provider-contract',
+        branchId: 'novel-rewrite-provider-contract:main',
+        chapterId: 'chapter-1',
+      }),
+    }))
+    expect(buildGenerationContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        novelId: 'novel-rewrite-provider-contract',
+        branchId: 'novel-rewrite-provider-contract:main',
+        chapterId: 'chapter-1',
+        selectedText: '选段',
+        userInstruction: '指令',
+      }),
+      { cachedRagArtifacts },
+    )
+    const providerBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    expect(providerBody.messages[1]?.content).toContain('Cached context marker')
+  })
+
   it('returns successful OpenAI-compatible rewrite content and metadata without fallback markers', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       choices: [{ message: { content: JSON.stringify({ result: '真实改写结果' }) } }],

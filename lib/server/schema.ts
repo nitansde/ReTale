@@ -798,6 +798,22 @@ CREATE TABLE IF NOT EXISTS KnowledgeJob (
   FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS GenerationContextSnapshot (
+  id TEXT PRIMARY KEY,
+  novelId TEXT NOT NULL,
+  branchId TEXT NOT NULL,
+  chapterId TEXT NOT NULL,
+  requestFingerprint TEXT NOT NULL,
+  knowledgeFingerprint TEXT NOT NULL,
+  contextJson TEXT NOT NULL,
+  expiresAt TEXT NOT NULL,
+  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (novelId) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+  FOREIGN KEY (branchId) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+  FOREIGN KEY (chapterId) REFERENCES KnowledgeChapter(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS RawTextEmbeddingCache (
   branchId TEXT NOT NULL,
   provider TEXT NOT NULL,
@@ -1125,6 +1141,7 @@ CREATE INDEX IF NOT EXISTS idx_event_link_status ON EventLink(branchId, status);
 CREATE INDEX IF NOT EXISTS idx_knowledge_world_branch_valid_until ON KnowledgeWorld(branchId, validFromChapter, validUntilChapter);
 CREATE INDEX IF NOT EXISTS idx_job_novel_status ON KnowledgeJob(novelId, status);
 CREATE INDEX IF NOT EXISTS idx_job_branch_status ON KnowledgeJob(branchId, status);
+CREATE INDEX IF NOT EXISTS idx_generation_context_snapshot_scope ON GenerationContextSnapshot(novelId, branchId, chapterId, expiresAt);
 CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_label_scope ON story_timeline_nodes(novel_id, branch_id, node_type, label_index);
 CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_anchor_chapter ON story_timeline_nodes(novel_id, branch_id, anchor_chapter_no);
 CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_parent ON story_timeline_nodes(parent_node_id);

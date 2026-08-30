@@ -1,6 +1,7 @@
 import { after, NextResponse } from 'next/server'
 import { noStoreJson } from '@/lib/server/api-route'
 import { buildGenerationContext } from '@/lib/server/context-builder'
+import { loadGenerationContextSnapshot } from '@/lib/server/generation-context-snapshot'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { createNovelDatabaseAccess, runWithNovelDatabaseAccess } from '@/lib/server/database-access'
 import { applyPresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runtime'
@@ -1081,8 +1082,8 @@ async function handleRewriteBody(
   const roleplayMessages = operationType === 'roleplay'
     ? normalizeRoleplayMessages(body.roleplayMessages)
     : []
-  const context = body.novelId && body.chapterId
-    ? await buildGenerationContext({
+  const contextRequest = body.novelId && body.chapterId
+    ? {
         novelId: String(body.novelId),
         branchId: body.branchId ? String(body.branchId) : undefined,
         chapterId: String(body.chapterId),
@@ -1096,10 +1097,22 @@ async function handleRewriteBody(
         futureJumpRunId: body.futureJumpRunId ? String(body.futureJumpRunId) : undefined,
         branchContextNodeId: body.branchContextNodeId ? String(body.branchContextNodeId) : undefined,
         branchContextInclusion: normalizeBranchContextInclusion(body.branchContextInclusion),
-        writingSkillCardIds: enabledWritingSkillCardIds,
+        writingSkillCardIds,
         writingSkillExampleCount,
         writingSkillSeed,
+      } as const
+    : null
+  const cachedRagArtifacts = contextRequest
+    ? loadGenerationContextSnapshot({
+        snapshotId: typeof body.contextSnapshotId === 'string' ? body.contextSnapshotId : null,
+        request: contextRequest,
       })
+    : null
+  const context = contextRequest
+    ? await buildGenerationContext({
+        ...contextRequest,
+        writingSkillCardIds: enabledWritingSkillCardIds,
+      }, { cachedRagArtifacts })
     : null
   const activePromptBlocks = context
     ? context.promptBlocks.filter((block) => !disabledBlockIds.includes(block.id))

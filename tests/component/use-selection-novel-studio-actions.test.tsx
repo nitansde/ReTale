@@ -284,6 +284,7 @@ function installRecoverableRewriteFetchMock(options: {
   restoreResponse: Deferred<Response>
   storyTimelineResponse?: Deferred<Response>
   writingSkillCards?: Array<{ id: string; title: string }>
+  contextPreviewResponse?: Response
   createResponse?: Deferred<Response>
   createResponses?: Deferred<Response>[]
   pollResponses?: Deferred<Response>[]
@@ -305,6 +306,9 @@ function installRecoverableRewriteFetchMock(options: {
     if (url === '/api/writing-skills?status=ACTIVE' && method === 'GET') {
       return Promise.resolve(jsonResponse({ ok: true, cards: options.writingSkillCards ?? [] }))
     }
+    if (url === '/api/rag/build-generation-context' && method === 'POST') {
+      return Promise.resolve(options.contextPreviewResponse ?? jsonResponse({ ok: false, error: 'Context preview omitted by test' }, 400))
+    }
     if (url.startsWith('/api/rewrite?') && method === 'GET') {
       if (url.includes('jobId=')) {
         const response = options.pollResponses?.[pollIndex]
@@ -325,9 +329,6 @@ function installRecoverableRewriteFetchMock(options: {
       abortIndex += 1
       if (!response) throw new Error(`Unexpected rewrite abort: ${url}`)
       return response.promise
-    }
-    if (url === '/api/generation-context' && method === 'POST') {
-      return Promise.resolve(jsonResponse({ ok: false, error: 'Context preview omitted by test' }, 400))
     }
     throw new Error(`Unexpected fetch: ${method} ${url}`)
   })
@@ -863,6 +864,43 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     expect(requestBody.writingSkillCardIds).toEqual(['writing-skill-card-1', 'writing-skill-card-2'])
     expect(requestBody.writingSkillExampleCount).toBe(4)
     expect(requestBody.writingSkillSeed).toBe(writingSkillSeed)
+    await resolveDeferredResponse(createResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('queued') }))
+  })
+
+  it('forwards the preview context snapshot into the recoverable rewrite job', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const createResponse = createDeferred<Response>()
+    const fetchMock = installRecoverableRewriteFetchMock({
+      restoreResponse,
+      createResponse,
+      contextPreviewResponse: jsonResponse({
+        ok: true,
+        contextSnapshotId: 'generation-context-1',
+        novelId: 'novel-1',
+        branchId: 'novel-1:main',
+        chapterId: chapter.id,
+        chapterNo: 1,
+        selectedLineStart: 1,
+        selectedLineEnd: 1,
+        warnings: [],
+        promptBlocks: [],
+        assembledContext: '',
+        graphContext: { seedEntities: [], nodes: [], edges: [], contextText: '', warnings: [], tokenEstimate: 0, status: 'ready' },
+        lanceEvidence: [],
+        tokenEstimate: 0,
+      }),
+    })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: null }))
+    act(() => result.current.core.setSelectionText('Fresh selection'))
+    await act(async () => { await result.current.actions.openActionMode('rewrite') })
+    await waitFor(() => expect(result.current.core.generationContext?.contextSnapshotId).toBe('generation-context-1'))
+
+    act(() => { void result.current.actions.handleRewrite() })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/rewrite', expect.objectContaining({ method: 'POST' })))
+    const rewriteCall = fetchMock.mock.calls.find(([url, init]) => String(url) === '/api/rewrite' && init?.method === 'POST')
+    const requestBody = JSON.parse(String(rewriteCall?.[1]?.body)) as { contextSnapshotId?: string }
+    expect(requestBody.contextSnapshotId).toBe('generation-context-1')
     await resolveDeferredResponse(createResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('queued') }))
   })
 

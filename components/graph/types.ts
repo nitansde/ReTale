@@ -36,6 +36,7 @@ export type GraphNodeGenerationState = {
 }
 
 export type GenerationContextBuildData = {
+  contextSnapshotId?: string | null
   novelId: string
   branchId: string
   chapterId: string

@@ -107,6 +107,7 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
   const whatIfCreateInFlightRef = useRef(false)
   const rewriteCreateRequestSequenceRef = useRef(0)
   const contextPreviewRequestSequenceRef = useRef(0)
+  const contextPreviewPromiseRef = useRef<Promise<GenerationContextBuildData | null> | null>(null)
   const rewritePollInFlightRef = useRef<Promise<void> | null>(null)
   const recoverableRestoreAbortControllerRef = useRef<AbortController | null>(null)
   const recoverablePollAbortControllerRef = useRef<AbortController | null>(null)
@@ -148,7 +149,7 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     ))
   }
 
-  const loadContextPreview = async (
+  const performContextPreview = async (
     mode: WorkspaceActionMode,
     instructionOverride?: string,
     selectionOverride?: string,
@@ -159,6 +160,7 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
       branchContextNodeId?: string
       branchContextInclusion?: 'ancestors_only' | 'include_selected'
       omitSelectedText?: boolean
+      sourceText?: string
       writingSkillCardIds?: string[]
       writingSkillExampleCount?: number
       writingSkillSeed?: number
@@ -186,7 +188,10 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
             writingSkillSeed: options?.writingSkillSeed ?? core.writingSkillSeed,
           }
         : {}
-      const data = await callGenerationContextApi({ novelId: core.currentNovelId, chapterId: sourceChapter.id, selectedText: options?.omitSelectedText ? '' : targetSelection, operationType: toGenerationContextOperationType(mode), userInstruction: instructionOverride ?? core.getInstructionForMode(mode), excludedGraphEdgeIds: options?.excludedGraphEdgeIds ?? core.excludedGraphEdgeIds, excludedEvidenceIds: options?.excludedEvidenceIds ?? core.excludedEvidenceIds, ...branchContext, ...writingSkillContext })
+      const sourceText = mode === 'rewrite'
+        ? options?.sourceText ?? (core.rewriteSourceTextOverride.trim() || core.chapterText)
+        : core.chapterText
+      const data = await callGenerationContextApi({ novelId: core.currentNovelId, branchId: core.storyTimelineBranchId, chapterId: sourceChapter.id, selectedText: options?.omitSelectedText ? '' : targetSelection, sourceText, contextSnapshotId: core.generationContext?.contextSnapshotId ?? undefined, operationType: toGenerationContextOperationType(mode), userInstruction: instructionOverride ?? core.getInstructionForMode(mode), excludedGraphEdgeIds: options?.excludedGraphEdgeIds ?? core.excludedGraphEdgeIds, excludedEvidenceIds: options?.excludedEvidenceIds ?? core.excludedEvidenceIds, ...branchContext, ...writingSkillContext })
       if (contextPreviewRequestSequenceRef.current !== requestSequence) return null
       if (!data.ok || !data.graphContext || !data.promptBlocks || !data.lanceEvidence) throw new Error(data.error || t('workspace.action.contextPreviewFailed'))
       const nextContext = { ...(data as GenerationContextBuildData), sourceMeta: core.currentChapter.parentChapterId ? { mode: 'inherited-parent', chapterId: sourceChapter.id, chapterNo: sourceChapter.order, chapterTitle: sourceChapter.title } : { mode: 'direct', chapterId: sourceChapter.id, chapterNo: sourceChapter.order, chapterTitle: sourceChapter.title } } satisfies GenerationContextBuildData
@@ -207,6 +212,17 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     } finally {
       if (contextPreviewRequestSequenceRef.current === requestSequence) core.setContextPreviewLoading(false)
     }
+  }
+
+  const loadContextPreview = (
+    ...args: Parameters<typeof performContextPreview>
+  ): Promise<GenerationContextBuildData | null> => {
+    const promise = performContextPreview(...args)
+    contextPreviewPromiseRef.current = promise
+    void promise.finally(() => {
+      if (contextPreviewPromiseRef.current === promise) contextPreviewPromiseRef.current = null
+    })
+    return promise
   }
 
   useEffect(() => {
@@ -479,9 +495,18 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
       await savePresetCompatLibrary()
       if (!ownsRequest()) return
       const continueBlockRequestContext = buildContinueBlockLineageRequestContext(core.activeContinueBlockRewriteContext)
-      if (!core.generationContext && !core.contextPreviewLoading) void loadContextPreview('rewrite', core.rewritePrompt, undefined, { ...continueBlockRequestContext })
+      const sourceText = core.rewriteSourceTextOverride.trim() || flushedEditor?.plainText || core.chapterText
+      let contextForGeneration = core.generationContext
+      if (!contextForGeneration) {
+        contextForGeneration = contextPreviewPromiseRef.current
+          ? await contextPreviewPromiseRef.current
+          : await loadContextPreview('rewrite', core.rewritePrompt, undefined, {
+              ...continueBlockRequestContext,
+              sourceText,
+            })
+      }
       if (!ownsRequest()) return
-      const job = await callCreateRecoverableRewriteJobApi({ novelId, branchId, chapterId, selectedText: continueBlockRequestContext.omitSelectedText ? '' : targetSelection, sourceText: core.rewriteSourceTextOverride.trim() || flushedEditor?.plainText || core.chapterText, operationType: 'rewrite', userInstruction: core.rewritePrompt, disabledBlockIds: core.disabledContextBlockIds, excludedGraphEdgeIds: core.excludedGraphEdgeIds, excludedEvidenceIds: core.excludedEvidenceIds, branchContextNodeId: continueBlockRequestContext.branchContextNodeId, branchContextInclusion: continueBlockRequestContext.branchContextInclusion, continueBlockId: continueBlockRequestContext.continueBlockId, presetCompatRuntimeContext: core.buildPresetCompatRuntimeContext('rewrite'), scope: 'chapter', mode: 'heavy', tone: 'dramatic', rewriteLaunchSource: core.rewriteLaunchSource, rewriteSourceTextOverride: core.rewriteSourceTextOverride, writingSkillCardIds: core.selectedWritingSkillCardIds, writingSkillCardId: core.selectedWritingSkillCardIds[0] || undefined, writingSkillExampleCount: core.writingSkillExampleCount, writingSkillSeed: core.writingSkillSeed })
+      const job = await callCreateRecoverableRewriteJobApi({ novelId, branchId, chapterId, selectedText: continueBlockRequestContext.omitSelectedText ? '' : targetSelection, sourceText, contextSnapshotId: contextForGeneration?.contextSnapshotId ?? undefined, operationType: 'rewrite', userInstruction: core.rewritePrompt, disabledBlockIds: core.disabledContextBlockIds, excludedGraphEdgeIds: core.excludedGraphEdgeIds, excludedEvidenceIds: core.excludedEvidenceIds, branchContextNodeId: continueBlockRequestContext.branchContextNodeId, branchContextInclusion: continueBlockRequestContext.branchContextInclusion, continueBlockId: continueBlockRequestContext.continueBlockId, presetCompatRuntimeContext: core.buildPresetCompatRuntimeContext('rewrite'), scope: 'chapter', mode: 'heavy', tone: 'dramatic', rewriteLaunchSource: core.rewriteLaunchSource, rewriteSourceTextOverride: core.rewriteSourceTextOverride, writingSkillCardIds: core.selectedWritingSkillCardIds, writingSkillCardId: core.selectedWritingSkillCardIds[0] || undefined, writingSkillExampleCount: core.writingSkillExampleCount, writingSkillSeed: core.writingSkillSeed })
       if (!ownsRequest() || !recoverableRewriteJobMatchesContext(job, novelId, branchId, chapterId)) return
       core.ownedRecoverableRewriteJobIdRef.current = job.jobId
       core.syncRewriteJobFromRecoverableJob(job)
