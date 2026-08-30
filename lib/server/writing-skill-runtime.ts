@@ -22,6 +22,10 @@ import type {
   WritingSkillExample,
   WritingSkillRuntimeRecord,
 } from '@/lib/writing-skill-types'
+import {
+  buildWritingSkillPromptBlockId,
+  normalizeWritingSkillCardIds,
+} from '@/lib/writing-skill-selection'
 
 function shuffle<T>(items: T[], random: () => number) {
   const next = items.slice()
@@ -232,6 +236,36 @@ export function resolveWritingSkillRuntime(input: {
     examples,
     prompt: compileWritingSkillPrompt(card, examples),
     record,
+  }
+}
+
+export function resolveWritingSkillRuntimes(input: {
+  cardIds: string[]
+  count?: number
+  seed: number
+  db?: WritingSkillStoreDb
+  library?: MaterialLibrary
+}) {
+  const cardIds = normalizeWritingSkillCardIds({ writingSkillCardIds: input.cardIds })
+  const runtimes = cardIds.map((cardId) => resolveWritingSkillRuntime({
+    cardId,
+    count: input.count,
+    seed: input.seed,
+    db: input.db,
+    library: input.library,
+  }))
+
+  return {
+    runtimes,
+    records: runtimes.map((runtime) => runtime.record),
+    prompt: runtimes.map((runtime) => runtime.prompt).join('\n\n'),
+    blocks: runtimes.map((runtime) => ({
+      id: buildWritingSkillPromptBlockId(runtime.card.id),
+      label: `写作技巧：${runtime.card.title}`,
+      enabled: true,
+      priority: 'highest' as const,
+      content: runtime.prompt,
+    })),
   }
 }
 

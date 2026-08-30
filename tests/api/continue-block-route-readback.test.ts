@@ -115,9 +115,13 @@ describe('/api/continue-blocks detail readback', () => {
       continueBlockId: string
       timelineNodeId: string
       nodeType: 'rewrite' | 'continue_block'
+      writingSkillCardIds: string[]
+      writingSkillExampleCount: number
     }
 
     expect(created.nodeType).toBe('rewrite')
+    expect(created.writingSkillCardIds).toEqual([])
+    expect(created.writingSkillExampleCount).toBe(5)
     expect(singletonDatabase.prepare('SELECT COUNT(*) AS count FROM continue_blocks').get()).toMatchObject({ count: 0 })
     expect(novelDatabase.prepare('SELECT COUNT(*) AS count FROM continue_blocks').get()).toMatchObject({ count: 1 })
 
@@ -135,6 +139,8 @@ describe('/api/continue-blocks detail readback', () => {
       timelineNodeId: string | null
       latestText: string
       latestRevisionNo: number
+      writingSkillCardIds: string[]
+      writingSkillExampleCount: number
     }
 
     expect(detail).toEqual(expect.objectContaining({
@@ -144,6 +150,124 @@ describe('/api/continue-blocks detail readback', () => {
       timelineNodeId: created.timelineNodeId,
       latestText: '中性续写结果',
       latestRevisionNo: 1,
+      writingSkillCardIds: [],
+      writingSkillExampleCount: 5,
     }))
   })
+
+  it('persists multiple writing skill cards across create, regenerate, detail, and timeline reads', async () => {
+    const { novelDatabase } = await createSplitBrainDatabases('retale-continue-block-writing-skills')
+    seedNovel(novelDatabase)
+
+    const [{ POST, PUT }, { GET: getDetail }, { GET: getTimeline }] = await Promise.all([
+      import('@/app/api/continue-blocks/route'),
+      import('@/app/api/continue-blocks/[continueBlockId]/route'),
+      import('@/app/api/story-timeline/route'),
+    ])
+
+    const postResponse = await POST(new Request('http://localhost/api/continue-blocks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        sourceChapterNo: 10,
+        selectedText: '五官选区',
+        originalText: '五官原文',
+        generatedText: '第一次生成结果',
+        userInstruction: '加强五官描写',
+        writingSkillCardIds: ['skill-facial-features', 'skill-prose-rhythm', 'skill-facial-features'],
+        writingSkillExampleCount: 8,
+      }),
+    }))
+
+    expect(postResponse.status).toBe(200)
+    const created = await postResponse.json() as {
+      continueBlockId: string
+      timelineNodeId: string
+      writingSkillCardIds: string[]
+      writingSkillExampleCount: number
+    }
+    expect(created.writingSkillCardIds).toEqual(['skill-facial-features', 'skill-prose-rhythm'])
+    expect(created.writingSkillExampleCount).toBe(8)
+
+    const createdDetailResponse = await getDetail(
+      new Request(`http://localhost/api/continue-blocks/${created.continueBlockId}?novelId=novel-001&branchId=novel-001:main`),
+      { params: Promise.resolve({ continueBlockId: created.continueBlockId }) }
+    )
+    expect(createdDetailResponse.status).toBe(200)
+    await expect(createdDetailResponse.json()).resolves.toEqual(expect.objectContaining({
+      writingSkillCardIds: ['skill-facial-features', 'skill-prose-rhythm'],
+      writingSkillExampleCount: 8,
+    }))
+
+    const putResponse = await PUT(new Request('http://localhost/api/continue-blocks', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        novelId: 'novel-001',
+        branchId: 'novel-001:main',
+        continueBlockId: created.continueBlockId,
+        selectedText: '五官选区',
+        originalText: '五官原文',
+        generatedText: '第二次生成结果',
+        userInstruction: '重新生成五官描写',
+        writingSkillCardIds: ['skill-closeup', 'skill-body-language', 'skill-closeup'],
+        writingSkillExampleCount: 3,
+      }),
+    }))
+
+    expect(putResponse.status).toBe(200)
+    const regenerated = await putResponse.json() as {
+      latestRevisionNo: number
+      writingSkillCardIds: string[]
+      writingSkillExampleCount: number
+    }
+    expect(regenerated).toEqual(expect.objectContaining({
+      latestRevisionNo: 2,
+      writingSkillCardIds: ['skill-closeup', 'skill-body-language'],
+      writingSkillExampleCount: 3,
+    }))
+
+    const updatedDetailResponse = await getDetail(
+      new Request(`http://localhost/api/continue-blocks/${created.continueBlockId}?novelId=novel-001&branchId=novel-001:main`),
+      { params: Promise.resolve({ continueBlockId: created.continueBlockId }) }
+    )
+    expect(updatedDetailResponse.status).toBe(200)
+    await expect(updatedDetailResponse.json()).resolves.toEqual(expect.objectContaining({
+      latestText: '第二次生成结果',
+      latestRevisionNo: 2,
+      writingSkillCardIds: ['skill-closeup', 'skill-body-language'],
+      writingSkillExampleCount: 3,
+    }))
+
+    const timelineResponse = await getTimeline(
+      new Request('http://localhost/api/story-timeline?novelId=novel-001&branchId=novel-001:main')
+    )
+    expect(timelineResponse.status).toBe(200)
+    const timeline = await timelineResponse.json() as {
+      branchNodes: Array<{
+        id: string
+        writingSkillCardIds?: string[]
+        writingSkillExampleCount?: number | null
+      }>
+    }
+    expect(timeline.branchNodes.find((node) => node.id === created.timelineNodeId)).toEqual(expect.objectContaining({
+      writingSkillCardIds: ['skill-closeup', 'skill-body-language'],
+      writingSkillExampleCount: 3,
+    }))
+
+    const persistedRow = novelDatabase.prepare(
+      'SELECT writing_skill_card_ids_json, writing_skill_example_count FROM continue_blocks WHERE id = ?'
+    ).get(created.continueBlockId)
+    expect(persistedRow).toEqual({
+      writing_skill_card_ids_json: '["skill-closeup","skill-body-language"]',
+      writing_skill_example_count: 3,
+    })
+    expect(listTableColumnsForTest(novelDatabase, 'continue_blocks')).not.toContain('writing_skill_seed')
+  })
 })
+
+function listTableColumnsForTest(database: DatabaseSync, tableName: string) {
+  return (database.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>).map((column) => column.name)
+}

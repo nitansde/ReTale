@@ -262,8 +262,8 @@ export function SelectionNovelStudio() {
   const {
     leftPanelOpen, setLeftPanelOpen, referencePanelOpen, setReferencePanelOpen, knowledgePanelOpen, setKnowledgePanelOpen, chapterListState, setChapterListState, centerPaneView, setCenterPaneView, refTab, setRefTab, settingsOpen, setSettingsOpen,
     selectionText, lockedSelectionText, toolbarPos, activeMode, rewritePrompt, rewriteState, rewriteFlow, generationContext,
-    writingSkillCards, writingSkillCardsLoading, writingSkillCardsError, selectedWritingSkillCardId,
-    setSelectedWritingSkillCardId, writingSkillExampleCount, setWritingSkillExampleCount,
+    writingSkillCards, writingSkillCardsLoading, writingSkillCardsError, selectedWritingSkillCardIds,
+    writingSkillExampleCount,
     graphContext, contextPreviewLoading, contextPreviewError, graphReviewLoading, graphReviewControls, contextPanelOpen,
     setContextPanelOpen, graphSelection, setGraphSelection, evidenceDrawerOpen, setEvidenceDrawerOpen, disabledContextBlockIds, setDisabledContextBlockIds, excludedGraphEdgeIds, excludedEvidenceIds, graphMutationPendingId, graphMutationError, chapterGraphData,
     chapterGraphLoading, chapterGraphError, chapterGraphControls, chapterGraphSelection, setChapterGraphSelection, copied, setCopied, toast, toastVariant,
@@ -302,7 +302,7 @@ export function SelectionNovelStudio() {
     openActionMode, handleRefreshContextReview, handleExcludedGenerationContextChange, handleConfirmGraphEdge, handleRejectGraphEdge,
     handleSaveGraphEdgeEdit, handleGraphControlChange, copyText, applyFullChapter, saveSettings, loadOllamaModels,
     loadOpenAICompatibleModels, handleDeleteNovel, handleDeleteChapter, handleTimelineDeleteChapter,
-    handleDeleteBranchNode, handleRewritePromptChange, handleRewrite, handleAbortRewriteGeneration, handleSaveContinueBlock,
+    handleDeleteBranchNode, handleRewritePromptChange, handleWritingSkillSelectionChange, handleWritingSkillExampleCountChange, handleRewrite, handleAbortRewriteGeneration, handleSaveContinueBlock,
     handleCreateWhatIf, launchFutureMapFromWhatIf, handleFutureJumpCreated, reopenWhatIfRewriteFlow,
     reopenFutureJumpRewriteFlow, selectionActions, knowledgeControls,
   } = actions
@@ -952,27 +952,48 @@ export function SelectionNovelStudio() {
                 </label>
 
                 <div className="grid gap-3 rounded-[24px] border border-white/8 bg-black/20 p-4 sm:grid-cols-[1fr_auto]">
-                  <label className="block">
-                    <span className="mb-2 block text-sm text-zinc-300">{t('workspace.shell.writingSkillLabel')}</span>
-                    <select
-                      value={selectedWritingSkillCardId}
-                      onChange={(event) => setSelectedWritingSkillCardId(event.target.value)}
-                      disabled={writingSkillCardsLoading}
-                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-3 py-2.5 text-sm text-zinc-100 outline-none disabled:opacity-60"
-                    >
-                      <option value="">{writingSkillCardsLoading ? t('workspace.shell.writingSkillLoading') : t('workspace.shell.writingSkillNone')}</option>
-                      {writingSkillCards.map((card) => (
-                        <option key={card.id} value={card.id}>{card.title}</option>
-                      ))}
-                    </select>
+                  <fieldset className="min-w-0">
+                    <legend className="mb-2 block text-sm text-zinc-300">{t('workspace.shell.writingSkillLabel')}</legend>
+                    <div className="max-h-44 space-y-2 overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0d12] p-2.5">
+                      {writingSkillCardsLoading ? (
+                        <p className="px-1 py-1 text-sm text-zinc-500">{t('workspace.shell.writingSkillLoading')}</p>
+                      ) : writingSkillCards.length ? writingSkillCards.map((card) => {
+                        const checked = selectedWritingSkillCardIds.includes(card.id)
+                        return (
+                          <label
+                            key={card.id}
+                            className={cn(
+                              'flex min-w-0 cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2 text-sm transition',
+                              checked
+                                ? 'border-violet-300/25 bg-violet-500/12 text-violet-50'
+                                : 'border-transparent text-zinc-300 hover:border-white/10 hover:bg-white/[0.04]',
+                            )}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(event) => handleWritingSkillSelectionChange(
+                                event.target.checked
+                                  ? [...selectedWritingSkillCardIds, card.id]
+                                  : selectedWritingSkillCardIds.filter((cardId) => cardId !== card.id),
+                              )}
+                              className="mt-0.5 h-4 w-4 shrink-0 rounded border-white/20 bg-black/20 text-violet-400"
+                            />
+                            <span className="min-w-0 break-words leading-5">{card.title}</span>
+                          </label>
+                        )
+                      }) : (
+                        <p className="px-1 py-1 text-sm text-zinc-500">{t('workspace.shell.writingSkillNone')}</p>
+                      )}
+                    </div>
                     {writingSkillCardsError ? <p className="mt-2 text-xs text-rose-300">{writingSkillCardsError}</p> : null}
-                  </label>
+                  </fieldset>
                   <label className="block sm:w-36">
                     <span className="mb-2 block text-sm text-zinc-300">{t('workspace.shell.writingSkillExampleCount')}</span>
                     <select
                       value={writingSkillExampleCount}
-                      onChange={(event) => setWritingSkillExampleCount(Number(event.target.value))}
-                      disabled={!selectedWritingSkillCardId}
+                      onChange={(event) => handleWritingSkillExampleCountChange(Number(event.target.value))}
+                      disabled={!selectedWritingSkillCardIds.length}
                       className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-3 py-2.5 text-sm text-zinc-100 outline-none disabled:opacity-40"
                     >
                       {WRITING_SKILL_RUNTIME_EXAMPLE_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}

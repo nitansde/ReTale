@@ -509,12 +509,14 @@ describe('authored branching schema migrations', () => {
     expect(isSqliteLockError(new Error('database table is locked'))).toBe(true)
   })
 
-  it('does not fast-skip legacy continue and what-if token column migrations', () => {
+  it('does not fast-skip legacy continue metadata and token column migrations', () => {
     const databasePath = makeTempDatabasePath('retale-token-column-migration')
     const currentDatabase = initializeDatabase(new DatabaseSync(databasePath))
 
     currentDatabase.exec('ALTER TABLE continue_blocks DROP COLUMN latest_input_tokens')
     currentDatabase.exec('ALTER TABLE continue_blocks DROP COLUMN latest_output_tokens')
+    currentDatabase.exec('ALTER TABLE continue_blocks DROP COLUMN writing_skill_card_ids_json')
+    currentDatabase.exec('ALTER TABLE continue_blocks DROP COLUMN writing_skill_example_count')
     currentDatabase.exec('ALTER TABLE continue_block_revisions DROP COLUMN input_tokens')
     currentDatabase.exec('ALTER TABLE continue_block_revisions DROP COLUMN output_tokens')
     currentDatabase.exec('ALTER TABLE what_if_sessions DROP COLUMN input_tokens')
@@ -523,10 +525,21 @@ describe('authored branching schema migrations', () => {
 
     const migratedDatabase = initializeDatabase(new DatabaseSync(databasePath))
 
-    expect(listTableColumns(migratedDatabase, 'continue_blocks').map((column) => column.name)).toEqual(expect.arrayContaining([
+    const continueBlockColumns = listTableColumns(migratedDatabase, 'continue_blocks')
+    expect(continueBlockColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
       'latest_input_tokens',
       'latest_output_tokens',
+      'writing_skill_card_ids_json',
+      'writing_skill_example_count',
     ]))
+    expect(continueBlockColumns.find((column) => column.name === 'writing_skill_card_ids_json')).toMatchObject({
+      notnull: 1,
+      dflt_value: "'[]'",
+    })
+    expect(continueBlockColumns.find((column) => column.name === 'writing_skill_example_count')).toMatchObject({
+      notnull: 1,
+      dflt_value: '5',
+    })
     expect(listTableColumns(migratedDatabase, 'continue_block_revisions').map((column) => column.name)).toEqual(expect.arrayContaining([
       'input_tokens',
       'output_tokens',

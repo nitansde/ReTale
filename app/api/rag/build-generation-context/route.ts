@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server'
 import { buildGenerationContext } from '@/lib/server/context-builder'
 import { runWithNovelDatabaseAccess } from '@/lib/server/database-access'
 import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
+import {
+  createWritingSkillRuntimeSeed,
+  normalizeWritingSkillCardIds,
+} from '@/lib/writing-skill-selection'
 
 const INVALID_OPERATION_TYPE_ERROR = `Invalid operationType. Expected one of: ${PRODUCT_SURFACE_IDS.join(', ')}`
 
@@ -45,6 +49,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: INVALID_OPERATION_TYPE_ERROR }, { status: 400 })
     }
     const effectiveOperationType = resolveGenerationRouteOperationType(operationType)
+    const writingSkillCardIds = effectiveOperationType === 'rewrite'
+      ? normalizeWritingSkillCardIds(body)
+      : []
+    const rawWritingSkillSeed = body.writingSkillSeed
+    const writingSkillSeed = typeof rawWritingSkillSeed === 'number' && Number.isFinite(rawWritingSkillSeed)
+      ? Math.floor(rawWritingSkillSeed) & 0x7fffffff
+      : createWritingSkillRuntimeSeed()
+    const rawWritingSkillExampleCount = body.writingSkillExampleCount
+    const writingSkillExampleCount = typeof rawWritingSkillExampleCount === 'number' && Number.isFinite(rawWritingSkillExampleCount)
+      ? Math.floor(rawWritingSkillExampleCount)
+      : undefined
 
     const result = await runWithNovelDatabaseAccess(novelId, () => buildGenerationContext({
       novelId,
@@ -60,6 +75,9 @@ export async function POST(request: Request) {
       futureJumpRunId: body.futureJumpRunId ? String(body.futureJumpRunId) : undefined,
       branchContextNodeId: body.branchContextNodeId ? String(body.branchContextNodeId) : undefined,
       branchContextInclusion: normalizeBranchContextInclusion(body.branchContextInclusion),
+      writingSkillCardIds,
+      writingSkillExampleCount,
+      writingSkillSeed,
     }))
 
     return NextResponse.json({ ok: true, ...result })

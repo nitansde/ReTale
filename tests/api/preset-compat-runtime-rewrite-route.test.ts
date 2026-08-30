@@ -457,6 +457,7 @@ function readPresetCompatHeader(response: Response) {
 afterEach(() => {
   vi.restoreAllMocks()
   vi.doUnmock('@/lib/preset-compat/runtime-integration')
+  vi.doUnmock('@/lib/server/writing-skill-runtime')
   vi.resetModules()
 })
 
@@ -1611,6 +1612,126 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.messages[1]?.content).not.toContain('# 相关世界设定')
     expect(requestBody.messages[1]?.content).toContain('[SCENARIO]\n# 当前章节摘要\n雨夜里的对峙一触即发。\n[/SCENARIO]')
     expect(requestBody.messages[1]?.content).toContain('[PERSONALITY]\n# 相关人物\n- 林澈｜状态：克制｜话少但护短\n[/PERSONALITY]')
+  })
+
+  it('inserts each selected writing skill once and omits a disabled writing-skill block', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createCreativeLibrary(),
+    }))
+
+    const skillPrompts = new Map([
+      ['writing-skill-card-1', '## 本次指定写作技巧：技巧甲\n技巧甲唯一内容'],
+      ['writing-skill-card-2', '## 本次指定写作技巧：技巧乙\n技巧乙唯一内容'],
+    ])
+    const createWritingSkillBundle = (cardIds: string[], seed: number) => {
+      const blocks = cardIds.map((cardId) => ({
+        id: `writing-skill:${cardId}`,
+        label: `写作技巧：${cardId}`,
+        enabled: true,
+        priority: 'highest' as const,
+        content: skillPrompts.get(cardId) ?? '',
+      }))
+      return {
+        runtimes: [],
+        records: cardIds.map((cardId) => ({
+          skillCardId: cardId,
+          exampleCount: 2,
+          seed,
+          selectedExampleRefs: [`${cardId}-example-1`, `${cardId}-example-2`],
+        })),
+        prompt: blocks.map((block) => block.content).join('\n\n'),
+        blocks,
+      }
+    }
+    const resolveWritingSkillRuntimes = vi.fn((input: { cardIds: string[]; seed: number }) => (
+      createWritingSkillBundle(input.cardIds, input.seed)
+    ))
+    const buildGenerationContext = vi.fn(async (input: { writingSkillCardIds?: string[]; writingSkillSeed?: number }) => {
+      const writingSkillBundle = createWritingSkillBundle(
+        input.writingSkillCardIds ?? [],
+        input.writingSkillSeed ?? 1,
+      )
+      const promptBlocks = [
+        { id: 'current-summary', label: '当前章节摘要', enabled: true, priority: 'high' as const, content: '# 当前章节摘要\n稳定摘要' },
+        ...writingSkillBundle.blocks,
+      ]
+      return {
+        novelId: 'novel-writing-skills',
+        branchId: 'novel-writing-skills:main',
+        chapterId: 'chapter-writing-skills',
+        chapterNo: 8,
+        selectedLineStart: 2,
+        selectedLineEnd: 3,
+        warnings: [],
+        promptBlocks,
+        assembledContext: promptBlocks.map((block) => block.content).join('\n\n'),
+        graphContext: { nodes: [], edges: [], seedEntities: [], contextText: '', warnings: [] },
+        lanceEvidence: [],
+        tokenEstimate: 0,
+      }
+    })
+    vi.doMock('@/lib/server/writing-skill-runtime', () => ({
+      resolveWritingSkillRuntimes,
+    }))
+    vi.doMock('@/lib/server/context-builder', () => ({
+      buildGenerationContext,
+    }))
+
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT'] }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const baseWritingSkillRequest = {
+      stream: false,
+      novelId: 'novel-writing-skills',
+      chapterId: 'chapter-writing-skills',
+      writingSkillCardIds: ['writing-skill-card-1', 'writing-skill-card-2'],
+      writingSkillExampleCount: 2,
+      writingSkillSeed: 13579,
+    }
+
+    const enabledResponse = await POST(createRequest('rewrite', baseWritingSkillRequest))
+    const disabledResponse = await POST(createRequest('rewrite', {
+      ...baseWritingSkillRequest,
+      disabledBlockIds: ['writing-skill:writing-skill-card-2'],
+    }))
+
+    expect(enabledResponse.status).toBe(200)
+    expect(disabledResponse.status).toBe(200)
+    const enabledBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    const disabledBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    const enabledPrompt = enabledBody.messages[1]?.content ?? ''
+    const disabledPrompt = disabledBody.messages[1]?.content ?? ''
+
+    expect(enabledPrompt.match(/技巧甲唯一内容/g)?.length ?? 0).toBe(1)
+    expect(enabledPrompt.match(/技巧乙唯一内容/g)?.length ?? 0).toBe(1)
+    expect(disabledPrompt.match(/技巧甲唯一内容/g)?.length ?? 0).toBe(1)
+    expect(disabledPrompt).not.toContain('技巧乙唯一内容')
+    expect(resolveWritingSkillRuntimes).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      cardIds: ['writing-skill-card-1', 'writing-skill-card-2'],
+      seed: 13579,
+    }))
+    expect(resolveWritingSkillRuntimes).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      cardIds: ['writing-skill-card-1'],
+      seed: 13579,
+    }))
+    expect(buildGenerationContext).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      writingSkillCardIds: ['writing-skill-card-1', 'writing-skill-card-2'],
+      writingSkillSeed: 13579,
+    }))
+    expect(buildGenerationContext).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      writingSkillCardIds: ['writing-skill-card-1'],
+      writingSkillSeed: 13579,
+    }))
   })
 
   it('forwards branch lineage selectors into buildGenerationContext for rewrite requests', async () => {

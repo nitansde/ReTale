@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server'
 import { createContinueBlockFromRewrite, regenerateContinueBlock } from '@/lib/server/continue-block-service'
 import { isNotFoundErrorMessage, jsonError, readJsonObject, toErrorMessage } from '@/lib/server/api-route'
+import { normalizeWritingSkillCardIds } from '@/lib/writing-skill-selection'
+
+function readWritingSkillExampleCount(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
 
 export async function POST(request: Request) {
   try {
@@ -15,6 +20,8 @@ export async function POST(request: Request) {
       generatedText: String(body.generatedText ?? ''),
       inputTokens: typeof body.inputTokens === 'number' ? body.inputTokens : null,
       outputTokens: typeof body.outputTokens === 'number' ? body.outputTokens : null,
+      writingSkillCardIds: normalizeWritingSkillCardIds(body),
+      writingSkillExampleCount: readWritingSkillExampleCount(body.writingSkillExampleCount),
       userInstruction: String(body.userInstruction ?? ''),
       titleHint: typeof body.titleHint === 'string' ? body.titleHint : null,
       subtitleHint: typeof body.subtitleHint === 'string' ? body.subtitleHint : null,
@@ -40,6 +47,8 @@ export async function PUT(request: Request) {
       originalText: String(body.originalText ?? ''),
       inputTokens: typeof body.inputTokens === 'number' ? body.inputTokens : null,
       outputTokens: typeof body.outputTokens === 'number' ? body.outputTokens : null,
+      writingSkillCardIds: normalizeWritingSkillCardIds(body),
+      writingSkillExampleCount: readWritingSkillExampleCount(body.writingSkillExampleCount),
       titleHint: typeof body.titleHint === 'string' ? body.titleHint : null,
       subtitleHint: typeof body.subtitleHint === 'string' ? body.subtitleHint : null,
     })

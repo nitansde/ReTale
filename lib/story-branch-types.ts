@@ -78,6 +78,8 @@ export type StoryTimelineNodeRecord = {
   originalText?: string | null
   inputTokens?: number | null
   outputTokens?: number | null
+  writingSkillCardIds?: string[]
+  writingSkillExampleCount?: number | null
   readableLabel?: string
   readableLineageLabel?: string
   laneIndex: number
@@ -113,6 +115,8 @@ export type StoryTimelineBranchNode = {
   originalText?: string | null
   inputTokens?: number | null
   outputTokens?: number | null
+  writingSkillCardIds?: string[]
+  writingSkillExampleCount?: number | null
   createdAt?: string
   updatedAt?: string
   status: string
@@ -471,6 +475,8 @@ export type ContinueBlockRecord = {
   latestText: string
   inputTokens?: number | null
   outputTokens?: number | null
+  writingSkillCardIds: string[]
+  writingSkillExampleCount: number
   latestRevisionNo: number
   status: string
   createdAt: string
@@ -495,6 +501,8 @@ export type ContinueBlockCreateRequest = {
   userInstruction: string
   inputTokens?: number | null
   outputTokens?: number | null
+  writingSkillCardIds?: string[]
+  writingSkillExampleCount?: number
   titleHint?: string | null
   subtitleHint?: string | null
 }
@@ -509,6 +517,8 @@ export type ContinueBlockRegenerateRequest = {
   originalText: string
   inputTokens?: number | null
   outputTokens?: number | null
+  writingSkillCardIds?: string[]
+  writingSkillExampleCount?: number
   titleHint?: string | null
   subtitleHint?: string | null
 }
@@ -523,5 +533,7 @@ export type ContinueBlockMutationResponse = {
   title: string
   subtitle: string | null
   latestRevisionNo: number
+  writingSkillCardIds: string[]
+  writingSkillExampleCount: number
 }
 import type { PresetCompatResponseMetadata } from '@/lib/preset-compat/runtime-integration'

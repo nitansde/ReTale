@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useSelectionNovelStudioActions } from '@/components/workspace/use-selection-novel-studio-actions'
 import { useSelectionNovelStudioCore } from '@/components/workspace/use-selection-novel-studio-core'
 import type { KnowledgeStatusOverview, RecoverableRewriteJob } from '@/components/workspace/selection-novel-studio-helpers'
+import type { StoryTimelineBranchNode } from '@/lib/story-branch-types'
 import type { Chapter } from '@/lib/types'
 import { useNovelStore } from '@/store/novel-store'
 import type { KnowledgeProjectionResult, NovelStore } from '@/store/novel-store-types'
@@ -180,6 +181,7 @@ function renderActionsHook(options: {
   rollbackNovelDeletion?: NovelStore['rollbackNovelDeletion']
   setNovelDeletionPending?: NovelStore['setNovelDeletionPending']
   reconcileNovelDeletion?: NovelStore['reconcileNovelDeletion']
+  viewModel?: Parameters<typeof useSelectionNovelStudioActions>[0]['viewModel']
 } = {}) {
   const coreParams: Parameters<typeof useSelectionNovelStudioCore>[0] = {
     loadFromBackend: options.loadFromBackend ?? vi.fn().mockResolvedValue(undefined),
@@ -219,7 +221,7 @@ function renderActionsHook(options: {
     const core = useSelectionNovelStudioCore(runtimeCoreParams)
     const actions = useSelectionNovelStudioActions({
       core,
-      viewModel: {
+      viewModel: options.viewModel ?? {
         activeWorkspaceSelection: { kind: 'chapter', chapterId: runtimeChapter.id, chapterNo: runtimeChapter.order },
         selectedTimelineNode: null,
         selectedContinueBlockNode: null,
@@ -281,6 +283,7 @@ function installIdleWorkspaceFetchMock() {
 function installRecoverableRewriteFetchMock(options: {
   restoreResponse: Deferred<Response>
   storyTimelineResponse?: Deferred<Response>
+  writingSkillCards?: Array<{ id: string; title: string }>
   createResponse?: Deferred<Response>
   createResponses?: Deferred<Response>[]
   pollResponses?: Deferred<Response>[]
@@ -300,7 +303,7 @@ function installRecoverableRewriteFetchMock(options: {
       return Promise.resolve(jsonResponse({ novelId: 'novel-1', branchId: 'novel-1:main', chapters: [], branchNodes: [], edges: [] }))
     }
     if (url === '/api/writing-skills?status=ACTIVE' && method === 'GET') {
-      return Promise.resolve(jsonResponse({ ok: true, cards: [] }))
+      return Promise.resolve(jsonResponse({ ok: true, cards: options.writingSkillCards ?? [] }))
     }
     if (url.startsWith('/api/rewrite?') && method === 'GET') {
       if (url.includes('jobId=')) {
@@ -530,6 +533,149 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     })
   })
 
+  it('hydrates multiple writing skill cards and their stable seed from a recoverable rewrite', async () => {
+    const restoreResponse = createDeferred<Response>()
+    installRecoverableRewriteFetchMock({
+      restoreResponse,
+      writingSkillCards: [
+        { id: 'writing-skill-card-1', title: 'Facial detail' },
+        { id: 'writing-skill-card-2', title: 'Tense dialogue' },
+      ],
+    })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    const restoredJob = buildRecoverableRewriteJob('succeeded')
+    restoredJob.panel.writingSkillCardIds = ['writing-skill-card-1', 'writing-skill-card-2']
+    restoredJob.panel.writingSkillSeed = 24680
+
+    await waitFor(() => expect(result.current.core.workspaceSelection).toEqual({ kind: 'chapter', chapterId: chapter.id, chapterNo: chapter.order }))
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: restoredJob }))
+
+    await waitFor(() => {
+      expect(result.current.core.selectedWritingSkillCardIds).toEqual(['writing-skill-card-1', 'writing-skill-card-2'])
+      expect(result.current.core.writingSkillSeed).toBe(24680)
+    })
+  })
+
+  it('hydrates a legacy single-card recoverable rewrite and creates a seed when it has none', async () => {
+    const restoreResponse = createDeferred<Response>()
+    installRecoverableRewriteFetchMock({
+      restoreResponse,
+      writingSkillCards: [{ id: 'legacy-writing-skill-card', title: 'Legacy skill' }],
+    })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    const restoredJob = buildRecoverableRewriteJob('succeeded')
+    restoredJob.panel.writingSkillCardId = 'legacy-writing-skill-card'
+
+    await waitFor(() => expect(result.current.core.workspaceSelection).toEqual({ kind: 'chapter', chapterId: chapter.id, chapterNo: chapter.order }))
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: restoredJob }))
+
+    await waitFor(() => {
+      expect(result.current.core.selectedWritingSkillCardIds).toEqual(['legacy-writing-skill-card'])
+      expect(Number.isFinite(result.current.core.writingSkillSeed)).toBe(true)
+    })
+  })
+
+  it('inherits the parent continue-block skill selection with a fresh task seed', async () => {
+    const previewBodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation((values) => {
+      ;(values as Uint32Array)[0] = 424242
+      return values
+    })
+    const selectedContinueBlockNode = {
+      type: 'branch_node',
+      id: 'continue-node-1',
+      nodeType: 'continue_block',
+      readableLabel: 'CONT-01',
+      readableLineageLabel: 'CONT-01',
+      anchorChapterNo: 1,
+      parentNodeId: null,
+      title: 'Continue block',
+      subtitle: null,
+      laneIndex: 0,
+      colorToken: 'fuchsia',
+      sourceChapterNo: 1,
+      targetChapterNo: null,
+      continueBlockId: 'continue-1',
+      whatIfSessionId: null,
+      futureJumpRunId: null,
+      roleplaySessionId: null,
+      latestText: 'Parent generated text',
+      userInstruction: 'Continue the parent branch',
+      selectedText: 'Parent selection',
+      originalText: 'Parent original text',
+      inputTokens: 100,
+      outputTokens: 50,
+      writingSkillCardIds: ['writing-skill-card-1', 'writing-skill-card-2', 'deleted-card'],
+      writingSkillExampleCount: 8,
+      status: 'active',
+    } satisfies StoryTimelineBranchNode
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url.startsWith('/api/knowledge-view?')) {
+        return jsonResponse({ ok: true, knowledgeRebuildStatus: null, hanlpCacheSnapshot: null, knowledgeStatusOverview: null })
+      }
+      if (url.startsWith('/api/story-timeline?')) {
+        return jsonResponse({ novelId: 'novel-1', branchId: 'novel-1:main', chapters: [], branchNodes: [selectedContinueBlockNode], edges: [] })
+      }
+      if (url === '/api/writing-skills?status=ACTIVE') {
+        return jsonResponse({
+          ok: true,
+          cards: [
+            { id: 'writing-skill-card-1', title: 'Facial detail' },
+            { id: 'writing-skill-card-2', title: 'Tense dialogue' },
+          ],
+        })
+      }
+      if (url.startsWith('/api/rewrite?') && method === 'GET') {
+        return jsonResponse({ ok: true, job: null })
+      }
+      if (url === '/api/rag/build-generation-context' && method === 'POST') {
+        previewBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+        return jsonResponse({
+          ok: true,
+          novelId: 'novel-1',
+          branchId: 'novel-1:main',
+          chapterNo: 1,
+          assembledContext: '',
+          promptBlocks: [],
+          lanceEvidence: [],
+          graphContext: { seedEntities: [], nodes: [], edges: [] },
+        })
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`)
+    }))
+    const { result } = renderActionsHook({
+      currentNovelId: 'novel-1',
+      viewModel: {
+        activeWorkspaceSelection: { kind: 'continue_block', nodeId: 'continue-node-1', continueBlockId: 'continue-1', anchorChapterNo: 1 },
+        selectedTimelineNode: selectedContinueBlockNode,
+        selectedContinueBlockNode,
+        selectedContinueBlockFutureMapLaunch: null,
+        selectedTimelineDisplayLabel: 'CONT-01',
+        selectedTimelineInstructionPreview: 'Continue the parent branch',
+      },
+    })
+
+    await waitFor(() => expect(result.current.core.writingSkillCards).toHaveLength(2))
+    act(() => {
+      result.current.core.setWritingSkillSeed(12345)
+      result.current.actions.reopenContinueBlockRewriteFlow('continue')
+    })
+
+    await waitFor(() => {
+      expect(result.current.core.selectedWritingSkillCardIds).toEqual(['writing-skill-card-1', 'writing-skill-card-2'])
+      expect(result.current.core.writingSkillExampleCount).toBe(8)
+      expect(result.current.core.writingSkillSeed).toBe(424242)
+    })
+    await waitFor(() => expect(previewBodies).toHaveLength(1))
+    expect(previewBodies[0]).toMatchObject({
+      writingSkillCardIds: ['writing-skill-card-1', 'writing-skill-card-2'],
+      writingSkillExampleCount: 8,
+      writingSkillSeed: 424242,
+    })
+  })
+
   it('ignores a delayed initial restore after an explicit same-current-chapter selection before URL hydration', async () => {
     const restoreResponse = createDeferred<Response>()
     installRecoverableRewriteFetchMock({ restoreResponse })
@@ -683,7 +829,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     expect(result.current.core.rewriteFlow.jobStatus).toBe('queued')
   })
 
-  it('uses the latest flushed editor text as the rewrite source', async () => {
+  it('uses the latest flushed editor text and submits multiple writing skill cards with a stable seed', async () => {
     const restoreResponse = createDeferred<Response>()
     const createResponse = createDeferred<Response>()
     const fetchMock = installRecoverableRewriteFetchMock({ restoreResponse, createResponse })
@@ -691,8 +837,10 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: null }))
     act(() => result.current.core.setSelectionText('Fresh selection'))
     await act(async () => { await result.current.actions.openActionMode('rewrite') })
-    act(() => result.current.core.setSelectedWritingSkillCardId('writing-skill-card-1'))
+    act(() => result.current.core.setSelectedWritingSkillCardIds(['writing-skill-card-1', 'writing-skill-card-2']))
     act(() => result.current.core.setWritingSkillExampleCount(4))
+    const writingSkillSeed = result.current.core.writingSkillSeed
+    expect(Number.isFinite(writingSkillSeed)).toBe(true)
     const updateChapterContent = vi.fn()
     const latestText = 'Latest buffered editor text'
     result.current.core.flushEditorBuffer = () => {
@@ -705,14 +853,16 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     const rewriteCall = fetchMock.mock.calls.find(([url, init]) => String(url) === '/api/rewrite' && init?.method === 'POST')
     const requestBody = JSON.parse(String(rewriteCall?.[1]?.body)) as {
       sourceText: string
-      writingSkillCardId?: string
+      writingSkillCardIds?: string[]
       writingSkillExampleCount?: number
+      writingSkillSeed?: number
     }
 
     expect(updateChapterContent.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder.at(-1) ?? 0)
     expect(requestBody.sourceText).toBe(latestText)
-    expect(requestBody.writingSkillCardId).toBe('writing-skill-card-1')
+    expect(requestBody.writingSkillCardIds).toEqual(['writing-skill-card-1', 'writing-skill-card-2'])
     expect(requestBody.writingSkillExampleCount).toBe(4)
+    expect(requestBody.writingSkillSeed).toBe(writingSkillSeed)
     await resolveDeferredResponse(createResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('queued') }))
   })
 

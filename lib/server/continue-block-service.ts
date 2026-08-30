@@ -102,6 +102,8 @@ export async function createContinueBlockFromRewrite(rawInput: ContinueBlockCrea
       latestText: input.generatedText,
       inputTokens: input.inputTokens ?? null,
       outputTokens: input.outputTokens ?? null,
+      writingSkillCardIds: input.writingSkillCardIds,
+      writingSkillExampleCount: input.writingSkillExampleCount,
       latestRevisionNo: 1,
       status: 'active',
     }, db)
@@ -150,6 +152,8 @@ export async function createContinueBlockFromRewrite(rawInput: ContinueBlockCrea
     title: continueBlock.title,
     subtitle: continueBlock.subtitle,
     latestRevisionNo: continueBlock.latestRevisionNo,
+    writingSkillCardIds: continueBlock.writingSkillCardIds,
+    writingSkillExampleCount: continueBlock.writingSkillExampleCount,
   })
 }
 
@@ -181,6 +185,8 @@ export async function regenerateContinueBlock(rawInput: ContinueBlockRegenerateR
     generatedText: input.generatedText,
     inputTokens: input.inputTokens ?? null,
     outputTokens: input.outputTokens ?? null,
+    writingSkillCardIds: input.writingSkillCardIds,
+    writingSkillExampleCount: input.writingSkillExampleCount,
     title,
     subtitle,
     status: 'revised',
@@ -211,5 +217,7 @@ export async function regenerateContinueBlock(rawInput: ContinueBlockRegenerateR
     title: updated.title,
     subtitle: updated.subtitle,
     latestRevisionNo: updated.latestRevisionNo,
+    writingSkillCardIds: updated.writingSkillCardIds,
+    writingSkillExampleCount: updated.writingSkillExampleCount,
   })
 }

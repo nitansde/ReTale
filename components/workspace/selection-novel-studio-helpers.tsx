@@ -100,6 +100,7 @@ export type RecoverableRewriteJob = {
     branchContextNodeId: string | null
     branchContextInclusion: string | null
     continueBlockId: string | null
+    writingSkillCardIds?: string[]
     writingSkillCardId?: string | null
     writingSkillExampleCount?: number | null
     writingSkillSeed?: number | null
@@ -149,6 +150,9 @@ export type PendingContinueBlockRewriteLaunch = {
   subtitle: string | null
   inputTokens?: number | null
   outputTokens?: number | null
+  writingSkillCardIds: string[]
+  writingSkillExampleCount: number
+  writingSkillSeed: number
   targetChapterId: string
   variant: 'continue' | 'regenerate'
 }
@@ -1338,6 +1342,8 @@ export async function callCreateContinueBlockApi(payload: Record<string, unknown
   title: string
   subtitle: string | null
   latestRevisionNo: number
+  writingSkillCardIds: string[]
+  writingSkillExampleCount: number
 }> {
   const response = await fetch('/api/continue-blocks', {
     method: 'POST',
@@ -1355,6 +1361,8 @@ export async function callCreateContinueBlockApi(payload: Record<string, unknown
     title: string
     subtitle: string | null
     latestRevisionNo: number
+    writingSkillCardIds: string[]
+    writingSkillExampleCount: number
     error?: string
   }
   if (!response.ok) {
@@ -1376,6 +1384,8 @@ export async function callRegenerateContinueBlockApi(payload: Record<string, unk
   title: string
   subtitle: string | null
   latestRevisionNo: number
+  writingSkillCardIds: string[]
+  writingSkillExampleCount: number
 }> {
   const response = await fetch('/api/continue-blocks', {
     method: 'PUT',
@@ -1393,6 +1403,8 @@ export async function callRegenerateContinueBlockApi(payload: Record<string, unk
     title: string
     subtitle: string | null
     latestRevisionNo: number
+    writingSkillCardIds: string[]
+    writingSkillExampleCount: number
     error?: string
   }
   if (!response.ok) {
@@ -1540,6 +1552,8 @@ export function createOptimisticContinueBlockTimelineNode(params: {
     originalText: params.originalText,
     inputTokens: params.inputTokens,
     outputTokens: params.outputTokens,
+    writingSkillCardIds: params.result.writingSkillCardIds,
+    writingSkillExampleCount: params.result.writingSkillExampleCount,
     createdAt: now,
     updatedAt: now,
     status: 'active',

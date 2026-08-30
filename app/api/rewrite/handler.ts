@@ -40,8 +40,13 @@ import type { PresetCompatPromptRuleRuntimeContext, PresetCompatRuntimeContextBl
 import type { GenerationContextBlock, RoleplayContextMessage } from '@/lib/server/context-builder'
 import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
 import { createWritingSkillRandomSeed } from '@/lib/server/writing-skill-distillation-agent'
-import { resolveWritingSkillRuntime } from '@/lib/server/writing-skill-runtime'
+import { resolveWritingSkillRuntimes } from '@/lib/server/writing-skill-runtime'
 import type { WritingSkillRuntimeRecord } from '@/lib/writing-skill-types'
+import {
+  isWritingSkillPromptBlockId,
+  normalizeWritingSkillCardIds,
+  readWritingSkillCardIdFromPromptBlockId,
+} from '@/lib/writing-skill-selection'
 
 export const maxDuration = 3600
 
@@ -273,7 +278,7 @@ function findLatestRecoverableRewriteJob(params: {
   rewriteLaunchSource?: string | null
   branchContextNodeId?: string | null
   continueBlockId?: string | null
-  writingSkillCardId?: string | null
+  writingSkillCardIds?: string[]
 }) {
   const db = getNovelRouteDb(params.novelId)
   const rows = db.queryAll<RecoverableRewriteJobRow>(
@@ -295,10 +300,16 @@ function findLatestRecoverableRewriteJob(params: {
     if (params.rewriteLaunchSource && payload.panel.rewriteLaunchSource !== params.rewriteLaunchSource) return false
     if (params.branchContextNodeId && payload.panel.branchContextNodeId !== params.branchContextNodeId) return false
     if (params.continueBlockId && payload.panel.continueBlockId !== params.continueBlockId) return false
-    if (
-      Object.prototype.hasOwnProperty.call(params, 'writingSkillCardId')
-      && (params.writingSkillCardId ?? null) !== payload.panel.writingSkillCardId
-    ) return false
+    if (Object.prototype.hasOwnProperty.call(params, 'writingSkillCardIds')) {
+      const expectedCardIds = params.writingSkillCardIds ?? []
+      const actualCardIds = payload.panel.writingSkillCardIds ?? normalizeWritingSkillCardIds({
+        writingSkillCardId: payload.panel.writingSkillCardId,
+      })
+      if (
+        expectedCardIds.length !== actualCardIds.length
+        || expectedCardIds.some((cardId, index) => cardId !== actualCardIds[index])
+      ) return false
+    }
     return true
   }) ?? null
 }
@@ -308,6 +319,7 @@ function buildRecoverableRewritePanel(body: Record<string, unknown>) {
   const chapterId = String(body.chapterId ?? '').trim()
   const branchId = String(body.branchId ?? `${novelId}:main`).trim()
   if (!novelId || !chapterId || !branchId) return null
+  const writingSkillCardIds = normalizeWritingSkillCardIds(body)
 
   return {
     novelId,
@@ -321,7 +333,8 @@ function buildRecoverableRewritePanel(body: Record<string, unknown>) {
     branchContextNodeId: String(body.branchContextNodeId ?? '').trim() || null,
     branchContextInclusion: String(body.branchContextInclusion ?? '').trim() || null,
     continueBlockId: String(body.continueBlockId ?? '').trim() || null,
-    writingSkillCardId: String(body.writingSkillCardId ?? '').trim() || null,
+    writingSkillCardIds,
+    writingSkillCardId: writingSkillCardIds[0] ?? null,
     writingSkillExampleCount: typeof body.writingSkillExampleCount === 'number' && Number.isFinite(body.writingSkillExampleCount)
       ? Math.floor(body.writingSkillExampleCount)
       : null,
@@ -365,29 +378,61 @@ function readStreamResponseMetadata(response: Response) {
   }
 }
 
-function buildWritingSkillResponseHeaders(record: WritingSkillRuntimeRecord | null): Record<string, string> {
-  return record ? { 'X-ReTale-Writing-Skill': encodeURIComponent(JSON.stringify(record)) } : {}
+function normalizeWritingSkillRuntimeRecord(value: unknown): WritingSkillRuntimeRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Partial<WritingSkillRuntimeRecord>
+  if (
+    typeof record.skillCardId !== 'string'
+    || typeof record.exampleCount !== 'number'
+    || typeof record.seed !== 'number'
+    || !Array.isArray(record.selectedExampleRefs)
+  ) return null
+  return {
+    skillCardId: record.skillCardId,
+    exampleCount: record.exampleCount,
+    seed: record.seed,
+    selectedExampleRefs: record.selectedExampleRefs.map(String),
+  }
 }
 
-function readStreamWritingSkillMetadata(response: Response): WritingSkillRuntimeRecord | null {
-  const header = response.headers.get('x-retale-writing-skill')
-  if (!header) return null
-  try {
-    const parsed = JSON.parse(decodeURIComponent(header)) as Partial<WritingSkillRuntimeRecord>
-    if (
-      typeof parsed.skillCardId !== 'string'
-      || typeof parsed.exampleCount !== 'number'
-      || typeof parsed.seed !== 'number'
-      || !Array.isArray(parsed.selectedExampleRefs)
-    ) return null
-    return {
-      skillCardId: parsed.skillCardId,
-      exampleCount: parsed.exampleCount,
-      seed: parsed.seed,
-      selectedExampleRefs: parsed.selectedExampleRefs.map(String),
+function buildWritingSkillResponseHeaders(records: readonly WritingSkillRuntimeRecord[]): Record<string, string> {
+  const firstRecord = records[0]
+  if (!firstRecord) return {}
+  return {
+    'X-ReTale-Writing-Skill': encodeURIComponent(JSON.stringify(firstRecord)),
+    'X-ReTale-Writing-Skills': encodeURIComponent(JSON.stringify(records)),
+  }
+}
+
+function buildWritingSkillMetadata(records: readonly WritingSkillRuntimeRecord[]) {
+  const firstRecord = records[0]
+  return firstRecord
+    ? { writingSkill: firstRecord, writingSkills: records }
+    : null
+}
+
+function readStreamWritingSkillMetadata(response: Response): WritingSkillRuntimeRecord[] {
+  const pluralHeader = response.headers.get('x-retale-writing-skills')
+  if (pluralHeader) {
+    try {
+      const parsed = JSON.parse(decodeURIComponent(pluralHeader)) as unknown
+      if (Array.isArray(parsed)) {
+        return parsed.flatMap((value) => {
+          const record = normalizeWritingSkillRuntimeRecord(value)
+          return record ? [record] : []
+        })
+      }
+    } catch {
     }
+  }
+
+  const legacyHeader = response.headers.get('x-retale-writing-skill')
+  if (!legacyHeader) return []
+  try {
+    const record = normalizeWritingSkillRuntimeRecord(JSON.parse(decodeURIComponent(legacyHeader)))
+    return record ? [record] : []
   } catch {
-    return null
+    return []
   }
 }
 
@@ -417,7 +462,8 @@ async function readRewriteResponseResultWithProgress(
   const decoder = new TextDecoder()
   const provider = response.headers.get('x-retale-provider') ?? 'context-stream'
   const presetCompat = readStreamResponseMetadata(response)
-  const writingSkill = readStreamWritingSkillMetadata(response)
+  const writingSkills = readStreamWritingSkillMetadata(response)
+  const writingSkillMetadata = buildWritingSkillMetadata(writingSkills)
   let content = ''
   let lastPersistedLength = 0
   let lastPersistedAt = 0
@@ -448,7 +494,7 @@ async function readRewriteResponseResultWithProgress(
           title: '生成版本',
           summary: '正在流式生成，结果会持续更新。',
           content: persistedContent,
-          metadata: writingSkill ? { writingSkill } : null,
+          metadata: writingSkillMetadata,
           presetCompat,
         }),
       },
@@ -483,7 +529,7 @@ async function readRewriteResponseResultWithProgress(
     provider,
     title: '生成版本',
     content: finalContent,
-    metadata: writingSkill ? { writingSkill } : null,
+    metadata: writingSkillMetadata,
     presetCompat,
   })
 }
@@ -780,7 +826,10 @@ export async function DELETE(request: Request) {
 
 async function createRecoverableRewriteJob(body: Record<string, unknown>) {
   const preparedBody = { ...body }
-  if (String(preparedBody.writingSkillCardId ?? '').trim()) {
+  const writingSkillCardIds = normalizeWritingSkillCardIds(preparedBody)
+  preparedBody.writingSkillCardIds = writingSkillCardIds
+  preparedBody.writingSkillCardId = writingSkillCardIds[0] ?? null
+  if (writingSkillCardIds.length) {
     const rawSeed = preparedBody.writingSkillSeed
     preparedBody.writingSkillSeed = typeof rawSeed === 'number' && Number.isFinite(rawSeed)
       ? Math.floor(rawSeed) & 0x7fffffff
@@ -809,7 +858,7 @@ async function createRecoverableRewriteJob(body: Record<string, unknown>) {
     rewriteLaunchSource: panel.rewriteLaunchSource,
     branchContextNodeId: panel.branchContextNodeId,
     continueBlockId: panel.continueBlockId,
-    writingSkillCardId: panel.writingSkillCardId,
+    writingSkillCardIds: panel.writingSkillCardIds,
   })
   if (activeJob?.status === 'queued' || activeJob?.status === 'running') {
     scheduleRecoverableRewriteJobIfQueued(activeJob)
@@ -1006,9 +1055,9 @@ async function handleRewriteBody(
     return NextResponse.json({ ok: false, error: INVALID_OPERATION_TYPE_ERROR }, { status: 400 })
   }
   const runtimeSurfaceId = resolveRewriteRouteSurfaceId(operationType)
-  const writingSkillCardId = operationType === 'rewrite'
-    ? String(body.writingSkillCardId ?? '').trim()
-    : ''
+  const writingSkillCardIds = operationType === 'rewrite'
+    ? normalizeWritingSkillCardIds(body)
+    : []
   const rawWritingSkillSeed = body.writingSkillSeed
   const writingSkillSeed = typeof rawWritingSkillSeed === 'number' && Number.isFinite(rawWritingSkillSeed)
     ? Math.floor(rawWritingSkillSeed) & 0x7fffffff
@@ -1017,14 +1066,16 @@ async function handleRewriteBody(
   const writingSkillExampleCount = typeof rawWritingSkillExampleCount === 'number' && Number.isFinite(rawWritingSkillExampleCount)
     ? Math.floor(rawWritingSkillExampleCount)
     : undefined
-  const writingSkillRuntime = writingSkillCardId
-    ? resolveWritingSkillRuntime({
-        cardId: writingSkillCardId,
+  const disabledBlockIds = Array.isArray(body.disabledBlockIds) ? body.disabledBlockIds.map((item: unknown) => String(item)) : []
+  const disabledBlockIdSet = new Set(disabledBlockIds)
+  const enabledWritingSkillCardIds = writingSkillCardIds.filter((cardId) => !disabledBlockIdSet.has(`writing-skill:${cardId}`))
+  const writingSkillBundle = enabledWritingSkillCardIds.length
+    ? resolveWritingSkillRuntimes({
+        cardIds: enabledWritingSkillCardIds,
         count: writingSkillExampleCount,
         seed: writingSkillSeed,
       })
     : null
-  const disabledBlockIds = Array.isArray(body.disabledBlockIds) ? body.disabledBlockIds.map((item: unknown) => String(item)) : []
   const excludedGraphEdgeIds = normalizeStringArray(body.excludedGraphEdgeIds)
   const excludedEvidenceIds = normalizeStringArray(body.excludedEvidenceIds)
   const roleplayMessages = operationType === 'roleplay'
@@ -1045,6 +1096,9 @@ async function handleRewriteBody(
         futureJumpRunId: body.futureJumpRunId ? String(body.futureJumpRunId) : undefined,
         branchContextNodeId: body.branchContextNodeId ? String(body.branchContextNodeId) : undefined,
         branchContextInclusion: normalizeBranchContextInclusion(body.branchContextInclusion),
+        writingSkillCardIds: enabledWritingSkillCardIds,
+        writingSkillExampleCount,
+        writingSkillSeed,
       })
     : null
   const activePromptBlocks = context
@@ -1053,8 +1107,26 @@ async function handleRewriteBody(
   const orderedActivePromptBlocks = activePromptBlocks
     ? orderPromptBlocksForLlmRequest(activePromptBlocks)
     : null
+  const resolvePromptParts = (
+    promptBlocks: readonly GenerationContextBlock[] | null,
+    fallbackContext: string,
+  ) => {
+    if (!promptBlocks) {
+      return {
+        assembledContext: fallbackContext,
+        writingSkillPrompt: writingSkillBundle?.prompt ?? '',
+      }
+    }
+
+    const contextBlocks = promptBlocks.filter((block) => !isWritingSkillPromptBlockId(block.id))
+    const writingSkillBlocks = promptBlocks.filter((block) => isWritingSkillPromptBlockId(block.id))
+    return {
+      assembledContext: assemblePromptBlockContents(contextBlocks) ?? '',
+      writingSkillPrompt: assemblePromptBlockContents(writingSkillBlocks) ?? '',
+    }
+  }
   const buildRuntime = (
-    assembledContext: string,
+    promptParts: { assembledContext: string; writingSkillPrompt: string },
     promptBlocks: readonly GenerationContextBlock[] | null,
   ) => applyPresetCompatCreativeRuntime({
     surfaceId: runtimeSurfaceId,
@@ -1078,8 +1150,8 @@ async function handleRewriteBody(
       selectedLineEnd: context?.selectedLineEnd,
       sourceText,
       selectedText,
-      assembledContext,
-      writingSkillPrompt: writingSkillRuntime?.prompt,
+      assembledContext: promptParts.assembledContext,
+      writingSkillPrompt: promptParts.writingSkillPrompt,
     }),
     promptRuleRuntimeContext: normalizePresetCompatRuntimeContext(
       body as Record<string, unknown>,
@@ -1087,10 +1159,9 @@ async function handleRewriteBody(
       promptBlocks,
     ),
   })
-  const initialAssembledContext = activePromptBlocks
-    ? assemblePromptBlockContents(orderedActivePromptBlocks) ?? ''
-    : String(body.prompt ?? '')
-  const initialRuntime = buildRuntime(initialAssembledContext, orderedActivePromptBlocks)
+  const fallbackContext = String(body.prompt ?? '')
+  const initialPromptParts = resolvePromptParts(orderedActivePromptBlocks, fallbackContext)
+  const initialRuntime = buildRuntime(initialPromptParts, orderedActivePromptBlocks)
   const requestStreamOverride = getExplicitStreamOverride(body as Record<string, unknown>)
   const initialRouteMetadata = resolveCreativeRoutePresetCompatMetadata({
     runtime: initialRuntime,
@@ -1102,10 +1173,9 @@ async function handleRewriteBody(
   const trimmedPromptBlocks = orderedActivePromptBlocks
     ? orderedActivePromptBlocks.filter((block) => !initialRouteMetadata.contextWindow?.trimmedBlockIds.includes(block.id))
     : null
-  const assembledContext = activePromptBlocks
-    ? assemblePromptBlockContents(trimmedPromptBlocks) ?? ''
-    : String(body.prompt ?? '')
-  const runtime = buildRuntime(assembledContext, trimmedPromptBlocks)
+  const promptParts = resolvePromptParts(trimmedPromptBlocks, fallbackContext)
+  const assembledContext = promptParts.assembledContext
+  const runtime = buildRuntime(promptParts, trimmedPromptBlocks)
   const routeMetadata = resolveCreativeRoutePresetCompatMetadata({
     runtime,
     blocks: buildRouteContextBlocks(trimmedPromptBlocks),
@@ -1118,6 +1188,16 @@ async function handleRewriteBody(
     contextWindow: initialRouteMetadata.contextWindow,
   }
   const presetCompatHeader = serializePresetCompatResponseMetadata(presetCompatMetadata)
+  const activeWritingSkillCardIds = new Set(
+    trimmedPromptBlocks
+      ? trimmedPromptBlocks.flatMap((block) => {
+          const cardId = readWritingSkillCardIdFromPromptBlockId(block.id)
+          return cardId ? [cardId] : []
+        })
+      : enabledWritingSkillCardIds,
+  )
+  const writingSkillRecords = writingSkillBundle?.records.filter((record) => activeWritingSkillCardIds.has(record.skillCardId)) ?? []
+  const writingSkillMetadata = buildWritingSkillMetadata(writingSkillRecords)
 
   if (routeMetadata.streamPolicy?.effective) {
     const promptPayload = {
@@ -1156,7 +1236,7 @@ async function handleRewriteBody(
             'Cache-Control': 'no-cache, no-transform',
             'X-ReTale-Provider': runtime.resolvedRuntime.providerRuntime.provider,
             ...buildPresetCompatResponseHeaders(presetCompatHeader),
-            ...buildWritingSkillResponseHeaders(writingSkillRuntime?.record ?? null),
+            ...buildWritingSkillResponseHeaders(writingSkillRecords),
           },
         })
       }
@@ -1167,7 +1247,7 @@ async function handleRewriteBody(
           'Cache-Control': 'no-cache, no-transform',
           'X-ReTale-Provider': runtime.resolvedRuntime.providerRuntime.provider,
           ...buildPresetCompatResponseHeaders(presetCompatHeader),
-          ...buildWritingSkillResponseHeaders(writingSkillRuntime?.record ?? null),
+          ...buildWritingSkillResponseHeaders(writingSkillRecords),
         },
       })
     }
@@ -1220,16 +1300,16 @@ async function handleRewriteBody(
       content: firstResult.postRegexText,
       inputTokens: result.usage?.inputTokens,
       outputTokens: result.usage?.outputTokens,
-      metadata: writingSkillRuntime
-        ? { runtime: runtime.metadata, writingSkill: writingSkillRuntime.record }
+      metadata: writingSkillMetadata
+        ? { runtime: runtime.metadata, ...writingSkillMetadata }
         : runtime.metadata,
       presetCompat: presetCompatMetadata,
     })
 
     return NextResponse.json({
       provider: runtime.resolvedRuntime.providerRuntime.provider,
-      metadata: writingSkillRuntime
-        ? { runtime: runtime.metadata, writingSkill: writingSkillRuntime.record }
+      metadata: writingSkillMetadata
+        ? { runtime: runtime.metadata, ...writingSkillMetadata }
         : runtime.metadata,
       result: rewriteResult,
       candidates: [rewriteResult],
@@ -1237,7 +1317,7 @@ async function handleRewriteBody(
     }, {
       headers: {
         ...buildPresetCompatResponseHeaders(presetCompatHeader),
-        ...buildWritingSkillResponseHeaders(writingSkillRuntime?.record ?? null),
+        ...buildWritingSkillResponseHeaders(writingSkillRecords),
       },
     })
   }

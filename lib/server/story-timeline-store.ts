@@ -1,4 +1,5 @@
 import { execute, queryAll, queryOne } from '@/lib/server/database-access'
+import { safeParseJson } from '@/lib/server/json-parse'
 import {
   buildStoryBranchReadableLineageLabel,
   formatStoryBranchReadableLabel,
@@ -6,6 +7,7 @@ import {
 } from '@/lib/story-branch-labels'
 import { orderStoryTimelineBranchNodes } from '@/lib/story-branch-types'
 import { countChineseFriendlyWords } from '@/lib/utils'
+import { normalizeWritingSkillCardIds } from '@/lib/writing-skill-selection'
 import type {
   ChapterTimelineItem,
   StoryTimelineBranchNode,
@@ -43,6 +45,8 @@ type StoryTimelineNodeRow = {
   continue_block_latest_text: string | null
   continue_block_latest_input_tokens: number | null
   continue_block_latest_output_tokens: number | null
+  continue_block_writing_skill_card_ids_json: string | null
+  continue_block_writing_skill_example_count: number | null
   continue_block_latest_revision_no: number | null
   continue_block_user_instruction: string | null
   continue_block_selected_text: string | null
@@ -78,6 +82,8 @@ const STORY_TIMELINE_NODE_SELECT = `
      continue_blocks.latest_text AS continue_block_latest_text,
      continue_blocks.latest_input_tokens AS continue_block_latest_input_tokens,
      continue_blocks.latest_output_tokens AS continue_block_latest_output_tokens,
+     continue_blocks.writing_skill_card_ids_json AS continue_block_writing_skill_card_ids_json,
+     continue_blocks.writing_skill_example_count AS continue_block_writing_skill_example_count,
      continue_blocks.latest_revision_no AS continue_block_latest_revision_no,
      continue_blocks.user_instruction AS continue_block_user_instruction,
      continue_blocks.selected_text AS continue_block_selected_text,
@@ -118,6 +124,21 @@ type RoleplayTimelineSessionRow = {
   latest_message: string | null
 }
 
+function parseContinueBlockWritingSkillCardIds(value: string | null) {
+  const parsed = safeParseJson(value)
+  return normalizeWritingSkillCardIds({
+    writingSkillCardIds: Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === 'string')
+      : [],
+  })
+}
+
+function normalizeContinueBlockWritingSkillExampleCount(value: number | null) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 10
+    ? value
+    : 5
+}
+
 function toStoryTimelineNodeRecord(row: StoryTimelineNodeRow): StoryTimelineNodeRecord {
   return {
     id: row.id,
@@ -140,6 +161,12 @@ function toStoryTimelineNodeRecord(row: StoryTimelineNodeRow): StoryTimelineNode
     latestText: row.continue_block_latest_text,
     inputTokens: row.continue_block_latest_input_tokens ?? row.what_if_input_tokens ?? row.future_jump_latest_input_tokens,
     outputTokens: row.continue_block_latest_output_tokens ?? row.what_if_output_tokens ?? row.future_jump_latest_output_tokens,
+    writingSkillCardIds: row.continue_block_id
+      ? parseContinueBlockWritingSkillCardIds(row.continue_block_writing_skill_card_ids_json)
+      : undefined,
+    writingSkillExampleCount: row.continue_block_id
+      ? normalizeContinueBlockWritingSkillExampleCount(row.continue_block_writing_skill_example_count)
+      : undefined,
     latestRevisionNo: row.continue_block_latest_revision_no,
     userInstruction: row.continue_block_user_instruction,
     selectedText: row.continue_block_selected_text,
@@ -685,6 +712,8 @@ function toStoryTimelineBranchNode(node: StoryTimelineNodeRecord): StoryTimeline
     latestText: node.latestText ?? null,
     inputTokens: node.inputTokens ?? null,
     outputTokens: node.outputTokens ?? null,
+    writingSkillCardIds: node.writingSkillCardIds,
+    writingSkillExampleCount: node.writingSkillExampleCount ?? null,
     latestRevisionNo: node.latestRevisionNo ?? null,
     userInstruction: node.userInstruction ?? null,
     selectedText: node.selectedText ?? null,

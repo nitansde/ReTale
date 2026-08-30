@@ -44,6 +44,7 @@ import {
 import {
   chooseWritingSkillExamples,
   compileWritingSkillPrompt,
+  resolveWritingSkillRuntimes,
 } from '@/lib/server/writing-skill-runtime'
 import type {
   MaterialParagraph,
@@ -471,6 +472,76 @@ describe('writing skill runtime example selection', () => {
     expect(different.map((example) => example.id)).not.toEqual(first.map((example) => example.id))
     expect(new Set(first.map((example) => example.rangeRef.chapterId)).size).toBe(4)
     expect(chooseWritingSkillExamples({ examples: examples.slice(0, 2), count: 5, seed: 1 })).toHaveLength(2)
+  })
+
+  it('resolves multiple cards in stable request order with prompts, records, and prompt blocks', async () => {
+    const database = initializeDatabase(new DatabaseSync(':memory:'), {
+      mode: 'control',
+      schemaSql: CONTROL_SCHEMA_SQL,
+    })
+    try {
+      const db = createDatabaseAccess(database)
+      const library = createLibrary({ chapterCount: 4 })
+      const saveCard = (input: { title: string; paragraphIndex: number }) => {
+        const paragraph = library.paragraphs[input.paragraphIndex]
+        return saveWritingSkillCard({
+          libraryId: library.id,
+          libraryVersion: library.version,
+          libraryName: library.name,
+          userInstruction: input.title,
+          modelConfigId: 'knowledgeExtraction',
+          sourceJobId: `job-${input.paragraphIndex + 1}`,
+          result: {
+            title: input.title,
+            summary: `${input.title}的技巧概述。`,
+            rules: [{ text: `${input.title}的写作方法。`, evidenceRefs: [paragraph.displayRef] }],
+            applicationScope: `${input.title}的适用范围。`,
+            avoid: [`避免误用${input.title}。`],
+          },
+          examples: [{
+            rangeRef: {
+              libraryId: library.id,
+              libraryVersion: library.version,
+              workId: library.workId,
+              chapterId: paragraph.chapterId,
+              startParagraphId: paragraph.id,
+              endParagraphId: paragraph.id,
+            },
+            displayRef: paragraph.displayRef,
+            score: 1,
+          }],
+        }, db)
+      }
+      const firstCard = await saveCard({ title: '五官描写', paragraphIndex: 0 })
+      const secondCard = await saveCard({ title: '环境描写', paragraphIndex: 1 })
+      const cardIds = [secondCard.id, firstCard.id, secondCard.id]
+      const first = resolveWritingSkillRuntimes({ cardIds, count: 1, seed: 77, db, library })
+      const repeated = resolveWritingSkillRuntimes({ cardIds, count: 1, seed: 77, db, library })
+
+      expect(first.runtimes.map((runtime) => runtime.card.id)).toEqual([secondCard.id, firstCard.id])
+      expect(repeated.runtimes.map((runtime) => runtime.card.id)).toEqual([secondCard.id, firstCard.id])
+      expect(first.prompt).toBe(first.runtimes.map((runtime) => runtime.prompt).join('\n\n'))
+      expect(first.prompt.indexOf('## 本次指定写作技巧：环境描写'))
+        .toBeLessThan(first.prompt.indexOf('## 本次指定写作技巧：五官描写'))
+
+      expect(first.records).toHaveLength(2)
+      expect(first.records.map((record) => record.skillCardId)).toEqual([secondCard.id, firstCard.id])
+      expect(first.records.every((record) => record.exampleCount === 1 && record.seed === 77)).toBe(true)
+
+      expect(first.blocks).toHaveLength(2)
+      expect(first.blocks.map((block) => block.id)).toEqual([
+        `writing-skill:${secondCard.id}`,
+        `writing-skill:${firstCard.id}`,
+      ])
+      expect(first.blocks.map((block) => block.content)).toEqual(first.runtimes.map((runtime) => runtime.prompt))
+      expect(first.blocks.map((block) => block.label)).toEqual([
+        '写作技巧：环境描写',
+        '写作技巧：五官描写',
+      ])
+      expect(first.blocks.every((block) => block.enabled && block.priority === 'highest')).toBe(true)
+    } finally {
+      database.close()
+    }
   })
 })
 

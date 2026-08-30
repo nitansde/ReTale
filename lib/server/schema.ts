@@ -892,6 +892,8 @@ CREATE TABLE IF NOT EXISTS continue_blocks (
   latest_text TEXT NOT NULL,
   latest_input_tokens INTEGER,
   latest_output_tokens INTEGER,
+  writing_skill_card_ids_json TEXT NOT NULL DEFAULT '[]',
+  writing_skill_example_count INTEGER NOT NULL DEFAULT 5,
   latest_revision_no INTEGER NOT NULL DEFAULT 1,
   status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

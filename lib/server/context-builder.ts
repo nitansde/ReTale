@@ -7,6 +7,7 @@ import { estimateTokenCount, normalizeBranchId } from '@/lib/server/knowledge-st
 import { searchLanceEvidence, type RetrievalDocSourceType } from '@/lib/server/retrieval-index'
 import { buildRewriteTaskPromptLines, isContinuationRewriteTask } from '@/lib/server/rewrite-task-prompt'
 import { queryAll, queryOne } from '@/lib/server/database-access'
+import { resolveWritingSkillRuntimes } from '@/lib/server/writing-skill-runtime'
 import type { DatabaseAccess } from '@/lib/server/database-access'
 import {
   buildCharacterDescriptionDelta,
@@ -35,6 +36,9 @@ export type GenerationContextRequest = {
   futureJumpRunId?: string
   branchContextNodeId?: string
   branchContextInclusion?: BranchLineageInclusion
+  writingSkillCardIds?: string[]
+  writingSkillExampleCount?: number
+  writingSkillSeed?: number
 }
 
 export function resolveGenerationContextOperationType(operationType: ProductSurfaceId): ProductSurfaceId {
@@ -933,6 +937,15 @@ export async function buildGenerationContext(request: GenerationContextRequest):
   const roleplayContextBlock = effectiveOperationType === 'roleplay'
     ? buildRoleplayContextBlock(request.roleplayMessages)
     : null
+  const writingSkillBundle = effectiveOperationType === 'rewrite' && request.writingSkillCardIds?.length
+    ? resolveWritingSkillRuntimes({
+        cardIds: request.writingSkillCardIds,
+        count: request.writingSkillExampleCount,
+        seed: typeof request.writingSkillSeed === 'number' && Number.isFinite(request.writingSkillSeed)
+          ? Math.floor(request.writingSkillSeed) & 0x7fffffff
+          : 1,
+      })
+    : null
   const excludedGraphEdgeIds = new Set((request.excludedGraphEdgeIds ?? []).map((item) => item.trim()).filter(Boolean))
   const excludedEvidenceIds = new Set((request.excludedEvidenceIds ?? []).map((item) => item.trim()).filter(Boolean))
   const branchId = normalizeBranchId(request.novelId, request.branchId)
@@ -1332,6 +1345,7 @@ export async function buildGenerationContext(request: GenerationContextRequest):
       priority: 'high',
       content: renderBlock('输出要求', [formatOutputConstraints(effectiveOperationType)]),
     },
+    ...(writingSkillBundle?.blocks ?? []),
     ...(branchLineageContextBlock ? [branchLineageContextBlock] : []),
     ...selectedTextBlock,
     userInstructionBlock,

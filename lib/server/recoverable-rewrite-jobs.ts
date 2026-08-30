@@ -8,6 +8,7 @@ import {
   mergeTaskWatchdogState,
   parseTaskWatchdogPayload,
 } from '@/lib/server/task-watchdog-attempt'
+import { normalizeWritingSkillCardIds } from '@/lib/writing-skill-selection'
 
 export const RECOVERABLE_REWRITE_JOB_TYPE = 'rewrite_generation'
 
@@ -41,6 +42,7 @@ export type RecoverableRewriteJobPayload = {
     branchContextNodeId: string | null
     branchContextInclusion: string | null
     continueBlockId: string | null
+    writingSkillCardIds?: string[]
     writingSkillCardId?: string | null
     writingSkillExampleCount?: number | null
     writingSkillSeed?: number | null
@@ -141,6 +143,10 @@ export function normalizeRecoverableRewriteJobPayload(payloadJson: string | null
       branchContextNodeId: typeof panelRecord.branchContextNodeId === 'string' ? panelRecord.branchContextNodeId : null,
       branchContextInclusion: typeof panelRecord.branchContextInclusion === 'string' ? panelRecord.branchContextInclusion : null,
       continueBlockId: typeof panelRecord.continueBlockId === 'string' ? panelRecord.continueBlockId : null,
+      writingSkillCardIds: normalizeWritingSkillCardIds({
+        writingSkillCardIds: panelRecord.writingSkillCardIds,
+        writingSkillCardId: panelRecord.writingSkillCardId,
+      }),
       writingSkillCardId: typeof panelRecord.writingSkillCardId === 'string' ? panelRecord.writingSkillCardId : null,
       writingSkillExampleCount: typeof panelRecord.writingSkillExampleCount === 'number' && Number.isFinite(panelRecord.writingSkillExampleCount)
         ? Math.floor(panelRecord.writingSkillExampleCount)

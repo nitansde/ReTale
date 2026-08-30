@@ -235,6 +235,8 @@ describe('story-timeline-read', () => {
         readableLineageLabel: 'RE-01',
         continueBlockId: 'continue-block-001',
         latestText: '改写后的正文',
+        writingSkillCardIds: [],
+        writingSkillExampleCount: 5,
       }),
       expect.objectContaining({
         id: 'continue_fixture_001',
@@ -249,6 +251,8 @@ describe('story-timeline-read', () => {
         userInstruction: '继续沿着当前分支扩展。',
         selectedText: '改写后的正文',
         originalText: '改写后的正文',
+        writingSkillCardIds: [],
+        writingSkillExampleCount: 5,
       }),
       expect.objectContaining({
         id: 'continue_fixture_002',
@@ -263,6 +267,8 @@ describe('story-timeline-read', () => {
         userInstruction: '继续沿着当前续写块向下扩展。',
         selectedText: '续写后的正文',
         originalText: '续写后的正文',
+        writingSkillCardIds: [],
+        writingSkillExampleCount: 5,
       }),
       expect.objectContaining({
         id: 'jump_fixture_001',

@@ -944,7 +944,12 @@ function bootSchemaIsCurrent(database: DatabaseSync) {
       'readable_lineage_label',
       'roleplay_session_id',
     ])
-    && tableHasColumns(database, 'continue_blocks', ['latest_input_tokens', 'latest_output_tokens'])
+    && tableHasColumns(database, 'continue_blocks', [
+      'latest_input_tokens',
+      'latest_output_tokens',
+      'writing_skill_card_ids_json',
+      'writing_skill_example_count',
+    ])
     && tableHasColumns(database, 'continue_block_revisions', ['input_tokens', 'output_tokens'])
     && tableHasColumns(database, 'what_if_sessions', ['input_tokens', 'output_tokens'])
     && tableExists(database, 'roleplay_sessions')
@@ -1224,10 +1229,12 @@ function runBootMigrations(database: DatabaseSync, migrationPlan = getBootMigrat
   database.exec('CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_run ON story_timeline_nodes(future_jump_run_id)')
   database.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_story_timeline_nodes_roleplay_session ON story_timeline_nodes(roleplay_session_id) WHERE roleplay_session_id IS NOT NULL')
   database.exec('CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_roleplay_session ON story_timeline_nodes(roleplay_session_id)')
-  database.exec('CREATE TABLE IF NOT EXISTS continue_blocks (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_timeline_node_id TEXT, source_chapter_no INTEGER NOT NULL, title TEXT NOT NULL, subtitle TEXT, user_instruction TEXT NOT NULL, selected_text TEXT NOT NULL, original_text TEXT NOT NULL, latest_text TEXT NOT NULL, latest_revision_no INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT \"active\", created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE, FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE, FOREIGN KEY (parent_timeline_node_id) REFERENCES story_timeline_nodes(id) ON DELETE SET NULL)')
+  database.exec('CREATE TABLE IF NOT EXISTS continue_blocks (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_timeline_node_id TEXT, source_chapter_no INTEGER NOT NULL, title TEXT NOT NULL, subtitle TEXT, user_instruction TEXT NOT NULL, selected_text TEXT NOT NULL, original_text TEXT NOT NULL, latest_text TEXT NOT NULL, writing_skill_card_ids_json TEXT NOT NULL DEFAULT \'[]\', writing_skill_example_count INTEGER NOT NULL DEFAULT 5, latest_revision_no INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT \"active\", created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE, FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE, FOREIGN KEY (parent_timeline_node_id) REFERENCES story_timeline_nodes(id) ON DELETE SET NULL)')
   database.exec('CREATE TABLE IF NOT EXISTS continue_block_revisions (id TEXT PRIMARY KEY, continue_block_id TEXT NOT NULL, revision_no INTEGER NOT NULL, revision_kind TEXT NOT NULL, user_instruction TEXT NOT NULL, selected_text TEXT NOT NULL, original_text TEXT NOT NULL, generated_text TEXT NOT NULL, title TEXT NOT NULL, subtitle TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (continue_block_id) REFERENCES continue_blocks(id) ON DELETE CASCADE, UNIQUE (continue_block_id, revision_no))')
   addColumnIfMissing(database, 'continue_blocks', 'latest_input_tokens', 'latest_input_tokens INTEGER')
   addColumnIfMissing(database, 'continue_blocks', 'latest_output_tokens', 'latest_output_tokens INTEGER')
+  addColumnIfMissing(database, 'continue_blocks', 'writing_skill_card_ids_json', "writing_skill_card_ids_json TEXT NOT NULL DEFAULT '[]'")
+  addColumnIfMissing(database, 'continue_blocks', 'writing_skill_example_count', 'writing_skill_example_count INTEGER NOT NULL DEFAULT 5')
   addColumnIfMissing(database, 'continue_block_revisions', 'input_tokens', 'input_tokens INTEGER')
   addColumnIfMissing(database, 'continue_block_revisions', 'output_tokens', 'output_tokens INTEGER')
   addColumnIfMissing(database, 'what_if_sessions', 'input_tokens', 'input_tokens INTEGER')

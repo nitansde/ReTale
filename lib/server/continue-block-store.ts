@@ -1,6 +1,8 @@
 import { uid } from '@/lib/utils'
 import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/database-access'
+import { safeParseJson } from '@/lib/server/json-parse'
 import { findStoryTimelineNodeByContinueBlockId } from '@/lib/server/story-timeline-store'
+import { normalizeWritingSkillCardIds } from '@/lib/writing-skill-selection'
 import type {
   ContinueBlockDetail,
   ContinueBlockRecord,
@@ -31,10 +33,27 @@ type ContinueBlockRow = {
   latest_text: string
   latest_input_tokens: number | null
   latest_output_tokens: number | null
+  writing_skill_card_ids_json: string | null | undefined
+  writing_skill_example_count: number | null | undefined
   latest_revision_no: number
   status: string
   created_at: string
   updated_at: string
+}
+
+function parseWritingSkillCardIds(value: string | null | undefined) {
+  const parsed = safeParseJson(value)
+  return normalizeWritingSkillCardIds({
+    writingSkillCardIds: Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === 'string')
+      : [],
+  })
+}
+
+function normalizeWritingSkillExampleCount(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 10
+    ? value
+    : 5
 }
 
 type ContinueBlockRevisionRow = {
@@ -68,6 +87,8 @@ function toContinueBlockRecord(row: ContinueBlockRow): ContinueBlockRecord {
     latestText: row.latest_text,
     inputTokens: row.latest_input_tokens,
     outputTokens: row.latest_output_tokens,
+    writingSkillCardIds: parseWritingSkillCardIds(row.writing_skill_card_ids_json),
+    writingSkillExampleCount: normalizeWritingSkillExampleCount(row.writing_skill_example_count),
     latestRevisionNo: row.latest_revision_no,
     status: row.status,
     createdAt: row.created_at,
@@ -138,8 +159,9 @@ export function insertContinueBlockWithInitialRevision(
   db.execute(
     `INSERT INTO continue_blocks (
       id, novel_id, branch_id, parent_timeline_node_id, source_chapter_no, title, subtitle,
-      user_instruction, selected_text, original_text, latest_text, latest_input_tokens, latest_output_tokens, latest_revision_no, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      user_instruction, selected_text, original_text, latest_text, latest_input_tokens, latest_output_tokens,
+      writing_skill_card_ids_json, writing_skill_example_count, latest_revision_no, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.id,
     input.novelId,
     input.branchId,
@@ -153,6 +175,8 @@ export function insertContinueBlockWithInitialRevision(
     input.latestText,
     input.inputTokens ?? null,
     input.outputTokens ?? null,
+    JSON.stringify(normalizeWritingSkillCardIds({ writingSkillCardIds: input.writingSkillCardIds })),
+    normalizeWritingSkillExampleCount(input.writingSkillExampleCount),
     input.latestRevisionNo,
     input.status
   )
@@ -194,6 +218,8 @@ export async function appendContinueBlockRevision(
     generatedText: string
     inputTokens?: number | null
     outputTokens?: number | null
+    writingSkillCardIds: string[]
+    writingSkillExampleCount: number
     title: string
     subtitle: string | null
     status?: string
@@ -229,7 +255,8 @@ export async function appendContinueBlockRevision(
     db.execute(
       `UPDATE continue_blocks
        SET title = ?, subtitle = ?, user_instruction = ?, selected_text = ?, original_text = ?, latest_text = ?,
-           latest_input_tokens = ?, latest_output_tokens = ?, latest_revision_no = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+           latest_input_tokens = ?, latest_output_tokens = ?, writing_skill_card_ids_json = ?,
+           writing_skill_example_count = ?, latest_revision_no = ?, status = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
       input.title,
       input.subtitle,
@@ -239,6 +266,8 @@ export async function appendContinueBlockRevision(
       input.generatedText,
       input.inputTokens ?? null,
       input.outputTokens ?? null,
+      JSON.stringify(normalizeWritingSkillCardIds({ writingSkillCardIds: input.writingSkillCardIds })),
+      normalizeWritingSkillExampleCount(input.writingSkillExampleCount),
       nextRevisionNo,
       input.status ?? 'revised',
       input.continueBlockId

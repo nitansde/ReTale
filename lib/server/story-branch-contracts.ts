@@ -3,6 +3,8 @@ import { z } from 'zod'
 const positiveInt = z.number().int().positive()
 const optionalNullableString = z.string().nullable().optional()
 const optionalNullableInt = z.number().int().nonnegative().nullable().optional()
+const writingSkillCardIds = z.array(z.string().trim().min(1)).default([]).transform((values) => Array.from(new Set(values)))
+const writingSkillExampleCount = z.number().int().min(1).max(10).default(5)
 
 export const timelineSelectionSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -338,6 +340,8 @@ export const continueBlockCreateRequestSchema = z.object({
   userInstruction: z.string().min(1),
   inputTokens: optionalNullableInt,
   outputTokens: optionalNullableInt,
+  writingSkillCardIds,
+  writingSkillExampleCount,
   titleHint: z.string().nullable().optional(),
   subtitleHint: z.string().nullable().optional(),
 })
@@ -352,6 +356,8 @@ export const continueBlockRegenerateRequestSchema = z.object({
   originalText: z.string(),
   inputTokens: optionalNullableInt,
   outputTokens: optionalNullableInt,
+  writingSkillCardIds,
+  writingSkillExampleCount,
   titleHint: z.string().nullable().optional(),
   subtitleHint: z.string().nullable().optional(),
 })
@@ -366,6 +372,8 @@ export const continueBlockMutationResponseSchema = z.object({
   title: z.string().min(1),
   subtitle: z.string().nullable(),
   latestRevisionNo: positiveInt,
+  writingSkillCardIds,
+  writingSkillExampleCount,
 })
 
 export const continueBlockDetailSchema = z.object({
@@ -382,6 +390,8 @@ export const continueBlockDetailSchema = z.object({
   latestText: z.string().min(1),
   inputTokens: optionalNullableInt,
   outputTokens: optionalNullableInt,
+  writingSkillCardIds,
+  writingSkillExampleCount,
   latestRevisionNo: positiveInt,
   status: z.string().min(1),
   createdAt: z.string().min(1),

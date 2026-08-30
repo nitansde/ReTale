@@ -52,6 +52,12 @@ import type { WorkspaceActionMode } from '@/components/workspace/use-workspace-c
 import type { NovelStore } from '@/store/novel-store-types'
 import { resolveWorkspaceUserFacingError } from '@/lib/workspace-user-facing-errors'
 import { writeTextToClipboard } from '@/lib/browser-clipboard'
+import {
+  createWritingSkillRuntimeSeed,
+  isWritingSkillPromptBlockId,
+  normalizeWritingSkillCardIds,
+  readWritingSkillCardIdFromPromptBlockId,
+} from '@/lib/writing-skill-selection'
 
 type ViewModelState = {
   activeWorkspaceSelection: ReturnType<typeof toChapterTimelineSelection> | Exclude<SelectionNovelStudioCoreState['workspaceSelection'], null>
@@ -100,6 +106,7 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
   const novelDeletionInFlightRef = useRef(false)
   const whatIfCreateInFlightRef = useRef(false)
   const rewriteCreateRequestSequenceRef = useRef(0)
+  const contextPreviewRequestSequenceRef = useRef(0)
   const rewritePollInFlightRef = useRef<Promise<void> | null>(null)
   const recoverableRestoreAbortControllerRef = useRef<AbortController | null>(null)
   const recoverablePollAbortControllerRef = useRef<AbortController | null>(null)
@@ -141,17 +148,46 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     ))
   }
 
-  const loadContextPreview = async (mode: WorkspaceActionMode, instructionOverride?: string, selectionOverride?: string, options?: { preserveDisabledBlocks?: boolean; excludedGraphEdgeIds?: string[]; excludedEvidenceIds?: string[]; branchContextNodeId?: string; branchContextInclusion?: 'ancestors_only' | 'include_selected'; omitSelectedText?: boolean }) => {
+  const loadContextPreview = async (
+    mode: WorkspaceActionMode,
+    instructionOverride?: string,
+    selectionOverride?: string,
+    options?: {
+      preserveDisabledBlocks?: boolean
+      excludedGraphEdgeIds?: string[]
+      excludedEvidenceIds?: string[]
+      branchContextNodeId?: string
+      branchContextInclusion?: 'ancestors_only' | 'include_selected'
+      omitSelectedText?: boolean
+      writingSkillCardIds?: string[]
+      writingSkillExampleCount?: number
+      writingSkillSeed?: number
+    },
+  ) => {
     if (!core.currentChapter) return null
     const sourceChapter = core.currentChapter.parentChapterId ? core.parentChapter ?? null : core.currentChapter
     if (!sourceChapter) return core.setContextPreviewError(t('workspace.chapterGraph.noInheritedParent')), null
     const targetSelection = ((selectionOverride ?? core.lockedSelectionText) || core.selectionText).trim()
     if (!targetSelection) return null
+    const requestSequence = contextPreviewRequestSequenceRef.current + 1
+    contextPreviewRequestSequenceRef.current = requestSequence
     core.setContextPreviewLoading(true)
     core.setContextPreviewError('')
     try {
       const branchContext = mode === 'rewrite' ? { branchContextNodeId: options?.branchContextNodeId ?? buildContinueBlockLineageRequestContext(core.activeContinueBlockRewriteContext).branchContextNodeId, branchContextInclusion: options?.branchContextInclusion ?? buildContinueBlockLineageRequestContext(core.activeContinueBlockRewriteContext).branchContextInclusion } : {}
-      const data = await callGenerationContextApi({ novelId: core.currentNovelId, chapterId: sourceChapter.id, selectedText: options?.omitSelectedText ? '' : targetSelection, operationType: toGenerationContextOperationType(mode), userInstruction: instructionOverride ?? core.getInstructionForMode(mode), excludedGraphEdgeIds: options?.excludedGraphEdgeIds ?? core.excludedGraphEdgeIds, excludedEvidenceIds: options?.excludedEvidenceIds ?? core.excludedEvidenceIds, ...branchContext })
+      const writingSkillCardIds = mode === 'rewrite'
+        ? options?.writingSkillCardIds ?? core.selectedWritingSkillCardIds
+        : []
+      const writingSkillContext = mode === 'rewrite'
+        ? {
+            writingSkillCardIds,
+            writingSkillCardId: writingSkillCardIds[0],
+            writingSkillExampleCount: options?.writingSkillExampleCount ?? core.writingSkillExampleCount,
+            writingSkillSeed: options?.writingSkillSeed ?? core.writingSkillSeed,
+          }
+        : {}
+      const data = await callGenerationContextApi({ novelId: core.currentNovelId, chapterId: sourceChapter.id, selectedText: options?.omitSelectedText ? '' : targetSelection, operationType: toGenerationContextOperationType(mode), userInstruction: instructionOverride ?? core.getInstructionForMode(mode), excludedGraphEdgeIds: options?.excludedGraphEdgeIds ?? core.excludedGraphEdgeIds, excludedEvidenceIds: options?.excludedEvidenceIds ?? core.excludedEvidenceIds, ...branchContext, ...writingSkillContext })
+      if (contextPreviewRequestSequenceRef.current !== requestSequence) return null
       if (!data.ok || !data.graphContext || !data.promptBlocks || !data.lanceEvidence) throw new Error(data.error || t('workspace.action.contextPreviewFailed'))
       const nextContext = { ...(data as GenerationContextBuildData), sourceMeta: core.currentChapter.parentChapterId ? { mode: 'inherited-parent', chapterId: sourceChapter.id, chapterNo: sourceChapter.order, chapterTitle: sourceChapter.title } : { mode: 'direct', chapterId: sourceChapter.id, chapterNo: sourceChapter.order, chapterTitle: sourceChapter.title } } satisfies GenerationContextBuildData
       core.setGenerationContext(nextContext)
@@ -162,13 +198,14 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
       core.setGraphMutationError('')
       return nextContext
     } catch (error) {
+      if (contextPreviewRequestSequenceRef.current !== requestSequence) return null
       core.setGenerationContext(null)
       core.setGraphContext(null)
       core.setGraphSelection(null)
       core.setContextPreviewError(resolveWorkspaceUserFacingError('context-preview', error, locale))
       return null
     } finally {
-      core.setContextPreviewLoading(false)
+      if (contextPreviewRequestSequenceRef.current === requestSequence) core.setContextPreviewLoading(false)
     }
   }
 
@@ -195,8 +232,56 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     const isContinue = launch.variant === 'continue'
     const targetText = isContinue ? launch.latestText.trim() || launch.selectedText : launch.selectedText
     const instruction = isContinue ? launch.userInstruction.trim() : [launch.userInstruction.trim() ? t('workspace.action.previousInstruction', { text: launch.userInstruction.trim() }) : '', t('workspace.action.currentContinueBlock', { title: launch.title }), t('workspace.action.regenerateContinueBlockInstruction')].filter(Boolean).join('\n\n')
-    core.setSelectionText(targetText); core.setLockedSelectionText(targetText); core.setToolbarPos(null); core.setGenerationContext(null); core.setGraphContext(null); core.setContextPreviewError(''); core.setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS); core.setContextPanelOpen(false); core.setGraphSelection(null); core.setEvidenceDrawerOpen(false); core.setDisabledContextBlockIds([]); core.setExcludedGraphEdgeIds([]); core.setExcludedEvidenceIds([]); core.setGraphMutationPendingId(null); core.setGraphMutationError(''); core.setRewritePrompt(instruction); core.setRewriteLaunchSource('continue_block'); core.setRewriteSourceTextOverride(launch.latestText); core.setRewriteState({ loading: false, result: launch.latestText, error: '' }); core.setRewriteFlow({ loading: false, error: '', provider: 'continue-block-reader', candidates: [{ title: launch.variant === 'continue' ? t('workspace.action.currentContinueBlockVersion') : t('workspace.action.currentPendingRegenerateVersion'), summary: launch.variant === 'continue' ? t('workspace.action.continueBlockContinueSummary') : t('workspace.action.continueBlockRegenerateSummary'), content: launch.latestText, inputTokens: launch.inputTokens ?? null, outputTokens: launch.outputTokens ?? null }], selectedIndex: 0, jobId: null, jobStatus: null, jobCurrentStep: null }); core.setActiveFutureJumpRewriteContext(null); core.setActiveContinueBlockRewriteContext(launch); core.setActiveMode('rewrite'); core.setPendingContinueBlockRewriteLaunch(null)
-    window.setTimeout(() => { void loadContextPreview('rewrite', instruction, targetText, { ...buildContinueBlockLineageRequestContext(launch) }) }, 0)
+    core.setSelectionText(targetText)
+    core.setLockedSelectionText(targetText)
+    core.setToolbarPos(null)
+    core.setGenerationContext(null)
+    core.setGraphContext(null)
+    core.setContextPreviewError('')
+    core.setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
+    core.setContextPanelOpen(false)
+    core.setGraphSelection(null)
+    core.setEvidenceDrawerOpen(false)
+    core.setDisabledContextBlockIds([])
+    core.setExcludedGraphEdgeIds([])
+    core.setExcludedEvidenceIds([])
+    core.setGraphMutationPendingId(null)
+    core.setGraphMutationError('')
+    core.setRewritePrompt(instruction)
+    core.setRewriteLaunchSource('continue_block')
+    core.setRewriteSourceTextOverride(launch.latestText)
+    core.setSelectedWritingSkillCardIds(launch.writingSkillCardIds)
+    core.setWritingSkillExampleCount(launch.writingSkillExampleCount)
+    core.setWritingSkillSeed(launch.writingSkillSeed)
+    core.setRewriteState({ loading: false, result: launch.latestText, error: '' })
+    core.setRewriteFlow({
+      loading: false,
+      error: '',
+      provider: 'continue-block-reader',
+      candidates: [{
+        title: launch.variant === 'continue' ? t('workspace.action.currentContinueBlockVersion') : t('workspace.action.currentPendingRegenerateVersion'),
+        summary: launch.variant === 'continue' ? t('workspace.action.continueBlockContinueSummary') : t('workspace.action.continueBlockRegenerateSummary'),
+        content: launch.latestText,
+        inputTokens: launch.inputTokens ?? null,
+        outputTokens: launch.outputTokens ?? null,
+      }],
+      selectedIndex: 0,
+      jobId: null,
+      jobStatus: null,
+      jobCurrentStep: null,
+    })
+    core.setActiveFutureJumpRewriteContext(null)
+    core.setActiveContinueBlockRewriteContext(launch)
+    core.setActiveMode('rewrite')
+    core.setPendingContinueBlockRewriteLaunch(null)
+    window.setTimeout(() => {
+      void loadContextPreview('rewrite', instruction, targetText, {
+        ...buildContinueBlockLineageRequestContext(launch),
+        writingSkillCardIds: launch.writingSkillCardIds,
+        writingSkillExampleCount: launch.writingSkillExampleCount,
+        writingSkillSeed: launch.writingSkillSeed,
+      })
+    }, 0)
   }, [core.pendingContinueBlockRewriteLaunch, core.currentChapter])
 
   const syncGraphReview = async (nextControls: GraphReviewControls, fallbackContext?: GenerationContextBuildData | null) => {
@@ -384,7 +469,7 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
       const continueBlockRequestContext = buildContinueBlockLineageRequestContext(core.activeContinueBlockRewriteContext)
       if (!core.generationContext && !core.contextPreviewLoading) void loadContextPreview('rewrite', core.rewritePrompt, undefined, { ...continueBlockRequestContext })
       if (!ownsRequest()) return
-      const job = await callCreateRecoverableRewriteJobApi({ novelId, branchId, chapterId, selectedText: continueBlockRequestContext.omitSelectedText ? '' : targetSelection, sourceText: core.rewriteSourceTextOverride.trim() || flushedEditor?.plainText || core.chapterText, operationType: 'rewrite', userInstruction: core.rewritePrompt, disabledBlockIds: core.disabledContextBlockIds, excludedGraphEdgeIds: core.excludedGraphEdgeIds, excludedEvidenceIds: core.excludedEvidenceIds, branchContextNodeId: continueBlockRequestContext.branchContextNodeId, branchContextInclusion: continueBlockRequestContext.branchContextInclusion, continueBlockId: continueBlockRequestContext.continueBlockId, presetCompatRuntimeContext: core.buildPresetCompatRuntimeContext('rewrite'), scope: 'chapter', mode: 'heavy', tone: 'dramatic', rewriteLaunchSource: core.rewriteLaunchSource, rewriteSourceTextOverride: core.rewriteSourceTextOverride, writingSkillCardId: core.selectedWritingSkillCardId || undefined, writingSkillExampleCount: core.writingSkillExampleCount })
+      const job = await callCreateRecoverableRewriteJobApi({ novelId, branchId, chapterId, selectedText: continueBlockRequestContext.omitSelectedText ? '' : targetSelection, sourceText: core.rewriteSourceTextOverride.trim() || flushedEditor?.plainText || core.chapterText, operationType: 'rewrite', userInstruction: core.rewritePrompt, disabledBlockIds: core.disabledContextBlockIds, excludedGraphEdgeIds: core.excludedGraphEdgeIds, excludedEvidenceIds: core.excludedEvidenceIds, branchContextNodeId: continueBlockRequestContext.branchContextNodeId, branchContextInclusion: continueBlockRequestContext.branchContextInclusion, continueBlockId: continueBlockRequestContext.continueBlockId, presetCompatRuntimeContext: core.buildPresetCompatRuntimeContext('rewrite'), scope: 'chapter', mode: 'heavy', tone: 'dramatic', rewriteLaunchSource: core.rewriteLaunchSource, rewriteSourceTextOverride: core.rewriteSourceTextOverride, writingSkillCardIds: core.selectedWritingSkillCardIds, writingSkillCardId: core.selectedWritingSkillCardIds[0] || undefined, writingSkillExampleCount: core.writingSkillExampleCount, writingSkillSeed: core.writingSkillSeed })
       if (!ownsRequest() || !recoverableRewriteJobMatchesContext(job, novelId, branchId, chapterId)) return
       core.ownedRecoverableRewriteJobIdRef.current = job.jobId
       core.syncRewriteJobFromRecoverableJob(job)
@@ -425,6 +510,12 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
   }
   useEffect(() => {
     if (!currentNovelId || !currentChapterId) return
+    if (
+      core.pendingWhatIfRewriteLaunch
+      || core.pendingFutureJumpRewriteLaunch
+      || core.pendingContinueBlockRewriteLaunch
+      || (core.activeMode === 'rewrite' && core.rewriteLaunchSource !== 'chapter')
+    ) return
     let cancelled = false
     recoverableRestoreAbortControllerRef.current?.abort()
     const controller = new AbortController()
@@ -529,7 +620,183 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     core.invalidateRecoverablePanelHydration()
     core.setRewritePrompt(value)
   }
-  const handleSaveContinueBlock = async () => { const flushedEditor = core.flushEditorBuffer(); const targetSelection = core.lockedSelectionText.trim() || core.selectionText.trim(); const selectedCandidate = core.selectedRewriteCandidate?.content?.trim() || ''; const continueCtx = core.activeContinueBlockRewriteContext; const originalText = continueCtx?.originalText?.trim() || core.activeFutureJumpRewriteContext?.originalText.trim() || core.rewriteSourceTextOverride.trim() || flushedEditor?.plainText || core.chapterText; if (!core.currentNovelId || !core.currentChapter || !targetSelection || !selectedCandidate || core.saveContinueBlockPending) return; const parentTimelineNodeId = core.rewriteLaunchSource === 'continue_block' ? continueCtx?.nodeId ?? (activeWorkspaceSelection.kind === 'chapter' ? null : activeWorkspaceSelection.nodeId) : core.rewriteLaunchSource === 'future_jump' ? core.activeFutureJumpRewriteContext?.parentTimelineNodeId ?? (activeWorkspaceSelection.kind === 'chapter' ? null : activeWorkspaceSelection.nodeId) : activeWorkspaceSelection.kind === 'chapter' ? null : activeWorkspaceSelection.nodeId; core.setSaveContinueBlockPending(true); core.setSaveContinueBlockError(''); try { const isContinueBlockRegenerate = core.rewriteLaunchSource === 'continue_block' && continueCtx?.variant === 'regenerate'; const createUserInstruction = core.rewritePrompt.trim() || core.activeFutureJumpRewriteContext?.userInstruction.trim() || t('workspace.action.saveCurrentRewriteResult'); const result = isContinueBlockRegenerate ? await callRegenerateContinueBlockApi({ novelId: core.currentNovelId, branchId: core.storyTimelineBranchId, continueBlockId: continueCtx!.continueBlockId, selectedText: targetSelection, originalText, generatedText: selectedCandidate, inputTokens: core.selectedRewriteCandidate?.inputTokens ?? null, outputTokens: core.selectedRewriteCandidate?.outputTokens ?? null, userInstruction: core.rewritePrompt.trim() || continueCtx!.userInstruction.trim() || t('workspace.action.regenerateCurrentContinueBlock'), titleHint: core.selectedRewriteCandidate?.title?.trim() || core.rewritePrompt.trim().slice(0, 24), subtitleHint: core.selectedRewriteCandidate?.summary?.trim() || null }) : await callCreateContinueBlockApi({ novelId: core.currentNovelId, branchId: core.storyTimelineBranchId, sourceChapterNo: core.currentChapter.order, parentTimelineNodeId, selectedText: targetSelection, originalText, generatedText: selectedCandidate, inputTokens: core.selectedRewriteCandidate?.inputTokens ?? null, outputTokens: core.selectedRewriteCandidate?.outputTokens ?? null, userInstruction: createUserInstruction, titleHint: core.selectedRewriteCandidate?.title?.trim() || core.rewritePrompt.trim().slice(0, 24), subtitleHint: core.selectedRewriteCandidate?.summary?.trim() || null }); const existingRegenerateNode = isContinueBlockRegenerate ? core.storyTimelineData?.branchNodes.find((node) => node.id === continueCtx?.nodeId || node.continueBlockId === continueCtx?.continueBlockId) ?? null : null; const refreshedRegenerateNode = existingRegenerateNode ? { ...existingRegenerateNode, id: result.timelineNodeId, nodeType: result.nodeType, continueBlockId: result.continueBlockId, title: result.title, subtitle: result.subtitle, readableLabel: result.readableLabel, readableLineageLabel: result.readableLineageLabel, currentText: result.generatedText, latestText: result.generatedText, latestRevisionNo: result.latestRevisionNo, inputTokens: core.selectedRewriteCandidate?.inputTokens ?? existingRegenerateNode.inputTokens, outputTokens: core.selectedRewriteCandidate?.outputTokens ?? existingRegenerateNode.outputTokens, userInstruction: createUserInstruction, selectedText: targetSelection, originalText, status: 'revised' } satisfies StoryTimelineBranchNode : null; const optimisticNode = refreshedRegenerateNode ?? createOptimisticContinueBlockTimelineNode({ result, storyTimeline: core.storyTimelineData, parentTimelineNodeId, sourceChapterNo: core.currentChapter.order, selectedText: targetSelection, originalText, generatedText: result.generatedText, inputTokens: core.selectedRewriteCandidate?.inputTokens ?? null, outputTokens: core.selectedRewriteCandidate?.outputTokens ?? null, userInstruction: createUserInstruction }); if (optimisticNode) { core.setStoryTimelineData((current) => upsertOptimisticContinueBlockTimelineNode(current, optimisticNode, { novelId: core.currentNovelId, branchId: core.storyTimelineBranchId, chapters: current?.chapters ?? core.resolvedStoryTimeline.chapters })); core.setChapterListState((current) => { const storedTarget = current[core.currentNovelId] ?? core.chapterListTarget; const nextTarget = resolveChapterListTargetForAnchorVisibility({ anchorChapterNo: optimisticNode.anchorChapterNo, currentTarget: Math.max(storedTarget, core.chapterListTarget), sortedChapters: core.sortedChapters }); if (nextTarget <= storedTarget) return current; return { ...current, [core.currentNovelId]: nextTarget } }) } core.closePanel(); core.setCenterPaneView('body'); core.setWorkspaceSelection(resolveContinueBlockSelectionAfterSave({ matchingNode: optimisticNode, result, fallbackAnchorChapterNo: core.currentChapter.order, parentTimelineNodeId })); core.setLeftPanelOpen(false); core.setToast(isContinueBlockRegenerate ? t('workspace.action.continueBlockUpdated', { title: result.title }) : t('workspace.action.continueBlockCreated', { title: result.title })); window.setTimeout(() => core.setToast(''), 2200); void core.loadStoryTimeline() } catch (error) { const message = resolveWorkspaceUserFacingError('continue-block-save', error, locale); core.setSaveContinueBlockError(message); core.setToast(message, 'error'); window.setTimeout(() => core.setToast(''), 2400) } finally { core.setSaveContinueBlockPending(false) } }
+  const handleWritingSkillSelectionChange = (nextCardIds: string[]) => {
+    const normalizedCardIds = normalizeWritingSkillCardIds({ writingSkillCardIds: nextCardIds })
+    const nextSeed = !core.selectedWritingSkillCardIds.length && normalizedCardIds.length
+      ? createWritingSkillRuntimeSeed()
+      : core.writingSkillSeed
+    core.invalidateRecoverablePanelHydration()
+    core.setSelectedWritingSkillCardIds(normalizedCardIds)
+    core.setWritingSkillSeed(nextSeed)
+    const selectedCardIdSet = new Set(normalizedCardIds)
+    core.setDisabledContextBlockIds((current) => current.filter((blockId) => {
+      if (!isWritingSkillPromptBlockId(blockId)) return true
+      const cardId = readWritingSkillCardIdFromPromptBlockId(blockId)
+      return Boolean(cardId && selectedCardIdSet.has(cardId))
+    }))
+    window.setTimeout(() => {
+      void loadContextPreview('rewrite', undefined, undefined, {
+        preserveDisabledBlocks: true,
+        writingSkillCardIds: normalizedCardIds,
+        writingSkillExampleCount: core.writingSkillExampleCount,
+        writingSkillSeed: nextSeed,
+      })
+    }, 0)
+  }
+  const handleWritingSkillExampleCountChange = (nextCount: number) => {
+    core.invalidateRecoverablePanelHydration()
+    core.setWritingSkillExampleCount(nextCount)
+    window.setTimeout(() => {
+      void loadContextPreview('rewrite', undefined, undefined, {
+        preserveDisabledBlocks: true,
+        writingSkillCardIds: core.selectedWritingSkillCardIds,
+        writingSkillExampleCount: nextCount,
+        writingSkillSeed: core.writingSkillSeed,
+      })
+    }, 0)
+  }
+  const handleSaveContinueBlock = async () => {
+    const flushedEditor = core.flushEditorBuffer()
+    const targetSelection = core.lockedSelectionText.trim() || core.selectionText.trim()
+    const selectedCandidate = core.selectedRewriteCandidate?.content?.trim() || ''
+    const continueCtx = core.activeContinueBlockRewriteContext
+    const originalText = continueCtx?.originalText?.trim()
+      || core.activeFutureJumpRewriteContext?.originalText.trim()
+      || core.rewriteSourceTextOverride.trim()
+      || flushedEditor?.plainText
+      || core.chapterText
+    if (!core.currentNovelId || !core.currentChapter || !targetSelection || !selectedCandidate || core.saveContinueBlockPending) return
+
+    const parentTimelineNodeId = core.rewriteLaunchSource === 'continue_block'
+      ? continueCtx?.nodeId ?? (activeWorkspaceSelection.kind === 'chapter' ? null : activeWorkspaceSelection.nodeId)
+      : core.rewriteLaunchSource === 'future_jump'
+        ? core.activeFutureJumpRewriteContext?.parentTimelineNodeId ?? (activeWorkspaceSelection.kind === 'chapter' ? null : activeWorkspaceSelection.nodeId)
+        : activeWorkspaceSelection.kind === 'chapter'
+          ? null
+          : activeWorkspaceSelection.nodeId
+    const persistedWritingSkillCardIds = core.selectedWritingSkillCardIds.filter(
+      (cardId) => !core.disabledContextBlockIds.includes(`writing-skill:${cardId}`),
+    )
+
+    core.setSaveContinueBlockPending(true)
+    core.setSaveContinueBlockError('')
+    try {
+      const isContinueBlockRegenerate = core.rewriteLaunchSource === 'continue_block' && continueCtx?.variant === 'regenerate'
+      const createUserInstruction = core.rewritePrompt.trim()
+        || core.activeFutureJumpRewriteContext?.userInstruction.trim()
+        || t('workspace.action.saveCurrentRewriteResult')
+      const sharedSkillConfig = {
+        writingSkillCardIds: persistedWritingSkillCardIds,
+        writingSkillExampleCount: core.writingSkillExampleCount,
+      }
+      const result = isContinueBlockRegenerate
+        ? await callRegenerateContinueBlockApi({
+            novelId: core.currentNovelId,
+            branchId: core.storyTimelineBranchId,
+            continueBlockId: continueCtx!.continueBlockId,
+            selectedText: targetSelection,
+            originalText,
+            generatedText: selectedCandidate,
+            inputTokens: core.selectedRewriteCandidate?.inputTokens ?? null,
+            outputTokens: core.selectedRewriteCandidate?.outputTokens ?? null,
+            userInstruction: core.rewritePrompt.trim() || continueCtx!.userInstruction.trim() || t('workspace.action.regenerateCurrentContinueBlock'),
+            titleHint: core.selectedRewriteCandidate?.title?.trim() || core.rewritePrompt.trim().slice(0, 24),
+            subtitleHint: core.selectedRewriteCandidate?.summary?.trim() || null,
+            ...sharedSkillConfig,
+          })
+        : await callCreateContinueBlockApi({
+            novelId: core.currentNovelId,
+            branchId: core.storyTimelineBranchId,
+            sourceChapterNo: core.currentChapter.order,
+            parentTimelineNodeId,
+            selectedText: targetSelection,
+            originalText,
+            generatedText: selectedCandidate,
+            inputTokens: core.selectedRewriteCandidate?.inputTokens ?? null,
+            outputTokens: core.selectedRewriteCandidate?.outputTokens ?? null,
+            userInstruction: createUserInstruction,
+            titleHint: core.selectedRewriteCandidate?.title?.trim() || core.rewritePrompt.trim().slice(0, 24),
+            subtitleHint: core.selectedRewriteCandidate?.summary?.trim() || null,
+            ...sharedSkillConfig,
+          })
+      const existingRegenerateNode = isContinueBlockRegenerate
+        ? core.storyTimelineData?.branchNodes.find((node) => node.id === continueCtx?.nodeId || node.continueBlockId === continueCtx?.continueBlockId) ?? null
+        : null
+      const refreshedRegenerateNode = existingRegenerateNode
+        ? {
+            ...existingRegenerateNode,
+            id: result.timelineNodeId,
+            nodeType: result.nodeType,
+            continueBlockId: result.continueBlockId,
+            title: result.title,
+            subtitle: result.subtitle,
+            readableLabel: result.readableLabel,
+            readableLineageLabel: result.readableLineageLabel,
+            currentText: result.generatedText,
+            latestText: result.generatedText,
+            latestRevisionNo: result.latestRevisionNo,
+            inputTokens: core.selectedRewriteCandidate?.inputTokens ?? existingRegenerateNode.inputTokens,
+            outputTokens: core.selectedRewriteCandidate?.outputTokens ?? existingRegenerateNode.outputTokens,
+            userInstruction: createUserInstruction,
+            selectedText: targetSelection,
+            originalText,
+            writingSkillCardIds: result.writingSkillCardIds,
+            writingSkillExampleCount: result.writingSkillExampleCount,
+            status: 'revised',
+          } satisfies StoryTimelineBranchNode
+        : null
+      const optimisticNode = refreshedRegenerateNode ?? createOptimisticContinueBlockTimelineNode({
+        result,
+        storyTimeline: core.storyTimelineData,
+        parentTimelineNodeId,
+        sourceChapterNo: core.currentChapter.order,
+        selectedText: targetSelection,
+        originalText,
+        generatedText: result.generatedText,
+        inputTokens: core.selectedRewriteCandidate?.inputTokens ?? null,
+        outputTokens: core.selectedRewriteCandidate?.outputTokens ?? null,
+        userInstruction: createUserInstruction,
+      })
+      if (optimisticNode) {
+        core.setStoryTimelineData((current) => upsertOptimisticContinueBlockTimelineNode(current, optimisticNode, {
+          novelId: core.currentNovelId,
+          branchId: core.storyTimelineBranchId,
+          chapters: current?.chapters ?? core.resolvedStoryTimeline.chapters,
+        }))
+        core.setChapterListState((current) => {
+          const storedTarget = current[core.currentNovelId] ?? core.chapterListTarget
+          const nextTarget = resolveChapterListTargetForAnchorVisibility({
+            anchorChapterNo: optimisticNode.anchorChapterNo,
+            currentTarget: Math.max(storedTarget, core.chapterListTarget),
+            sortedChapters: core.sortedChapters,
+          })
+          if (nextTarget <= storedTarget) return current
+          return { ...current, [core.currentNovelId]: nextTarget }
+        })
+      }
+      core.closePanel()
+      core.setCenterPaneView('body')
+      core.setWorkspaceSelection(resolveContinueBlockSelectionAfterSave({
+        matchingNode: optimisticNode,
+        result,
+        fallbackAnchorChapterNo: core.currentChapter.order,
+        parentTimelineNodeId,
+      }))
+      core.setLeftPanelOpen(false)
+      core.setToast(isContinueBlockRegenerate
+        ? t('workspace.action.continueBlockUpdated', { title: result.title })
+        : t('workspace.action.continueBlockCreated', { title: result.title }))
+      window.setTimeout(() => core.setToast(''), 2200)
+      void core.loadStoryTimeline()
+    } catch (error) {
+      const message = resolveWorkspaceUserFacingError('continue-block-save', error, locale)
+      core.setSaveContinueBlockError(message)
+      core.setToast(message, 'error')
+      window.setTimeout(() => core.setToast(''), 2400)
+    } finally {
+      core.setSaveContinueBlockPending(false)
+    }
+  }
   const handleCreateWhatIf = async () => {
     const targetSelection = core.lockedSelectionText.trim() || core.selectionText.trim()
     const selectedCandidate = core.selectedRewriteCandidate?.content?.trim() || ''
@@ -585,10 +852,60 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
   const launchFutureMapFromWhatIf = (detail: WhatIfSessionDetail) => { const sourceChapter = core.resolveSourceChapter({ chapterId: null, chapterNo: detail.sourceChapterNo }); core.setFutureMapLaunch({ novelId: detail.novelId, branchId: detail.baseBranchId, sourceContext: { nodeId: activeWorkspaceSelection.kind === 'what_if' ? activeWorkspaceSelection.nodeId : null, nodeType: 'what_if', chapterId: sourceChapter?.id ?? null, chapterNo: detail.sourceChapterNo, whatIfSessionId: detail.id }, title: detail.title, parentTimelineNodeId: activeWorkspaceSelection.kind === 'what_if' ? activeWorkspaceSelection.nodeId : null }) }
   const handleFutureJumpCreated = async (result: FutureJumpMutationResponse, context: { sourceChapterNo: number; targetChapterNo: number }) => { if (!result.timelineNodeId) throw new Error(t('workspace.action.futureJumpTimelineNodeMissing')); core.setFutureMapLaunch(null); const refreshed = await core.loadStoryTimeline(); core.setWorkspaceSelection(resolveBranchTimelineSelection({ kind: 'future_jump', nodeId: result.timelineNodeId, runId: result.runId, sourceChapterNo: context.sourceChapterNo, targetChapterNo: context.targetChapterNo }, refreshed?.branchNodes ?? [])); core.setLeftPanelOpen(false) }
   const reopenFutureJumpRewriteFlow = (context: FutureJumpContinueContext) => { const targetChapter = core.resolveSourceChapter({ chapterId: context.targetChapter?.chapterId ?? null, chapterNo: context.targetChapter?.chapterNo ?? context.detail.targetChapterNo }); if (!targetChapter) { core.setToast(t('workspace.action.reopenFutureJumpMissingChapter', { chapter: context.detail.targetChapterNo }), 'warning'); return window.setTimeout(() => core.setToast(''), 2400) } core.invalidateRecoverableRewriteOwnership(); const targetTitle = context.targetChapter?.chapterTitle?.trim() || context.targetEvent?.title?.trim() || t('workspace.action.futureJumpTargetFallback', { chapter: context.detail.targetChapterNo }); const selectedText = context.detail.generatedTargetText.trim(); const userInstruction = [context.detail.userDirection.trim() ? t('workspace.action.originalDirection', { text: context.detail.userDirection.trim() }) : '', t('workspace.action.targetFutureNode', { title: targetTitle }), t('workspace.action.latestBridgeSummary', { text: context.detail.bridgeSummary }), t('workspace.action.futureJumpContinueInstruction')].filter(Boolean).join('\n\n'); core.setCenterPaneView('body'); core.setLeftPanelOpen(false); setPresetCompatSessionPhase({ kind: 'future_jump', nodeId: activeWorkspaceSelection.kind === 'future_jump' ? activeWorkspaceSelection.nodeId : `future-jump:${context.detail.id}`, runId: context.detail.id, sourceChapterNo: context.detail.sourceChapterNo, targetChapterNo: context.detail.targetChapterNo }, 'rewrite', 'continue'); core.setPendingFutureJumpRewriteLaunch({ detail: context.detail, targetChapterId: targetChapter.id, targetTitle, parentTimelineNodeId: context.detail.timelineNodeId, selectedText, originalText: selectedText, userInstruction, inputTokens: context.detail.inputTokens ?? null, outputTokens: context.detail.outputTokens ?? null }); core.flushEditorBuffer(); setCurrentChapterId(targetChapter.id) }
-  const reopenContinueBlockRewriteFlow = (variant: 'continue' | 'regenerate') => { if ((activeWorkspaceSelection.kind !== 'rewrite' && activeWorkspaceSelection.kind !== 'continue_block') || !selectedContinueBlockNode?.continueBlockId) return; const anchorChapter = core.resolveSourceChapter({ chapterId: null, chapterNo: activeWorkspaceSelection.anchorChapterNo }); if (!anchorChapter) { core.setToast(t('workspace.action.reopenContinueBlockMissingChapter', { chapter: activeWorkspaceSelection.anchorChapterNo }), 'warning'); return window.setTimeout(() => core.setToast(''), 2400) } core.invalidateRecoverableRewriteOwnership(); core.setCenterPaneView('body'); core.setLeftPanelOpen(false); setPresetCompatSessionPhase(toContinueBranchSelection(activeWorkspaceSelection), 'rewrite', variant === 'continue' ? 'continue' : 'new_chat', variant !== 'continue'); core.setPendingContinueBlockRewriteLaunch({ continueBlockId: activeWorkspaceSelection.continueBlockId, nodeId: activeWorkspaceSelection.nodeId, anchorChapterNo: activeWorkspaceSelection.anchorChapterNo, latestText: selectedContinueBlockNode.latestText?.trim() || '', userInstruction: selectedContinueBlockNode.userInstruction?.trim() || '', selectedText: selectedContinueBlockNode.selectedText?.trim() || selectedContinueBlockNode.latestText?.trim() || '', originalText: selectedContinueBlockNode.originalText?.trim() || selectedContinueBlockNode.latestText?.trim() || '', title: selectedContinueBlockNode.title, subtitle: selectedContinueBlockNode.subtitle ?? null, inputTokens: selectedContinueBlockNode.inputTokens ?? null, outputTokens: selectedContinueBlockNode.outputTokens ?? null, targetChapterId: anchorChapter.id, variant }); core.flushEditorBuffer(); setCurrentChapterId(anchorChapter.id) }
+  const reopenContinueBlockRewriteFlow = (variant: 'continue' | 'regenerate') => {
+    if (
+      (activeWorkspaceSelection.kind !== 'rewrite' && activeWorkspaceSelection.kind !== 'continue_block')
+      || !selectedContinueBlockNode?.continueBlockId
+    ) return
+    const anchorChapter = core.resolveSourceChapter({ chapterId: null, chapterNo: activeWorkspaceSelection.anchorChapterNo })
+    if (!anchorChapter) {
+      core.setToast(t('workspace.action.reopenContinueBlockMissingChapter', { chapter: activeWorkspaceSelection.anchorChapterNo }), 'warning')
+      return window.setTimeout(() => core.setToast(''), 2400)
+    }
+
+    const activeCardIds = new Set(core.writingSkillCards.map((card) => card.id))
+    const persistedWritingSkillCardIds = normalizeWritingSkillCardIds({
+      writingSkillCardIds: selectedContinueBlockNode.writingSkillCardIds,
+    })
+    const inheritedWritingSkillCardIds = core.writingSkillCardsLoading
+      ? persistedWritingSkillCardIds
+      : persistedWritingSkillCardIds.filter((cardId) => activeCardIds.has(cardId))
+    const inheritedExampleCount = selectedContinueBlockNode.writingSkillExampleCount ?? core.writingSkillExampleCount
+    const taskSeed = createWritingSkillRuntimeSeed()
+
+    core.invalidateRecoverableRewriteOwnership()
+    core.setCenterPaneView('body')
+    core.setLeftPanelOpen(false)
+    setPresetCompatSessionPhase(
+      toContinueBranchSelection(activeWorkspaceSelection),
+      'rewrite',
+      variant === 'continue' ? 'continue' : 'new_chat',
+      variant !== 'continue',
+    )
+    core.setPendingContinueBlockRewriteLaunch({
+      continueBlockId: activeWorkspaceSelection.continueBlockId,
+      nodeId: activeWorkspaceSelection.nodeId,
+      anchorChapterNo: activeWorkspaceSelection.anchorChapterNo,
+      latestText: selectedContinueBlockNode.latestText?.trim() || '',
+      userInstruction: selectedContinueBlockNode.userInstruction?.trim() || '',
+      selectedText: selectedContinueBlockNode.selectedText?.trim() || selectedContinueBlockNode.latestText?.trim() || '',
+      originalText: selectedContinueBlockNode.originalText?.trim() || selectedContinueBlockNode.latestText?.trim() || '',
+      title: selectedContinueBlockNode.title,
+      subtitle: selectedContinueBlockNode.subtitle ?? null,
+      inputTokens: selectedContinueBlockNode.inputTokens ?? null,
+      outputTokens: selectedContinueBlockNode.outputTokens ?? null,
+      writingSkillCardIds: inheritedWritingSkillCardIds,
+      writingSkillExampleCount: inheritedExampleCount,
+      writingSkillSeed: taskSeed,
+      targetChapterId: anchorChapter.id,
+      variant,
+    })
+    core.flushEditorBuffer()
+    setCurrentChapterId(anchorChapter.id)
+  }
 
   const selectionActions = <WorkspaceSelectionActions selection={activeWorkspaceSelection} selectedTimelineDisplayLabel={selectedTimelineDisplayLabel} selectedTimelineNodeTitle={selectedTimelineNode?.title ?? null} selectedTimelineInstructionPreview={selectedTimelineInstructionPreview} selectionText={core.selectionText} activeMode={core.activeMode} roleplaySessionStarting={core.roleplaySessionStarting} hasFutureMapLaunch={Boolean(selectedContinueBlockFutureMapLaunch)} onOpenActionMode={(mode) => { void openActionMode(mode) }} onReopenContinueBlockRewriteFlow={reopenContinueBlockRewriteFlow} onOpenContinueBlockFutureJump={() => { if (selectedContinueBlockFutureMapLaunch) core.setFutureMapLaunch(selectedContinueBlockFutureMapLaunch) }} onOpenAnchorChapter={() => { if (activeWorkspaceSelection.kind === 'chapter' || activeWorkspaceSelection.kind === 'future_jump') return; const anchorChapter = core.resolveSourceChapter({ chapterId: null, chapterNo: activeWorkspaceSelection.anchorChapterNo }); if (anchorChapter) openChapterWorkspace(anchorChapter) }} onOpenFutureJumpSourceChapter={() => { if (activeWorkspaceSelection.kind !== 'future_jump') return; const sourceChapter = core.resolveSourceChapter({ chapterId: null, chapterNo: activeWorkspaceSelection.sourceChapterNo }); if (sourceChapter) openChapterWorkspace(sourceChapter) }} onOpenFutureJumpTargetChapter={() => { if (activeWorkspaceSelection.kind !== 'future_jump') return; const targetChapter = core.resolveSourceChapter({ chapterId: null, chapterNo: activeWorkspaceSelection.targetChapterNo }); if (targetChapter) openChapterWorkspace(targetChapter) }} />
   const knowledgeControls = <WorkspaceKnowledgeControls knowledgeRebuilding={core.knowledgeRebuilding} knowledgeRebuildActive={core.knowledgeRebuildActive} knowledgeActionLoading={core.knowledgeActionLoading} knowledgeRebuildPaused={core.knowledgeRebuildPaused} knowledgeRebuildFailed={core.knowledgeRebuildFailed} knowledgeRebuildRangeMode={core.knowledgeRebuildRangeMode} knowledgeRebuildFirstChapterCount={core.knowledgeRebuildFirstChapterCount} knowledgeRebuildStartChapter={core.knowledgeRebuildStartChapter} knowledgeRebuildEndChapter={core.knowledgeRebuildEndChapter} selectedKnowledgeRebuildChapterRangeLabel={core.selectedKnowledgeRebuildChapterRangeLabel} knowledgeStatusOverview={core.knowledgeStatusOverview} currentKnowledgeJobBusy={core.currentKnowledgeJobBusy} knowledgeGraphOverview={core.knowledgeGraphOverview} extractionCacheOverview={core.extractionCacheOverview} embeddingCacheOverview={core.embeddingCacheOverview} retrievalIndexOverview={core.retrievalIndexOverview} retrievalIndexStatusLine={core.retrievalIndexStatusLine} retrievalTaskStatus={core.retrievalTaskStatus} retrievalTaskStatusLabel={core.retrievalTaskStatusLabel} retrievalTaskPhaseLabel={core.retrievalTaskPhaseLabel} retrievalControlsState={core.retrievalControlsState} mainKnowledgeRebuildStatus={core.mainKnowledgeRebuildStatus} knowledgeRebuildFailureMessage={core.knowledgeRebuildFailureMessage} knowledgeRebuildEtaMinutes={core.knowledgeRebuildEtaMinutes} hanlpBootstrapStatusLine={core.hanlpBootstrapStatusLine} hanlpBootstrapCompletedChapterCount={core.hanlpBootstrapCompletedChapterCount} hanlpBootstrapTotalChapterCount={core.hanlpBootstrapTotalChapterCount} hanlpCacheStatusLabel={core.hanlpCacheStatusLabel} hanlpBootstrapCacheHitRatePercent={core.hanlpBootstrapCacheHitRatePercent} hanlpBootstrapPhaseLabel={core.hanlpBootstrapPhaseLabel} hanlpBootstrapEtaLabel={core.hanlpBootstrapEtaLabel} hanlpBootstrapTimingLabel={core.hanlpBootstrapTimingLabel} hanlpSettingsLine={core.hanlpSettingsLine} rawTextEmbeddingStatusLine={core.rawTextEmbeddingStatusLine} rawTextEmbeddingActive={core.rawTextEmbeddingActive} rawTextEmbeddingPhaseBadge={core.rawTextEmbeddingPhaseBadge} rawTextEmbeddingCacheHitRatePercent={core.rawTextEmbeddingCacheHitRatePercent} rawTextEmbeddingTimingLabel={core.rawTextEmbeddingTimingLabel} rawTextEmbeddingSettingsLine={core.rawTextEmbeddingSettingsLine} knowledgeRebuildSteps={core.knowledgeRebuildSteps} currentKnowledgeRunningStepKey={core.currentKnowledgeRunningStepKey} confirmDeleteHanlpCache={core.confirmDeleteHanlpCache} confirmDeleteExtractionCache={core.confirmDeleteExtractionCache} confirmDeleteEmbeddingCache={core.confirmDeleteEmbeddingCache} confirmDeleteKnowledge={core.confirmDeleteKnowledge} hanlpCacheDeleteState={core.hanlpCacheDeleteState} extractionCacheDeleteState={core.extractionCacheDeleteState} embeddingCacheDeleteState={core.embeddingCacheDeleteState} onRebuildKnowledge={() => { void handleRebuildKnowledge() }} onPauseKnowledge={() => { void handlePauseKnowledge() }} onAbortKnowledge={() => { void handleAbortKnowledge() }} onRebuildRetrievalIndex={() => { void handleRebuildRetrievalIndex() }} onSetKnowledgeRebuildRangeMode={core.setKnowledgeRebuildRangeMode} onSetKnowledgeRebuildFirstChapterCount={core.setKnowledgeRebuildFirstChapterCount} onSetKnowledgeRebuildStartChapter={core.setKnowledgeRebuildStartChapter} onSetKnowledgeRebuildEndChapter={core.setKnowledgeRebuildEndChapter} onToggleConfirmDeleteHanlpCache={() => core.setConfirmDeleteHanlpCache((current) => !current)} onToggleConfirmDeleteExtractionCache={() => core.setConfirmDeleteExtractionCache((current) => !current)} onToggleConfirmDeleteEmbeddingCache={() => core.setConfirmDeleteEmbeddingCache((current) => !current)} onToggleConfirmDeleteKnowledge={() => core.setConfirmDeleteKnowledge((current) => !current)} onCancelDeleteHanlpCache={() => core.setConfirmDeleteHanlpCache(false)} onCancelDeleteExtractionCache={() => core.setConfirmDeleteExtractionCache(false)} onCancelDeleteEmbeddingCache={() => core.setConfirmDeleteEmbeddingCache(false)} onCancelDeleteKnowledge={() => core.setConfirmDeleteKnowledge(false)} onDeleteHanlpCache={() => { void handleDeleteHanlpCache() }} onDeleteExtractionCache={() => { void handleDeleteExtractionCache() }} onDeleteEmbeddingCache={() => { void handleDeleteEmbeddingCache() }} onDeleteKnowledgeGraph={() => { void handleDeleteKnowledgeGraph() }} />
 
-  return { openActionMode, handleRefreshContextReview, handleExcludedGenerationContextChange, handleConfirmGraphEdge: async (edgeId: string) => handleGraphEdgeMutation(edgeId, () => callGraphEdgeConfirmApi(edgeId, core.currentNovelId)), handleRejectGraphEdge: async (edgeId: string) => handleGraphEdgeMutation(edgeId, () => callGraphEdgeRejectApi(edgeId, core.currentNovelId)), handleSaveGraphEdgeEdit: async (edgeId: string, draft: GraphEdgeEditDraft) => handleGraphEdgeMutation(edgeId, () => callGraphEdgeEditApi(edgeId, core.currentNovelId, { linkType: draft.linkType.trim(), label: draft.label.trim() || null, description: draft.description.trim() || null, polarity: draft.polarity || null, strength: draft.strength, validFromChapter: draft.validFromChapter, validUntilChapter: draft.validUntilChapter.trim() ? Number(draft.validUntilChapter.trim()) : null, includeByDefault: draft.includeByDefault })), handleGraphControlChange, copyText, applyFullChapter, saveSettings, loadOllamaModels, loadOpenAICompatibleModels, handleDeleteNovel, handleDeleteChapter, handleTimelineDeleteChapter, handleDeleteBranchNode, handleRewritePromptChange, handleRewrite, handleAbortRewriteGeneration, handleSaveContinueBlock, handleCreateWhatIf, reopenWhatIfRewriteFlow, launchFutureMapFromWhatIf, handleFutureJumpCreated, reopenFutureJumpRewriteFlow, selectionActions, knowledgeControls }
+  return { openActionMode, handleRefreshContextReview, handleExcludedGenerationContextChange, handleConfirmGraphEdge: async (edgeId: string) => handleGraphEdgeMutation(edgeId, () => callGraphEdgeConfirmApi(edgeId, core.currentNovelId)), handleRejectGraphEdge: async (edgeId: string) => handleGraphEdgeMutation(edgeId, () => callGraphEdgeRejectApi(edgeId, core.currentNovelId)), handleSaveGraphEdgeEdit: async (edgeId: string, draft: GraphEdgeEditDraft) => handleGraphEdgeMutation(edgeId, () => callGraphEdgeEditApi(edgeId, core.currentNovelId, { linkType: draft.linkType.trim(), label: draft.label.trim() || null, description: draft.description.trim() || null, polarity: draft.polarity || null, strength: draft.strength, validFromChapter: draft.validFromChapter, validUntilChapter: draft.validUntilChapter.trim() ? Number(draft.validUntilChapter.trim()) : null, includeByDefault: draft.includeByDefault })), handleGraphControlChange, copyText, applyFullChapter, saveSettings, loadOllamaModels, loadOpenAICompatibleModels, handleDeleteNovel, handleDeleteChapter, handleTimelineDeleteChapter, handleDeleteBranchNode, handleRewritePromptChange, handleWritingSkillSelectionChange, handleWritingSkillExampleCountChange, handleRewrite, handleAbortRewriteGeneration, handleSaveContinueBlock, handleCreateWhatIf, reopenWhatIfRewriteFlow, launchFutureMapFromWhatIf, handleFutureJumpCreated, reopenFutureJumpRewriteFlow, reopenContinueBlockRewriteFlow, selectionActions, knowledgeControls }
 }

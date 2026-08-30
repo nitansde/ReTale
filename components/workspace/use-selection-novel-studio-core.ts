@@ -34,6 +34,10 @@ import { useI18n } from '@/lib/i18n/provider'
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import type { WritingSkillCard } from '@/lib/writing-skill-types'
 import { WRITING_SKILL_DEFAULTS } from '@/lib/writing-skill-defaults'
+import {
+  createWritingSkillRuntimeSeed,
+  normalizeWritingSkillCardIds,
+} from '@/lib/writing-skill-selection'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import { createPresetCompatSessionStateKey } from '@/lib/workspace-state'
 import { resolveWorkspaceUserFacingError } from '@/lib/workspace-user-facing-errors'
@@ -268,8 +272,9 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const [writingSkillCards, setWritingSkillCards] = useState<WritingSkillCard[]>([])
   const [writingSkillCardsLoading, setWritingSkillCardsLoading] = useState(true)
   const [writingSkillCardsError, setWritingSkillCardsError] = useState('')
-  const [selectedWritingSkillCardId, setSelectedWritingSkillCardId] = useState('')
+  const [selectedWritingSkillCardIds, setSelectedWritingSkillCardIds] = useState<string[]>([])
   const [writingSkillExampleCount, setWritingSkillExampleCount] = useState<number>(WRITING_SKILL_DEFAULTS.defaultRuntimeExampleCount)
+  const [writingSkillSeed, setWritingSkillSeed] = useState(1)
   const [generationContext, setGenerationContext] = useState<GenerationContextBuildData | null>(null)
   const [graphContext, setGraphContext] = useState<GenerationContextBuildData['graphContext'] | null>(null)
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false)
@@ -375,7 +380,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const knowledgePanelReadOnly = true
 
   useEffect(() => {
-    if (activeMode !== 'rewrite') return
     let cancelled = false
     const load = async () => {
       try {
@@ -386,9 +390,8 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
         const cards = data.cards ?? []
         setWritingSkillCards(cards)
         setWritingSkillCardsError('')
-        setSelectedWritingSkillCardId((current) => (
-          current && cards.some((card) => card.id === current) ? current : ''
-        ))
+        const availableCardIds = new Set(cards.map((card) => card.id))
+        setSelectedWritingSkillCardIds((current) => current.filter((cardId) => availableCardIds.has(cardId)))
       } catch (error) {
         if (cancelled) return
         setWritingSkillCards([])
@@ -401,7 +404,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     return () => {
       cancelled = true
     }
-  }, [activeMode])
+  }, [])
 
   useEffect(() => {
     workspaceSelectionRef.current = workspaceSelection
@@ -1755,8 +1758,16 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     if (job.panel.rewriteLaunchSource === 'chapter' || job.panel.rewriteLaunchSource === 'what_if' || job.panel.rewriteLaunchSource === 'future_jump' || job.panel.rewriteLaunchSource === 'continue_block') {
       setRewriteLaunchSource(job.panel.rewriteLaunchSource)
     }
-    setSelectedWritingSkillCardId(job.panel.writingSkillCardId ?? '')
+    setSelectedWritingSkillCardIds(normalizeWritingSkillCardIds({
+      writingSkillCardIds: job.panel.writingSkillCardIds,
+      writingSkillCardId: job.panel.writingSkillCardId,
+    }))
     if (job.panel.writingSkillExampleCount) setWritingSkillExampleCount(job.panel.writingSkillExampleCount)
+    setWritingSkillSeed(
+      typeof job.panel.writingSkillSeed === 'number' && Number.isFinite(job.panel.writingSkillSeed)
+        ? Math.floor(job.panel.writingSkillSeed) & 0x7fffffff
+        : createWritingSkillRuntimeSeed(),
+    )
   }, [t])
 
   const syncRewriteJobFromRecoverableJob = useCallback((job: RecoverableRewriteJob) => {
@@ -1810,10 +1821,12 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     writingSkillCards,
     writingSkillCardsLoading,
     writingSkillCardsError,
-    selectedWritingSkillCardId,
-    setSelectedWritingSkillCardId,
+    selectedWritingSkillCardIds,
+    setSelectedWritingSkillCardIds,
     writingSkillExampleCount,
     setWritingSkillExampleCount,
+    writingSkillSeed,
+    setWritingSkillSeed,
     generationContext,
     setGenerationContext,
     graphContext,
