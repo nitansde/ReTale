@@ -122,13 +122,17 @@ export class WritingSkillDistillationAgent {
     if (!initialJob) throw new Error('Writing skill distillation job not found')
     if (initialJob.status === 'CANCELLED') return initialJob
     const request = readWritingSkillJobRequest(jobId, this.dependencies.db) ?? {}
+    const replaceCardId = typeof request.replaceCardId === 'string' ? request.replaceCardId.trim() : ''
+    const refineInstruction = typeof request.refineInstruction === 'string'
+      ? request.refineInstruction.trim()
+      : ''
     let inputTokens = initialJob.inputTokens
     let outputTokens = initialJob.outputTokens
 
     try {
       updateWritingSkillJob(jobId, {
         status: 'INSPECTING_LIBRARY',
-        message: '正在检查素材库……',
+        message: refineInstruction ? '正在准备上次保存的素材片段……' : '正在检查素材库……',
         errorMessage: null,
       }, this.dependencies.db)
       const sourceRefs = normalizeWritingSkillSourceRefs(request.sourceRefs)
@@ -155,17 +159,6 @@ export class WritingSkillDistillationAgent {
       updateWritingSkillJob(jobId, { libraryVersion: library.version }, this.dependencies.db)
       this.assertActive(jobId)
 
-      const capabilities = await this.gateway.getCapabilities(initialJob.modelConfigId)
-      const scanContextWindow = normalizeWritingSkillContextWindow(request.scanContextWindow)
-      const scanTotalBudget = normalizeWritingSkillTotalBudget(request.scanTotalBudget)
-      const scanChunkBudget = calculateWritingSkillScanChunkBudget(capabilities, scanContextWindow)
-      const totalScanBudget = resolveWritingSkillTotalBudget(scanTotalBudget)
-      if (scanChunkBudget <= 0) throw new Error('当前模型上下文不足以执行素材扫描')
-
-      const replaceCardId = typeof request.replaceCardId === 'string' ? request.replaceCardId.trim() : ''
-      const refineInstruction = typeof request.refineInstruction === 'string'
-        ? request.refineInstruction.trim()
-        : ''
       let candidates: ValidatedCandidateRange[] = []
       let hasSufficientCoverage = Boolean(refineInstruction)
       const sampledRanges = initialJob.sampledRanges.slice()
@@ -176,9 +169,16 @@ export class WritingSkillDistillationAgent {
         if (existing.libraryId !== library.id || existing.libraryVersion !== library.version) {
           throw new InsufficientWritingSkillEvidenceError('已有技巧卡的素材版本已经过期，请使用“换一批素材重做”')
         }
+        const sourceJob = existing.sourceJobId
+          ? readWritingSkillJob(existing.sourceJobId, this.dependencies.db)
+          : null
+        const cachedCandidateRefs = sourceJob?.libraryVersion === library.version
+          ? sourceJob.candidateRefs
+          : []
         const refs = Array.from(new Set([
-          ...existing.rules.flatMap((rule) => rule.evidenceRefs),
+          ...cachedCandidateRefs,
           ...existing.examples.map((example) => example.displayRef),
+          ...existing.rules.flatMap((rule) => rule.evidenceRefs),
         ]))
         candidates = mergeWritingSkillCandidateRanges(
           refs.map((ref) => candidateFromDisplayRef(library, ref)).filter((candidate): candidate is ValidatedCandidateRange => candidate !== null),
@@ -191,6 +191,12 @@ export class WritingSkillDistillationAgent {
           candidateRefs: candidates.map((candidate) => candidate.displayRef),
         }, this.dependencies.db)
       } else {
+        const capabilities = await this.gateway.getCapabilities(initialJob.modelConfigId)
+        const scanContextWindow = normalizeWritingSkillContextWindow(request.scanContextWindow)
+        const scanTotalBudget = normalizeWritingSkillTotalBudget(request.scanTotalBudget)
+        const scanChunkBudget = calculateWritingSkillScanChunkBudget(capabilities, scanContextWindow)
+        const totalScanBudget = resolveWritingSkillTotalBudget(scanTotalBudget)
+        if (scanChunkBudget <= 0) throw new Error('当前模型上下文不足以执行素材扫描')
         const excludedChapterIds = new Set<string>()
         let scannedTokens = 0
         let effectiveScanChunkBudget = scanChunkBudget
@@ -318,7 +324,9 @@ export class WritingSkillDistillationAgent {
       this.assertActive(jobId)
       updateWritingSkillJob(jobId, {
         status: 'FETCHING_EVIDENCE',
-        message: '正在读取代表性段落……',
+        message: refineInstruction
+          ? `正在复用上次保存的 ${candidates.length} 组素材片段……`
+          : '正在读取代表性段落……',
         candidateRefs: candidates.map((candidate) => candidate.displayRef),
         inputTokens,
         outputTokens,
@@ -330,7 +338,7 @@ export class WritingSkillDistillationAgent {
       const distill = async () => {
         updateWritingSkillJob(jobId, {
           status: 'DISTILLING_SKILL',
-          message: '正在整理写作技巧……',
+          message: refineInstruction ? '正在按要求调整写作技巧……' : '正在整理写作技巧……',
         }, this.dependencies.db)
         const prompt = buildSkillDistillationPrompt({
           libraryName: library.name,

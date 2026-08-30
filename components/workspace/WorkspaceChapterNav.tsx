@@ -191,6 +191,34 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
               : t('chapterNav.noChapters')}
         </p>
 
+        {!searching && navigationChapters.length > CHAPTER_NAVIGATION_WINDOW_SIZE ? (
+          <div className="grid grid-cols-2 gap-2" data-testid="chapter-navigation-range-controls">
+            <button
+              type="button"
+              disabled={!canShowPrevious}
+              onClick={() => updateNavigationState({ windowStart: Math.max(0, normalizedWindowStart - CHAPTER_NAVIGATION_WINDOW_SIZE) })}
+              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-2xl border border-white/8 bg-black/20 px-3 text-xs text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+              {t('chapterNav.previousRange')}
+            </button>
+            <button
+              type="button"
+              disabled={!canShowNext}
+              onClick={() => updateNavigationState({
+                windowStart: Math.min(
+                  Math.max(0, navigationChapters.length - CHAPTER_NAVIGATION_WINDOW_SIZE),
+                  normalizedWindowStart + CHAPTER_NAVIGATION_WINDOW_SIZE,
+                ),
+              })}
+              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-2xl border border-white/8 bg-black/20 px-3 text-xs text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              {t('chapterNav.nextRange')}
+              <ChevronRight className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
+
         {props.storyTimelineError ? (
           <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-3 py-3 text-sm text-amber-100">{props.storyTimelineError}</div>
         ) : null}
@@ -223,34 +251,6 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
             </div>
           )}
         </div>
-
-        {!searching && navigationChapters.length > CHAPTER_NAVIGATION_WINDOW_SIZE ? (
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              disabled={!canShowPrevious}
-              onClick={() => updateNavigationState({ windowStart: Math.max(0, normalizedWindowStart - CHAPTER_NAVIGATION_WINDOW_SIZE) })}
-              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-2xl border border-white/8 bg-black/20 px-3 text-xs text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
-            >
-              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
-              {t('chapterNav.previousRange')}
-            </button>
-            <button
-              type="button"
-              disabled={!canShowNext}
-              onClick={() => updateNavigationState({
-                windowStart: Math.min(
-                  Math.max(0, navigationChapters.length - CHAPTER_NAVIGATION_WINDOW_SIZE),
-                  normalizedWindowStart + CHAPTER_NAVIGATION_WINDOW_SIZE,
-                ),
-              })}
-              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-2xl border border-white/8 bg-black/20 px-3 text-xs text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
-            >
-              {t('chapterNav.nextRange')}
-              <ChevronRight className="h-4 w-4" aria-hidden="true" />
-            </button>
-          </div>
-        ) : null}
       </section>
     </>
   )

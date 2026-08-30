@@ -103,6 +103,8 @@ describe('workspace chapter navigation', () => {
     expect(completeSummary).not.toHaveClass('line-clamp-2')
     expect(screen.getByText('魔改版本')).toBeInTheDocument()
     expect(screen.queryByText('魔改摘要不应显示')).not.toBeInTheDocument()
+    const rangeControls = screen.getByTestId('chapter-navigation-range-controls')
+    expect(rangeControls.nextElementSibling).toBe(screen.getByTestId('chapter-navigation-scroll'))
 
     const search = screen.getByLabelText('chapterNav.searchLabel')
     fireEvent.change(search, { target: { value: '早期线索' } })

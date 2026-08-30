@@ -436,6 +436,7 @@ export function WritingSkillDistillationPanel({
               className="min-h-24 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
               placeholder={t('writingSkill.refinePlaceholder')}
             />
+            <span className="mt-2 block text-xs leading-5 text-zinc-500">{t('writingSkill.refineHint')}</span>
           </label>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => void updateCard(agentState.card)} disabled={saving} className="rounded-2xl bg-violet-500 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50">

@@ -24,6 +24,7 @@ import {
   readWritingSkillJob,
   saveWritingSkillCard,
   updateWritingSkillCard,
+  updateWritingSkillJob,
 } from '@/lib/server/writing-skill-store'
 import type {
   MaterialParagraph,
@@ -127,13 +128,17 @@ function createGateway(input: {
 }) {
   const scanCalls: string[][] = []
   let distillCalls = 0
+  let capabilityCalls = 0
   const gateway: ModelGateway = {
-    getCapabilities: async () => ({
-      contextWindow: input.contextWindow,
-      maxOutputTokens: 1024,
-      supportsStructuredOutput: true,
-      supportsToolCalling: false,
-    }),
+    getCapabilities: async () => {
+      capabilityCalls += 1
+      return {
+        contextWindow: input.contextWindow,
+        maxOutputTokens: 1024,
+        supportsStructuredOutput: true,
+        supportsToolCalling: false,
+      }
+    },
     generateStructured: async <T,>(options: {
       modelConfigId: string
       messages: WritingSkillChatMessage[]
@@ -161,7 +166,12 @@ function createGateway(input: {
       }
     },
   }
-  return { gateway, scanCalls, getDistillCalls: () => distillCalls }
+  return {
+    gateway,
+    scanCalls,
+    getDistillCalls: () => distillCalls,
+    getCapabilityCalls: () => capabilityCalls,
+  }
 }
 
 async function runAgent(input: {
@@ -648,16 +658,28 @@ describe('WritingSkillDistillationAgent workflows', () => {
   it('refines an existing card from its saved evidence without rescanning the library', async () => {
     const { db } = createTestDb('retale-writing-skill-refine')
     const library = createLibrary({ chapterCount: 8, estimatedTokens: 20 })
-    const initialResult = createDistillationResult(library.paragraphs.map((paragraph) => paragraph.displayRef))
+    const cachedCandidateRefs = library.paragraphs.map((paragraph) => paragraph.displayRef)
+    const initialResult = createDistillationResult(cachedCandidateRefs)
+    const sourceJob = createWritingSkillJob({
+      libraryId: library.id,
+      instruction: '五官',
+      modelConfigId: 'knowledgeExtraction',
+      randomSeed: 123,
+    }, db)
+    updateWritingSkillJob(sourceJob.id, {
+      libraryVersion: library.version,
+      status: 'COMPLETED',
+      candidateRefs: cachedCandidateRefs,
+    }, db)
     const existing = await saveWritingSkillCard({
       libraryId: library.id,
       libraryVersion: library.version,
       libraryName: library.name,
       userInstruction: '五官',
       modelConfigId: 'knowledgeExtraction',
-      sourceJobId: 'source-job',
+      sourceJobId: sourceJob.id,
       result: initialResult,
-      examples: library.paragraphs.map((paragraph) => ({
+      examples: library.paragraphs.slice(0, 6).map((paragraph) => ({
         rangeRef: {
           libraryId: library.id,
           libraryVersion: library.version,
@@ -670,10 +692,15 @@ describe('WritingSkillDistillationAgent workflows', () => {
         score: 1,
       })),
     }, db)
+    let refinedEvidenceRefs: string[] = []
     const mock = createGateway({
       contextWindow: 32_000,
       scan: () => {
         throw new Error('Refine must not rescan material')
+      },
+      distill: (refs) => {
+        refinedEvidenceRefs = refs
+        return createDistillationResult(refs)
       },
     })
     const job = createWritingSkillJob({
@@ -697,7 +724,10 @@ describe('WritingSkillDistillationAgent workflows', () => {
     expect(completed?.roundCount).toBe(0)
     expect(completed?.resultCardId).toBe(existing.id)
     expect(mock.scanCalls).toHaveLength(0)
+    expect(mock.getCapabilityCalls()).toBe(0)
     expect(mock.getDistillCalls()).toBe(1)
+    expect(completed?.candidateRefs).toEqual(cachedCandidateRefs)
+    expect(refinedEvidenceRefs).toEqual(cachedCandidateRefs)
   })
 
   it('uses one schema-valid distillation without semantic post-processing', async () => {
