@@ -43,7 +43,7 @@ function createCard(): WritingSkillCardDetail {
       { text: '按观察顺序递进信息。', evidenceRefs: ['W01-C004-P001'] },
     ],
     avoid: ['逐项罗列', '复制独特措辞'],
-    defaultExampleCount: 3,
+    defaultExampleCount: 5,
     modelConfigId: 'knowledgeExtraction',
     status: 'ACTIVE',
     sourceJobId: 'job-1',
@@ -130,7 +130,8 @@ describe('WritingSkillDistillationPanel', () => {
     )
 
     expect(await screen.findByPlaceholderText('writingSkill.placeholder')).toBeInTheDocument()
-    expect(screen.getByLabelText('writingSkill.contextWindowLabel')).toHaveValue('auto')
+    expect(screen.getByLabelText('writingSkill.contextWindowLabel')).toHaveValue('256k')
+    expect(screen.queryByRole('option', { name: 'writingSkill.contextWindowAuto' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('writingSkill.totalBudgetLabel')).toHaveValue('512k')
     expect(screen.queryByText(/关键词/)).not.toBeInTheDocument()
     expect(screen.queryByText(/相似度/)).not.toBeInTheDocument()
@@ -159,6 +160,9 @@ describe('WritingSkillDistillationPanel', () => {
     expect(screen.getByText('writingSkill.regenerate')).toBeInTheDocument()
     expect(screen.getByText('writingSkill.refine')).toBeInTheDocument()
     expect(screen.queryByText('writingSkill.archive')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('writingSkill.advanced'))
+    expect(screen.getByLabelText('writingSkill.defaultExampleCount')).toHaveValue('5')
+    expect(screen.getByRole('option', { name: '10' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'writingSkill.regenerate' }))
     await waitFor(() => {

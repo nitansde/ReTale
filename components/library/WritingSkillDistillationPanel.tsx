@@ -13,6 +13,7 @@ import type {
 import {
   DEFAULT_WRITING_SKILL_CONTEXT_WINDOW,
   DEFAULT_WRITING_SKILL_TOTAL_BUDGET,
+  WRITING_SKILL_RUNTIME_EXAMPLE_COUNTS,
   type WritingSkillContextWindow,
   type WritingSkillTotalBudget,
 } from '@/lib/writing-skill-defaults'
@@ -225,7 +226,6 @@ export function WritingSkillDistillationPanel({
           onChange={(event) => setScanContextWindow(event.target.value as WritingSkillContextWindow)}
           className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
         >
-          <option value="auto">{t('writingSkill.contextWindowAuto')}</option>
           <option value="32k">{t('writingSkill.contextWindow32k')}</option>
           <option value="64k">{t('writingSkill.contextWindow64k')}</option>
           <option value="96k">{t('writingSkill.contextWindow96k')}</option>
@@ -402,7 +402,7 @@ export function WritingSkillDistillationPanel({
                   onChange={(event) => setAgentState({ kind: 'result', card: { ...agentState.card, defaultExampleCount: Number(event.target.value) } })}
                   className="rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100"
                 >
-                  {[1, 2, 3, 4, 5].map((count) => <option key={count} value={count}>{count}</option>)}
+                  {WRITING_SKILL_RUNTIME_EXAMPLE_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}
                 </select>
               </label>
               {scanBudgetControls}

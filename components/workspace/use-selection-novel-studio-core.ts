@@ -33,6 +33,7 @@ import {
 import { useI18n } from '@/lib/i18n/provider'
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import type { WritingSkillCard } from '@/lib/writing-skill-types'
+import { WRITING_SKILL_DEFAULTS } from '@/lib/writing-skill-defaults'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import { createPresetCompatSessionStateKey } from '@/lib/workspace-state'
 import { resolveWorkspaceUserFacingError } from '@/lib/workspace-user-facing-errors'
@@ -268,7 +269,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const [writingSkillCardsLoading, setWritingSkillCardsLoading] = useState(true)
   const [writingSkillCardsError, setWritingSkillCardsError] = useState('')
   const [selectedWritingSkillCardId, setSelectedWritingSkillCardId] = useState('')
-  const [writingSkillExampleCount, setWritingSkillExampleCount] = useState(3)
+  const [writingSkillExampleCount, setWritingSkillExampleCount] = useState<number>(WRITING_SKILL_DEFAULTS.defaultRuntimeExampleCount)
   const [generationContext, setGenerationContext] = useState<GenerationContextBuildData | null>(null)
   const [graphContext, setGraphContext] = useState<GenerationContextBuildData['graphContext'] | null>(null)
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false)

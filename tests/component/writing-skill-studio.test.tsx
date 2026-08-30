@@ -41,7 +41,7 @@ function createCard(): WritingSkillCardDetail {
       evidenceRefs: [`W01-C00${index + 1}-P001`],
     })),
     avoid: ['避免堆砌形容词', '避免环境与行动脱节'],
-    defaultExampleCount: 3,
+    defaultExampleCount: 5,
     modelConfigId: 'knowledgeExtraction',
     status: 'ACTIVE',
     sourceJobId: 'job-1',
@@ -74,6 +74,7 @@ function createCard(): WritingSkillCardDetail {
 describe('WritingSkillStudio', () => {
   it('selects library and upload-only books together and creates one global skill card', async () => {
     const card = createCard()
+    let saved = false
     const completedJob: WritingSkillDistillationJob = {
       id: 'job-1',
       libraryId: card.libraryId,
@@ -100,6 +101,11 @@ describe('WritingSkillStudio', () => {
       if (url === '/api/writing-skill-sources' && method === 'GET') {
         return jsonResponse({
           ok: true,
+          model: {
+            modelConfigId: 'rewrite',
+            provider: 'openai-compatible',
+            model: 'deepseek-v4-flash',
+          },
           librarySources: [{
             sourceType: 'LIBRARY', sourceId: 'library-1', title: '书库作品', author: null,
             chapterCount: 10, estimatedTokens: 80_000, createdAt: null, updatedAt: null,
@@ -110,10 +116,14 @@ describe('WritingSkillStudio', () => {
           }],
         })
       }
-      if (url === '/api/writing-skills' && method === 'GET') return jsonResponse({ ok: true, cards: [] })
+      if (url === '/api/writing-skills' && method === 'GET') return jsonResponse({ ok: true, cards: saved ? [card] : [] })
       if (url === '/api/writing-skills' && method === 'POST') return jsonResponse({ ok: true, jobId: 'job-1' }, 202)
       if (url === '/api/writing-skill-jobs/job-1' && method === 'GET') return jsonResponse({ ok: true, job: completedJob })
       if (url === '/api/writing-skills/card-1' && method === 'GET') return jsonResponse({ ok: true, card })
+      if (url === '/api/writing-skills/card-1' && method === 'PATCH') {
+        saved = true
+        return jsonResponse({ ok: true, card: { ...card, defaultExampleCount: 10 } })
+      }
       throw new Error(`Unexpected request: ${method} ${url}`)
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -121,6 +131,7 @@ describe('WritingSkillStudio', () => {
     render(<WritingSkillStudio />)
 
     expect(await screen.findByText('writingSkill.pageTitle')).toBeInTheDocument()
+    expect(screen.getByText('deepseek-v4-flash')).toBeInTheDocument()
     fireEvent.click(screen.getByText('书库作品'))
     fireEvent.click(screen.getByText('独立素材'))
     fireEvent.change(screen.getByPlaceholderText('writingSkill.placeholder'), { target: { value: '环境描写' } })
@@ -142,5 +153,17 @@ describe('WritingSkillStudio', () => {
     expect(screen.getByText('书库作品')).toBeInTheDocument()
     expect(screen.getByText('独立素材')).toBeInTheDocument()
     expect(screen.getByText('范文原文段落 1。')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('writingSkill.advanced'))
+    const defaultExampleCount = screen.getByLabelText('writingSkill.defaultExampleCount')
+    expect(defaultExampleCount).toHaveValue('5')
+    expect(screen.getByRole('option', { name: '10' })).toBeInTheDocument()
+    fireEvent.change(defaultExampleCount, { target: { value: '10' } })
+    fireEvent.click(screen.getByRole('button', { name: 'writingSkill.saveAndUse' }))
+
+    await waitFor(() => expect(screen.queryByDisplayValue('多书 · 环境描写')).not.toBeInTheDocument())
+    expect(screen.getByText('writingSkill.cardsTitle')).toBeInTheDocument()
+    const saveCall = fetchMock.mock.calls.find(([url, init]) => String(url) === '/api/writing-skills/card-1' && init?.method === 'PATCH')
+    expect(JSON.parse(String(saveCall?.[1]?.body)).defaultExampleCount).toBe(10)
   })
 })

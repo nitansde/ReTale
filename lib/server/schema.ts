@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS WritingSkillCard (
   applicationScope TEXT NOT NULL,
   rulesJson TEXT NOT NULL,
   avoidJson TEXT NOT NULL,
-  defaultExampleCount INTEGER NOT NULL DEFAULT 3,
+  defaultExampleCount INTEGER NOT NULL DEFAULT 5,
   modelConfigId TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'ACTIVE',
   sourceJobId TEXT,

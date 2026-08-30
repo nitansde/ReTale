@@ -55,6 +55,7 @@ import { normalizeAISettings } from '@/lib/ai-settings'
 import { useI18n } from '@/lib/i18n/provider'
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
+import { WRITING_SKILL_RUNTIME_EXAMPLE_COUNTS } from '@/lib/writing-skill-defaults'
 import { createPresetCompatSessionStateKey } from '@/lib/workspace-state'
 import {
   ACTION_META,
@@ -974,7 +975,7 @@ export function SelectionNovelStudio() {
                       disabled={!selectedWritingSkillCardId}
                       className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-3 py-2.5 text-sm text-zinc-100 outline-none disabled:opacity-40"
                     >
-                      {[1, 2, 3, 4, 5].map((count) => <option key={count} value={count}>{count}</option>)}
+                      {WRITING_SKILL_RUNTIME_EXAMPLE_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}
                     </select>
                   </label>
                 </div>
