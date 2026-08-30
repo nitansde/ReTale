@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 type DialogPlacement = 'center' | 'left' | 'right' | 'bottom'
@@ -31,6 +32,7 @@ export function DialogSurface({
   modal = true,
   closeOnBackdrop = true,
   closeDisabled = false,
+  closeLabel,
   busy = false,
   backdropClassName,
   titleClassName,
@@ -46,6 +48,7 @@ export function DialogSurface({
   modal?: boolean
   closeOnBackdrop?: boolean
   closeDisabled?: boolean
+  closeLabel?: string
   busy?: boolean
   backdropClassName?: string
   titleClassName?: string
@@ -119,7 +122,7 @@ export function DialogSurface({
 
   return (
     <div
-      className={cn('fixed inset-0 z-[70] flex bg-black/60 backdrop-blur-sm', backdropClassName)}
+      className={cn('dialog-backdrop fixed inset-0 z-[70] flex bg-[#05060a]/72 backdrop-blur-md backdrop-saturate-150', backdropClassName)}
       onClick={(event) => {
         if (!closeDisabled && closeOnBackdrop && event.target === event.currentTarget) onClose()
       }}
@@ -133,12 +136,25 @@ export function DialogSurface({
         aria-busy={busy || undefined}
         tabIndex={-1}
         className={cn(
-          'overflow-y-auto border border-white/10 bg-[#0d1017] px-5 pt-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] text-zinc-100 shadow-[0_30px_120px_rgba(0,0,0,0.5)] outline-none',
+          'dialog-surface overflow-y-auto border border-white/10 bg-[#0d1017]/96 px-5 pt-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] text-zinc-100 shadow-[0_30px_120px_rgba(0,0,0,0.58)] outline-none supports-[backdrop-filter]:backdrop-blur-2xl',
           PLACEMENT_STYLES[placement],
           className
         )}
       >
-        <h2 id={titleId} className={cn('text-lg font-semibold text-zinc-100', titleClassName)}>{title}</h2>
+        <div className="flex items-start justify-between gap-4">
+          <h2 id={titleId} className={cn('min-w-0 text-lg font-semibold text-zinc-100', titleClassName)}>{title}</h2>
+          {closeLabel ? (
+            <button
+              type="button"
+              aria-label={closeLabel}
+              disabled={closeDisabled}
+              onClick={onClose}
+              className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-black/20 text-zinc-300 transition hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
         {description ? <p id={descriptionId} className="mt-2 text-sm leading-6 text-zinc-400">{description}</p> : null}
         <div className={cn('mt-5', contentClassName)}>{children}</div>
       </div>

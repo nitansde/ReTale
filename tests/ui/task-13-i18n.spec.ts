@@ -11,7 +11,7 @@ test('task 13 defaults to zh and persists en across reload and navigation', asyn
   await page.goto('/library', { waitUntil: 'networkidle' })
   await expect(page.getByRole('heading', { name: '书库' })).toBeVisible()
   await expect(page.getByTestId('app-language-switcher')).toHaveCount(1)
-  await expect(page.getByText('导入 TXT 小说')).toBeVisible()
+  await expect(page.getByRole('button', { name: '导入小说' })).toBeVisible()
   await expect(page.getByTestId('app-language-option-zh')).toHaveAttribute('aria-pressed', 'true')
 
   await page.screenshot({
@@ -21,12 +21,12 @@ test('task 13 defaults to zh and persists en across reload and navigation', asyn
 
   await page.getByTestId('app-language-option-en').click()
   await expect(page.getByRole('heading', { name: 'Library' })).toBeVisible()
-  await expect(page.getByText('Import TXT Novel')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Import novel' })).toBeVisible()
   await expect(page.getByTestId('app-language-option-en')).toHaveAttribute('aria-pressed', 'true')
 
   await page.reload({ waitUntil: 'networkidle' })
   await expect(page.getByRole('heading', { name: 'Library' })).toBeVisible()
-  await expect(page.getByText('Import TXT Novel')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Import novel' })).toBeVisible()
 
   await page.goto('/task', { waitUntil: 'networkidle' })
   await expect(page.getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible()

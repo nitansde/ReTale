@@ -606,7 +606,7 @@ async function startFakeOllamaServer() {
 
 async function importWorkspaceFixture(page: Page, novelTitle: string) {
   await page.goto('/library', { waitUntil: 'networkidle' })
-  await expect(page.getByRole('button', { name: /导入 TXT 小说|Import TXT Novel/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /导入小说|Import novel/ })).toBeVisible()
 
   const importResponsePromise = page.waitForResponse(
     (response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST'
@@ -874,13 +874,13 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await page.goto('/library', { waitUntil: 'networkidle' })
     await expect(page.getByRole('heading', { name: '书库' })).toBeVisible()
     const libraryLoadMs = Date.now() - libraryStartedAt
-    await expect(page.getByText('导入 TXT 小说')).toBeVisible()
+    await expect(page.getByRole('button', { name: '导入小说' })).toBeVisible()
     await expect(page.getByTestId('app-language-option-zh')).toHaveAttribute('aria-pressed', 'true')
     appendQaRow(qaRows, 'Chinese default surfaces', '[task-12-i18n-full-stack.png](./task-12-i18n-full-stack.png)', 'Verified on library before any locale switch.')
 
     await page.getByTestId('app-language-option-en').click()
     await expect(page.getByRole('heading', { name: 'Library' })).toBeVisible()
-    await expect(page.getByText('Import TXT Novel')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Import novel' })).toBeVisible()
 
     const importResult = await importWorkspaceFixture(page, task12NovelTitle)
     const workspaceLoadStartedAt = Date.now()
@@ -1521,7 +1521,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     appendQaRow(qaRows, 'Rewrite provider error and structured product guidance', '[performance-before-after.md](./performance-before-after.md)', 'Verified the real `/api/rewrite` provider failure contract and setup guidance without any fake fallback content.')
 
     await dismissWorkspaceActionOverlayIfVisible(page)
-    await page.getByRole('button', { name: 'Back to anchor chapter' }).click()
+    await page.getByRole('button', { name: 'Back to chapter' }).click()
     await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
 
     await selectEntireChapter(page)
@@ -1562,7 +1562,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     const futureJumpCreateResult = await futureJumpCreateResponse.json() as { runId: string; timelineNodeId: string }
     expect(readStoryTimelineNodeCount(identity.novelId, futureJumpCreateResult.timelineNodeId)).toBe(1)
     await expect(page.getByTestId('workspace-future-jump-view')).toBeVisible()
-    await expect(page.getByTestId('future-jump-view').getByText('Persisted Future Jump run', { exact: true })).toBeVisible()
+    await expect(page.getByTestId('future-jump-view').getByText('Future Jump', { exact: true })).toBeVisible()
     await expect(page.getByTestId('workspace-future-jump-view').getByRole('button', { name: 'Regenerate Future Jump' })).toBeVisible()
     await expect(page.getByTestId('future-jump-feedback')).toBeVisible()
     const futureJumpReviseResponsePromise = page.waitForResponse(

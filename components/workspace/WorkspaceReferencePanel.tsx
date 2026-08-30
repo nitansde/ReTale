@@ -1,9 +1,7 @@
 "use client"
 
 import type { ReactNode } from 'react'
-import { X } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
-import { IconButton } from '@/components/ui/IconButton'
 import { useDesktopWorkspaceLayout } from '@/components/workspace/use-desktop-workspace-layout'
 import { useI18n } from '@/lib/i18n/provider'
 
@@ -36,24 +34,30 @@ export function WorkspaceReferencePanel(props: {
 
   return (
     <>
-      <DialogSurface open={props.open} onClose={props.onClose} title={t('workspace.context.title')} description={t('workspace.context.description')} placement="right">
-        <div className="mb-4 flex items-center justify-between gap-3">
+      <DialogSurface
+        open={props.open}
+        onClose={props.onClose}
+        closeLabel={t('workspace.context.close')}
+        title={t('workspace.context.title')}
+        description={t('workspace.context.description')}
+        placement="right"
+      >
+        <div className="mb-4">
           <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-zinc-400" data-testid="workspace-reference-selection-kind">{props.contextLabel}</span>
-          <IconButton label={t('workspace.context.close')} onClick={props.onClose}>
-            <X className="h-4 w-4" aria-hidden="true" />
-          </IconButton>
         </div>
         <div data-testid="workspace-reference-panel">
           {props.selectionActions}
           {props.references}
         </div>
       </DialogSurface>
-      <DialogSurface open={props.knowledgeOpen} onClose={props.onKnowledgeClose} title={t('workspace.knowledge.sheetTitle')} description={t('workspace.knowledge.sheetDescription')} placement="bottom">
-        <div className="mb-4 flex justify-end">
-          <IconButton label={t('workspace.knowledge.closeSheet')} onClick={props.onKnowledgeClose}>
-            <X className="h-4 w-4" aria-hidden="true" />
-          </IconButton>
-        </div>
+      <DialogSurface
+        open={props.knowledgeOpen}
+        onClose={props.onKnowledgeClose}
+        closeLabel={t('workspace.knowledge.closeSheet')}
+        title={t('workspace.knowledge.sheetTitle')}
+        description={t('workspace.knowledge.sheetDescription')}
+        placement="bottom"
+      >
         {props.knowledgeControls}
       </DialogSurface>
     </>

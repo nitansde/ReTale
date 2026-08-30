@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { LoaderCircle } from 'lucide-react'
+import Link from 'next/link'
+import { LoaderCircle, Sparkles } from 'lucide-react'
 import { ProjectCard } from './project-card'
 import { Notice, type NoticeVariant } from '@/components/ui/Notice'
 import { useI18n } from '@/lib/i18n/provider'
@@ -317,7 +318,7 @@ export function ProjectGrid() {
 
   return (
     <>
-      <div className="mb-6 flex flex-col items-end gap-3">
+      <div className="mb-6 flex flex-col gap-3">
         {backendLoadError || librarySummariesError ? (
           <div className="w-full max-w-xl rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
             {t('library.restoreError', { message: toUserFacingWorkspaceError(backendLoadError || librarySummariesError, locale) })}
@@ -327,18 +328,26 @@ export function ProjectGrid() {
             {t('library.restoreLoading')}
           </div>
         ) : null}
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          disabled={isImporting || workspaceHandoffPending}
-          className="rounded-2xl border border-indigo-400/20 bg-indigo-500/90 px-4 py-2.5 text-sm font-medium text-white shadow-[0_12px_30px_rgba(99,102,241,0.35)] transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {importFeedback.status === 'uploading'
-            ? t('library.uploading')
-            : importFeedback.status === 'processing'
-              ? t('library.processing')
-              : t('library.importButton')}
-        </button>
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+          <Link
+            href="/writing-skills"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-violet-300/20 bg-violet-500/12 px-4 text-sm font-medium text-violet-100 transition hover:bg-violet-500/22"
+          >
+            <Sparkles className="h-4 w-4" aria-hidden="true" /> {t('library.writingSkillsButton')}
+          </Link>
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={isImporting || workspaceHandoffPending}
+            className="min-h-11 rounded-2xl border border-indigo-400/20 bg-indigo-500/90 px-4 text-sm font-medium text-white shadow-[0_12px_30px_rgba(99,102,241,0.28)] transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {importFeedback.status === 'uploading'
+              ? t('library.uploading')
+              : importFeedback.status === 'processing'
+                ? t('library.processing')
+                : t('library.importButton')}
+          </button>
+        </div>
         <input
           ref={fileRef}
           type="file"

@@ -1,12 +1,13 @@
 "use client"
 
-import { X } from 'lucide-react'
+import { useState } from 'react'
 import {
   AI_SCENARIO_META,
   getAIScenarioMeta,
   type OllamaModelOption,
   type OpenAICompatibleModelOption,
 } from '@/components/workspace/selection-novel-studio-helpers'
+import { DialogSurface } from '@/components/ui/DialogSurface'
 import { useI18n } from '@/lib/i18n/provider'
 import { cn } from '@/lib/utils'
 import type { AIProvider, AISettings, AIScenarioKey } from '@/lib/types'
@@ -14,7 +15,7 @@ import type { AIProvider, AISettings, AIScenarioKey } from '@/lib/types'
 type WorkspaceAISettingsModalProps = {
   open: boolean
   onClose: () => void
-  onSave: () => void
+  onSave: () => Promise<void> | void
   scenarioStatusLabels: string[]
   resolvedAISettings: AISettings
   ollamaModelsByScenario: Record<AIScenarioKey, OllamaModelOption[]>
@@ -34,8 +35,21 @@ type WorkspaceAISettingsModalProps = {
 export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
   const { locale, t } = useI18n()
   const metaByScenario = getAIScenarioMeta(locale)
+  const [saving, setSaving] = useState(false)
 
   if (!props.open) return null
+
+  const handleSave = async () => {
+    if (saving) return
+    setSaving(true)
+    try {
+      await props.onSave()
+    } catch {
+      // The workspace owns the user-facing error notice and keeps this dialog open.
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const renderOpenAICompatibleFields = (scenario: AIScenarioKey) => {
     const scenarioSettings = props.resolvedAISettings[scenario]
@@ -251,17 +265,16 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm" onClick={props.onClose}>
-      <div className="absolute inset-x-0 top-[8vh] mx-auto max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-[32px] border border-white/10 bg-[#0d1017] p-5 shadow-[0_30px_120px_rgba(0,0,0,0.5)]" onClick={(event) => event.stopPropagation()}>
-        <div className="mb-5 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">{t('aiSettings.eyebrow')}</p>
-            <h3 className="mt-1 text-xl font-semibold text-zinc-100">{t('aiSettings.title')}</h3>
-            <p className="mt-2 text-sm leading-6 text-zinc-400">{t('aiSettings.description')}</p>
-          </div>
-          <button onClick={props.onClose} className="rounded-2xl border border-white/10 p-2 text-zinc-300 hover:bg-white/[0.06]"><X className="h-4 w-4" /></button>
-        </div>
-
+    <DialogSurface
+      open={props.open}
+      onClose={props.onClose}
+      closeLabel={t('common.close')}
+      closeDisabled={saving}
+      busy={saving}
+      title={t('aiSettings.title')}
+      description={t('aiSettings.description')}
+      className="max-w-2xl"
+    >
         <div className="space-y-6">
           {(Object.keys(AI_SCENARIO_META) as AIScenarioKey[]).map((scenario) => {
             const meta = metaByScenario[scenario]
@@ -331,13 +344,12 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
         </div>
 
         <div className="mt-6 flex items-center justify-between gap-3">
-          <p className="text-sm text-zinc-500">{t('aiSettings.currentStatus')} {props.scenarioStatusLabels.join(' / ')}</p>
+          <p className="hidden text-sm text-zinc-500 sm:block">{t('aiSettings.currentStatus')} {props.scenarioStatusLabels.join(' / ')}</p>
           <div className="flex gap-2">
-            <button onClick={props.onClose} className="rounded-2xl border border-white/10 px-4 py-2 text-sm text-zinc-300 hover:bg-white/[0.06]">{t('workspace.shell.cancel')}</button>
-            <button onClick={props.onSave} className="rounded-2xl bg-violet-500 px-4 py-2 text-sm font-medium text-white hover:bg-violet-400">{t('aiSettings.saveSettings')}</button>
+            <button onClick={props.onClose} disabled={saving} className="min-h-11 rounded-2xl border border-white/10 px-4 text-sm text-zinc-300 hover:bg-white/[0.06] disabled:opacity-50">{t('workspace.shell.cancel')}</button>
+            <button onClick={() => void handleSave()} disabled={saving} className="min-h-11 rounded-2xl bg-violet-500 px-4 text-sm font-medium text-white hover:bg-violet-400 disabled:opacity-60">{saving ? t('aiSettings.saving') : t('aiSettings.saveSettings')}</button>
           </div>
         </div>
-      </div>
-    </div>
+    </DialogSurface>
   )
 }

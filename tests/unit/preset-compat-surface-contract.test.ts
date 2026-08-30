@@ -18,8 +18,8 @@ describe('preset compat surface contract', () => {
       'roleplay',
     ])
     expect(PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS).toEqual(PRESET_COMPAT_OPTED_IN_SURFACE_IDS)
-    expect(PRESET_COMPAT_EDITABLE_SURFACE_META.rewrite.bindingSummary).toContain('save / continue / regenerate')
-    expect(PRESET_COMPAT_EDITABLE_SURFACE_META.future_jump.bindingSummary).toContain('不参与 continue')
+    expect(PRESET_COMPAT_EDITABLE_SURFACE_META.rewrite.bindingSummary).toContain('魔改、续写和重生')
+    expect(PRESET_COMPAT_EDITABLE_SURFACE_META.future_jump.bindingSummary).toBe('用于 Future Jump。')
   })
 
   it('keeps obsolete creative surface ids out of the editable registry', () => {

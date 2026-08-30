@@ -121,15 +121,19 @@ export function ContinueBlockDetailView(props: {
   )
   const historyEntries = revisionEntries.slice(1)
   const effectiveReaderText = effectiveDetail?.latestText.trim() || ''
+  const rawSubtitle = effectiveDetail?.subtitle?.trim() || props.nodeSubtitle?.trim() || ''
+  const displaySubtitle = rawSubtitle === '基于当前章节知识状态与证据装配生成。' || rawSubtitle === '已保存版本。'
+    ? t('continue.defaultSubtitle')
+    : rawSubtitle || t('continue.defaultSubtitle')
 
   return (
-    <div className="space-y-4 px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-continue-block-view">
-      <section className="overflow-hidden rounded-[28px] border border-fuchsia-400/20 bg-[radial-gradient(circle_at_top,_rgba(217,70,239,0.12),_transparent_42%),#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-        <div className="flex flex-col gap-5 px-5 py-5 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between">
+    <div className="space-y-0 sm:space-y-4 sm:px-7 sm:py-6" data-testid="workspace-continue-block-view">
+      <section className="overflow-hidden border-b border-fuchsia-400/15 bg-[radial-gradient(circle_at_top,_rgba(217,70,239,0.1),_transparent_45%),#0b0d12] sm:rounded-[28px] sm:border sm:border-fuchsia-400/20 sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+        <div className="flex flex-col gap-4 px-5 py-5 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-3xl">
             <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">{t('continue.savedEyebrow')}</p>
             <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{readableLabel || effectiveDetail?.title || props.nodeTitle || t('continue.defaultTitle')}</h3>
-            <p className="mt-3 text-sm leading-7 text-zinc-300">{effectiveDetail?.subtitle?.trim() || props.nodeSubtitle?.trim() || t('continue.defaultSubtitle')}</p>
+            <p className="mt-2 text-sm leading-6 text-zinc-400">{displaySubtitle}</p>
             {userRequest ? (
               <div className="mt-4 rounded-[20px] border border-fuchsia-300/16 bg-black/20 px-4 py-3" data-testid="continue-block-user-request">
                 <p className="text-[10px] uppercase tracking-[0.16em] text-fuchsia-200/65">{t('continue.userRequest')}</p>
@@ -137,12 +141,11 @@ export function ContinueBlockDetailView(props: {
               </div>
             ) : null}
             <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-zinc-300">
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">reader mode</span>
               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{t('continue.revision', { count: effectiveDetail?.latestRevisionNo ?? 1 })}</span>
               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{readableLabel || t('continue.chapter', { count: props.anchorChapterNo })}</span>
             </div>
           </div>
-          <div className="rounded-[22px] border border-fuchsia-300/20 bg-black/20 px-4 py-3 text-xs uppercase tracking-[0.18em] text-fuchsia-100" data-testid="workspace-continue-block-reader-mode">
+          <div className="hidden rounded-[22px] border border-fuchsia-300/20 bg-black/20 px-4 py-3 text-xs uppercase tracking-[0.18em] text-fuchsia-100 sm:block" data-testid="workspace-continue-block-reader-mode">
             {t('continue.readerMode')}
           </div>
         </div>
@@ -165,11 +168,11 @@ export function ContinueBlockDetailView(props: {
 
       {effectiveDetail ? (
         <>
-          <section className="rounded-[28px] border border-white/8 bg-[#0b0d12] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:p-6">
-            <div className="mb-3 flex items-center justify-between gap-3">
+          <section className="bg-[#0b0d12] px-5 py-5 sm:rounded-[28px] sm:border sm:border-white/8 sm:p-6 sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+            <div className="mb-3 hidden items-center justify-between gap-3 sm:flex">
               <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('continue.latestRevision')}</p>
             </div>
-            <div className="rounded-[24px] border border-white/8 bg-black/20 p-5">
+            <div className="bg-transparent sm:rounded-[24px] sm:border sm:border-white/8 sm:bg-black/20 sm:p-5">
               {renderReaderBodyParagraphs(effectiveReaderText || t('continue.emptyBody'), 'text-zinc-200', 'workspace-continue-block-reader-body')}
             </div>
           </section>

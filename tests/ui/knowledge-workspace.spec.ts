@@ -159,7 +159,7 @@ test('knowledge workspace shows phase-local progress, advanced HanLP diagnostics
   })
 
   await page.goto('/library', { waitUntil: 'networkidle' })
-  await expect(page.getByText('导入 TXT 小说')).toBeVisible()
+  await expect(page.getByRole('button', { name: '导入小说' })).toBeVisible()
 
   const importResponsePromise = page.waitForResponse(
     (response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST'
@@ -333,7 +333,7 @@ test('knowledge workspace shows LanceDB Refresh progress inline', async ({ page 
   })
 
   await page.goto('/library', { waitUntil: 'networkidle' })
-  await expect(page.getByText('导入 TXT 小说')).toBeVisible()
+  await expect(page.getByRole('button', { name: '导入小说' })).toBeVisible()
   await page.locator('input[type=file]').setInputFiles(fixturePath)
   await page.waitForResponse((response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST')
 
@@ -370,7 +370,7 @@ test('knowledge workspace keeps cache controls visible against the real backend'
   fs.mkdirSync(evidenceDirectory, { recursive: true })
 
   await page.goto('/library', { waitUntil: 'networkidle' })
-  await expect(page.getByText('导入 TXT 小说')).toBeVisible()
+  await expect(page.getByRole('button', { name: '导入小说' })).toBeVisible()
 
   const importResponsePromise = page.waitForResponse(
     (response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST'
@@ -444,7 +444,7 @@ test('knowledge workspace stops polling when no job is active', async ({ page })
   })
 
   await page.goto('/library', { waitUntil: 'networkidle' })
-  await expect(page.getByText('导入 TXT 小说')).toBeVisible()
+  await expect(page.getByRole('button', { name: '导入小说' })).toBeVisible()
   await page.locator('input[type=file]').setInputFiles(fixturePath)
   await page.waitForResponse((response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST')
 

@@ -63,3 +63,24 @@ body {
   padding-left: 1.5rem;
   margin: 1rem 0;
 }
+
+@media (prefers-reduced-motion: no-preference) {
+  .dialog-backdrop {
+    animation: dialog-backdrop-in 160ms ease-out both;
+  }
+
+  .dialog-surface {
+    animation: dialog-surface-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+}
+
+@keyframes dialog-backdrop-in {
+  from { opacity: 0; }
+}
+
+@keyframes dialog-surface-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+}

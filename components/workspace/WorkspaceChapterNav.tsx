@@ -3,7 +3,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, LocateFixed, Search, X } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
-import { IconButton } from '@/components/ui/IconButton'
 import { StoryTimeline } from '@/components/timeline/StoryTimeline'
 import { useDesktopWorkspaceLayout } from '@/components/workspace/use-desktop-workspace-layout'
 import {
@@ -267,12 +266,14 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
   }
 
   return (
-    <DialogSurface open={props.leftPanelOpen} onClose={props.onClose} title={t('chapterNav.title')} description={t('chapterNav.description')} placement="left">
-      <div className="mb-4 flex justify-end">
-        <IconButton label={t('chapterNav.close')} onClick={props.onClose}>
-          <X className="h-4 w-4" aria-hidden="true" />
-        </IconButton>
-      </div>
+    <DialogSurface
+      open={props.leftPanelOpen}
+      onClose={props.onClose}
+      closeLabel={t('chapterNav.close')}
+      title={t('chapterNav.title')}
+      description={t('chapterNav.description')}
+      placement="left"
+    >
       <div data-testid="workspace-chapter-nav">{content}</div>
     </DialogSurface>
   )

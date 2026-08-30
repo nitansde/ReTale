@@ -517,7 +517,7 @@ describe('workspace selection shell', () => {
     expect(screen.getByTestId('continue-block-slot')).toBeInTheDocument()
     expect(screen.queryByTestId('workspace-chapter-view-toggle')).not.toBeInTheDocument()
     expect(screen.getByTestId('workspace-center-pane-kind')).toHaveTextContent('续写块工作区')
-    expect(screen.getByText(/默认停留在干净的 reader 视图里/)).toBeInTheDocument()
+    expect(screen.queryByText(/默认停留在干净的 reader 视图里/)).not.toBeInTheDocument()
     expect(screen.getAllByText('CONT-01')).toHaveLength(2)
     cleanup()
 

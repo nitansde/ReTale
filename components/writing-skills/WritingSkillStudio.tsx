@@ -85,6 +85,7 @@ export function WritingSkillStudio() {
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [sourceError, setSourceError] = useState('')
+  const [saveNotice, setSaveNotice] = useState('')
   const [activeModel, setActiveModel] = useState<SourcesResponse['model']>(null)
   const [modelError, setModelError] = useState('')
 
@@ -286,6 +287,8 @@ export function WritingSkillStudio() {
       if (!response.ok || !data.ok || !data.card) throw new Error(data.error || t('writingSkill.saveFailed'))
       await loadCards()
       setStudioState({ kind: 'cards' })
+      setSaveNotice(t('writingSkill.saved'))
+      window.setTimeout(() => setSaveNotice(''), 2400)
     } catch (error) {
       setStudioState({ kind: 'error', message: error instanceof Error ? error.message : t('writingSkill.saveFailed') })
     } finally {
@@ -409,7 +412,7 @@ export function WritingSkillStudio() {
   )
 
   return (
-    <main className="min-h-screen bg-[#0a0c12] px-5 py-8 text-zinc-100 sm:px-8">
+    <main className="min-h-screen bg-[#0a0c12] px-4 py-6 text-zinc-100 sm:px-8 sm:py-8">
       <div className="mx-auto max-w-7xl">
         <header className="mb-8">
           <Link href="/library" className="mb-5 inline-flex items-center gap-2 text-sm text-zinc-400 transition hover:text-zinc-100">
@@ -447,6 +450,7 @@ export function WritingSkillStudio() {
           />
         </header>
 
+        {saveNotice ? <Notice variant="success" className="mb-5">{saveNotice}</Notice> : null}
         {sourceError ? <Notice variant="error" className="mb-5">{sourceError}</Notice> : null}
 
         {studioState.kind === 'running' ? (

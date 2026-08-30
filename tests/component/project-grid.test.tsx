@@ -411,7 +411,7 @@ describe('ProjectGrid chapter resolution', () => {
     expect(await screen.findByText('上传完成，服务器已解析完成：共 121 章。已刷新书库，请从书库卡片进入工作区。')).toBeInTheDocument()
     expect(screen.getByText('导入结果')).toBeInTheDocument()
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '导入 TXT 小说' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '导入小说' })).toBeEnabled()
   })
 
   it.each([
@@ -530,7 +530,7 @@ describe('ProjectGrid chapter resolution', () => {
 
     renderProjectGrid()
 
-    expect(screen.getByText('正在恢复书库与上次工作区…如果本地数据较大，可能需要几秒钟。')).toBeInTheDocument()
+    expect(screen.getByText('正在恢复书库…')).toBeInTheDocument()
   })
 
   it('stores an existing novel selection locally before navigating', async () => {
@@ -737,7 +737,7 @@ describe('ProjectGrid chapter resolution', () => {
     renderProjectGrid()
     fireEvent.click(screen.getAllByRole('button', { name: 'Open project' })[0])
 
-    expect(screen.getByRole('button', { name: '导入 TXT 小说' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '导入小说' })).toBeDisabled()
     expect(screen.getByTestId('project-card-novel-a')).toHaveAttribute('data-disabled', 'true')
     expect(screen.getByTestId('project-card-novel-b')).toHaveAttribute('data-disabled', 'true')
     for (const deleteButton of screen.getAllByRole('button', { name: 'Delete project' })) {

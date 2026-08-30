@@ -77,21 +77,12 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
 
   if (props.selection.kind === 'rewrite' || props.selection.kind === 'continue_block') {
     return (
-      <div className="mb-4 rounded-[24px] border border-fuchsia-400/20 bg-fuchsia-500/10 p-4" data-testid="workspace-continue-block-actions">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">{t('workspace.continueBlockActionsEyebrow')}</p>
-            <h3 className="mt-1 text-sm font-medium text-zinc-100">{props.selectedTimelineDisplayLabel || props.selectedTimelineNodeTitle || t('workspace.continueBlock')}</h3>
-            {props.selectedTimelineInstructionText ? <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-fuchsia-100"><span className="font-medium">{t('workspace.userRequest')}</span> · {props.selectedTimelineInstructionText}</p> : null}
-            <p className="mt-2 text-xs leading-6 text-zinc-300">{t('workspace.continueBlockActionsDescription')}</p>
-          </div>
-          <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{props.selectedTimelineDisplayLabel || t('workspace.continueBlock')}</span>
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" onClick={() => props.onReopenContinueBlockRewriteFlow('continue')} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.continue} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.continueWriting')}</button>
-          <button type="button" onClick={() => props.onReopenContinueBlockRewriteFlow('regenerate')} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.regenerate} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.regenerateCurrentNode')}</button>
-          <button type="button" disabled={!props.hasFutureMapLaunch} onClick={props.onOpenContinueBlockFutureJump} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.futureJump} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08] disabled:opacity-60">{t('workspace.futureJumpRun')}</button>
-          <button type="button" onClick={props.onOpenAnchorChapter} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.backToAnchorChapter')}</button>
+      <div className="mb-0" data-testid="workspace-continue-block-actions">
+        <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:flex-wrap">
+          <button type="button" onClick={() => props.onReopenContinueBlockRewriteFlow('continue')} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.continue} className="min-h-11 shrink-0 rounded-2xl bg-fuchsia-500 px-4 text-sm font-medium text-white transition hover:bg-fuchsia-400">{t('workspace.continueWriting')}</button>
+          <button type="button" onClick={() => props.onReopenContinueBlockRewriteFlow('regenerate')} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.regenerate} className="min-h-11 shrink-0 rounded-2xl border border-fuchsia-300/25 bg-fuchsia-500/10 px-4 text-sm text-fuchsia-50 transition hover:bg-fuchsia-500/20">{t('workspace.regenerateCurrentNode')}</button>
+          <button type="button" disabled={!props.hasFutureMapLaunch} onClick={props.onOpenContinueBlockFutureJump} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.futureJump} className="min-h-11 shrink-0 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-zinc-200 transition hover:bg-white/[0.08] disabled:opacity-50">{t('workspace.futureJumpRun')}</button>
+          <button type="button" onClick={props.onOpenAnchorChapter} className="min-h-11 shrink-0 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.backToAnchorChapter')}</button>
         </div>
       </div>
     )
@@ -99,57 +90,24 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
 
   if (props.selection.kind === 'what_if') {
     return (
-      <div className="mb-4 rounded-[24px] border border-fuchsia-400/20 bg-fuchsia-500/10 p-4" data-testid="workspace-what-if-actions">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-             <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">{t('workspace.whatIfActionsEyebrow')}</p>
-             <h3 className="mt-1 text-sm font-medium text-zinc-100">{props.selectedTimelineDisplayLabel || props.selectedTimelineNodeTitle || t('workspace.whatIfSession')}</h3>
-             {props.selectedTimelineInstructionText ? <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-fuchsia-100"><span className="font-medium">{t('workspace.userRequest')}</span> · {props.selectedTimelineInstructionText}</p> : null}
-             <p className="mt-2 text-xs leading-6 text-zinc-300">{t('workspace.whatIfActionsDescription')}</p>
-          </div>
-          <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">{props.selectedTimelineDisplayLabel || t('workspace.whatIfSession')}</span>
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" onClick={props.onOpenAnchorChapter} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.backToAnchorChapter')}</button>
-        </div>
+      <div data-testid="workspace-what-if-actions">
+        <button type="button" onClick={props.onOpenAnchorChapter} className="min-h-11 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.backToAnchorChapter')}</button>
       </div>
     )
   }
 
   if (props.selection.kind === 'future_jump') {
     return (
-      <div className="mb-4 rounded-[24px] border border-sky-400/20 bg-sky-500/10 p-4" data-testid="workspace-future-jump-actions">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-             <p className="text-[11px] uppercase tracking-[0.22em] text-sky-200/70">{t('workspace.futureJumpActionsEyebrow')}</p>
-             <h3 className="mt-1 text-sm font-medium text-zinc-100">{props.selectedTimelineDisplayLabel || props.selectedTimelineNodeTitle || t('workspace.futureJumpRun')}</h3>
-             {props.selectedTimelineInstructionText ? <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-sky-100"><span className="font-medium">{t('workspace.userRequest')}</span> · {props.selectedTimelineInstructionText}</p> : null}
-             <p className="mt-2 text-xs leading-6 text-zinc-300">{t('workspace.futureJumpActionsDescription')}</p>
-          </div>
-          <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1 text-[11px] text-sky-100">{props.selectedTimelineDisplayLabel || t('workspace.futureJumpRun')}</span>
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" onClick={props.onOpenFutureJumpSourceChapter} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.openSourceChapter')}</button>
-          <button type="button" onClick={props.onOpenFutureJumpTargetChapter} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.openTargetChapter')}</button>
-        </div>
+      <div className="flex flex-wrap gap-2" data-testid="workspace-future-jump-actions">
+        <button type="button" onClick={props.onOpenFutureJumpSourceChapter} className="min-h-11 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.openSourceChapter')}</button>
+        <button type="button" onClick={props.onOpenFutureJumpTargetChapter} className="min-h-11 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.openTargetChapter')}</button>
       </div>
     )
   }
 
   return (
-    <div className="mb-4 rounded-[24px] border border-emerald-400/20 bg-emerald-500/10 p-4" data-testid="workspace-roleplay-session-actions">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.22em] text-emerald-200/70">{t('workspace.roleplayActionsEyebrow')}</p>
-          <h3 className="mt-1 text-sm font-medium text-zinc-100">{props.selectedTimelineDisplayLabel || props.selectedTimelineNodeTitle || t('workspace.roleplaySession')}</h3>
-          {props.selectedTimelineInstructionText ? <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-emerald-100">{t('workspace.firstMessagePreview')} · {props.selectedTimelineInstructionText}</p> : null}
-          <p className="mt-2 text-xs leading-6 text-zinc-300">{t('workspace.roleplayActionsDescription')}</p>
-        </div>
-        <span className="rounded-full border border-emerald-300/20 bg-black/20 px-3 py-1 text-[11px] text-emerald-100">{props.selectedTimelineDisplayLabel || t('workspace.roleplaySession')}</span>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button type="button" onClick={props.onOpenAnchorChapter} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.backToAnchorChapter')}</button>
-      </div>
+    <div data-testid="workspace-roleplay-session-actions">
+      <button type="button" onClick={props.onOpenAnchorChapter} className="min-h-11 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.backToAnchorChapter')}</button>
     </div>
   )
 }

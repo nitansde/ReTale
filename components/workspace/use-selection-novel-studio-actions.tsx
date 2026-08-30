@@ -370,7 +370,19 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     core.setToast(t('workspace.action.appliedToBody')); window.setTimeout(() => core.setToast(''), 1800); core.closePanel()
   }
 
-  const saveSettings = async () => { await saveAISettings(); await core.refreshCurrentFullKnowledgeProjection(); core.setSettingsOpen(false) }
+  const saveSettings = async () => {
+    try {
+      await saveAISettings()
+      await core.refreshCurrentFullKnowledgeProjection()
+      core.setSettingsOpen(false)
+      core.setToast(t('aiSettings.saved'), 'success')
+      window.setTimeout(() => core.setToast(''), 2000)
+    } catch (error) {
+      core.setToast(t('aiSettings.saveFailed'), 'error')
+      window.setTimeout(() => core.setToast(''), 2400)
+      throw error
+    }
+  }
   async function loadOllamaModels(scenario: AIScenarioKey, baseUrl?: string) {
     ollamaModelRequestControllersRef.current[scenario]?.abort()
     const controller = new AbortController()

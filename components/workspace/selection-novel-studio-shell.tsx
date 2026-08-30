@@ -352,7 +352,7 @@ export function SelectionNovelStudio() {
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(129,140,248,0.12),_transparent_30%),#0a0c12] text-zinc-100">
-      <div className="mx-auto flex min-h-screen max-w-[1720px] flex-col px-3 pb-10 pt-3 sm:px-5 lg:px-6">
+      <div className="mx-auto flex min-h-screen max-w-[1720px] flex-col px-0 pb-10 pt-0 sm:px-5 sm:pt-3 lg:px-6">
         <WorkspaceHeader
           title={workspaceHeaderTitle}
           metrics={{
@@ -375,7 +375,7 @@ export function SelectionNovelStudio() {
           }}
         />
 
-        <div className="grid flex-1 gap-4 lg:grid-cols-[264px_minmax(0,1.28fr)_376px] 2xl:grid-cols-[280px_minmax(0,1.32fr)_392px]">
+        <div className="grid flex-1 gap-0 sm:gap-4 lg:grid-cols-[264px_minmax(0,1.28fr)_376px] 2xl:grid-cols-[280px_minmax(0,1.32fr)_392px]">
           <WorkspaceChapterNav
             leftPanelOpen={leftPanelOpen}
             onClose={() => setLeftPanelOpen(false)}
@@ -403,12 +403,13 @@ export function SelectionNovelStudio() {
             onCenterPaneViewChange={setCenterPaneView}
             chapterSelectionSummary={chapterSelectionSummary}
             chapterGraphSummary={chapterGraphSummary}
+            selectionActions={activeWorkspaceSelection.kind === 'chapter' ? null : selectionActions}
             branchReadableLabel={selectedTimelineDisplayLabel || null}
             branchInstructionText={selectedTimelineInstructionText || null}
             chapterBodyView={
-              <div className="px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-chapter-body-view">
+              <div className="px-0 py-0 sm:px-7 sm:py-6" data-testid="workspace-chapter-body-view">
                 {selectionActions}
-                <div className="min-h-[62vh] rounded-[28px] border border-white/8 bg-[#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+                <div className="min-h-[62vh] bg-transparent shadow-none sm:rounded-[28px] sm:border sm:border-white/8 sm:bg-[#0b0d12] sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                   <EditorContent editor={editor} />
                 </div>
               </div>
@@ -532,7 +533,7 @@ export function SelectionNovelStudio() {
             knowledgeOpen={knowledgePanelOpen}
             onKnowledgeClose={() => setKnowledgePanelOpen(false)}
             contextLabel={contextLabel}
-            selectionActions={activeWorkspaceSelection.kind === 'chapter' ? null : selectionActions}
+            selectionActions={null}
             knowledgeControls={knowledgeControls}
             references={(
               <>
@@ -849,9 +850,7 @@ export function SelectionNovelStudio() {
         <WorkspaceAISettingsModal
           open
           onClose={() => setSettingsOpen(false)}
-          onSave={() => {
-            void saveSettings()
-          }}
+          onSave={saveSettings}
           scenarioStatusLabels={scenarioStatusLabels}
           resolvedAISettings={resolvedAISettings}
           ollamaModelsByScenario={ollamaModelsByScenario}

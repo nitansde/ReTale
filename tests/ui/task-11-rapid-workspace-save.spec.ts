@@ -7,7 +7,7 @@ const fixturePath = path.join(process.cwd(), 'scripts/fixtures/workspace-import-
 
 async function importWorkspaceFixture(page: Page) {
   await page.goto('/library', { waitUntil: 'networkidle' })
-  await expect(page.getByText('导入 TXT 小说')).toBeVisible()
+  await expect(page.getByRole('button', { name: '导入小说' })).toBeVisible()
 
   const importResponsePromise = page.waitForResponse(
     (response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST'

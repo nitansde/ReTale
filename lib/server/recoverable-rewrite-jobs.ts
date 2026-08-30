@@ -108,7 +108,7 @@ export function normalizeRewriteResultPayload(value: unknown): RewriteResultPayl
   return {
     provider: typeof record.provider === 'string' ? record.provider : '',
     title: typeof record.title === 'string' ? record.title : '生成版本',
-    summary: typeof record.summary === 'string' ? record.summary : '基于当前章节知识状态与证据装配生成。',
+    summary: typeof record.summary === 'string' ? record.summary : '已保存版本。',
     content,
     inputTokens: normalizeTokenValue(record.inputTokens),
     outputTokens: normalizeTokenValue(record.outputTokens),

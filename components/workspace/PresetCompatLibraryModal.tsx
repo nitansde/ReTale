@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
-import { X } from 'lucide-react'
+import { FileUp, X } from 'lucide-react'
 import { PresetCompatPresetEditor } from '@/components/workspace/PresetCompatPresetEditor'
 import { PRESET_COMPAT_EDITABLE_SURFACE_META } from '@/lib/preset-compat/surface-contract'
 import {
@@ -83,6 +83,21 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
     error: unknown
   } | null>(null)
   const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || saving) return
+      event.preventDefault()
+      onClose()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = previousOverflow
+    }
+  }, [onClose, open, saving])
   useEffect(() => {
     if (!open || !onLoad) return
     void onLoad().catch(() => undefined)
@@ -193,20 +208,30 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-[65] bg-black/60 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-[65] bg-[#05060a]/72 backdrop-blur-md backdrop-saturate-150" onClick={onClose}>
       <div
-        className="absolute inset-x-0 top-[6vh] mx-auto max-h-[88vh] w-full max-w-7xl overflow-y-auto rounded-[32px] border border-white/10 bg-[#0d1017] p-5 shadow-[0_30px_120px_rgba(0,0,0,0.5)]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="preset-compat-library-title"
+        className="absolute inset-x-3 top-3 mx-auto max-h-[calc(100vh-1.5rem)] w-auto max-w-7xl overflow-y-auto rounded-[28px] border border-white/10 bg-[#0d1017]/96 p-4 shadow-[0_30px_120px_rgba(0,0,0,0.58)] supports-[backdrop-filter]:backdrop-blur-2xl sm:inset-x-6 sm:top-[6vh] sm:max-h-[88vh] sm:rounded-[32px] sm:p-5"
         data-testid="preset-compat-library-modal"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-5 flex items-start justify-between gap-3">
           <div>
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">{t('preset.eyebrow')}</p>
-            <h3 className="mt-1 text-xl font-semibold text-zinc-100">{t('preset.title')}</h3>
+            <h3 id="preset-compat-library-title" className="mt-1 text-xl font-semibold text-zinc-100">{t('preset.title')}</h3>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">{t('preset.description')}</p>
           </div>
-          <button onClick={onClose} className="rounded-2xl border border-white/10 p-2 text-zinc-300 hover:bg-white/[0.06]"><X className="h-4 w-4" /></button>
+          <button aria-label={t('common.close')} onClick={onClose} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-2xl border border-white/10 text-zinc-300 hover:bg-white/[0.06]"><X className="h-4 w-4" /></button>
         </div>
+
+        {statusMessage || resolvedErrorMessage ? (
+          <div className="sticky top-0 z-20 mb-4 space-y-2 bg-[#0d1017]/94 py-2 backdrop-blur-xl">
+            {statusMessage ? <p className="rounded-2xl border border-emerald-400/20 bg-emerald-500/12 px-4 py-3 text-sm text-emerald-50 shadow-lg">{statusMessage}</p> : null}
+            {resolvedErrorMessage ? <p className="rounded-2xl border border-rose-400/20 bg-rose-500/12 px-4 py-3 text-sm text-rose-50 shadow-lg">{resolvedErrorMessage}</p> : null}
+          </div>
+        ) : null}
 
         <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
           <div className="space-y-4">
@@ -215,22 +240,30 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
               <div className="mt-4 space-y-3">
                 <label className="block">
                   <span className="mb-2 block text-sm text-zinc-300">{t('preset.presetJson')}</span>
+                  <span className="flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-2xl border border-violet-300/20 bg-violet-500/10 px-4 text-sm font-medium text-violet-50 transition hover:bg-violet-500/20">
+                    <FileUp className="h-4 w-4" />
+                    {t('preset.chooseJsonFile')}
+                  </span>
                   <input
                     type="file"
                     accept="application/json,.json"
                     data-testid="preset-compat-preset-import-input"
                     onChange={(event) => void importFile(event, 'preset')}
-                    className="block w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-300 file:mr-4 file:rounded-xl file:border-0 file:bg-violet-500 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white"
+                    className="sr-only"
                   />
                 </label>
                 <label className="block">
                   <span className="mb-2 block text-sm text-zinc-300">{t('preset.regexJson')}</span>
+                  <span className="flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-2xl border border-sky-300/20 bg-sky-500/10 px-4 text-sm font-medium text-sky-50 transition hover:bg-sky-500/20">
+                    <FileUp className="h-4 w-4" />
+                    {t('preset.chooseJsonFile')}
+                  </span>
                   <input
                     type="file"
                     accept="application/json,.json"
                     data-testid="preset-compat-regex-import-input"
                     onChange={(event) => void importFile(event, 'regex')}
-                    className="block w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-300 file:mr-4 file:rounded-xl file:border-0 file:bg-sky-500 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white"
+                    className="sr-only"
                   />
                 </label>
               </div>
@@ -251,9 +284,6 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                   {presetCompatLibraryLoading || saving ? t('preset.processing') : t('preset.ready')}
                 </span>
               </div>
-
-              {statusMessage ? <p className="mt-3 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">{statusMessage}</p> : null}
-              {resolvedErrorMessage ? <p className="mt-3 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{resolvedErrorMessage}</p> : null}
 
               <div className="mt-4 flex flex-wrap gap-2">
                 <button

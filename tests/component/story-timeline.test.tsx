@@ -400,7 +400,7 @@ describe('StoryTimeline', () => {
 
     const continueNode = screen.getByTestId('timeline-node-continue-node-1')
     expect(within(continueNode).getByText('CONT-01')).toBeInTheDocument()
-    expect(within(continueNode).getByText('用户要求')).toBeInTheDocument()
+    expect(within(continueNode).getByText(/创作方向/)).toBeInTheDocument()
     expect(within(continueNode).getByText('继续压低场景里的情绪。')).toBeInTheDocument()
     expect(screen.queryByText('IF-01, CONT-01')).not.toBeInTheDocument()
     expect(screen.queryByText('CONT-01 续写块')).not.toBeInTheDocument()

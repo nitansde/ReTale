@@ -7,7 +7,7 @@ import { normalizeStoryBranchInstructionText, resolveStoryBranchDisplayLabel } f
 import type { StoryTimelineBranchNode } from '@/lib/story-branch-types'
 import { cn } from '@/lib/utils'
 
-const INDENT_CLASSES = ['', 'lg:ml-5', 'lg:ml-10', 'lg:ml-14'] as const
+const INDENT_CLASSES = ['', 'lg:ml-2', 'lg:ml-4', 'lg:ml-6'] as const
 
 function resolveIndentClass(laneIndex: number) {
   return INDENT_CLASSES[Math.min(Math.max(laneIndex, 0), INDENT_CLASSES.length - 1)]
@@ -82,10 +82,10 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
             </p>
             <p className="mt-1 text-sm font-medium text-zinc-50">{displayLabel}</p>
             {instructionText ? (
-              <div className="mt-2 rounded-xl border border-white/8 bg-black/15 px-2.5 py-2">
-                <p className="text-[10px] uppercase tracking-[0.14em] text-zinc-500">{t('workspace.userRequest')}</p>
-                <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-zinc-300">{instructionText}</p>
-              </div>
+              <p className="mt-2 line-clamp-2 break-words text-xs leading-5 text-zinc-300">
+                <span className="text-zinc-500">{t('workspace.userRequest')} · </span>
+                {instructionText}
+              </p>
             ) : null}
           </div>
         </div>

@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
+import { ArrowLeft } from 'lucide-react'
 import { TaskAbortButton } from './task-abort-button'
 import { readBrowserWorkspaceSession } from '@/lib/browser-preferences'
 import { useI18n } from '@/lib/i18n/provider'
@@ -130,33 +131,21 @@ export function TaskPageClient() {
   }
 
   return (
-    <main className="min-h-screen bg-[#0a0c12] px-6 py-8 text-zinc-100">
+    <main className="min-h-screen bg-[#0a0c12] px-4 py-6 text-zinc-100 sm:px-6 sm:py-8">
       <div className="mx-auto max-w-5xl">
-        <header className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-          <div>
-            <p className="text-sm uppercase tracking-[0.28em] text-zinc-500">{t('task.eyebrow')}</p>
-            <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">{t('task.title')}</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">{t('task.description')}</p>
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300">
-            <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('task.jsonEndpoint')}</div>
-            <Link
-              className="mt-1 inline-block text-indigo-200 transition hover:text-indigo-100"
-              href={novelId ? `/api/task?novelId=${encodeURIComponent(novelId)}` : '/api/task'}
-            >
-              /api/task{novelId ? `?novelId=${novelId}` : ''}
-            </Link>
-          </div>
+        <Link href="/library" className="mb-5 inline-flex min-h-11 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 text-sm text-zinc-300 transition hover:bg-white/[0.08]">
+          <ArrowLeft className="h-4 w-4" aria-hidden="true" /> {t('task.backToLibrary')}
+        </Link>
+        <header className="mb-8">
+          <p className="text-sm uppercase tracking-[0.28em] text-zinc-500">{t('task.eyebrow')}</p>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">{t('task.title')}</h1>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">{t('task.description')}</p>
         </header>
 
         <section className="mb-6 rounded-[28px] border border-white/8 bg-[radial-gradient(circle_at_top_left,_rgba(124,58,237,0.16),_transparent_38%),rgba(255,255,255,0.04)] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('task.activeTasks')}</p>
-              <p className="mt-2 text-3xl font-semibold tracking-tight text-white">{sortedTasks.length}</p>
-            </div>
-            <p className="max-w-xl text-sm leading-6 text-zinc-400">{t('task.activeTasksHelp')}</p>
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('task.activeTasks')}</p>
+            <p className="mt-2 text-3xl font-semibold tracking-tight text-white">{sortedTasks.length}</p>
           </div>
         </section>
 
@@ -165,7 +154,6 @@ export function TaskPageClient() {
             <div className="mx-auto max-w-2xl">
               <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">{t('task.allQuiet')}</p>
               <h2 className="mt-3 text-2xl font-semibold tracking-tight text-white">{t('task.noActiveTasks')}</h2>
-              <p className="mt-3 text-sm leading-7 text-zinc-400">{t('task.noActiveTasksDescription')}</p>
             </div>
           </section>
         ) : (

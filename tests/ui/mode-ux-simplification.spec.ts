@@ -794,7 +794,7 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   })
 
   await page.goto('/library', { waitUntil: 'networkidle' })
-  await expect(page.getByText('导入 TXT 小说')).toBeVisible()
+  await expect(page.getByRole('button', { name: '导入小说' })).toBeVisible()
 
   await page.locator('input[type=file]').setInputFiles(fixturePath)
   await expect(page).toHaveURL(/\/workspace(?:\?|$)/)

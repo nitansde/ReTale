@@ -22,7 +22,7 @@ export function ProjectCard({
   const { t } = useI18n()
 
   return (
-    <article className="group rounded-[28px] border border-white/8 bg-white/[0.04] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur transition hover:border-white/12 hover:bg-white/[0.06]">
+    <article className="group rounded-[24px] border border-white/8 bg-white/[0.04] p-4 shadow-[0_20px_60px_rgba(0,0,0,0.3)] backdrop-blur transition hover:border-white/12 hover:bg-white/[0.06] sm:rounded-[28px] sm:p-5">
       <div className="mb-4 flex items-start justify-between gap-3">
         <button
           type="button"
@@ -31,7 +31,7 @@ export function ProjectCard({
           aria-busy={opening}
           className="flex-1 text-left disabled:cursor-progress"
         >
-          <div className="mb-5 h-32 rounded-[22px] bg-[radial-gradient(circle_at_top_left,_rgba(124,156,255,0.45),_transparent_35%),radial-gradient(circle_at_bottom_right,_rgba(168,85,247,0.25),_transparent_35%),linear-gradient(135deg,_rgba(255,255,255,0.05),_rgba(255,255,255,0.01))]" />
+          <div className="mb-4 h-24 rounded-[20px] bg-[radial-gradient(circle_at_top_left,_rgba(124,156,255,0.45),_transparent_35%),radial-gradient(circle_at_bottom_right,_rgba(168,85,247,0.25),_transparent_35%),linear-gradient(135deg,_rgba(255,255,255,0.05),_rgba(255,255,255,0.01))] sm:mb-5 sm:h-32 sm:rounded-[22px]" />
 
           <div className="space-y-3">
             <div>

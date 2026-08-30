@@ -1455,7 +1455,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     extensions: [StarterKit],
     content: currentChapter?.content ?? '',
     immediatelyRender: false,
-    editorProps: { attributes: { class: 'px-5 py-6 sm:px-8 sm:py-8 font-[family:var(--font-noto-serif-sc)] text-[1.05rem] leading-9 text-zinc-200 outline-none min-h-[62vh]' } },
+    editorProps: { attributes: { class: 'px-5 py-5 sm:px-8 sm:py-8 font-[family:var(--font-noto-serif-sc)] text-[1.06rem] leading-9 text-zinc-200 outline-none min-h-[62vh]' } },
     onUpdate({ editor }) {
       const chapterId = editorChapterIdRef.current
       if (chapterId) {

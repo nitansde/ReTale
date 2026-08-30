@@ -22,18 +22,18 @@ export const PRESET_COMPAT_EDITABLE_SURFACE_META: Record<
 > = {
   rewrite: {
     label: 'Rewrite',
-    bindingSummary: '用于 rewrite 的 save / continue / regenerate；所有 continue 生成都复用这里的预设。',
-    builtinPromptSummary: '影响 rewrite 保存、rewrite regenerate，以及所有 continue 生成。',
+    bindingSummary: '用于魔改、续写和重生。',
+    builtinPromptSummary: '用于魔改、续写和重生。',
   },
   future_jump: {
     label: 'Future Jump',
-    bindingSummary: '仅用于 Future Jump 的目标节点生成与 regenerate，不参与 continue。',
-    builtinPromptSummary: '只影响 Future Jump 目标节点改写，不参与 continue。',
+    bindingSummary: '用于 Future Jump。',
+    builtinPromptSummary: '用于 Future Jump。',
   },
   roleplay: {
     label: 'Roleplay',
-    bindingSummary: '仅用于角色扮演生成，不扩展到 rewrite / future jump 流。',
-    builtinPromptSummary: '只影响角色扮演会话。',
+    bindingSummary: '用于角色扮演。',
+    builtinPromptSummary: '用于角色扮演。',
   },
 }
 

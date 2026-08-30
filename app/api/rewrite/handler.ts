@@ -186,7 +186,7 @@ function normalizeRewriteResultPayload(value: unknown): RewriteResultPayload | n
   return {
     provider: typeof record.provider === 'string' ? record.provider : '',
     title: typeof record.title === 'string' ? record.title : '生成版本',
-    summary: typeof record.summary === 'string' ? record.summary : '基于当前章节知识状态与证据装配生成。',
+    summary: typeof record.summary === 'string' ? record.summary : '已保存版本。',
     content,
     inputTokens: normalizeTokenValue(record.inputTokens),
     outputTokens: normalizeTokenValue(record.outputTokens),
@@ -358,7 +358,7 @@ function createResultPayload(params: {
   return {
     provider: params.provider,
     title: params.title ?? '生成版本',
-    summary: params.summary ?? '基于当前章节知识状态与证据装配生成。',
+    summary: params.summary ?? '已保存版本。',
     content: params.content,
     inputTokens: normalizeTokenValue(params.inputTokens),
     outputTokens: normalizeTokenValue(params.outputTokens),

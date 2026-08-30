@@ -3,7 +3,6 @@
 import type { ReactNode } from 'react'
 import { BookOpen, GitBranch, Globe } from 'lucide-react'
 import { useI18n } from '@/lib/i18n/provider'
-import { normalizeStoryBranchInstructionText } from '@/lib/story-branch-labels'
 import { cn } from '@/lib/utils'
 import type { TimelineSelection } from '@/lib/story-branch-types'
 
@@ -20,6 +19,7 @@ export function WorkspaceCenterPane(props: {
   whatIfView: ReactNode
   futureJumpView: ReactNode
   roleplayView: ReactNode
+  selectionActions?: ReactNode
   branchReadableLabel?: string | null
   branchInstructionText?: string | null
 }) {
@@ -32,7 +32,6 @@ export function WorkspaceCenterPane(props: {
     : t('workspace.centerPane.chapterGraphDescription')
   let statusSummary = props.centerPaneView === 'body' ? props.chapterSelectionSummary : props.chapterGraphSummary
   const branchReadableLabel = props.branchReadableLabel?.trim() || ''
-  const instructionText = normalizeStoryBranchInstructionText(props.branchInstructionText)
 
   if (props.selection.kind === 'what_if') {
     eyebrow = t('workspace.centerPane.whatIfEyebrow')
@@ -62,30 +61,27 @@ export function WorkspaceCenterPane(props: {
   }
 
   return (
-    <section className="min-w-0 rounded-[30px] border border-white/10 bg-[#11141d] shadow-[0_28px_90px_rgba(0,0,0,0.35)]" data-testid="workspace-center-pane">
-      <div className="border-b border-white/8 px-5 py-4 sm:px-7">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+    <section className="min-w-0 overflow-hidden bg-transparent shadow-none sm:rounded-[30px] sm:border sm:border-white/10 sm:bg-[#11141d] sm:shadow-[0_28px_90px_rgba(0,0,0,0.35)]" data-testid="workspace-center-pane">
+      <div className={cn(
+        'border-y border-white/8 bg-[#0d1017]/88 px-4 py-3 backdrop-blur-xl sm:border-x-0 sm:border-t-0 sm:bg-transparent sm:px-7 sm:py-4 sm:backdrop-blur-none',
+        !isChapter && 'hidden sm:block',
+      )}>
+        <div className="flex flex-wrap items-center justify-between gap-3 sm:items-start">
+          <div className={cn('min-w-0', isChapter && 'hidden sm:block')}>
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500" data-testid="workspace-center-pane-kind">{eyebrow}</p>
-            <h2 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-100">{title}</h2>
-            {!isChapter && instructionText ? (
-              <div className="mt-3 max-w-2xl rounded-[18px] border border-fuchsia-300/14 bg-fuchsia-500/[0.07] px-3.5 py-3">
-                <p className="text-[10px] uppercase tracking-[0.14em] text-fuchsia-200/60">{t('workspace.userRequest')}</p>
-                <p className="mt-1.5 whitespace-pre-wrap break-words text-sm leading-6 text-zinc-200">{instructionText}</p>
-              </div>
-            ) : null}
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">{description}</p>
+            <h2 className="mt-1 truncate text-lg font-semibold tracking-tight text-zinc-100 sm:text-2xl">{title}</h2>
+            <p className="mt-2 hidden max-w-2xl text-sm leading-6 text-zinc-400 sm:block">{description}</p>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-3">
+          <div className={cn('flex items-center gap-2 sm:flex-wrap sm:justify-end sm:gap-3', isChapter && 'w-full sm:w-auto')}>
             {isChapter ? (
-              <div className="inline-flex rounded-[22px] border border-white/10 bg-black/20 p-1 text-sm text-zinc-400" data-testid="workspace-chapter-view-toggle">
+              <div className="inline-flex shrink-0 rounded-[18px] border border-white/10 bg-black/25 p-1 text-sm text-zinc-400 sm:rounded-[22px]" data-testid="workspace-chapter-view-toggle">
                 {(['body', 'graph'] as const).map((view) => (
                   <button
                     key={view}
                     type="button"
                     onClick={() => props.onCenterPaneViewChange(view)}
                     className={cn(
-                      'rounded-[18px] px-4 py-2 transition',
+                      'min-h-9 rounded-[14px] px-4 py-2 transition sm:rounded-[18px]',
                       props.centerPaneView === view ? 'bg-white/10 text-zinc-100 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'
                     )}
                   >
@@ -94,24 +90,30 @@ export function WorkspaceCenterPane(props: {
                 ))}
               </div>
             ) : (
-              <div className="inline-flex items-center gap-2 rounded-[22px] border border-fuchsia-300/20 bg-fuchsia-500/10 px-4 py-3 text-xs text-fuchsia-100">
+              <div className="hidden items-center gap-2 rounded-[22px] border border-fuchsia-300/20 bg-fuchsia-500/10 px-4 py-3 text-xs text-fuchsia-100 sm:inline-flex">
                 <GitBranch className="h-4 w-4" />
                 <span className="font-medium">{branchReadableLabel || t('workspace.centerPane.branchView')}</span>
               </div>
             )}
-            <div className="rounded-[22px] border border-white/10 bg-black/20 px-4 py-3 text-xs leading-6 text-zinc-400">
-              <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1 rounded-[18px] border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-400 sm:flex-none sm:rounded-[22px] sm:px-4 sm:py-3 sm:leading-6">
+              <div className="flex min-w-0 items-center gap-2">
                 {isChapter ? (
                   props.centerPaneView === 'body' ? <BookOpen className="h-4 w-4 text-violet-300" /> : <Globe className="h-4 w-4 text-sky-300" />
                 ) : (
                   <GitBranch className="h-4 w-4 text-fuchsia-300" />
                 )}
-                {statusSummary}
+                <span className="truncate">{statusSummary}</span>
               </div>
             </div>
           </div>
         </div>
       </div>
+
+      {!isChapter && props.selectionActions ? (
+        <div className="border-b border-white/8 px-3 py-3 sm:px-7 sm:py-4">
+          {props.selectionActions}
+        </div>
+      ) : null}
 
       {isChapter
         ? (props.centerPaneView === 'body' ? props.chapterBodyView : props.chapterGraphView)

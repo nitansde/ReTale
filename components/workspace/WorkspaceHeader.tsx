@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { ArrowLeft, BookOpen, Brain, Ellipsis, Gauge, ScrollText, Settings2, Trash2, X } from 'lucide-react'
+import { ArrowLeft, BookOpen, Brain, Ellipsis, Gauge, ScrollText, Settings2, Trash2 } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { IconButton } from '@/components/ui/IconButton'
 import { useI18n } from '@/lib/i18n/provider'
@@ -55,7 +55,7 @@ export function WorkspaceHeader({
   }
 
   return (
-    <header className="sticky top-0 z-30 mb-4 rounded-[24px] border border-white/10 bg-[#0d1017]/92 px-2 py-2 shadow-[0_20px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:px-4 sm:py-3 lg:rounded-[28px]">
+    <header className="sticky top-0 z-30 mb-2 border-b border-white/10 bg-[#0d1017]/92 px-4 py-2 shadow-[0_14px_40px_rgba(0,0,0,0.3)] backdrop-blur-2xl sm:mb-4 sm:rounded-[24px] sm:border sm:py-3 sm:shadow-[0_20px_70px_rgba(0,0,0,0.35)] lg:rounded-[28px]">
       <div className="grid grid-cols-[44px_44px_minmax(0,1fr)_44px_44px] items-center gap-1 lg:hidden" data-testid="workspace-mobile-header">
         <Link
           href="/library"
@@ -113,13 +113,15 @@ export function WorkspaceHeader({
         </div>
       </div>
 
-      <DialogSurface open={overflowOpen} onClose={() => setOverflowOpen(false)} title={t('workspace.header.overflowTitle')} description={t('workspace.header.overflowDescription')} placement="bottom">
-        <div className="flex justify-end">
-          <IconButton label={t('workspace.header.closeOverflow')} onClick={() => setOverflowOpen(false)}>
-            <X className="h-4 w-4" aria-hidden="true" />
-          </IconButton>
-        </div>
-        <section className="mt-4" aria-labelledby="workspace-mobile-metrics-title">
+      <DialogSurface
+        open={overflowOpen}
+        onClose={() => setOverflowOpen(false)}
+        closeLabel={t('workspace.header.closeOverflow')}
+        title={t('workspace.header.overflowTitle')}
+        description={t('workspace.header.overflowDescription')}
+        placement="bottom"
+      >
+        <section aria-labelledby="workspace-mobile-metrics-title">
           <h3 id="workspace-mobile-metrics-title" className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">
             <Gauge className="h-4 w-4" aria-hidden="true" />
             {t('workspace.header.metrics')}

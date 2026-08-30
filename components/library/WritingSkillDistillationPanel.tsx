@@ -190,8 +190,8 @@ export function WritingSkillDistillationPanel({
       })
       const data = await response.json() as { ok?: boolean; card?: WritingSkillCardDetail; error?: string }
       if (!response.ok || !data.ok || !data.card) throw new Error(data.error || t('writingSkill.saveFailed'))
-      setAgentState({ kind: 'result', card: data.card })
       await loadCards()
+      onClose()
     } catch (error) {
       setAgentState({ kind: 'error', message: error instanceof Error ? error.message : t('writingSkill.saveFailed') })
     } finally {
@@ -260,6 +260,7 @@ export function WritingSkillDistillationPanel({
       open={open}
       onClose={onClose}
       closeDisabled={running}
+      closeLabel={t('common.close')}
       busy={running || saving}
       title={t('writingSkill.agentTitle')}
       description={library ? t('writingSkill.agentDescription', { title: library.title }) : ''}

@@ -9,7 +9,7 @@ test('future-jump harness smoke', async ({ page }) => {
   fs.mkdirSync(evidenceDirectory, { recursive: true })
 
   await page.goto('/library', { waitUntil: 'networkidle' })
-  await expect(page.getByText('导入 TXT 小说')).toBeVisible()
+  await expect(page.getByRole('button', { name: '导入小说' })).toBeVisible()
   await expect(page).toHaveURL(/127\.0\.0\.1:3000\/library/)
 
   const importResponsePromise = page.waitForResponse(

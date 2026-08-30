@@ -16,7 +16,7 @@ test('task 2 full-stack library to workspace baseline and task page snapshot', a
     fullPage: true,
   })
 
-  await expect(page.getByText('导入 TXT 小说')).toBeVisible()
+  await expect(page.getByRole('button', { name: '导入小说' })).toBeVisible()
 
   const importResponsePromise = page.waitForResponse(
     (response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST'

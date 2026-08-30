@@ -301,8 +301,8 @@ test('workspace preset-compat library modal imports fixture JSON, edits bindings
   const mainRuleId = importedPreset.promptRules.find((rule) => rule.id === 'synthetic-main')?.id
   expect(mainRuleId).toBe('synthetic-main')
   await expect(page.locator('select[data-testid^="preset-compat-binding-"]')).toHaveCount(PRESET_COMPAT_EDITABLE_SURFACE_REGISTRY_IDS.length)
-  await expect(page.getByTestId('preset-compat-binding-summary-rewrite')).toContainText('save / continue / regenerate')
-  await expect(page.getByTestId('preset-compat-binding-summary-future_jump')).toContainText('不参与 continue')
+  await expect(page.getByTestId('preset-compat-binding-summary-rewrite')).toContainText('魔改、续写和重生')
+  await expect(page.getByTestId('preset-compat-binding-summary-future_jump')).toContainText('用于 Future Jump')
   await expect(page.getByTestId('preset-compat-binding-roleplay')).toBeVisible()
   await expect(page.getByTestId('preset-compat-binding-expand')).toHaveCount(0)
   await expect(page.getByTestId('preset-compat-binding-polish')).toHaveCount(0)

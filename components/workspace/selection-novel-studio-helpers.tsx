@@ -334,8 +334,8 @@ export const AI_SCENARIO_META: Record<AIScenarioKey, {
 }> = {
   rewrite: {
     eyebrow: 'Rewrite',
-    title: '改写模型场景',
-    description: '用于魔改、扩写和角色扮演生成。可以走在线 OpenAI-compatible API，也可以切到本地 Ollama。',
+    title: '改写模型',
+    description: '魔改、扩写与角色扮演。',
     shortLabel: '改写',
     ollamaPurpose: 'text',
     openAIPlaceholder: 'deepseek-v4-flash',
@@ -343,8 +343,8 @@ export const AI_SCENARIO_META: Record<AIScenarioKey, {
   },
   knowledgeExtraction: {
     eyebrow: 'Knowledge extraction',
-    title: '知识抽取场景',
-    description: '用于知识视图与图谱抽取。这里会按当前场景独立保存 provider、模型和连接信息。',
+    title: '知识抽取',
+    description: '人物、设定与关系图谱。',
     shortLabel: '知识',
     ollamaPurpose: 'text',
     openAIPlaceholder: 'gpt-4.1-mini',
@@ -352,8 +352,8 @@ export const AI_SCENARIO_META: Record<AIScenarioKey, {
   },
   embeddings: {
     eyebrow: 'Embeddings',
-    title: 'Embedding 场景',
-    description: '用于向量化与检索相关能力。支持 OpenAI-compatible embedding 模型，也支持本地 Ollama embedding 模型。',
+    title: '向量模型',
+    description: '原文向量化与检索。',
     shortLabel: '向量',
     ollamaPurpose: 'embedding',
     openAIPlaceholder: 'text-embedding-3-large',
@@ -369,8 +369,8 @@ export function getAIScenarioMeta(locale: Locale): typeof AI_SCENARIO_META {
   return {
     rewrite: {
       eyebrow: 'Rewrite',
-      title: 'Rewrite model scenario',
-      description: 'Used for rewrite, expansion, and roleplay generation. It can call an online OpenAI-compatible API or switch to local Ollama.',
+      title: 'Rewrite model',
+      description: 'Rewrite, expansion, and roleplay.',
       shortLabel: 'Rewrite',
       ollamaPurpose: 'text',
       openAIPlaceholder: 'deepseek-v4-flash',
@@ -378,8 +378,8 @@ export function getAIScenarioMeta(locale: Locale): typeof AI_SCENARIO_META {
     },
     knowledgeExtraction: {
       eyebrow: 'Knowledge extraction',
-      title: 'Knowledge extraction scenario',
-      description: 'Used for knowledge-view and graph extraction. This scenario stores its own provider, model, and connection settings.',
+      title: 'Knowledge extraction',
+      description: 'Characters, world details, and graph data.',
       shortLabel: 'Knowledge',
       ollamaPurpose: 'text',
       openAIPlaceholder: 'gpt-4.1-mini',
@@ -387,8 +387,8 @@ export function getAIScenarioMeta(locale: Locale): typeof AI_SCENARIO_META {
     },
     embeddings: {
       eyebrow: 'Embeddings',
-      title: 'Embedding scenario',
-      description: 'Used for vectorization and retrieval features. It supports both OpenAI-compatible embedding models and local Ollama embedding models.',
+      title: 'Embedding model',
+      description: 'Source vectorization and retrieval.',
       shortLabel: 'Embedding',
       ollamaPurpose: 'embedding',
       openAIPlaceholder: 'text-embedding-3-large',
