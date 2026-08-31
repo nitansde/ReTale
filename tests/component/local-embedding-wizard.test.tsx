@@ -22,21 +22,21 @@ const baseStatus: LocalEmbeddingRuntimeStatus = {
   progress: null,
   error: null,
   models: [{
-    id: 'qwen3-embedding-0.6b-q8_0',
-    label: 'Qwen3 Embedding 0.6B · Q8_0',
+    id: 'qwen3-embedding-4b-q4_k_m',
+    label: 'Qwen3 Embedding 4B · Q4_K_M',
     description: 'Qwen',
-    family: 'Qwen3 Embedding 0.6B',
+    family: 'Qwen3 Embedding 4B',
     profile: 'balanced',
-    quantization: 'Q8_0',
+    quantization: 'Q4_K_M',
     license: 'Apache 2.0',
-    downloadBytes: 639_150_592,
-    dimension: 1024,
-    contextSize: 1024,
+    downloadBytes: 2_496_703_776,
+    dimension: 2560,
+    contextSize: 2048,
     pooling: 'last',
     normalization: 'l2',
-    memoryMinBytes: 800_000_000,
-    memoryMaxBytes: 1_500_000_000,
-    diskEstimateBytes: 850_000_000,
+    memoryMinBytes: 3_500_000_000,
+    memoryMaxBytes: 6_500_000_000,
+    diskEstimateBytes: 2_800_000_000,
     recommended: true,
   }],
   connection: {
@@ -72,8 +72,9 @@ describe('LocalEmbeddingWizard', () => {
     expect(screen.getByText(/只是一套 Embedding 服务/)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '下一步' }))
-    expect(screen.getByRole('combobox')).toHaveValue('qwen3-embedding-0.6b-q8_0')
-    expect(screen.getByText(/650 MB/)).toBeInTheDocument()
+    expect(screen.getByRole('combobox')).toHaveValue('qwen3-embedding-4b-q4_k_m')
+    expect(screen.getByText(/2.5 GB/)).toBeInTheDocument()
+    expect(screen.getByText(/2560 dim/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '下一步' }))
 
     const installButton = screen.getByRole('button', { name: '确认并开始安装' })
@@ -84,7 +85,7 @@ describe('LocalEmbeddingWizard', () => {
 
     await waitFor(() => expect(requests).toEqual([{
       action: 'install',
-      modelId: 'qwen3-embedding-0.6b-q8_0',
+      modelId: 'qwen3-embedding-4b-q4_k_m',
     }]))
   })
 
@@ -110,11 +111,11 @@ describe('LocalEmbeddingWizard', () => {
 
     expect(screen.getByText(/不校验 SHA-256/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '下一步' })).toBeDisabled()
-    fireEvent.change(screen.getByPlaceholderText('Qwen/Qwen3-Embedding-0.6B-GGUF'), {
-      target: { value: 'Qwen/Qwen3-Embedding-0.6B-GGUF' },
+    fireEvent.change(screen.getByPlaceholderText('Qwen/Qwen3-Embedding-4B-GGUF'), {
+      target: { value: 'Qwen/Qwen3-Embedding-4B-GGUF' },
     })
-    fireEvent.change(screen.getByPlaceholderText('Qwen3-Embedding-0.6B-Q8_0.gguf'), {
-      target: { value: 'Qwen3-Embedding-0.6B-Q8_0.gguf' },
+    fireEvent.change(screen.getByPlaceholderText('Qwen3-Embedding-4B-Q4_K_M.gguf'), {
+      target: { value: 'Qwen3-Embedding-4B-Q4_K_M.gguf' },
     })
     const riskCheckbox = screen.getByRole('checkbox')
     fireEvent.click(riskCheckbox)
@@ -128,8 +129,8 @@ describe('LocalEmbeddingWizard', () => {
 
     await waitFor(() => expect(requests).toEqual([{
       action: 'install-custom',
-      repository: 'Qwen/Qwen3-Embedding-0.6B-GGUF',
-      fileName: 'Qwen3-Embedding-0.6B-Q8_0.gguf',
+      repository: 'Qwen/Qwen3-Embedding-4B-GGUF',
+      fileName: 'Qwen3-Embedding-4B-Q4_K_M.gguf',
       riskAccepted: true,
       installConfirmed: true,
     }]))

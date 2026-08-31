@@ -217,7 +217,11 @@ export function LocalEmbeddingWizard({ onConfigured }: LocalEmbeddingWizardProps
                   }}
                   className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
                 >
-                  {status?.models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+                  {status?.models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}{model.recommended ? ` · ${t('aiSettings.local.recommended')}` : ''}
+                    </option>
+                  ))}
                   <option value={CUSTOM_MODEL_VALUE}>{t('aiSettings.local.customOption')}</option>
                 </select>
               </label>
@@ -233,7 +237,7 @@ export function LocalEmbeddingWizard({ onConfigured }: LocalEmbeddingWizardProps
                           setCustomRepository(event.target.value)
                           setConfirmed(false)
                         }}
-                        placeholder="Qwen/Qwen3-Embedding-0.6B-GGUF"
+                        placeholder="Qwen/Qwen3-Embedding-4B-GGUF"
                         autoComplete="off"
                         className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
                       />
@@ -246,7 +250,7 @@ export function LocalEmbeddingWizard({ onConfigured }: LocalEmbeddingWizardProps
                           setCustomFileName(event.target.value)
                           setConfirmed(false)
                         }}
-                        placeholder="Qwen3-Embedding-0.6B-Q8_0.gguf"
+                        placeholder="Qwen3-Embedding-4B-Q4_K_M.gguf"
                         autoComplete="off"
                         className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
                       />
@@ -276,7 +280,7 @@ export function LocalEmbeddingWizard({ onConfigured }: LocalEmbeddingWizardProps
                     <div className="rounded-2xl border border-white/8 px-3 py-2 text-zinc-400">{t('aiSettings.local.download')}: {formatBytes(selectedModel.downloadBytes + (status?.runtimeDownloadBytes ?? 0), locale)}</div>
                     <div className="rounded-2xl border border-white/8 px-3 py-2 text-zinc-400">{t('aiSettings.local.disk')}: {formatBytes(selectedModel.diskEstimateBytes, locale)}</div>
                     <div className="rounded-2xl border border-white/8 px-3 py-2 text-zinc-400">{t('aiSettings.local.memory')}: {formatBytes(selectedModel.memoryMinBytes, locale)}–{formatBytes(selectedModel.memoryMaxBytes, locale)}</div>
-                    <div className="rounded-2xl border border-white/8 px-3 py-2 text-zinc-400">1024 dim · {selectedModel.quantization} · {selectedModel.license}</div>
+                    <div className="rounded-2xl border border-white/8 px-3 py-2 text-zinc-400">{selectedModel.dimension} dim · {selectedModel.quantization} · {selectedModel.license}</div>
                   </div>
                 </>
               ) : null}
