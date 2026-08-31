@@ -957,7 +957,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
 
     await openModelServiceSettings(page)
     await expect(page.getByRole('button', { name: 'OpenAI-compatible API' }).first()).toBeVisible()
-    const rewriteScenario = page.getByRole('heading', { name: 'Rewrite model scenario' }).locator('..').locator('..').locator('..')
+    const rewriteScenario = page.getByTestId('ai-settings-scenario-rewrite')
     await rewriteScenario.getByRole('button', { name: 'OpenAI-compatible API' }).click()
     await rewriteScenario.getByLabel('Base URL').fill(fakeProvider.baseUrl)
     await rewriteScenario.getByLabel('API Key').fill('task-12-key')
@@ -971,14 +971,14 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await rewriteScenario.locator('select').selectOption('task-12-fake-model')
     await expect(rewriteScenario.locator('input').nth(2)).toHaveValue('task-12-fake-model')
 
-    const knowledgeScenario = page.getByRole('heading', { name: 'Knowledge extraction scenario' }).locator('..').locator('..').locator('..')
+    const knowledgeScenario = page.getByTestId('ai-settings-scenario-knowledgeExtraction')
     await knowledgeScenario.getByRole('button', { name: 'OpenAI-compatible API' }).click()
     await knowledgeScenario.getByLabel('Base URL').fill(fakeProvider.baseUrl)
     await knowledgeScenario.getByLabel('API Key').fill('task-12-key')
     await knowledgeScenario.locator('input').nth(2).fill('task-12-fake-model')
     await knowledgeScenario.locator('input').nth(3).fill('1')
 
-    const embeddingScenario = page.getByRole('heading', { name: 'Embedding scenario' }).locator('..').locator('..').locator('..')
+    const embeddingScenario = page.getByTestId('ai-settings-scenario-embeddings')
     await embeddingScenario.getByRole('button', { name: 'OpenAI-compatible API' }).click()
     await embeddingScenario.getByLabel('Base URL').fill(fakeProvider.baseUrl)
     await embeddingScenario.getByLabel('API Key').fill('task-12-key')
@@ -1014,7 +1014,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
 
     await page.reload({ waitUntil: 'networkidle' })
     await openModelServiceSettings(page)
-    const rewriteOllamaScenario = page.getByRole('heading', { name: 'Rewrite model scenario' }).locator('..').locator('..').locator('..')
+    const rewriteOllamaScenario = page.getByTestId('ai-settings-scenario-rewrite')
     await rewriteOllamaScenario.getByRole('button', { name: 'Ollama' }).click()
     await rewriteOllamaScenario.getByLabel('Ollama Base URL').fill(fakeOllama.baseUrl)
     const ollamaTextModelsResponsePromise = page.waitForResponse(
@@ -1026,7 +1026,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await expect(rewriteOllamaScenario.locator('select')).toContainText('task12-ollama-text:latest')
     await expect(rewriteOllamaScenario.locator('select')).not.toContainText('task12-ollama-embed:latest')
 
-    const embeddingOllamaScenario = page.getByRole('heading', { name: 'Embedding scenario' }).locator('..').locator('..').locator('..')
+    const embeddingOllamaScenario = page.getByTestId('ai-settings-scenario-embeddings')
     await embeddingOllamaScenario.getByRole('button', { name: 'Ollama' }).click()
     await embeddingOllamaScenario.getByLabel('Ollama Base URL').fill(fakeOllama.baseUrl)
     const ollamaEmbeddingModelsResponsePromise = page.waitForResponse(
@@ -1540,7 +1540,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     apiTimings.push({ label: 'what-if-create', ms: 0, status: whatIfCreateResponse.status() })
     const whatIfResult = await whatIfCreateResponse.json() as { sessionId: string; timelineNodeId: string }
     await expect(page.getByTestId('workspace-what-if-view')).toBeVisible()
-    await expect(page.getByTestId('what-if-view').getByText('Persisted What-if session', { exact: true })).toBeVisible()
+    await expect(page.getByTestId('what-if-view').getByRole('heading', { name: 'IF-01' })).toBeVisible()
     await expect(page.getByTestId('what-if-view').getByRole('button', { name: 'Jump to Future' })).toBeVisible()
     await expect(page.getByTestId('what-if-view').getByRole('button', { name: 'Continue in Branch' })).toBeVisible()
     await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('What-if branch')

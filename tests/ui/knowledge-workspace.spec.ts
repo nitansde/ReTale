@@ -554,7 +554,7 @@ test('saving AI settings waits for the current full knowledge projection refresh
   const settingsHeading = page.getByRole('heading', { name: /模型服务配置|Model service settings/ })
   await expect(settingsHeading).toBeVisible()
 
-  const embeddingScenario = page.getByRole('heading', { name: /Embedding 场景|Embedding scenario/ }).locator('..').locator('..').locator('..')
+  const embeddingScenario = page.getByTestId('ai-settings-scenario-embeddings')
   const changedEmbeddingModel = 'nomic-embed-text:settings-refresh'
   const embeddingModelInput = embeddingScenario.getByPlaceholder('nomic-embed-text')
   await embeddingModelInput.fill(changedEmbeddingModel)

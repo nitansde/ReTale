@@ -497,13 +497,11 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
       const continueBlockRequestContext = buildContinueBlockLineageRequestContext(core.activeContinueBlockRewriteContext)
       const sourceText = core.rewriteSourceTextOverride.trim() || flushedEditor?.plainText || core.chapterText
       let contextForGeneration = core.generationContext
-      if (!contextForGeneration) {
-        contextForGeneration = contextPreviewPromiseRef.current
-          ? await contextPreviewPromiseRef.current
-          : await loadContextPreview('rewrite', core.rewritePrompt, undefined, {
-              ...continueBlockRequestContext,
-              sourceText,
-            })
+      if (!contextForGeneration && !contextPreviewPromiseRef.current) {
+        contextForGeneration = await loadContextPreview('rewrite', core.rewritePrompt, undefined, {
+          ...continueBlockRequestContext,
+          sourceText,
+        })
       }
       if (!ownsRequest()) return
       const job = await callCreateRecoverableRewriteJobApi({ novelId, branchId, chapterId, selectedText: continueBlockRequestContext.omitSelectedText ? '' : targetSelection, sourceText, contextSnapshotId: contextForGeneration?.contextSnapshotId ?? undefined, operationType: 'rewrite', userInstruction: core.rewritePrompt, disabledBlockIds: core.disabledContextBlockIds, excludedGraphEdgeIds: core.excludedGraphEdgeIds, excludedEvidenceIds: core.excludedEvidenceIds, branchContextNodeId: continueBlockRequestContext.branchContextNodeId, branchContextInclusion: continueBlockRequestContext.branchContextInclusion, continueBlockId: continueBlockRequestContext.continueBlockId, presetCompatRuntimeContext: core.buildPresetCompatRuntimeContext('rewrite'), scope: 'chapter', mode: 'heavy', tone: 'dramatic', rewriteLaunchSource: core.rewriteLaunchSource, rewriteSourceTextOverride: core.rewriteSourceTextOverride, writingSkillCardIds: core.selectedWritingSkillCardIds, writingSkillCardId: core.selectedWritingSkillCardIds[0] || undefined, writingSkillExampleCount: core.writingSkillExampleCount, writingSkillSeed: core.writingSkillSeed })

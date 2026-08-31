@@ -3,6 +3,7 @@ import {
   deleteNovelResource,
   getNovelResource,
   saveNovelResource,
+  updateNovelLibraryMetadata,
 } from '@/lib/server/novel-resource-handlers'
 
 export const maxDuration = 3600
@@ -73,6 +74,12 @@ export async function POST(request: Request, context: { params: Promise<{ novelI
   const novelId = await readNovelId(context)
   if (!novelId) return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
   return saveNovelResource(request, novelId)
+}
+
+export async function PATCH(request: Request, context: { params: Promise<{ novelId: string }> }) {
+  const novelId = await readNovelId(context)
+  if (!novelId) return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
+  return updateNovelLibraryMetadata(request, novelId)
 }
 
 export async function DELETE(request: Request, context: { params: Promise<{ novelId: string }> }) {

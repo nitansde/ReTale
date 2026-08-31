@@ -626,7 +626,7 @@ test('workspace rewrite flow saves a macro-bearing preset binding and sends Alic
     document.dispatchEvent(new Event('selectionchange'))
   })
 
-  await page.getByRole('button', { name: '魔改 围绕选中片段与额外要求，产出一个完整章节重写版本。' }).click()
+  await page.getByTestId('workspace-chapter-rewrite-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
   const rewriteResponsePromise = page.waitForResponse((response) => response.url().includes('/api/rewrite') && response.request().method() === 'POST')
   await page.getByRole('button', { name: '生成版本' }).click()
@@ -752,7 +752,7 @@ test('workspace rewrite flow shows a localized creation error when the provider 
     document.dispatchEvent(new Event('selectionchange'))
   })
 
-  await page.getByRole('button', { name: '魔改 围绕选中片段与额外要求，产出一个完整章节重写版本。' }).click()
+  await page.getByTestId('workspace-chapter-rewrite-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
   await page.getByRole('button', { name: '生成版本' }).click()
   await expect(page.getByTestId('rewrite-flow-error')).toContainText('创建可恢复改写任务失败')

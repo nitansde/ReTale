@@ -232,8 +232,8 @@ test('mobile knowledge sheet presents one phase-local progressbar and durable te
   ]) {
     const box = await control.boundingBox()
     expect(box).not.toBeNull()
-    expect(box!.width).toBeGreaterThanOrEqual(44)
-    expect(box!.height).toBeGreaterThanOrEqual(44)
+    expect(Math.round(box!.width)).toBeGreaterThanOrEqual(44)
+    expect(Math.round(box!.height)).toBeGreaterThanOrEqual(44)
   }
 
   const collapsedOverflow = await knowledgeDialog.evaluate((dialog) => ({

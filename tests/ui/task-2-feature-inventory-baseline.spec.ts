@@ -52,7 +52,7 @@ test('task 2 full-stack library to workspace baseline and task page snapshot', a
 
   await page.goto('/task', { waitUntil: 'networkidle' })
   await expect(page.getByRole('heading', { level: 1, name: /Tasks|任务/, exact: true })).toBeVisible()
-  await expect(page.getByText('/api/task')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 2, name: /No active tasks|当前没有活跃任务/ })).toBeVisible()
 
   const taskPageText = await page.locator('body').innerText()
   await page.screenshot({
@@ -70,7 +70,6 @@ test('task 2 full-stack library to workspace baseline and task page snapshot', a
       `workspaceReloadHasChapterNav=${reloadedWorkspaceText.includes('章节导航')}`,
       `workspaceReloadHasChapterOne=${reloadedWorkspaceText.includes('第1章 初入现场')}`,
       `taskPageHasHeading=${taskPageText.includes('Tasks') || taskPageText.includes('任务')}`,
-      `taskPageHasApiLink=${taskPageText.includes('/api/task')}`,
       `taskPageHasNoActiveTasks=${taskPageText.includes('No active tasks') || taskPageText.includes('当前没有活跃任务')}`,
     ].join('\n')
   )

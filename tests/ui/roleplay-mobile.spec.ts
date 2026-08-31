@@ -271,8 +271,8 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
     document.dispatchEvent(new Event('selectionchange'))
   })
 
-  await expect(page.getByRole('button', { name: '角色扮演', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '角色扮演', exact: true }).click()
+  await expect(page.getByTestId('workspace-chapter-roleplay-entry')).toBeVisible()
+  await page.getByTestId('workspace-chapter-roleplay-entry').click()
 
   await expect(page.getByTestId('workspace-roleplay-session-view')).toBeVisible()
   await page.getByRole('button', { name: '打开故事上下文' }).click()
@@ -291,8 +291,8 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await expect(page.getByTestId('roleplay-fork-anchor')).toContainText('下轮从 #1 分叉')
 
   await page.getByRole('button', { name: '打开故事上下文' }).click()
-  await page.getByRole('button', { name: '返回章节' }).click()
   await page.getByRole('button', { name: '关闭故事上下文' }).click()
+  await page.getByRole('button', { name: '返回章节' }).click()
   await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
   await expect(page.locator('[contenteditable="true"]')).toContainText('第10章正文：夜色压下来之前，他们已经开始互相试探。')
 

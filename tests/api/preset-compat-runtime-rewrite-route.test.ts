@@ -1727,11 +1727,11 @@ describe('preset compat rewrite route runtime', () => {
     expect(buildGenerationContext).toHaveBeenNthCalledWith(1, expect.objectContaining({
       writingSkillCardIds: ['writing-skill-card-1', 'writing-skill-card-2'],
       writingSkillSeed: 13579,
-    }))
+    }), { cachedRagArtifacts: null })
     expect(buildGenerationContext).toHaveBeenNthCalledWith(2, expect.objectContaining({
       writingSkillCardIds: ['writing-skill-card-1'],
       writingSkillSeed: 13579,
-    }))
+    }), { cachedRagArtifacts: null })
   })
 
   it('forwards branch lineage selectors into buildGenerationContext for rewrite requests', async () => {
@@ -1780,7 +1780,7 @@ describe('preset compat rewrite route runtime', () => {
     expect(buildGenerationContext).toHaveBeenCalledWith(expect.objectContaining({
       branchContextNodeId: 'continue-node-7',
       branchContextInclusion: 'include_selected',
-    }))
+    }), { cachedRagArtifacts: null })
 
     const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
       messages: Array<{ content: string }>

@@ -390,20 +390,6 @@ async function requestOpenAICompatibleChat(params: {
       invalidJsonMessage: 'OpenAI-compatible provider returned malformed JSON.',
       emptyBodyMessage: 'OpenAI-compatible provider returned an empty response body.',
     })
-    await writeLlmDebugLog({
-      folder: params.debug?.folder ?? 'openai-compatible',
-      provider: 'openai-compatible',
-      model: params.model,
-      streamed: false,
-      stage: params.debug?.stage,
-      attempt: params.debug?.attempt,
-      request: { url, body: requestBody, messages: params.messages },
-      response: {
-        status: response.status,
-        rawText: extractChatCompletionResponseText(data),
-        parsed: data,
-      },
-    })
     return data
   } finally {
     cleanup()
@@ -650,16 +636,6 @@ export async function generateRewriteWithOpenAICompatible(
         return { enabled: true, error: 'Provider returned empty content.' }
       }
 
-      await writeLlmDebugLog({
-        folder: 'rewrite',
-        provider: 'openai-compatible',
-        model: config.model,
-        streamed: false,
-        stage: 'rewrite',
-        presetCompat: input.presetCompat,
-        request,
-        response: { status: response.status, rawText: extractChatCompletionText(raw), parsed },
-      })
       return { enabled: true, content: candidates, usage }
     } finally {
       cleanup()

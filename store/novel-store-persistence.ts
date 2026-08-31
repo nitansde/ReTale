@@ -114,11 +114,14 @@ function applyBrowserSessionToWorkspace(workspace: PersistedNovelState, requeste
 }
 
 function parseLibrarySummary(value: unknown): LibrarySummary | null {
-  if (!isRecord(value) || !hasExactKeys(value, [
-    'id', 'title', 'summary', 'tags', 'updatedAt', 'wordCount', 'chapterCount', 'firstChapterId',
-  ])) return null
+  if (!isRecord(value)) return null
+  const requiredKeys = ['id', 'title', 'summary', 'tags', 'updatedAt', 'wordCount', 'chapterCount', 'firstChapterId'] as const
+  const allowedKeys = new Set([...requiredKeys, 'author', 'coverImage'])
+  if (!requiredKeys.every((key) => key in value) || Object.keys(value).some((key) => !allowedKeys.has(key))) return null
   if (typeof value.id !== 'string' || !value.id.trim()) return null
   if (typeof value.title !== 'string' || typeof value.summary !== 'string' || typeof value.updatedAt !== 'string') return null
+  if (value.author !== undefined && typeof value.author !== 'string') return null
+  if (value.coverImage !== undefined && typeof value.coverImage !== 'string') return null
   if (!Array.isArray(value.tags) || value.tags.some((tag) => typeof tag !== 'string')) return null
   if (typeof value.wordCount !== 'number' || !Number.isFinite(value.wordCount) || !Number.isInteger(value.wordCount) || value.wordCount < 0) return null
   if (typeof value.chapterCount !== 'number' || !Number.isFinite(value.chapterCount) || !Number.isInteger(value.chapterCount) || value.chapterCount < 0) return null
@@ -127,6 +130,8 @@ function parseLibrarySummary(value: unknown): LibrarySummary | null {
   return {
     id: value.id,
     title: value.title,
+    author: value.author ?? '',
+    coverImage: value.coverImage ?? '',
     summary: value.summary,
     tags: value.tags,
     updatedAt: value.updatedAt,

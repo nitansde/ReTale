@@ -4,11 +4,13 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { LoaderCircle, Sparkles } from 'lucide-react'
+import { BookMetadataDialog } from './BookMetadataDialog'
 import { ProjectCard } from './project-card'
 import { Notice, type NoticeVariant } from '@/components/ui/Notice'
 import { useI18n } from '@/lib/i18n/provider'
 import { toUserFacingWorkspaceError } from '@/lib/workspace-user-facing-errors'
 import { useNovelStore } from '@/store/novel-store'
+import type { LibrarySummary } from '@/store/novel-store-types'
 
 export function resolveOpenNovelChapter(
   localChapters: Array<{
@@ -99,6 +101,7 @@ export function ProjectGrid() {
   const novels = getNovels()
   const [deletingNovelId, setDeletingNovelId] = useState<string | null>(null)
   const [openingNovelId, setOpeningNovelId] = useState<string | null>(null)
+  const [editingNovel, setEditingNovel] = useState<LibrarySummary | null>(null)
   const [importFeedback, setImportFeedback] = useState<ImportFeedback>({ status: 'idle' })
   const [libraryNotice, setLibraryNotice] = useState<LibraryNotice>(null)
   const deletionInFlightRef = useRef(false)
@@ -338,7 +341,7 @@ export function ProjectGrid() {
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            disabled={isImporting || workspaceHandoffPending}
+            disabled={isImporting || workspaceHandoffPending || editingNovel !== null}
             className="min-h-11 rounded-2xl border border-indigo-400/20 bg-indigo-500/90 px-4 text-sm font-medium text-white shadow-[0_12px_30px_rgba(99,102,241,0.28)] transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {importFeedback.status === 'uploading'
@@ -351,7 +354,7 @@ export function ProjectGrid() {
         <input
           ref={fileRef}
           type="file"
-          disabled={isImporting || workspaceHandoffPending}
+          disabled={isImporting || workspaceHandoffPending || editingNovel !== null}
           accept=".txt,text/plain"
           className="hidden"
           onChange={(event) => {
@@ -411,15 +414,32 @@ export function ProjectGrid() {
             onOpen={() => {
               void openNovel(novel.id)
             }}
+            onEdit={() => {
+              setLibraryNotice(null)
+              setEditingNovel(novel)
+            }}
             onDelete={() => {
               void handleDeleteNovel(novel.id, novel.title)
             }}
             opening={openingNovelId === novel.id}
             deleting={isNovelDeletionPending || deletingNovelId === novel.id}
-            disabled={workspaceHandoffPending}
+            disabled={workspaceHandoffPending || editingNovel !== null || isImporting}
           />
         ))}
       </div>
+
+      {editingNovel ? (
+        <BookMetadataDialog
+          key={editingNovel.id}
+          novel={editingNovel}
+          onClose={() => setEditingNovel(null)}
+          onSaved={async (title) => {
+            await loadLibrarySummaries({ fresh: true })
+            setLibraryNotice({ variant: 'success', message: t('library.metadataSaved', { title }) })
+            setEditingNovel(null)
+          }}
+        />
+      ) : null}
     </>
   )
 }

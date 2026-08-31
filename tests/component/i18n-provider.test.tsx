@@ -31,8 +31,10 @@ describe('I18nProvider browser persistence', () => {
       </I18nProvider>,
     )
 
-    await waitFor(() => expect(screen.getByTestId('locale')).toHaveTextContent('en'))
-    expect(document.documentElement.lang).toBe('en')
+    await waitFor(() => {
+      expect(screen.getByTestId('locale')).toHaveTextContent('en')
+      expect(document.documentElement.lang).toBe('en')
+    })
     expect(document.documentElement.dataset.locale).toBe('en')
     expect(document.cookie).toContain(`${LOCALE_COOKIE_KEY}=en`)
   })

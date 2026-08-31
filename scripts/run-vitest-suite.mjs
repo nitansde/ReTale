@@ -86,6 +86,7 @@ const result = spawnSync(
     stdio: 'inherit',
     env: {
       ...process.env,
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, '--no-experimental-webstorage'].filter(Boolean).join(' '),
       RETALE_TEST_ROOT: testRoot,
       RETALE_TEST_SOURCE_DB_PATH: sourceDbPath,
       DATABASE_URL: `file:${runtimeDbPath}`,

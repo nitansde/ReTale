@@ -86,6 +86,7 @@ describe('authored branching schema migrations', () => {
 
     const firstOpen = initializeDatabase(new DatabaseSync(databasePath), { mode: 'control', schemaSql: CONTROL_SCHEMA_SQL })
     expect(listTableColumns(firstOpen, 'NovelRegistry').map((column) => column.name)).toEqual(expect.arrayContaining([
+      'author',
       'lifecycleToken',
       'leaseExpiresAt',
       'claimedAt',

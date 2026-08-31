@@ -179,6 +179,7 @@ export function initializeDatabase(database: DatabaseSync, options: InitializeDa
 }
 
 function runControlMigrations(database: DatabaseSync) {
+  addColumnIfMissing(database, 'NovelRegistry', 'author', 'author TEXT')
   addColumnIfMissing(database, 'NovelRegistry', 'lifecycleToken', 'lifecycleToken TEXT')
   addColumnIfMissing(database, 'NovelRegistry', 'leaseExpiresAt', 'leaseExpiresAt TEXT')
   addColumnIfMissing(database, 'NovelRegistry', 'claimedAt', 'claimedAt TEXT')

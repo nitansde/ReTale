@@ -216,6 +216,8 @@ export type KnowledgeProjectionResult = KnowledgeProjectionPayload & {
 export type LibrarySummary = {
   id: string
   title: string
+  author?: string
+  coverImage?: string
   summary: string
   tags: string[]
   updatedAt: string

@@ -273,7 +273,7 @@ describe('roleplay prompt contract', () => {
     expect(buildGenerationContext).toHaveBeenCalledWith(expect.objectContaining({
       operationType: 'roleplay',
       roleplayMessages: normalizedRoleplayMessages,
-    }))
+    }), { cachedRagArtifacts: null })
     expect(generateRewriteWithOpenAICompatible).toHaveBeenCalledTimes(1)
     expect(workspaceWriteSpy).not.toHaveBeenCalled()
 

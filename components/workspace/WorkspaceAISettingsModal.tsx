@@ -282,7 +282,11 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
             const scenarioStatus = props.scenarioStatusLabels.find((label) => label.startsWith(meta.shortLabel)) ?? ''
 
             return (
-              <div key={scenario} className="rounded-[24px] border border-white/10 bg-[#0b0d12] p-4">
+              <div
+                key={scenario}
+                data-testid={`ai-settings-scenario-${scenario}`}
+                className="rounded-[24px] border border-white/10 bg-[#0b0d12] p-4"
+              >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="max-w-2xl">
                     <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{meta.eyebrow}</p>

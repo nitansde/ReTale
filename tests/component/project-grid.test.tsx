@@ -20,7 +20,7 @@ type MockStoreState = {
   librarySummariesError?: string
   librarySummariesLoaded?: boolean
   localChapters: MockChapter[]
-  getNovels: () => Array<{ id: string; title: string; summary: string; tags: string[] }>
+  getNovels: () => Array<{ id: string; title: string; summary: string; tags: string[]; author?: string; coverImage?: string }>
   loadLibrarySummaries?: (options?: { fresh?: boolean }) => Promise<void>
   loadFromBackend: (novelId?: string) => Promise<void>
   saveToBackend: () => Promise<void>
@@ -49,9 +49,10 @@ vi.mock('next/navigation', () => ({
 }))
 
 vi.mock('@/components/library/project-card', () => ({
-  ProjectCard: ({ novel, onOpen, onDelete, opening, deleting, disabled }: {
+  ProjectCard: ({ novel, onOpen, onEdit, onDelete, opening, deleting, disabled }: {
     novel: { id: string; title: string }
     onOpen: () => void
+    onEdit: () => void
     onDelete: () => void
     opening?: boolean
     deleting?: boolean
@@ -65,6 +66,9 @@ vi.mock('@/components/library/project-card', () => ({
     >
       <button type="button" onClick={onOpen} disabled={opening || disabled} aria-busy={opening}>
         {opening ? '打开中…' : 'Open project'}
+      </button>
+      <button type="button" onClick={onEdit} disabled={opening || deleting || disabled}>
+        Edit project
       </button>
       <button type="button" onClick={onDelete} disabled={opening || deleting || disabled}>
         Delete project
@@ -569,6 +573,49 @@ describe('ProjectGrid chapter resolution', () => {
     expect(pushMock).toHaveBeenCalledWith('/workspace')
     expect(saveToBackend).not.toHaveBeenCalled()
     expect(callOrder).toEqual(['novel:novel-a', 'chapter:ch-1', 'push'])
+  })
+
+  it('edits title and author from the library without opening the workspace', async () => {
+    const loadLibrarySummaries = vi.fn(async () => undefined)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      void input
+      void init
+      return Response.json({ ok: true })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    mockStoreState = {
+      backendLoadError: '',
+      localChapters: [],
+      getNovels: () => [{ id: 'novel-a', title: 'Old title', summary: 'Summary', tags: [], author: 'Old author', coverImage: '' }],
+      loadLibrarySummaries,
+      loadFromBackend: vi.fn(async () => undefined),
+      saveToBackend: vi.fn(async () => undefined),
+      deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
+      setCurrentNovelId: vi.fn(),
+      setCurrentChapterId: vi.fn(),
+      deleteNovel: vi.fn(),
+    }
+
+    renderProjectGrid()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit project' }))
+    fireEvent.change(screen.getByLabelText('书名'), { target: { value: 'New title' } })
+    fireEvent.change(screen.getByLabelText('作者'), { target: { value: 'New author' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存修改' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toBe('/api/novels/novel-a')
+    expect(init?.method).toBe('PATCH')
+    expect((init?.body as FormData).get('title')).toBe('New title')
+    expect((init?.body as FormData).get('author')).toBe('New author')
+    await waitFor(() => {
+      expect(loadLibrarySummaries).toHaveBeenCalledWith({ fresh: true })
+      expect(screen.getByText('《New title》的书籍信息已更新。')).toBeInTheDocument()
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+    expect(pushMock).not.toHaveBeenCalled()
   })
 
   it('keeps the chapter restored by targeted hydration instead of reopening chapter one', async () => {

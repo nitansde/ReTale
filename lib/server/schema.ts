@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS NovelRegistry (
   novelId TEXT PRIMARY KEY,
   safeNovelId TEXT NOT NULL UNIQUE,
   title TEXT,
+  author TEXT,
   dbFilePath TEXT NOT NULL UNIQUE,
   lanceDbPath TEXT NOT NULL UNIQUE,
   schemaVersion TEXT NOT NULL DEFAULT '1',

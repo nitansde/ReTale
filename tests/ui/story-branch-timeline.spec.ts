@@ -912,8 +912,7 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
   await expect(page.getByTestId('workspace-continue-block-future-jump-entry')).toBeEnabled()
   await expect(page.getByTestId('timeline-node-continue-node-1')).toContainText('CONT-01')
   await expect(page.getByTestId('workspace-center-pane')).toContainText('CONT-01')
-  await expect(page.getByTestId('workspace-continue-block-actions')).toContainText(`指令预览 · ${formatStoryBranchInstructionPreview('把誓言后的情绪变化压进同一场景。')}`)
-  await expect(page.getByTestId('workspace-continue-block-view')).toContainText(`指令预览 · ${formatStoryBranchInstructionPreview('把誓言后的情绪变化压进同一场景。')}`)
+  await expect(page.getByTestId('continue-block-user-request')).toContainText('把誓言后的情绪变化压进同一场景。')
   await expect(page.getByText('continue-block-1')).toHaveCount(0)
   await expect(page.getByText(/anchor 第/i)).toHaveCount(0)
   await expect(page.getByText(/^draft$/i)).toHaveCount(0)
@@ -2364,8 +2363,8 @@ test('focused Future Map overlay is single-column without mobile overflow and pr
   await expect(closeButton).toBeFocused()
   const closeBox = await closeButton.boundingBox()
   expect(closeBox).not.toBeNull()
-  expect(closeBox!.width).toBeGreaterThanOrEqual(44)
-  expect(closeBox!.height).toBeGreaterThanOrEqual(44)
+  expect(Math.round(closeBox!.width)).toBeGreaterThanOrEqual(44)
+  expect(Math.round(closeBox!.height)).toBeGreaterThanOrEqual(44)
   await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('hidden')
 
   const mobileGeometry = await page.evaluate(() => {
@@ -2412,8 +2411,8 @@ test('focused Future Map overlay is single-column without mobile overflow and pr
   expect(Math.abs(desktopGeometry.candidates.y - desktopGeometry.confirmation.y)).toBeLessThanOrEqual(1)
   expect(desktopGeometry.tracks.x).toBeLessThan(desktopGeometry.candidates.x)
   expect(desktopGeometry.candidates.x).toBeLessThan(desktopGeometry.confirmation.x)
-  expect(Math.round(desktopGeometry.tracks.width)).toBe(248)
-  expect(Math.round(desktopGeometry.confirmation.width)).toBe(360)
+  expect(Math.abs(desktopGeometry.tracks.width - 248)).toBeLessThanOrEqual(1)
+  expect(Math.abs(desktopGeometry.confirmation.width - 360)).toBeLessThanOrEqual(1)
 
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()

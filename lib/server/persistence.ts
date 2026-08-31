@@ -84,6 +84,7 @@ export type WorkspaceNovelRegistryRow = {
   novelId: string
   safeNovelId: string
   title: string | null
+  author?: string | null
   dbFilePath: string
   lanceDbPath: string
   schemaVersion: string
@@ -363,12 +364,69 @@ export function assertWorkspaceNovelReadyForWrite(novelId: string) {
 
 export function listReadyWorkspaceNovelRegistry() {
   return createControlDatabaseAccess().queryAll<WorkspaceNovelRegistryRow>(
-    `SELECT novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus,
+    `SELECT novelId, safeNovelId, title, author, dbFilePath, lanceDbPath, schemaVersion, migrationStatus,
             lifecycleToken, leaseExpiresAt, claimedAt, createdAt, updatedAt
      FROM NovelRegistry
      WHERE migrationStatus = 'ready'
      ORDER BY createdAt ASC, novelId ASC`
   )
+}
+
+export type WorkspaceNovelLibraryMetadata = {
+  novelId: string
+  title: string
+  author: string
+}
+
+export function readWorkspaceNovelLibraryMetadata(novelId: string): WorkspaceNovelLibraryMetadata {
+  const stableNovelId = validateNovelId(novelId)
+  const row = createControlDatabaseAccess().queryOne<{
+    novelId: string
+    title: string | null
+    author: string | null
+    migrationStatus: string
+  }>(
+    `SELECT novelId, title, author, migrationStatus
+     FROM NovelRegistry
+     WHERE novelId = ?`,
+    stableNovelId,
+  )
+  if (!row) {
+    throw new WorkspaceNovelDeletionError('Novel not found', 404)
+  }
+  if (row.migrationStatus !== 'ready') {
+    throw new WorkspaceNovelDeletionError('Novel is not available for metadata updates', 409)
+  }
+  return {
+    novelId: row.novelId,
+    title: row.title?.trim() ?? '',
+    author: row.author?.trim() ?? '',
+  }
+}
+
+export async function updateWorkspaceNovelLibraryMetadata(metadata: WorkspaceNovelLibraryMetadata) {
+  const stableNovelId = validateNovelId(metadata.novelId)
+  const controlDb = createControlDatabaseAccess()
+  return controlDb.withTransaction(() => {
+    const result = controlDb.execute(
+      `UPDATE NovelRegistry
+       SET title = ?, author = ?, updatedAt = CURRENT_TIMESTAMP
+       WHERE novelId = ? AND migrationStatus = 'ready'`,
+      metadata.title.trim(),
+      metadata.author.trim() || null,
+      stableNovelId,
+    )
+    if (result.changes !== 1) {
+      const row = controlDb.queryOne<{ migrationStatus: string }>(
+        'SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?',
+        stableNovelId,
+      )
+      throw new WorkspaceNovelDeletionError(
+        row ? 'Novel is not available for metadata updates' : 'Novel not found',
+        row ? 409 : 404,
+      )
+    }
+  })
 }
 
 function assertCanonicalRegistryStoragePaths(row: WorkspaceNovelRegistryRow) {

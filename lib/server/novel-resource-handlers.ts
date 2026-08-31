@@ -1,15 +1,20 @@
+import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import {
   ApiRequestError,
   assertJsonMediaType,
+  assertMultipartFormDataMediaType,
   assertWorkspaceSnapshotSemantics,
+  createByteLimitedRequest,
   noStoreJson,
   readBoundedJsonObject,
 } from '@/lib/server/api-route'
 import {
   deleteWorkspaceNovel,
   listReadyWorkspaceNovelRegistry,
+  readWorkspaceNovelLibraryMetadata,
   readWorkspaceNovelDeletionState,
+  updateWorkspaceNovelLibraryMetadata,
   WorkspaceNovelDeletionError,
 } from '@/lib/server/persistence'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
@@ -29,9 +34,17 @@ import {
   scheduleWorkspaceKnowledgeSyncRecovery,
   scheduleWorkspaceNovelCleanup,
 } from '@/lib/server/workspace-background'
+import {
+  buildNovelCoverUrl,
+  deleteNovelCoverFile,
+  hasNovelCoverFile,
+  MAX_NOVEL_COVER_BYTES,
+  saveNovelCoverFile,
+} from '@/lib/server/novel-cover'
 
 const MAX_WORKSPACE_POST_BODY_BYTES = 16 * 1024 * 1024
 const MAX_WORKSPACE_PATCH_BODY_BYTES = 4 * 1024 * 1024
+const MAX_NOVEL_METADATA_BODY_BYTES = MAX_NOVEL_COVER_BYTES + 256 * 1024
 
 function getNovelWorkspaceDb(novelId: string) {
   return createNovelDatabaseAccess(novelId)
@@ -162,7 +175,16 @@ async function loadNovelLibrarySummaries() {
         await loadWorkspacePayloadFromRuntimeOrRecovery('singleton', workspaceDb)
       }
       scheduleWorkspaceKnowledgeSyncRecovery(row.novelId)
-      return readWorkspaceLibrarySummary('singleton', workspaceDb)
+      const summary = readWorkspaceLibrarySummary('singleton', workspaceDb)
+      if (!summary) return null
+      return {
+        ...summary,
+        title: row.title?.trim() || summary.title,
+        author: row.author?.trim() || '',
+        coverImage: await hasNovelCoverFile(row.novelId)
+          ? buildNovelCoverUrl(row.novelId, row.updatedAt)
+          : '',
+      }
     })
   )
   const summaries = settledSummaries.flatMap((result, index) => {
@@ -176,6 +198,128 @@ async function loadNovelLibrarySummaries() {
   return {
     ok: true,
     novels: summaries,
+  }
+}
+
+const MAX_NOVEL_TITLE_LENGTH = 200
+const MAX_NOVEL_AUTHOR_LENGTH = 200
+
+async function persistNovelTitle(novelId: string, title: string) {
+  const snapshot = await loadWorkspaceSnapshotFromRuntimeOrRecovery('singleton', getNovelWorkspaceDb(novelId))
+  const novel = snapshot.payload.localNovels.find((item) => item.id === novelId)
+  if (!novel || novel.title === title) return
+
+  const result = await runWorkspaceMutation({
+    kind: 'full-snapshot',
+    novelId,
+    payload: stripBrowserSessionState(normalizeWorkspaceState({
+      ...snapshot.payload,
+      localNovels: snapshot.payload.localNovels.map((item) => item.id === novelId ? { ...item, title } : item),
+    }), novelId),
+    backupReason: 'workspace-save',
+    allowEmptyReset: false,
+    baseRevision: snapshot.revision,
+    idempotencyKey: `novel-metadata-${randomUUID()}`,
+  })
+  if (result.shouldScheduleKnowledgeSync) scheduleWorkspaceKnowledgeSync(novelId)
+}
+
+async function persistNovelRecordMetadata(novelId: string, title: string, author: string) {
+  const db = getNovelWorkspaceDb(novelId)
+  await db.withTransaction(() => {
+    db.execute(
+      `INSERT INTO NovelRecord (id, title, author, sourceType)
+       VALUES (?, ?, ?, 'workspace')
+       ON CONFLICT(id) DO UPDATE SET
+         title = excluded.title,
+         author = excluded.author,
+         updatedAt = CURRENT_TIMESTAMP`,
+      novelId,
+      title,
+      author || null,
+    )
+  })
+}
+
+export async function updateNovelLibraryMetadata(request: Request, novelId: string) {
+  try {
+    readWorkspaceNovelLibraryMetadata(novelId)
+    assertMultipartFormDataMediaType(request)
+    const limitedRequest = createByteLimitedRequest(
+      request,
+      MAX_NOVEL_METADATA_BODY_BYTES,
+      'Novel metadata body exceeds the allowed size',
+    )
+    const formData = await limitedRequest.formData().catch(() => {
+      throw new ApiRequestError(400, 'Invalid multipart form data')
+    })
+    const rawTitle = formData.get('title')
+    const rawAuthor = formData.get('author')
+    const rawRemoveCover = formData.get('removeCover')
+    const rawCover = formData.get('cover')
+    if (typeof rawTitle !== 'string' || typeof rawAuthor !== 'string') {
+      return noStoreJson({ ok: false, error: 'title and author are required' }, { status: 400 })
+    }
+    const title = rawTitle.trim()
+    const author = rawAuthor.trim()
+    if (!title) {
+      return noStoreJson({ ok: false, error: 'title is required' }, { status: 422 })
+    }
+    if (title.length > MAX_NOVEL_TITLE_LENGTH || author.length > MAX_NOVEL_AUTHOR_LENGTH) {
+      return noStoreJson({ ok: false, error: 'Novel metadata exceeds the allowed length' }, { status: 422 })
+    }
+    const removeCover = rawRemoveCover === '1'
+    if (rawRemoveCover !== null && rawRemoveCover !== '0' && rawRemoveCover !== '1') {
+      return noStoreJson({ ok: false, error: 'removeCover must be 0 or 1' }, { status: 422 })
+    }
+    if (rawCover !== null && !(rawCover instanceof File)) {
+      return noStoreJson({ ok: false, error: 'cover must be a file' }, { status: 400 })
+    }
+    const coverFile = rawCover instanceof File && rawCover.size > 0 ? rawCover : null
+    if (coverFile && removeCover) {
+      return noStoreJson({ ok: false, error: 'cover and removeCover cannot be submitted together' }, { status: 422 })
+    }
+    if (coverFile && coverFile.size > MAX_NOVEL_COVER_BYTES) {
+      return noStoreJson({ ok: false, error: 'Novel cover exceeds 5 MiB' }, { status: 413 })
+    }
+
+    await persistNovelTitle(novelId, title)
+    await updateWorkspaceNovelLibraryMetadata({ novelId, title, author })
+    await persistNovelRecordMetadata(novelId, title, author).catch((error) => {
+      console.warn('Novel metadata was saved, but the knowledge-store author mirror could not be updated.', error)
+    })
+    try {
+      if (coverFile) await saveNovelCoverFile(novelId, coverFile)
+      else if (removeCover) await deleteNovelCoverFile(novelId)
+    } catch (error) {
+      return noStoreJson({
+        ok: false,
+        error: error instanceof Error ? error.message : 'Invalid novel cover',
+      }, { status: 422 })
+    }
+    return noStoreJson({
+      ok: true,
+      novel: {
+        id: novelId,
+        title,
+        author,
+        coverImage: await hasNovelCoverFile(novelId)
+          ? buildNovelCoverUrl(novelId, Date.now().toString())
+          : '',
+      },
+    })
+  } catch (error) {
+    if (error instanceof WorkspaceNovelDeletionError) {
+      return noStoreJson({ ok: false, error: error.message }, { status: error.status })
+    }
+    if (error instanceof ApiRequestError) {
+      return noStoreJson({ ok: false, error: error.message }, { status: error.status })
+    }
+    if (error instanceof WorkspaceMutationError) {
+      return mutationErrorResponse(error)
+    }
+    console.error('Failed to update novel library metadata:', error)
+    return noStoreJson({ ok: false, error: 'Failed to update novel metadata' }, { status: 500 })
   }
 }
 

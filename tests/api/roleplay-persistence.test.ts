@@ -296,7 +296,9 @@ function createLegacyDatabaseWithoutRoleplay(databasePath: string) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       latest_input_tokens INTEGER,
-      latest_output_tokens INTEGER
+      latest_output_tokens INTEGER,
+      writing_skill_card_ids_json TEXT NOT NULL DEFAULT '[]',
+      writing_skill_example_count INTEGER NOT NULL DEFAULT 5
     );
     CREATE TABLE what_if_sessions (
       id TEXT PRIMARY KEY,
