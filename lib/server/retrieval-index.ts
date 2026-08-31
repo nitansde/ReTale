@@ -16,6 +16,10 @@ import {
   upsertRawTextEmbeddingCacheEntries,
 } from '@/lib/server/retrieval-embedding-cache'
 import {
+  buildLocalEmbeddingCacheIdentity,
+  isRetaleLocalEmbeddingConfig,
+} from '@/lib/server/local-embedding-catalog'
+import {
   loadExplicitAuthoredContext,
   hasExplicitAuthoredContextSelection,
   type AuthoredRetrievalSeed,
@@ -974,12 +978,20 @@ function getEmbeddingModel(settings: EmbeddingsScenarioSettings) {
     : settings.ollama.model
 }
 
+function getEmbeddingCacheModelIdentity(settings: EmbeddingsScenarioSettings) {
+  const model = getEmbeddingModel(settings)
+  return settings.provider === 'openai-compatible'
+    && isRetaleLocalEmbeddingConfig(settings.openAICompatible.baseUrl, model)
+    ? buildLocalEmbeddingCacheIdentity(model)
+    : model
+}
+
 function buildRawTextEmbeddingCacheScope(novelId: string, branchId: string, settings: EmbeddingsScenarioSettings) {
   return {
     novelId,
     branchId,
     provider: settings.provider,
-    model: getEmbeddingModel(settings),
+    model: getEmbeddingCacheModelIdentity(settings),
   }
 }
 
@@ -1022,7 +1034,7 @@ async function buildRetrievalEmbeddingPlan(params: {
 async function embedRetrievalQuery(query: string) {
   const settings = loadStoredAISettings().embeddings
   const result = settings.provider === 'openai-compatible'
-    ? await embedTextsWithOpenAICompatible(query, settings.openAICompatible)
+    ? await embedTextsWithOpenAICompatible(query, settings.openAICompatible, { inputType: 'query' })
     : await embedTextsWithOllama(query, settings.ollama)
   if (!result.enabled || !result.embeddings?.[0]) {
     throw new Error(result.error || 'Failed to generate LanceDB query embedding')
@@ -1123,7 +1135,7 @@ function buildPendingRebuildFingerprint(params: {
     scopeStartChapter: params.scope.scopeStartChapter,
     scopeEndChapter: params.scope.scopeEndChapter,
     embeddingProvider: params.embeddingSettings.provider,
-    embeddingModel: getEmbeddingModel(params.embeddingSettings),
+    embeddingModel: getEmbeddingCacheModelIdentity(params.embeddingSettings),
     plannedRows: params.plannedRows.map((item) => ({
       id: item.row.id,
       sourceType: item.row.sourceType,

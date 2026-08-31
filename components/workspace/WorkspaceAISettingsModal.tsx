@@ -8,6 +8,7 @@ import {
   type OpenAICompatibleModelOption,
 } from '@/components/workspace/selection-novel-studio-helpers'
 import { DialogSurface } from '@/components/ui/DialogSurface'
+import { LocalEmbeddingWizard } from '@/components/workspace/LocalEmbeddingWizard'
 import { useI18n } from '@/lib/i18n/provider'
 import { cn } from '@/lib/utils'
 import type { AIProvider, AISettings, AIScenarioKey } from '@/lib/types'
@@ -28,6 +29,7 @@ type WorkspaceAISettingsModalProps = {
   updateScenarioOllamaField: (scenario: AIScenarioKey, field: 'baseUrl' | 'model', value: string) => void
   updateKnowledgeExtractionParallelism: (provider: AIProvider, value: string) => void
   updateEmbeddingBatchSize: (value: string) => void
+  applyLocalEmbeddingSettings: (settings: { baseUrl: string; apiKey: string; model: string }) => void
   loadOpenAICompatibleModels: (scenario: AIScenarioKey, baseUrl?: string, apiKey?: string) => void
   loadOllamaModels: (scenario: AIScenarioKey, baseUrl?: string) => void
 }
@@ -321,6 +323,10 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
                     )
                   })}
                 </div>
+
+                {scenario === 'embeddings' ? (
+                  <LocalEmbeddingWizard onConfigured={props.applyLocalEmbeddingSettings} />
+                ) : null}
 
                 {scenarioSettings.provider === 'openai-compatible'
                   ? renderOpenAICompatibleFields(scenario)
