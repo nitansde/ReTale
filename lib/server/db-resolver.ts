@@ -59,7 +59,7 @@ function getResolverCache() {
   return globalForDbResolver.__retaleResolvedDbs
 }
 
-function getDataRootPath() {
+export function getDataRootPath() {
   const configuredBasePath = process.env.RETALE_DATA_DIR?.trim()
   const resolvedPath = configuredBasePath && configuredBasePath.length > 0
     ? path.resolve(process.cwd(), configuredBasePath)
