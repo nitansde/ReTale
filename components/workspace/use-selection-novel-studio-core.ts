@@ -541,6 +541,24 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     })
   }, [updateAISettings])
 
+  const applyLocalEmbeddingSettings = useCallback((settings: { baseUrl: string; apiKey: string; model: string }) => {
+    updateAISettings((current) => ({
+      ...current,
+      embeddings: {
+        ...current.embeddings,
+        provider: 'openai-compatible',
+        openAICompatible: {
+          ...current.embeddings.openAICompatible,
+          baseUrl: settings.baseUrl,
+          apiKey: settings.apiKey,
+          apiKeyConfigured: true,
+          model: settings.model,
+          configured: true,
+        },
+      },
+    }))
+  }, [updateAISettings])
+
   const setToast = useCallback((message: string, variant: NoticeVariant = 'success') => {
     setToastMessage(message)
     setToastVariant(variant)
@@ -1961,6 +1979,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     updateScenarioOllamaField,
     updateKnowledgeExtractionParallelism,
     updateEmbeddingBatchSize,
+    applyLocalEmbeddingSettings,
     refreshCurrentFullKnowledgeProjection,
     showKnowledgeToast,
     currentNovelMeta,

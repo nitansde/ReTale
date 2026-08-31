@@ -271,7 +271,7 @@ export function SelectionNovelStudio() {
     presetCompatLibraryOpen, setPresetCompatLibraryOpen, ollamaModelsByScenario, ollamaModelsLoading, ollamaModelsError,
     openAICompatibleModelsByScenario, openAICompatibleModelsLoading, editState, setEditState, knowledgePanelReadOnly,
     editor, editorRef, toolbarRef, resolvedAISettings, updateScenarioProvider, updateScenarioOpenAIField,
-    updateScenarioOllamaField, updateKnowledgeExtractionParallelism, updateEmbeddingBatchSize, sortedChapters,
+    updateScenarioOllamaField, updateKnowledgeExtractionParallelism, updateEmbeddingBatchSize, applyLocalEmbeddingSettings, sortedChapters,
     currentChapter, parentChapter, graphSourceMeta, selectChapter, jumpToGraphSource, hasWorkspaceContent, branchChaptersByParentId, storyTimelineBranchId, resolvedStoryTimeline,
     timelineChapterById, timelineNodeById, storyTimelineError, currentNovelMeta, chapterText,
     mainKnowledgeRebuildStatus, knowledgeRebuildActive, knowledgeRebuildPaused, knowledgeRebuildFailed, knowledgeRebuildRangeMode,
@@ -863,6 +863,7 @@ export function SelectionNovelStudio() {
           updateScenarioOllamaField={updateScenarioOllamaField}
           updateKnowledgeExtractionParallelism={updateKnowledgeExtractionParallelism}
           updateEmbeddingBatchSize={updateEmbeddingBatchSize}
+          applyLocalEmbeddingSettings={applyLocalEmbeddingSettings}
           loadOpenAICompatibleModels={(scenario, baseUrl, apiKey) => {
             void loadOpenAICompatibleModels(scenario, baseUrl, apiKey)
           }}
