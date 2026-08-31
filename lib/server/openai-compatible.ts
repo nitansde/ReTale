@@ -2,6 +2,11 @@ import type { AIScenarioKey, OpenAICompatibleProviderSettings } from '@/lib/type
 import type { ChapterKnowledgeExtraction } from '@/lib/story-knowledge'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { safeParseJson } from '@/lib/server/json-parse'
+import {
+  buildLocalEmbeddingQuery,
+  isRetaleLocalEmbeddingConfig,
+} from '@/lib/server/local-embedding-catalog'
+import { ensureLocalEmbeddingRuntimeRunning } from '@/lib/server/local-embedding-runtime'
 import { writeLlmDebugLog, type LlmDebugLogParams } from '@/lib/server/llm-debug-log'
 import { withProviderModelDiscoveryDeadline } from '@/lib/server/provider-model-discovery'
 import {
@@ -827,7 +832,8 @@ export async function streamRewriteWithOpenAICompatible(
 
 export async function embedTextsWithOpenAICompatible(
   input: string | string[],
-  configOverride?: Partial<OpenAICompatibleProviderSettings>
+  configOverride?: Partial<OpenAICompatibleProviderSettings>,
+  options?: { inputType?: 'document' | 'query' },
 ): Promise<OpenAICompatibleEmbeddingResult> {
   const config = getConfig('embeddings', configOverride)
   if (!config.enabled) {
@@ -846,48 +852,64 @@ export async function embedTextsWithOpenAICompatible(
     }
   }
 
-  const controller = new AbortController()
-  const timeoutMs = NON_STREAM_PROVIDER_TIMEOUT_MS
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
-
   try {
-    const response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/embeddings`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.apiKey}`,
+    const localEmbedding = isRetaleLocalEmbeddingConfig(config.baseUrl, config.model)
+    if (localEmbedding) {
+      await ensureLocalEmbeddingRuntimeRunning()
+    }
+    const requestInput = localEmbedding && options?.inputType === 'query'
+      ? normalizedInput.map((item) => buildLocalEmbeddingQuery(config.model, item))
+      : normalizedInput
+    const requestBody = {
+      model: config.model,
+      input: Array.isArray(input) ? requestInput : requestInput[0],
+      encoding_format: 'float',
+    }
+    const { response, cleanup } = await requestProviderEndpoint({
+      provider: 'openai-compatible',
+      action: 'OpenAI-compatible embedding request',
+      url: `${config.baseUrl.replace(/\/$/, '')}/embeddings`,
+      model: config.model,
+      requestBody,
+      requestInit: {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
       },
-      body: JSON.stringify({
-        model: config.model,
-        input: Array.isArray(input) ? normalizedInput : normalizedInput[0],
-        encoding_format: 'float',
-      }),
-      signal: controller.signal,
+      timeoutMs: NON_STREAM_PROVIDER_TIMEOUT_MS,
+      streamed: false,
     })
 
-    if (!response.ok) {
-      return { enabled: true, model: config.model, error: `HTTP ${response.status}` }
-    }
+    try {
+      if (!response.ok) {
+        return { enabled: true, model: config.model, error: `HTTP ${response.status}` }
+      }
 
-    const data = await response.json() as OpenAICompatibleEmbeddingsResponse
-    const embeddings = Array.isArray(data.data)
-      ? data.data
-          .map((item) => (Array.isArray(item?.embedding) ? item.embedding : null))
-          .filter((vector): vector is number[] => Array.isArray(vector) && vector.length > 0 && vector.every((value) => Number.isFinite(value)))
-      : []
+      const data = await response.json() as OpenAICompatibleEmbeddingsResponse
+      const embeddings = Array.isArray(data.data)
+        ? data.data
+            .map((item) => (Array.isArray(item?.embedding) ? item.embedding : null))
+            .filter((vector): vector is number[] => Array.isArray(vector) && vector.length > 0 && vector.every((value) => Number.isFinite(value)))
+        : []
 
-    if (!embeddings.length) {
+      if (!embeddings.length) {
+        return {
+          enabled: true,
+          model: config.model,
+          error: 'OpenAI-compatible embedding response did not contain usable vectors',
+        }
+      }
+
       return {
         enabled: true,
-        model: config.model,
-        error: 'OpenAI-compatible embedding response did not contain usable vectors',
+        embeddings,
+        model: data.model ?? config.model,
       }
-    }
-
-    return {
-      enabled: true,
-      embeddings,
-      model: data.model ?? config.model,
+    } finally {
+      cleanup()
     }
   } catch (error) {
     return {
@@ -895,7 +917,5 @@ export async function embedTextsWithOpenAICompatible(
       model: config.model,
       error: error instanceof Error ? error.message : 'Failed to generate embeddings with OpenAI-compatible API',
     }
-  } finally {
-    clearTimeout(timeout)
   }
 }
