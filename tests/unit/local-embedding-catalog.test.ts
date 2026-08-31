@@ -36,22 +36,37 @@ afterEach(async () => {
 })
 
 describe('local embedding catalog', () => {
-  it('pins the recommended Qwen GGUF and its vector contract', () => {
+  it('pins the recommended 4B Qwen GGUF and a curated consumer-hardware catalog', () => {
     const model = getDefaultLocalEmbeddingModel()
-    expect(model.id).toBe('qwen3-embedding-0.6b-q8_0')
-    expect(model.downloadBytes).toBe(639_150_592)
-    expect(model.sha256).toBe('06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439')
-    expect(model.dimension).toBe(1024)
+    expect(model.id).toBe('qwen3-embedding-4b-q4_k_m')
+    expect(model.downloadBytes).toBe(2_496_703_776)
+    expect(model.sha256).toBe('2b0cf8f17b4c723c27303015383c27ec4bf2d8314bb677d05e920dd70bb0f16b')
+    expect(model.dimension).toBe(2560)
     expect(model.pooling).toBe('last')
     expect(model.normalization).toBe('l2')
-    expect(listPublicLocalEmbeddingModels()).toHaveLength(2)
+    const publicModels = listPublicLocalEmbeddingModels()
+    expect(publicModels).toHaveLength(5)
+    expect(publicModels.filter((item) => item.recommended).map((item) => item.id)).toEqual([model.id])
+    expect(getLocalEmbeddingModel('qwen3-embedding-8b-q4_k_m')).toMatchObject({
+      downloadBytes: 4_676_804_928,
+      sha256: '3fcd3febec8b3fd64435204db75bf0dd73b91e8d0661e0331acfe7e7c3120b85',
+      dimension: 4096,
+      recommended: false,
+    })
+    expect(getLocalEmbeddingModel('bge-m3-q8_0')).toMatchObject({
+      downloadBytes: 634_553_760,
+      sha256: 'aa473d51f451a22f0fcf39ba3330c14bed38a385712b1113440f69df4047a173',
+      dimension: 1024,
+      pooling: 'cls',
+      queryInstruction: null,
+    })
     expect(getLocalEmbeddingModel('qwen3-embedding-0.6b-f16')).toMatchObject({
       downloadBytes: 1_197_629_632,
       sha256: '421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340',
       recommended: false,
     })
     expect(model.downloadUrls.map((url) => new URL(url).host)).toEqual(['huggingface.co', 'hf-mirror.com'])
-    expect(listPublicLocalEmbeddingModels()[0]).not.toHaveProperty('downloadUrls')
+    expect(publicModels[0]).not.toHaveProperty('downloadUrls')
   })
 
   it('applies the Qwen retrieval instruction only when explicitly building a query', () => {
@@ -59,13 +74,14 @@ describe('local embedding catalog', () => {
     expect(buildLocalEmbeddingQuery(model.id, ' 谁拿走了钥匙？ ')).toBe(
       'Instruct: Given a query about a novel, retrieve passages, entities, events, and relationships relevant to the query\nQuery: 谁拿走了钥匙？',
     )
+    expect(buildLocalEmbeddingQuery('bge-m3-q8_0', ' 谁拿走了钥匙？ ')).toBe('谁拿走了钥匙？')
     expect(buildLocalEmbeddingQuery('external-model', ' 原文段落 ')).toBe('原文段落')
   })
 
   it('versions the local cache identity with model and embedding semantics', () => {
     const identity = buildLocalEmbeddingCacheIdentity(getDefaultLocalEmbeddingModel().id)
-    expect(identity).toContain('sha256:06507c7b')
-    expect(identity).toContain('dim:1024')
+    expect(identity).toContain('sha256:2b0cf8f1')
+    expect(identity).toContain('dim:2560')
     expect(identity).toContain('pool:last')
     expect(identity).toContain('norm:l2')
     expect(identity).toContain('query:qwen3-retrieval-v1')
@@ -133,7 +149,7 @@ describe('local embedding catalog', () => {
     expect(args).toContain('--embedding')
     expect(args).toContain('--no-webui')
     expect(args).toContain('--no-cors-credentials')
-    expect(args.slice(args.indexOf('--alias'), args.indexOf('--alias') + 2)).toEqual(['--alias', 'qwen3-embedding-0.6b-q8_0'])
+    expect(args.slice(args.indexOf('--alias'), args.indexOf('--alias') + 2)).toEqual(['--alias', 'qwen3-embedding-4b-q4_k_m'])
     expect(args.slice(args.indexOf('--api-key'), args.indexOf('--api-key') + 2)).toEqual(['--api-key', 'retale-local'])
     expect(args.slice(args.indexOf('--cors-origins'), args.indexOf('--cors-origins') + 2)).toEqual(['--cors-origins', 'localhost'])
     expect(args.slice(args.indexOf('--host'), args.indexOf('--host') + 2)).toEqual(['--host', '127.0.0.1'])
@@ -143,6 +159,17 @@ describe('local embedding catalog', () => {
       { repository: 'owner/model', fileName: 'embedding.gguf' },
     ), '/safe/custom.gguf', 0)
     expect(customArgs).not.toContain('--pooling')
+
+    const bgeModel = getLocalEmbeddingModel('bge-m3-q8_0')!
+    const bgeArgs = buildLocalEmbeddingServerArgs({
+      id: bgeModel.id,
+      label: bgeModel.label,
+      localFileName: bgeModel.fileName,
+      contextSize: bgeModel.contextSize,
+      pooling: bgeModel.pooling,
+      normalization: bgeModel.normalization,
+    }, '/safe/bge-m3.gguf', 0)
+    expect(bgeArgs.slice(bgeArgs.indexOf('--pooling'), bgeArgs.indexOf('--pooling') + 2)).toEqual(['--pooling', 'cls'])
   })
 
   it('accepts both tar directory and flat Windows zip runtime layouts', async () => {

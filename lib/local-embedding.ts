@@ -13,19 +13,26 @@ export type LocalEmbeddingPhase =
   | 'error'
 
 export type LocalEmbeddingBackend = 'metal' | 'vulkan' | 'cpu'
+export type LocalEmbeddingPooling = 'last' | 'cls' | 'mean'
+export type LocalEmbeddingModelProfile =
+  | 'balanced'
+  | 'high-precision'
+  | 'multilingual'
+  | 'lightweight'
+  | 'compact-precision'
 
 export type LocalEmbeddingCatalogModel = {
   id: string
   label: string
   description: string
   family: string
-  profile: 'balanced' | 'high-precision'
+  profile: LocalEmbeddingModelProfile
   quantization: string
   license: string
   downloadBytes: number
   dimension: number
   contextSize: number
-  pooling: 'last'
+  pooling: LocalEmbeddingPooling
   normalization: 'l2'
   memoryMinBytes: number
   memoryMaxBytes: number

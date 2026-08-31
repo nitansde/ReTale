@@ -5,6 +5,7 @@ import path from 'node:path'
 import type {
   LocalEmbeddingBackend,
   LocalEmbeddingPhase,
+  LocalEmbeddingPooling,
   LocalEmbeddingProgress,
   LocalEmbeddingRuntimeStatus,
 } from '@/lib/local-embedding'
@@ -50,7 +51,7 @@ type RuntimeLocalEmbeddingModel = {
   label: string
   localFileName: string
   contextSize: number
-  pooling: 'last' | null
+  pooling: LocalEmbeddingPooling | null
   normalization: 'l2'
 }
 

@@ -4,14 +4,14 @@ import { LOCAL_EMBEDDING_BASE_URL } from '@/lib/local-embedding'
 import { isCustomLocalEmbeddingModelId } from '@/lib/server/local-embedding-custom-model'
 
 export const LLAMA_CPP_RUNTIME_VERSION = 'b10705'
-export const LOCAL_EMBEDDING_QUERY_RECIPE_VERSION = 'qwen3-retrieval-v1'
 
 export type LocalEmbeddingModelDefinition = LocalEmbeddingCatalogModel & {
   repository: string
   fileName: string
   downloadUrls: readonly string[]
   sha256: string
-  queryInstruction: string
+  queryInstruction: string | null
+  queryRecipe: 'qwen3-retrieval-v1' | 'plain-v1'
 }
 
 export type LlamaCppRuntimeArtifact = {
@@ -30,9 +30,9 @@ export type LlamaCppRuntimeArtifact = {
 const QWEN3_EMBEDDING_06B_Q8: LocalEmbeddingModelDefinition = {
   id: 'qwen3-embedding-0.6b-q8_0',
   label: 'Qwen3 Embedding 0.6B · Q8_0',
-  description: '默认推荐。中英文检索表现均衡，适合小说段落、实体、事件与关系检索。',
+  description: '轻量备选。中英文检索表现均衡，适合内存较小或主要使用 CPU 的设备。',
   family: 'Qwen3 Embedding 0.6B',
-  profile: 'balanced',
+  profile: 'lightweight',
   quantization: 'Q8_0',
   license: 'Apache 2.0',
   repository: 'Qwen/Qwen3-Embedding-0.6B-GGUF',
@@ -47,16 +47,17 @@ const QWEN3_EMBEDDING_06B_Q8: LocalEmbeddingModelDefinition = {
   memoryMinBytes: 800_000_000,
   memoryMaxBytes: 1_500_000_000,
   diskEstimateBytes: 850_000_000,
-  recommended: true,
+  recommended: false,
   queryInstruction: 'Given a query about a novel, retrieve passages, entities, events, and relationships relevant to the query',
+  queryRecipe: 'qwen3-retrieval-v1',
 }
 
 const QWEN3_EMBEDDING_06B_F16: LocalEmbeddingModelDefinition = {
   ...QWEN3_EMBEDDING_06B_Q8,
   id: 'qwen3-embedding-0.6b-f16',
   label: 'Qwen3 Embedding 0.6B · F16',
-  description: '完整 F16 权重，精度优先；下载、磁盘与内存需求约为 Q8_0 的两倍。',
-  profile: 'high-precision',
+  description: '保留的 0.6B 完整精度版本，兼容已有安装；同等资源下更推荐 4B Q4_K_M。',
+  profile: 'compact-precision',
   quantization: 'F16',
   fileName: 'Qwen3-Embedding-0.6B-f16.gguf',
   downloadUrls: huggingFaceDownloadUrls('Qwen/Qwen3-Embedding-0.6B-GGUF', 'Qwen3-Embedding-0.6B-f16.gguf'),
@@ -68,7 +69,82 @@ const QWEN3_EMBEDDING_06B_F16: LocalEmbeddingModelDefinition = {
   recommended: false,
 }
 
-const LOCAL_EMBEDDING_MODELS = [QWEN3_EMBEDDING_06B_Q8, QWEN3_EMBEDDING_06B_F16] as const
+const QWEN3_EMBEDDING_4B_Q4_K_M: LocalEmbeddingModelDefinition = {
+  id: 'qwen3-embedding-4b-q4_k_m',
+  label: 'Qwen3 Embedding 4B · Q4_K_M',
+  description: '默认推荐。适合 16 GB 消费级设备，在中英文小说检索质量、速度和资源占用之间较均衡。',
+  family: 'Qwen3 Embedding 4B',
+  profile: 'balanced',
+  quantization: 'Q4_K_M',
+  license: 'Apache 2.0',
+  repository: 'Qwen/Qwen3-Embedding-4B-GGUF',
+  fileName: 'Qwen3-Embedding-4B-Q4_K_M.gguf',
+  downloadUrls: huggingFaceDownloadUrls('Qwen/Qwen3-Embedding-4B-GGUF', 'Qwen3-Embedding-4B-Q4_K_M.gguf'),
+  sha256: '2b0cf8f17b4c723c27303015383c27ec4bf2d8314bb677d05e920dd70bb0f16b',
+  downloadBytes: 2_496_703_776,
+  dimension: 2560,
+  contextSize: 2048,
+  pooling: 'last',
+  normalization: 'l2',
+  memoryMinBytes: 3_500_000_000,
+  memoryMaxBytes: 6_500_000_000,
+  diskEstimateBytes: 2_800_000_000,
+  recommended: true,
+  queryInstruction: 'Given a query about a novel, retrieve passages, entities, events, and relationships relevant to the query',
+  queryRecipe: 'qwen3-retrieval-v1',
+}
+
+const QWEN3_EMBEDDING_8B_Q4_K_M: LocalEmbeddingModelDefinition = {
+  ...QWEN3_EMBEDDING_4B_Q4_K_M,
+  id: 'qwen3-embedding-8b-q4_k_m',
+  label: 'Qwen3 Embedding 8B · Q4_K_M',
+  description: '质量优先。Qwen3 Embedding 系列的大模型档，适合更重视复杂人物、事件和长文语义检索的设备。',
+  family: 'Qwen3 Embedding 8B',
+  profile: 'high-precision',
+  repository: 'Qwen/Qwen3-Embedding-8B-GGUF',
+  fileName: 'Qwen3-Embedding-8B-Q4_K_M.gguf',
+  downloadUrls: huggingFaceDownloadUrls('Qwen/Qwen3-Embedding-8B-GGUF', 'Qwen3-Embedding-8B-Q4_K_M.gguf'),
+  sha256: '3fcd3febec8b3fd64435204db75bf0dd73b91e8d0661e0331acfe7e7c3120b85',
+  downloadBytes: 4_676_804_928,
+  dimension: 4096,
+  memoryMinBytes: 6_000_000_000,
+  memoryMaxBytes: 10_000_000_000,
+  diskEstimateBytes: 5_100_000_000,
+  recommended: false,
+}
+
+const BGE_M3_Q8_0: LocalEmbeddingModelDefinition = {
+  id: 'bge-m3-q8_0',
+  label: 'BGE-M3 · Q8_0',
+  description: '热门多语种长文本模型，支持 100 多种语言；无需查询 instruction，适合作为 Qwen 之外的稳健备选。',
+  family: 'BGE-M3',
+  profile: 'multilingual',
+  quantization: 'Q8_0',
+  license: 'MIT',
+  repository: 'ggml-org/bge-m3-Q8_0-GGUF',
+  fileName: 'bge-m3-q8_0.gguf',
+  downloadUrls: huggingFaceDownloadUrls('ggml-org/bge-m3-Q8_0-GGUF', 'bge-m3-q8_0.gguf'),
+  sha256: 'aa473d51f451a22f0fcf39ba3330c14bed38a385712b1113440f69df4047a173',
+  downloadBytes: 634_553_760,
+  dimension: 1024,
+  contextSize: 4096,
+  pooling: 'cls',
+  normalization: 'l2',
+  memoryMinBytes: 1_000_000_000,
+  memoryMaxBytes: 2_500_000_000,
+  diskEstimateBytes: 850_000_000,
+  recommended: false,
+  queryInstruction: null,
+  queryRecipe: 'plain-v1',
+}
+
+const LOCAL_EMBEDDING_MODELS = [
+  QWEN3_EMBEDDING_4B_Q4_K_M,
+  QWEN3_EMBEDDING_8B_Q4_K_M,
+  BGE_M3_Q8_0,
+  QWEN3_EMBEDDING_06B_Q8,
+  QWEN3_EMBEDDING_06B_F16,
+] as const
 
 const RELEASE_BASE = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_CPP_RUNTIME_VERSION}`
 
@@ -148,7 +224,7 @@ export function getLocalEmbeddingModel(modelId: string) {
 }
 
 export function getDefaultLocalEmbeddingModel() {
-  return QWEN3_EMBEDDING_06B_Q8
+  return QWEN3_EMBEDDING_4B_Q4_K_M
 }
 
 export function getLlamaCppRuntimeArtifact(params: {
@@ -178,7 +254,7 @@ export function getSupportedRuntimeBackends(platform: NodeJS.Platform = process.
 export function buildLocalEmbeddingQuery(modelId: string, query: string) {
   const model = getLocalEmbeddingModel(modelId)
   const normalized = query.trim()
-  if (!model || !normalized) return normalized
+  if (!model?.queryInstruction || !normalized) return normalized
   return `Instruct: ${model.queryInstruction}\nQuery: ${normalized}`
 }
 
@@ -191,7 +267,7 @@ export function buildLocalEmbeddingCacheIdentity(modelId: string) {
     `dim:${model.dimension}`,
     `pool:${model.pooling}`,
     `norm:${model.normalization}`,
-    `query:${LOCAL_EMBEDDING_QUERY_RECIPE_VERSION}`,
+    `query:${model.queryRecipe}`,
   ].join('|')
 }
 
