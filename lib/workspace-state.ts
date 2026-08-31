@@ -1,4 +1,3 @@
-import { defaultConstraints, defaultPresets } from '@/lib/data'
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import { createDefaultAISettings, normalizeAISettings } from '@/lib/ai-settings'
 import { normalizeCharacterRoleCardProfile } from '@/lib/story-knowledge'
@@ -9,8 +8,41 @@ import type {
   PresetCompatSessionPhase,
   PresetCompatSessionState,
   PresetCompatSessionWorkspaceSelection,
+  RewriteConstraint,
+  RewritePreset,
 } from '@/lib/types'
 import { normalizeLegacySingleParagraphHtml } from '@/lib/utils'
+
+const defaultPresets: RewritePreset[] = [
+  {
+    id: 'preset-1',
+    name: '冷感压迫',
+    mode: 'heavy',
+    tone: 'colder',
+    prompt: '压低情绪外露，提高压迫感与空间细节，避免解释性台词。',
+  },
+  {
+    id: 'preset-2',
+    name: '电影镜头',
+    mode: 'perspective',
+    tone: 'cinematic',
+    prompt: '以镜头推进为优先，增强动作和环境切换，减少抽象比喻。',
+  },
+  {
+    id: 'preset-3',
+    name: '对话拉扯',
+    mode: 'dialogue',
+    tone: 'romantic',
+    prompt: '强化角色之间的张力与潜台词，不要破坏既有设定。',
+  },
+]
+
+const defaultConstraints: RewriteConstraint[] = [
+  { id: 'cons-1', label: '不改世界观规则', enabled: true, strength: 'strict' },
+  { id: 'cons-2', label: '保留关键伏笔词', enabled: true, strength: 'soft' },
+  { id: 'cons-3', label: '避免现代口语跳戏', enabled: false, strength: 'soft' },
+  { id: 'cons-4', label: '控制单段长度', enabled: true, strength: 'soft' },
+]
 
 const PRESET_COMPAT_SESSION_PHASE_SET = new Set<PresetCompatSessionPhase>([
   'new_chat',

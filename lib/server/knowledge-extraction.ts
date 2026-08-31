@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises'
 import type { Chapter, KnowledgeExtractionScenarioSettings } from '@/lib/types'
 import { type ChapterKnowledgeExtraction } from '@/lib/story-knowledge'
 import { extractChapterKnowledgeWithOpenAICompatible } from '@/lib/server/openai-compatible'
@@ -126,7 +127,7 @@ async function waitForRetryCooldown(ms: number, assertCanContinue?: () => void |
   while (Date.now() < deadline) {
     await assertCanContinue?.()
     const remaining = deadline - Date.now()
-    await new Promise((resolve) => setTimeout(resolve, Math.min(1000, remaining)))
+    await sleep(Math.min(1000, remaining))
   }
   await assertCanContinue?.()
 }

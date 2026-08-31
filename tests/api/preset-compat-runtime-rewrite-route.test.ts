@@ -1042,8 +1042,9 @@ describe('preset compat rewrite route runtime', () => {
         maxContextUnlocked: false,
       }),
     }))
-    vi.doMock('@/lib/preset-compat/token-estimate', () => ({
-      estimatePresetCompatTokenCount: (text: string) => text.trim().split(/\s+/).filter(Boolean).length,
+    vi.doMock('@/lib/utils', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('@/lib/utils')>()),
+      estimateTokenCount: (text: string) => text.trim().split(/\s+/).filter(Boolean).length,
     }))
     vi.doMock('@/lib/server/context-builder', () => ({
       buildGenerationContext: async () => ({
@@ -1206,8 +1207,9 @@ describe('preset compat rewrite route runtime', () => {
         return library
       },
     }))
-    vi.doMock('@/lib/preset-compat/token-estimate', () => ({
-      estimatePresetCompatTokenCount: (text: string) => text.trim().split(/\s+/).filter(Boolean).length,
+    vi.doMock('@/lib/utils', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('@/lib/utils')>()),
+      estimateTokenCount: (text: string) => text.trim().split(/\s+/).filter(Boolean).length,
     }))
     vi.doMock('@/lib/server/context-builder', () => ({
       buildGenerationContext: async () => ({
@@ -1373,7 +1375,8 @@ describe('preset compat rewrite route runtime', () => {
         return library
       },
     }))
-    vi.doMock('@/lib/server/knowledge-store', () => ({
+    vi.doMock('@/lib/utils', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('@/lib/utils')>()),
       estimateTokenCount: (text: string) => text.trim().split(/\s+/).filter(Boolean).length,
     }))
     vi.doMock('@/lib/server/context-builder', () => ({

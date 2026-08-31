@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import { Geist, Noto_Sans_SC, Noto_Serif_SC } from 'next/font/google'
 import { cookies } from 'next/headers'
 import { I18nProvider } from '@/lib/i18n/provider'
-import { isLocale, LOCALE_COOKIE_KEY } from '@/lib/i18n/messages'
+import { isLocale, LOCALE_STORAGE_KEY } from '@/lib/i18n/messages'
 import './globals.css'
 
 const geistSans = Geist({
@@ -35,7 +35,7 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode
 }>) {
-  const storedLocale = (await cookies()).get(LOCALE_COOKIE_KEY)?.value
+  const storedLocale = (await cookies()).get(LOCALE_STORAGE_KEY)?.value
   const localeCookiePresent = Boolean(storedLocale && isLocale(storedLocale))
   const initialLocale = localeCookiePresent && storedLocale && isLocale(storedLocale) ? storedLocale : 'zh'
 

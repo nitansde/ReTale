@@ -22,7 +22,7 @@ import type {
   PresetCompatRuntimeSnapshot,
   PresetCompatSurfaceId,
 } from '@/lib/preset-compat/types'
-import { estimatePresetCompatTokenCount } from '@/lib/preset-compat/token-estimate'
+import { estimateTokenCount } from '@/lib/utils'
 
 const DEFAULT_SAFE_CONTEXT_MAX_TOKENS = 12000
 
@@ -225,7 +225,7 @@ function trimContextBlocksToBudget(blocks: readonly RouteContextBlock[], budget:
     medium: 1,
   } as const
 
-  while (remaining.length > 0 && estimatePresetCompatTokenCount(joinedBlockText(remaining)) > budget) {
+  while (remaining.length > 0 && estimateTokenCount(joinedBlockText(remaining)) > budget) {
     let removeIndex = -1
     let removeWeight = Number.POSITIVE_INFINITY
 
@@ -248,7 +248,7 @@ function trimContextBlocksToBudget(blocks: readonly RouteContextBlock[], budget:
   return {
     blocks: remaining,
     trimmedBlockIds,
-    tokenEstimate: estimatePresetCompatTokenCount(joinedBlockText(remaining)),
+    tokenEstimate: estimateTokenCount(joinedBlockText(remaining)),
   }
 }
 

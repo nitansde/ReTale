@@ -8,6 +8,7 @@ import { assertNextProductionBuildProvenance } from './next-production-provenanc
 const require = createRequire(import.meta.url)
 const nextCli = require.resolve('next/dist/bin/next')
 
+/** @param {string[]} args @param {Record<string, string | undefined>} [environment] */
 export function buildNextProductionStartArgs(args, environment = process.env) {
   const hasHostname = args.some((argument) => argument === '--hostname'
     || argument === '-H'
@@ -54,6 +55,7 @@ function parsePort(value) {
   return port
 }
 
+/** @param {string[]} args @param {Record<string, string | undefined>} [environment] */
 export function resolveNextProductionBinding(args, environment = process.env) {
   const hostname = readOption(args, ['--hostname', '-H'])
     ?? (environment.RETALE_PRODUCTION_HOST?.trim() || '127.0.0.1')
@@ -65,6 +67,7 @@ export function resolveNextProductionBinding(args, environment = process.env) {
   return { hostname, port: parsePort(portValue) }
 }
 
+/** @param {string[]} args @param {Record<string, string | undefined>} [environment] @param {{repoRoot?: string, portDetection?: {execFileSync?: Function}}} [options] */
 export function prepareNextProductionStart(args, environment = process.env, options = {}) {
   const nextArgs = buildNextProductionStartArgs(args, environment)
   const binding = resolveNextProductionBinding(nextArgs.slice(1), environment)

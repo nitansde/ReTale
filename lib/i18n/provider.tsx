@@ -4,7 +4,6 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import {
   getMessage,
   isLocale,
-  LOCALE_COOKIE_KEY,
   LOCALE_STORAGE_KEY,
   type Locale,
   type TranslationKey,
@@ -66,7 +65,7 @@ export function I18nProvider({
     } catch {
       // Ignore storage access failures in restricted or test environments.
     }
-    document.cookie = `${LOCALE_COOKIE_KEY}=${locale}; Path=/; Max-Age=${LOCALE_COOKIE_MAX_AGE_SECONDS}; SameSite=Lax`
+    document.cookie = `${LOCALE_STORAGE_KEY}=${locale}; Path=/; Max-Age=${LOCALE_COOKIE_MAX_AGE_SECONDS}; SameSite=Lax`
   }, [browserStorageReady, locale])
 
   useEffect(() => {

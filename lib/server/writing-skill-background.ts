@@ -16,8 +16,3 @@ export function scheduleWritingSkillDistillationJob(jobId: string) {
     }
   })
 }
-
-export function resetWritingSkillBackgroundSchedulingForTests() {
-  if (!process.env.VITEST) throw new Error('Writing skill background scheduling can only be reset under Vitest')
-  scheduledJobs.clear()
-}

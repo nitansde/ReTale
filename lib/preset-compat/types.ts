@@ -174,8 +174,6 @@ export type PresetCompatRegexRecord = {
 export type PresetCompatSurfaceId = (typeof PRESET_COMPAT_SURFACE_IDS)[number]
 export type PresetCompatCreativeSurfaceId = ProductSurfaceId
 export type PresetCompatEditableSurfaceId = ProductSurfaceId
-export type PresetCompatObsoleteSurfaceId = (typeof PRESET_COMPAT_OBSOLETE_SURFACE_IDS)[number]
-
 export type PresetCompatSurfaceBinding = {
   surfaceId: PresetCompatSurfaceId
   presetId: string | null

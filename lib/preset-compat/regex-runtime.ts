@@ -8,8 +8,6 @@ import type { PresetCompatRegexPlacement, PresetCompatRegexRecord } from '@/lib/
 
 export const PRESET_COMPAT_REGEX_RUNTIME_MAX_ACTIVE_RULES = 100
 export const PRESET_COMPAT_REGEX_RUNTIME_MAX_INPUT_LENGTH = 200000
-export const PRESET_COMPAT_REGEX_RUNTIME_MAX_INPUT_CHARS = PRESET_COMPAT_REGEX_RUNTIME_MAX_INPUT_LENGTH
-
 export type PresetCompatRegexRuntimePhase = 'user_input' | 'assistant_output'
 
 export type PresetCompatRegexRuntimeOptions = {

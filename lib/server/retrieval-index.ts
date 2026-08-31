@@ -3,7 +3,7 @@ import * as lancedb from '@lancedb/lancedb'
 import type { AIProvider, EmbeddingsScenarioSettings, KnowledgeRebuildChapterRange } from '@/lib/types'
 import { sleep, withScopedAsyncLock } from '@/lib/server/async-control'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
-import { estimateTokenCount, healMissingKnowledgeChapterDerivedArtifacts, type TextSpanInput } from '@/lib/server/knowledge-store'
+import { healMissingKnowledgeChapterDerivedArtifacts, type TextSpanInput } from '@/lib/server/knowledge-store'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { embedTextsWithOpenAICompatible } from '@/lib/server/openai-compatible'
 import { embedTextsWithOllama } from '@/lib/server/ollama-local'
@@ -47,6 +47,7 @@ export type {
   RawTextEmbeddingPrecomputeResult,
   RawTextEmbeddingPrecomputeSettingsSnapshot,
 } from '@/lib/server/retrieval-precompute'
+import { estimateTokenCount, uniqueStrings } from '@/lib/utils'
 
 export type RetrievalDocSourceType =
   | 'text_span'
@@ -457,21 +458,6 @@ async function dropInactiveBranchTable(database: LanceDatabase, branchId: string
   }
 }
 
-function uniqueStrings(values: Array<string | null | undefined>) {
-  const seen = new Set<string>()
-  const next: string[] = []
-
-  for (const raw of values) {
-    const value = raw?.trim()
-    if (!value) continue
-    if (seen.has(value)) continue
-    seen.add(value)
-    next.push(value)
-  }
-
-  return next
-}
-
 function serializeTerms(values: Array<string | null | undefined>) {
   return uniqueStrings(values).join('\n')
 }
@@ -632,16 +618,12 @@ function buildRetrievalEmbeddingText(row: RetrievalDocSeedRow) {
   })
 }
 
-function buildRetrievalEmbeddingInput(row: RetrievalDocSeedRow) {
+export function buildRawTextRetrievalEmbeddingInput(row: RetrievalDocSeedRow) {
   const text = buildRetrievalEmbeddingText(row)
   return {
     text,
     embeddingInputHash: buildEmbeddingInputHash(text),
   }
-}
-
-export function buildRawTextRetrievalEmbeddingInput(row: RetrievalDocSeedRow) {
-  return buildRetrievalEmbeddingInput(row)
 }
 
 export async function precomputeRawTextEmbeddingCache(params: {
@@ -1002,7 +984,7 @@ async function buildRetrievalEmbeddingPlan(params: {
   embeddingSettings: EmbeddingsScenarioSettings
 }) {
   const plannedRows = params.rows.map<RetrievalDocEmbeddingPlanRow>((row, rowIndex) => {
-    const { text, embeddingInputHash } = buildRetrievalEmbeddingInput(row)
+    const { text, embeddingInputHash } = buildRawTextRetrievalEmbeddingInput(row)
     return {
       row,
       rowIndex,
@@ -2537,16 +2519,6 @@ function pickDiverseEvidenceRows(rows: LanceEvidenceMatch[], limit: number) {
   }
 
   return picked
-}
-
-export async function replaceChapterRetrievalIndex(spans: TextSpanInput[]) {
-  if (!spans.length) return
-
-  const novelId = spans[0]?.novelId
-  const branchId = spans[0]?.branchId
-  if (!novelId || !branchId) return
-
-  await rebuildBranchRetrievalIndex(novelId, branchId)
 }
 
 export async function rebuildBranchRetrievalIndex(

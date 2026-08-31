@@ -125,12 +125,6 @@ export const whatIfDeltaCreateSchema = z.object({
   confidence: z.number().min(0).max(1).nullable().optional(),
 })
 
-export const whatIfSessionDetailSchema = whatIfSessionCreateSchema.extend({
-  createdAt: z.string().min(1),
-  updatedAt: z.string().min(1),
-  deltas: z.array(whatIfDeltaSchema),
-})
-
 export const whatIfCreateRequestSchema = z.object({
   novelId: z.string().min(1),
   branchId: z.string().min(1),
@@ -166,55 +160,6 @@ export const whatIfCreateResponseSchema = z.object({
   deltas: z.array(whatIfDeltaSchema).min(1),
   title: z.string().min(1),
   subtitle: z.string().nullable(),
-})
-
-export const storyTimelineNodeCreateSchema = z.object({
-  id: z.string().min(1),
-  novelId: z.string().min(1),
-  branchId: z.string().min(1),
-  nodeType: z.enum(['rewrite', 'what_if', 'continue_block', 'future_jump', 'roleplay_session']),
-  labelIndex: z.number().int().nonnegative(),
-  anchorChapterNo: positiveInt,
-  title: z.string().min(1),
-  subtitle: z.string().nullable(),
-  parentNodeId: z.string().nullable(),
-  sourceChapterNo: positiveInt.nullable(),
-  targetChapterNo: positiveInt.nullable(),
-  chapterId: z.string().nullable(),
-  continueBlockId: z.string().nullable(),
-  whatIfSessionId: z.string().nullable(),
-  futureJumpRunId: z.string().nullable(),
-  roleplaySessionId: z.string().nullable().optional(),
-  laneIndex: z.number().int().nonnegative().default(0),
-  colorToken: z.string().nullable(),
-  status: z.string().min(1),
-})
-
-export const outlineNodeChapterCreateSchema = z.object({
-  id: z.string().min(1),
-  outlineNodeId: z.string().min(1),
-  chapterNo: positiveInt,
-  chapterId: z.string().nullable(),
-  chapterTitle: z.string().nullable(),
-  isPrimary: z.boolean(),
-  sortOrder: z.number().int().nonnegative(),
-})
-
-export const outlineNodeCreateSchema = z.object({
-  id: z.string().min(1),
-  novelId: z.string().min(1),
-  branchId: z.string().min(1),
-  chapterNo: positiveInt.nullable(),
-  title: z.string().min(1),
-  summary: z.string().min(1),
-  originalOutcome: z.string().nullable(),
-  trackKey: z.string().min(1),
-  phaseLabel: z.string().nullable(),
-  sourceType: z.string().min(1),
-  confidence: z.number().min(0).max(1).nullable(),
-  involvedEntities: z.array(z.string()),
-  keyEvents: z.array(z.string()),
-  sortOrder: z.number().int().nonnegative(),
 })
 
 export const futureJumpRevisionSchema = z.object({
@@ -254,20 +199,6 @@ export const futureJumpRunCreateSchema = z.object({
   latestRevisionNo: positiveInt.default(1),
   errorMessage: z.string().nullable().default(null),
   status: z.string().min(1),
-})
-
-export const futureJumpRunDetailSchema = futureJumpRunCreateSchema.extend({
-  createdAt: z.string().min(1),
-  updatedAt: z.string().min(1),
-  timelineNodeId: z.string().nullable(),
-  latestRevision: z.lazy(() => futureJumpRevisionSchema).nullable(),
-  revisionHistory: z.array(z.object({
-    revisionNo: positiveInt,
-    revisionKind: z.string().min(1),
-    userFeedback: z.string().nullable(),
-    createdAt: z.string().min(1),
-  })),
-  revisions: z.array(z.lazy(() => futureJumpRevisionSchema)),
 })
 
 export const futureJumpCreateRequestSchema = z.object({
@@ -374,36 +305,6 @@ export const continueBlockMutationResponseSchema = z.object({
   latestRevisionNo: positiveInt,
   writingSkillCardIds,
   writingSkillExampleCount,
-})
-
-export const continueBlockDetailSchema = z.object({
-  id: z.string().min(1),
-  novelId: z.string().min(1),
-  branchId: z.string().min(1),
-  parentTimelineNodeId: z.string().nullable(),
-  sourceChapterNo: positiveInt,
-  title: z.string().min(1),
-  subtitle: z.string().nullable(),
-  userInstruction: z.string(),
-  selectedText: z.string(),
-  originalText: z.string(),
-  latestText: z.string().min(1),
-  inputTokens: optionalNullableInt,
-  outputTokens: optionalNullableInt,
-  writingSkillCardIds,
-  writingSkillExampleCount,
-  latestRevisionNo: positiveInt,
-  status: z.string().min(1),
-  createdAt: z.string().min(1),
-  updatedAt: z.string().min(1),
-  timelineNodeId: z.string().nullable(),
-  latestRevision: continueBlockRevisionSchema.nullable(),
-  revisionHistory: z.array(z.object({
-    revisionNo: positiveInt,
-    revisionKind: z.string().min(1),
-    createdAt: z.string().min(1),
-  })),
-  revisions: z.array(continueBlockRevisionSchema),
 })
 
 export const bridgeSummaryGenerationSchema = z.object({

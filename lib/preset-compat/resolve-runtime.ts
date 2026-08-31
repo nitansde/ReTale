@@ -1,6 +1,5 @@
 import type {
   AIProvider,
-  AIScenarioSettings,
   OllamaProviderSettings,
   OpenAICompatibleProviderSettings,
 } from '@/lib/types'
@@ -147,15 +146,6 @@ type PresetCompatResolvedPromptRuleCandidate = {
   resolvedRule: PresetCompatResolvedPromptRule
   rule: PresetCompatPromptRule
 }
-
-const PRESET_COMPAT_ALLOWED_PROMPT_RULE_TRIGGERS = new Set([
-  'new_chat',
-  'new_group_chat',
-  'new_example_chat',
-  'continue',
-  'group',
-  'impersonation',
-])
 
 type PresetCompatRuntimeContext = {
   preset: PresetCompatPresetRecord | null
@@ -566,23 +556,6 @@ function resolvePromptRuleChannel(rule: PresetCompatPromptRule): 'system' | 'use
   return rule.role === 'system' ? 'system' : 'user'
 }
 
-function getPromptRuleTriggerReason(trigger: string): PresetCompatStatusReasonCode {
-  switch (trigger) {
-    case 'new_group_chat':
-    case 'group':
-      return 'NO_GROUP_CONTEXT'
-    case 'new_example_chat':
-      return 'NO_EXAMPLE_CONTEXT'
-    case 'impersonation':
-      return 'NO_IMPERSONATION_CONTEXT'
-    case 'continue':
-      return 'CONTINUE_SURFACE_ONLY'
-    case 'new_chat':
-    default:
-      return 'NEW_CHAT_CONTEXT_REQUIRED'
-  }
-}
-
 function createEmptyTemplateFragmentSet(): PresetCompatResolvedTemplateFragmentSet {
   return {
     ordered: [],
@@ -902,45 +875,6 @@ function doesPromptRuleTriggerMatch(
       return runtimeContext.hasImpersonationContext === true
     default:
       return false
-  }
-}
-
-function evaluatePromptRuleTriggers(params: {
-  rule: PresetCompatPromptRule
-  surfaceId: PresetCompatSurfaceId
-  runtimeContext: PresetCompatPromptRuleRuntimeContext
-}) {
-  const injectionTriggers = getPromptRuleInjectionTriggers(params.rule)
-
-  if (injectionTriggers.length === 0) {
-    return {
-      status: 'pass' as const,
-    }
-  }
-
-  const unknownTriggers = injectionTriggers.filter(
-    (trigger) => !PRESET_COMPAT_ALLOWED_PROMPT_RULE_TRIGGERS.has(trigger)
-  )
-  if (unknownTriggers.length > 0) {
-    return {
-      status: 'unknown' as const,
-      reason: 'UNKNOWN_TRIGGER' as const,
-      value: unknownTriggers,
-    }
-  }
-
-  for (const trigger of injectionTriggers) {
-    if (doesPromptRuleTriggerMatch(trigger, params.surfaceId, params.runtimeContext)) {
-      return {
-        status: 'pass' as const,
-      }
-    }
-  }
-
-  return {
-    status: 'no-match' as const,
-    reason: getPromptRuleTriggerReason(injectionTriggers[0] ?? 'new_chat'),
-    value: injectionTriggers,
   }
 }
 

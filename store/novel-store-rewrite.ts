@@ -1,5 +1,5 @@
 import { buildGenerationContext } from '@/lib/story-knowledge'
-import { getClientLocale, getMessage } from '@/lib/i18n/messages'
+import { tm } from '@/lib/i18n/messages'
 import {
   countChineseFriendlyWords,
   formatNowLabel,
@@ -10,10 +10,6 @@ import {
 } from '@/lib/utils'
 import type { Chapter, RewriteCandidate, RewriteHistoryEntry } from '@/lib/types'
 import type { NovelStore, NovelStoreGet, PersistedNovelStoreSet } from '@/store/novel-store-types'
-
-function tm(key: import('@/lib/i18n/messages').TranslationKey, values?: import('@/lib/i18n/messages').TranslationValues) {
-  return getMessage(getClientLocale(), key, values)
-}
 
 export function getScopeSource(chapter: Chapter, scope: NovelStore['rewriteScope'], selectedParagraphIndex: number | null, selectionText: string) {
   const chapterText = htmlToPlainText(chapter.content)

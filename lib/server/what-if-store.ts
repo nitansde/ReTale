@@ -156,25 +156,6 @@ export function findWhatIfSessionById(id: string, db: Db = defaultDb): WhatIfSes
   }
 }
 
-export function updateWhatIfSessionGeneratedText(
-  id: string,
-  generatedText: string,
-  status: string,
-  tokenUsage: { inputTokens?: number | null; outputTokens?: number | null } = {},
-  db: Db = defaultDb
-) {
-  db.execute(
-    'UPDATE what_if_sessions SET generated_text = ?, input_tokens = ?, output_tokens = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-    generatedText,
-    tokenUsage.inputTokens ?? null,
-    tokenUsage.outputTokens ?? null,
-    status,
-    id
-  )
-
-  return findWhatIfSessionById(id, db)
-}
-
 export async function deleteWhatIfSession(sessionId: string, db: Db = defaultDb) {
   const session = findWhatIfSessionById(sessionId, db)
   if (!session) return null

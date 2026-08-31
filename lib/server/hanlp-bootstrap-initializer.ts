@@ -2,7 +2,6 @@ import type { CharacterImportanceTier } from '@/lib/server/hanlp-contracts'
 import {
   classifyHanlpBootstrapCharacters,
   shouldBootstrapFormalCharacterEntity,
-  type HanlpBootstrapCharacterDecision,
 } from '@/lib/server/character-tier'
 import { upsertHanlpBootstrapCharacterEntity } from '@/lib/server/knowledge-rebuild'
 import { queryAll, queryOne } from '@/lib/server/database-access'
@@ -19,13 +18,6 @@ type HanlpBootstrapEntityAggregateRow = {
 
 export type HanlpBootstrapAggregateEntity = HanlpBootstrapEntityAggregateRow & {
   coverageRatio: number
-}
-
-export type HanlpBootstrapPromptContext = {
-  characters: HanlpBootstrapCharacterDecision[]
-  locations: HanlpBootstrapAggregateEntity[]
-  organizations: HanlpBootstrapAggregateEntity[]
-  settings: HanlpBootstrapAggregateEntity[]
 }
 
 function sortAggregateEntities(left: HanlpBootstrapEntityAggregateRow, right: HanlpBootstrapEntityAggregateRow) {
@@ -142,5 +134,3 @@ export async function initializeHanlpBootstrapCharacterEntities(params: {
     promptContext,
   }
 }
-
-export type HanlpBootstrapFormalCharacterTier = Extract<CharacterImportanceTier, 'protagonist' | 'important' | 'arc'>

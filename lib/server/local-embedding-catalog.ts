@@ -194,10 +194,6 @@ function runtimeArtifact(
   }
 }
 
-export function listLocalEmbeddingModels(): LocalEmbeddingModelDefinition[] {
-  return LOCAL_EMBEDDING_MODELS.map((model) => ({ ...model }))
-}
-
 export function listPublicLocalEmbeddingModels(): LocalEmbeddingCatalogModel[] {
   return LOCAL_EMBEDDING_MODELS.map((model) => ({
     id: model.id,

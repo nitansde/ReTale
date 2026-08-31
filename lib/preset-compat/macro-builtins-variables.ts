@@ -57,7 +57,7 @@ function createInvocationFromNode(node: PresetCompatMacroNodeLike): PresetCompat
   })
 }
 
-function resolveNodeLike(
+export function resolveNodeLike(
   node: PresetCompatMacroNodeLike,
   context: PresetCompatMacroContext,
   registry: PresetCompatMacroRegistry,

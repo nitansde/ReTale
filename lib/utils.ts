@@ -156,3 +156,36 @@ export function createUuid() {
   const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
+
+export function uniqueStrings(values: Array<string | null | undefined>) {
+  const seen = new Set<string>()
+  const next: string[] = []
+  for (const raw of values) {
+    const value = raw?.trim()
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    next.push(value)
+  }
+  return next
+}
+
+export function chunkValues<T>(values: T[], size = 500) {
+  const chunks: T[][] = []
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size))
+  }
+  return chunks
+}
+
+export function shuffleWithSeed<T>(items: T[], random: () => number) {
+  const next = items.slice()
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(random() * (index + 1))
+    ;[next[index], next[target]] = [next[target], next[index]]
+  }
+  return next
+}
+
+export function estimateTokenCount(text: string) {
+  return Math.max(1, Math.ceil(text.replace(/\s+/g, '').length / 1.6))
+}

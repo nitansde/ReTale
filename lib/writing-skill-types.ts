@@ -163,8 +163,3 @@ export type WritingSkillCardDetail = WritingSkillCard & {
     anonymizedText?: string | null
   }>
 }
-
-export type WritingSkillListResponse = {
-  ok: true
-  cards: WritingSkillCard[]
-}

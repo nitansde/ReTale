@@ -25,15 +25,6 @@ const REGEX_PLACEMENT_FROM_ST: Record<number, PresetCompatRegexPlacement> = {
   7: 'reasoning',
 }
 
-const REGEX_PLACEMENT_TO_ST: Record<PresetCompatRegexPlacement, number> = {
-  md_display: 0,
-  user_input: 1,
-  assistant_output: 2,
-  slash_command: 3,
-  world_info: 6,
-  reasoning: 7,
-}
-
 type NameConflictPolicy = 'copy'
 
 type PromptExportMeta = {
@@ -142,11 +133,7 @@ function asStringArray(value: unknown) {
   return [] as string[]
 }
 
-function toRecordClone(value: unknown) {
-  return isRecord(value) ? cloneValue(value) : {}
-}
-
-function normalizeDisplayName(baseName: string, existingNames: Iterable<string>, conflictPolicy: NameConflictPolicy = 'copy') {
+export function normalizeDisplayName(baseName: string, existingNames: Iterable<string>, conflictPolicy: NameConflictPolicy = 'copy') {
   const trimmed = baseName.trim() || 'Imported preset'
   if (conflictPolicy !== 'copy') {
     return trimmed
@@ -531,10 +518,6 @@ export function stripInternalPromptPassthroughMeta(passthrough: Record<string, u
 
 export function stripInternalRegexPassthroughMeta(passthrough: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(passthrough).filter(([key]) => key !== REGEX_EXPORT_META_KEY))
-}
-
-export function resolvePresetCompatCopyName(baseName: string, existingNames: Iterable<string>) {
-  return normalizeDisplayName(baseName, existingNames)
 }
 
 export function normalizePresetCompatStandaloneRegexImport(

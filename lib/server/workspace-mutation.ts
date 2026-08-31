@@ -300,10 +300,6 @@ function canonicalizeJson(value: unknown): unknown {
   return value
 }
 
-export function hashWorkspaceMutationRequest(request: WorkspaceMutationRequest) {
-  return hashValidatedRequest(validateRequest(request))
-}
-
 function hashValidatedRequest(request: ValidatedWorkspaceMutation) {
   const operationPayload = request.kind === 'chapter-patch'
     ? {

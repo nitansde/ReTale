@@ -3,7 +3,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { I18nProvider, useI18n } from '@/lib/i18n/provider'
-import { LOCALE_COOKIE_KEY, LOCALE_STORAGE_KEY } from '@/lib/i18n/messages'
+import { LOCALE_STORAGE_KEY } from '@/lib/i18n/messages'
 
 function LocaleProbe() {
   const { locale, setLocale } = useI18n()
@@ -18,7 +18,7 @@ function LocaleProbe() {
 describe('I18nProvider browser persistence', () => {
   beforeEach(() => {
     window.localStorage.clear()
-    document.cookie = `${LOCALE_COOKIE_KEY}=; Path=/; Max-Age=0`
+    document.cookie = `${LOCALE_STORAGE_KEY}=; Path=/; Max-Age=0`
     document.documentElement.lang = 'zh-CN'
     delete document.documentElement.dataset.locale
   })
@@ -36,7 +36,7 @@ describe('I18nProvider browser persistence', () => {
       expect(document.documentElement.lang).toBe('en')
     })
     expect(document.documentElement.dataset.locale).toBe('en')
-    expect(document.cookie).toContain(`${LOCALE_COOKIE_KEY}=en`)
+    expect(document.cookie).toContain(`${LOCALE_STORAGE_KEY}=en`)
   })
 
   it('keeps a valid server cookie authoritative over stale localStorage', async () => {

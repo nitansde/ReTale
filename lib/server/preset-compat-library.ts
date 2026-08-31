@@ -47,25 +47,6 @@ export type ProtectedPresetCompatLibraryResetSnapshot = {
   presetCompatLibraryV1: string | null
 }
 
-export function loadProtectedPresetCompatLibraryResetSnapshot(): ProtectedPresetCompatLibraryResetSnapshot {
-  const entries = findAppSettings([PRESET_COMPAT_LIBRARY_V1_KEY])
-  const map = Object.fromEntries(entries.map((item) => [item.key, item.value])) as Partial<Record<typeof PRESET_COMPAT_LIBRARY_V1_KEY, string>>
-  return {
-    presetCompatLibraryV1: map.PRESET_COMPAT_LIBRARY_V1 ?? null,
-  }
-}
-
-export function validateProtectedPresetCompatLibraryResetSnapshot(snapshot: ProtectedPresetCompatLibraryResetSnapshot) {
-  if (snapshot.presetCompatLibraryV1 === null) {
-    return
-  }
-
-  const parsed = parseStoredLibraryBlob(snapshot.presetCompatLibraryV1)
-  if (!isRecord(parsed)) {
-    throw new Error('Protected reset snapshot for PRESET_COMPAT_LIBRARY_V1 is invalid')
-  }
-}
-
 function normalizeString(value: unknown, fallback = '') {
   return typeof value === 'string' ? value : fallback
 }

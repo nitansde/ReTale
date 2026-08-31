@@ -8,8 +8,6 @@ import {
 } from '@/lib/preset-compat/runtime-integration'
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 
-export const IMPORTED_PRESET_USER_RULES_HEADING = '## Imported Preset User Rules'
-
 export const PRESET_COMPAT_PROMPT_ASSEMBLY_STAGE_ORDER = [
   'builtin_system_prompt',
   'base_prompt',

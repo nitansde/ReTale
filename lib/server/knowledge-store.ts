@@ -7,7 +7,7 @@ import {
   type SqlParam,
   withTransaction,
 } from '@/lib/server/database-access'
-import { uid } from '@/lib/utils'
+import { estimateTokenCount, uid } from '@/lib/utils'
 
 export const MAIN_BRANCH_NAME = 'main'
 
@@ -50,12 +50,6 @@ export type TextSpanInput = {
   tokenEstimate?: number | null
 }
 
-export type EvidenceSearchResult = {
-  spanId: string
-  chapterNo: number
-  score: number
-}
-
 export type KnowledgeChapterDerivedArtifactSource = {
   id: string
   novelId: string
@@ -70,10 +64,6 @@ export type KnowledgeChapterDerivedArtifactRepairResult = {
 
 export function hashContent(value: string) {
   return createHash('sha256').update(value).digest('hex')
-}
-
-export function estimateTokenCount(text: string) {
-  return Math.max(1, Math.ceil(text.replace(/\s+/g, '').length / 1.6))
 }
 
 export function splitChapterLines(text: string): LineRecordInput[] {
@@ -360,28 +350,6 @@ export async function healMissingKnowledgeChapterDerivedArtifacts(params: {
   return {
     repairedChapterNos: chaptersToRepair.map((chapter) => chapter.chapterNo),
   }
-}
-
-export async function ensureMainBranch(novelId: string, db: KnowledgeStoreDb = defaultDb) {
-  const branchId = getMainBranchId(novelId)
-  db.execute(
-    `
-      INSERT INTO StoryBranch (id, novelId, name)
-      VALUES (?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        novelId = excluded.novelId,
-        name = excluded.name,
-        updatedAt = CURRENT_TIMESTAMP
-    `,
-    branchId,
-    novelId,
-    MAIN_BRANCH_NAME
-  )
-
-  return db.queryOne<{ id: string; novelId: string; name: string }>(
-    'SELECT id, novelId, name FROM StoryBranch WHERE id = ?',
-    branchId
-  )
 }
 
 export function findStoryBranch(id: string, db: KnowledgeStoreDb = defaultDb) {

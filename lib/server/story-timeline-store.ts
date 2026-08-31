@@ -654,11 +654,6 @@ export function deleteStoryTimelineNode(nodeId: string, db: Db = defaultDb): Sto
   }
 }
 
-export function updateStoryTimelineNodeStatus(id: string, status: string, db: Db = defaultDb) {
-  db.execute('UPDATE story_timeline_nodes SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', status, id)
-  return findStoryTimelineNodeById(id, db)
-}
-
 export function updateStoryTimelineNodePresentation(
   id: string,
   input: { title: string; subtitle: string | null; status: string },
