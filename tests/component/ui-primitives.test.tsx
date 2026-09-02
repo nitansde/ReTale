@@ -69,6 +69,51 @@ describe('UI interaction primitives', () => {
     expect(document.body.style.overflow).toBe('')
   })
 
+  it('keeps dialog focus stable when a parent rerender replaces the close callback', () => {
+    const firstOnClose = vi.fn()
+    const latestOnClose = vi.fn()
+    const renderDialog = (onClose: () => void) => (
+      <DialogSurface open onClose={onClose} title="Settings">
+        <button type="button">First</button>
+        <button type="button">Current control</button>
+      </DialogSurface>
+    )
+    const { rerender } = render(renderDialog(firstOnClose))
+    const currentControl = screen.getByRole('button', { name: 'Current control' })
+    currentControl.focus()
+
+    rerender(renderDialog(latestOnClose))
+
+    expect(currentControl).toHaveFocus()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(firstOnClose).not.toHaveBeenCalled()
+    expect(latestOnClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses an explicit initial focus target and restores the opener after closing', () => {
+    const onClose = vi.fn()
+    const inputRef = createRef<HTMLInputElement>()
+    const renderDialog = (open: boolean) => (
+      <>
+        <button type="button">Edit metadata</button>
+        <DialogSurface open={open} onClose={onClose} title="Metadata" closeLabel="Close" initialFocusRef={inputRef}>
+          <input ref={inputRef} aria-label="Title" />
+        </DialogSurface>
+      </>
+    )
+    const { rerender } = render(renderDialog(false))
+    const opener = screen.getByRole('button', { name: 'Edit metadata' })
+    opener.focus()
+
+    rerender(renderDialog(true))
+
+    expect(screen.getByRole('textbox', { name: 'Title' })).toHaveFocus()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    rerender(renderDialog(false))
+    expect(opener).toHaveFocus()
+  })
+
   it('supports backdrop close and destructive confirmation', () => {
     const onClose = vi.fn()
     const onConfirm = vi.fn()

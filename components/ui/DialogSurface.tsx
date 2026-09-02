@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -34,6 +34,9 @@ export function DialogSurface({
   closeDisabled = false,
   closeLabel,
   busy = false,
+  initialFocusRef,
+  backdropTestId,
+  surfaceTestId,
   backdropClassName,
   titleClassName,
   contentClassName,
@@ -50,6 +53,9 @@ export function DialogSurface({
   closeDisabled?: boolean
   closeLabel?: string
   busy?: boolean
+  initialFocusRef?: RefObject<HTMLElement | null>
+  backdropTestId?: string
+  surfaceTestId?: string
   backdropClassName?: string
   titleClassName?: string
   contentClassName?: string
@@ -58,7 +64,12 @@ export function DialogSurface({
   const titleId = useId()
   const descriptionId = useId()
   const surfaceRef = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
   const closeDisabledRef = useRef(closeDisabled)
+
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
 
   useEffect(() => {
     closeDisabledRef.current = closeDisabled
@@ -72,14 +83,17 @@ export function DialogSurface({
     if (modal) document.body.style.overflow = 'hidden'
 
     const surface = surfaceRef.current
-    const focusable = surface?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+    const requestedFocus = initialFocusRef?.current
+    const focusable = requestedFocus && surface?.contains(requestedFocus)
+      ? requestedFocus
+      : surface?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
     ;(focusable ?? surface)?.focus()
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         event.preventDefault()
         if (closeDisabledRef.current) return
-        onClose()
+        onCloseRef.current()
         return
       }
       if (event.key !== 'Tab' || !surface) return
@@ -116,12 +130,13 @@ export function DialogSurface({
       if (modal) document.body.style.overflow = previousOverflow
       previouslyFocused?.focus()
     }
-  }, [modal, onClose, open])
+  }, [initialFocusRef, modal, open])
 
   if (!open) return null
 
   return (
     <div
+      data-testid={backdropTestId}
       className={cn('dialog-backdrop fixed inset-0 z-[70] flex bg-[#05060a]/72 backdrop-blur-md backdrop-saturate-150', backdropClassName)}
       onClick={(event) => {
         if (!closeDisabled && closeOnBackdrop && event.target === event.currentTarget) onClose()
@@ -129,6 +144,7 @@ export function DialogSurface({
     >
       <div
         ref={surfaceRef}
+        data-testid={surfaceTestId}
         role="dialog"
         aria-modal={modal || undefined}
         aria-labelledby={titleId}
