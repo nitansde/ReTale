@@ -95,6 +95,7 @@ function mapSurfaceContextBlocks(promptBlocks: readonly GenerationContextBlock[]
         ? 'personality'
         : block.id === 'current-summary'
           || block.id === 'recent-summaries'
+          || block.id === 'recent-chapters-full-text'
           || block.id === 'chapter-state'
           || block.id === 'authored-branch-context'
           || block.id === 'graph-context'
@@ -1088,6 +1089,7 @@ async function handleRewriteBody(
         branchId: body.branchId ? String(body.branchId) : undefined,
         chapterId: String(body.chapterId),
         selectedText,
+        sourceText,
         operationType: runtimeSurfaceId,
         userInstruction,
         roleplayMessages,

@@ -29,6 +29,7 @@ export type GenerationContextRequest = {
   branchId?: string
   chapterId: string
   selectedText: string
+  sourceText?: string
   operationType: ProductSurfaceId
   userInstruction: string
   roleplayMessages?: RoleplayContextMessage[]
@@ -333,6 +334,70 @@ function buildNeighborhoodText(lines: Array<{ lineNo: number; text: string }>, l
   const startIndex = Math.max(0, lineStart - 1 - 20)
   const endIndex = Math.min(lines.length, lineEnd + 20)
   return selectWindow(lines, startIndex, endIndex).map((line) => `${line.lineNo}. ${line.text}`).join('\n')
+}
+
+function splitContextLines(text: string) {
+  return text.replace(/\r\n?/g, '\n').split('\n').map((line, index) => ({
+    lineNo: index + 1,
+    text: line,
+  }))
+}
+
+function findSelectionEndOffset(text: string, selectedText: string) {
+  const trimmedSelection = selectedText.trim()
+  if (!trimmedSelection) return null
+
+  const directIndex = text.indexOf(trimmedSelection)
+  if (directIndex >= 0) return directIndex + trimmedSelection.length
+
+  const normalizedCharacters: string[] = []
+  const originalOffsets: number[] = []
+  let pendingWhitespaceOffset: number | null = null
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]
+    if (/\s/.test(character)) {
+      if (normalizedCharacters.length && pendingWhitespaceOffset === null) {
+        pendingWhitespaceOffset = index
+      }
+      continue
+    }
+
+    if (pendingWhitespaceOffset !== null) {
+      normalizedCharacters.push(' ')
+      originalOffsets.push(pendingWhitespaceOffset)
+      pendingWhitespaceOffset = null
+    }
+    normalizedCharacters.push(character)
+    originalOffsets.push(index)
+  }
+
+  const normalizedSelection = trimmedSelection.replace(/\s+/g, ' ')
+  const normalizedIndex = normalizedCharacters.join('').indexOf(normalizedSelection)
+  if (normalizedIndex < 0) return null
+
+  const normalizedEndIndex = normalizedIndex + normalizedSelection.length - 1
+  return (originalOffsets[normalizedEndIndex] ?? text.length - 1) + 1
+}
+
+function buildChapterTextThroughSelection(
+  chapterText: string,
+  selectedText: string,
+  selectedLineEnd: number | null,
+) {
+  const normalizedChapterText = chapterText.replace(/\r\n?/g, '\n').trim()
+  if (!normalizedChapterText) return '（当前章节暂无正文）'
+
+  const selectionEndOffset = findSelectionEndOffset(normalizedChapterText, selectedText)
+  if (selectionEndOffset !== null) {
+    return normalizedChapterText.slice(0, selectionEndOffset).trimEnd()
+  }
+
+  if (selectedLineEnd !== null) {
+    return normalizedChapterText.split('\n').slice(0, selectedLineEnd).join('\n').trimEnd()
+  }
+
+  return normalizedChapterText
 }
 
 function parseJsonObject<T>(value: string | null, fallback: T): T {
@@ -1230,7 +1295,7 @@ export async function buildGenerationContext(
       })
     : null
 
-  const [lines, recentChapters, entities, facts, events, worlds] = await Promise.all([
+  const [storedLines, recentChapters, entities, facts, events, worlds] = await Promise.all([
     Promise.resolve(
       queryAll<{ lineNo: number; text: string }>(
         'SELECT lineNo, text FROM ChapterLine WHERE chapterId = ? ORDER BY lineNo ASC',
@@ -1238,13 +1303,13 @@ export async function buildGenerationContext(
       )
     ),
     Promise.resolve(
-      queryAll<{ chapterNo: number; title: string | null; summary: string | null }>(
+      queryAll<{ chapterNo: number; title: string | null; rawText: string | null }>(
         `
-          SELECT chapterNo, title, summary
+          SELECT chapterNo, title, rawText
           FROM KnowledgeChapter
-          WHERE novelId = ? AND branchId = ? AND chapterNo <= ?
+          WHERE novelId = ? AND branchId = ? AND chapterNo < ?
           ORDER BY chapterNo DESC
-          LIMIT 4
+          LIMIT 5
         `,
         request.novelId,
         branchId,
@@ -1307,9 +1372,17 @@ export async function buildGenerationContext(
     ),
   ])
 
+  const storedChapterText = buildFullChapterText(chapter.rawText, storedLines)
+  const sourceText = request.sourceText?.trim()
+  const fullChapterText = sourceText || storedChapterText
+  const lines = sourceText ? splitContextLines(fullChapterText) : storedLines
   const selectionRange = inferSelectionRange(lines, request.selectedText)
   const neighborhoodText = buildNeighborhoodText(lines, selectionRange.lineStart, selectionRange.lineEnd)
-  const fullChapterText = buildFullChapterText(chapter.rawText, lines)
+  const chapterTextThroughSelection = buildChapterTextThroughSelection(
+    fullChapterText,
+    request.selectedText,
+    selectionRange.lineEnd,
+  )
   const branchLineageContextBlock = buildBranchLineageContextBlock({
     chapterText: fullChapterText,
     branchContextNodeId: request.branchContextNodeId,
@@ -1565,10 +1638,10 @@ export async function buildGenerationContext(
     ...(roleplayContextBlock ? [roleplayContextBlock] : []),
     {
       id: 'neighborhood',
-      label: '选区附近原文',
+      label: '选区附近正文',
       enabled: true,
       priority: 'highest',
-      content: renderBlock('选区附近原文', [neighborhoodText]),
+      content: renderBlock('选区附近正文', [chapterTextThroughSelection]),
     },
     {
       id: 'current-summary',
@@ -1578,16 +1651,24 @@ export async function buildGenerationContext(
       content: renderBlock('当前章节摘要', [currentSummary]),
     },
     {
-      id: 'recent-summaries',
-      label: '最近章节摘要',
+      id: 'recent-chapters-full-text',
+      label: '前情最近 5 章正文',
       enabled: true,
-      priority: 'high',
+      priority: 'highest',
       content: renderBlock(
-        '最近章节摘要',
-        recentChapters
-          .slice()
-          .sort((a, b) => a.chapterNo - b.chapterNo)
-          .map((item) => `- 第 ${item.chapterNo} 章 ${item.title ?? ''}：${item.summary ?? '暂无摘要'}`)
+        '前情最近 5 章正文',
+        recentChapters.length
+          ? [
+              ...recentChapters
+                .slice()
+                .sort((a, b) => a.chapterNo - b.chapterNo)
+                .flatMap((item, index) => [
+                  ...(index > 0 ? [''] : []),
+                  `## 第 ${item.chapterNo} 章${item.title?.trim() ? ` ${item.title.trim()}` : ''}`,
+                  item.rawText?.trim() || '（本章暂无正文）',
+                ]),
+            ]
+          : ['当前章节之前暂无可用正文。']
       ),
     },
     {

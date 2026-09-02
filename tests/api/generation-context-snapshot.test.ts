@@ -175,6 +175,90 @@ describe('chapter-scoped GraphRAG seeds', () => {
   })
 })
 
+describe('full-text chapter context blocks', () => {
+  it('separates the current chapter through the selection from the five preceding full chapters', async () => {
+    const { database, db } = createFixture()
+    const insertChapter = database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, summary, sourceHash, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+
+    for (let chapterNo = 2; chapterNo <= 6; chapterNo += 1) {
+      insertChapter.run(
+        `chapter-${chapterNo}`,
+        'novel-1',
+        'novel-1:main',
+        chapterNo,
+        `Chapter ${chapterNo}`,
+        `CHAPTER-${chapterNo}-START\nCHAPTER-${chapterNo}-MIDDLE\nCHAPTER-${chapterNo}-END`,
+        `Summary ${chapterNo}`,
+        `source-hash-${chapterNo}`,
+        'ready',
+      )
+    }
+
+    insertChapter.run(
+      'chapter-7',
+      'novel-1',
+      'novel-1:main',
+      7,
+      'Chapter 7',
+      '数据库中的旧正文',
+      'Summary 7',
+      'source-hash-7',
+      'ready',
+    )
+
+    const currentSourceText = [
+      '当前章开头。',
+      '当前章中段，选中部分，选区之后同一行不应进入上下文。',
+      '当前章结尾也不应进入上下文。',
+    ].join('\n')
+    const result = await runWithDatabaseAccessScope(db, () => buildGenerationContext(buildRequest({
+      chapterId: 'chapter-7',
+      selectedText: '选中部分',
+      sourceText: currentSourceText,
+      branchContextNodeId: undefined,
+      branchContextInclusion: undefined,
+    })))
+
+    const selectionContext = result.promptBlocks.find((block) => block.id === 'neighborhood')
+    expect(selectionContext).toMatchObject({
+      label: '选区附近正文',
+      priority: 'highest',
+    })
+    expect(selectionContext?.content).toContain('# 选区附近正文')
+    expect(selectionContext?.content).not.toContain('范围：')
+    expect(selectionContext?.content).toContain('当前章开头。')
+    expect(selectionContext?.content).toContain('当前章中段，选中部分')
+    expect(selectionContext?.content).not.toContain('选区之后同一行不应进入上下文')
+    expect(selectionContext?.content).not.toContain('当前章结尾也不应进入上下文')
+
+    const recentChapters = result.promptBlocks.find((block) => block.id === 'recent-chapters-full-text')
+    expect(recentChapters).toMatchObject({
+      label: '前情最近 5 章正文',
+      priority: 'highest',
+    })
+    expect(recentChapters?.content.match(/^## 第 /gm)).toHaveLength(5)
+    expect(recentChapters?.content).not.toContain('范围：')
+    expect(recentChapters?.content).not.toContain('Chapter body')
+    expect(recentChapters?.content).not.toContain('数据库中的旧正文')
+
+    for (let chapterNo = 2; chapterNo <= 6; chapterNo += 1) {
+      expect(recentChapters?.content).toContain(`## 第 ${chapterNo} 章 Chapter ${chapterNo}`)
+      expect(recentChapters?.content).toContain(`CHAPTER-${chapterNo}-START`)
+      expect(recentChapters?.content).toContain(`CHAPTER-${chapterNo}-END`)
+    }
+
+    expect(recentChapters?.content.indexOf('## 第 2 章')).toBeLessThan(recentChapters?.content.indexOf('## 第 6 章') ?? -1)
+    expect(result.promptBlocks.indexOf(selectionContext!)).not.toBe(result.promptBlocks.indexOf(recentChapters!))
+    expect(result.assembledContext).toContain(selectionContext?.content)
+    expect(result.assembledContext).toContain(recentChapters?.content)
+    expect(result.assembledContext).not.toContain('范围：')
+  })
+})
+
 describe('generation context snapshots', () => {
   it('loads cached RAG artifacts for the same chapter even when prompt-only request inputs change', () => {
     const { db } = createFixture()

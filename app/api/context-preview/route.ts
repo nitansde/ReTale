@@ -51,6 +51,7 @@ export async function POST(request: Request) {
       branchId: body.branchId ? String(body.branchId) : undefined,
       chapterId: String(body.chapterId ?? ''),
       selectedText: String(body.selectedText ?? ''),
+      sourceText: typeof body.sourceText === 'string' ? body.sourceText : undefined,
       operationType,
       userInstruction: String(body.userInstruction ?? ''),
       roleplayMessages: Array.isArray(body.roleplayMessages) ? body.roleplayMessages : undefined,
