@@ -14,7 +14,6 @@ export const RECOVERABLE_REWRITE_JOB_TYPE = 'rewrite_generation'
 
 export const RECOVERABLE_REWRITE_ABORTED_STATUS = 'aborted'
 
-const ACTIVE_REWRITE_JOB_STATUSES = new Set(['queued', 'running'])
 const TERMINAL_REWRITE_JOB_STATUSES = new Set(['succeeded', 'failed', RECOVERABLE_REWRITE_ABORTED_STATUS])
 
 export type RewriteResultPayload = {
@@ -291,10 +290,6 @@ export function findLatestRecoverableRewriteJob(params: { novelId: string; branc
     if (params.chapterId && payload.panel.chapterId !== params.chapterId) return false
     return true
   }) ?? null
-}
-
-export function isRecoverableRewriteJobActive(status: string) {
-  return ACTIVE_REWRITE_JOB_STATUSES.has(status)
 }
 
 export function isRecoverableRewriteJobRestorable(status: string) {

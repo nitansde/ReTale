@@ -49,11 +49,3 @@ export async function bufferAndTransformTextStream(
     stream: createBufferedTextStream(transformedText),
   }
 }
-
-export async function transformBufferedTextStream(
-  stream: ReadableStream<Uint8Array>,
-  transform: (value: string) => string
-) {
-  const result = await bufferAndTransformTextStream(stream, transform)
-  return result.stream
-}

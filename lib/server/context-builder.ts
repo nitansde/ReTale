@@ -4,7 +4,7 @@ import { loadExplicitAuthoredContext, type ExplicitAuthoredContext } from '@/lib
 import { loadEntityStatesByEntityIds } from '@/lib/server/graph-store'
 import { findStoryTimelineNodeById } from '@/lib/server/story-timeline-store'
 import type { GraphAwareResult } from '@/lib/server/graph-types'
-import { estimateTokenCount, normalizeBranchId } from '@/lib/server/knowledge-store'
+import { normalizeBranchId } from '@/lib/server/knowledge-store'
 import { searchLanceEvidence, type RetrievalDocSourceType } from '@/lib/server/retrieval-index'
 import { buildRewriteTaskPromptLines, isContinuationRewriteTask } from '@/lib/server/rewrite-task-prompt'
 import { queryAll, queryOne } from '@/lib/server/database-access'
@@ -20,6 +20,7 @@ import {
 } from '@/lib/story-knowledge'
 import type { StoryTimelineNodeRecord } from '@/lib/story-branch-types'
 import type { ProductSurfaceId } from '@/lib/types'
+import { estimateTokenCount, uniqueStrings } from '@/lib/utils'
 
 type BranchLineageInclusion = 'ancestors_only' | 'include_selected'
 
@@ -357,21 +358,6 @@ function buildCompactExcerpt(text: string, maxLength = 280) {
   const normalized = text.split(/\s+/).filter(Boolean).join(' ').trim()
   if (!normalized) return ''
   return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength)}…`
-}
-
-function uniqueStrings(values: Array<string | null | undefined>) {
-  const seen = new Set<string>()
-  const next: string[] = []
-
-  for (const raw of values) {
-    const value = raw?.trim()
-    if (!value) continue
-    if (seen.has(value)) continue
-    seen.add(value)
-    next.push(value)
-  }
-
-  return next
 }
 
 function stableCacheValue(value: unknown): unknown {

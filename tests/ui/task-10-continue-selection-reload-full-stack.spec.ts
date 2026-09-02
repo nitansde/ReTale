@@ -18,10 +18,11 @@ async function importWorkspaceFixture(page: Page) {
   expect(importResponse.ok()).toBeTruthy()
   const imported = await importResponse.json() as { novelId: string; chapterId: string }
 
+  // The library pushes to /workspace itself once the novel is loaded into the store.
+  // Navigating here instead of waiting aborts that load and rehydrates the previously
+  // persisted novel, so wait for the app's own navigation.
+  await page.waitForURL(/\/workspace/)
   await page.waitForLoadState('networkidle')
-  if (!/\/workspace$/.test(page.url())) {
-    await page.goto('/workspace', { waitUntil: 'networkidle' })
-  }
   return imported
 }
 

@@ -6,7 +6,6 @@ import { listReadyWorkspaceNovelRegistry } from '@/lib/server/persistence'
 import {
   formatMaterialParagraphRef,
   loadMaterialLibrary,
-  readMaterialLibraryVersion,
   type MaterialLibrary,
 } from '@/lib/server/writing-skill-material'
 import { splitPlainTextParagraphs, uid } from '@/lib/utils'
@@ -323,13 +322,4 @@ export function loadWritingSkillMaterialCollection(
     paragraphById: new Map(paragraphs.map((paragraph) => [paragraph.id, paragraph])),
   }
   return { library, sources }
-}
-
-export function readWritingSkillSourceVersion(
-  source: WritingSkillSourceRef,
-  db: DatabaseAccess = defaultDb(),
-) {
-  return source.sourceType === 'LIBRARY'
-    ? readMaterialLibraryVersion(source.sourceId)
-    : readUploadedWritingSkillMaterialRow(source.sourceId, db)?.contentHash ?? null
 }

@@ -1,5 +1,6 @@
 import { hashContent, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { execute, queryAll, withTransaction } from '@/lib/server/database-access'
+import { chunkValues } from '@/lib/utils'
 
 export type RawTextEmbeddingCacheScope = {
   novelId: string
@@ -47,8 +48,6 @@ type RawTextEmbeddingCacheRow = {
 }
 
 type NormalizedRawTextEmbeddingCacheScope = ReturnType<typeof normalizeScope>
-
-const SQLITE_HASH_BATCH_SIZE = 500
 
 function requireTrimmedValue(value: string, label: string) {
   const normalized = value.trim()
@@ -121,14 +120,6 @@ function parseStoredVector(row: RawTextEmbeddingCacheRow) {
 
 function buildPlaceholders(count: number) {
   return Array.from({ length: count }, () => '?').join(', ')
-}
-
-function chunkValues<T>(values: T[], size = SQLITE_HASH_BATCH_SIZE) {
-  const chunks: T[][] = []
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size))
-  }
-  return chunks
 }
 
 function appendRows<T>(target: T[], source: T[]) {

@@ -54,8 +54,11 @@ async function importContextBuilderHelpers() {
     findStoryTimelineNodeById: vi.fn(),
   }))
   vi.doMock('@/lib/server/knowledge-store', () => ({
-    estimateTokenCount: vi.fn(() => 0),
     normalizeBranchId: vi.fn(),
+  }))
+  vi.doMock('@/lib/utils', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/lib/utils')>()),
+    estimateTokenCount: vi.fn(() => 0),
   }))
   vi.doMock('@/lib/server/retrieval-index', () => ({
     searchLanceEvidence: vi.fn(),

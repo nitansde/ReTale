@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs, { promises as fsPromises } from 'node:fs'
@@ -908,7 +909,7 @@ async function launchServer(params: {
       }
       return
     }
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    await sleep(500)
   }
 
   await terminateChild(child)

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
-import { chromium } from 'playwright'
+import { chromium } from '@playwright/test'
 import { assertPortAvailable, assertPortReleased } from './production-port-safety.mjs'
 import {
   assertOwnedTestPath,

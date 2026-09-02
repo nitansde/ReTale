@@ -26,10 +26,11 @@ test('task 2 full-stack library to workspace baseline and task page snapshot', a
   const importResponse = await importResponsePromise
   expect(importResponse.ok()).toBeTruthy()
 
+  // The library pushes to /workspace itself once the novel is loaded into the store.
+  // Navigating here instead of waiting aborts that load and rehydrates the previously
+  // persisted novel, so wait for the app's own navigation.
+  await page.waitForURL(/\/workspace/)
   await page.waitForLoadState('networkidle')
-  if (!/\/workspace$/.test(page.url())) {
-    await page.goto('/workspace', { waitUntil: 'networkidle' })
-  }
 
   await expect(page.getByText('章节导航')).toBeVisible()
   await expect(page.getByText('第1章 初入现场')).toBeVisible()

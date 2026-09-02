@@ -9,7 +9,7 @@ import {
 import {
   normalizePresetCompatPresetImport,
   normalizePresetCompatStandaloneRegexImport,
-  resolvePresetCompatCopyName,
+  normalizeDisplayName,
 } from '@/lib/preset-compat/normalize'
 
 function readFixture(name: string) {
@@ -285,8 +285,8 @@ describe('preset compat import/export compatibility', () => {
   })
 
   it('uses uploaded name hints and deterministic copy suffixes', () => {
-    expect(resolvePresetCompatCopyName('Preset', ['Preset'])).toBe('Preset (copy)')
-    expect(resolvePresetCompatCopyName('Preset', ['Preset', 'Preset (copy)'])).toBe('Preset (copy 2)')
+    expect(normalizeDisplayName('Preset', ['Preset'])).toBe('Preset (copy)')
+    expect(normalizeDisplayName('Preset', ['Preset', 'Preset (copy)'])).toBe('Preset (copy 2)')
 
     const { preset } = normalizePresetCompatPresetImport({}, {
       nameHint: 'Imported by hint',

@@ -18,8 +18,6 @@ export const CHARACTER_CLASSIFICATION_METADATA = {
   ignored: { key: 'ignored', label: 'Ignored' },
 } as const
 
-export type CharacterClassificationKey = typeof CHARACTER_CLASSIFICATION_METADATA[CharacterImportanceTier]['key']
-
 export function getCharacterClassificationMetadata(tier: CharacterImportanceTier | null | undefined) {
   if (!tier) return null
   return CHARACTER_CLASSIFICATION_METADATA[tier] ?? null
@@ -28,18 +26,12 @@ export function getCharacterClassificationMetadata(tier: CharacterImportanceTier
 export const characterImportanceTierSchema = z.enum(CHARACTER_IMPORTANCE_TIERS)
 
 export const HANLP_BOOTSTRAP_CACHE_STATUSES = ['pending', 'ready', 'failed'] as const
-export type HanlpBootstrapCacheStatus = (typeof HANLP_BOOTSTRAP_CACHE_STATUSES)[number]
-
 export const hanlpBootstrapCacheStatusSchema = z.enum(HANLP_BOOTSTRAP_CACHE_STATUSES)
 
 export const HANLP_BOOTSTRAP_RESULT_KINDS = ['bootstrap'] as const
-export type HanlpBootstrapResultKind = (typeof HANLP_BOOTSTRAP_RESULT_KINDS)[number]
-
 export const hanlpBootstrapResultKindSchema = z.enum(HANLP_BOOTSTRAP_RESULT_KINDS)
 
 export const ENTITY_ALIAS_CONFLICT_REASONS = ['branch_alias_already_claimed'] as const
-export type EntityAliasConflictReason = (typeof ENTITY_ALIAS_CONFLICT_REASONS)[number]
-
 export const entityAliasConflictReasonSchema = z.enum(ENTITY_ALIAS_CONFLICT_REASONS)
 
 export const characterCandidateRecordSchema = z.object({
@@ -61,8 +53,6 @@ export const characterCandidateRecordSchema = z.object({
   normalizedName: z.string().min(1).optional(),
 })
 
-export type CharacterCandidateRecord = z.infer<typeof characterCandidateRecordSchema>
-
 export const characterCandidateChapterRecordSchema = z.object({
   id: z.string().min(1),
   novelId: z.string().min(1),
@@ -76,8 +66,6 @@ export const characterCandidateChapterRecordSchema = z.object({
   chapterId: z.string().min(1).nullable().optional(),
 })
 
-export type CharacterCandidateChapterRecord = z.infer<typeof characterCandidateChapterRecordSchema>
-
 export const entityAliasMappingRecordSchema = z.object({
   id: z.string().min(1),
   novelId: z.string().min(1),
@@ -89,8 +77,6 @@ export const entityAliasMappingRecordSchema = z.object({
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
 })
-
-export type EntityAliasMappingRecord = z.infer<typeof entityAliasMappingRecordSchema>
 
 export const entityAliasConflictRecordSchema = z.object({
   id: z.string().min(1),
@@ -107,8 +93,6 @@ export const entityAliasConflictRecordSchema = z.object({
   detailsJson: z.string().nullable(),
   createdAt: z.string().min(1),
 })
-
-export type EntityAliasConflictRecord = z.infer<typeof entityAliasConflictRecordSchema>
 
 export const hanlpBootstrapCacheRecordSchema = z.object({
   id: z.string().min(1),
@@ -152,8 +136,6 @@ export const hanlpBootstrapEntityRecordSchema = z.object({
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
 })
-
-export type HanlpBootstrapEntityRecord = z.infer<typeof hanlpBootstrapEntityRecordSchema>
 
 export const hanlpBootstrapResultRecordSchema = z.object({
   id: z.string().min(1),

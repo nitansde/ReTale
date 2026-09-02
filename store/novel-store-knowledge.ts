@@ -1,4 +1,4 @@
-import { getClientLocale, getMessage } from '@/lib/i18n/messages'
+import { tm } from '@/lib/i18n/messages'
 import { formatNowLabel, uid } from '@/lib/utils'
 import type { Chapter, PersistedNovelState } from '@/lib/types'
 import type {
@@ -10,10 +10,6 @@ import type {
   PersistedNovelStoreSet,
 } from '@/store/novel-store-types'
 import { requestClientGet } from '@/lib/client-request-broker'
-
-function tm(key: import('@/lib/i18n/messages').TranslationKey, values?: import('@/lib/i18n/messages').TranslationValues) {
-  return getMessage(getClientLocale(), key, values)
-}
 
 export function normalizeKnowledgeProjection(data: Partial<KnowledgeProjectionPayload>): KnowledgeProjectionPayload {
   return {
@@ -164,19 +160,6 @@ function mergeAuthoritativeKnowledgeProjection(
         }
       : {}),
   }
-}
-
-export function resolveCurrentChapterOrder(state: Pick<PersistedNovelState, 'currentNovelId' | 'currentChapterId' | 'localChapters'>, novelId?: string) {
-  const targetNovelId = novelId ?? state.currentNovelId
-  const currentChapter = state.localChapters.find((chapter) => chapter.id === state.currentChapterId)
-  if (currentChapter?.novelId === targetNovelId) {
-    return currentChapter.order
-  }
-
-  const fallbackChapter = state.localChapters
-    .filter((chapter) => chapter.novelId === targetNovelId && !chapter.parentChapterId)
-    .sort((left, right) => left.order - right.order)[0]
-  return fallbackChapter?.order
 }
 
 export function createKnowledgeActions(set: NovelStoreSet, setPersisted: PersistedNovelStoreSet, get: NovelStoreGet): Pick<NovelStore,

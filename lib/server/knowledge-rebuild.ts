@@ -15,11 +15,8 @@ import { INF_CHAPTER } from '@/lib/server/chapter-interval'
 import { buildKnowledgeExtractionStoryState } from '@/lib/server/context-builder'
 import {
   enqueueKnowledgeJob,
-  ensureKnowledgeChapterDerivedArtifacts,
   getMainBranchId,
   hashContent,
-  markKnowledgeStaleFromChapter,
-  replaceKnowledgeChapterDerivedArtifacts,
 } from '@/lib/server/knowledge-store'
 import {
   deleteBranchRetrievalIndex,
@@ -37,15 +34,14 @@ import {
   withPerNovelWriteTransaction,
   withTransaction,
 } from '@/lib/server/database-access'
-import { htmlToPlainText, plainTextToHtml, uid } from '@/lib/utils'
-import { bootstrapOutlineNodesForFutureMap } from '@/lib/server/outline-bootstrap'
+import { plainTextToHtml, uid } from '@/lib/utils'
 import type { CharacterImportanceTier } from '@/lib/server/hanlp-contracts'
 import { runHanlpBootstrapForChapter } from '@/lib/server/hanlp-bootstrap'
 import { initializeHanlpBootstrapCharacterEntities } from '@/lib/server/hanlp-bootstrap-initializer'
 import { generateCandidatePromotionSummary } from '@/lib/server/candidate-promotion-summary'
 import { classifyHanlpBootstrapCharacters } from '@/lib/server/character-tier'
 import { abortKnowledgeRebuildUntilIdle, waitForKnowledgeJobCompletionStatus } from '@/lib/server/knowledge-job-status'
-import { createWorkspaceKnowledgeSync, type WorkspaceKnowledgeSyncPayload } from '@/lib/server/knowledge-workspace-sync'
+import { createWorkspaceKnowledgeSync } from '@/lib/server/knowledge-workspace-sync'
 import { reconcileKnowledgeJobWatchdog } from '@/lib/server/knowledge-job-watchdog'
 import {
   createTaskWatchdogAttemptId,
@@ -55,14 +51,6 @@ import {
 } from '@/lib/server/task-watchdog-attempt'
 
 export type { WorkspaceKnowledgeSyncPayload } from '@/lib/server/knowledge-workspace-sync'
-
-type PersistImportedNovelParams = {
-  novelId: string
-  title: string
-  chapters: Chapter[]
-  author?: string | null
-  sourceType?: string
-}
 
 type KnowledgeChapterRow = {
   id: string
@@ -2062,76 +2050,8 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
   }
 }
 
-function upsertNovelRecord(params: { novelId: string; title: string; author?: string | null; sourceType?: string }) {
-  execute(
-    `
-      INSERT INTO NovelRecord (id, title, author, sourceType)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        title = excluded.title,
-        author = excluded.author,
-        sourceType = excluded.sourceType,
-        updatedAt = CURRENT_TIMESTAMP
-    `,
-    params.novelId,
-    params.title,
-    params.author ?? null,
-    params.sourceType ?? 'txt'
-  )
-}
-
-function upsertStoryBranch(novelId: string, branchId: string, name: string) {
-  execute(
-    `
-      INSERT INTO StoryBranch (id, novelId, name)
-      VALUES (?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        novelId = excluded.novelId,
-        name = excluded.name,
-        updatedAt = CURRENT_TIMESTAMP
-    `,
-    branchId,
-    novelId,
-    name
-  )
-}
-
 async function withKnowledgeWriteTransaction<T>(novelId: string, callback: () => T | Promise<T>) {
   return withPerNovelWriteTransaction({ novelId, execute, callback })
-}
-
-async function deleteNovelProjectionArtifacts(novelId: string, branchId: string) {
-  await withKnowledgeWriteTransaction(novelId, async () => {
-    execute(
-      `
-        DELETE FROM future_jump_revisions
-        WHERE run_id IN (
-          SELECT id FROM future_jump_runs
-          WHERE base_branch_id = ?
-             OR session_id IN (SELECT id FROM what_if_sessions WHERE novel_id = ?)
-        )
-      `,
-      branchId,
-      novelId
-    )
-    execute(
-      `
-        DELETE FROM future_jump_runs
-        WHERE base_branch_id = ?
-           OR session_id IN (SELECT id FROM what_if_sessions WHERE novel_id = ?)
-      `,
-      branchId,
-      novelId
-    )
-    execute('DELETE FROM story_timeline_nodes WHERE novel_id = ?', novelId)
-    execute('DELETE FROM what_if_sessions WHERE novel_id = ?', novelId)
-    execute('DELETE FROM outline_node_chapters WHERE outline_node_id IN (SELECT id FROM outline_nodes WHERE novel_id = ?)', novelId)
-    execute('DELETE FROM outline_nodes WHERE novel_id = ?', novelId)
-    execute('DELETE FROM chapter_extraction_candidates WHERE novel_id = ?', novelId)
-    cleanupOrphanedChapterExtractionProcessingBatches({ novelId })
-    execute('DELETE FROM KnowledgeJob WHERE novelId = ?', novelId)
-    execute('DELETE FROM NovelRecord WHERE id = ?', novelId)
-  })
 }
 
 async function clearKnowledgeGraphData(novelId: string, branchId: string) {
@@ -2172,16 +2092,6 @@ function appendChapterRangeSql(columnName: string, range: Required<Pick<Knowledg
   return range.endChapter === undefined
     ? { sql: `${columnName} >= ?`, params: [range.startChapter] as SqlParam[] }
     : { sql: `${columnName} BETWEEN ? AND ?`, params: [range.startChapter, range.endChapter] as SqlParam[] }
-}
-
-async function clearExtractionCandidatesInChapterRange(branchId: string, chapterRange: Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'>) {
-  const range = appendChapterRangeSql('chapter_no', chapterRange)
-  execute(
-    `DELETE FROM chapter_extraction_candidates WHERE branch_id = ? AND ${range.sql}`,
-    branchId,
-    ...range.params
-  )
-  cleanupOrphanedChapterExtractionProcessingBatches({ branchId })
 }
 
 function clearDerivedKnowledgeInChapterRangeWithinTransaction(
@@ -2374,12 +2284,6 @@ function clearDerivedKnowledgeInChapterRangeWithinTransaction(
     )
 }
 
-async function clearDerivedKnowledgeInChapterRange(novelId: string, branchId: string, chapterRange: Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'>) {
-  await withKnowledgeWriteTransaction(novelId, async () => {
-    clearDerivedKnowledgeInChapterRangeWithinTransaction(novelId, branchId, chapterRange)
-  })
-}
-
 function readChapterExtractionCandidate(row: ChapterExtractionCandidateRow | null | undefined): ChapterExtractionCandidate | null {
   if (!row) return null
 
@@ -2512,15 +2416,6 @@ export function buildChapterExtractionCandidateSourceHash(params: {
     settings: getKnowledgeExtractionSettingsVersionPayload(params.settings),
     schemaVersion: CHAPTER_EXTRACTION_CANDIDATE_SCHEMA_VERSION,
   }))
-}
-
-function loadOrderedRebuildQueue(chapters: KnowledgeChapterRow[], chapterRange: Required<Pick<KnowledgeRebuildChapterRange, 'startChapter'>> & Pick<KnowledgeRebuildChapterRange, 'endChapter'>) {
-  return getRebuildChapters(chapters, chapterRange)
-    .map((chapter) => ({
-      chapterId: chapter.id,
-      chapterNo: chapter.chapterNo,
-    }))
-    .sort((left, right) => left.chapterNo - right.chapterNo)
 }
 
 function buildChapterExtractionBatchProcessingContext(params: {
@@ -2704,35 +2599,6 @@ function assignChapterExtractionProcessingBatch(params: {
     params.branchId,
     params.chapterId,
     params.chapterSourceHash,
-  )
-}
-
-function cleanupOrphanedChapterExtractionProcessingBatches(params: {
-  branchId?: string
-  novelId?: string
-} = {}) {
-  const filters: string[] = []
-  const filterParams: SqlParam[] = []
-  if (params.branchId) {
-    filters.push('branch_id = ?')
-    filterParams.push(params.branchId)
-  }
-  if (params.novelId) {
-    filters.push('novel_id = ?')
-    filterParams.push(params.novelId)
-  }
-
-  const whereSql = filters.length ? `${filters.join(' AND ')} AND ` : ''
-  execute(
-    `
-      DELETE FROM chapter_extraction_processing_batches
-      WHERE ${whereSql}NOT EXISTS (
-        SELECT 1
-        FROM chapter_extraction_candidates
-        WHERE chapter_extraction_candidates.processing_batch_id = chapter_extraction_processing_batches.id
-      )
-    `,
-    ...filterParams,
   )
 }
 
@@ -6760,85 +6626,6 @@ export async function deleteKnowledgeGraphForNovel(params: { novelId: string; br
     await deleteBranchRetrievalIndex(params.novelId, branchId)
     await clearKnowledgeGraphData(params.novelId, branchId)
     return 'deleted' as const
-  })
-}
-
-export async function persistImportedNovelToKnowledgeStore(params: PersistImportedNovelParams) {
-  return runWithNovelDatabaseAccess(params.novelId, async () => {
-  const branchId = getMainBranchId(params.novelId)
-  upsertNovelRecord({
-    novelId: params.novelId,
-    title: params.title,
-    author: params.author ?? null,
-    sourceType: params.sourceType ?? 'txt',
-  })
-  upsertStoryBranch(params.novelId, branchId, 'main')
-
-  const chapterRows = params.chapters
-    .filter((chapter) => !chapter.parentChapterId)
-    .slice()
-    .sort((a, b) => a.order - b.order)
-    .map((chapter, index) => {
-      const rawText = chapter.content
-        .replace(/<\/p>/g, '\n\n')
-        .replace(/<br\s*\/?>/g, '\n')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/&nbsp;/g, ' ')
-        .replace(/\n{3,}/g, '\n\n')
-        .replace(/[ \t]+/g, ' ')
-        .trim()
-      return {
-        source: chapter,
-        chapterId: chapter.id,
-        chapterNo: index + 1,
-        rawText,
-        sourceHash: hashContent(rawText),
-      }
-    })
-
-  await withKnowledgeWriteTransaction(params.novelId, async () => {
-    for (const row of chapterRows) {
-      execute(
-        `
-          INSERT INTO KnowledgeChapter (
-            id, novelId, branchId, chapterNo, title, rawText, revision, isDirty, sourceHash, knowledgeStatus
-          )
-          VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, 'queued')
-        `,
-        row.chapterId,
-        params.novelId,
-        branchId,
-        row.chapterNo,
-        row.source.title,
-        row.rawText,
-        row.sourceHash
-      )
-
-      replaceKnowledgeChapterDerivedArtifacts({
-        id: row.chapterId,
-        novelId: params.novelId,
-        branchId,
-        chapterNo: row.chapterNo,
-        rawText: row.rawText,
-      })
-    }
-  })
-
-  await enqueueKnowledgeJob({
-    novelId: params.novelId,
-    branchId,
-    jobType: 'import_novel',
-    currentStep: '导入完成，等待知识重建',
-    payload: { title: params.title, chapterCount: chapterRows.length },
-  })
-
-  await rebuildKnowledgeForNovel({ novelId: params.novelId, branchId })
-
-  return {
-    novelId: params.novelId,
-    branchId,
-    chapterCount: chapterRows.length,
-  }
   })
 }
 

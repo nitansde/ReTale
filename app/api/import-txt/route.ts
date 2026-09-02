@@ -6,7 +6,7 @@ import { createWorkspaceNovelFromSnapshot } from '@/lib/server/workspace-mutatio
 import {
   ApiRequestError,
   assertMultipartFormDataMediaType,
-  assertNormalizedWorkspaceSnapshotSemantics,
+  assertWorkspaceSnapshotSemantics,
   createByteLimitedRequest,
 } from '@/lib/server/api-route'
 
@@ -97,7 +97,7 @@ export async function POST(request: Request) {
       throw new Error('Imported workspace is missing its target novel')
     }
     const scopedState = scopeWorkspaceStateToNovel(nextState, targetNovelId)
-    assertNormalizedWorkspaceSnapshotSemantics(scopedState)
+    assertWorkspaceSnapshotSemantics(scopedState)
 
     const result = await createWorkspaceNovelFromSnapshot({
       novelId: targetNovelId,

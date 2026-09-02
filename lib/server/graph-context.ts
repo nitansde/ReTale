@@ -1,8 +1,9 @@
 import { loadEntityLinksByEntityIds, loadEntityStatesByEntityIds } from '@/lib/server/graph-store'
 import { getCharacterClassificationMetadata, type CharacterImportanceTier } from '@/lib/server/hanlp-contracts'
-import { estimateTokenCount } from '@/lib/server/knowledge-store'
+
 import type { GraphAwareRequest, GraphAwareResult, GraphEdge, GraphNode, GraphSubgraphRequest } from '@/lib/server/graph-types'
 import { queryAll } from '@/lib/server/database-access'
+import { estimateTokenCount } from '@/lib/utils'
 
 type KnowledgeEntityRow = {
   id: string

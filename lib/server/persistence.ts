@@ -31,16 +31,6 @@ type WorkspaceStateRow = {
   updatedAt: string
 }
 
-type WorkspaceStateBackupRow = {
-  id: string
-  workspaceStateId: string
-  payload: string | null
-  revision: number
-  reason: string
-  sourceUpdatedAt: string | null
-  createdAt: string
-}
-
 type WorkspaceStateWriteOptions = {
   backupReason?: string
   novelId?: string
@@ -866,18 +856,6 @@ export function findWorkspaceState(id = 'singleton', context: WorkspaceDbContext
 
 export function readWorkspaceStateFromDb(db: DatabaseAccess, id = 'singleton') {
   return db.queryOne<WorkspaceStateRow>('SELECT id, payload, revision, createdAt, updatedAt FROM WorkspaceState WHERE id = ?', id)
-}
-
-export function findWorkspaceStateBackups(id = 'singleton', context: WorkspaceDbContext = {}) {
-  const db = resolveWorkspaceDbContext(context)
-  if (!db) return [] as WorkspaceStateBackupRow[]
-  return db.queryAll<WorkspaceStateBackupRow>(
-    `SELECT id, workspaceStateId, payload, revision, reason, sourceUpdatedAt, createdAt
-     FROM WorkspaceStateBackup
-     WHERE workspaceStateId = ?
-     ORDER BY createdAt DESC, rowid DESC`,
-    id
-  )
 }
 
 export function createWorkspaceState(id: string, payload: string, context: WorkspaceDbContext = {}) {

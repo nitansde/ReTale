@@ -171,12 +171,6 @@ export function findRoleplaySessionById(sessionId: string, db: Db = defaultDb): 
   }
 }
 
-export function loadRoleplaySessionByNovel(sessionId: string, novelId: string, db: Db = defaultDb): RoleplaySessionDetail | null {
-  const session = findRoleplaySessionById(sessionId, db)
-  if (!session || session.novelId !== novelId) return null
-  return session
-}
-
 export async function createRoleplaySession(
   rawInput: Omit<RoleplaySessionRecord, 'createdAt' | 'updatedAt'>,
   db: Db = defaultDb

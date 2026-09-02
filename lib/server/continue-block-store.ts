@@ -201,13 +201,6 @@ export function insertContinueBlockWithInitialRevision(
   return findContinueBlockRecordById(input.id, db)
 }
 
-export async function createContinueBlockWithInitialRevision(
-  input: Omit<ContinueBlockRecord, 'createdAt' | 'updatedAt'>,
-  db: Db = defaultDb
-) {
-  return db.withTransaction(() => insertContinueBlockWithInitialRevision(input, db))
-}
-
 export async function appendContinueBlockRevision(
   input: {
     continueBlockId: string

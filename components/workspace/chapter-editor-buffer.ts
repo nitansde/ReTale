@@ -72,5 +72,3 @@ export function createChapterEditorBuffer(options: ChapterEditorBufferOptions) {
     },
   }
 }
-
-export type ChapterEditorBuffer = ReturnType<typeof createChapterEditorBuffer>

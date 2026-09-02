@@ -133,6 +133,7 @@ function hashProductionInputs(repoRoot, relativePaths) {
   return hash.digest('hex')
 }
 
+/** @param {string} [repoRoot] @param {Record<string, string | undefined>} [environment] */
 export function resolveNextProductionDistDir(repoRoot = process.cwd(), environment = process.env) {
   const configuredDistDir = environment.RETALE_NEXT_DIST_DIR?.trim() || '.next'
   return resolveContainedDistDir(repoRoot, configuredDistDir)

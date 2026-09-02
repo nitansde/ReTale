@@ -1,9 +1,9 @@
-export async function sleep(ms: number) {
-  if (ms <= 0) {
-    return
-  }
+import { setTimeout as delay } from 'node:timers/promises'
 
-  await new Promise((resolve) => setTimeout(resolve, ms))
+// A non-positive sleep must resolve without scheduling a timer: retry/poll loops
+// compute `remaining` after an await and rely on not paying a macrotask per pass.
+export function sleep(ms: number) {
+  return ms > 0 ? delay(ms) : Promise.resolve()
 }
 
 export async function waitForCondition<T>(params: {

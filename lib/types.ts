@@ -124,8 +124,6 @@ export const PRODUCT_SURFACE_IDS = ['rewrite', 'future_jump', 'roleplay'] as con
 export type ProductSurfaceId = (typeof PRODUCT_SURFACE_IDS)[number]
 
 export const PRODUCT_ACTION_IDS = ['save', 'continue', 'regenerate'] as const
-export type ProductActionId = (typeof PRODUCT_ACTION_IDS)[number]
-
 export type RewriteMode =
   | 'light'
   | 'medium'
@@ -199,12 +197,6 @@ export type TrajectoryEntry = {
   title: string
   detail: string
   createdAt: string
-}
-
-export type RewriteSelection = {
-  scope: RewriteScope
-  paragraphIndex: number | null
-  text: string
 }
 
 export type AIProvider = 'openai-compatible' | 'ollama'

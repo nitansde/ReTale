@@ -5,8 +5,6 @@ import { deleteBranchRetrievalIndexFromChapter } from '@/lib/server/retrieval-in
 import type {
   EntityLinkRow,
   EntityStateRow,
-  EventLinkRow,
-  LinkStatus,
 } from '@/lib/server/graph-types'
 
 type ActiveGraphQueryParams = {
@@ -34,20 +32,6 @@ type EntityLinkEditParams = {
   includeByDefault?: boolean
 }
 
-function appendStatusFilters(baseSql: string, includePotentiallyStale: boolean) {
-  return includePotentiallyStale
-    ? `${baseSql} AND status NOT IN ('rejected', 'outdated')`
-    : `${baseSql} AND status NOT IN ('rejected', 'outdated', 'potentially_stale')`
-}
-
-function appendConfidenceFilter(baseSql: string, includeLowConfidence: boolean) {
-  return includeLowConfidence ? baseSql : `${baseSql} AND confidence >= 0.4`
-}
-
-function appendGenericRelationFilter(baseSql: string, columnName: string) {
-  return `${baseSql} AND TRIM(${columnName}) NOT IN ('', '关系', '人物关系', '角色关系', '关联', '联系', '相关')`
-}
-
 function normalizeValidFromChapter(value: number) {
   if (!Number.isFinite(value) || value < 1) {
     throw new Error('validFromChapter must be a positive chapter number')
@@ -65,94 +49,6 @@ function normalizeValidUntilChapter(value: number | null | undefined) {
   }
 
   return Math.floor(value)
-}
-
-function appendConfirmedOnlyFilter(baseSql: string, confirmedOnly: boolean) {
-  return confirmedOnly ? `${baseSql} AND status = 'user_confirmed'` : baseSql
-}
-
-export function loadActiveEntityLinks(params: ActiveGraphQueryParams) {
-  const sql = appendConfidenceFilter(
-    appendGenericRelationFilter(
-      appendConfirmedOnlyFilter(
-        appendStatusFilters(
-          `
-            SELECT id, novelId, branchId, sourceEntityId, targetEntityId, linkType, label, description,
-                   polarity, strength, weight, sourceChapter, validFromChapter, validUntilChapter,
-                   evidenceSpanId, evidenceQuote, confidence, status, includeByDefault
-            FROM EntityLink
-            WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
-              AND validUntilChapter > ?
-          `,
-          params.includePotentiallyStale ?? false
-        ),
-        params.confirmedOnly ?? false
-      ),
-      'linkType'
-    ),
-    params.includeLowConfidence ?? false
-  )
-
-  return queryAll<EntityLinkRow>(sql, params.novelId, params.branchId, params.chapterNo, params.chapterNo)
-}
-
-export function loadActiveEntityStates(params: ActiveGraphQueryParams) {
-  const sql = appendConfidenceFilter(
-    appendConfirmedOnlyFilter(
-      appendStatusFilters(
-        `
-          SELECT id, novelId, branchId, entityId, stateType, stateValue, description, sourceChapter,
-                  validFromChapter, evidenceSpanId, evidenceQuote, confidence, status, includeByDefault,
-                  validUntilChapter
-           FROM EntityState
-           WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
-             AND validUntilChapter > ?
-        `,
-        params.includePotentiallyStale ?? false
-      ),
-      params.confirmedOnly ?? false
-    ),
-    params.includeLowConfidence ?? false
-  )
-
-  return queryAll<EntityStateRow>(sql, params.novelId, params.branchId, params.chapterNo, params.chapterNo)
-}
-
-export function loadActiveEventLinks(params: ActiveGraphQueryParams) {
-  const sql = appendConfidenceFilter(
-    appendStatusFilters(
-      `
-        SELECT id, novelId, branchId, sourceEventId, targetEventId, linkType, label, description,
-               sourceChapter, validFromChapter, evidenceSpanId, evidenceQuote, confidence, status
-        FROM EventLink
-        WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
-      `,
-      params.includePotentiallyStale ?? false
-    ),
-    params.includeLowConfidence ?? false
-  )
-
-  return queryAll<EventLinkRow>(sql, params.novelId, params.branchId, params.chapterNo)
-}
-
-export function updateEntityLinkStatus(params: { id: string; status: LinkStatus; includeByDefault?: boolean }) {
-  const includeByDefault =
-    params.includeByDefault === undefined
-      ? null
-      : params.includeByDefault
-        ? 1
-        : 0
-
-  execute(
-    `
-      UPDATE EntityLink
-      SET status = ?, includeByDefault = COALESCE(?, includeByDefault), updatedAt = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `,
-    params.status,
-    includeByDefault,
-    params.id
-  )
 }
 
 export function loadEntityLinkById(id: string) {

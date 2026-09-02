@@ -1,3 +1,4 @@
+import { chunkValues, uniqueStrings } from '@/lib/utils'
 import type { Character, CharacterRelation, KnowledgeRebuildChapterRange, OutlineItem, TimelineEvent, WorldEntry, WorldEntryType } from '@/lib/types'
 import {
   buildCharacterDescriptionDelta,
@@ -17,8 +18,6 @@ import {
   type KnowledgeRebuildPayloadStep,
   type KnowledgeRebuildStartOutcome,
   pauseKnowledgeRebuildForNovel,
-  runStartedKnowledgeRetrievalRebuildForNovel,
-  runStartedKnowledgeRebuildForNovel,
   startKnowledgeRetrievalRebuildForNovel,
   startKnowledgeRebuildForNovel,
 } from '@/lib/server/knowledge-rebuild'
@@ -397,14 +396,6 @@ async function buildLightweightKnowledgeActionPayload(novelId: string) {
 
 function buildSqlPlaceholders(count: number) {
   return Array.from({ length: count }, () => '?').join(', ')
-}
-
-function chunkValues<T>(values: T[], size = 500) {
-  const chunks: T[][] = []
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size))
-  }
-  return chunks
 }
 
 function getCurrentEmbeddingModel() {
@@ -849,7 +840,7 @@ async function deleteBranchScopedCacheForNovel(params: {
   }
 }
 
-async function deleteHanlpCacheForNovel(novelId: string): Promise<KnowledgeViewActionPayload> {
+export async function deleteAuthoritativeHanlpCache(novelId: string): Promise<KnowledgeViewActionPayload> {
   return deleteBranchScopedCacheForNovel({
     novelId,
     cacheLabel: 'HanLP cache',
@@ -862,7 +853,7 @@ async function deleteHanlpCacheForNovel(novelId: string): Promise<KnowledgeViewA
   })
 }
 
-async function deleteExtractionCacheForNovel(novelId: string): Promise<KnowledgeViewActionPayload> {
+export async function deleteAuthoritativeExtractionCache(novelId: string): Promise<KnowledgeViewActionPayload> {
   return deleteBranchScopedCacheForNovel({
     novelId,
     cacheLabel: 'LLM extraction cache',
@@ -873,7 +864,7 @@ async function deleteExtractionCacheForNovel(novelId: string): Promise<Knowledge
   })
 }
 
-async function deleteEmbeddingCacheForNovel(novelId: string): Promise<KnowledgeViewActionPayload> {
+export async function deleteAuthoritativeEmbeddingCache(novelId: string): Promise<KnowledgeViewActionPayload> {
   return deleteBranchScopedCacheForNovel({
     novelId,
     cacheLabel: 'raw embedding cache',
@@ -1061,18 +1052,6 @@ function dedupeById<T extends { id: string }>(items: T[]) {
     seen.add(item.id)
     return true
   })
-}
-
-function uniqueStrings(values: Array<string | null | undefined>) {
-  const seen = new Set<string>()
-  const next: string[] = []
-  for (const raw of values) {
-    const value = raw?.trim()
-    if (!value || seen.has(value)) continue
-    seen.add(value)
-    next.push(value)
-  }
-  return next
 }
 
 function loadCharacterAliasesByEntityId(entityIds: string[]) {
@@ -1502,30 +1481,6 @@ export async function rebuildAuthoritativeRetrievalIndex(novelId: string, chapte
   }
 }
 
-export async function runAuthoritativeKnowledgeViewRebuild(novelId: string, jobId: string) {
-  const normalizedNovelId = novelId.trim()
-  const normalizedJobId = jobId.trim()
-  if (!normalizedNovelId || !normalizedJobId) return
-
-  await runStartedKnowledgeRebuildForNovel({
-    novelId: normalizedNovelId,
-    branchId: getMainBranchId(normalizedNovelId),
-    jobId: normalizedJobId,
-  })
-}
-
-export async function runAuthoritativeRetrievalIndexRebuild(novelId: string, jobId: string) {
-  const normalizedNovelId = novelId.trim()
-  const normalizedJobId = jobId.trim()
-  if (!normalizedNovelId || !normalizedJobId) return
-
-  await runStartedKnowledgeRetrievalRebuildForNovel({
-    novelId: normalizedNovelId,
-    branchId: getMainBranchId(normalizedNovelId),
-    jobId: normalizedJobId,
-  })
-}
-
 export async function pauseAuthoritativeKnowledgeRebuild(novelId: string): Promise<KnowledgeViewActionPayload> {
   const trimmedNovelId = novelId.trim()
   if (!trimmedNovelId) {
@@ -1577,16 +1532,4 @@ export async function deleteAuthoritativeKnowledgeGraph(novelId: string): Promis
     jobOutcome,
     actionError: null,
   }
-}
-
-export async function deleteAuthoritativeHanlpCache(novelId: string): Promise<KnowledgeViewActionPayload> {
-  return deleteHanlpCacheForNovel(novelId)
-}
-
-export async function deleteAuthoritativeExtractionCache(novelId: string): Promise<KnowledgeViewActionPayload> {
-  return deleteExtractionCacheForNovel(novelId)
-}
-
-export async function deleteAuthoritativeEmbeddingCache(novelId: string): Promise<KnowledgeViewActionPayload> {
-  return deleteEmbeddingCacheForNovel(novelId)
 }

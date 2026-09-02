@@ -21,7 +21,7 @@ import type {
   PresetCompatRegexRecord,
   PresetCompatSurfaceId,
 } from '@/lib/preset-compat/types'
-import { getClientLocale, getMessage } from '@/lib/i18n/messages'
+import { tm } from '@/lib/i18n/messages'
 import {
   countChineseFriendlyWords,
   formatNowLabel,
@@ -120,10 +120,6 @@ function pickNextAvailableChapter(chapters: Chapter[], preferredNovelId?: string
   })
 
   return sorted[0] ?? null
-}
-
-function tm(key: import('@/lib/i18n/messages').TranslationKey, values?: import('@/lib/i18n/messages').TranslationValues) {
-  return getMessage(getClientLocale(), key, values)
 }
 
 function buildStateAfterNovelDeletion(state: PersistedNovelState, novelId: string) {

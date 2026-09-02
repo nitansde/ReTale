@@ -691,32 +691,6 @@ function readWorkspaceArtifactPayload(id = WORKSPACE_ID, db?: WorkspaceRecoveryD
   }
 }
 
-export async function backfillWorkspaceRuntimeFromArtifactIfMissing(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
-  const runtimeState = readWorkspaceRuntimeState(id, db)
-  if (runtimeState) return runtimeState
-
-  const artifact = readWorkspaceArtifactPayload(id, db)
-  if (!artifact.ok) {
-    if (artifact.reason === 'invalid') {
-      throw new Error('Saved workspace payload artifact is invalid and cannot backfill runtime state')
-    }
-    return null
-  }
-
-  await persistWorkspaceRuntimeStateWithRevision(artifact.payload, artifact.revision, id, db)
-  return artifact.payload
-}
-
-export async function restoreWorkspaceRuntimeFromArtifactForTests(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
-  if (process.env.VITEST !== 'true') {
-    throw new Error('Forced workspace artifact recovery is only available in tests')
-  }
-  const artifact = readWorkspaceArtifactPayload(id, db)
-  if (!artifact.ok) return null
-  await persistWorkspaceRuntimeStateWithRevision(artifact.payload, artifact.revision, id, db)
-  return artifact.payload
-}
-
 export async function loadWorkspacePayloadFromRuntimeOrRecovery(id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
   return (await loadWorkspaceSnapshotFromRuntimeOrRecovery(id, db)).payload
 }
@@ -769,20 +743,4 @@ export async function loadWorkspaceSnapshotFromRuntimeOrRecovery(
 
 export function isExplicitWorkspaceResetRequest(request: Request) {
   return request.headers.get(WORKSPACE_RESET_HEADER) === 'true'
-}
-
-export function shouldBlockEmptyWorkspaceOverwrite(payload: unknown, allowReset: boolean, id = WORKSPACE_ID, db?: WorkspaceRecoveryDb) {
-  if (allowReset || workspacePayloadHasLibraryContent(payload)) return false
-
-  const existingRuntime = readWorkspaceRuntimeState(id, db)
-  if (existingRuntime && workspacePayloadHasLibraryContent(existingRuntime)) {
-    return true
-  }
-
-  const artifact = readWorkspaceArtifactPayload(id, db)
-  if (artifact.ok && workspacePayloadHasLibraryContent(artifact.payload)) {
-    return true
-  }
-
-  return hasRecoverableKnowledgeWorkspaceSource(db)
 }

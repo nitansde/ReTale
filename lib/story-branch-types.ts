@@ -38,11 +38,6 @@ export type TimelineSelection =
       anchorChapterNo: number
     }
 
-export type VersionTokenUsage = {
-  inputTokens: number | null
-  outputTokens: number | null
-}
-
 export type StoryTimelineNodeType = 'rewrite' | 'what_if' | 'continue_block' | 'future_jump' | 'roleplay_session'
 
 export type ChapterTimelineItem = {

@@ -3,7 +3,7 @@ import type { DatabaseAccess } from '@/lib/server/database-access'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { getMainBranchId } from '@/lib/server/knowledge-store'
 import { safeParseJson } from '@/lib/server/json-parse'
-import { htmlToPlainText, splitPlainTextParagraphs } from '@/lib/utils'
+import { htmlToPlainText, shuffleWithSeed, splitPlainTextParagraphs } from '@/lib/utils'
 import type {
   MaterialParagraph,
   MaterialScanResult,
@@ -400,15 +400,6 @@ export function createSeededRandom(seed: number) {
 export function deriveWritingSkillRoundSeed(seed: number, round: number) {
   const hash = createHash('sha256').update(`${seed}:${round}`).digest()
   return hash.readUInt32BE(0) & 0x7fffffff
-}
-
-function shuffleWithSeed<T>(items: T[], random: () => number) {
-  const next = items.slice()
-  for (let index = next.length - 1; index > 0; index -= 1) {
-    const target = Math.floor(random() * (index + 1))
-    ;[next[index], next[target]] = [next[target], next[index]]
-  }
-  return next
 }
 
 function groupParagraphsByChapter(paragraphs: MaterialParagraph[]) {

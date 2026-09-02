@@ -68,8 +68,11 @@ describe('writing skill advanced-context preview', () => {
       findStoryTimelineNodeById: vi.fn(() => null),
     }))
     vi.doMock('@/lib/server/knowledge-store', () => ({
-      estimateTokenCount: vi.fn(() => 128),
       normalizeBranchId: vi.fn((novelId: string, branchId?: string) => branchId ?? `${novelId}:main`),
+    }))
+    vi.doMock('@/lib/utils', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('@/lib/utils')>()),
+      estimateTokenCount: vi.fn(() => 128),
     }))
     vi.doMock('@/lib/server/retrieval-index', () => ({
       searchLanceEvidence: vi.fn(async () => ({ matches: [], warning: null })),

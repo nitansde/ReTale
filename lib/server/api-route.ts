@@ -142,10 +142,6 @@ export function assertWorkspaceSnapshotSemantics(payload: unknown) {
   }
 }
 
-export function assertNormalizedWorkspaceSnapshotSemantics(payload: PersistedNovelState) {
-  assertWorkspaceSnapshotSemantics(payload)
-}
-
 export function jsonError(error: string, status: number) {
   return NextResponse.json({ ok: false, error }, { status })
 }

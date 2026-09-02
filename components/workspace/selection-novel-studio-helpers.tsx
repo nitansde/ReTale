@@ -12,10 +12,9 @@ import {
   Trash2,
   Wand2,
 } from 'lucide-react'
-import { type PendingSourceJump, type WorkspaceActionMode } from '@/components/workspace/use-workspace-chapter-selection'
-import { resolveBranchTimelineSelection, toBranchTimelineSelection } from '@/components/workspace/workspace-selection'
+import { type WorkspaceActionMode } from '@/components/workspace/use-workspace-chapter-selection'
+import { toBranchTimelineSelection } from '@/components/workspace/workspace-selection'
 import type {
-  ChapterGraphContextData,
   ChapterGraphContextResponse,
   GenerationContextBuildData,
   GenerationContextResponse,
@@ -26,7 +25,6 @@ import type {
 import type { GraphEdge } from '@/lib/server/graph-types'
 import { cn, countChineseFriendlyWords, htmlToPlainText } from '@/lib/utils'
 import type {
-  ChapterTimelineItem,
   ContinueBlockMutationResponse,
   FutureJumpSourceContext,
   FutureJumpRunDetail,
@@ -37,7 +35,6 @@ import type {
   WhatIfSessionDetail,
 } from '@/lib/story-branch-types'
 import type {
-  AIProvider,
   AIScenarioKey,
   Chapter,
   Character,
@@ -49,16 +46,12 @@ import type {
 } from '@/lib/types'
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import { requestClientGet } from '@/lib/client-request-broker'
-import { getClientLocale, getMessage, type Locale, type TranslationKey, type TranslationValues } from '@/lib/i18n/messages'
+import { getClientLocale, tm, type Locale } from '@/lib/i18n/messages'
 import { useI18n } from '@/lib/i18n/provider'
 
 export const TOOLBAR_EDGE_PADDING = 12
 export const TOOLBAR_OFFSET_Y = 56
 export const DEFAULT_REWRITE_PROMPT = tm('workspace.rewrite.defaultPrompt')
-
-function tm(key: TranslationKey, values?: TranslationValues) {
-  return getMessage(getClientLocale(), key, values)
-}
 
 export type GenerationState = {
   loading: boolean
