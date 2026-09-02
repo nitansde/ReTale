@@ -575,6 +575,30 @@ describe('ProjectGrid chapter resolution', () => {
     expect(callOrder).toEqual(['novel:novel-a', 'chapter:ch-1', 'push'])
   })
 
+  it('focuses the book title field and restores the edit trigger when metadata closes', () => {
+    mockStoreState = {
+      backendLoadError: '',
+      localChapters: [],
+      getNovels: () => [{ id: 'novel-a', title: 'Old title', summary: 'Summary', tags: [], author: 'Old author', coverImage: '' }],
+      loadFromBackend: vi.fn(async () => undefined),
+      saveToBackend: vi.fn(async () => undefined),
+      deleteNovelFromBackend: vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
+      setCurrentNovelId: vi.fn(),
+      setCurrentChapterId: vi.fn(),
+      deleteNovel: vi.fn(),
+    }
+
+    renderProjectGrid()
+    const editButton = screen.getByRole('button', { name: 'Edit project' })
+    editButton.focus()
+    fireEvent.click(editButton)
+
+    expect(screen.getByLabelText('书名')).toHaveFocus()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(editButton).toHaveFocus()
+  })
+
   it('edits title and author from the library without opening the workspace', async () => {
     const loadLibrarySummaries = vi.fn(async () => undefined)
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

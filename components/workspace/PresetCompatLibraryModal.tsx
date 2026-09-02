@@ -1,7 +1,8 @@
 "use client"
 
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
-import { FileUp, X } from 'lucide-react'
+import { FileUp } from 'lucide-react'
+import { DialogSurface } from '@/components/ui/DialogSurface'
 import { PresetCompatPresetEditor } from '@/components/workspace/PresetCompatPresetEditor'
 import { PRESET_COMPAT_EDITABLE_SURFACE_META } from '@/lib/preset-compat/surface-contract'
 import {
@@ -83,21 +84,6 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
     error: unknown
   } | null>(null)
   const [saving, setSaving] = useState(false)
-  useEffect(() => {
-    if (!open) return
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || saving) return
-      event.preventDefault()
-      onClose()
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-      document.body.style.overflow = previousOverflow
-    }
-  }, [onClose, open, saving])
   useEffect(() => {
     if (!open || !onLoad) return
     void onLoad().catch(() => undefined)
@@ -208,24 +194,23 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-[65] bg-[#05060a]/72 backdrop-blur-md backdrop-saturate-150" onClick={onClose}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="preset-compat-library-title"
-        className="absolute inset-x-3 top-3 mx-auto max-h-[calc(100vh-1.5rem)] w-auto max-w-7xl overflow-y-auto rounded-[28px] border border-white/10 bg-[#0d1017]/96 p-4 shadow-[0_30px_120px_rgba(0,0,0,0.58)] supports-[backdrop-filter]:backdrop-blur-2xl sm:inset-x-6 sm:top-[6vh] sm:max-h-[88vh] sm:rounded-[32px] sm:p-5"
-        data-testid="preset-compat-library-modal"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="mb-5 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">{t('preset.eyebrow')}</p>
-            <h3 id="preset-compat-library-title" className="mt-1 text-xl font-semibold text-zinc-100">{t('preset.title')}</h3>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">{t('preset.description')}</p>
-          </div>
-          <button aria-label={t('common.close')} onClick={onClose} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-2xl border border-white/10 text-zinc-300 hover:bg-white/[0.06]"><X className="h-4 w-4" /></button>
-        </div>
-
+    <DialogSurface
+      open
+      onClose={onClose}
+      closeLabel={t('common.close')}
+      closeDisabled={saving}
+      busy={presetCompatLibraryLoading || saving}
+      title={(
+        <span className="block">
+          <span aria-hidden="true" className="block text-[11px] font-normal uppercase tracking-[0.22em] text-zinc-500">{t('preset.eyebrow')}</span>
+          <span className="mt-1 block text-xl font-semibold text-zinc-100">{t('preset.title')}</span>
+        </span>
+      )}
+      description={t('preset.description')}
+      backdropClassName="z-[65]"
+      surfaceTestId="preset-compat-library-modal"
+      className="max-h-[calc(100vh-1.5rem)] max-w-7xl rounded-[28px] p-4 sm:max-h-[88vh] sm:w-[calc(100%-3rem)] sm:rounded-[32px] sm:p-5"
+    >
         {statusMessage || resolvedErrorMessage ? (
           <div className="sticky top-0 z-20 mb-4 space-y-2 bg-[#0d1017]/94 py-2 backdrop-blur-xl">
             {statusMessage ? <p className="rounded-2xl border border-emerald-400/20 bg-emerald-500/12 px-4 py-3 text-sm text-emerald-50 shadow-lg">{statusMessage}</p> : null}
@@ -417,7 +402,6 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </DialogSurface>
   )
 }

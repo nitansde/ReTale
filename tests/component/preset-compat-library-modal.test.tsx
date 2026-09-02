@@ -401,6 +401,36 @@ describe('PresetCompatLibraryModal', () => {
     expect(onLoad).toHaveBeenCalledTimes(1)
   })
 
+  it('traps focus inside the modal and restores the opener after Escape', () => {
+    function Harness() {
+      const [open, setOpen] = React.useState(false)
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>Open presets</button>
+          <PresetCompatLibraryModal open={open} onClose={() => setOpen(false)} />
+        </>
+      )
+    }
+
+    render(<Harness />)
+    const opener = screen.getByRole('button', { name: 'Open presets' })
+    opener.focus()
+    fireEvent.click(opener)
+
+    const dialog = screen.getByRole('dialog', { name: '全局预设兼容库' })
+    const closeButton = within(dialog).getByRole('button', { name: '关闭' })
+    expect(closeButton).toHaveFocus()
+    opener.focus()
+    expect(closeButton).toHaveFocus()
+
+    within(dialog).getByRole('button', { name: '保存兼容库' }).focus()
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    expect(screen.queryByRole('dialog', { name: '全局预设兼容库' })).not.toBeInTheDocument()
+    expect(opener).toHaveFocus()
+    expect(document.body.style.overflow).toBe('')
+  })
+
   it('re-syncs the preview surface selector and clears stale preview when reopening the same preset on a different active surface', async () => {
     useNovelStore.setState({
       presetCompatLibrary: createLibrary(),

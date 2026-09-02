@@ -31,6 +31,7 @@ import { WorkspaceWorldEntriesPanel } from '@/components/workspace/WorkspaceWorl
 import { WorkspaceReferencePanel } from '@/components/workspace/WorkspaceReferencePanel'
 import { WorkspaceKnowledgeControls } from '@/components/workspace/WorkspaceKnowledgeControls'
 import { WorkspaceSelectionActions } from '@/components/workspace/WorkspaceSelectionActions'
+import { DialogSurface } from '@/components/ui/DialogSurface'
 import { Notice } from '@/components/ui/Notice'
 import { useSelectionNovelStudioActions } from '@/components/workspace/use-selection-novel-studio-actions'
 import { useSelectionNovelStudioCore } from '@/components/workspace/use-selection-novel-studio-core'
@@ -896,17 +897,22 @@ export function SelectionNovelStudio() {
       ) : null}
 
       {activeMode ? (
-        <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm" data-testid="workspace-action-overlay" onClick={closePanel}>
-          <div className="absolute inset-x-0 bottom-0 mx-auto max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-t-[32px] border border-white/10 bg-[#0d1017] p-4 shadow-[0_-20px_80px_rgba(0,0,0,0.5)] sm:bottom-6 sm:rounded-[32px] sm:p-5" onClick={(event) => event.stopPropagation()}>
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">{t('workspace.shell.selectedText')}</p>
-                <h3 className="mt-1 text-xl font-semibold text-zinc-100">{ACTION_META[activeMode].title}</h3>
-                <p className="mt-2 text-sm leading-6 text-zinc-400">{ACTION_META[activeMode].description}</p>
-              </div>
-              <button onClick={closePanel} className="rounded-2xl border border-white/10 p-2 text-zinc-300 hover:bg-white/[0.06]"><X className="h-4 w-4" /></button>
-            </div>
-
+        <DialogSurface
+          open
+          onClose={closePanel}
+          closeLabel={t('common.close')}
+          title={(
+            <span className="block">
+              <span aria-hidden="true" className="block text-[11px] font-normal uppercase tracking-[0.22em] text-zinc-500">{t('workspace.shell.selectedText')}</span>
+              <span className="mt-1 block text-xl font-semibold text-zinc-100">{ACTION_META[activeMode].title}</span>
+            </span>
+          )}
+          description={ACTION_META[activeMode].description}
+          placement="bottom"
+          backdropTestId="workspace-action-overlay"
+          backdropClassName="z-50 bg-black/55"
+          className="max-w-3xl bg-[#0d1017] p-4 shadow-[0_-20px_80px_rgba(0,0,0,0.5)] sm:mb-6 sm:rounded-[32px] sm:p-5"
+        >
             <div className="mb-4 rounded-[24px] border border-white/8 bg-black/20 p-4">
               <p className="mb-2 text-xs uppercase tracking-[0.16em] text-zinc-500">{t('workspace.shell.selectedExcerpt')}</p>
               <p className="whitespace-pre-wrap text-sm leading-7 text-zinc-300">{lockedSelectionText || selectionText}</p>
@@ -1181,8 +1187,7 @@ export function SelectionNovelStudio() {
               </div>
             ) : null}
 
-          </div>
-        </div>
+        </DialogSurface>
       ) : null}
     </main>
   )

@@ -52,6 +52,7 @@ export function WritingSkillDistillationPanel({
   const [scanTotalBudget, setScanTotalBudget] = useState<WritingSkillTotalBudget>(DEFAULT_WRITING_SKILL_TOTAL_BUDGET)
   const [saving, setSaving] = useState(false)
   const pollingJobIdRef = useRef<string | null>(null)
+  const instructionInputRef = useRef<HTMLInputElement>(null)
 
   const loadCardDetail = useCallback(async (cardId: string) => {
     const response = await fetch(`/api/writing-skills/${encodeURIComponent(cardId)}`, { cache: 'no-store' })
@@ -265,19 +266,20 @@ export function WritingSkillDistillationPanel({
       title={t('writingSkill.agentTitle')}
       description={library ? t('writingSkill.agentDescription', { title: library.title }) : ''}
       className="max-w-2xl"
+      initialFocusRef={instructionInputRef}
     >
       {agentState.kind === 'ready' ? (
         <div className="space-y-5">
           <label className="block">
             <span className="mb-2 block text-sm font-medium text-zinc-200">{t('writingSkill.question')}</span>
             <input
+              ref={instructionInputRef}
               value={instruction}
               onChange={(event) => setInstruction(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && instruction.trim()) startCreate()
               }}
               maxLength={120}
-              autoFocus
               className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-zinc-100 outline-none focus:border-violet-300/40"
               placeholder={t('writingSkill.placeholder')}
             />

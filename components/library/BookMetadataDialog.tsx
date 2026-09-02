@@ -1,7 +1,7 @@
 "use client"
 
 import Image from 'next/image'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ImagePlus, LoaderCircle, Trash2 } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { useI18n } from '@/lib/i18n/provider'
@@ -26,6 +26,7 @@ export function BookMetadataDialog({
   const [removeCover, setRemoveCover] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const titleInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     return () => {
@@ -71,6 +72,7 @@ export function BookMetadataDialog({
       closeLabel={t('library.metadataClose')}
       closeDisabled={saving}
       busy={saving}
+      initialFocusRef={titleInputRef}
     >
       <form onSubmit={handleSubmit} className="space-y-5">
         <div className="grid gap-5 sm:grid-cols-[140px_minmax(0,1fr)]">
@@ -129,7 +131,7 @@ export function BookMetadataDialog({
           <div className="space-y-4">
             <label className="block text-sm text-zinc-300">
               <span className="mb-2 block">{t('library.metadataTitleLabel')}</span>
-              <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={200} disabled={saving} autoFocus className="min-h-11 w-full rounded-xl border border-white/10 bg-black/25 px-3 outline-none focus:border-indigo-300/45" />
+              <input ref={titleInputRef} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={200} disabled={saving} className="min-h-11 w-full rounded-xl border border-white/10 bg-black/25 px-3 outline-none focus:border-indigo-300/45" />
             </label>
             <label className="block text-sm text-zinc-300">
               <span className="mb-2 block">{t('library.metadataAuthorLabel')}</span>

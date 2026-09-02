@@ -42,6 +42,8 @@ type PendingAssistantState = {
   mode: 'send' | 'regenerate'
 }
 
+const ROLEPLAY_STICKY_BOTTOM_THRESHOLD = 80
+
 async function loadRoleplaySessionDetail(input: {
   novelId: string
   branchId: string
@@ -210,10 +212,9 @@ export function RoleplaySessionView(props: {
   const [sending, setSending] = useState(false)
   const [regenerating, setRegenerating] = useState(false)
   const [pendingAssistant, setPendingAssistant] = useState<PendingAssistantState | null>(null)
-  const chatCoreRef = useRef<HTMLElement | null>(null)
   const messageListRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
-  const sendButtonRef = useRef<HTMLButtonElement | null>(null)
+  const stickToBottomRef = useRef(true)
 
   const refreshDetail = useCallback(async () => {
     const nextDetail = await loadRoleplaySessionDetail({
@@ -280,21 +281,14 @@ export function RoleplaySessionView(props: {
   }, [composerValue])
 
   useEffect(() => {
-    const messageList = messageListRef.current
-    if (!messageList) return
-    messageList.scrollTop = messageList.scrollHeight
-  }, [detail?.messages, pendingAssistant])
+    stickToBottomRef.current = true
+  }, [props.sessionId])
 
   useEffect(() => {
-    if (typeof window === 'undefined' || window.innerWidth >= 1024) return
-    const timer = window.setTimeout(() => {
-      sendButtonRef.current?.scrollIntoView({ block: 'end' })
-    }, 80)
-
-    return () => {
-      window.clearTimeout(timer)
-    }
-  }, [props.sessionId])
+    const messageList = messageListRef.current
+    if (!messageList || !stickToBottomRef.current) return
+    messageList.scrollTop = messageList.scrollHeight
+  }, [detail?.messages, pendingAssistant])
 
   const readableLabel = props.readableLineageLabel?.trim() || ''
   const resolvedTitle = readableLabel || detail?.title?.trim() || props.nodeTitle?.trim() || t('roleplay.defaultTitle', { count: props.anchorChapterNo })
@@ -356,6 +350,7 @@ export function RoleplaySessionView(props: {
     const historyMessages = anchorMessage ? buildMessagePath(messagesById, anchorMessage.id) : []
     const userContent = composerValue.trim()
 
+    stickToBottomRef.current = true
     setSending(true)
     setError('')
     let errorOperation: WorkspaceErrorOperation = 'roleplay-send'
@@ -439,6 +434,7 @@ export function RoleplaySessionView(props: {
 
     setRegenerating(true)
     setError('')
+    stickToBottomRef.current = true
     setPendingAssistant({
       content: '',
       parentMessageId: parentUser.id,
@@ -533,7 +529,7 @@ export function RoleplaySessionView(props: {
       ) : null}
 
       {!loading && detail ? (
-        <section ref={chatCoreRef} className="flex h-[calc(100dvh-19rem)] min-h-[420px] flex-col overflow-hidden rounded-[28px] border border-white/8 bg-[#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:min-h-[calc(100dvh-15rem)] sm:h-auto" data-testid="roleplay-chat-core">
+        <section className="flex h-[calc(100dvh-19rem)] min-h-[420px] flex-col overflow-hidden rounded-[28px] border border-white/8 bg-[#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:min-h-[calc(100dvh-15rem)] sm:h-auto" data-testid="roleplay-chat-core">
           <div className="border-b border-white/8 px-4 py-4 sm:px-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -577,7 +573,15 @@ export function RoleplaySessionView(props: {
             </div>
           </div>
 
-          <div ref={messageListRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-4 sm:px-4">
+          <div
+            ref={messageListRef}
+            data-testid="roleplay-message-list"
+            onScroll={(event) => {
+              const messageList = event.currentTarget
+              stickToBottomRef.current = messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight <= ROLEPLAY_STICKY_BOTTOM_THRESHOLD
+            }}
+            className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-4 sm:px-4"
+          >
             {detail.messages.map((message, index) => {
               const isUser = message.role === 'user'
               const isForkTarget = forkMessageId === message.id
@@ -698,7 +702,6 @@ export function RoleplaySessionView(props: {
                 </details>
 
                 <button
-                  ref={sendButtonRef}
                   type="button"
                   data-testid="roleplay-composer-send"
                   disabled={!canSend}

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from 'react'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { RoleplaySessionView } from '@/components/workspace/RoleplaySessionView'
 
@@ -86,6 +86,29 @@ function createStreamResponse(chunks: string[]) {
   })
 }
 
+function createControlledStreamResponse() {
+  const encoder = new TextEncoder()
+  let controller: ReadableStreamDefaultController<Uint8Array> | null = null
+  const stream = new ReadableStream<Uint8Array>({
+    start(nextController) {
+      controller = nextController
+    },
+  })
+
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    }),
+    enqueue(chunk: string) {
+      controller?.enqueue(encoder.encode(chunk))
+    },
+    close() {
+      controller?.close()
+    },
+  }
+}
+
 describe('RoleplaySessionView', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -153,6 +176,37 @@ describe('RoleplaySessionView', () => {
 
     expect(await screen.findByTestId('roleplay-chat-core')).toBeInTheDocument()
     expect(screen.getByTestId('roleplay-regenerate-last')).toBeDisabled()
+  })
+
+  it('does not move the page to the composer when a mobile session opens', async () => {
+    const scrollIntoView = vi.fn()
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+    const originalInnerWidth = window.innerWidth
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView })
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(Response.json(buildSessionDetail([]))))
+
+    try {
+      render(
+        <RoleplaySessionView
+          novelId="novel-001"
+          branchId="novel-001:main"
+          sessionId="roleplay-session-001"
+          anchorChapterNo={10}
+        />
+      )
+
+      expect(await screen.findByTestId('roleplay-chat-core')).toBeInTheDocument()
+      await new Promise((resolve) => window.setTimeout(resolve, 120))
+      expect(scrollIntoView).not.toHaveBeenCalled()
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalInnerWidth })
+      if (originalScrollIntoView) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: originalScrollIntoView })
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
+      }
+    }
   })
 
   it('sanitizes raw session-load diagnostics', async () => {
@@ -351,5 +405,90 @@ describe('RoleplaySessionView', () => {
       { role: 'user', content: '你昨晚为什么没有按约定现身？' },
       { role: 'assistant', content: '我到了，只是先确认街角没有埋伏。' },
     ])
+  })
+
+  it('stops following streamed chunks after the user scrolls away from the bottom', async () => {
+    let currentDetail = buildSessionDetail([
+      buildMessage({ id: 'message-1', messageIndex: 1, role: 'user', content: '第一问。' }),
+      buildMessage({ id: 'message-2', messageIndex: 2, role: 'assistant', content: '第一答。', parentMessageId: 'message-1', turnIndex: 1 }),
+    ])
+    const controlledStream = createControlledStreamResponse()
+
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input)
+      if (url === '/api/roleplay/sessions/roleplay-session-001?novelId=novel-001&branchId=novel-001%3Amain') {
+        return Response.json(currentDetail)
+      }
+      if (url === '/api/rewrite' && init?.method === 'POST') {
+        return controlledStream.response
+      }
+      if (url === '/api/roleplay/sessions/roleplay-session-001/messages' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as {
+          role: 'user' | 'assistant'
+          content: string
+          parentMessageId?: string | null
+        }
+        const message = buildMessage({
+          id: body.role === 'user' ? 'message-3' : 'message-4',
+          messageIndex: body.role === 'user' ? 3 : 4,
+          role: body.role,
+          content: body.content,
+          parentMessageId: body.parentMessageId,
+          turnIndex: 2,
+        })
+        currentDetail = { ...currentDetail, messages: [...currentDetail.messages, message] }
+        return Response.json(message)
+      }
+      throw new Error(`Unhandled fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <RoleplaySessionView
+        novelId="novel-001"
+        branchId="novel-001:main"
+        sessionId="roleplay-session-001"
+        anchorChapterNo={10}
+      />
+    )
+
+    expect(await screen.findByTestId('roleplay-chat-core')).toBeInTheDocument()
+    const messageList = screen.getByTestId('roleplay-message-list')
+    Object.defineProperties(messageList, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 1000 },
+    })
+    messageList.scrollTop = 800
+
+    fireEvent.change(screen.getByPlaceholderText('输入角色台词、动作，或你希望推动的剧情。⌘/Ctrl + Enter 发送'), {
+      target: { value: '继续。' },
+    })
+    fireEvent.click(screen.getByTestId('roleplay-composer-send'))
+    await waitFor(() => expect(messageList.scrollTop).toBe(1000))
+
+    messageList.scrollTop = 200
+    fireEvent.scroll(messageList)
+    await act(async () => {
+      controlledStream.enqueue('流式第一段。')
+      await Promise.resolve()
+    })
+    expect(await screen.findByText('流式第一段。')).toBeInTheDocument()
+    expect(messageList.scrollTop).toBe(200)
+
+    await act(async () => {
+      controlledStream.enqueue('流式第二段。')
+      await Promise.resolve()
+    })
+    expect(await screen.findByText('流式第一段。流式第二段。')).toBeInTheDocument()
+    expect(messageList.scrollTop).toBe(200)
+
+    await act(async () => {
+      controlledStream.close()
+      await Promise.resolve()
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('roleplay-message-3')).toHaveTextContent('流式第一段。流式第二段。')
+    })
+    expect(messageList.scrollTop).toBe(200)
   })
 })
