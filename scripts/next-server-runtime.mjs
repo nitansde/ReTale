@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import {
   assertOwnedTestDatabaseUrl,
   assertOwnedTestPath,
@@ -178,6 +178,26 @@ function ensureIsolatedTestTsconfig(config) {
   fs.writeFileSync(path.join(ROOT, config.tsconfigPath), `${JSON.stringify(tsconfigContents, null, 2)}\n`)
 }
 
+function ensureHanlpRuntime(mode) {
+  if (mode !== 'prod') return
+
+  const setupScript = path.join(ROOT, 'scripts', 'setup-hanlp-runtime.mjs')
+  console.log('[retale-server] Verifying managed HanLP runtime')
+  const result = spawnSync(process.execPath, [setupScript, '--ensure'], {
+    cwd: ROOT,
+    stdio: 'inherit',
+    env: process.env,
+  })
+
+  if (result.error) {
+    throw new Error(`[retale-server] Failed to verify HanLP runtime: ${result.error.message}`)
+  }
+
+  if (result.status !== 0) {
+    throw new Error(`[retale-server] HanLP runtime verification exited with status ${result.status ?? 'unknown'}`)
+  }
+}
+
 function printHelp(invokedAs) {
   console.log(`Usage: node ${invokedAs} [-- --next-cli-args]\n`)
   console.log('This wrapper starts a ReTale Next dev server with an isolated runtime profile.')
@@ -232,6 +252,7 @@ export function runNextServer(mode, invokedAs) {
   ensurePortAvailable(config.host, config.port)
   ensureModeFilesystem(config)
   ensureIsolatedTestTsconfig(config)
+  ensureHanlpRuntime(mode)
 
   const nextArgs = ['dev', '--hostname', config.host, '--port', String(config.port), ...args]
 

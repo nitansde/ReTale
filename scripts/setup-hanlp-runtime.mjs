@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
@@ -7,6 +6,13 @@ const ROOT = process.cwd()
 const DEFAULT_VENV_DIR = path.resolve(ROOT, '..', '.retale-hanlp-venv')
 const PYTHON_CANDIDATES = ['python3.13', 'python3.12', 'python3.11', 'python3']
 const REQUIRED_PACKAGES = ['hanlp==2.1.3', 'transformers==4.57.6']
+const RUNTIME_HEALTH_CHECK = [
+  'import hanlp, transformers',
+  'from transformers import BertTokenizer',
+  'assert hanlp.__version__ == "2.1.3"',
+  'assert transformers.__version__ == "4.57.6"',
+  'assert hasattr(BertTokenizer, "encode_plus")',
+].join('; ')
 
 const args = new Set(process.argv.slice(2))
 const postinstall = args.has('--postinstall')
@@ -46,6 +52,10 @@ function commandWorks(command, commandArgs) {
   return !result.error && result.status === 0
 }
 
+function runtimeWorks(pythonPath) {
+  return commandWorks(pythonPath, ['-c', RUNTIME_HEALTH_CHECK])
+}
+
 function selectPython() {
   const explicit = process.env.RETALE_HANLP_BOOTSTRAP_PYTHON?.trim()
   if (explicit) {
@@ -73,26 +83,23 @@ function venvPythonPath(venvDir) {
 
 function ensureVenv(venvDir) {
   const pythonPath = venvPythonPath(venvDir)
-  if (fs.existsSync(pythonPath)) {
-    return pythonPath
+  if (runtimeWorks(pythonPath)) {
+    log(`reusing healthy HanLP runtime: ${venvDir}`)
+    return { pythonPath, packagesReady: true }
   }
 
   fs.mkdirSync(path.dirname(venvDir), { recursive: true })
   const python = selectPython()
-  log(`creating venv with ${python}: ${venvDir}`)
-  run(python, ['-m', 'venv', venvDir])
-  return pythonPath
+  const resetExistingVenv = fs.existsSync(venvDir)
+  log(`${resetExistingVenv ? 'rebuilding' : 'creating'} venv with ${python}: ${venvDir}`)
+  run(python, ['-m', 'venv', ...(resetExistingVenv ? ['--clear'] : []), venvDir])
+  return { pythonPath, packagesReady: false }
 }
 
 function ensurePackages(pythonPath) {
   log(`installing pinned HanLP runtime packages with ${pythonPath}`)
   run(pythonPath, ['-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools', 'wheel', ...REQUIRED_PACKAGES])
-  run(pythonPath, ['-c', [
-    'import hanlp, transformers',
-    'from transformers import BertTokenizer',
-    'assert hasattr(BertTokenizer, "encode_plus")',
-    'print(f"hanlp={hanlp.__version__} transformers={transformers.__version__}")',
-  ].join('; ')])
+  run(pythonPath, ['-c', `${RUNTIME_HEALTH_CHECK}; print(f"hanlp={hanlp.__version__} transformers={transformers.__version__}")`])
 }
 
 function setEnvLine(existing, key, value) {
@@ -143,8 +150,10 @@ if (process.env.RETALE_SKIP_HANLP_SETUP === '1') {
 
 try {
   const venvDir = path.resolve(process.env.RETALE_HANLP_VENV_DIR?.trim() || DEFAULT_VENV_DIR)
-  const pythonPath = ensureVenv(venvDir)
-  ensurePackages(pythonPath)
+  const { pythonPath, packagesReady } = ensureVenv(venvDir)
+  if (!packagesReady) {
+    ensurePackages(pythonPath)
+  }
   ensureLocalEnv(pythonPath)
   if (runSmoke) {
     smokeTest(pythonPath)
