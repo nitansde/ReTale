@@ -1384,7 +1384,7 @@ export async function buildGenerationContext(
     selectionRange.lineEnd,
   )
   const branchLineageContextBlock = buildBranchLineageContextBlock({
-    chapterText: fullChapterText,
+    chapterText: storedChapterText,
     branchContextNodeId: request.branchContextNodeId,
     branchContextInclusion: request.branchContextInclusion,
   })
@@ -1636,13 +1636,15 @@ export async function buildGenerationContext(
 
   const blocks: GenerationContextBlock[] = [
     ...(roleplayContextBlock ? [roleplayContextBlock] : []),
-    {
-      id: 'neighborhood',
-      label: '选区附近正文',
-      enabled: true,
-      priority: 'highest',
-      content: renderBlock('选区附近正文', [chapterTextThroughSelection]),
-    },
+    ...(!isContinuationTask || !branchLineageContextBlock
+      ? [{
+          id: 'neighborhood',
+          label: '选区附近正文',
+          enabled: true,
+          priority: 'highest' as const,
+          content: renderBlock('选区附近正文', [chapterTextThroughSelection]),
+        }]
+      : []),
     {
       id: 'current-summary',
       label: '当前章节摘要',

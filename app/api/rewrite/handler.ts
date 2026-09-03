@@ -589,6 +589,7 @@ export function buildUserPrompt(params: {
   selectedText: string
   assembledContext: string
   writingSkillPrompt?: string
+  hasBranchLineageContext?: boolean
 }) {
   const roleplayContract = params.operationType === 'roleplay'
     ? [
@@ -610,7 +611,7 @@ export function buildUserPrompt(params: {
   })
   const sourceBlock = selectedText
     ? ['# 选中文本', selectedText, '']
-    : sourceText
+    : sourceText && !params.hasBranchLineageContext
       ? [`# ${CONTINUATION_SOURCE_BLOCK_LABEL}`, sourceText, '']
       : []
   const selectedLineText = params.selectedLineStart && params.selectedLineEnd
@@ -1167,6 +1168,7 @@ async function handleRewriteBody(
       selectedText,
       assembledContext: promptParts.assembledContext,
       writingSkillPrompt: promptParts.writingSkillPrompt,
+      hasBranchLineageContext: Boolean(promptBlocks?.some((block) => block.id === 'branch-lineage-full-text')),
     }),
     promptRuleRuntimeContext: normalizePresetCompatRuntimeContext(
       body as Record<string, unknown>,

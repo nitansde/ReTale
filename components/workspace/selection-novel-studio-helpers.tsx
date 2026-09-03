@@ -967,11 +967,9 @@ export function buildCharacterProfileSections(profile: Character['profile']) {
 
 export function characterCardNeedsExpansion(params: {
   profileSections: ReturnType<typeof buildCharacterProfileSections>
-  note: string
 }) {
-  const { profileSections, note } = params
+  const { profileSections } = params
   if (profileSections.length > 3) return true
-  if (note.length > 120) return true
   return profileSections.some((section) => section.note.length > 72 || section.evidence.length > 96 || section.summary.length > 140)
 }
 
@@ -994,11 +992,8 @@ export function WorkspaceCharacterReferenceCard({
   const aliasBadges = (char.aliases ?? []).map((alias) => alias.trim()).filter(Boolean)
   const identitySummary = getCharacterFacetContent(char.profile?.identity)
   const genderSummary = getCharacterFacetContent(char.profile?.gender)
-  const supplementalNote = char.note.trim()
-  const noteMatchesIdentity = supplementalNote && supplementalNote === identitySummary
   const cardCanExpand = characterCardNeedsExpansion({
     profileSections,
-    note: noteMatchesIdentity ? '' : supplementalNote,
   })
   const collapsedPrioritySections = profileSections.filter((section) => ['identity', 'capability', 'personality'].includes(section.key))
   const visibleProfileSections = !cardCanExpand || isExpanded
@@ -1049,9 +1044,6 @@ export function WorkspaceCharacterReferenceCard({
               </div>
             ))}
           </div>
-          {supplementalNote && !noteMatchesIdentity ? (
-            <p className={cn('text-xs leading-5 text-zinc-500', !isExpanded && cardCanExpand && 'line-clamp-2')}>{t('workspace.character.supplementalLine', { value: supplementalNote })}</p>
-          ) : null}
           {cardCanExpand ? (
             <button
               type="button"

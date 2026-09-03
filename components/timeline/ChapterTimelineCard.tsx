@@ -41,7 +41,7 @@ export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
             <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('workspace.timeline.chapterLabel', { count: props.chapter.chapterNo })}</p>
             <p className="mt-1 text-sm font-medium text-zinc-100">{props.chapter.title}</p>
             {props.chapter.summary ? (
-              <p className="mt-2 line-clamp-3 break-words text-xs leading-5 text-zinc-400">{props.chapter.summary}</p>
+              <p className="mt-2 break-words text-xs leading-5 text-zinc-400">{props.chapter.summary}</p>
             ) : null}
             <p className="mt-2 text-xs text-zinc-500">{t('workspace.wordCount', { count: props.chapter.wordCount })}</p>
           </button>

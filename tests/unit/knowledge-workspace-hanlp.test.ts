@@ -186,7 +186,6 @@ describe('knowledge workspace HanLP helpers', () => {
         capability: { content: '刀法精准' },
         personality: { content: '寡言审慎' },
       }),
-      note: '',
     })).toBe(false)
 
     expect(characterCardNeedsExpansion({
@@ -196,7 +195,6 @@ describe('knowledge workspace HanLP helpers', () => {
         personality: { content: '寡言审慎' },
         speakingStyle: { content: '每句话都像缓慢落刀一样压住场面' },
       }),
-      note: '他把每一次亮相都压得极低，却总能在关键处突然发力，把整场对话带向他预设的方向。',
     })).toBe(true)
   })
 

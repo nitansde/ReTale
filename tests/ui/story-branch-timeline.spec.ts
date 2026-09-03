@@ -1300,7 +1300,7 @@ test('full speculative branching flow persists through revise, reload, and reope
 
   await page.getByRole('button', { name: /Regenerate What-if|重新生成 What-if/i }).click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
-  await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue(DEFAULT_REWRITE_PROMPT)
+  await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue('如果他们在这里闹翻')
   await page.getByTestId('workspace-action-overlay').click({ position: { x: 8, y: 8 } })
   await expect(page.getByTestId('workspace-action-overlay')).toBeHidden()
 

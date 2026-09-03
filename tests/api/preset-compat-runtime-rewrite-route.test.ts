@@ -616,8 +616,8 @@ describe('preset compat rewrite route runtime', () => {
     }
     expect(requestBody.messages[1]?.content).toContain('用户要求：把情绪压低。')
     expect(requestBody.messages[1]?.content).toContain('任务类型：续写后续故事')
-    expect(requestBody.messages[1]?.content).toContain('任务要求：接着下面给出的正文，继续根据用户指令写接下来的故事。')
-    expect(requestBody.messages[1]?.content).toContain('输出要求：只输出后续新正文，不要复述、解释或重新输出下面已经给出的正文。')
+    expect(requestBody.messages[1]?.content).toContain('任务要求：接着上下文中给出的已有正文，继续根据用户指令写接下来的故事。')
+    expect(requestBody.messages[1]?.content).toContain('输出要求：只输出后续新正文，不要复述、解释或重新输出已有正文。')
     expect(requestBody.messages[1]?.content).toContain('# 已有正文（从这里之后继续写）\n上一个 block 的最新正文 BETA')
     expect(requestBody.messages[1]?.content.indexOf('选中行：未知')).toBeLessThan(
       requestBody.messages[1]?.content.indexOf('# 已有正文（从这里之后继续写）')
@@ -629,8 +629,8 @@ describe('preset compat rewrite route runtime', () => {
       '# 任务',
       '任务类型：续写后续故事',
       '用户要求：把情绪压低。',
-      '任务要求：接着下面给出的正文，继续根据用户指令写接下来的故事。',
-      '输出要求：只输出后续新正文，不要复述、解释或重新输出下面已经给出的正文。',
+      '任务要求：接着上下文中给出的已有正文，继续根据用户指令写接下来的故事。',
+      '输出要求：只输出后续新正文，不要复述、解释或重新输出已有正文。',
     ].join('\n'))).toBe(true)
     expect(requestBody.messages[1]?.content).not.toContain('操作类型：rewrite')
     expect(requestBody.messages[1]?.content).not.toContain('不要改写')
@@ -1803,5 +1803,60 @@ describe('preset compat rewrite route runtime', () => {
       '操作类型：rewrite',
       '用户要求：指令 BETA',
     ].join('\n'))).toBe(true)
+  })
+
+  it('uses branch lineage as the sole continuation body when that context block is active', async () => {
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => createAiSettings('openai-compatible'),
+    }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({
+      loadStoredPresetCompatLibrary: () => createCreativeLibrary(),
+    }))
+    const buildGenerationContext = vi.fn(async () => ({
+      novelId: 'novel-lineage',
+      branchId: 'novel-lineage:main',
+      chapterId: 'chapter-lineage',
+      chapterNo: 10,
+      selectedLineStart: null,
+      selectedLineEnd: null,
+      warnings: [],
+      promptBlocks: [
+        { id: 'current-summary', label: '当前章节摘要', enabled: true, priority: 'high' as const, content: '# 当前章节摘要\n稳定摘要' },
+        { id: 'branch-lineage-full-text', label: '当前分支谱系全文', enabled: true, priority: 'highest' as const, content: '# 当前分支谱系全文\n原始章节正文：\n原始正文\n\nContinue 祖先全文（CONT-01）：\n当前续写正文 ALPHA' },
+      ],
+      assembledContext: '# 当前章节摘要\n稳定摘要\n\n# 当前分支谱系全文\n原始章节正文：\n原始正文\n\nContinue 祖先全文（CONT-01）：\n当前续写正文 ALPHA',
+      graphContext: { nodes: [], edges: [], seedEntities: [], contextText: '', warnings: [] },
+      lanceEvidence: [],
+      tokenEstimate: 0,
+    }))
+    vi.doMock('@/lib/server/context-builder', () => ({
+      buildGenerationContext,
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ candidates: ['RAW OUTPUT'] }) } }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('rewrite', {
+      stream: false,
+      novelId: 'novel-lineage',
+      chapterId: 'chapter-lineage',
+      selectedText: '',
+      sourceText: '当前续写正文 ALPHA',
+      branchContextNodeId: 'continue-node-7',
+      branchContextInclusion: 'include_selected',
+    }))
+
+    expect(response.status).toBe(200)
+    const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      messages: Array<{ content: string }>
+    }
+    const content = requestBody.messages[1]?.content ?? ''
+    expect(content.match(/当前续写正文 BETA/g)).toHaveLength(1)
+    expect(content).not.toContain('# 已有正文（从这里之后继续写）')
+    expect(content).not.toContain('# 选中文本')
+    expect(content).toContain('任务类型：续写后续故事')
   })
 })

@@ -23,7 +23,10 @@ import {
   X,
 } from 'lucide-react'
 import type { FutureJumpContinueContext } from '@/components/future-jump/FutureJumpView'
-import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/context-prompt-block-visibility'
+import {
+  getVisibleAdvancedContextPromptBlocks,
+  resolveActiveGenerationContextTokenEstimate,
+} from '@/components/graph/context-prompt-block-visibility'
 import { WorkspaceCenterPane } from '@/components/workspace/WorkspaceCenterPane'
 import { WorkspaceChapterNav } from '@/components/workspace/WorkspaceChapterNav'
 import { WorkspaceHeader } from '@/components/workspace/WorkspaceHeader'
@@ -268,7 +271,7 @@ export function SelectionNovelStudio() {
     graphContext, contextPreviewLoading, contextPreviewError, graphReviewLoading, graphReviewControls, contextPanelOpen,
     setContextPanelOpen, graphSelection, setGraphSelection, evidenceDrawerOpen, setEvidenceDrawerOpen, disabledContextBlockIds, setDisabledContextBlockIds, excludedGraphEdgeIds, excludedEvidenceIds, graphMutationPendingId, graphMutationError, chapterGraphData,
     chapterGraphLoading, chapterGraphError, chapterGraphControls, chapterGraphSelection, setChapterGraphSelection, copied, setCopied, toast, toastVariant,
-    saveContinueBlockPending, saveContinueBlockError, roleplaySessionStarting, rewriteLaunchSource, futureMapLaunch, setFutureMapLaunch,
+    saveContinueBlockPending, saveContinueBlockError, roleplaySessionStarting, rewriteLaunchSource, activeContinueBlockRewriteContext, futureMapLaunch, setFutureMapLaunch,
     presetCompatLibraryOpen, setPresetCompatLibraryOpen, ollamaModelsByScenario, ollamaModelsLoading, ollamaModelsError,
     openAICompatibleModelsByScenario, openAICompatibleModelsLoading, editState, setEditState, knowledgePanelReadOnly,
     editor, editorRef, toolbarRef, resolvedAISettings, updateScenarioProvider, updateScenarioOpenAIField,
@@ -307,6 +310,16 @@ export function SelectionNovelStudio() {
     handleCreateWhatIf, launchFutureMapFromWhatIf, handleFutureJumpCreated, reopenWhatIfRewriteFlow,
     reopenFutureJumpRewriteFlow, selectionActions, knowledgeControls,
   } = actions
+  const isContinueBlockContinuation = rewriteLaunchSource === 'continue_block'
+    && activeContinueBlockRewriteContext?.variant === 'continue'
+  const activeContextTokenEstimate = useMemo(() => generationContext
+    ? resolveActiveGenerationContextTokenEstimate({
+        blocks: generationContext.promptBlocks,
+        disabledBlockIds: disabledContextBlockIds,
+        fallbackTokenEstimate: generationContext.tokenEstimate,
+        userInstruction: rewritePrompt,
+      })
+    : null, [disabledContextBlockIds, generationContext, rewritePrompt])
   const contextLabel = activeWorkspaceSelection.kind === 'chapter'
     ? t('workspace.context.chapter')
     : activeWorkspaceSelection.kind === 'rewrite'
@@ -903,7 +916,9 @@ export function SelectionNovelStudio() {
           closeLabel={t('common.close')}
           title={(
             <span className="block">
-              <span aria-hidden="true" className="block text-[11px] font-normal uppercase tracking-[0.22em] text-zinc-500">{t('workspace.shell.selectedText')}</span>
+              {!isContinueBlockContinuation ? (
+                <span aria-hidden="true" className="block text-[11px] font-normal uppercase tracking-[0.22em] text-zinc-500">{t('workspace.shell.selectedText')}</span>
+              ) : null}
               <span className="mt-1 block text-xl font-semibold text-zinc-100">{ACTION_META[activeMode].title}</span>
             </span>
           )}
@@ -913,10 +928,12 @@ export function SelectionNovelStudio() {
           backdropClassName="z-50 bg-black/55"
           className="max-w-3xl bg-[#0d1017] p-4 shadow-[0_-20px_80px_rgba(0,0,0,0.5)] sm:mb-6 sm:rounded-[32px] sm:p-5"
         >
-            <div className="mb-4 rounded-[24px] border border-white/8 bg-black/20 p-4">
-              <p className="mb-2 text-xs uppercase tracking-[0.16em] text-zinc-500">{t('workspace.shell.selectedExcerpt')}</p>
-              <p className="whitespace-pre-wrap text-sm leading-7 text-zinc-300">{lockedSelectionText || selectionText}</p>
-            </div>
+            {!isContinueBlockContinuation ? (
+              <div className="mb-4 rounded-[24px] border border-white/8 bg-black/20 p-4" data-testid="workspace-selected-excerpt">
+                <p className="mb-2 text-xs uppercase tracking-[0.16em] text-zinc-500">{t('workspace.shell.selectedExcerpt')}</p>
+                <p className="whitespace-pre-wrap text-sm leading-7 text-zinc-300">{lockedSelectionText || selectionText}</p>
+              </div>
+            ) : null}
 
             {contextPreviewLoading && !generationContext ? (
               <div className="mb-4 rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">{t('workspace.shell.loadingContextEvidence')}</div>
@@ -940,7 +957,14 @@ export function SelectionNovelStudio() {
                           : t('workspace.shell.rewriteDefaultDescription')}
                       </p>
                     </div>
-                    <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-zinc-300">{rewriteFlow.provider || providerLabel}</span>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {activeContextTokenEstimate !== null ? (
+                        <span className="rounded-full border border-amber-300/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-100" data-testid="workspace-context-token-estimate">
+                          {t('workspace.shell.contextApproxTokens', { count: activeContextTokenEstimate.toLocaleString() })}
+                        </span>
+                      ) : null}
+                      <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-zinc-300">{rewriteFlow.provider || providerLabel}</span>
+                    </div>
                   </div>
                 </div>
 
@@ -1016,7 +1040,11 @@ export function SelectionNovelStudio() {
                     >
                       <div>
                         <p className="text-[11px] uppercase tracking-[0.18em] text-amber-200/70">{t('workspace.shell.advancedContext')}</p>
-                        <p className="mt-1 text-sm text-zinc-200">{t('workspace.shell.advancedContextDescription')}</p>
+                        <p className="mt-1 text-sm text-zinc-200">
+                          {t(isContinueBlockContinuation
+                            ? 'workspace.shell.advancedContinuationContextDescription'
+                            : 'workspace.shell.advancedContextDescription')}
+                        </p>
                         <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-zinc-400">
                           <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.seedEntitiesCount', { count: activeSeedEntityCount })}</span>
                           <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.relationsCount', { count: activeGraphEdgeCount })}</span>
@@ -1033,7 +1061,11 @@ export function SelectionNovelStudio() {
                     {contextPanelOpen ? (
                       <div className="pt-3" data-testid="workspace-context-panel">
                         <GraphReviewPanel
-                          context={{ ...generationContext, graphContext: activeGraphContext }}
+                          context={{
+                            ...generationContext,
+                            tokenEstimate: activeContextTokenEstimate ?? generationContext.tokenEstimate,
+                            graphContext: activeGraphContext,
+                          }}
                           graphNodes={activeGraphContext.nodes}
                           graphEdges={activeGraphContext.edges}
                           controls={graphReviewControls}

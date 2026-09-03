@@ -1,8 +1,8 @@
 export const CONTINUATION_SOURCE_BLOCK_LABEL = '已有正文（从这里之后继续写）'
 
 const CONTINUATION_TASK_LINES = [
-  '任务要求：接着下面给出的正文，继续根据用户指令写接下来的故事。',
-  '输出要求：只输出后续新正文，不要复述、解释或重新输出下面已经给出的正文。',
+  '任务要求：接着上下文中给出的已有正文，继续根据用户指令写接下来的故事。',
+  '输出要求：只输出后续新正文，不要复述、解释或重新输出已有正文。',
 ]
 
 export function isContinuationRewriteTask(params: {

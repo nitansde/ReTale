@@ -56,7 +56,8 @@ describe('WorkspaceCharacterReferenceCard', () => {
     expect(screen.getByText('肩背清直，站在人群里也像一柄收鞘的刀。')).toBeInTheDocument()
     expect(screen.getByText('每句话都压得很稳')).toBeInTheDocument()
     expect(screen.getByText(/第六章写他/)).toBeInTheDocument()
-    expect(screen.getByText(/他总会先把屋里的每一处出口/)).toBeInTheDocument()
+    expect(screen.queryByText(/补充：/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/他总会先把屋里的每一处出口/)).not.toBeInTheDocument()
   })
 
   it('renders body facets from content-only profiles even when no expansion is needed', () => {

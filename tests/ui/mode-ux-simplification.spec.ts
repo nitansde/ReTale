@@ -819,6 +819,8 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   await expect(page.getByRole('button', { name: /Future Jump/i })).toHaveCount(0)
 
   await page.getByTestId('workspace-chapter-rewrite-entry').click()
+  await expect(page.getByTestId('workspace-selected-excerpt')).toBeVisible()
+  await expect(page.getByTestId('workspace-context-token-estimate')).toContainText('42')
   await expect(page.getByTestId('workspace-context-panel-toggle')).toHaveAttribute('aria-expanded', 'false')
   await expect(page.getByTestId('workspace-context-panel')).toHaveCount(0)
   await page.getByTestId('workspace-context-panel-toggle').click()
@@ -866,7 +868,8 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
 
   await page.getByTestId('workspace-continue-block-regenerate-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
-  await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue('前一版要求：把誓言后的情绪变化压进同一场景。\n\n当前续写块：RE-01 改写节点\n\n重新生成当前续写块，并保留它的修订历史。')
+  await expect(page.getByTestId('workspace-selected-excerpt')).toBeVisible()
+  await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue('把誓言后的情绪变化压进同一场景。')
   await expect(page.getByTestId('workspace-context-panel-toggle')).toHaveAttribute('aria-expanded', 'false')
   await page.getByTestId('workspace-context-panel-toggle').click()
   await expect(page.getByTestId('workspace-context-panel')).toBeVisible()
@@ -878,6 +881,8 @@ test('simplified mode flow covers import, continue-block lineage, future-jump co
   await page.getByTestId('workspace-continue-block-continue-entry').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
   await expect(page.getByTestId('workspace-action-overlay').getByText('当前续写块版本').first()).toBeVisible()
+  await expect(page.getByTestId('workspace-selected-excerpt')).toHaveCount(0)
+  await expect(page.getByTestId('workspace-context-token-estimate')).toContainText('42')
   await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue('把誓言后的情绪变化压进同一场景。')
   await expect(page.getByTestId('workspace-context-panel-toggle')).toHaveAttribute('aria-expanded', 'false')
   await page.getByTestId('workspace-context-panel-toggle').click()

@@ -300,6 +300,7 @@ describe('branch-isolation-authored', () => {
       branchId: 'novel-001:main',
       chapterId: 'chapter-10',
       selectedText: '',
+      sourceText: '续写正文：他们在雨夜里正式立下共同誓言。',
       operationType: 'rewrite',
       userInstruction: '继续沿着当前续写块扩展新的版本。',
       branchContextNodeId: 'continue-node-001',
@@ -311,12 +312,14 @@ describe('branch-isolation-authored', () => {
     expect(branchLineageBlock?.content).toContain('男主和女主暂时结盟，准备一起行动。\n他们都还相信对方。')
     expect(branchLineageBlock?.content).toContain('改写根正文：誓言让他们决定一起冒险。')
     expect(branchLineageBlock?.content).toContain('续写正文：他们在雨夜里正式立下共同誓言。')
+    expect(branchLineageBlock?.content.match(/续写正文：他们在雨夜里正式立下共同誓言。/g)).toHaveLength(1)
+    expect(context.promptBlocks.find((block) => block.id === 'neighborhood')).toBeUndefined()
 
     const assembled = context.assembledContext
     const taskBlock = context.promptBlocks.find((block) => block.id === 'user-instruction')
     expect(taskBlock?.content).toContain('任务类型：续写后续故事')
-    expect(taskBlock?.content).toContain('任务要求：接着下面给出的正文，继续根据用户指令写接下来的故事。')
-    expect(taskBlock?.content).toContain('输出要求：只输出后续新正文，不要复述、解释或重新输出下面已经给出的正文。')
+    expect(taskBlock?.content).toContain('任务要求：接着上下文中给出的已有正文，继续根据用户指令写接下来的故事。')
+    expect(taskBlock?.content).toContain('输出要求：只输出后续新正文，不要复述、解释或重新输出已有正文。')
     expect(taskBlock?.content).not.toContain('操作类型：rewrite')
     expect(taskBlock?.content).not.toContain('不要改写')
 

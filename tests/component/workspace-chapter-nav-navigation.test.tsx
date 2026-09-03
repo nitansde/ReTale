@@ -100,7 +100,7 @@ describe('workspace chapter navigation', () => {
     expect(screen.getByTestId('timeline-chapter-150')).toHaveAttribute('data-navigation-current', 'true')
     const completeSummary = screen.getByText('主角在旧港口确认失踪者留下的暗号，并由此判断真正的接头地点不在仓库，而是在潮水退去后才会显露的礁洞。')
     expect(completeSummary).toBeInTheDocument()
-    expect(completeSummary).not.toHaveClass('line-clamp-2')
+    expect(completeSummary.className).not.toMatch(/line-clamp-/)
     expect(screen.getByText('魔改版本')).toBeInTheDocument()
     expect(screen.queryByText('魔改摘要不应显示')).not.toBeInTheDocument()
     const rangeControls = screen.getByTestId('chapter-navigation-range-controls')
