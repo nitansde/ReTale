@@ -7,12 +7,18 @@ import {
   lookupRawTextEmbeddingCacheEntries,
   upsertRawTextEmbeddingCacheEntries,
 } from '@/lib/server/retrieval-embedding-cache'
+import {
+  formatMemoryAwareBatchPlan,
+  resolveMemoryAwareEmbeddingBatchPlan,
+} from '@/lib/server/memory-aware-batching'
 
 const DEFAULT_EMBEDDING_BATCH_SIZE = 16
 
 export type RawTextEmbeddingPrecomputeSettingsSnapshot = {
   provider: AIProvider
   model: string
+  cacheModelIdentity?: string
+  embeddingInputMaxCodePoints?: number | null
   embeddingBatchSize: number
 }
 
@@ -87,12 +93,21 @@ export async function precomputeRawTextEmbeddingCache<TRow>(params: {
   buildRawTextRetrievalEmbeddingInput: (row: TRow) => { text: string; embeddingInputHash: string }
 }): Promise<RawTextEmbeddingPrecomputeResult> {
   const startedAt = Date.now()
-  const maxConcurrentBatches = Math.max(1, Math.floor(params.maxConcurrentBatches ?? 2))
+  const batchPlan = resolveMemoryAwareEmbeddingBatchPlan({
+    provider: params.settingsSnapshot.provider,
+    model: params.settingsSnapshot.model,
+    requestedBatchSize: params.settingsSnapshot.embeddingBatchSize || DEFAULT_EMBEDDING_BATCH_SIZE,
+  })
+  const requestedConcurrentBatches = Math.max(1, Math.floor(params.maxConcurrentBatches ?? 2))
+  const maxConcurrentBatches = Math.min(requestedConcurrentBatches, batchPlan.maxConcurrentBatches)
+  if (batchPlan.localWorkload) {
+    console.log(`[raw-text-precompute] memory-aware batch plan: ${formatMemoryAwareBatchPlan(batchPlan)}`)
+  }
   const cacheScope = {
     novelId: params.novelId,
     branchId: params.branchId,
     provider: params.settingsSnapshot.provider,
-    model: params.settingsSnapshot.model,
+    model: params.settingsSnapshot.cacheModelIdentity ?? params.settingsSnapshot.model,
   }
   await params.healMissingKnowledgeChapterDerivedArtifacts({
     novelId: params.novelId,
@@ -114,7 +129,7 @@ export async function precomputeRawTextEmbeddingCache<TRow>(params: {
   const hitHashes = new Set(hits.map((entry) => entry.embeddingInputHash))
   const hitDocsCount = docsWithInputs.filter((item) => hitHashes.has(item.embeddingInputHash)).length
   const missingDocs = docsWithInputs.filter((item) => !hitHashes.has(item.embeddingInputHash))
-  const batchSize = Math.max(1, Math.floor(params.settingsSnapshot.embeddingBatchSize || DEFAULT_EMBEDDING_BATCH_SIZE))
+  const batchSize = batchPlan.effectiveBatchSize
   const missingBatches = Array.from(
     { length: Math.ceil(missingDocs.length / batchSize) },
     (_, index) => missingDocs.slice(index * batchSize, (index + 1) * batchSize),

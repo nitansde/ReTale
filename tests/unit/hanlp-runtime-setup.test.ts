@@ -69,6 +69,9 @@ if (args[0] === '-m' && args[1] === 'venv') {
     expect(fs.readFileSync(path.join(projectRoot, '.env.local'), 'utf8')).toContain(
       `HANLP_PYTHON_BIN=${JSON.stringify(path.join(managedVenv, 'bin', 'python'))}`,
     )
+    expect(fs.readFileSync(path.join(projectRoot, '.env.local'), 'utf8')).toContain(
+      'HANLP_BOOTSTRAP_BATCH_SIZE="auto"',
+    )
 
     const invocations = fs.readFileSync(invocationLog, 'utf8')
       .trim()
@@ -77,5 +80,9 @@ if (args[0] === '-m' && args[1] === 'venv') {
     expect(invocations.filter((args) => args[0] === '-m' && args[1] === 'venv')).toEqual([
       ['-m', 'venv', '--clear', managedVenv],
     ])
+    expect(invocations.some((args) => args[0] === '-c' && args[1]?.includes('pkg_resources'))).toBe(true)
+    expect(invocations.some((args) => args.includes('setuptools==80.9.0'))).toBe(true)
+    expect(invocations.some((args) => args.includes('nvidia-ml-py==13.610.43'))).toBe(true)
+    expect(invocations.some((args) => args[0] === '-m' && args[1] === 'pip' && args.includes('uninstall') && args.includes('pynvml'))).toBe(true)
   })
 })

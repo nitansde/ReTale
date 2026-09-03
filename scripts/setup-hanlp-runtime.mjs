@@ -5,9 +5,14 @@ import { spawnSync } from 'node:child_process'
 const ROOT = process.cwd()
 const DEFAULT_VENV_DIR = path.resolve(ROOT, '..', '.retale-hanlp-venv')
 const PYTHON_CANDIDATES = ['python3.13', 'python3.12', 'python3.11', 'python3']
-const REQUIRED_PACKAGES = ['hanlp==2.1.3', 'transformers==4.57.6']
+const REQUIRED_PACKAGES = [
+  'setuptools==80.9.0',
+  'nvidia-ml-py==13.610.43',
+  'hanlp==2.1.3',
+  'transformers==4.57.6',
+]
 const RUNTIME_HEALTH_CHECK = [
-  'import hanlp, transformers',
+  'import hanlp, pkg_resources, pynvml, transformers',
   'from transformers import BertTokenizer',
   'assert hanlp.__version__ == "2.1.3"',
   'assert transformers.__version__ == "4.57.6"',
@@ -98,8 +103,15 @@ function ensureVenv(venvDir) {
 
 function ensurePackages(pythonPath) {
   log(`installing pinned HanLP runtime packages with ${pythonPath}`)
-  run(pythonPath, ['-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools', 'wheel', ...REQUIRED_PACKAGES])
+  run(pythonPath, ['-m', 'pip', 'install', '--upgrade', 'pip', 'wheel', ...REQUIRED_PACKAGES])
   run(pythonPath, ['-c', `${RUNTIME_HEALTH_CHECK}; print(f"hanlp={hanlp.__version__} transformers={transformers.__version__}")`])
+}
+
+function removeDeprecatedPynvmlWrapper(pythonPath) {
+  if (!commandWorks(pythonPath, ['-m', 'pip', 'show', 'pynvml'])) return
+  log('removing deprecated pynvml redirector while keeping nvidia-ml-py')
+  run(pythonPath, ['-m', 'pip', 'uninstall', '--yes', 'pynvml'])
+  run(pythonPath, ['-c', 'import pynvml; print(pynvml.__file__)'])
 }
 
 function setEnvLine(existing, key, value) {
@@ -118,7 +130,7 @@ function ensureLocalEnv(pythonPath) {
   contents = setEnvLine(contents, 'HANLP_PYTHON_BIN', pythonPath)
   contents = setEnvLine(contents, 'HANLP_BOOTSTRAP_SCRIPT_PATH', scriptPath)
   contents = setEnvLine(contents, 'HANLP_BOOTSTRAP_PARALLELISM', process.env.HANLP_BOOTSTRAP_PARALLELISM?.trim() || '1')
-  contents = setEnvLine(contents, 'HANLP_BOOTSTRAP_BATCH_SIZE', process.env.HANLP_BOOTSTRAP_BATCH_SIZE?.trim() || '256')
+  contents = setEnvLine(contents, 'HANLP_BOOTSTRAP_BATCH_SIZE', process.env.HANLP_BOOTSTRAP_BATCH_SIZE?.trim() || 'auto')
   fs.writeFileSync(envPath, contents)
   log(`updated ${path.relative(ROOT, envPath)}`)
 }
@@ -154,6 +166,7 @@ try {
   if (!packagesReady) {
     ensurePackages(pythonPath)
   }
+  removeDeprecatedPynvmlWrapper(pythonPath)
   ensureLocalEnv(pythonPath)
   if (runSmoke) {
     smokeTest(pythonPath)

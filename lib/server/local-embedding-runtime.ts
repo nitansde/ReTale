@@ -11,6 +11,7 @@ import type {
   LocalEmbeddingRuntimeStatus,
 } from '@/lib/local-embedding'
 import { LOCAL_EMBEDDING_API_KEY, LOCAL_EMBEDDING_BASE_URL } from '@/lib/local-embedding'
+import { resolvePhysicalMemoryBytes } from '@/lib/server/memory-aware-batching'
 import { loadStoredAISettings, saveStoredAISettings } from '@/lib/server/ai-settings'
 import { getDataRootPath } from '@/lib/server/db-resolver'
 import {
@@ -836,7 +837,33 @@ async function isHealthy(modelId: string, timeoutMs = 1_500) {
   }
 }
 
-export function buildLocalEmbeddingServerArgs(model: RuntimeLocalEmbeddingModel, modelPath: string, gpuLayers: number) {
+export type LocalEmbeddingRuntimeTuning = {
+  parallel: number
+  batchSize: number
+  microBatchSize: number
+}
+
+export function resolveLocalEmbeddingRuntimeTuning(totalMemoryBytes: number = resolvePhysicalMemoryBytes()): LocalEmbeddingRuntimeTuning {
+  const gib = 1024 ** 3
+  if (totalMemoryBytes <= 8 * gib) {
+    return { parallel: 1, batchSize: 128, microBatchSize: 64 }
+  }
+  if (totalMemoryBytes <= 16 * gib) {
+    return { parallel: 1, batchSize: 256, microBatchSize: 128 }
+  }
+  if (totalMemoryBytes <= 32 * gib) {
+    return { parallel: 2, batchSize: 512, microBatchSize: 256 }
+  }
+  return { parallel: 4, batchSize: 1024, microBatchSize: 512 }
+}
+
+export function buildLocalEmbeddingServerArgs(
+  model: RuntimeLocalEmbeddingModel,
+  modelPath: string,
+  gpuLayers: number,
+  totalMemoryBytes: number = resolvePhysicalMemoryBytes(),
+) {
+  const tuning = resolveLocalEmbeddingRuntimeTuning(totalMemoryBytes)
   return [
     '--model', modelPath,
     '--alias', model.id,
@@ -844,6 +871,9 @@ export function buildLocalEmbeddingServerArgs(model: RuntimeLocalEmbeddingModel,
     ...(model.pooling ? ['--pooling', model.pooling] : []),
     '--embd-normalize', '2',
     '--ctx-size', String(model.contextSize),
+    '--parallel', String(tuning.parallel),
+    '--batch-size', String(tuning.batchSize),
+    '--ubatch-size', String(tuning.microBatchSize),
     '--n-gpu-layers', String(gpuLayers),
     '--api-key', LOCAL_EMBEDDING_API_KEY,
     '--cors-origins', 'localhost',

@@ -11,6 +11,9 @@ function writeFakeHanlpPackage(root: string) {
   fs.writeFileSync(path.join(pretrainedDir, '__init__.py'), '')
   fs.writeFileSync(path.join(pretrainedDir, 'mtl.py'), 'CLOSE_TOK_POS_NER_SRL_DEP_SDP_CON_ELECTRA_SMALL_ZH = "fake-model"\n')
   fs.writeFileSync(path.join(packageDir, '__init__.py'), `
+import os
+
+
 class Sampler:
     batch_size = None
 
@@ -36,7 +39,8 @@ class FakeModel:
     def __call__(self, texts, tasks=None, skip_tasks=None):
         if not isinstance(texts, list):
             raise RuntimeError(f"expected batched list input, got {type(texts).__name__}")
-        if self.tasks["ner/msra"].sampler_builder.batch_size != 256:
+        expected_batch_size = int(os.environ.get("EXPECTED_HANLP_BATCH_SIZE", "8"))
+        if self.tasks["ner/msra"].sampler_builder.batch_size != expected_batch_size:
             raise RuntimeError("sampler_builder.batch_size was not configured")
         if "tok/fine" not in tasks or "ner/msra" not in tasks:
             raise RuntimeError(f"expected tok+ner tasks, got {tasks}")
@@ -54,7 +58,7 @@ def load(_model_name):
 }
 
 describe('hanlp_bootstrap.py batching', () => {
-  it('passes sentence batches to HanLP with the default batch size of 256', () => {
+  it('caps sentence batches from physical memory by default', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-fake-hanlp-'))
 
     try {
@@ -74,6 +78,9 @@ describe('hanlp_bootstrap.py batching', () => {
         encoding: 'utf8',
         env: {
           ...process.env,
+          HANLP_BOOTSTRAP_BATCH_SIZE: 'auto',
+          HANLP_BOOTSTRAP_PHYSICAL_MEMORY_BYTES: String(16 * 1024 ** 3),
+          EXPECTED_HANLP_BATCH_SIZE: '8',
           PYTHONPATH: [tempDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
         },
       })

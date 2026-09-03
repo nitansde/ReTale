@@ -1316,6 +1316,111 @@ describe('knowledge rebuild HanLP orchestration', () => {
     })
   })
 
+  it('reuses a bootstrapped canonical character when extraction finds an earlier first appearance', async () => {
+    const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-hanlp-earlier-first-seen')
+    const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_earlier_first_seen', 1)
+    const aiSettings = createMockAISettings(1)
+
+    database.prepare(
+      `INSERT INTO KnowledgeEntity (
+        id, novelId, branchId, entityType, canonicalName, description,
+        firstSeenChapter, lastSeenChapter, importanceTier, status, userConfirmed
+      ) VALUES (?, ?, ?, 'character', ?, ?, ?, ?, ?, ?, 0)`
+    ).run('entity-future-bootstrap', novelId, branchId, '古音', 'HanLP 后续章节引导实体', 2, 2, 'important', 'hanlp_bootstrap')
+
+    vi.doMock('@/lib/server/ai-settings', () => ({
+      loadStoredAISettings: () => aiSettings,
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap', () => ({
+      runHanlpBootstrapForChapter: vi.fn(async (input: { rawText: string }) => ({
+        source: 'cache' as const,
+        cache: {} as never,
+        result: {} as never,
+        output: { people: [], locations: [], organizations: [], settings: [], entities: [] },
+        cacheKey: {} as never,
+        scriptPath: '/tmp/mock-hanlp.py',
+        normalizedChapterText: input.rawText,
+      })),
+    }))
+    vi.doMock('@/lib/server/hanlp-bootstrap-initializer', () => ({
+      initializeHanlpBootstrapCharacterEntities: vi.fn(async () => ({
+        createdOrUpdatedEntityIds: [],
+        characterDecisions: [],
+        promptContext: { characters: [], locations: [], organizations: [], settings: [] },
+      })),
+    }))
+    vi.doMock('@/lib/server/knowledge-extraction', () => ({
+      extractChapterKnowledgeOffline: vi.fn(async () => ({
+        extraction: {
+          ...createMockExtraction(1),
+          characters: [{
+            name: '古音',
+            aliases: [],
+            descriptionDelta: '第一章已经正式登场',
+            profile: {},
+            status: '活跃',
+            evidence: [{ quote: '古音出现在山门前。', lineStart: 1, lineEnd: 1 }],
+          }],
+        },
+        provider: 'openai-compatible' as const,
+        model: aiSettings.knowledgeExtraction.openAICompatible.model,
+      })),
+    }))
+    vi.doMock('@/lib/server/retrieval-index', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/server/retrieval-index')>()
+      return {
+        ...actual,
+        precomputeRawTextEmbeddingCache: vi.fn(async () => ({
+          totalDocs: 0,
+          completedDocs: 0,
+          cacheHits: 0,
+          cacheMisses: 0,
+          failedDocs: 0,
+          totalBatches: 0,
+          completedBatches: 0,
+          degraded: false,
+          cancelled: false,
+          durationMs: 0,
+        })),
+        rebuildBranchRetrievalIndex: vi.fn(async () => ({ rowCount: 0, embeddingBatchCount: 0 })),
+      }
+    })
+
+    const { rebuildKnowledgeForNovel } = await import('@/lib/server/knowledge-rebuild')
+    await expect(rebuildKnowledgeForNovel({
+      novelId,
+      chapterRange: { startChapter: 1, endChapter: 1 },
+    })).resolves.toMatchObject({ outcome: 'completed' })
+
+    expect(queryOne<{
+      id: string
+      firstSeenChapter: number
+      lastSeenChapter: number
+      status: string | null
+    }>(
+      'SELECT id, firstSeenChapter, lastSeenChapter, status FROM KnowledgeEntity WHERE branchId = ? AND canonicalName = ?',
+      branchId,
+      '古音',
+    )).toEqual({
+      id: 'entity-future-bootstrap',
+      firstSeenChapter: 1,
+      lastSeenChapter: 2,
+      status: '活跃',
+    })
+    expect(queryOne<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM KnowledgeEntity WHERE branchId = ? AND canonicalName = ?',
+      branchId,
+      '古音',
+    )?.count).toBe(1)
+    expect(queryOne<{ status: string; knowledgeStatus: string }>(
+      `SELECT candidate.status, chapter.knowledgeStatus
+       FROM chapter_extraction_candidates candidate
+       JOIN KnowledgeChapter chapter ON chapter.id = candidate.chapter_id
+       WHERE candidate.branch_id = ? AND candidate.chapter_no = 1`,
+      branchId,
+    )).toEqual({ status: 'persisted', knowledgeStatus: 'ready' })
+  })
+
   it('passes combined story-state and HanLP chapter context into extraction calls', async () => {
     const { database, queryAll } = await createTestDatabase('retale-knowledge-rebuild-hanlp-prompt-context')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_hanlp_prompt_context', 2)

@@ -12,9 +12,11 @@ BATCH_SIZE_ENV = "HANLP_BOOTSTRAP_BATCH_SIZE"
 MAX_SENT_CHARS_ENV = "HANLP_BOOTSTRAP_MAX_SENT_CHARS"
 TASKS_ENV = "HANLP_BOOTSTRAP_TASKS"
 SKIP_HEAVY_TASKS_ENV = "HANLP_BOOTSTRAP_SKIP_HEAVY_TASKS"
+PHYSICAL_MEMORY_BYTES_ENV = "HANLP_BOOTSTRAP_PHYSICAL_MEMORY_BYTES"
 
-DEFAULT_BATCH_SIZE = 256
+DEFAULT_BATCH_SIZE = 4
 DEFAULT_MAX_SENT_CHARS = 220
+GIB = 1024 ** 3
 
 
 sys.setrecursionlimit(max(sys.getrecursionlimit(), 10000))
@@ -31,6 +33,73 @@ def _read_positive_int(env_name, default):
     except ValueError:
         value = default
     return max(1, value)
+
+
+def _physical_memory_bytes():
+    configured = os.environ.get(PHYSICAL_MEMORY_BYTES_ENV, "").strip()
+    if configured:
+        try:
+            return max(1, int(configured))
+        except ValueError:
+            pass
+
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        physical_pages = os.sysconf("SC_PHYS_PAGES")
+        if page_size > 0 and physical_pages > 0:
+            return page_size * physical_pages
+    except (AttributeError, OSError, TypeError, ValueError):
+        pass
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [
+                    ("length", ctypes.c_ulong),
+                    ("memory_load", ctypes.c_ulong),
+                    ("total_physical", ctypes.c_ulonglong),
+                    ("available_physical", ctypes.c_ulonglong),
+                    ("total_page_file", ctypes.c_ulonglong),
+                    ("available_page_file", ctypes.c_ulonglong),
+                    ("total_virtual", ctypes.c_ulonglong),
+                    ("available_virtual", ctypes.c_ulonglong),
+                    ("available_extended_virtual", ctypes.c_ulonglong),
+                ]
+
+            status = MemoryStatus()
+            status.length = ctypes.sizeof(MemoryStatus)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return max(1, int(status.total_physical))
+        except (AttributeError, OSError, TypeError, ValueError):
+            pass
+
+    return 0
+
+
+def _auto_batch_size(total_memory_bytes):
+    if total_memory_bytes <= 0:
+        return DEFAULT_BATCH_SIZE
+    if total_memory_bytes <= 8 * GIB:
+        return 4
+    if total_memory_bytes <= 16 * GIB:
+        return 8
+    if total_memory_bytes <= 32 * GIB:
+        return 16
+    if total_memory_bytes <= 64 * GIB:
+        return 32
+    return 64
+
+
+def _resolve_batch_size():
+    configured = os.environ.get(BATCH_SIZE_ENV, "auto").strip().lower()
+    if configured not in {"", "auto"}:
+        try:
+            return max(1, int(configured))
+        except ValueError:
+            pass
+    return _auto_batch_size(_physical_memory_bytes())
 
 
 def _env_flag(env_name, default=True):
@@ -343,7 +412,7 @@ def _build_group(items, entity_type, chapter_no):
 
 
 def _run(text, chapter_no):
-    batch_size = _read_positive_int(BATCH_SIZE_ENV, DEFAULT_BATCH_SIZE)
+    batch_size = _resolve_batch_size()
     max_sent_chars = _read_positive_int(MAX_SENT_CHARS_ENV, DEFAULT_MAX_SENT_CHARS)
     model = _load_model()
     _configure_batch_size(model, batch_size)

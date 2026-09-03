@@ -20,6 +20,8 @@ import {
 } from '@/lib/server/knowledge-store'
 import {
   deleteBranchRetrievalIndex,
+  getEmbeddingCacheModelIdentity,
+  getEmbeddingInputMaxCodePoints,
   precomputeRawTextEmbeddingCache,
   rebuildBranchRetrievalIndex,
   type RawTextEmbeddingPrecomputeResult,
@@ -173,6 +175,8 @@ type KnowledgeRebuildIndexProgress = RetrievalIndexBuildProgress
 type KnowledgeRebuildEmbeddingSettingsSnapshot = {
   provider: AIProvider
   model: string
+  cacheModelIdentity?: string
+  embeddingInputMaxCodePoints?: number | null
   embeddingBatchSize: number
 }
 
@@ -882,6 +886,8 @@ function buildEmbeddingSettingsSnapshot(): KnowledgeRebuildEmbeddingSettingsSnap
   return {
     provider: embeddings.provider,
     model: embeddings.provider === 'openai-compatible' ? embeddings.openAICompatible.model : embeddings.ollama.model,
+    cacheModelIdentity: getEmbeddingCacheModelIdentity(embeddings),
+    embeddingInputMaxCodePoints: getEmbeddingInputMaxCodePoints(embeddings),
     embeddingBatchSize: Math.max(1, Math.floor(embeddings.embeddingBatchSize || 1)),
   }
 }
@@ -4128,7 +4134,6 @@ function resolveCharacterEntityByName(params: {
           AND e.entityType = 'character'
           AND e.importanceTier IN ('protagonist', 'important', 'arc')
           AND e.canonicalName = ?
-          AND e.firstSeenChapter <= ?
         UNION ALL
         SELECT e.id AS id, e.canonicalName AS canonicalName, 'alias' AS matchSource, e.userConfirmed AS userConfirmed
         FROM EntityAlias a
@@ -4143,7 +4148,6 @@ function resolveCharacterEntityByName(params: {
     normalizedName,
     params.branchId,
     normalizedName,
-    params.chapterNo,
     params.branchId,
     normalizedName,
     params.chapterNo,

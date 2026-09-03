@@ -1,7 +1,10 @@
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { LOCAL_EMBEDDING_BASE_URL } from '@/lib/local-embedding'
+import type { EmbeddingsScenarioSettings } from '@/lib/types'
 import { resetResolvedDatabasesForTests } from '@/lib/server/db-resolver'
+import type { OpenAICompatibleEmbeddingResult } from '@/lib/server/openai-compatible'
 import type { OllamaEmbeddingResult } from '@/lib/server/ollama-local'
 import { initializeDatabase } from '@/lib/server/sqlite'
 import { registerLegacyNovelDatabase } from '@/tests/helpers/novel-db'
@@ -75,15 +78,20 @@ function registerSeededDatabase(database: DatabaseSync) {
   disposeNovelDatabaseOverride = registerLegacyNovelDatabase(database, ['novel-001'])
 }
 
-function createMockAISettings() {
+function createMockAISettings(provider: 'ollama' | 'local-openai-compatible' = 'ollama'): {
+  embeddings: EmbeddingsScenarioSettings
+} {
   return {
     embeddings: {
-      provider: 'ollama',
+      provider: provider === 'local-openai-compatible' ? 'openai-compatible' : 'ollama',
       embeddingBatchSize: 16,
       openAICompatible: {
-        model: 'unused-openai-model',
+        baseUrl: provider === 'local-openai-compatible' ? LOCAL_EMBEDDING_BASE_URL : 'https://example.com/v1',
+        apiKey: 'unit-test-key',
+        model: provider === 'local-openai-compatible' ? 'qwen3-embedding-4b-q4_k_m' : 'unused-openai-model',
       },
       ollama: {
+        baseUrl: 'http://127.0.0.1:11434',
         model: 'unit-test-embedding-model',
       },
     },
@@ -281,7 +289,10 @@ function getPendingRetrievalIndexRows(database: DatabaseSync) {
     }>
 }
 
-async function createRetrievalIndexHarness(testName: string) {
+async function createRetrievalIndexHarness(
+  testName: string,
+  options: { embeddingProvider?: 'ollama' | 'local-openai-compatible' } = {},
+) {
   const tempDatabase = createTempDatabaseCopy(testName)
   cleanups.push(tempDatabase.cleanup)
   process.env.RETALE_DATA_DIR = path.join(tempDatabase.directory, 'data')
@@ -290,7 +301,7 @@ async function createRetrievalIndexHarness(testName: string) {
   seedRetrievalFixture(database)
   registerSeededDatabase(database)
 
-  const aiSettings = createMockAISettings()
+  const aiSettings = createMockAISettings(options.embeddingProvider)
   const mockLanceDb = createMockLanceDb()
   const ivfFlat = vi.fn((config: Record<string, unknown>) => ({ kind: 'ivfFlat', config, callIndex: ivfFlat.mock.calls.length }))
   const embedTextsWithOllama = vi.fn(async (input: string | string[]): Promise<OllamaEmbeddingResult> => {
@@ -305,6 +316,21 @@ async function createRetrievalIndexHarness(testName: string) {
       model: aiSettings.embeddings.ollama.model,
     }
   })
+  const embedTextsWithOpenAICompatible = vi.fn(async (
+    input: string | string[],
+    configOverride?: { model?: string },
+  ): Promise<OpenAICompatibleEmbeddingResult> => {
+    const values = Array.isArray(input) ? input : [input]
+    return {
+      enabled: true,
+      embeddings: values.map((text) => {
+        if (text.includes('章节摘要')) return [4, 4, 4]
+        if (text.includes('场景证据原文内容')) return [3, 3, 3]
+        return [2, 2, 2]
+      }),
+      model: configOverride?.model ?? aiSettings.embeddings.openAICompatible.model,
+    }
+  })
 
   vi.resetModules()
   vi.doMock('@/lib/server/ai-settings', () => ({
@@ -312,6 +338,9 @@ async function createRetrievalIndexHarness(testName: string) {
   }))
   vi.doMock('@/lib/server/ollama-local', () => ({
     embedTextsWithOllama,
+  }))
+  vi.doMock('@/lib/server/openai-compatible', () => ({
+    embedTextsWithOpenAICompatible,
   }))
   vi.doMock('@lancedb/lancedb', () => ({
     connect: mockLanceDb.connect,
@@ -328,6 +357,7 @@ async function createRetrievalIndexHarness(testName: string) {
   return {
     aiSettings,
     database,
+    embedTextsWithOpenAICompatible,
     embedTextsWithOllama,
     ivfFlat,
     mockLanceDb,
@@ -687,6 +717,72 @@ describe('retrieval-index cache reuse helpers', () => {
     const storedRows = mockLanceDb.database.createTable.mock.calls[0]?.[1] as Array<{ id: string; vector: number[] }>
     expect(storedRows.map((row) => row.id)).toEqual(mergedDocs.map((row) => row.id))
     expect(storedRows.find((row) => row.id === packedDoc!.id)?.vector).toEqual(cachedVector)
+  })
+
+  it('reuses local OpenAI-compatible vectors under the canonical cache identity and context limit', async () => {
+    const {
+      aiSettings,
+      database,
+      embedTextsWithOpenAICompatible,
+      retrievalIndex,
+    } = await createRetrievalIndexHarness(
+      'retale-retrieval-index-local-openai-cache-identity',
+      { embeddingProvider: 'local-openai-compatible' },
+    )
+
+    const longFixture = seedLongWorldFallbackFixture(database, 'local-openai-context')
+    const rawTextDocs = retrievalIndex.loadRawTextRetrievalDocs('novel-001', 'novel-001:main')
+    const mergedDocs = retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main')
+    const model = aiSettings.embeddings.openAICompatible.model
+    const cacheModelIdentity = retrievalIndex.getEmbeddingCacheModelIdentity(aiSettings.embeddings)
+    const embeddingInputMaxCodePoints = retrievalIndex.getEmbeddingInputMaxCodePoints(aiSettings.embeddings)
+    const rawTextInputs = rawTextDocs.map((row) => retrievalIndex.buildRawTextRetrievalEmbeddingInput(row).text)
+
+    expect(cacheModelIdentity).not.toBe(model)
+    expect(embeddingInputMaxCodePoints).toBe(1536)
+    await expect(retrievalIndex.precomputeRawTextEmbeddingCache({
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      settingsSnapshot: {
+        provider: 'openai-compatible',
+        model,
+        embeddingBatchSize: aiSettings.embeddings.embeddingBatchSize,
+      },
+    })).resolves.toMatchObject({
+      totalDocs: rawTextDocs.length,
+      completedDocs: rawTextDocs.length,
+      cacheHits: 0,
+    })
+
+    expect(embedTextsWithOpenAICompatible).toHaveBeenCalledTimes(rawTextDocs.length > 0 ? 1 : 0)
+    expect(embedTextsWithOpenAICompatible.mock.calls[0]?.[1]).toMatchObject({ model })
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND provider = ? AND model = ?'
+    ).get('novel-001:main', 'openai-compatible', cacheModelIdentity)).toMatchObject({ count: rawTextDocs.length })
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ? AND provider = ? AND model = ?'
+    ).get('novel-001:main', 'openai-compatible', model)).toMatchObject({ count: 0 })
+
+    embedTextsWithOpenAICompatible.mockClear()
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: mergedDocs.length,
+    })
+
+    const liveInputs = embedTextsWithOpenAICompatible.mock.calls.flatMap(([input]) => Array.isArray(input) ? input : [input])
+    expect(liveInputs).toHaveLength(mergedDocs.length - rawTextDocs.length)
+    for (const rawTextInput of rawTextInputs) {
+      expect(liveInputs).not.toContain(rawTextInput)
+    }
+    const cappedLongInput = liveInputs.find((input) => input.includes(longFixture.term))
+    expect(cappedLongInput).toBeTruthy()
+    expect(Array.from(cappedLongInput!).length).toBe(embeddingInputMaxCodePoints)
+    expect(embedTextsWithOpenAICompatible.mock.calls.every(([, config]) => config?.model === model)).toBe(true)
+
+    embedTextsWithOpenAICompatible.mockClear()
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
+      rowCount: mergedDocs.length,
+    })
+    expect(embedTextsWithOpenAICompatible).not.toHaveBeenCalled()
   })
 
   it('preserves overlap and final rebuild correctness', async () => {

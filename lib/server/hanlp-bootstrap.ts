@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import {
@@ -435,8 +436,19 @@ export function validateHanlpBootstrapOutput(rawOutput: unknown, params: { chapt
 export function defaultHanlpBootstrapRunner(invocation: HanlpBootstrapSubprocessInvocation): Promise<HanlpBootstrapSubprocessResult> {
   return new Promise((resolve) => {
     const maxBuffer = 10 * 1024 * 1024
+    const physicalMemoryBytes = os.totalmem()
+    const threadLimit = Math.max(1, Math.min(4, os.availableParallelism()))
     const child = spawn(invocation.pythonBin, [invocation.scriptPath], {
       cwd: /* turbopackIgnore: true */ process.cwd(),
+      env: {
+        ...process.env,
+        HANLP_BOOTSTRAP_PHYSICAL_MEMORY_BYTES: process.env.HANLP_BOOTSTRAP_PHYSICAL_MEMORY_BYTES?.trim()
+          || String(physicalMemoryBytes),
+        KMP_USE_SHM: process.env.KMP_USE_SHM?.trim() || '0',
+        OMP_NUM_THREADS: process.env.OMP_NUM_THREADS?.trim() || String(threadLimit),
+        MKL_NUM_THREADS: process.env.MKL_NUM_THREADS?.trim() || String(threadLimit),
+        TOKENIZERS_PARALLELISM: process.env.TOKENIZERS_PARALLELISM?.trim() || 'false',
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
 

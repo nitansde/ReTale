@@ -23,6 +23,7 @@ import {
   downloadUnverifiedModelFile,
   downloadVerifiedFile,
   findExtractedRuntimeSourcePath,
+  resolveLocalEmbeddingRuntimeTuning,
   resolveLocalEmbeddingPaths,
   resetLocalEmbeddingRuntimeForTests,
 } from '@/lib/server/local-embedding-runtime'
@@ -145,7 +146,7 @@ describe('local embedding catalog', () => {
       contextSize: catalogModel.contextSize,
       pooling: catalogModel.pooling,
       normalization: catalogModel.normalization,
-    }, '/safe/model.gguf', 999)
+    }, '/safe/model.gguf', 999, 16 * 1024 ** 3)
     expect(args).toContain('--embedding')
     expect(args).toContain('--no-webui')
     expect(args).toContain('--no-cors-credentials')
@@ -153,6 +154,9 @@ describe('local embedding catalog', () => {
     expect(args.slice(args.indexOf('--api-key'), args.indexOf('--api-key') + 2)).toEqual(['--api-key', 'retale-local'])
     expect(args.slice(args.indexOf('--cors-origins'), args.indexOf('--cors-origins') + 2)).toEqual(['--cors-origins', 'localhost'])
     expect(args.slice(args.indexOf('--host'), args.indexOf('--host') + 2)).toEqual(['--host', '127.0.0.1'])
+    expect(args.slice(args.indexOf('--parallel'), args.indexOf('--parallel') + 2)).toEqual(['--parallel', '1'])
+    expect(args.slice(args.indexOf('--batch-size'), args.indexOf('--batch-size') + 2)).toEqual(['--batch-size', '256'])
+    expect(args.slice(args.indexOf('--ubatch-size'), args.indexOf('--ubatch-size') + 2)).toEqual(['--ubatch-size', '128'])
 
     const customArgs = buildLocalEmbeddingServerArgs(restoreCustomLocalEmbeddingModel(
       'hf-embedding-0123456789abcdef',
@@ -170,6 +174,24 @@ describe('local embedding catalog', () => {
       normalization: bgeModel.normalization,
     }, '/safe/bge-m3.gguf', 0)
     expect(bgeArgs.slice(bgeArgs.indexOf('--pooling'), bgeArgs.indexOf('--pooling') + 2)).toEqual(['--pooling', 'cls'])
+  })
+
+  it('scales llama-server parallelism and token batches from physical memory', () => {
+    expect(resolveLocalEmbeddingRuntimeTuning(8 * 1024 ** 3)).toEqual({
+      parallel: 1,
+      batchSize: 128,
+      microBatchSize: 64,
+    })
+    expect(resolveLocalEmbeddingRuntimeTuning(16 * 1024 ** 3)).toEqual({
+      parallel: 1,
+      batchSize: 256,
+      microBatchSize: 128,
+    })
+    expect(resolveLocalEmbeddingRuntimeTuning(64 * 1024 ** 3)).toEqual({
+      parallel: 4,
+      batchSize: 1024,
+      microBatchSize: 512,
+    })
   })
 
   it('accepts both tar directory and flat Windows zip runtime layouts', async () => {

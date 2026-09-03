@@ -95,6 +95,7 @@ const result = spawnSync(
       TMP: tempDir,
       TEMP: tempDir,
       TASK_EVIDENCE_DIR: EVIDENCE_ROOT,
+      RETALE_PHYSICAL_MEMORY_BYTES: process.env.RETALE_PHYSICAL_MEMORY_BYTES || String(64 * 1024 ** 3),
     },
   }
 )

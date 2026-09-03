@@ -17,8 +17,14 @@ import {
 } from '@/lib/server/retrieval-embedding-cache'
 import {
   buildLocalEmbeddingCacheIdentity,
+  getLocalEmbeddingModel,
   isRetaleLocalEmbeddingConfig,
 } from '@/lib/server/local-embedding-catalog'
+import { isCustomLocalEmbeddingModelId } from '@/lib/server/local-embedding-custom-model'
+import {
+  formatMemoryAwareBatchPlan,
+  resolveMemoryAwareEmbeddingBatchPlan,
+} from '@/lib/server/memory-aware-batching'
 import {
   loadExplicitAuthoredContext,
   hasExplicitAuthoredContextSelection,
@@ -618,8 +624,14 @@ function buildRetrievalEmbeddingText(row: RetrievalDocSeedRow) {
   })
 }
 
-export function buildRawTextRetrievalEmbeddingInput(row: RetrievalDocSeedRow) {
-  const text = buildRetrievalEmbeddingText(row)
+export function buildRawTextRetrievalEmbeddingInput(
+  row: RetrievalDocSeedRow,
+  options: { maxCodePoints?: number | null } = {},
+) {
+  const unboundedText = buildRetrievalEmbeddingText(row)
+  const text = options.maxCodePoints
+    ? middleElideEmbeddingInput(unboundedText, options.maxCodePoints)
+    : unboundedText
   return {
     text,
     embeddingInputHash: buildEmbeddingInputHash(text),
@@ -635,11 +647,34 @@ export async function precomputeRawTextEmbeddingCache(params: {
   shouldContinue?: () => boolean | Promise<boolean>
   onProgress?: (progress: RawTextEmbeddingPrecomputeProgress) => void | Promise<void>
 }): Promise<RawTextEmbeddingPrecomputeResult> {
+  const currentEmbeddingSettings = loadStoredAISettings().embeddings
+  const currentEmbeddingModel = getEmbeddingModel(currentEmbeddingSettings)
+  const cacheModelIdentity = params.settingsSnapshot.cacheModelIdentity
+    ?? (
+      params.settingsSnapshot.provider === currentEmbeddingSettings.provider
+      && params.settingsSnapshot.model === currentEmbeddingModel
+        ? getEmbeddingCacheModelIdentity(currentEmbeddingSettings)
+        : params.settingsSnapshot.model
+    )
+  const embeddingInputMaxCodePoints = params.settingsSnapshot.embeddingInputMaxCodePoints
+    ?? (
+      params.settingsSnapshot.provider === currentEmbeddingSettings.provider
+      && params.settingsSnapshot.model === currentEmbeddingModel
+        ? getEmbeddingInputMaxCodePoints(currentEmbeddingSettings)
+        : null
+    )
+
   return runWithNovelDatabaseAccess(params.novelId, () => precomputeRawTextEmbeddingCacheImpl({
     ...params,
+    settingsSnapshot: {
+      ...params.settingsSnapshot,
+      cacheModelIdentity,
+    },
     healMissingKnowledgeChapterDerivedArtifacts,
     loadRawTextRetrievalDocs,
-    buildRawTextRetrievalEmbeddingInput,
+    buildRawTextRetrievalEmbeddingInput: (row) => buildRawTextRetrievalEmbeddingInput(row, {
+      maxCodePoints: embeddingInputMaxCodePoints,
+    }),
   }))
 }
 
@@ -706,8 +741,12 @@ function logLanceIndex(message: string) {
   console.log(`${LANCEDB_INDEX_LOG_PREFIX} ${message}`)
 }
 
-function getEmbeddingBatchSize(settings: EmbeddingsScenarioSettings) {
-  return Math.max(1, Math.floor(settings.embeddingBatchSize || DEFAULT_EMBEDDING_BATCH_SIZE))
+function getEmbeddingBatchPlan(settings: EmbeddingsScenarioSettings) {
+  return resolveMemoryAwareEmbeddingBatchPlan({
+    provider: settings.provider,
+    model: getEmbeddingModel(settings),
+    requestedBatchSize: settings.embeddingBatchSize || DEFAULT_EMBEDDING_BATCH_SIZE,
+  })
 }
 
 async function embedRetrievalRowBatch(
@@ -960,12 +999,26 @@ function getEmbeddingModel(settings: EmbeddingsScenarioSettings) {
     : settings.ollama.model
 }
 
-function getEmbeddingCacheModelIdentity(settings: EmbeddingsScenarioSettings) {
+export function getEmbeddingCacheModelIdentity(settings: EmbeddingsScenarioSettings) {
   const model = getEmbeddingModel(settings)
   return settings.provider === 'openai-compatible'
     && isRetaleLocalEmbeddingConfig(settings.openAICompatible.baseUrl, model)
     ? buildLocalEmbeddingCacheIdentity(model)
     : model
+}
+
+export function getEmbeddingInputMaxCodePoints(settings: EmbeddingsScenarioSettings) {
+  const model = getEmbeddingModel(settings)
+  if (
+    settings.provider !== 'openai-compatible'
+    || !isRetaleLocalEmbeddingConfig(settings.openAICompatible.baseUrl, model)
+  ) {
+    return null
+  }
+
+  const contextSize = getLocalEmbeddingModel(model)?.contextSize
+    ?? (isCustomLocalEmbeddingModelId(model) ? 1024 : null)
+  return contextSize === null ? null : Math.max(256, Math.floor(contextSize * 0.75))
 }
 
 function buildRawTextEmbeddingCacheScope(novelId: string, branchId: string, settings: EmbeddingsScenarioSettings) {
@@ -983,8 +1036,11 @@ async function buildRetrievalEmbeddingPlan(params: {
   rows: RetrievalDocSeedRow[]
   embeddingSettings: EmbeddingsScenarioSettings
 }) {
+  const embeddingInputMaxCodePoints = getEmbeddingInputMaxCodePoints(params.embeddingSettings)
   const plannedRows = params.rows.map<RetrievalDocEmbeddingPlanRow>((row, rowIndex) => {
-    const { text, embeddingInputHash } = buildRawTextRetrievalEmbeddingInput(row)
+    const { text, embeddingInputHash } = buildRawTextRetrievalEmbeddingInput(row, {
+      maxCodePoints: embeddingInputMaxCodePoints,
+    })
     return {
       row,
       rowIndex,
@@ -2565,7 +2621,11 @@ async function rebuildBranchRetrievalIndexUnlocked(
   logLanceIndex(`build retrieval docs done: docs=${rows.length}, elapsed=${formatElapsed(Date.now() - docBuildStartedAt)}`)
 
   const embeddingSettings = loadStoredAISettings().embeddings
-  const embeddingBatchSize = getEmbeddingBatchSize(embeddingSettings)
+  const embeddingBatchPlan = getEmbeddingBatchPlan(embeddingSettings)
+  const embeddingBatchSize = embeddingBatchPlan.effectiveBatchSize
+  if (embeddingBatchPlan.localWorkload) {
+    logLanceIndex(`memory-aware batch plan: ${formatMemoryAwareBatchPlan(embeddingBatchPlan)}`)
+  }
   const plannedRows = await buildRetrievalEmbeddingPlan({
     novelId,
     branchId,
