@@ -155,6 +155,11 @@ export function StoryTimeline(props: {
             }}
             chapter={chapter}
             activeChapterId={props.activeChapterId}
+            navigationTargetChapterId={props.activeSelection?.kind === 'chapter'
+              ? props.activeSelection.chapterId
+              : props.activeSelection
+                ? null
+                : props.activeChapterId}
             branchChapters={branchChapters}
             onSelectChapter={() => props.onSelectionChange({ kind: 'chapter', chapterId: chapter.chapterId, chapterNo: chapter.chapterNo })}
             onDeleteChapter={() => props.onDeleteChapter(chapter.chapterId)}

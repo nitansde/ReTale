@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
   chapter: ChapterTimelineItem
   activeChapterId: string
+  navigationTargetChapterId: string | null
   branchChapters: Chapter[]
   onSelectChapter: () => void
   onDeleteChapter: () => void
@@ -32,6 +33,7 @@ export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
           <button
             ref={ref}
             type="button"
+            data-navigation-target={props.navigationTargetChapterId === props.chapter.chapterId ? 'true' : undefined}
             onClick={props.onSelectChapter}
             className={cn(
               'flex-1 rounded-[22px] border px-3 py-3 text-left transition',
@@ -63,6 +65,7 @@ export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
                 <div key={branch.id} className="mt-2 flex items-start gap-2">
                   <button
                     type="button"
+                    data-navigation-target={props.navigationTargetChapterId === branch.id ? 'true' : undefined}
                     onClick={() => props.onSelectBranchChapter(branch)}
                     className={cn(
                       'flex-1 rounded-2xl border px-3 py-3 text-left transition',

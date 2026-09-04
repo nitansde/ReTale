@@ -99,25 +99,39 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
   const canShowNext = !searching
     && normalizedWindowStart + CHAPTER_NAVIGATION_WINDOW_SIZE < navigationChapters.length
   const alreadyCentered = !searching && normalizedWindowStart === centeredWindowStart
+  const activeNavigationKey = props.activeSelection?.kind === 'chapter'
+    ? `chapter:${props.activeSelection.chapterId}`
+    : props.activeSelection
+      ? `${props.activeSelection.kind}:${props.activeSelection.nodeId}`
+      : `chapter:${props.currentChapterId}`
 
   useLayoutEffect(() => {
     if (!desktop && !props.leftPanelOpen) return
     const container = timelineScrollRef.current
     if (!container) return
-    const activeItem = container.querySelector<HTMLElement>('[data-navigation-current="true"]')
-    if (!activeItem) {
-      container.scrollTop = 0
-      return
+
+    const centerActiveItem = () => {
+      const activeItem = container.querySelector<HTMLElement>('[data-navigation-target="true"]')
+      if (!activeItem) {
+        if (searchQuery.trim()) container.scrollTop = 0
+        return
+      }
+
+      const containerBounds = container.getBoundingClientRect()
+      const itemBounds = activeItem.getBoundingClientRect()
+      const centeredOffset = itemBounds.top - containerBounds.top - (container.clientHeight - itemBounds.height) / 2
+      container.scrollTop = Math.max(0, container.scrollTop + centeredOffset)
     }
 
-    const containerBounds = container.getBoundingClientRect()
-    const itemBounds = activeItem.getBoundingClientRect()
-    const centeredOffset = itemBounds.top - containerBounds.top - (container.clientHeight - itemBounds.height) / 2
-    container.scrollTop = Math.max(0, container.scrollTop + centeredOffset)
+    centerActiveItem()
+    const frameId = window.requestAnimationFrame(centerActiveItem)
+    return () => window.cancelAnimationFrame(frameId)
   }, [
+    activeNavigationKey,
     desktop,
     normalizedWindowStart,
-    props.currentChapterId,
+    props.branchChaptersByParentId,
+    props.branchNodes,
     props.leftPanelOpen,
     props.timelineChapterById,
     searchQuery,

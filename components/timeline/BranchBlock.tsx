@@ -51,6 +51,7 @@ export const BranchBlock = forwardRef<HTMLButtonElement, {
         type="button"
         disabled={props.disabled || props.deleting}
         data-testid={`timeline-node-${props.node.id}`}
+        data-navigation-target={props.selected ? 'true' : undefined}
         data-visible-depth={props.node.laneIndex}
         data-active={props.selected ? 'true' : 'false'}
         data-highlighted={props.highlighted ? 'true' : 'false'}
