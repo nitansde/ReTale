@@ -29,7 +29,7 @@ This app now behaves like a local-first rewrite product with a real backend laye
 
 ## Environment
 
-ReTale requires Node.js `>=22.15.0`. Detached knowledge workers use synchronous `node:module` loader hooks to transpile the repository TypeScript graph before importing it; older Node releases do not provide the required `registerHooks` API.
+ReTale requires Node.js `>=22.15.0`. Development knowledge workers and the text-repair CLI use synchronous `node:module` loader hooks; older Node releases do not provide the required `registerHooks` API. Production workers load the compiled application graph from `.retale-worker/`, built automatically by `npm run build` (or separately by `npm run build:worker`). With `NODE_ENV=production`, a missing bundle is recorded as a startup failure for the matching queued attempt; the worker does not fall back to source compilation. Development always loads current sources. Deployment traces include the worker bundle, source map, diagnostics, and native LanceDB dependencies; the production worker needs neither local TypeScript sources nor the TypeScript compiler.
 
 CI runs `npm run audit:production` immediately after `npm ci` and fails on high-severity vulnerabilities in production dependencies. Run the same gate locally after dependency changes.
 
@@ -70,6 +70,10 @@ The rebuild API returns quickly with a queued/running job status. The server con
 
 Background task watchdogs use `RETALE_TASK_STALE_TIMEOUT_MS` to decide when a queued/running knowledge or recoverable rewrite job has stopped making progress, and `RETALE_TASK_MAX_RETRIES` to cap automatic retry attempts. When a job is retried, ReTale writes a new in-payload attempt token so stale old workers cannot overwrite the newer retry or a terminal watchdog failure. Detached worker startup failures are fenced by the scheduled attempt token before they can mark a queued job failed. Knowledge-view reads also reschedule queued watchdog retries, so users do not need to press rebuild again after a stale worker is reconciled.
 
+Detached knowledge workers retain stderr and fatal exception diagnostics in `worker-logs/` beside the novel's `novel.db`. Each log is capped at 512 KiB; rotation retains at most 20 recent log files per novel (10 MiB), including logs from exited workers. Files use owner-only permissions and survive server restarts. Stderr also remains visible in the launching server's logs, including failures before the worker logger starts. Recording diagnostics does not change attempt ownership or overwrite running/completed jobs.
+
+SQLite transaction wrappers serialize callers and retry `BEGIN IMMEDIATE` asynchronously within the connection's configured busy timeout. This keeps lock acquisition from blocking request timers; statements themselves, schema initialization, and writes outside these wrappers still use synchronous SQLite. Concurrent code using the singleton helpers must use `withTransaction`; unrelated synchronous singleton statements are rejected while another caller owns a transaction.
+
 ## First-time setup
 
 ```bash
@@ -77,7 +81,38 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:14500. The app does not hard-code deployment IPs or hostnames, and its API permits cross-origin requests for self-hosted deployments. The default daily developer command is `npm run dev` (same as `npm run dev:prod`) and it always binds `0.0.0.0:14500`, always forces `DATABASE_URL=file:./dev.db`, and uses Next's development output so it stays separate from production builds and the isolated test server.
+Open http://localhost:14500. Browser API access is same-origin by default. The default daily developer command is `npm run dev` (same as `npm run dev:prod`) and it always binds `0.0.0.0:14500`, always forces `DATABASE_URL=file:./dev.db`, and uses Next's development output so it stays separate from production builds and the isolated test server.
+
+For a separate trusted frontend or a reverse proxy whose public origin differs from the origin seen by Next, set `RETALE_ALLOWED_API_ORIGINS` to comma-separated exact origins, for example `https://retale.example,http://localhost:4000`. Include a non-default port when used; paths, trailing slashes, credentials, and wildcards are rejected. Only configured origins receive CORS headers. Origin-less CLI clients remain supported; these browser checks do not add authentication.
+
+JSON API requests require `Content-Type: application/json`. Default request bodies are capped at 1 MiB; generation/context/session text requests allow 8 MiB, and preset-library requests allow 16 MiB. Workspace snapshots retain their 16 MiB cap, chapter patches their 4 MiB cap, and uploads their existing file/body limits. Limits count received bytes even without a trustworthy `Content-Length`; rejected media types and oversized bodies return 415 and 413 respectively.
+
+Workspace recovery backups keep at most 20 snapshots and 200 MiB of UTF-8 payload per workspace. Set `RETALE_BACKUP_MAX_COUNT` and `RETALE_BACKUP_MAX_BYTES` to change those limits. The newest backup is always kept, even if it alone exceeds the byte budget. Pruning happens within the existing workspace save/checkpoint transaction.
+
+Embedding-cache retention runs after successful raw-text precomputation. It protects the current model, the model used by that precomputation, and identities referenced by queued, running, or paused rebuilds. Legacy job snapshots without an exact identity protect matching model variants; incomplete snapshots protect the affected branch. Failed/aborted jobs are terminal and do not pin caches. Inactive identities survive at least 7 days for model switching, then are eligible when the cache exceeds 1 GiB per novel or they have gone unused for 30 days. Configure positive integer values with `RETALE_EMBEDDING_CACHE_MAX_BYTES`, `RETALE_EMBEDDING_CACHE_MAX_AGE_DAYS`, and `RETALE_EMBEDDING_CACHE_GRACE_DAYS`. Protected/recent scopes can exceed the budget. Cleanup deletes up to 500 rows per eligible scope and 2,000 rows per completed precomputation, rechecking job protection and last use inside each transaction.
+
+Use `npm run storage:preview -- --database data/novels/<novel-id>/novel.db` for a read-only report of backup retention, embedding scopes, reusable database pages, and derived-text/count mismatches. No schema initialization, cleanup, repair, or compaction runs. Cache models are all protected in the preview unless you supply the active exact identity with `--protect-model 'provider=cache-model-identity'` (repeatable); job protection still applies. The CLI reads `.env*` configuration and never prints novel text or API credentials. Both previews and retention use SQLite byte counts without loading full backup payloads into JavaScript. Logical deletion makes pages reusable; it does not promise a smaller database file. Compaction is a separate maintenance operation.
+
+For persisted text affected by the former HTML-entity decoder, run `npm run storage:repair-text -- --database PATH --novel-id ID`. This is a read-only preview: it reports the current workspace revision, exact entity-related repairs, skipped count differences, and blockers without printing manuscript text. Applying requires `--apply --expected-revision N`, using the previewed revision. The database must match the configured `RETALE_DATA_DIR` novel store and have a ready registry entry. Finish or abort queued/running/paused jobs and finish or recover claimed workspace syncs first. Changes unrelated to entity decoding must be synchronized through the normal workspace workflow before repair.
+
+Text repair leaves chapter HTML intact, re-derives affected knowledge text, refreshes line/span offsets, and marks dependent generated knowledge and retrieval stale. It corrects counts for those chapters and counts exactly explained by the old decoder, leaving other count differences alone. Count corrections use the existing workspace mutation contract, including a new revision, recovery snapshot, backup retention, and sync claim. A single SQLite transaction commits the workspace and knowledge changes together; a failed repair can be retried. Retrieval tables are derived filesystem data and may have been removed even if SQLite rolls back, so they may need rebuilding after a failed attempt. Repair does not call a model: rebuild the novel's knowledge and retrieval from the workspace afterward. The CLI holds a write lock while repairing, so run it when the novel is idle.
+
+Embedding-cache storage uses only validated little-endian float32 BLOBs (four bytes per dimension). The application rejects an unmigrated JSON schema with migration instructions. It has no JSON fallback, empty-array placeholder writes, or old-writer trigger. A corrupt binary vector becomes a cache miss and is regenerated normally.
+
+To upgrade existing data, stop the server and all workers, finish or abort active/resumable jobs, and keep a verified database backup. Run retention first to avoid converting obsolete vectors:
+
+```bash
+npm run storage:preview -- --database PATH --protect-model 'provider=exact-cache-model-identity'
+npm run storage:apply-retention -- --database PATH --protect-model 'provider=exact-cache-model-identity' --apply
+npm run storage:migrate-vectors -- --database PATH --novel-id ID
+npm run storage:migrate-vectors -- --database PATH --novel-id ID --apply --retire-json --limit 250
+```
+
+Repeat conversion using the returned `nextRowId` as `--after-rowid` until `scanned` is zero, for every novel in that database. Each batch verifies the stored bytes and float32-rounded values before retiring JSON. Invalid or conflicting rows are reported and retained. Then run `storage:migrate-vectors` with `--apply --finalize`: it verifies every retained BLOB and atomically replaces the cache table, removing the JSON column and compatibility trigger. Finalization refuses unconverted or corrupt rows. Keep old application processes stopped; restoring old application code also requires restoring the database backup.
+
+Run `npm run storage:migrate-progress -- --database PATH` to preview recognized old progress messages, then add `--apply` to convert job progress and stored step labels/details to stable keys. Prompts and custom diagnostics are preserved. Runtime progress parsing accepts stable keys only; historical decoding is confined to these explicit offline tools.
+
+After vector finalization, run the text-repair preview/apply commands above when needed. Finish with `storage:apply-retention -- --database PATH --protect-model 'provider=exact-cache-model-identity' --apply --compact`. Compaction writes and verifies a smaller SQLite file before replacing the original; allow temporary space for that file and leave the server stopped until it completes. Backups remain separate from application retention. Restart only after verifying database integrity and the maintenance reports.
 
 ## Server modes
 
@@ -162,7 +197,7 @@ There is no server workspace endpoint. Browser clients use only the novel and ch
 - Novel import completes synchronously and makes the imported novel ready at revision 1.
 - A stale revision conflict preserves local edits instead of replacing them with server state.
 - PATCH falls back to revision-aware POST only when the server reports PATCH as unsupported with HTTP 405 or 501.
-- API responses allow cross-origin access and novel/chapter persistence does not use an Origin allowlist.
+- Browser API requests use same-origin checks; additional cross-origin access is opt-in.
 - AI settings are saved through `POST /api/settings/ai`
 
 ## Notes
@@ -174,3 +209,7 @@ There is no server workspace endpoint. Browser clients use only the novel and ch
 - Import currently assumes valid exported JSON.
 - Preset compatibility scope, provider mappings, preserved-only behavior, provenance notes, and MVP limitations live in `docs/preset-compatibility.md`.
 - Knowledge graph design, rebuild ordering, and runtime technology notes live in `docs/knowledge-graph-design.md`.
+
+### Test isolation and concurrency
+
+`npm run test:unit` and `npm run test:api` run at most two test files concurrently. Each file receives its own marked database, source database, data directory, temporary directory, and evidence directory before application modules load. Set `RETALE_TEST_WORKERS=1` for a serial run, or an integer up to 8 when evaluating another limit. Tests within a file keep their existing ordering. Each suite retains its own JSON report under the printed run root; the historical `.sisyphus/evidence/task-1-test-harness/` path contains the latest report. Run tests through these wrappers so the ownership checks and isolation environment are present.
