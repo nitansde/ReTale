@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import { encodeEmbeddingVector } from '@/lib/server/embedding-vector'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -6,8 +7,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabaseCopy, getSourceDbPath } from '@/tests/helpers/temp-db'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
 const originalDataDir = process.env.RETALE_DATA_DIR
 const originalTaskStaleTimeoutMs = process.env.RETALE_TASK_STALE_TIMEOUT_MS
@@ -33,7 +35,7 @@ async function createTestDatabase(prefix: string) {
   process.env.RETALE_DATA_DIR = path.join(tempDatabase.directory, 'data')
   vi.resetModules()
 
-  const sqliteModule = await import('@/lib/server/sqlite')
+  const sqliteModule = databaseFixture.open(process.env.DATABASE_URL!)
   vi.doMock('@/lib/server/db-resolver', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/lib/server/db-resolver')>()
     return {
@@ -41,7 +43,6 @@ async function createTestDatabase(prefix: string) {
       getNovelDb: vi.fn(() => sqliteModule.sqlite),
     }
   })
-  globalForSqlite.sqlite = sqliteModule.sqlite
 
   return {
     database: sqliteModule.sqlite,
@@ -66,8 +67,7 @@ async function createSplitBrainKnowledgeViewDatabases(prefix: string, novelId: s
   process.env.RETALE_DATA_DIR = runtimeDataRoot
   vi.resetModules()
 
-  const sqliteModule = await import('@/lib/server/sqlite')
-  globalForSqlite.sqlite = sqliteModule.sqlite
+  const sqliteModule = databaseFixture.open(process.env.DATABASE_URL!)
   const resolverModule = await import('@/lib/server/db-resolver')
 
   return {
@@ -367,7 +367,7 @@ async function getCurrentExtractionCandidateSourceHash(chapterSourceHash: string
   })
 }
 
-afterEach(async () => {
+afterEach(databaseFixture.wrap(async () => {
   vi.unmock('@/lib/server/retrieval-index')
   vi.unmock('@/lib/server/knowledge-worker-scheduler')
   vi.unmock('@/lib/server/db-resolver')
@@ -376,12 +376,12 @@ afterEach(async () => {
   vi.doUnmock('@/lib/server/db-resolver')
   vi.resetModules()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   process.env.DATABASE_URL = originalDatabaseUrl
@@ -398,10 +398,10 @@ afterEach(async () => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('/api/knowledge-view', () => {
-  it('reads single-novel statusOnly job state from the per-novel database when singleton data is stale', async () => {
+  it('reads single-novel statusOnly job state from the per-novel database when singleton data is stale', databaseFixture.wrap(async () => {
     const novelId = `novel_knowledge_view_scoped_${Math.random().toString(36).slice(2, 8)}`
     const { singletonDatabase, novelDatabase } = await createSplitBrainKnowledgeViewDatabases('retale-knowledge-view-scoped-status-only', novelId)
 
@@ -462,9 +462,9 @@ describe('/api/knowledge-view', () => {
       currentStep: '并行抽取候选知识（已完成第 702 章）',
       progress: 0.22,
     })
-  })
+  }))
 
-  it('reconciles stale active jobs during GET and reschedules the queued retry', async () => {
+  it('reconciles stale active jobs during GET and reschedules the queued retry', databaseFixture.wrap(async () => {
     process.env.RETALE_TASK_STALE_TIMEOUT_MS = '1000'
     process.env.RETALE_TASK_MAX_RETRIES = '1'
 
@@ -527,9 +527,9 @@ describe('/api/knowledge-view', () => {
       jobId: 'job_knowledge_view_watchdog_get',
       jobType: 'extract_chapter_knowledge',
     })
-  })
+  }))
 
-  it('projects formal character classifications and aliases while excluding candidates from formal characters', async () => {
+  it('projects formal character classifications and aliases while excluding candidates from formal characters', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-character-classification')
     const novelId = `novel_knowledge_view_classification_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -609,9 +609,9 @@ describe('/api/knowledge-view', () => {
     ]))
     expect(payload.localCharacters.some((character) => character.name === '路人甲')).toBe(false)
     expect(payload.localCharacters.some((character) => character.name === '被拒绝的临时角色')).toBe(false)
-  })
+  }))
 
-  it('projects literal HanLP world categories into workspace world entry types', async () => {
+  it('projects literal HanLP world categories into workspace world entry types', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-hanlp-world-categories')
     const novelId = `novel_knowledge_view_world_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -642,9 +642,9 @@ describe('/api/knowledge-view', () => {
       expect.objectContaining({ title: '黑塔', type: 'organization' }),
       expect.objectContaining({ title: '夜雨', type: 'scene' }),
     ]))
-  })
+  }))
 
-  it('surfaces HanLP telemetry on the knowledge rebuild status payload', async () => {
+  it('surfaces HanLP telemetry on the knowledge rebuild status payload', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-hanlp-telemetry')
     const novelId = `novel_knowledge_view_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -739,9 +739,9 @@ describe('/api/knowledge-view', () => {
         pipelineVersion: 'hanlp-bootstrap:v1',
       },
     })
-  })
+  }))
 
-  it('omits stored payloads and provider credentials from public job statuses', async () => {
+  it('omits stored payloads and provider credentials from public job statuses', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-public-job-status-security')
     const novelId = `novel_knowledge_view_security_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -853,9 +853,9 @@ describe('/api/knowledge-view', () => {
     expect(serializedResponse).not.toContain(mainBaseUrlSentinel)
     expect(serializedResponse).not.toContain(retrievalApiKeySentinel)
     expect(serializedResponse).not.toContain(retrievalBaseUrlSentinel)
-  })
+  }))
 
-  it('surfaces retrieval task status in the overview payload while preserving main rebuild status priority', async () => {
+  it('surfaces retrieval task status in the overview payload while preserving main rebuild status priority', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-retrieval-overview-task')
     const novelId = `novel_retrieval_overview_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -949,9 +949,9 @@ describe('/api/knowledge-view', () => {
         ],
       },
     })
-  })
+  }))
 
-  it('reports retrieval jobs through knowledgeRebuildStatus with an explicit retrieval jobType', async () => {
+  it('reports retrieval jobs through knowledgeRebuildStatus with an explicit retrieval jobType', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-retrieval-jobtype')
     const novelId = `novel_retrieval_jobtype_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -995,9 +995,9 @@ describe('/api/knowledge-view', () => {
       jobType: 'rebuild_retrieval_index',
       status: 'paused',
     })
-  })
+  }))
 
-  it('reports retrieval index status as pending when only pending metadata exists for the branch', async () => {
+  it('reports retrieval index status as pending when only pending metadata exists for the branch', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-retrieval-pending-status')
     const novelId = `novel_retrieval_pending_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -1032,9 +1032,9 @@ describe('/api/knowledge-view', () => {
         endChapter: 3,
       },
     })
-  })
+  }))
 
-  it('returns the latest failed rebuild status with errorMessage for the selected novel main branch', async () => {
+  it('returns the latest failed rebuild status with errorMessage for the selected novel main branch', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-failed-status')
     const novelId = `novel_knowledge_view_failed_${Math.random().toString(36).slice(2, 8)}`
     const otherNovelId = `novel_knowledge_view_failed_other_${Math.random().toString(36).slice(2, 8)}`
@@ -1140,9 +1140,9 @@ describe('/api/knowledge-view', () => {
       currentStep: 'hanlp-bootstrap',
       progress: 0.35,
     })
-  })
+  }))
 
-  it('hides an older failed rebuild when a newer main-branch rebuild succeeded', async () => {
+  it('hides an older failed rebuild when a newer main-branch rebuild succeeded', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-hide-old-failed-after-success')
     const novelId = `novel_knowledge_view_hide_failed_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -1206,9 +1206,9 @@ describe('/api/knowledge-view', () => {
         pipelineVersion: 'hanlp-bootstrap:v1',
       },
     })
-  })
+  }))
 
-  it('prefers an older active rebuild over a newer terminal rebuild row for the main branch', async () => {
+  it('prefers an older active rebuild over a newer terminal rebuild row for the main branch', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-prefer-active-over-terminal')
     const novelId = `novel_knowledge_view_prefer_active_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -1282,9 +1282,9 @@ describe('/api/knowledge-view', () => {
       currentStep: 'extract',
       progress: 0.42,
     })
-  })
+  }))
 
-  it('surfaces the latest retrieval rebuild status through the existing knowledge rebuild payload', async () => {
+  it('surfaces the latest retrieval rebuild status through the existing knowledge rebuild payload', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-retrieval-status-surface')
     const novelId = `novel_knowledge_view_retrieval_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -1351,9 +1351,9 @@ describe('/api/knowledge-view', () => {
       progress: 0.95,
       rawTextEmbeddingProgress: 0.4,
     })
-  })
+  }))
 
-  it('surfaces populated HanLP cache readiness without an active rebuild', async () => {
+  it('surfaces populated HanLP cache readiness without an active rebuild', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-idle-hanlp-cache')
     const novelId = `novel_knowledge_view_idle_hanlp_${Math.random().toString(36).slice(2, 8)}`
     const otherNovelId = `novel_knowledge_view_idle_hanlp_other_${Math.random().toString(36).slice(2, 8)}`
@@ -1405,9 +1405,9 @@ describe('/api/knowledge-view', () => {
         pipelineVersion: 'hanlp-bootstrap:v1',
       },
     })
-  })
+  }))
 
-  it('returns persistent knowledge, embedding, and LanceDB coverage overview for the selected novel', async () => {
+  it('returns persistent knowledge, embedding, and LanceDB coverage overview for the selected novel', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-status-overview')
     const novelId = `novel_knowledge_overview_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId, altBranchId } = seedNovel(database, novelId)
@@ -1501,9 +1501,9 @@ describe('/api/knowledge-view', () => {
         },
       },
     })
-  })
+  }))
 
-  it('reports full, partial, and missing extraction cache coverage for current chapter hashes', async () => {
+  it('reports full, partial, and missing extraction cache coverage for current chapter hashes', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-extraction-coverage')
     const novelId = `novel_extraction_coverage_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -1554,9 +1554,9 @@ describe('/api/knowledge-view', () => {
       totalChapterCount: 3,
       validThroughChapterNo: null,
     })
-  })
+  }))
 
-  it('reports missing extraction coverage for a novel with no chapters', async () => {
+  it('reports missing extraction coverage for a novel with no chapters', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-extraction-empty')
     const novelId = `novel_extraction_empty_${Math.random().toString(36).slice(2, 8)}`
     seedNovel(database, novelId)
@@ -1574,9 +1574,9 @@ describe('/api/knowledge-view', () => {
       totalChapterCount: 0,
       validThroughChapterNo: null,
     })
-  })
+  }))
 
-  it('chunks extraction candidate lookups and reports only contiguous current-hash coverage', async () => {
+  it('chunks extraction candidate lookups and reports only contiguous current-hash coverage', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-extraction-chunked-contiguous')
     const novelId = `novel_extraction_chunked_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -1619,9 +1619,9 @@ describe('/api/knowledge-view', () => {
       totalChapterCount: 501,
       validThroughChapterNo: 249,
     })
-  })
+  }))
 
-  it('excludes obsolete, non-terminal, cross-scope, and non-current extraction candidates', async () => {
+  it('excludes obsolete, non-terminal, cross-scope, and non-current extraction candidates', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-extraction-exclusions')
     const novelId = `novel_extraction_exclusions_${Math.random().toString(36).slice(2, 8)}`
     const otherNovelId = `${novelId}_other`
@@ -1693,9 +1693,9 @@ describe('/api/knowledge-view', () => {
       totalChapterCount: 3,
       validThroughChapterNo: null,
     })
-  })
+  }))
 
-  it('keeps full and lightweight extraction coverage in exact parity', async () => {
+  it('keeps full and lightweight extraction coverage in exact parity', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-extraction-lightweight-parity')
     const novelId = `novel_extraction_parity_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -1735,9 +1735,9 @@ describe('/api/knowledge-view', () => {
       totalChapterCount: 2,
       validThroughChapterNo: 1,
     })
-  })
+  }))
 
-  it('reports lightweight embedding coverage as missing when a full index has zero matching cache rows', async () => {
+  it('reports lightweight embedding coverage as missing when a full index has zero matching cache rows', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-lightweight-zero-embedding-cache')
     const novelId = `novel_zero_embedding_cache_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -1786,9 +1786,9 @@ describe('/api/knowledge-view', () => {
         status: 'full',
       },
     })
-  })
+  }))
 
-  it('returns lightweight status-only payloads without loading retrieval docs', async () => {
+  it('returns lightweight status-only payloads without loading retrieval docs', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-status-only-lightweight')
     const novelId = `novel_status_only_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -1855,9 +1855,9 @@ describe('/api/knowledge-view', () => {
     })
     expect(payload.knowledgeStatusOverview?.embeddingCache.provider).toBeNull()
     expect(payload.knowledgeStatusOverview?.embeddingCache.model).toBeNull()
-  })
+  }))
 
-  it('deletes only the target main-branch HanLP cache rows and preserves raw embedding cache', async () => {
+  it('deletes only the target main-branch HanLP cache rows and preserves raw embedding cache', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-view-delete-hanlp-cache')
     const novelId = `novel_delete_hanlp_${Math.random().toString(36).slice(2, 8)}`
     const otherNovelId = `novel_delete_other_${Math.random().toString(36).slice(2, 8)}`
@@ -1925,9 +1925,9 @@ describe('/api/knowledge-view', () => {
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_cache WHERE branch_id = ?', otherMainBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_coverage WHERE novel_id = ?', otherNovelId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', mainBranchId)?.count).toBe(1)
-  })
+  }))
 
-  it('blocks HanLP cache deletion with a clear payload when a rebuild is active', async () => {
+  it('blocks HanLP cache deletion with a clear payload when a rebuild is active', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-view-delete-hanlp-cache-blocked')
     const novelId = `novel_block_hanlp_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -1997,9 +1997,9 @@ describe('/api/knowledge-view', () => {
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_results WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_entities WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_coverage WHERE novel_id = ?', novelId)?.count).toBe(1)
-  })
+  }))
 
-  it('deletes only the target main-branch LLM extraction cache rows', async () => {
+  it('deletes only the target main-branch LLM extraction cache rows', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-view-delete-extraction-cache')
     const novelId = `novel_delete_extraction_${Math.random().toString(36).slice(2, 8)}`
     const otherNovelId = `novel_delete_extraction_other_${Math.random().toString(36).slice(2, 8)}`
@@ -2041,9 +2041,9 @@ describe('/api/knowledge-view', () => {
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_processing_batches WHERE branch_id = ?', altBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_processing_batches WHERE branch_id = ?', otherMainBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM hanlp_bootstrap_cache WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
-  })
+  }))
 
-  it('deletes only the target main-branch raw embedding cache rows', async () => {
+  it('deletes only the target main-branch raw embedding cache rows', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-view-delete-embedding-cache')
     const novelId = `novel_delete_embedding_${Math.random().toString(36).slice(2, 8)}`
     const otherNovelId = `novel_delete_embedding_other_${Math.random().toString(36).slice(2, 8)}`
@@ -2088,9 +2088,9 @@ describe('/api/knowledge-view', () => {
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', altBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', otherMainBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
-  })
+  }))
 
-  it('blocks LLM extraction and raw embedding cache deletion when a rebuild is active', async () => {
+  it('blocks LLM extraction and raw embedding cache deletion when a rebuild is active', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-view-delete-cache-blocked')
     const novelId = `novel_block_cache_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -2123,9 +2123,9 @@ describe('/api/knowledge-view', () => {
     }
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE branch_id = ?', mainBranchId)?.count).toBe(1)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', mainBranchId)?.count).toBe(1)
-  })
+  }))
 
-  it('blocks raw embedding cache deletion while a retrieval rebuild is active', async () => {
+  it('blocks raw embedding cache deletion while a retrieval rebuild is active', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-view-delete-embedding-cache-retrieval-blocked')
     const novelId = `novel_block_retrieval_cache_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -2169,9 +2169,9 @@ describe('/api/knowledge-view', () => {
     expect(payload.actionError?.code).toBe('active-rebuild')
     expect(payload.actionError?.message).toContain('Cannot delete raw embedding cache')
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', mainBranchId)?.count).toBe(1)
-  })
+  }))
 
-  it('queues rebuild jobs with a bounded chapter range payload', async () => {
+  it('queues rebuild jobs with a bounded chapter range payload', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-view-range-rebuild')
     const novelId = `novel_range_rebuild_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -2210,9 +2210,9 @@ describe('/api/knowledge-view', () => {
       chapterRange: { startChapter: 2, endChapter: 3 },
       rebuildStartChapter: 2,
     })
-  })
+  }))
 
-  it('queues main rebuild jobs with a lightweight POST response that avoids full projections and retrieval doc loading', async () => {
+  it('queues main rebuild jobs with a lightweight POST response that avoids full projections and retrieval doc loading', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-range-rebuild-fast-response')
     const novelId = `novel_range_rebuild_fast_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -2277,9 +2277,9 @@ describe('/api/knowledge-view', () => {
     expect(payload.localOutlines).toEqual([])
     expect(payload.knowledgeStatusOverview?.knowledgeGraph?.totalChapterCount).toBe(3)
     expect(loadRawTextRetrievalDocs).not.toHaveBeenCalled()
-  })
+  }))
 
-  it('pauses active rebuild jobs with a lightweight POST response that avoids full projections and retrieval doc loading', async () => {
+  it('pauses active rebuild jobs with a lightweight POST response that avoids full projections and retrieval doc loading', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-pause-fast-response')
     const novelId = `novel_pause_fast_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -2348,9 +2348,9 @@ describe('/api/knowledge-view', () => {
     expect(payload.localTimelineEvents).toEqual([])
     expect(payload.localOutlines).toEqual([])
     expect(loadRawTextRetrievalDocs).not.toHaveBeenCalled()
-  })
+  }))
 
-  it('aborts active rebuild jobs with a lightweight POST response that avoids full projections and retrieval doc loading', async () => {
+  it('aborts active rebuild jobs with a lightweight POST response that avoids full projections and retrieval doc loading', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-abort-fast-response')
     const novelId = `novel_abort_fast_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -2421,9 +2421,9 @@ describe('/api/knowledge-view', () => {
     expect(payload.localOutlines).toEqual([])
     expect(payload.knowledgeStatusOverview?.knowledgeGraph?.totalChapterCount).toBe(1)
     expect(loadRawTextRetrievalDocs).not.toHaveBeenCalled()
-  })
+  }))
 
-  it('queues dedicated retrieval rebuild jobs with retrieval status payloads', async () => {
+  it('queues dedicated retrieval rebuild jobs with retrieval status payloads', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-view-retrieval-start')
     const novelId = `novel_retrieval_start_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -2482,9 +2482,9 @@ describe('/api/knowledge-view', () => {
       chapterRange: { startChapter: 2, endChapter: 3 },
       rebuildStartChapter: 2,
     })
-  })
+  }))
 
-  it('blocks dedicated retrieval rebuild start while a main knowledge rebuild is active', async () => {
+  it('blocks dedicated retrieval rebuild start while a main knowledge rebuild is active', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-view-retrieval-start-blocked')
     const novelId = `novel_retrieval_start_blocked_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -2546,9 +2546,9 @@ describe('/api/knowledge-view', () => {
       mainBranchId,
       'rebuild_retrieval_index',
     )?.count).toBe(0)
-  })
+  }))
 
-  it('queues a fresh imported novel rebuild without blocking the POST response', async () => {
+  it('queues a fresh imported novel rebuild without blocking the POST response', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-view-fresh-import-rebuild')
     const novelId = `novel_fresh_import_${Math.random().toString(36).slice(2, 8)}`
     const { mainBranchId } = seedNovel(database, novelId)
@@ -2591,9 +2591,9 @@ describe('/api/knowledge-view', () => {
       },
     })
     expect(payload.knowledgeRebuildStatus?.jobId).toEqual(expect.any(String))
-  })
+  }))
 
-  it('rejects invalid POST actions with stable 400 JSON and no job rows', async () => {
+  it('rejects invalid POST actions with stable 400 JSON and no job rows', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-invalid-action')
     const novelId = 'novel_invalid_action'
     seedNovel(database, novelId)
@@ -2611,9 +2611,9 @@ describe('/api/knowledge-view', () => {
 
     const jobCountAfter = (database.prepare('SELECT COUNT(*) AS count FROM KnowledgeJob').get() as { count: number }).count
     expect(jobCountAfter).toBe(jobCountBefore)
-  })
+  }))
 
-  it('rejects missing novel ids with stable 400 JSON and no job rows', async () => {
+  it('rejects missing novel ids with stable 400 JSON and no job rows', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-view-missing-novel-id')
     const { POST } = await loadKnowledgeViewRoute()
     const jobCountBefore = (database.prepare('SELECT COUNT(*) AS count FROM KnowledgeJob').get() as { count: number }).count
@@ -2627,5 +2627,5 @@ describe('/api/knowledge-view', () => {
 
     const jobCountAfter = (database.prepare('SELECT COUNT(*) AS count FROM KnowledgeJob').get() as { count: number }).count
     expect(jobCountAfter).toBe(jobCountBefore)
-  })
+  }))
 })

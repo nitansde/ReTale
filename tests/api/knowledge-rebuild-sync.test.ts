@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -8,12 +9,14 @@ import { createWorkspaceKnowledgeSync } from '@/lib/server/knowledge-workspace-s
 import { createDatabaseAccess } from '@/lib/server/database-access'
 import { NovelRegistryNotReadyError } from '@/lib/server/db-resolver'
 import { hashContent } from '@/lib/server/knowledge-store'
-import { execute, initializeDatabase, queryOne } from '@/lib/server/sqlite'
+import { initializeDatabase } from '@/lib/server/sqlite'
+import { execute, queryOne } from '@/lib/server/database-access'
 import { htmlToPlainText } from '@/lib/utils'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDataDir = process.env.RETALE_DATA_DIR
 const cleanupDirectories: string[] = []
 
@@ -31,17 +34,17 @@ function createTestDatabase(prefix: string) {
   cleanups.push(tempDatabase.cleanup)
   process.env.RETALE_DATA_DIR = path.join(tempDatabase.directory, 'data')
   const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-  globalForSqlite.sqlite = database
+  databaseFixture.database = database
   return database
 }
 
-afterEach(async () => {
-  if (globalForSqlite.sqlite) {
+afterEach(databaseFixture.wrap(async () => {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   while (cleanups.length) {
@@ -54,7 +57,7 @@ afterEach(async () => {
   while (cleanupDirectories.length) {
     fs.rmSync(cleanupDirectories.pop()!, { recursive: true, force: true })
   }
-})
+}))
 
 async function createPerNovelResolverFixture(prefix: string) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
@@ -86,7 +89,7 @@ function seedNovelRegistryStatus(
 }
 
 describe('syncWorkspacePayloadToKnowledgeStore', () => {
-  it('re-derives previously encoded raw text and spans from the unchanged chapter HTML', async () => {
+  it('re-derives previously encoded raw text and spans from the unchanged chapter HTML', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-knowledge-sync-entities')
     database.prepare('INSERT INTO NovelRecord (id, title) VALUES (?, ?)').run('novel_entities', 'Entities')
     database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run('novel_entities:main', 'novel_entities', 'main')
@@ -110,14 +113,14 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
       .toEqual([{ text: 'A & B <C>' }])
     expect(database.prepare('SELECT DISTINCT text FROM TextSpan WHERE chapterId = ?').all('chapter_entities'))
       .toEqual([{ text: 'A & B <C>' }])
-  })
+  }))
 
-  it('aborts stale running rebuild jobs before removing stale novels', async () => {
+  it('aborts stale running rebuild jobs before removing stale novels', databaseFixture.wrap(async () => {
     createTestDatabase('retale-knowledge-sync-stale-job-cleanup')
 
-    globalForSqlite.sqlite?.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run('novel_stale', 'Stale Novel', 'txt')
-    globalForSqlite.sqlite?.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run('novel_stale:main', 'novel_stale', 'main')
-    globalForSqlite.sqlite?.prepare(
+    databaseFixture.database?.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run('novel_stale', 'Stale Novel', 'txt')
+    databaseFixture.database?.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run('novel_stale:main', 'novel_stale', 'main')
+    databaseFixture.database?.prepare(
       `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run('job_stale', 'novel_stale', 'novel_stale:main', 'extract_chapter_knowledge', 'running', 'extracting', 0.5)
@@ -130,23 +133,23 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
     expect(queryOne<{ id: string }>('SELECT id FROM NovelRecord WHERE id = ?', 'novel_stale')).toBeNull()
     expect(queryOne<{ id: string }>('SELECT id FROM StoryBranch WHERE id = ?', 'novel_stale:main')).toBeNull()
     expect(queryOne<{ id: string }>('SELECT id FROM KnowledgeJob WHERE id = ?', 'job_stale')).toBeNull()
-  })
+  }))
 
   it.each(['deleting', 'deleted'] as const)(
     'removes stale projection rows without opening storage for a %s registry entry',
-    async (migrationStatus) => {
+    databaseFixture.wrap(async (migrationStatus) => {
       createTestDatabase(`retale-knowledge-sync-${migrationStatus}-cleanup`)
       const resolver = await import('@/lib/server/db-resolver')
       const controlDb = resolver.getControlDb()
       seedNovelRegistryStatus(controlDb, 'novel_tombstone', migrationStatus)
       const novelDirectory = resolver.getNovelStoragePaths('novel_tombstone').novelDirectory
 
-      globalForSqlite.sqlite?.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(
+      databaseFixture.database?.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(
         'novel_tombstone',
         'Tombstone',
         'workspace',
       )
-      globalForSqlite.sqlite?.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run(
+      databaseFixture.database?.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run(
         'novel_tombstone:main',
         'novel_tombstone',
         'main',
@@ -160,10 +163,10 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
       expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get('novel_tombstone')).toEqual({
         migrationStatus,
       })
-    },
+    }),
   )
 
-  it('keeps normal storage-backed cleanup for ready stale novels', async () => {
+  it('keeps normal storage-backed cleanup for ready stale novels', databaseFixture.wrap(async () => {
     createTestDatabase('retale-knowledge-sync-ready-cleanup')
     const resolver = await import('@/lib/server/db-resolver')
     const controlDb = resolver.getControlDb()
@@ -171,7 +174,7 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
     seedNovelRegistryStatus(controlDb, 'novel_ready_stale', 'ready')
     const novelDirectory = resolver.getNovelStoragePaths('novel_ready_stale').novelDirectory
 
-    globalForSqlite.sqlite?.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(
+    databaseFixture.database?.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(
       'novel_ready_stale',
       'Ready stale',
       'workspace',
@@ -186,9 +189,9 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
 
     expect(queryOne<{ id: string }>('SELECT id FROM NovelRecord WHERE id = ?', 'novel_ready_stale')).toBeNull()
     expect(fs.existsSync(novelDirectory)).toBe(true)
-  })
+  }))
 
-  it('accepts a ready-to-deleted race only after the registry confirms the tombstone', async () => {
+  it('accepts a ready-to-deleted race only after the registry confirms the tombstone', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-knowledge-sync-ready-deleted-race')
     const resolver = await import('@/lib/server/db-resolver')
     const controlDb = resolver.getControlDb()
@@ -208,9 +211,9 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
 
     expect(abortKnowledgeRebuildUntilIdle).toHaveBeenCalledTimes(1)
     expect(database.prepare('SELECT id FROM NovelRecord WHERE id = ?').get('novel_raced')).toBeUndefined()
-  })
+  }))
 
-  it('rethrows unexpected stale cleanup failures without deleting the projection', async () => {
+  it('rethrows unexpected stale cleanup failures without deleting the projection', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-knowledge-sync-unexpected-cleanup-error')
     database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(
       'novel_failure',
@@ -227,9 +230,9 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
     await expect(sync({ localNovels: [], localChapters: [] }, { db: createDatabaseAccess(database) }))
       .rejects.toBe(cleanupError)
     expect(database.prepare('SELECT id FROM NovelRecord WHERE id = ?').get('novel_failure')).toEqual({ id: 'novel_failure' })
-  })
+  }))
 
-  it('rethrows a not-ready error when the fresh registry read still reports ready', async () => {
+  it('rethrows a not-ready error when the fresh registry read still reports ready', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-knowledge-sync-unconfirmed-registry-race')
     const resolver = await import('@/lib/server/db-resolver')
     seedNovelRegistryStatus(resolver.getControlDb(), 'novel_still_ready', 'ready')
@@ -248,9 +251,9 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
     await expect(sync({ localNovels: [], localChapters: [] }, { db: createDatabaseAccess(database) }))
       .rejects.toBe(notReadyError)
     expect(database.prepare('SELECT id FROM NovelRecord WHERE id = ?').get('novel_still_ready')).toEqual({ id: 'novel_still_ready' })
-  })
+  }))
 
-  it('syncs workspace chapters without enqueuing a rebuild job', async () => {
+  it('syncs workspace chapters without enqueuing a rebuild job', databaseFixture.wrap(async () => {
     createTestDatabase('retale-knowledge-sync-without-rebuild-job')
 
     await syncWorkspacePayloadToKnowledgeStore({
@@ -281,9 +284,9 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
     expect(queryOne<{ id: string }>('SELECT id FROM StoryBranch WHERE id = ?', 'novel_imported:main')).toMatchObject({ id: 'novel_imported:main' })
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeChapter WHERE novelId = ?', 'novel_imported')).toMatchObject({ count: 1 })
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeJob WHERE novelId = ?', 'novel_imported')).toMatchObject({ count: 0 })
-  })
+  }))
 
-  it('preserves an active first rebuild for unchanged source and aborts it after a real edit', async () => {
+  it('preserves an active first rebuild for unchanged source and aborts it after a real edit', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-knowledge-sync-active-first-rebuild')
     const chapterContent = '<p>林澄开始记录这次练习。</p>'
     const rawText = htmlToPlainText(chapterContent)
@@ -411,9 +414,9 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
       sourceHash: hashContent(editedRawText),
       knowledgeStatus: 'stale',
     })
-  })
+  }))
 
-  it('repairs missing derived line and span artifacts for unchanged chapters', async () => {
+  it('repairs missing derived line and span artifacts for unchanged chapters', databaseFixture.wrap(async () => {
     createTestDatabase('retale-knowledge-sync-repairs-derived-artifacts')
     const chapterContent = '<p>林澄开始记录这次练习。</p>'
     const rawText = htmlToPlainText(chapterContent)
@@ -468,9 +471,9 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
       'ch_repair_1'
     )).toMatchObject({ revision: 7, isDirty: 0, knowledgeStatus: 'ready' })
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeJob WHERE novelId = ?', 'novel_repair')).toMatchObject({ count: 0 })
-  })
+  }))
 
-  it('syncs a large workspace payload without queuing rebuild jobs', async () => {
+  it('syncs a large workspace payload without queuing rebuild jobs', databaseFixture.wrap(async () => {
     createTestDatabase('retale-knowledge-sync-large-workspace')
 
     const localChapters = Array.from({ length: 64 }, (_, index) => ({
@@ -501,14 +504,14 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM ChapterLine WHERE chapterId = ?', 'large_ch_64')?.count).toBeGreaterThan(0)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM TextSpan WHERE chapterId = ?', 'large_ch_64')?.count).toBeGreaterThan(0)
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeJob WHERE novelId = ?', 'novel_large_workspace')).toMatchObject({ count: 0 })
-  })
+  }))
 
-  it('scopes target-novel sync writes and stale cleanup to the requested novel database only', async () => {
+  it('scopes target-novel sync writes and stale cleanup to the requested novel database only', databaseFixture.wrap(async () => {
     const resolver = await createPerNovelResolverFixture('retale-knowledge-sync-per-novel')
     const alphaDb = resolver.getNovelDb('novel-alpha')
     const betaDb = resolver.getNovelDb('novel-beta')
     const alphaAccess = createDatabaseAccess(alphaDb)
-    globalForSqlite.sqlite = alphaDb
+    databaseFixture.database = alphaDb
 
     alphaDb.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run('novel-alpha', 'Alpha', 'workspace')
     alphaDb.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run('novel-alpha:main', 'novel-alpha', 'main')
@@ -552,5 +555,5 @@ describe('syncWorkspacePayloadToKnowledgeStore', () => {
     expect(alphaDb.prepare('SELECT COUNT(*) AS count FROM KnowledgeChapter WHERE novelId = ?').get('novel-alpha')).toMatchObject({ count: 1 })
     expect(betaDb.prepare('SELECT COUNT(*) AS count FROM KnowledgeChapter WHERE novelId = ?').get('novel-beta')).toMatchObject({ count: 0 })
     expect(betaDb.prepare('SELECT COUNT(*) AS count FROM KnowledgeJob WHERE novelId = ?').get('novel-beta')).toMatchObject({ count: 1 })
-  })
+  }))
 })

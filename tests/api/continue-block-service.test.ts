@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -5,20 +6,21 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const EVIDENCE_DIR = process.env.TASK_EVIDENCE_DIR!
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDataDir = process.env.RETALE_DATA_DIR
 
-afterEach(async () => {
+afterEach(databaseFixture.wrap(async () => {
   vi.resetModules()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   const resolver = await import('@/lib/server/db-resolver')
@@ -29,7 +31,7 @@ afterEach(async () => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 function createNovelTestDatabase(prefix: string) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`))
@@ -39,7 +41,7 @@ function createNovelTestDatabase(prefix: string) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true })
   process.env.RETALE_DATA_DIR = dataRoot
   const database = initializeDatabase(new DatabaseSync(databasePath))
-  globalForSqlite.sqlite = database
+  databaseFixture.database = database
   return database
 }
 
@@ -159,7 +161,7 @@ function seedNovel(database: DatabaseSync) {
 }
 
 describe('continue-block service', () => {
-  it('persists continue children under saved nodes, keeps future-jump continues as child blocks, and regenerates in place with history', async () => {
+  it('persists continue children under saved nodes, keeps future-jump continues as child blocks, and regenerates in place with history', databaseFixture.wrap(async () => {
     const database = createNovelTestDatabase('retale-continue-block-service')
     seedNovel(database)
 
@@ -383,9 +385,9 @@ describe('continue-block service', () => {
         branchNodes: timeline.branchNodes.filter((node) => ['rewrite', 'continue_block'].includes(node.nodeType)),
       }, null, 2)
     )
-  })
+  }))
 
-  it('returns a stable 404 for invalid parent timeline ids without leaving continue-block rows behind', async () => {
+  it('returns a stable 404 for invalid parent timeline ids without leaving continue-block rows behind', databaseFixture.wrap(async () => {
     const database = createNovelTestDatabase('retale-continue-block-invalid-parent')
     seedNovel(database)
 
@@ -415,9 +417,9 @@ describe('continue-block service', () => {
     expect((database.prepare('SELECT COUNT(*) AS count FROM continue_blocks').get() as { count: number }).count).toBe(beforeContinueBlocks)
     expect((database.prepare('SELECT COUNT(*) AS count FROM continue_block_revisions').get() as { count: number }).count).toBe(beforeRevisions)
     expect((database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes').get() as { count: number }).count).toBe(beforeTimelineNodes)
-  })
+  }))
 
-  it('rolls back the continue block and initial revision when timeline insertion fails', async () => {
+  it('rolls back the continue block and initial revision when timeline insertion fails', databaseFixture.wrap(async () => {
     const database = createNovelTestDatabase('retale-continue-block-atomic-rollback')
     seedNovel(database)
     database.exec(`
@@ -445,9 +447,9 @@ describe('continue-block service', () => {
     expect(database.prepare('SELECT COUNT(*) AS count FROM continue_blocks').get()).toMatchObject({ count: 0 })
     expect(database.prepare('SELECT COUNT(*) AS count FROM continue_block_revisions').get()).toMatchObject({ count: 0 })
     expect(database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes WHERE continue_block_id IS NOT NULL').get()).toMatchObject({ count: 0 })
-  })
+  }))
 
-  it('serializes concurrent label allocation for rewrite roots and continue children', async () => {
+  it('serializes concurrent label allocation for rewrite roots and continue children', databaseFixture.wrap(async () => {
     const database = createNovelTestDatabase('retale-continue-block-concurrent-allocation')
     seedNovel(database)
 
@@ -482,9 +484,9 @@ describe('continue-block service', () => {
     expect(database.prepare('SELECT COUNT(*) AS count FROM continue_blocks').get()).toMatchObject({ count: 12 })
     expect(database.prepare('SELECT COUNT(*) AS count FROM continue_block_revisions').get()).toMatchObject({ count: 12 })
     expect(database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes WHERE continue_block_id IS NOT NULL').get()).toMatchObject({ count: 12 })
-  })
+  }))
 
-  it('rejects regenerate for a missing continue block', async () => {
+  it('rejects regenerate for a missing continue block', databaseFixture.wrap(async () => {
     const database = createNovelTestDatabase('retale-continue-block-missing')
     seedNovel(database)
 
@@ -500,9 +502,9 @@ describe('continue-block service', () => {
       selectedText: '原始选区',
       originalText: '原始片段',
     })).rejects.toThrow('Continue block not found: missing-continue-block')
-  })
+  }))
 
-  it('returns stable 404 JSON for missing continue blocks on the route boundary', async () => {
+  it('returns stable 404 JSON for missing continue blocks on the route boundary', databaseFixture.wrap(async () => {
     const database = createNovelTestDatabase('retale-continue-block-route-missing')
     seedNovel(database)
 
@@ -529,5 +531,5 @@ describe('continue-block service', () => {
 
     const revisionCountAfter = (database.prepare('SELECT COUNT(*) AS count FROM continue_block_revisions').get() as { count: number }).count
     expect(revisionCountAfter).toBe(revisionCountBefore)
-  })
+  }))
 })

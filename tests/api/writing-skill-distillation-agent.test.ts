@@ -44,7 +44,7 @@ afterEach(() => {
 })
 
 function createTestDb(prefix: string) {
-  const temp = createTempDatabaseCopy(prefix)
+  const temp = createTempDatabaseCopy(prefix, 'control')
   const database = initializeDatabase(new DatabaseSync(temp.dbPath), { mode: 'control', schemaSql: CONTROL_SCHEMA_SQL })
   cleanups.push(() => {
     database.close()

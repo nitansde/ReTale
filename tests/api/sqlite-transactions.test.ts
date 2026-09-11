@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
 import { beginSqliteTransaction, getDatabaseTransactionKey } from '@/lib/server/database-transactions'
 import { createDatabaseAccess } from '@/lib/server/database-access'
-import * as singleton from '@/lib/server/sqlite'
+import { initializeDatabase } from '@/lib/server/sqlite'
 
 function deferred() {
   let resolve!: () => void
@@ -16,7 +16,9 @@ function deferred() {
 }
 
 describe('shared SQLite transaction runner', () => {
-  it('serializes singleton callers, rejects unrelated statements, and drains nested rollback failures', async () => {
+  it('serializes explicitly injected callers, rejects unrelated statements, and drains nested rollback failures', async () => {
+    const raw = initializeDatabase(new DatabaseSync(':memory:'))
+    const singleton = createDatabaseAccess(raw)
     singleton.execute('CREATE TABLE IF NOT EXISTS TransactionProbe (value TEXT)')
     singleton.execute('DELETE FROM TransactionProbe')
     const entered = deferred()
@@ -49,6 +51,7 @@ describe('shared SQLite transaction runner', () => {
     expect(order).toEqual(['first', 'second'])
     expect(singleton.queryAll('SELECT * FROM TransactionProbe')).toEqual([{ value: 'committed' }])
     singleton.execute('DROP TABLE TransactionProbe')
+    raw.close()
   })
 
   it('serializes the default database access wrapper and caches each handle identity', async () => {

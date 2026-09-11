@@ -73,6 +73,7 @@ export async function DELETE(request: Request) {
       branchId,
       nodeId,
       continueBlockId: node.continueBlockId,
+      db,
     })
     deleteStoryTimelineNode(nodeId, db)
     return NextResponse.json({ ok: true, nodeId })

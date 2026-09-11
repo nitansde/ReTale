@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -5,8 +6,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync; fetch?: typeof fetch }
 const originalDataDir = process.env.RETALE_DATA_DIR
 
 function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
@@ -42,7 +44,7 @@ function createTestDatabase(prefix: string) {
   const dbPath = path.join(process.env.RETALE_DATA_DIR, 'novels', 'novel-001', 'novel.db')
   fs.mkdirSync(path.dirname(dbPath), { recursive: true })
   const database = initializeDatabase(new DatabaseSync(dbPath))
-  globalForSqlite.sqlite = database
+  databaseFixture.database = database
   return database
 }
 
@@ -123,7 +125,7 @@ function seedReviseFixture(database: DatabaseSync) {
   ).run('jump_fixture_001', 'novel-001', 'novel-001:main', 'future_jump', 1, 100, 'JUMP-01 被绑走之夜', '迟来的真相', 'if_fixture_001', 10, 100, 'chapter-100', null, 'jump-run-001', 0, 'violet', 'generated')
 }
 
-afterEach(async () => {
+afterEach(databaseFixture.wrap(async () => {
   vi.restoreAllMocks()
   vi.resetModules()
   restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
@@ -131,21 +133,21 @@ afterEach(async () => {
   const resolverModule = await import('@/lib/server/db-resolver')
   resolverModule.resetResolvedDatabasesForTests()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('future-jump revise API', () => {
-  it('appends immutable revisions, updates mirrored latest fields, and keeps one timeline node', async () => {
+  it('appends immutable revisions, updates mirrored latest fields, and keeps one timeline node', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-future-jump-revise')
     seedReviseFixture(database)
 
@@ -272,9 +274,9 @@ describe('future-jump revise API', () => {
         expect.objectContaining({ revisionNo: 2, revisionKind: 'revise', userFeedback: '把男主的愧疚写得更明显，但不要立刻和好。' }),
       ],
     }))
-  }, 30000)
+  }), 30000)
 
-  it('returns stable 404 JSON for missing runs without writing revisions', async () => {
+  it('returns stable 404 JSON for missing runs without writing revisions', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-future-jump-revise-missing-run')
     seedReviseFixture(database)
 
@@ -297,5 +299,5 @@ describe('future-jump revise API', () => {
 
     const revisionCountAfter = (database.prepare('SELECT COUNT(*) AS count FROM future_jump_revisions').get() as { count: number }).count
     expect(revisionCountAfter).toBe(revisionCountBefore)
-  })
+  }))
 })

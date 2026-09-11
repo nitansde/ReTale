@@ -8,10 +8,9 @@ import {
   getNovelLanceDbPath,
   setNovelDatabaseOverrideForTests,
 } from '@/lib/server/db-resolver'
-import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
+import { registerNovelDatabaseFixture, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createOwnedTestRoot, removeOwnedTestTree } from '../../scripts/test-path-safety.mjs'
 
-type GlobalWithSqlite = typeof globalThis & { sqlite?: DatabaseSync }
 
 const repoRoot = process.cwd()
 const suiteTestRoot = process.env.RETALE_TEST_ROOT ?? ''
@@ -56,7 +55,6 @@ beforeEach(() => {
 
 afterEach(() => {
   resetNovelDatabaseTestState()
-  delete (globalThis as GlobalWithSqlite).sqlite
 
   while (databases.length > 0) {
     const database = databases.pop()
@@ -129,9 +127,8 @@ describe('novel database test overrides', () => {
     expect(() => getNovelDb(' novel-alpha')).toThrow(/Invalid novel ID/)
   })
 
-  it('routes only the registered exact key and never falls back to the singleton', () => {
+  it('routes only the registered exact key and never uses an unregistered connection', () => {
     const database = openDatabase('override.db')
-    ;(globalThis as GlobalWithSqlite).sqlite = database
     setNovelDatabaseOverrideForTests('novel-alpha', database)
 
     const alphaDatabase = getNovelDb('novel-alpha')
@@ -194,7 +191,7 @@ describe('novel database test overrides', () => {
 
   it('deduplicates shared registrations and rolls back partial failures', () => {
     const database = openDatabase('legacy-helper.db')
-    const dispose = registerLegacyNovelDatabase(database, ['novel-alpha', 'novel-alpha', 'novel-gamma'])
+    const dispose = registerNovelDatabaseFixture(database, ['novel-alpha', 'novel-alpha', 'novel-gamma'])
     expect(getNovelDb('novel-alpha')).toBe(database)
     expect(getNovelDb('novel-gamma')).toBe(database)
     dispose()
@@ -202,7 +199,7 @@ describe('novel database test overrides', () => {
     expect(getNovelDb('novel-alpha')).not.toBe(database)
     expect(getNovelDb('novel-gamma')).not.toBe(database)
 
-    expect(() => registerLegacyNovelDatabase(database, ['novel-beta', '../invalid'])).toThrow(/Invalid novel ID/)
+    expect(() => registerNovelDatabaseFixture(database, ['novel-beta', '../invalid'])).toThrow(/Invalid novel ID/)
     expect(getNovelDb('novel-beta')).not.toBe(database)
   })
 })

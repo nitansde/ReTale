@@ -4,7 +4,7 @@ export const PROTECTED_RESET_APP_SETTING_KEYS = [
   'OLLAMA_TIMEOUT_MS',
 ] as const
 
-export const CURRENT_NOVEL_SCHEMA_VERSION = '2'
+export const CURRENT_NOVEL_SCHEMA_VERSION = '3'
 
 export const CONTROL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS AppSetting (
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS NovelRegistry (
   author TEXT,
   dbFilePath TEXT NOT NULL UNIQUE,
   lanceDbPath TEXT NOT NULL UNIQUE,
-  schemaVersion TEXT NOT NULL DEFAULT '1',
+  schemaVersion TEXT NOT NULL DEFAULT '3',
   migrationStatus TEXT NOT NULL DEFAULT 'pending',
   lifecycleToken TEXT,
   leaseExpiresAt TEXT,
@@ -136,6 +136,8 @@ CREATE INDEX IF NOT EXISTS idx_writing_skill_card_source_card_order ON WritingSk
 CREATE INDEX IF NOT EXISTS idx_writing_skill_card_source_lookup ON WritingSkillCardSource(sourceType, sourceId);
 CREATE INDEX IF NOT EXISTS idx_writing_skill_example_card_enabled ON WritingSkillExample(skillCardId, enabled, score);
 CREATE INDEX IF NOT EXISTS idx_writing_skill_job_library_status ON WritingSkillDistillationJob(libraryId, status, updatedAt);
+
+CREATE INDEX IF NOT EXISTS idx_novel_registry_lifecycle ON NovelRegistry(migrationStatus, leaseExpiresAt, updatedAt, novelId);
 `
 
 const CHARACTER_IMPORTANCE_TIER_SQL = "'protagonist', 'important', 'arc'"
@@ -319,6 +321,7 @@ CREATE TABLE IF NOT EXISTS chapter_extraction_candidates (
   chapter_revision INTEGER,
   chapter_source_hash TEXT NOT NULL,
   extraction_json TEXT NOT NULL,
+  processing_batch_id TEXT,
   processing_result_json TEXT,
   status TEXT NOT NULL DEFAULT 'extracted',
   provider TEXT,
@@ -1170,6 +1173,73 @@ CREATE INDEX IF NOT EXISTS idx_future_jump_runs_target_outline ON future_jump_ru
 CREATE INDEX IF NOT EXISTS idx_future_jump_runs_target_outline_chapter ON future_jump_runs(target_outline_chapter_id);
 CREATE INDEX IF NOT EXISTS idx_future_jump_runs_branch_target_chapter ON future_jump_runs(base_branch_id, target_chapter_no);
 CREATE INDEX IF NOT EXISTS idx_future_jump_revisions_run ON future_jump_revisions(run_id);
+
+CREATE TABLE IF NOT EXISTS chapter_extraction_processing_batches (
+      id TEXT PRIMARY KEY,
+      novel_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      batch_identity_hash TEXT NOT NULL,
+      batch_context_json TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (novel_id) REFERENCES NovelRecord(id) ON DELETE CASCADE,
+      FOREIGN KEY (branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE,
+      UNIQUE (branch_id, batch_identity_hash)
+    );
+
+CREATE TRIGGER IF NOT EXISTS trg_knowledge_entity_character_tier_insert
+    BEFORE INSERT ON KnowledgeEntity
+    FOR EACH ROW
+    WHEN (NEW.entityType = 'character' AND (NEW.importanceTier IS NULL OR NEW.importanceTier NOT IN ('protagonist', 'important', 'arc')))
+      OR (NEW.entityType <> 'character' AND NEW.importanceTier IS NOT NULL)
+    BEGIN
+      SELECT RAISE(ABORT, 'character entities require Tier 0, Tier 1, or Tier 2 importanceTier');
+    END;
+
+CREATE TRIGGER IF NOT EXISTS trg_knowledge_entity_character_tier_update
+    BEFORE UPDATE OF entityType, importanceTier ON KnowledgeEntity
+    FOR EACH ROW
+    WHEN (NEW.entityType = 'character' AND (NEW.importanceTier IS NULL OR NEW.importanceTier NOT IN ('protagonist', 'important', 'arc')))
+      OR (NEW.entityType <> 'character' AND NEW.importanceTier IS NOT NULL)
+    BEGIN
+      SELECT RAISE(ABORT, 'character entities require Tier 0, Tier 1, or Tier 2 importanceTier');
+    END;
+
+CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_cache_lookup ON hanlp_bootstrap_cache(branch_id, chapter_no, chapter_text_hash, hanlp_script_version_hash, hanlp_model_or_config_hash, output_schema_version);
+
+CREATE INDEX IF NOT EXISTS idx_chapter_extraction_candidates_processing_batch ON chapter_extraction_candidates(branch_id, processing_batch_id);
+
+CREATE INDEX IF NOT EXISTS idx_chapter_extraction_processing_batches_branch ON chapter_extraction_processing_batches(branch_id, updated_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_chapter_extraction_processing_batches_identity ON chapter_extraction_processing_batches(branch_id, batch_identity_hash);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_character_candidates_surface_text ON character_candidates(novel_id, branch_id, surface_text);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_character_candidate_chapters_chapter_no ON character_candidate_chapters(novel_id, branch_id, candidate_id, chapter_no);
+
+CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_entities_branch_type ON hanlp_bootstrap_entities(branch_id, entity_type, score);
+
+CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_entities_result_lookup ON hanlp_bootstrap_entities(source_result_id, branch_id, chapter_no);
+
+CREATE INDEX IF NOT EXISTS idx_hanlp_bootstrap_coverage_novel ON hanlp_bootstrap_coverage(novel_id, valid_through_chapter_no);
+
+CREATE INDEX IF NOT EXISTS idx_character_candidates_branch_status ON character_candidates(branch_id, status, last_seen_chapter);
+
+CREATE INDEX IF NOT EXISTS idx_character_candidates_promotion_lookup ON character_candidates(branch_id, promoted_entity_id, promotion_summary_status, merged_entity_id, status, last_seen_chapter);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_entity_branch_tier ON KnowledgeEntity(branchId, importanceTier) WHERE importanceTier IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_story_timeline_nodes_continue_block ON story_timeline_nodes(continue_block_id) WHERE continue_block_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_continue_block ON story_timeline_nodes(continue_block_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_story_timeline_nodes_roleplay_session ON story_timeline_nodes(roleplay_session_id) WHERE roleplay_session_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_story_timeline_nodes_roleplay_session ON story_timeline_nodes(roleplay_session_id);
+
+CREATE INDEX IF NOT EXISTS idx_future_jump_runs_source_node ON future_jump_runs(source_timeline_node_id);
+
+CREATE INDEX IF NOT EXISTS idx_future_jump_runs_source_chapter ON future_jump_runs(source_chapter_id);
 `
 
 export const SCHEMA_SQL = FULL_SCHEMA_SQL

@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -5,8 +6,9 @@ import type { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
 const originalDataDir = process.env.RETALE_DATA_DIR
 
@@ -46,8 +48,7 @@ async function createSplitBrainDatabases(prefix: string) {
   process.env.RETALE_DATA_DIR = runtimeDataRoot
   vi.resetModules()
 
-  const sqliteModule = await import('@/lib/server/sqlite')
-  globalForSqlite.sqlite = sqliteModule.sqlite
+  const sqliteModule = databaseFixture.open(process.env.DATABASE_URL!)
   const resolverModule = await import('@/lib/server/db-resolver')
   const novelDatabase = resolverModule.getNovelDb('novel-001')
 
@@ -57,17 +58,17 @@ async function createSplitBrainDatabases(prefix: string) {
   }
 }
 
-afterEach(async () => {
+afterEach(databaseFixture.wrap(async () => {
   vi.restoreAllMocks()
   vi.resetModules()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch (closeError) {
       void closeError
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   restoreEnvVar('DATABASE_URL', originalDatabaseUrl)
@@ -83,10 +84,10 @@ afterEach(async () => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('/api/continue-blocks detail readback', () => {
-  it('reads an immediately saved continue block from the per-novel database instead of the singleton database', async () => {
+  it('reads an immediately saved continue block from the per-novel database instead of the singleton database', databaseFixture.wrap(async () => {
     const { singletonDatabase, novelDatabase } = await createSplitBrainDatabases('retale-continue-block-route-readback')
     seedNovel(novelDatabase)
 
@@ -153,9 +154,9 @@ describe('/api/continue-blocks detail readback', () => {
       writingSkillCardIds: [],
       writingSkillExampleCount: 5,
     }))
-  })
+  }))
 
-  it('persists multiple writing skill cards across create, regenerate, detail, and timeline reads', async () => {
+  it('persists multiple writing skill cards across create, regenerate, detail, and timeline reads', databaseFixture.wrap(async () => {
     const { novelDatabase } = await createSplitBrainDatabases('retale-continue-block-writing-skills')
     seedNovel(novelDatabase)
 
@@ -265,7 +266,7 @@ describe('/api/continue-blocks detail readback', () => {
       writing_skill_example_count: 3,
     })
     expect(listTableColumnsForTest(novelDatabase, 'continue_blocks')).not.toContain('writing_skill_seed')
-  })
+  }))
 })
 
 function listTableColumnsForTest(database: DatabaseSync, tableName: string) {

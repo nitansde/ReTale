@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -5,8 +6,9 @@ import type { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
 const originalDataDir = process.env.RETALE_DATA_DIR
 
@@ -46,8 +48,7 @@ async function createSplitBrainDatabases(prefix: string) {
   process.env.RETALE_DATA_DIR = runtimeDataRoot
   vi.resetModules()
 
-  const sqliteModule = await import('@/lib/server/sqlite')
-  globalForSqlite.sqlite = sqliteModule.sqlite
+  const sqliteModule = databaseFixture.open(process.env.DATABASE_URL!)
   const resolverModule = await import('@/lib/server/db-resolver')
   const novelDatabase = resolverModule.getNovelDb('novel-001')
 
@@ -57,17 +58,17 @@ async function createSplitBrainDatabases(prefix: string) {
   }
 }
 
-afterEach(async () => {
+afterEach(databaseFixture.wrap(async () => {
   vi.restoreAllMocks()
   vi.resetModules()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch (closeError) {
       void closeError
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   restoreEnvVar('DATABASE_URL', originalDatabaseUrl)
@@ -83,10 +84,10 @@ afterEach(async () => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('/api/story-timeline per-novel readback', () => {
-  it('returns a timeline node stored only in the per-novel database when the singleton database is empty', async () => {
+  it('returns a timeline node stored only in the per-novel database when the singleton database is empty', databaseFixture.wrap(async () => {
     const { singletonDatabase, novelDatabase } = await createSplitBrainDatabases('retale-story-timeline-route-readback')
     seedNovel(novelDatabase)
 
@@ -161,9 +162,9 @@ describe('/api/story-timeline per-novel readback', () => {
         latestText: '中性改写结果',
       }),
     ])
-  })
+  }))
 
-  it('deletes a timeline node from the per-novel database within the requested branch context', async () => {
+  it('deletes a timeline node from the per-novel database within the requested branch context', databaseFixture.wrap(async () => {
     const { singletonDatabase, novelDatabase } = await createSplitBrainDatabases('retale-story-timeline-route-delete')
     seedNovel(novelDatabase)
 
@@ -210,5 +211,5 @@ describe('/api/story-timeline per-novel readback', () => {
     await expect(response.json()).resolves.toEqual({ ok: true, nodeId: 'timeline-node-delete-001' })
     expect(novelDatabase.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes WHERE id = ?').get('timeline-node-delete-001')).toMatchObject({ count: 0 })
     expect(singletonDatabase.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes').get()).toMatchObject({ count: 0 })
-  })
+  }))
 })

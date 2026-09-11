@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,9 +7,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 import type { AISettings } from '@/lib/types'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const EVIDENCE_DIR = process.env.TASK_EVIDENCE_DIR!
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDataDir = process.env.RETALE_DATA_DIR
 
 function seedWhatIfFixture(database: DatabaseSync) {
@@ -60,13 +62,13 @@ function snapshotAuthoritativeState(database: DatabaseSync) {
   }
 }
 
-afterEach(async () => {
-  if (globalForSqlite.sqlite) {
+afterEach(databaseFixture.wrap(async () => {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   const resolver = await import('@/lib/server/db-resolver')
@@ -77,10 +79,10 @@ afterEach(async () => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('what-if create API', () => {
-  it('persists speculative session, deltas, and timeline node without mutating authoritative storage', async () => {
+  it('persists speculative session, deltas, and timeline node without mutating authoritative storage', databaseFixture.wrap(async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-what-if-create-'))
     cleanups.push(() => fs.rmSync(directory, { recursive: true, force: true }))
     const dataRoot = path.join(directory, 'data')
@@ -88,7 +90,7 @@ describe('what-if create API', () => {
     fs.mkdirSync(path.dirname(databasePath), { recursive: true })
     process.env.RETALE_DATA_DIR = dataRoot
     const database = initializeDatabase(new DatabaseSync(databasePath))
-    globalForSqlite.sqlite = database
+    databaseFixture.database = database
     seedWhatIfFixture(database)
 
     const before = snapshotAuthoritativeState(database)
@@ -242,5 +244,5 @@ describe('what-if create API', () => {
         `KnowledgeChapter rawText unchanged: ${String(after.chapter.rawText === before.chapter.rawText)}`,
       ].join('\n')
     )
-  }, 15000)
+  }), 15000)
 })

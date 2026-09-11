@@ -202,9 +202,12 @@ function openResolvedDatabase(databasePath: string, options?: { schemaSql?: stri
     return cached
   }
 
-  const database = initializeDatabase(openSqliteDatabase(databasePath), options)
-  cache.set(cacheKey, database)
-  return database
+  const database = openSqliteDatabase(databasePath)
+  try {
+    initializeDatabase(database, options)
+    cache.set(cacheKey, database)
+    return database
+  } catch (error) { database.close(); throw error }
 }
 
 function getNovelDirectory(novelId: string) {

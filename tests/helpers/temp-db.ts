@@ -38,7 +38,7 @@ export function hashFile(filePath: string) {
   return hash.digest('hex')
 }
 
-export function createTempDatabaseCopy(prefix: string) {
+export function createTempDatabaseCopy(prefix: string, mode: 'full' | 'control' = 'full') {
   const sourceDbPath = resolveOwnedSourceDatabase()
   const sourceHashBefore = hashFile(sourceDbPath)
   const testRoot = process.env.RETALE_TEST_ROOT
@@ -50,7 +50,7 @@ export function createTempDatabaseCopy(prefix: string) {
   const dbPath = path.join(tempDir, 'test.db')
   fs.copyFileSync(sourceDbPath, dbPath)
 
-  const database = initializeDatabase(new DatabaseSync(dbPath))
+  const database = initializeDatabase(new DatabaseSync(dbPath), { mode })
   ;(database as DatabaseSync & { close?: () => void }).close?.()
 
   if (hashFile(sourceDbPath) !== sourceHashBefore) {

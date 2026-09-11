@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -5,8 +6,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const createdDirectories: string[] = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDataDir = process.env.RETALE_DATA_DIR
 
 const FIXTURE_IDS = {
@@ -29,7 +31,7 @@ function createTestDatabase(prefix: string) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true })
   process.env.RETALE_DATA_DIR = dataRoot
   const database = initializeDatabase(new DatabaseSync(databasePath))
-  globalForSqlite.sqlite = database
+  databaseFixture.database = database
   return database
 }
 
@@ -280,16 +282,16 @@ function createMessageRequest(sessionId: string, body: Record<string, unknown>) 
   })
 }
 
-afterEach(async () => {
+afterEach(databaseFixture.wrap(async () => {
   vi.restoreAllMocks()
   vi.resetModules()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   const resolver = await import('@/lib/server/db-resolver')
@@ -303,10 +305,10 @@ afterEach(async () => {
       fs.rmSync(directory, { recursive: true, force: true })
     }
   }
-})
+}))
 
 describe('roleplay session API', () => {
-  it('creates a session, appends ordered messages, preserves variant and fork metadata, and keeps non-roleplay tables untouched', async () => {
+  it('creates a session, appends ordered messages, preserves variant and fork metadata, and keeps non-roleplay tables untouched', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-roleplay-api-success')
     createFixture(database)
     vi.resetModules()
@@ -574,9 +576,9 @@ describe('roleplay session API', () => {
         future_jump_run_id: null,
       },
     ])
-  })
+  }))
 
-  it('returns 404 for invalid roleplay session ids on load and append', async () => {
+  it('returns 404 for invalid roleplay session ids on load and append', databaseFixture.wrap(async () => {
     createTestDatabase('retale-roleplay-api-not-found')
     vi.resetModules()
 
@@ -599,9 +601,9 @@ describe('roleplay session API', () => {
     )
     expect(appendResponse.status).toBe(404)
     await expect(appendResponse.json()).resolves.toEqual({ ok: false, error: 'Roleplay session not found for the requested branch context' })
-  })
+  }))
 
-  it('rejects invalid source timeline ids without creating a session or orphan timeline node', async () => {
+  it('rejects invalid source timeline ids without creating a session or orphan timeline node', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-roleplay-api-invalid-source-node')
     createFixture(database)
     vi.resetModules()
@@ -630,9 +632,9 @@ describe('roleplay session API', () => {
     await expect(response.json()).resolves.toEqual({ ok: false, error: 'Source timeline node not found: missing-timeline-node' })
     expect((database.prepare('SELECT COUNT(*) AS count FROM roleplay_sessions').get() as { count: number }).count).toBe(beforeSessionCount)
     expect((database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes').get() as { count: number }).count).toBe(beforeTimelineNodeCount)
-  })
+  }))
 
-  it('rolls back roleplay session creation when its timeline node insert fails', async () => {
+  it('rolls back roleplay session creation when its timeline node insert fails', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-roleplay-api-atomic-rollback')
     createFixture(database)
     database.exec(`
@@ -663,9 +665,9 @@ describe('roleplay session API', () => {
     await expect(response.json()).resolves.toEqual({ ok: false, error: 'forced roleplay timeline failure' })
     expect(database.prepare('SELECT COUNT(*) AS count FROM roleplay_sessions').get()).toMatchObject({ count: 0 })
     expect(database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes WHERE roleplay_session_id IS NOT NULL').get()).toMatchObject({ count: 0 })
-  })
+  }))
 
-  it('rolls back variant-group updates when latest-turn variant insertion fails', async () => {
+  it('rolls back variant-group updates when latest-turn variant insertion fails', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-roleplay-api-variant-rollback')
     createFixture(database)
     vi.resetModules()
@@ -717,9 +719,9 @@ describe('roleplay session API', () => {
 
     expect(database.prepare('SELECT COUNT(*) AS count FROM roleplay_messages WHERE session_id = ?').get(session.id)).toMatchObject({ count: 1 })
     expect(database.prepare('SELECT variant_group_id FROM roleplay_messages WHERE id = ?').get(originalMessage.id)).toMatchObject({ variant_group_id: null })
-  })
+  }))
 
-  it('serializes concurrent session, message, and latest-turn variant allocations and returns each inserted variant', async () => {
+  it('serializes concurrent session, message, and latest-turn variant allocations and returns each inserted variant', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-roleplay-api-concurrent-allocation')
     createFixture(database)
     vi.resetModules()
@@ -797,5 +799,5 @@ describe('roleplay session API', () => {
       const stored = storedVariants.find((message) => message.content === variant.content)
       expect(stored?.id).toBe(variant.id)
     }
-  })
+  }))
 })

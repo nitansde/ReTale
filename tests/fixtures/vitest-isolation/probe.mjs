@@ -2,10 +2,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { expect, it } from 'vitest'
-import { sqlite } from '../../../lib/server/sqlite'
+import { initializeDatabase, openSqliteDatabase } from '../../../lib/server/sqlite'
+const sqlite = initializeDatabase(openSqliteDatabase(process.env.DATABASE_URL))
 
-// Resolve the lazy singleton during module evaluation, before any test hooks.
-const singletonFile = sqlite.prepare('PRAGMA database_list').get().file
+// Open an explicitly selected file during module evaluation, before any test hooks.
+const databaseFile = sqlite.prepare('PRAGMA database_list').get().file
 
 export function registerIsolationProbe(name, peer) {
   it(`isolates ${name} while ${peer} writes the same filenames`, async () => {
@@ -18,7 +19,7 @@ export function registerIsolationProbe(name, peer) {
     sqlite.prepare('INSERT INTO isolation_probe (owner) VALUES (?)').run(name)
     const runtime = {
       testRoot: process.env.RETALE_TEST_ROOT,
-      database: singletonFile,
+      database: databaseFile,
       source: process.env.RETALE_TEST_SOURCE_DB_PATH,
       temp: process.env.TMPDIR,
       evidence: process.env.TASK_EVIDENCE_DIR,

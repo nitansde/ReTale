@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PresetCompatMacroDiagnostic } from '@/lib/preset-compat/macro-context'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
-import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
+import { registerNovelDatabaseFixture, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 import type { AISettings } from '@/lib/types'
 
@@ -19,7 +19,7 @@ async function createTestDatabase(prefix: string, novelIds: readonly string[]) {
 
   const { initializeDatabase } = await import('@/lib/server/sqlite')
   initializeDatabase(database)
-  novelDatabaseDisposers.push(registerLegacyNovelDatabase(database, novelIds))
+  novelDatabaseDisposers.push(registerNovelDatabaseFixture(database, novelIds))
   return database
 }
 

@@ -4,7 +4,7 @@ import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { DatabaseSync } from 'node:sqlite'
-import { CONTROL_SCHEMA_SQL, FULL_SCHEMA_SQL } from '../lib/server/schema.ts'
+import { registerTypeScriptHooks } from './typescript-runtime.mjs'
 import {
   assertOwnedTestDatabaseUrl,
   assertOwnedTestPath,
@@ -14,6 +14,9 @@ import {
 import { buildNextProductionBuildArgs } from './next-production-build.mjs'
 import { buildKnowledgeWorker } from './build-knowledge-worker.mjs'
 import { assertPortAvailable, assertPortReleased } from './production-port-safety.mjs'
+
+await registerTypeScriptHooks()
+const { initializeDatabase } = await import('../lib/server/sqlite.ts')
 
 const ROOT = process.cwd()
 const require = createRequire(import.meta.url)
@@ -98,16 +101,14 @@ function seedRuntime(config) {
   const lanceDbPath = path.join(novelDirectory, 'lancedb')
   fs.mkdirSync(novelDirectory, { recursive: true })
 
-  const controlDb = new DatabaseSync(path.join(config.dataDir, 'control.db'))
-  controlDb.exec(CONTROL_SCHEMA_SQL)
+  const controlDb = initializeDatabase(new DatabaseSync(path.join(config.dataDir, 'control.db')), { mode: 'control' })
   controlDb.prepare(
     `INSERT INTO NovelRegistry (novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus)
-     VALUES (?, ?, ?, ?, ?, '1', 'ready')`
+     VALUES (?, ?, ?, ?, ?, '3', 'ready')`
   ).run(NOVEL_ID, NOVEL_ID, 'Production Smoke Novel', novelDbPath, lanceDbPath)
   controlDb.close()
 
-  const novelDb = new DatabaseSync(novelDbPath)
-  novelDb.exec(FULL_SCHEMA_SQL)
+  const novelDb = initializeDatabase(new DatabaseSync(novelDbPath))
   novelDb.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)')
     .run(NOVEL_ID, 'Production Smoke Novel', 'workspace')
   novelDb.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)')

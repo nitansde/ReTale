@@ -1,11 +1,13 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
+import { registerNovelDatabaseFixture, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
+
+const databaseFixture = createScopedDatabaseFixture()
 
 const cleanups: Array<() => void> = []
 const novelDatabaseOverrideDisposers: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
 let fixtureSequence = 0
 
@@ -72,8 +74,7 @@ async function createTestDatabase(prefix: string) {
   process.env.DATABASE_URL = tempDatabase.dbPath
   vi.resetModules()
 
-  const sqliteModule = await import('@/lib/server/sqlite')
-  globalForSqlite.sqlite = sqliteModule.sqlite
+  const sqliteModule = databaseFixture.open(process.env.DATABASE_URL!)
 
   return {
     database: sqliteModule.sqlite,
@@ -86,7 +87,7 @@ function seedKnowledgeRebuildFixture(database: DatabaseSync, novelKey: string, c
   fixtureSequence += 1
   const novelId = `${novelKey}_${String(fixtureSequence).padStart(3, '0')}`
   const branchId = `${novelId}:main`
-  novelDatabaseOverrideDisposers.push(registerLegacyNovelDatabase(database, [novelId]))
+  novelDatabaseOverrideDisposers.push(registerNovelDatabaseFixture(database, [novelId]))
   database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(novelId, 'Fixture Novel', 'txt')
   database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run(branchId, novelId, 'main')
   const insertChapter = database.prepare(
@@ -207,7 +208,7 @@ function mockKnowledgeRebuildDependencies(params: {
   }))
 }
 
-afterEach(() => {
+afterEach(databaseFixture.wrap(() => {
   vi.unstubAllGlobals()
   vi.resetModules()
   vi.unmock('@/lib/server/ai-settings')
@@ -222,14 +223,14 @@ afterEach(() => {
   }
   resetNovelDatabaseTestState()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch (ignoredError) {
       void ignoredError
       // The shared fixture database may already be closed.
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   process.env.DATABASE_URL = originalDatabaseUrl
@@ -237,10 +238,10 @@ afterEach(() => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('knowledge rebuild candidate promotion', () => {
-  it('refuses to create formal entities for unranked extracted characters and known updates', async () => {
+  it('refuses to create formal entities for unranked extracted characters and known updates', databaseFixture.wrap(async () => {
     const { database, queryOne, queryAll } = await createTestDatabase('retale-candidate-formal-tier-gate')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_candidate_formal_tier_gate', 1)
     const aiSettings = createMockAISettings()
@@ -294,9 +295,9 @@ describe('knowledge rebuild candidate promotion', () => {
       { mentionText: '路过掌柜', resolutionKind: 'unresolved' },
     ])
     expect(summarySpy).not.toHaveBeenCalled()
-  })
+  }))
 
-  it('does not promote when a candidate appears in only 9 distinct chapters', async () => {
+  it('does not promote when a candidate appears in only 9 distinct chapters', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-candidate-promotion-nine-chapters')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_candidate_nine_chapters', 9)
     const aiSettings = createMockAISettings()
@@ -356,9 +357,9 @@ describe('knowledge rebuild candidate promotion', () => {
     })
     expect(promotedEntityCount?.count).toBe(0)
     expect(summarySpy).not.toHaveBeenCalled()
-  })
+  }))
 
-  it('does not promote when 20 mentions happen in the same chapter only', async () => {
+  it('does not promote when 20 mentions happen in the same chapter only', databaseFixture.wrap(async () => {
     const { database, queryOne, queryAll } = await createTestDatabase('retale-candidate-promotion-single-chapter')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_candidate_single_chapter', 1)
     const aiSettings = createMockAISettings()
@@ -425,9 +426,9 @@ describe('knowledge rebuild candidate promotion', () => {
     expect(chapterRows).toEqual([{ chapterNo: 1, mentionCount: 20 }])
     expect(promotedEntityCount?.count).toBe(0)
     expect(summarySpy).not.toHaveBeenCalled()
-  })
+  }))
 
-  it('promotes once at 10 distinct chapters, preserves per-chapter mention counts, and skips summary reruns', async () => {
+  it('promotes once at 10 distinct chapters, preserves per-chapter mention counts, and skips summary reruns', databaseFixture.wrap(async () => {
     const { database, queryOne, queryAll } = await createTestDatabase('retale-candidate-promotion')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_candidate_promotion', 10)
     const aiSettings = createMockAISettings()
@@ -563,9 +564,9 @@ describe('knowledge rebuild candidate promotion', () => {
     expect(rerunCandidate).toMatchObject({ chapterCount: 10, mentionCount: 11, promotionSummaryStatus: 'completed' })
     expect(rerunChapterRows[0]).toMatchObject({ chapterNo: 1, mentionCount: 2 })
     expect(summarySpy).toHaveBeenCalledTimes(1)
-  })
+  }))
 
-  it('recovers a promoted pending summary on rerun after the first summary attempt fails', async () => {
+  it('recovers a promoted pending summary on rerun after the first summary attempt fails', databaseFixture.wrap(async () => {
     const { database, queryOne, queryAll } = await createTestDatabase('retale-candidate-promotion-recovery')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_candidate_promotion_recovery', 10)
     const aiSettings = createMockAISettings()
@@ -673,5 +674,5 @@ describe('knowledge rebuild candidate promotion', () => {
       { factType: 'character_status', predicate: 'status', status: 'candidate_promoted_summary' },
     ])
     expect(summarySpy).toHaveBeenCalledTimes(2)
-  })
+  }))
 })

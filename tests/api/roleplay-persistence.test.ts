@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -5,9 +6,10 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const EVIDENCE_DIR = process.env.TASK_EVIDENCE_DIR!
 const createdDirectories: string[] = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 
 const FIXTURE_IDS = {
   novelId: 'novel-roleplay-001',
@@ -246,137 +248,16 @@ function snapshotNonRoleplayState(database: DatabaseSync) {
   }
 }
 
-function createLegacyDatabaseWithoutRoleplay(databasePath: string) {
-  const database = new DatabaseSync(databasePath)
-  database.exec(`
-    PRAGMA foreign_keys = OFF;
-    CREATE TABLE story_timeline_nodes (
-      id TEXT PRIMARY KEY,
-      novel_id TEXT NOT NULL,
-      branch_id TEXT NOT NULL,
-      node_type TEXT NOT NULL,
-      label_index INTEGER NOT NULL,
-      anchor_chapter_no INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      subtitle TEXT,
-      parent_node_id TEXT,
-      source_chapter_no INTEGER,
-      target_chapter_no INTEGER,
-      chapter_id TEXT,
-      continue_block_id TEXT,
-      what_if_session_id TEXT,
-      future_jump_run_id TEXT,
-      readable_label TEXT,
-      readable_lineage_label TEXT,
-      lane_index INTEGER DEFAULT 0,
-      color_token TEXT,
-      status TEXT NOT NULL DEFAULT 'active',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE (novel_id, branch_id, node_type, label_index),
-      UNIQUE (continue_block_id),
-      UNIQUE (what_if_session_id),
-      UNIQUE (future_jump_run_id)
-    );
-    CREATE TABLE continue_blocks (
-      id TEXT PRIMARY KEY,
-      novel_id TEXT NOT NULL,
-      branch_id TEXT NOT NULL,
-      parent_timeline_node_id TEXT,
-      source_chapter_no INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      subtitle TEXT,
-      user_instruction TEXT NOT NULL,
-      selected_text TEXT NOT NULL,
-      original_text TEXT NOT NULL,
-      latest_text TEXT NOT NULL,
-      latest_revision_no INTEGER NOT NULL DEFAULT 1,
-      status TEXT NOT NULL DEFAULT 'active',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      latest_input_tokens INTEGER,
-      latest_output_tokens INTEGER,
-      writing_skill_card_ids_json TEXT NOT NULL DEFAULT '[]',
-      writing_skill_example_count INTEGER NOT NULL DEFAULT 5
-    );
-    CREATE TABLE what_if_sessions (
-      id TEXT PRIMARY KEY,
-      novel_id TEXT NOT NULL,
-      base_branch_id TEXT NOT NULL,
-      source_chapter_no INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      premise TEXT NOT NULL,
-      selected_text TEXT NOT NULL,
-      original_text TEXT NOT NULL,
-      generated_text TEXT NOT NULL,
-      input_tokens INTEGER,
-      output_tokens INTEGER,
-      status TEXT NOT NULL DEFAULT 'active',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE future_jump_runs (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      base_branch_id TEXT NOT NULL,
-      parent_timeline_node_id TEXT,
-      source_timeline_node_id TEXT,
-      source_timeline_node_type TEXT,
-      source_chapter_id TEXT,
-      source_what_if_session_id TEXT,
-      target_outline_node_id TEXT NOT NULL,
-      target_outline_chapter_id TEXT NOT NULL,
-      source_chapter_no INTEGER NOT NULL,
-      target_chapter_no INTEGER NOT NULL,
-      user_direction TEXT NOT NULL DEFAULT '',
-      bridge_summary TEXT NOT NULL,
-      generated_target_text TEXT NOT NULL,
-      latest_input_tokens INTEGER,
-      latest_output_tokens INTEGER,
-      latest_revision_no INTEGER NOT NULL DEFAULT 1,
-      error_message TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE future_jump_revisions (
-      id TEXT PRIMARY KEY,
-      run_id TEXT NOT NULL,
-      revision_no INTEGER NOT NULL,
-      revision_kind TEXT NOT NULL,
-      user_feedback TEXT,
-      bridge_summary TEXT NOT NULL,
-      generated_target_text TEXT NOT NULL,
-      input_tokens INTEGER,
-      output_tokens INTEGER,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE (run_id, revision_no)
-    );
-    CREATE INDEX idx_continue_blocks_branch_source ON continue_blocks(branch_id, source_chapter_no);
-    CREATE INDEX idx_continue_blocks_parent_node ON continue_blocks(parent_timeline_node_id);
-    CREATE INDEX idx_what_if_sessions_branch_source ON what_if_sessions(base_branch_id, source_chapter_no);
-    CREATE INDEX idx_future_jump_runs_session ON future_jump_runs(session_id);
-    CREATE INDEX idx_future_jump_runs_parent_node ON future_jump_runs(parent_timeline_node_id);
-    CREATE INDEX idx_future_jump_runs_source_node ON future_jump_runs(source_timeline_node_id);
-    CREATE INDEX idx_future_jump_runs_source_chapter ON future_jump_runs(source_chapter_id);
-    CREATE INDEX idx_future_jump_runs_target_outline ON future_jump_runs(target_outline_node_id);
-    CREATE INDEX idx_future_jump_runs_target_outline_chapter ON future_jump_runs(target_outline_chapter_id);
-    CREATE INDEX idx_future_jump_runs_branch_target_chapter ON future_jump_runs(base_branch_id, target_chapter_no);
-    CREATE INDEX idx_future_jump_revisions_run ON future_jump_revisions(run_id);
-  `)
-  ;(database as DatabaseSync & { close?: () => void }).close?.()
-}
-
-afterEach(() => {
+afterEach(databaseFixture.wrap(() => {
   vi.restoreAllMocks()
   vi.resetModules()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   while (createdDirectories.length) {
@@ -385,13 +266,13 @@ afterEach(() => {
       fs.rmSync(directory, { recursive: true, force: true })
     }
   }
-})
+}))
 
 describe('roleplay persistence schema', () => {
-  it('creates dedicated roleplay tables and preserves ordered fork and variant invariants without mutating non-roleplay state', async () => {
+  it('creates dedicated roleplay tables and preserves ordered fork and variant invariants without mutating non-roleplay state', databaseFixture.wrap(async () => {
     const databasePath = makeTempDatabasePath('retale-roleplay-persistence-contract')
     const database = initializeDatabase(new DatabaseSync(databasePath))
-    globalForSqlite.sqlite = database
+    databaseFixture.database = database
     seedPersistenceFixture(database)
     vi.resetModules()
 
@@ -536,9 +417,9 @@ describe('roleplay persistence schema', () => {
     expect(afterIsolation).toEqual(beforeIsolation)
 
     ;(database as DatabaseSync & { close?: () => void }).close?.()
-  })
+  }))
 
-  it('creates dedicated roleplay tables and timeline support on a fresh database', () => {
+  it('creates dedicated roleplay tables and timeline support on a fresh database', databaseFixture.wrap(() => {
     const databasePath = makeTempDatabasePath('retale-roleplay-schema')
     const database = initializeDatabase(new DatabaseSync(databasePath))
 
@@ -577,61 +458,5 @@ describe('roleplay persistence schema', () => {
     )
 
     ;(database as DatabaseSync & { close?: () => void }).close?.()
-  })
-
-  it('forward-migrates legacy branch tables without changing branch-table definitions or writing roleplay rows into them', () => {
-    const databasePath = makeTempDatabasePath('retale-roleplay-branch-guard')
-    createLegacyDatabaseWithoutRoleplay(databasePath)
-
-    const beforeDatabase = new DatabaseSync(databasePath)
-    const branchTables = ['continue_blocks', 'what_if_sessions', 'future_jump_runs', 'future_jump_revisions'] as const
-    const beforeMetadata = Object.fromEntries(branchTables.map((tableName) => {
-      const row = beforeDatabase.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName) as { sql: string | null }
-      return [tableName, row.sql]
-    }))
-    const beforeTimelineColumns = listColumnNames(beforeDatabase, 'story_timeline_nodes')
-    ;(beforeDatabase as DatabaseSync & { close?: () => void }).close?.()
-
-    const migratedDatabase = initializeDatabase(new DatabaseSync(databasePath))
-    const afterMetadata = Object.fromEntries(branchTables.map((tableName) => {
-      const row = migratedDatabase.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName) as { sql: string | null }
-      return [tableName, row.sql]
-    }))
-    const afterTimelineColumns = listColumnNames(migratedDatabase, 'story_timeline_nodes')
-    const branchTableCounts = Object.fromEntries(branchTables.map((tableName) => {
-      const row = migratedDatabase.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get() as { count: number }
-      return [tableName, row.count]
-    }))
-    const roleplayCounts = {
-      roleplay_sessions: (migratedDatabase.prepare('SELECT COUNT(*) AS count FROM roleplay_sessions').get() as { count: number }).count,
-      roleplay_messages: (migratedDatabase.prepare('SELECT COUNT(*) AS count FROM roleplay_messages').get() as { count: number }).count,
-    }
-
-    expect(beforeTimelineColumns).not.toContain('roleplay_session_id')
-    expect(afterTimelineColumns).toContain('roleplay_session_id')
-    expect(afterMetadata).toEqual(beforeMetadata)
-    expect(branchTableCounts).toEqual({
-      continue_blocks: 0,
-      what_if_sessions: 0,
-      future_jump_runs: 0,
-      future_jump_revisions: 0,
-    })
-    expect(roleplayCounts).toEqual({ roleplay_sessions: 0, roleplay_messages: 0 })
-
-    fs.mkdirSync(EVIDENCE_DIR, { recursive: true })
-    fs.writeFileSync(
-      path.join(EVIDENCE_DIR, 'task-1-branch-table-guard.txt'),
-      JSON.stringify({
-        databasePath,
-        beforeMetadata,
-        afterMetadata,
-        beforeTimelineColumns,
-        afterTimelineColumns,
-        branchTableCounts,
-        roleplayCounts,
-      }, null, 2)
-    )
-
-    ;(migratedDatabase as DatabaseSync & { close?: () => void }).close?.()
-  })
+  }))
 })

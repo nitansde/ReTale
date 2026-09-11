@@ -7,7 +7,7 @@ import {
 
 type DatabaseSync = NodeSqlite.DatabaseSync
 
-export function registerLegacyNovelDatabase(database: DatabaseSync, novelIds: readonly string[]) {
+export function registerNovelDatabaseFixture(database: DatabaseSync, novelIds: readonly string[]) {
   const disposers: Array<() => void> = []
 
   try {

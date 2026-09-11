@@ -30,7 +30,7 @@ export async function beginSqliteTransaction(database: DatabaseSync) {
 export function assertDatabaseTransactionAccess(database: DatabaseSync) {
   const owner = serializedDatabaseTransactionState.ownerByKey.get(getDatabaseTransactionKey(database))
   if (owner && owner !== serializedDatabaseTransactionState.scope.getStore()) {
-    throw new Error('The singleton database is in use by another transaction; use withTransaction for concurrent work')
+    throw new Error('This database is in use by another transaction; use withTransaction for concurrent work')
   }
 }
 

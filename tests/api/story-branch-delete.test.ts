@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -5,8 +6,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDataDir = process.env.RETALE_DATA_DIR
 
 function createTestDatabase(prefix: string, novelId = 'novel-001') {
@@ -17,7 +19,7 @@ function createTestDatabase(prefix: string, novelId = 'novel-001') {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true })
   process.env.RETALE_DATA_DIR = dataRoot
   const database = initializeDatabase(new DatabaseSync(databasePath))
-  globalForSqlite.sqlite = database
+  databaseFixture.database = database
   return database
 }
 
@@ -334,15 +336,15 @@ function seedPromoteFixture(database: DatabaseSync) {
   )
 }
 
-afterEach(async () => {
+afterEach(databaseFixture.wrap(async () => {
   vi.resetModules()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   const resolver = await import('@/lib/server/db-resolver')
@@ -353,10 +355,10 @@ afterEach(async () => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('story branch delete APIs', () => {
-  it('deletes a what-if session, its timeline node, and descendant future-jump lineage in branch context', async () => {
+  it('deletes a what-if session, its timeline node, and descendant future-jump lineage in branch context', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-story-branch-delete-what-if')
     seedDeleteFixture(database)
     vi.resetModules()
@@ -379,9 +381,9 @@ describe('story branch delete APIs', () => {
     expect(database.prepare('SELECT id FROM story_timeline_nodes WHERE id = ?').get('jump-node-001')).toBeUndefined()
     expect(database.prepare('SELECT id FROM what_if_sessions WHERE id = ?').get('what-if-002')).toEqual({ id: 'what-if-002' })
     expect(database.prepare('SELECT id FROM story_timeline_nodes WHERE id = ?').get('if-node-002')).toEqual({ id: 'if-node-002' })
-  })
+  }))
 
-  it('deletes a future-jump run and revisions while preserving the parent what-if node', async () => {
+  it('deletes a future-jump run and revisions while preserving the parent what-if node', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-story-branch-delete-future-jump')
     seedDeleteFixture(database)
     vi.resetModules()
@@ -400,9 +402,9 @@ describe('story branch delete APIs', () => {
     expect(database.prepare('SELECT id FROM story_timeline_nodes WHERE id = ?').get('jump-node-001')).toBeUndefined()
     expect(database.prepare('SELECT id FROM what_if_sessions WHERE id = ?').get('what-if-001')).toEqual({ id: 'what-if-001' })
     expect(database.prepare('SELECT id FROM story_timeline_nodes WHERE id = ?').get('if-node-001')).toEqual({ id: 'if-node-001' })
-  })
+  }))
 
-  it('keeps branch-context validation on deletes', async () => {
+  it('keeps branch-context validation on deletes', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-story-branch-delete-context')
     seedDeleteFixture(database)
 
@@ -430,9 +432,9 @@ describe('story branch delete APIs', () => {
       ok: false,
       error: 'Future jump run not found for the requested branch context',
     })
-  })
+  }))
 
-  it('deletes only the current timeline node and promotes its direct children at the deleted index', async () => {
+  it('deletes only the current timeline node and promotes its direct children at the deleted index', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-story-branch-delete-promote', 'novel-promote')
     seedPromoteFixture(database)
     vi.resetModules()
@@ -498,7 +500,7 @@ describe('story branch delete APIs', () => {
       'continue-node-promote-b',
       'if-node-promote-sibling',
     ])
-  })
+  }))
 
   it('deletes a leaf timeline node without disturbing surviving sibling order', async () => {
     const database = createTestDatabase('retale-story-branch-delete-leaf', 'novel-promote')

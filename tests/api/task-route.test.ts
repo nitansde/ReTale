@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
+import { registerNovelDatabaseFixture, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
@@ -10,7 +10,7 @@ const originalTaskMaxRetries = process.env.RETALE_TASK_MAX_RETRIES
 function createTestDatabase(prefix: string, novelIds: readonly string[]) {
   const tempDatabase = createTempDatabaseCopy(prefix)
   const database = new DatabaseSync(tempDatabase.dbPath)
-  const unregister = registerLegacyNovelDatabase(database, novelIds)
+  const unregister = registerNovelDatabaseFixture(database, novelIds)
   cleanups.push(() => {
     unregister()
     database.close()

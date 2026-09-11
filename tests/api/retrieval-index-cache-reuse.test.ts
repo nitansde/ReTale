@@ -8,7 +8,7 @@ import { resetResolvedDatabasesForTests } from '@/lib/server/db-resolver'
 import type { OpenAICompatibleEmbeddingResult } from '@/lib/server/openai-compatible'
 import type { OllamaEmbeddingResult } from '@/lib/server/ollama-local'
 import { initializeDatabase } from '@/lib/server/sqlite'
-import { registerLegacyNovelDatabase } from '@/tests/helpers/novel-db'
+import { registerNovelDatabaseFixture } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
@@ -76,7 +76,7 @@ function registerSeededDatabase(database: DatabaseSync) {
   disposeNovelDatabaseOverride?.()
   disposeNovelDatabaseOverride = undefined
   resetResolvedDatabasesForTests()
-  disposeNovelDatabaseOverride = registerLegacyNovelDatabase(database, ['novel-001'])
+  disposeNovelDatabaseOverride = registerNovelDatabaseFixture(database, ['novel-001'])
 }
 
 function createMockAISettings(provider: 'ollama' | 'local-openai-compatible' = 'ollama'): {

@@ -1,14 +1,16 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import { progressMessage } from '@/lib/i18n/progress-message'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
-import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
+import { registerNovelDatabaseFixture, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import type { AISettings } from '@/lib/types'
+
+const databaseFixture = createScopedDatabaseFixture()
 
 const cleanups: Array<() => void> = []
 const novelDatabaseOverrideDisposers: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
 const originalDataDir = process.env.RETALE_DATA_DIR
 const originalTaskStaleTimeoutMs = process.env.RETALE_TASK_STALE_TIMEOUT_MS
@@ -100,8 +102,7 @@ async function createTestDatabase(prefix: string) {
   process.env.RETALE_DATA_DIR = path.join(tempDatabase.directory, 'data')
   vi.resetModules()
 
-  const sqliteModule = await import('@/lib/server/sqlite')
-  globalForSqlite.sqlite = sqliteModule.sqlite
+  const sqliteModule = databaseFixture.open(process.env.DATABASE_URL!)
 
   return {
     database: sqliteModule.sqlite,
@@ -151,7 +152,7 @@ function seedKnowledgeRebuildFixture(database: DatabaseSync, novelKey = 'novel_o
     insertSpan.run(`span-${chapterNo}`, novelId, branchId, chapterId, chapterNo, 1, 1, 0, rawText.length, rawText, 'paragraph', rawText.length)
   }
 
-  novelDatabaseOverrideDisposers.push(registerLegacyNovelDatabase(database, [novelId]))
+  novelDatabaseOverrideDisposers.push(registerNovelDatabaseFixture(database, [novelId]))
 
   return { novelId, branchId }
 }
@@ -165,7 +166,7 @@ async function waitForCondition(check: () => boolean, label: string) {
   throw new Error(`Timed out waiting for ${label}`)
 }
 
-afterEach(() => {
+afterEach(databaseFixture.wrap(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.unmock('@/lib/server/ai-settings')
@@ -189,14 +190,14 @@ afterEach(() => {
   }
   resetNovelDatabaseTestState()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch (_closeError) {
       void _closeError
       // Ignore sqlite close cleanup failures so temp fixture teardown can continue.
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   process.env.DATABASE_URL = originalDatabaseUrl
@@ -207,10 +208,10 @@ afterEach(() => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('knowledge rebuild raw-text precompute overlap', () => {
-  it('requeues a stale running knowledge rebuild instead of keeping it stuck as running', async () => {
+  it('requeues a stale running knowledge rebuild instead of keeping it stuck as running', databaseFixture.wrap(async () => {
     process.env.RETALE_TASK_STALE_TIMEOUT_MS = '1000'
     process.env.RETALE_TASK_MAX_RETRIES = '1'
 
@@ -238,7 +239,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
       errorMessage: expect.stringContaining('无进度更新'),
     })
     expect(payload.taskWatchdog).toMatchObject({ attemptCount: 1, lastAction: 'retried' })
-  })
+  }))
 
   it.each([
     {
@@ -251,7 +252,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
       startFunction: 'startKnowledgeRetrievalRebuildForNovel',
       runFunction: 'runStartedKnowledgeRetrievalRebuildForNovel',
     },
-  ] as const)('keeps a queued $label unchanged when its claim transaction fails', async ({ startFunction, runFunction }) => {
+  ] as const)('keeps a queued $label unchanged when its claim transaction fails', databaseFixture.wrap(async ({ startFunction, runFunction }) => {
     const { database, queryOne } = await createTestDatabase(`retale-knowledge-${startFunction}-claim-failure`)
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, `novel_${startFunction}_claim_failure`, 1)
     const starter = await import('@/lib/server/knowledge-rebuild')
@@ -280,9 +281,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
       status: 'queued',
       errorMessage: null,
     })
-  })
+  }))
 
-  it('keeps dedicated retrieval rebuild visible while raw embedding is running, then builds LanceDB', async () => {
+  it('keeps dedicated retrieval rebuild visible while raw embedding is running, then builds LanceDB', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-retrieval-dedicated-worker')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_dedicated_retrieval_worker', 2)
     const aiSettings = createMockAISettings()
@@ -377,9 +378,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
       rawTextEmbeddingProgress: 1,
       indexProgress: { phase: 'completed' },
     })
-  })
+  }))
 
-  it('no-ops duplicate targeted retrieval workers once the job is already running', async () => {
+  it('no-ops duplicate targeted retrieval workers once the job is already running', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-retrieval-targeted-duplicate-worker')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_targeted_duplicate_retrieval_worker', 2)
     const aiSettings = createMockAISettings()
@@ -450,13 +451,13 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     expect(precomputeCalls).toBe(1)
     expect(indexCalls).toBe(1)
     expect(queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', started.jobId)?.status).toBe('succeeded')
-  })
+  }))
 
-  it('exposes raw-text telemetry through rebuild status', async () => {
+  it('exposes raw-text telemetry through rebuild status', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-rebuild-status-telemetry-surface')
     const novelId = `novel_status_${Math.random().toString(36).slice(2, 8)}`
     const branchId = `${novelId}:main`
-    novelDatabaseOverrideDisposers.push(registerLegacyNovelDatabase(database, [novelId]))
+    novelDatabaseOverrideDisposers.push(registerNovelDatabaseFixture(database, [novelId]))
 
     vi.doMock('@/lib/server/retrieval-index', async () => await vi.importActual<typeof import('@/lib/server/retrieval-index')>('@/lib/server/retrieval-index'))
 
@@ -517,9 +518,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
         embeddingBatchSize: 16,
       },
     })
-  })
+  }))
 
-  it('keeps the active graph queryable and preserves chapter saves while rebuild compute is running', async () => {
+  it('keeps the active graph queryable and preserves chapter saves while rebuild compute is running', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-main-overlap-preserves-save')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_main_overlap_preserves_save', 1)
     const aiSettings = createMockAISettings()
@@ -616,9 +617,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
       branchId,
     )?.count).toBe(1)
     expect(queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', started.jobId)?.status).toBe('succeeded')
-  })
+  }))
 
-  it('skips duplicate detached retrieval workers once another process claimed the job', async () => {
+  it('skips duplicate detached retrieval workers once another process claimed the job', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-retrieval-detached-claim')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_detached_retrieval_claim', 2)
     const aiSettings = createMockAISettings()
@@ -673,9 +674,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
 
     precomputeGate.resolve()
     await expect(firstRunPromise).resolves.toBeUndefined()
-  })
+  }))
 
-  it('skips duplicate detached main rebuild workers once another process claimed the job', async () => {
+  it('skips duplicate detached main rebuild workers once another process claimed the job', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-main-detached-claim')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_detached_main_claim', 1)
     const aiSettings = createMockAISettings()
@@ -740,9 +741,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
 
     extractionGate.resolve()
     await expect(firstRunPromise).resolves.toBeUndefined()
-  })
+  }))
 
-  it('keeps raw-text precompute off the main SQLite rebuild path', async () => {
+  it('keeps raw-text precompute off the main SQLite rebuild path', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-overlap-starts-early')
     const { novelId } = seedKnowledgeRebuildFixture(database)
     const aiSettings = createMockAISettings()
@@ -825,9 +826,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     const payload = payloadRow?.payloadJson ? JSON.parse(payloadRow.payloadJson) as { rawTextEmbeddingProgress?: number; stageTimingsMs?: Record<string, number> } : null
     expect(payload?.rawTextEmbeddingProgress).toBeUndefined()
     expect(payload?.stageTimingsMs?.raw_text_precompute).toBeUndefined()
-  })
+  }))
 
-  it('no-ops duplicate targeted main rebuild workers once the job is already running', async () => {
+  it('no-ops duplicate targeted main rebuild workers once the job is already running', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-main-targeted-duplicate-worker')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_targeted_duplicate_main_worker')
     const aiSettings = createMockAISettings()
@@ -896,9 +897,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
 
     expect(extractionCalls).toBe(1)
     expect(queryOne<{ status: string }>('SELECT status FROM KnowledgeJob WHERE id = ?', started.jobId)?.status).toBe('succeeded')
-  })
+  }))
 
-  it('stops a stale main rebuild worker after watchdog rotates the attempt id', async () => {
+  it('stops a stale main rebuild worker after watchdog rotates the attempt id', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-main-stale-attempt-rotation')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_stale_attempt_rotation')
     const aiSettings = createMockAISettings()
@@ -1014,9 +1015,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     })
     expect(extractionCandidate?.status).toBe('extracting')
     expect(queryOne<{ summary: string | null }>('SELECT summary FROM KnowledgeChapter WHERE id = ?', 'chapter-1')?.summary).toBeNull()
-  })
+  }))
 
-  it('stops a stale detached retrieval rebuild worker after watchdog rotates the attempt id', async () => {
+  it('stops a stale detached retrieval rebuild worker after watchdog rotates the attempt id', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-retrieval-stale-attempt-rotation')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_retrieval_stale_attempt_rotation', 2)
     const aiSettings = createMockAISettings()
@@ -1117,9 +1118,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     })
     expect(finalPayload.taskWatchdog).toEqual(rotatedPayload.taskWatchdog)
     expect(rebuildBranchRetrievalIndex).not.toHaveBeenCalled()
-  })
+  }))
 
-  it('finishes ranged SQLite rebuilds without waiting for retrieval phases', async () => {
+  it('finishes ranged SQLite rebuilds without waiting for retrieval phases', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-overlap-final-correctness')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_overlap_final_correctness')
     const aiSettings = createMockAISettings()
@@ -1254,9 +1255,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     expect(payload?.rawTextEmbeddingCacheHitRate).toBeUndefined()
     expect(payload?.stageTimingsMs?.raw_text_precompute).toBeUndefined()
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', branchId)?.count).toBe(0)
-  })
+  }))
 
-  it('resumes a persisted-ready write queue idempotently with duplicate entries', async () => {
+  it('resumes a persisted-ready write queue idempotently with duplicate entries', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-write-resume-idempotent')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_write_resume_idempotent')
     const aiSettings = createMockAISettings()
@@ -1361,9 +1362,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
       'SELECT COUNT(*) AS count FROM chapter_extraction_candidates WHERE chapter_id = ?',
       'chapter-1',
     )?.count).toBe(1)
-  })
+  }))
 
-  it('treats a resumed raw-embedding main job as already complete for SQLite purposes', async () => {
+  it('treats a resumed raw-embedding main job as already complete for SQLite purposes', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-rebuild-raw-embedding-resume')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_raw_embedding_resume')
     const aiSettings = createMockAISettings()
@@ -1446,9 +1447,9 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     expect(precomputeCalls).toHaveLength(0)
     expect(events).not.toContain('precompute:start')
     expect(events).not.toContain('final-index:start')
-  })
+  }))
 
-  it('degrades gracefully after raw-text precompute retries are exhausted', async () => {
+  it('degrades gracefully after raw-text precompute retries are exhausted', databaseFixture.wrap(async () => {
     vi.useFakeTimers()
 
     const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-overlap-degraded')
@@ -1523,6 +1524,6 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     expect(payload?.rawTextEmbeddingCacheHitRate).toBeUndefined()
     expect(payload?.stageTimingsMs?.raw_text_precompute).toBeUndefined()
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?', branchId)?.count).toBe(0)
-  })
+  }))
 
 })

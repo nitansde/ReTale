@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -5,8 +6,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDataDir = process.env.RETALE_DATA_DIR
 
 function createTestDatabase(prefix: string) {
@@ -17,7 +19,7 @@ function createTestDatabase(prefix: string) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true })
   process.env.RETALE_DATA_DIR = dataRoot
   const database = initializeDatabase(new DatabaseSync(databasePath))
-  globalForSqlite.sqlite = database
+  databaseFixture.database = database
   return database
 }
 
@@ -198,15 +200,15 @@ function seedTimelineFixture(database: DatabaseSync) {
   ).run('jump_fixture_001', 'novel-001', 'novel-001:main', 'future_jump', 1, 100, 'RE-01, JUMP-01 第100章', '跳到被绑走后的未来', 'rewrite_fixture_001', 10, 100, 'chapter-100', null, null, 'jump-run-001', 1, 'violet', 'generated')
 }
 
-afterEach(async () => {
+afterEach(databaseFixture.wrap(async () => {
   vi.resetModules()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   const resolver = await import('@/lib/server/db-resolver')
@@ -217,10 +219,10 @@ afterEach(async () => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('story-timeline-read', () => {
-  it('returns chapters, authored branch nodes, derived edges, and rehydrates what-if detail records', async () => {
+  it('returns chapters, authored branch nodes, derived edges, and rehydrates what-if detail records', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-story-timeline-read')
     seedTimelineFixture(database)
     vi.resetModules()
@@ -333,9 +335,9 @@ describe('story-timeline-read', () => {
         newValue: '决裂',
       }),
     ])
-  })
+  }))
 
-  it('returns validation and branch-isolation errors for timeline and what-if detail reads', async () => {
+  it('returns validation and branch-isolation errors for timeline and what-if detail reads', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-story-timeline-read-errors')
     seedTimelineFixture(database)
     vi.resetModules()
@@ -378,5 +380,5 @@ describe('story-timeline-read', () => {
       ok: false,
       error: 'What-if session not found for the requested branch context',
     })
-  })
+  }))
 })

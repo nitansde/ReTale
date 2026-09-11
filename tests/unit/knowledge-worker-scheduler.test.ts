@@ -1,9 +1,12 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import { EventEmitter } from 'node:events'
 import type { SpawnOptions } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+const databaseFixture = createScopedDatabaseFixture()
 
 type SpawnMock = (command: string, args: readonly string[], options: SpawnOptions) => MockChildProcess
 
@@ -37,7 +40,7 @@ function canonicalizePath(targetPath: string) {
   return fs.realpathSync.native(targetPath)
 }
 
-afterEach(() => {
+afterEach(databaseFixture.wrap(() => {
   vi.restoreAllMocks()
   vi.resetModules()
   restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
@@ -45,10 +48,10 @@ afterEach(() => {
   while (cleanupDirectories.length) {
     fs.rmSync(cleanupDirectories.pop()!, { recursive: true, force: true })
   }
-})
+}))
 
 describe('knowledge worker scheduler', () => {
-  it('allows retry scheduling for the same job id when the attempt id changes', async () => {
+  it('allows retry scheduling for the same job id when the attempt id changes', databaseFixture.wrap(async () => {
     const tempDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-knowledge-worker-scheduler-'))
     cleanupDirectories.push(tempDataRoot)
     process.env.RETALE_DATA_DIR = path.join(tempDataRoot, 'data')
@@ -119,9 +122,9 @@ describe('knowledge worker scheduler', () => {
     expect(canonicalizePath(String(firstSpawnOptions?.env?.RETALE_KNOWLEDGE_WORKER_LANCEDB_DIR))).toBe(canonicalizePath(expectedLanceDbPath))
     expect(canonicalizePath(String(firstSpawnOptions?.env?.DATABASE_URL).replace(/^file:/u, ''))).toBe(canonicalizePath(expectedNovelDbPath))
     expect(canonicalizePath(String(firstSpawnOptions?.env?.LANCEDB_DIR))).toBe(canonicalizePath(expectedLanceDbPath))
-  })
+  }))
 
-  it('reads omitted attempt ids from the target novel DB instead of singleton state', async () => {
+  it('reads omitted attempt ids from the target novel DB instead of singleton state', databaseFixture.wrap(async () => {
     const tempDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-knowledge-worker-scheduler-'))
     cleanupDirectories.push(tempDataRoot)
     process.env.RETALE_DATA_DIR = path.join(tempDataRoot, 'data')
@@ -132,7 +135,7 @@ describe('knowledge worker scheduler', () => {
     const spawnMock = vi.fn<SpawnMock>(() => new MockChildProcess())
     vi.doMock('node:child_process', () => ({ spawn: spawnMock }))
 
-    const sqliteModule = await import('@/lib/server/sqlite')
+    const sqliteModule = databaseFixture.open(process.env.DATABASE_URL!)
     const resolverModule = await import('@/lib/server/db-resolver')
     const scheduler = await import('@/lib/server/knowledge-worker-scheduler')
 
@@ -226,9 +229,9 @@ describe('knowledge worker scheduler', () => {
     expect(canonicalizePath(String(spawnMock.mock.calls[0]?.[2]?.env?.DATABASE_URL).replace(/^file:/u, ''))).toBe(
       canonicalizePath(path.join(tempDataRoot, 'data', 'novels', 'novel-alpha', 'novel.db'))
     )
-  })
+  }))
 
-  it('omits the attempt argument when the resolved attempt id is null', async () => {
+  it('omits the attempt argument when the resolved attempt id is null', databaseFixture.wrap(async () => {
     const tempDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-knowledge-worker-scheduler-tokenless-'))
     cleanupDirectories.push(tempDataRoot)
     process.env.RETALE_DATA_DIR = path.join(tempDataRoot, 'data')
@@ -258,9 +261,9 @@ describe('knowledge worker scheduler', () => {
       '--branch-id', 'novel-tokenless:main',
     ])
     expect(workerArgs).not.toContain('--attempt-id')
-  })
+  }))
 
-  it('refuses to spawn workers for deleting and deleted registry rows', async () => {
+  it('refuses to spawn workers for deleting and deleted registry rows', databaseFixture.wrap(async () => {
     const tempDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-knowledge-worker-scheduler-fence-'))
     cleanupDirectories.push(tempDataRoot)
     process.env.RETALE_DATA_DIR = path.join(tempDataRoot, 'data')
@@ -304,5 +307,5 @@ describe('knowledge worker scheduler', () => {
       allowInTests: true,
     })).toBe(false)
     expect(spawnMock).not.toHaveBeenCalled()
-  })
+  }))
 })

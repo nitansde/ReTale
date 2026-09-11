@@ -1,11 +1,13 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
+import { registerNovelDatabaseFixture, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
+
+const databaseFixture = createScopedDatabaseFixture()
 
 const databaseOverrideDisposers: Array<() => void> = []
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
 let fixtureSequence = 0
 
@@ -82,8 +84,7 @@ async function createTestDatabase(prefix: string) {
   process.env.DATABASE_URL = tempDatabase.dbPath
   vi.resetModules()
 
-  const sqliteModule = await import('@/lib/server/sqlite')
-  globalForSqlite.sqlite = sqliteModule.sqlite
+  const sqliteModule = databaseFixture.open(process.env.DATABASE_URL!)
 
   return {
     database: sqliteModule.sqlite,
@@ -95,7 +96,7 @@ function seedKnowledgeRebuildFixture(database: DatabaseSync, novelKey: string, c
   fixtureSequence += 1
   const novelId = `${novelKey}_${String(fixtureSequence).padStart(3, '0')}`
   const branchId = `${novelId}:main`
-  databaseOverrideDisposers.push(registerLegacyNovelDatabase(database, [novelId]))
+  databaseOverrideDisposers.push(registerNovelDatabaseFixture(database, [novelId]))
   database.prepare('INSERT INTO NovelRecord (id, title, sourceType) VALUES (?, ?, ?)').run(novelId, 'Fixture Novel', 'txt')
   database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run(branchId, novelId, 'main')
   const insertChapter = database.prepare(
@@ -132,7 +133,7 @@ async function waitForCondition(check: () => boolean, label: string) {
   throw new Error(`Timed out waiting for ${label}`)
 }
 
-afterEach(() => {
+afterEach(databaseFixture.wrap(() => {
   vi.unstubAllGlobals()
   vi.resetModules()
   vi.unmock('@/lib/server/ai-settings')
@@ -146,14 +147,14 @@ afterEach(() => {
   }
   resetNovelDatabaseTestState()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch (ignoredError) {
       void ignoredError
       // Ignore secondary SQLite close failures so teardown can continue.
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   process.env.DATABASE_URL = originalDatabaseUrl
@@ -161,10 +162,10 @@ afterEach(() => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('knowledge rebuild alias sync', () => {
-  it('migrates EntityAlias timestamps used by alias resync updates', async () => {
+  it('migrates EntityAlias timestamps used by alias resync updates', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-rebuild-alias-timestamps')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_alias_timestamp_migration', 1)
     const columns = database.prepare('PRAGMA table_info(EntityAlias)').all() as Array<{ name: string }>
@@ -185,9 +186,9 @@ describe('knowledge rebuild alias sync', () => {
     const alias = database.prepare('SELECT sourceChapter, updatedAt FROM EntityAlias WHERE id = ?').get('alias-timestamp-a') as { sourceChapter: number; updatedAt: string | null }
     expect(alias).toMatchObject({ sourceChapter: 2 })
     expect(alias.updatedAt).toEqual(expect.any(String))
-  })
+  }))
 
-  it('keeps first alias ownership in chapter order and logs later conflicts', async () => {
+  it('keeps first alias ownership in chapter order and logs later conflicts', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-alias-first-wins')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_alias_first_wins', 2)
     const aiSettings = createMockAISettings(2)
@@ -305,9 +306,9 @@ describe('knowledge rebuild alias sync', () => {
     expect(mapping).toMatchObject({ alias: '阿离', canonicalName: '李青' })
     expect(conflict).toMatchObject({ count: 1, attemptedCanonicalName: '赵七' })
     expect(entityCount?.count).toBe(2)
-  })
+  }))
 
-  it('merges one-way canonical alias variants for formal characters', async () => {
+  it('merges one-way canonical alias variants for formal characters', databaseFixture.wrap(async () => {
     const { database } = await createTestDatabase('retale-knowledge-rebuild-one-way-canonical-alias-merge')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_one_way_canonical_alias_merge', 1)
     const aiSettings = createMockAISettings(1)
@@ -421,9 +422,9 @@ describe('knowledge rebuild alias sync', () => {
     expect(aliasMappings).toEqual([
       { alias: '菜月昴', entityId: 'entity-subaru-short' },
     ])
-  })
+  }))
 
-  it('merges safe canonical character variants and repoints mentions, aliases, and event participants to one entity', async () => {
+  it('merges safe canonical character variants and repoints mentions, aliases, and event participants to one entity', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-safe-canonical-merge')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_safe_canonical_merge', 1)
     const aiSettings = createMockAISettings(1)
@@ -678,9 +679,9 @@ describe('knowledge rebuild alias sync', () => {
       attemptedEntityId: mergedEntities[0]!.id,
     })
     expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM KnowledgeEntity WHERE id IN (?, ?)', 'entity-subaru-space', 'entity-subaru-dot')?.count).toBe(0)
-  })
+  }))
 
-  it('applies later same-batch aliases before ordered writes so earlier unknown observations do not create candidates', async () => {
+  it('applies later same-batch aliases before ordered writes so earlier unknown observations do not create candidates', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-alias-hit-no-candidate')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_alias_hit_no_candidate', 7)
     const aiSettings = createMockAISettings(7)
@@ -794,9 +795,9 @@ describe('knowledge rebuild alias sync', () => {
     expect(createdEntityB).toBeNull()
     expect(aliasMapping).toMatchObject({ alias: 'B', canonicalName: 'A' })
     expect(mention).toMatchObject({ mentionText: 'B', canonicalName: 'A' })
-  })
+  }))
 
-  it('skips unresolved alias targets without creating formal entities', async () => {
+  it('skips unresolved alias targets without creating formal entities', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-alias-skip-unresolved-target')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_alias_skip_unresolved_target', 1)
     const aiSettings = createMockAISettings(1)
@@ -885,9 +886,9 @@ describe('knowledge rebuild alias sync', () => {
     expect(createdEntityA).toBeNull()
     expect(skipLog?.attemptedCanonicalName).toBe('A')
     expect(skipLog?.detailsJson).toContain('alias_target_unresolved')
-  })
+  }))
 
-  it('persists known updates on the canonical entity, preserves alias surface text, and keeps 没有变化 as a no-op', async () => {
+  it('persists known updates on the canonical entity, preserves alias surface text, and keeps 没有变化 as a no-op', databaseFixture.wrap(async () => {
     const { database, queryOne } = await createTestDatabase('retale-knowledge-rebuild-known-update-canonical-profile')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(database, 'novel_known_update_alias_profile', 1)
     const aiSettings = createMockAISettings(1)
@@ -1038,5 +1039,5 @@ describe('knowledge rebuild alias sync', () => {
       body: { content: '旧体态' },
       clothing: { content: '旧衣着' },
     })
-  })
+  }))
 })

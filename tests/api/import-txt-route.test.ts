@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -6,8 +7,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const MAX_TXT_FILE_SIZE_BYTES = 10 * 1024 * 1024
 const MAX_IMPORT_BODY_SIZE_BYTES = MAX_TXT_FILE_SIZE_BYTES + 256 * 1024
 const originalDataDir = process.env.RETALE_DATA_DIR
@@ -48,7 +50,7 @@ function createTestDatabase(prefix: string) {
   const tempDatabase = createTempDatabaseCopy(prefix)
   cleanups.push(tempDatabase.cleanup)
   const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-  globalForSqlite.sqlite = database
+  databaseFixture.database = database
   return database
 }
 
@@ -127,7 +129,7 @@ function expectNoImportSideEffects(sideEffects: ReturnType<typeof mockImportSide
   expect(sideEffects.createWorkspaceNovelFromSnapshot).not.toHaveBeenCalled()
 }
 
-afterEach(async () => {
+afterEach(databaseFixture.wrap(async () => {
   vi.restoreAllMocks()
   try {
     const mutation = await import('@/lib/server/workspace-mutation')
@@ -148,21 +150,21 @@ afterEach(async () => {
   if (originalDataDir === undefined) delete process.env.RETALE_DATA_DIR
   else process.env.RETALE_DATA_DIR = originalDataDir
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('import-txt route', () => {
-  it('accepts an arbitrary cross-origin import independently of request URL and Host', async () => {
+  it('accepts an arbitrary cross-origin import independently of request URL and Host', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-import-txt-route-host-origin')
     resetWorkspaceState(database)
     vi.doMock('@/lib/server/knowledge-rebuild', () => ({
@@ -178,7 +180,7 @@ describe('import-txt route', () => {
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ ok: true, chapterCount: 3 })
-  })
+  }))
 
   it.each([
     [null, 415],
@@ -186,7 +188,7 @@ describe('import-txt route', () => {
     ['multipart/form-data', 415],
     ['multipart/form-data; boundary=', 415],
     ['multipart/form-data; boundary=""', 415],
-  ])('requires multipart/form-data with a non-empty boundary: %s', async (contentType, expectedStatus) => {
+  ])('requires multipart/form-data with a non-empty boundary: %s', databaseFixture.wrap(async (contentType, expectedStatus) => {
     const sideEffects = mockImportSideEffects()
     const request = createImportRequest()
     if (contentType === null) request.headers.delete('content-type')
@@ -197,9 +199,9 @@ describe('import-txt route', () => {
 
     expect(response.status).toBe(expectedStatus)
     expectNoImportSideEffects(sideEffects)
-  })
+  }))
 
-  it('rejects a declared body over 10.25 MiB before parsing or persistence', async () => {
+  it('rejects a declared body over 10.25 MiB before parsing or persistence', databaseFixture.wrap(async () => {
     const sideEffects = mockImportSideEffects()
     const formDataSpy = vi.spyOn(Request.prototype, 'formData')
     const request = createImportRequest()
@@ -215,9 +217,9 @@ describe('import-txt route', () => {
     })
     expect(formDataSpy).not.toHaveBeenCalled()
     expectNoImportSideEffects(sideEffects)
-  })
+  }))
 
-  it('allows a declared body exactly at the 10.25 MiB boundary', async () => {
+  it('allows a declared body exactly at the 10.25 MiB boundary', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-import-txt-route-exact-body-limit')
     resetWorkspaceState(database)
 
@@ -233,9 +235,9 @@ describe('import-txt route', () => {
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ ok: true, chapterCount: 3 })
-  })
+  }))
 
-  it('accepts an absent Origin and a quoted non-empty multipart boundary', async () => {
+  it('accepts an absent Origin and a quoted non-empty multipart boundary', databaseFixture.wrap(async () => {
     const sideEffects = mockImportSideEffects()
     const request = createImportRequest()
     const contentType = request.headers.get('content-type')
@@ -248,9 +250,9 @@ describe('import-txt route', () => {
 
     expect(response.status).toBe(200)
     expect(sideEffects.createWorkspaceNovelFromSnapshot).toHaveBeenCalledTimes(1)
-  })
+  }))
 
-  it('rejects a streamed body that exceeds 10.25 MiB despite a misleading declared length and cancels its source', async () => {
+  it('rejects a streamed body that exceeds 10.25 MiB despite a misleading declared length and cancels its source', databaseFixture.wrap(async () => {
     const sideEffects = mockImportSideEffects()
     const boundary = 'retale-import-limit-boundary'
     const prefix = new TextEncoder().encode([
@@ -304,9 +306,9 @@ describe('import-txt route', () => {
     }
     expect(cancellationReason.message).toBe('TXT import request body exceeds 10.25 MiB')
     expectNoImportSideEffects(sideEffects)
-  })
+  }))
 
-  it('rejects a file over 10 MiB before reading its bytes or persisting', async () => {
+  it('rejects a file over 10 MiB before reading its bytes or persisting', databaseFixture.wrap(async () => {
     const sideEffects = mockImportSideEffects()
     const file = new File(['第1章 测试\n内容'], 'oversized.txt', { type: 'text/plain' })
     Object.defineProperty(file, 'size', { configurable: true, value: MAX_TXT_FILE_SIZE_BYTES + 1 })
@@ -325,9 +327,9 @@ describe('import-txt route', () => {
     })
     expect(arrayBufferSpy).not.toHaveBeenCalled()
     expectNoImportSideEffects(sideEffects)
-  })
+  }))
 
-  it('allows a file exactly at the 10 MiB boundary', async () => {
+  it('allows a file exactly at the 10 MiB boundary', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-import-txt-route-exact-file-limit')
     resetWorkspaceState(database)
 
@@ -348,9 +350,9 @@ describe('import-txt route', () => {
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ ok: true })
     expect(arrayBufferSpy).toHaveBeenCalledTimes(1)
-  })
+  }))
 
-  it('rejects generated imports over chapter and content semantic limits before creation or scheduling', async () => {
+  it('rejects generated imports over chapter and content semantic limits before creation or scheduling', databaseFixture.wrap(async () => {
     const sideEffects = mockImportSideEffects()
     vi.doMock('@/lib/server/import-txt', () => ({
       importNovelIntoWorkspace: vi.fn(() => ({
@@ -375,9 +377,9 @@ describe('import-txt route', () => {
 
     expect(response.status).toBe(422)
     expect(sideEffects.createWorkspaceNovelFromSnapshot).not.toHaveBeenCalled()
-  })
+  }))
 
-  it('returns a fixed generic 500 message for internal creation failures', async () => {
+  it('returns a fixed generic 500 message for internal creation failures', databaseFixture.wrap(async () => {
     const sideEffects = mockImportSideEffects()
     sideEffects.createWorkspaceNovelFromSnapshot.mockRejectedValue(new Error('secret database path /private/internal.db'))
     vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -387,9 +389,9 @@ describe('import-txt route', () => {
 
     expect(response.status).toBe(500)
     await expect(response.json()).resolves.toEqual({ ok: false, error: 'Failed to import TXT workspace' })
-  })
+  }))
 
-  it('waits for workspace knowledge sync before returning success', async () => {
+  it('waits for workspace knowledge sync before returning success', databaseFixture.wrap(async () => {
     const { controlDb, getNovelDb } = await createTestDataRoot('retale-import-txt-route-waits-for-sync')
     const syncControl: { resolve: null | (() => void) } = { resolve: null }
     const syncWorkspacePayloadToKnowledgeStore = vi.fn(
@@ -438,9 +440,9 @@ describe('import-txt route', () => {
     expect(getNovelDb(payload.novelId).prepare(
       'SELECT requestedRevision, syncedRevision, startedRevision, lastError FROM WorkspaceKnowledgeSyncState',
     ).get()).toEqual({ requestedRevision: 1, syncedRevision: 1, startedRevision: null, lastError: null })
-  })
+  }))
 
-  it('renews the creation lease while a long knowledge sync is still running', async () => {
+  it('renews the creation lease while a long knowledge sync is still running', databaseFixture.wrap(async () => {
     const { controlDb } = await createTestDataRoot('retale-import-txt-route-creation-heartbeat')
     const syncControl = Promise.withResolvers<void>()
     const syncWorkspacePayloadToKnowledgeStore = vi.fn((_payload: unknown) => syncControl.promise)
@@ -469,9 +471,9 @@ describe('import-txt route', () => {
 
     syncControl.resolve()
     expect((await responsePromise).status).toBe(200)
-  })
+  }))
 
-  it('creates each import as an isolated generated novel', async () => {
+  it('creates each import as an isolated generated novel', databaseFixture.wrap(async () => {
     const sideEffects = mockImportSideEffects()
 
     const { POST } = await import('@/app/api/import-txt/route')
@@ -488,9 +490,9 @@ describe('import-txt route', () => {
       }) }),
     )
     expect(sideEffects.createWorkspaceNovelFromSnapshot).toHaveBeenCalledTimes(1)
-  })
+  }))
 
-  it('surfaces knowledge sync failures instead of reporting a broken import as success', async () => {
+  it('surfaces knowledge sync failures instead of reporting a broken import as success', databaseFixture.wrap(async () => {
     const { controlDb } = await createTestDataRoot('retale-import-txt-route-sync-error', 'novel-prior')
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const syncWorkspacePayloadToKnowledgeStore = vi.fn(async () => {
@@ -515,9 +517,9 @@ describe('import-txt route', () => {
     ).get() as { novelId: string; migrationStatus: string }
     expect(failedRow.migrationStatus).toBe('deleted')
     expect(fs.existsSync(path.join(process.env.RETALE_DATA_DIR ?? '', 'novels', failedRow.novelId))).toBe(false)
-  })
+  }))
 
-  it('commits runtime, artifact, and one sync request at revision 1 before publishing ready', async () => {
+  it('commits runtime, artifact, and one sync request at revision 1 before publishing ready', databaseFixture.wrap(async () => {
     const { controlDb, getNovelDb } = await createTestDataRoot('retale-import-txt-route-atomic-surfaces')
     const { POST, afterCallbacks } = await importRouteWithAfterCallbacks()
     const response = await POST(createImportRequest())
@@ -535,9 +537,9 @@ describe('import-txt route', () => {
     ).get()).toEqual({ requestedRevision: 1, syncedRevision: 1, startedRevision: null })
     expect(novelDb.prepare('SELECT COUNT(*) AS count FROM WorkspaceMutationReplay').get()).toEqual({ count: 0 })
     expect(afterCallbacks).toHaveLength(0)
-  })
+  }))
 
-  it('compensates a failure after the novel transaction without disturbing existing novels or scheduling sync', async () => {
+  it('compensates a failure after the novel transaction without disturbing existing novels or scheduling sync', databaseFixture.wrap(async () => {
     const { controlDb } = await createTestDataRoot('retale-import-txt-route-compensation', 'novel-prior')
     const mutation = await import('@/lib/server/workspace-mutation')
     mutation.setWorkspaceNovelCreationFaultInjectorForTests(() => {
@@ -555,9 +557,9 @@ describe('import-txt route', () => {
     expect(failed?.migrationStatus).toBe('deleted')
     expect(fs.existsSync(path.join(process.env.RETALE_DATA_DIR ?? '', 'novels', failed?.novelId ?? 'missing'))).toBe(false)
     expect(afterCallbacks).toHaveLength(0)
-  })
+  }))
 
-  it('recovers abandoned creating rows and does not revive collisions', async () => {
+  it('recovers abandoned creating rows and does not revive collisions', databaseFixture.wrap(async () => {
     const { controlDb } = await createTestDataRoot('retale-import-txt-route-abandoned-creating')
     const novelId = 'novel_abandoned'
     const novelDirectory = path.join(process.env.RETALE_DATA_DIR ?? '', 'novels', novelId)
@@ -585,9 +587,9 @@ describe('import-txt route', () => {
         }),
       })
     }
-  })
+  }))
 
-  it('does not let a pending creating-row cleanup delete a novel published ready before gate acquisition', async () => {
+  it('does not let a pending creating-row cleanup delete a novel published ready before gate acquisition', databaseFixture.wrap(async () => {
     const { controlDb } = await createTestDataRoot('retale-import-txt-route-creating-cleanup-race')
     const novelId = 'novel_publishing'
     const novelDirectory = path.join(process.env.RETALE_DATA_DIR ?? '', 'novels', novelId)
@@ -614,9 +616,9 @@ describe('import-txt route', () => {
 
     expect(controlDb.prepare('SELECT migrationStatus FROM NovelRegistry WHERE novelId = ?').get(novelId)).toEqual({ migrationStatus: 'ready' })
     expect(fs.existsSync(novelDirectory)).toBe(true)
-  })
+  }))
 
-  it('uses fixed-clock creator leases for renewal, token fencing, publication, and claim wins', async () => {
+  it('uses fixed-clock creator leases for renewal, token fencing, publication, and claim wins', databaseFixture.wrap(async () => {
     const { controlDb } = await createTestDataRoot('retale-import-txt-route-lifecycle-fixed-clock')
     const persistence = await import('@/lib/server/persistence')
     const novelId = 'novel_fixed_clock'
@@ -664,9 +666,9 @@ describe('import-txt route', () => {
       '2026-08-12T00:16:00.000Z',
     )).rejects.toThrow(/no longer publishable/)
     expect(fs.existsSync(abandonedDirectory)).toBe(false)
-  })
+  }))
 
-  it('drains more than 25 expired creations without sharing the deleted purge cursor', async () => {
+  it('drains more than 25 expired creations without sharing the deleted purge cursor', databaseFixture.wrap(async () => {
     const { controlDb } = await createTestDataRoot('retale-import-txt-route-expired-creation-batches')
     const persistence = await import('@/lib/server/persistence')
     for (let index = 0; index < 26; index += 1) {
@@ -678,9 +680,9 @@ describe('import-txt route', () => {
     expect(controlDb.prepare("SELECT COUNT(*) AS count FROM NovelRegistry WHERE migrationStatus = 'deleted'").get()).toEqual({ count: 25 })
     await persistence.resumePendingWorkspaceNovelCleanup('2026-08-12T00:16:00.000Z')
     expect(controlDb.prepare("SELECT COUNT(*) AS count FROM NovelRegistry WHERE migrationStatus = 'deleted'").get()).toEqual({ count: 26 })
-  })
+  }))
 
-  it('allows an imported chapter to PATCH immediately from revision 1 to revision 2', async () => {
+  it('allows an imported chapter to PATCH immediately from revision 1 to revision 2', databaseFixture.wrap(async () => {
     const { getNovelDb } = await createTestDataRoot('retale-import-txt-route-patch-continuity')
     const { POST } = await importRouteWithAfterCallbacks()
     const imported = await POST(createImportRequest())
@@ -706,9 +708,9 @@ describe('import-txt route', () => {
     expect(patch.status).toBe(200)
     await expect(patch.json()).resolves.toMatchObject({ revision: 2, operation: 'chapter-patch' })
     expect(getNovelDb(importPayload.novelId).prepare('SELECT revision FROM WorkspaceRuntimeState').get()).toEqual({ revision: 2 })
-  })
+  }))
 
-  it('selects GB18030 decoding when the UTF-8 candidate is mojibake', async () => {
+  it('selects GB18030 decoding when the UTF-8 candidate is mojibake', databaseFixture.wrap(async () => {
     await createTestDataRoot('retale-import-txt-route-gb18030')
     vi.doMock('@/lib/server/knowledge-rebuild', () => ({
       syncWorkspacePayloadToKnowledgeStore: vi.fn(async () => {}),
@@ -732,9 +734,9 @@ describe('import-txt route', () => {
     expect(payload.localChapters[1]?.title).toBe('第1章 初遇')
     expect(payload.localChapters[1]?.content).toContain('林澄开始记录这次练习。')
     expect(JSON.stringify(payload)).not.toContain('����')
-  })
+  }))
 
-  it('keeps imported content available through normalized runtime state after the workspace artifact is blanked', async () => {
+  it('keeps imported content available through normalized runtime state after the workspace artifact is blanked', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-import-txt-route-runtime-source-of-truth')
     resetWorkspaceState(database)
 
@@ -760,5 +762,5 @@ describe('import-txt route', () => {
     expect(payload.localNovels[0]?.title).toBe('workspace-import-smoke')
     expect(payload.localChapters[1]?.title).toBe('第1章 初遇')
     expect(payload.localChapters[1]?.content).toContain('林澄开始记录这次练习。')
-  })
+  }))
 })

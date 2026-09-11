@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase, type SqlParam } from '@/lib/server/sqlite'
-import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
+import { registerNovelDatabaseFixture, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const databaseOverrideDisposers: Array<() => void> = []
@@ -161,7 +161,7 @@ function seedKnowledgeRebuildFixture(database: DatabaseSync, novelKey = 'novel_h
     insertSpan.run(`span-${chapterNo}`, novelId, branchId, chapterId, chapterNo, 1, 1, 0, rawText.length, rawText, 'paragraph', rawText.length)
   }
 
-  databaseOverrideDisposers.push(registerLegacyNovelDatabase(database, [novelId]))
+  databaseOverrideDisposers.push(registerNovelDatabaseFixture(database, [novelId]))
 
   return { novelId, branchId }
 }

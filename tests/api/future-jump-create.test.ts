@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -5,8 +6,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync; fetch?: typeof fetch }
 const originalDataDir = process.env.RETALE_DATA_DIR
 
 function restoreEnvVar(name: 'RETALE_DATA_DIR', originalValue: string | undefined) {
@@ -42,7 +44,7 @@ function createTestDatabase(prefix: string) {
   const dbPath = path.join(process.env.RETALE_DATA_DIR, 'novels', 'novel-001', 'novel.db')
   fs.mkdirSync(path.dirname(dbPath), { recursive: true })
   const database = initializeDatabase(new DatabaseSync(dbPath))
-  globalForSqlite.sqlite = database
+  databaseFixture.database = database
   return database
 }
 
@@ -191,7 +193,7 @@ function seedCreateFixture(database: DatabaseSync) {
   ).run('continue_fixture_025', 'novel-001', 'novel-001:main', 'continue_block', 2, 25, 'CONT-02 深入误判', null, 'rewrite_fixture_025', 25, null, 'chapter-25', null, null, 0, 'sky', 'active', 'continue-block-025')
 }
 
-afterEach(async () => {
+afterEach(databaseFixture.wrap(async () => {
   vi.restoreAllMocks()
   vi.resetModules()
   restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
@@ -199,21 +201,21 @@ afterEach(async () => {
   const resolverModule = await import('@/lib/server/db-resolver')
   resolverModule.resetResolvedDatabasesForTests()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('future-jump create API', () => {
-  it('uses the selected source node context instead of the ancestor what-if root and creates exactly one timeline node', async () => {
+  it('uses the selected source node context instead of the ancestor what-if root and creates exactly one timeline node', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-future-jump-create')
     seedCreateFixture(database)
 
@@ -315,9 +317,9 @@ describe('future-jump create API', () => {
       chapter_id: 'chapter-100',
       parent_node_id: 'continue_fixture_025',
     }))
-  }, 30000)
+  }), 30000)
 
-  it('rejects missing outline nodes before any run is persisted', async () => {
+  it('rejects missing outline nodes before any run is persisted', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-future-jump-create-missing-outline')
     seedCreateFixture(database)
     const initialRunCount = (database.prepare('SELECT COUNT(*) AS count FROM future_jump_runs').get() as { count: number }).count
@@ -349,9 +351,9 @@ describe('future-jump create API', () => {
     await expect(response.json()).resolves.toEqual({ ok: false, error: 'Target outline node not found: missing-outline' })
     const runCount = database.prepare('SELECT COUNT(*) AS count FROM future_jump_runs').get() as { count: number }
     expect(runCount.count).toBe(initialRunCount)
-  })
+  }))
 
-  it('rejects invalid parent timeline ids before creating future-jump runs or timeline nodes', async () => {
+  it('rejects invalid parent timeline ids before creating future-jump runs or timeline nodes', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-future-jump-create-invalid-parent')
     seedCreateFixture(database)
     const initialRunCount = (database.prepare('SELECT COUNT(*) AS count FROM future_jump_runs').get() as { count: number }).count
@@ -389,9 +391,9 @@ describe('future-jump create API', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     expect((database.prepare('SELECT COUNT(*) AS count FROM future_jump_runs').get() as { count: number }).count).toBe(initialRunCount)
     expect((database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes').get() as { count: number }).count).toBe(initialTimelineNodeCount)
-  })
+  }))
 
-  it('rejects targets that stay on or before the source chapter', async () => {
+  it('rejects targets that stay on or before the source chapter', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-future-jump-create-invalid-targets')
     seedCreateFixture(database)
     const initialRunCount = (database.prepare('SELECT COUNT(*) AS count FROM future_jump_runs').get() as { count: number }).count
@@ -443,5 +445,5 @@ describe('future-jump create API', () => {
 
     const runCount = database.prepare('SELECT COUNT(*) AS count FROM future_jump_runs').get() as { count: number }
     expect(runCount.count).toBe(initialRunCount)
-  })
+  }))
 })

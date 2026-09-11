@@ -1,9 +1,11 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDatabaseUrl = process.env.DATABASE_URL
 
 async function createTestDatabase(prefix: string) {
@@ -13,9 +15,8 @@ async function createTestDatabase(prefix: string) {
   process.env.DATABASE_URL = tempDatabase.dbPath
   vi.resetModules()
 
-  const sqliteModule = await import('@/lib/server/sqlite')
+  const sqliteModule = databaseFixture.open(process.env.DATABASE_URL!)
   const cacheModule = await import('@/lib/server/retrieval-embedding-cache')
-  globalForSqlite.sqlite = sqliteModule.sqlite
 
   return {
     database: sqliteModule.sqlite,
@@ -103,13 +104,13 @@ async function runDirectRawTextCachePass(params: {
   }
 }
 
-afterEach(() => {
-  if (globalForSqlite.sqlite) {
+afterEach(databaseFixture.wrap(() => {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   process.env.DATABASE_URL = originalDatabaseUrl
@@ -118,10 +119,10 @@ afterEach(() => {
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('raw-text embedding cache repository', () => {
-  it('handles huge raw-text cache hash lists without overflowing the call stack', async () => {
+  it('handles huge raw-text cache hash lists without overflowing the call stack', databaseFixture.wrap(async () => {
     const {
       database,
       deleteRawTextEmbeddingCacheEntries,
@@ -150,9 +151,9 @@ describe('raw-text embedding cache repository', () => {
       scope,
       reachableEmbeddingInputHashes: hashes,
     })).resolves.toBe(0)
-  })
+  }))
 
-  it('cache repository round-trip succeeds', async () => {
+  it('cache repository round-trip succeeds', databaseFixture.wrap(async () => {
     const {
       database,
       queryAll,
@@ -309,9 +310,9 @@ describe('raw-text embedding cache repository', () => {
       { embeddingInputHash: firstHash },
       { embeddingInputHash: firstHash },
     ])
-  })
+  }))
 
-  it('rejects invalid vector payloads', async () => {
+  it('rejects invalid vector payloads', databaseFixture.wrap(async () => {
     const {
       database,
       queryOne,
@@ -389,9 +390,9 @@ describe('raw-text embedding cache repository', () => {
       'text-embedding-3-small',
       corruptHash,
     )).toMatchObject({ count: 0 })
-  })
+  }))
 
-  it('covers raw-text cache hit miss matrix', async () => {
+  it('covers raw-text cache hit miss matrix', databaseFixture.wrap(async () => {
     const {
       database,
       buildCanonicalRetrievalEmbeddingInput,
@@ -491,9 +492,9 @@ describe('raw-text embedding cache repository', () => {
     expect(providerModelChangedRun.misses).toHaveLength(2)
     expect(embedLive).toHaveBeenCalledTimes(3)
     expect(embedLive.mock.calls[2]?.[0]).toHaveLength(2)
-  })
+  }))
 
-  it('garbage collects removed inputs and reuses moved identical text', async () => {
+  it('garbage collects removed inputs and reuses moved identical text', databaseFixture.wrap(async () => {
     const {
       database,
       queryOne,
@@ -598,5 +599,5 @@ describe('raw-text embedding cache repository', () => {
       'text-embedding-3-small',
       movedHash,
     )).toMatchObject({ count: 1 })
-  })
+  }))
 })

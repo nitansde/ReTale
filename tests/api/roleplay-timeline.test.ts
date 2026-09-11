@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
-import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
+import { registerNovelDatabaseFixture, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
@@ -13,7 +13,7 @@ function createTestDatabase(prefix: string, novelIds: readonly string[]) {
   cleanups.push(tempDatabase.cleanup)
   const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
   databases.push(database)
-  novelDatabaseDisposers.push(registerLegacyNovelDatabase(database, novelIds))
+  novelDatabaseDisposers.push(registerNovelDatabaseFixture(database, novelIds))
   return database
 }
 

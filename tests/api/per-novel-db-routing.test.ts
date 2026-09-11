@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -8,9 +9,10 @@ import { SQLITE_BUSY_TIMEOUT_MS } from '@/lib/server/sqlite'
 import type { PersistedNovelState } from '@/lib/types'
 import { hashFile } from '@/tests/helpers/temp-db'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const repoRoot = process.cwd()
 const originalDataDir = process.env.RETALE_DATA_DIR
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync; fetch?: typeof fetch }
 
 const cleanupDirectories: string[] = []
 
@@ -268,16 +270,16 @@ async function importNovelResourceRoutesWithAfterCallbacks() {
   }
 }
 
-afterEach(async () => {
+afterEach(databaseFixture.wrap(async () => {
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
   vi.doUnmock('next/server')
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
   const resolverModule = await import('@/lib/server/db-resolver')
   resolverModule.resetResolvedDatabasesForTests()
@@ -290,10 +292,10 @@ afterEach(async () => {
       fs.rmSync(directory, { recursive: true, force: true })
     }
   }
-})
+}))
 
 describe('per-novel database resolver', () => {
-  it('routes control and novel databases to isolated file paths with per-file pragmas', async () => {
+  it('routes control and novel databases to isolated file paths with per-file pragmas', databaseFixture.wrap(async () => {
     const dataRootPath = createTempDataRoot()
     const resolver = await loadResolverModule(dataRootPath)
 
@@ -319,9 +321,9 @@ describe('per-novel database resolver', () => {
     expect(getForeignKeys(novelDb)).toBe(1)
     expect(getJournalMode(controlDb)).toBe('wal')
     expect(getJournalMode(novelDb)).toBe('wal')
-  })
+  }))
 
-  it('keeps the control database limited to settings and registry metadata tables', async () => {
+  it('keeps the control database limited to settings and registry metadata tables', databaseFixture.wrap(async () => {
     const dataRootPath = createTempDataRoot()
     const resolver = await loadResolverModule(dataRootPath)
 
@@ -355,9 +357,9 @@ describe('per-novel database resolver', () => {
     expect(tables.has('WorkspaceState')).toBe(false)
     expect(tables.has('continue_blocks')).toBe(false)
     expect(tables.has('what_if_sessions')).toBe(false)
-  })
+  }))
 
-  it('rejects invalid novel IDs without creating escaped directories', async () => {
+  it('rejects invalid novel IDs without creating escaped directories', databaseFixture.wrap(async () => {
     const dataRootPath = createTempDataRoot()
     const tempRootPath = path.dirname(dataRootPath)
     const resolver = await loadResolverModule(dataRootPath)
@@ -372,9 +374,9 @@ describe('per-novel database resolver', () => {
     expect(fs.existsSync(path.join(tempRootPath, 'escape'))).toBe(false)
     expect(fs.existsSync(path.join(dataRootPath, 'novels', 'novel'))).toBe(false)
     expect(fs.existsSync(path.join(dataRootPath, 'novels'))).toBe(false)
-  })
+  }))
 
-  it('fences non-ready registry rows from live storage resolution and ordinary upserts', async () => {
+  it('fences non-ready registry rows from live storage resolution and ordinary upserts', databaseFixture.wrap(async () => {
     const dataRootPath = createTempDataRoot()
     const resolver = await loadResolverModule(dataRootPath)
     const controlDb = resolver.getControlDb()
@@ -412,13 +414,13 @@ describe('per-novel database resolver', () => {
       migrationStatus: 'ready',
     })
     expect(() => resolver.getNovelDb('novel-new')).not.toThrow()
-  })
+  }))
 
-  it('keeps raw singleton sqlite imports limited to resolver and documented control modules', () => {
+  it('keeps raw singleton sqlite imports limited to resolver and documented control modules', databaseFixture.wrap(() => {
     expect(listRawSqliteImportFiles()).toEqual([...RAW_SQLITE_IMPORT_ALLOWED_FILES].sort((left, right) => left.localeCompare(right, 'en-US')))
-  })
+  }))
 
-  it('keeps app-setting reads and writes in control.db inside novel scope', async () => {
+  it('keeps app-setting reads and writes in control.db inside novel scope', databaseFixture.wrap(async () => {
     const dataRootPath = createTempDataRoot()
     const resolver = await loadResolverModule(dataRootPath)
     const controlDb = resolver.getControlDb()
@@ -434,9 +436,9 @@ describe('per-novel database resolver', () => {
     expect(scopedRead).toMatchObject([{ key: 'AI_SETTINGS_V2', value: 'control-value' }])
     expect(controlDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('AI_SETTINGS_V2')).toEqual({ value: 'control-updated' })
     expect(novelDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('AI_SETTINGS_V2')).toEqual({ value: 'novel-decoy' })
-  })
+  }))
 
-  it('saves workspace runtime and artifacts only into the targeted novel database', async () => {
+  it('saves workspace runtime and artifacts only into the targeted novel database', databaseFixture.wrap(async () => {
     const dataRootPath = createTempDataRoot()
     const resolver = await loadResolverModule(dataRootPath)
     const controlDb = resolver.getControlDb()
@@ -469,9 +471,9 @@ describe('per-novel database resolver', () => {
     expect(JSON.parse((betaDb.prepare('SELECT payload FROM WorkspaceState WHERE id = ?').get('singleton') as { payload: string }).payload)).toMatchObject({
       localNovels: [{ id: 'novel-beta', title: 'Beta Initial' }],
     })
-  })
+  }))
 
-  it('evicts and removes only the deleted novel storage while leaving sibling routing usable', async () => {
+  it('evicts and removes only the deleted novel storage while leaving sibling routing usable', databaseFixture.wrap(async () => {
     const dataRootPath = createTempDataRoot()
     const resolver = await loadResolverModule(dataRootPath)
     const controlDb = resolver.getControlDb()
@@ -508,9 +510,9 @@ describe('per-novel database resolver', () => {
     expect(fs.existsSync(betaDirectory)).toBe(true)
     expect((alphaDb as DatabaseSync & { isOpen: boolean }).isOpen).toBe(false)
     expect(betaDb.prepare('SELECT 1 AS value').get()).toEqual({ value: 1 })
-  })
+  }))
 
-  it('does not let a corrupt sibling novel database block alpha save or alpha read paths', async () => {
+  it('does not let a corrupt sibling novel database block alpha save or alpha read paths', databaseFixture.wrap(async () => {
     const dataRootPath = createTempDataRoot()
     const resolver = await loadResolverModule(dataRootPath)
     const controlDb = resolver.getControlDb()
@@ -552,16 +554,16 @@ describe('per-novel database resolver', () => {
     )
     expect(betaGetResponse.status).toBe(500)
     await expect(betaGetResponse.json()).resolves.toMatchObject({ ok: false })
-  })
+  }))
 
-  it('routes future-jump create and revise through the requested novel DB instead of singleton discovery reads', async () => {
+  it('routes future-jump create and revise through the requested novel DB instead of singleton discovery reads', databaseFixture.wrap(async () => {
     const dataRootPath = createTempDataRoot()
     const resolver = await loadResolverModule(dataRootPath)
     const alphaDb = resolver.getNovelDb('novel-alpha')
     const betaDb = resolver.getNovelDb('novel-beta')
     const singletonDbPath = path.join(path.dirname(dataRootPath), 'singleton-monolith.db')
     const singletonDb = initializeDatabase(new DatabaseSync(singletonDbPath))
-    globalForSqlite.sqlite = singletonDb
+    databaseFixture.database = singletonDb
 
     const seedFutureJumpFixture = (database: DatabaseSync, novelId: string, labels: { outlineTitle: string; sessionTitle: string; runTitle: string }) => {
       const branchId = `${novelId}:main`
@@ -702,9 +704,9 @@ describe('per-novel database resolver', () => {
       latest_revision_no: 1,
       generated_target_text: 'Beta initial text',
     })
-  })
+  }))
 
-  it('routes colliding rewrite, RAG, graph, roleplay, what-if, and continue resources only through the requested novel DB', async () => {
+  it('routes colliding rewrite, RAG, graph, roleplay, what-if, and continue resources only through the requested novel DB', databaseFixture.wrap(async () => {
     const dataRootPath = createTempDataRoot()
     const resolver = await loadResolverModule(dataRootPath)
     const alphaDb = resolver.getNovelDb('novel-alpha')
@@ -897,5 +899,5 @@ describe('per-novel database resolver', () => {
       { params: Promise.resolve({ sessionId: 'shared-roleplay' }) },
     )
     expect(wrongOwnerResponse.status).toBe(404)
-  })
+  }))
 })

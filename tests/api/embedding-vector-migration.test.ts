@@ -7,7 +7,7 @@ import { createDatabaseAccess, runWithDatabaseAccessScope } from '@/lib/server/d
 import { decodeEmbeddingVector, encodeEmbeddingVector } from '@/lib/server/embedding-vector'
 import { lookupRawTextEmbeddingCacheEntries, upsertRawTextEmbeddingCacheEntries } from '@/lib/server/retrieval-embedding-cache'
 import { previewEmbeddingCacheRetention } from '@/lib/server/storage-retention'
-import { initializeDatabase } from '@/lib/server/sqlite'
+import { DatabaseSchemaVersionError, initializeDatabase } from '@/lib/server/sqlite'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const connections: DatabaseSync[] = []
@@ -36,15 +36,15 @@ describe('binary vector storage and explicit offline migration', () => {
   it('refuses an unmigrated database without rewriting its old values', () => {
     const { database, insert } = fixture()
     insert('legacy')
-    expect(() => initializeDatabase(database)).toThrow('offline migration')
+    expect(() => initializeDatabase(database)).toThrow(DatabaseSchemaVersionError)
     expect(database.prepare('SELECT vectorJson,vectorBlob FROM RawTextEmbeddingCache').get())
       .toEqual({ vectorJson: '[0.1,-0.2,1]', vectorBlob: null })
   })
 
-  it('writes and reads only binary vectors after finalization', async () => {
+  it('writes and reads binary vectors after vector finalization, before the separate schema cutover', async () => {
     const { database, db } = fixture()
     finalizeEmbeddingVectorMigration(database)
-    initializeDatabase(database)
+    expect(() => initializeDatabase(database)).toThrow(DatabaseSchemaVersionError)
     await runWithDatabaseAccessScope(db, async () => {
       await upsertRawTextEmbeddingCacheEntries({ scope, entries: [{ embeddingInput: 'new vector', vector: [0.1,0.2,1] }] })
     })

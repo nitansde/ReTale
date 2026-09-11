@@ -1,11 +1,13 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 
 function seedIsolationFixture(database: DatabaseSync) {
   database.prepare(
@@ -147,27 +149,27 @@ function createMockAISettings() {
   }
 }
 
-afterEach(() => {
-  if (globalForSqlite.sqlite) {
+afterEach(databaseFixture.wrap(() => {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('branch-isolation-authored', () => {
-  it('merges speculative authored deltas and latest future jump revision only for explicit requests', async () => {
+  it('merges speculative authored deltas and latest future jump revision only for explicit requests', databaseFixture.wrap(async () => {
     const tempDatabase = createTempDatabaseCopy('retale-branch-isolation-authored')
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-    globalForSqlite.sqlite = database
+    databaseFixture.database = database
     seedIsolationFixture(database)
 
     vi.resetModules()
@@ -263,14 +265,14 @@ describe('branch-isolation-authored', () => {
     expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
       count: rawTextDocs.length,
     })
-  })
+  }))
 
-  it('assembles full chapter text plus rewrite/continue lineage in chronological order for continue flows', async () => {
+  it('assembles full chapter text plus rewrite/continue lineage in chronological order for continue flows', databaseFixture.wrap(async () => {
     const tempDatabase = createTempDatabaseCopy('retale-branch-lineage-context')
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-    globalForSqlite.sqlite = database
+    databaseFixture.database = database
     seedIsolationFixture(database)
 
     vi.resetModules()
@@ -330,5 +332,5 @@ describe('branch-isolation-authored', () => {
     expect(chapterIndex).toBeGreaterThanOrEqual(0)
     expect(rewriteIndex).toBeGreaterThan(chapterIndex)
     expect(continueIndex).toBeGreaterThan(rewriteIndex)
-  })
+  }))
 })

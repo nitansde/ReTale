@@ -1,11 +1,13 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const cleanups: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 
 function seedIsolationFixture(database: DatabaseSync) {
   database.prepare(
@@ -104,27 +106,27 @@ function createMockAISettings() {
   }
 }
 
-afterEach(() => {
-  if (globalForSqlite.sqlite) {
+afterEach(databaseFixture.wrap(() => {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch {
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   while (cleanups.length) {
     cleanups.pop()?.()
   }
-})
+}))
 
 describe('branch-isolation-mainline', () => {
-  it('keeps default context and retrieval speculation-free', async () => {
+  it('keeps default context and retrieval speculation-free', databaseFixture.wrap(async () => {
     const tempDatabase = createTempDatabaseCopy('retale-branch-isolation-mainline')
     cleanups.push(tempDatabase.cleanup)
 
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-    globalForSqlite.sqlite = database
+    databaseFixture.database = database
     seedIsolationFixture(database)
 
     vi.resetModules()
@@ -215,5 +217,5 @@ describe('branch-isolation-mainline', () => {
     expect(database.prepare('SELECT COUNT(*) AS count FROM RawTextEmbeddingCache WHERE branchId = ?').get('novel-001:main')).toMatchObject({
       count: rawTextDocs.length,
     })
-  })
+  }))
 })

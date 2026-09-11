@@ -1,13 +1,15 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { initializeDatabase } from '@/lib/server/sqlite'
-import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
+import { registerNovelDatabaseFixture, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
+
+const databaseFixture = createScopedDatabaseFixture()
 
 const cleanups: Array<() => void> = []
 const novelDatabaseDisposers: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync; fetch?: typeof fetch }
 
 function seedFailureFixture(database: DatabaseSync) {
   database.prepare(`INSERT INTO NovelRecord (id, title, author, sourceType) VALUES (?, ?, ?, ?)`).run('novel-001', 'Fixture Novel', 'Fixture Author', 'txt')
@@ -57,7 +59,7 @@ function seedFailureFixture(database: DatabaseSync) {
   ).run('if_fixture_001', 'novel-001', 'novel-001:main', 'what_if', 1, 10, 'IF 决裂线', '让男女主决裂。', null, 10, null, 'chapter-10', 'what-if-001', null, 0, 'rose', 'active')
 }
 
-afterEach(() => {
+afterEach(databaseFixture.wrap(() => {
   vi.restoreAllMocks()
 
   while (novelDatabaseDisposers.length) {
@@ -65,14 +67,14 @@ afterEach(() => {
   }
   resetNovelDatabaseTestState()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch (_closeError) {
       void _closeError
       // Ignore close failures so temporary files can still be removed.
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   while (cleanups.length) {
@@ -80,10 +82,10 @@ afterEach(() => {
   }
 
   vi.resetModules()
-})
+}))
 
 describe('future-jump-service failure', () => {
-  it('retries exactly once on bridge validation failure then marks the run failed without creating timeline nodes', async () => {
+  it('retries exactly once on bridge validation failure then marks the run failed without creating timeline nodes', databaseFixture.wrap(async () => {
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => ({
         rewrite: {
@@ -104,9 +106,9 @@ describe('future-jump-service failure', () => {
     const tempDatabase = createTempDatabaseCopy('retale-future-jump-service-failure')
     cleanups.push(tempDatabase.cleanup)
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-    globalForSqlite.sqlite = database
+    databaseFixture.database = database
     seedFailureFixture(database)
-    novelDatabaseDisposers.push(registerLegacyNovelDatabase(database, ['novel-001']))
+    novelDatabaseDisposers.push(registerNovelDatabaseFixture(database, ['novel-001']))
 
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ bridgeSummary: '太短了' }) } }] }), { status: 200 }))
@@ -144,5 +146,5 @@ describe('future-jump-service failure', () => {
 
     const timelineCount = database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes WHERE future_jump_run_id = ?').get(failedRun!.id) as { count: number }
     expect(timelineCount.count).toBe(0)
-  }, 15000)
+  }), 15000)
 })

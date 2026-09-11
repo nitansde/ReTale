@@ -42,6 +42,9 @@ dev.db-wal
 /data/
 backups/
 
+# local archived scripts
+/scripts/archive/
+
 # local verification artifacts
 /docs/bug-review-and-fixes-*.md
 .playwright-mcp/

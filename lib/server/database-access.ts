@@ -1,30 +1,25 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type * as NodeSqlite from 'node:sqlite'
 import { getControlDb, getCreatingNovelDb, getNovelDb } from '@/lib/server/db-resolver'
-import {
-  execute as executeAgainstSingleton,
-  queryAll as queryAllAgainstSingleton,
-  queryOne as queryOneAgainstSingleton,
-  runWithSqliteBusyRetry,
-  type SqlParam,
-  withTransaction as withSingletonTransaction,
-} from '@/lib/server/sqlite'
-import { beginSqliteTransaction, getDatabaseTransactionKey, observeOutwardNestedTransaction, runSerializedDatabaseTransaction, type DatabaseTransactionKey } from '@/lib/server/database-transactions'
+import { runWithSqliteBusyRetry, type SqlParam } from '@/lib/server/sqlite'
+import { assertDatabaseTransactionAccess, beginSqliteTransaction, getDatabaseTransactionKey, observeOutwardNestedTransaction, runSerializedDatabaseTransaction, type DatabaseTransactionKey } from '@/lib/server/database-transactions'
 export { resetControlDatabaseTransactionQueueForTests } from '@/lib/server/database-transactions'
 import { runWithPerNovelWriteGate } from '@/lib/server/per-novel-write-gate'
 
 type DatabaseSync = NodeSqlite.DatabaseSync
 
 export type DatabaseAccess = {
-  execute: typeof executeAgainstSingleton
-  queryOne: typeof queryOneAgainstSingleton
-  queryAll: typeof queryAllAgainstSingleton
-  withTransaction: typeof withSingletonTransaction
+  execute: (sql: string, ...params: SqlParam[]) => ReturnType<ReturnType<DatabaseSync['prepare']>['run']>
+  queryOne: <T>(sql: string, ...params: SqlParam[]) => T | null
+  queryAll: <T>(sql: string, ...params: SqlParam[]) => T[]
+  withTransaction: <T>(callback: () => T | Promise<T>) => Promise<T>
 }
 
 type ExecuteLike = DatabaseAccess['execute']
 
-const databaseAccessScope = new AsyncLocalStorage<DatabaseAccess>()
+// Preserve only the async context across server module reloads, never a default connection.
+const scopeHost = globalThis as typeof globalThis & { __retaleDatabaseAccessScope?: AsyncLocalStorage<DatabaseAccess> }
+const databaseAccessScope = scopeHost.__retaleDatabaseAccessScope ??= new AsyncLocalStorage<DatabaseAccess>()
 
 export async function withPerNovelWriteTransaction<T>(params: {
   novelId: string
@@ -43,21 +38,23 @@ export async function withPerNovelWriteTransaction<T>(params: {
 
 export function createDatabaseAccess(database: DatabaseSync, options?: {
   novelId?: string
-  serializeTransactions?: boolean
   transactionKey?: DatabaseTransactionKey
 }): DatabaseAccess {
-  const execute: DatabaseAccess['execute'] = (sql, ...params) => (
-    runWithSqliteBusyRetry(() => database.prepare(sql).run(...params))
-  )
+  const execute: DatabaseAccess['execute'] = (sql, ...params) => {
+    assertDatabaseTransactionAccess(database)
+    return runWithSqliteBusyRetry(() => database.prepare(sql).run(...params))
+  }
 
   const queryOne: DatabaseAccess['queryOne'] = <T>(sql: string, ...params: SqlParam[]) => {
+    assertDatabaseTransactionAccess(database)
     const row = runWithSqliteBusyRetry(() => database.prepare(sql).get(...params))
     return (row ?? null) as T | null
   }
 
-  const queryAll: DatabaseAccess['queryAll'] = <T>(sql: string, ...params: SqlParam[]) => (
-    runWithSqliteBusyRetry(() => database.prepare(sql).all(...params)) as T[]
-  )
+  const queryAll: DatabaseAccess['queryAll'] = <T>(sql: string, ...params: SqlParam[]) => {
+    assertDatabaseTransactionAccess(database)
+    return runWithSqliteBusyRetry(() => database.prepare(sql).all(...params)) as T[]
+  }
 
   const withTransaction: DatabaseAccess['withTransaction'] = <T>(callback: () => T | Promise<T>) => {
     if (options?.novelId) {
@@ -97,13 +94,14 @@ export function createCreatingNovelDatabaseAccess(novelId: string) {
 export function createControlDatabaseAccess() {
   const database = getControlDb()
   return createDatabaseAccess(database, {
-    serializeTransactions: true,
     transactionKey: getDatabaseTransactionKey(database),
   })
 }
 
 function getScopedDatabaseAccess() {
-  return databaseAccessScope.getStore() ?? singletonDatabaseAccess
+  const db = databaseAccessScope.getStore()
+  if (!db) throw new Error('Database access requires an explicit database scope; use runWithNovelDatabaseAccess or inject DatabaseAccess')
+  return db
 }
 
 export function runWithDatabaseAccessScope<T>(db: DatabaseAccess, callback: () => T): T
@@ -116,13 +114,6 @@ export function runWithNovelDatabaseAccess<T>(novelId: string, callback: () => T
 export function runWithNovelDatabaseAccess<T>(novelId: string, callback: () => Promise<T>): Promise<T>
 export function runWithNovelDatabaseAccess<T>(novelId: string, callback: () => T | Promise<T>) {
   return runWithDatabaseAccessScope(createNovelDatabaseAccess(novelId), callback)
-}
-
-export const singletonDatabaseAccess: DatabaseAccess = {
-  execute: executeAgainstSingleton,
-  queryOne: queryOneAgainstSingleton,
-  queryAll: queryAllAgainstSingleton,
-  withTransaction: withSingletonTransaction,
 }
 
 export const execute: DatabaseAccess['execute'] = (sql, ...params) => getScopedDatabaseAccess().execute(sql, ...params)

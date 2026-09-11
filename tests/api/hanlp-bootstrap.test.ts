@@ -1,20 +1,23 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import fs from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
+
+const databaseFixture = createScopedDatabaseFixture()
 
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL
 const LOCAL_HANLP_SMOKE_ENABLED = process.env.RETALE_RUN_LOCAL_HANLP_SMOKE === '1'
 
 function resetGlobalSqlite() {
-  const globalForSqlite = globalThis as { sqlite?: { close?: () => void } }
-  globalForSqlite.sqlite?.close?.()
-  delete globalForSqlite.sqlite
+  databaseFixture.database?.close?.()
+  delete databaseFixture.database
 }
 
 async function loadHanlpBootstrapModule(dbPath: string) {
   process.env.DATABASE_URL = `file:${dbPath}`
   resetGlobalSqlite()
   vi.resetModules()
+  databaseFixture.open(dbPath)
   return import('@/lib/server/hanlp-bootstrap')
 }
 
@@ -22,6 +25,7 @@ async function loadHanlpBootstrapInitializerModule(dbPath: string) {
   process.env.DATABASE_URL = `file:${dbPath}`
   resetGlobalSqlite()
   vi.resetModules()
+  databaseFixture.open(dbPath)
   return import('@/lib/server/hanlp-bootstrap-initializer')
 }
 
@@ -29,7 +33,7 @@ async function loadSqliteModule(dbPath: string) {
   process.env.DATABASE_URL = `file:${dbPath}`
   resetGlobalSqlite()
   vi.resetModules()
-  return import('@/lib/server/sqlite')
+  return databaseFixture.open(dbPath)
 }
 
 function makeOutput() {
@@ -141,15 +145,15 @@ async function seedAggregateEntityRows(dbPath: string, suffix: string) {
   return { novelId, branchId }
 }
 
-afterEach(() => {
+afterEach(databaseFixture.wrap(() => {
   process.env.DATABASE_URL = ORIGINAL_DATABASE_URL
   resetGlobalSqlite()
   vi.restoreAllMocks()
   vi.resetModules()
-})
+}))
 
 describe('hanlp bootstrap runner cache lifecycle', () => {
-  it('stores a runner result once and reuses the cache on later matching calls', async () => {
+  it('stores a runner result once and reuses the cache on later matching calls', databaseFixture.wrap(async () => {
     const tempDb = createTempDatabaseCopy('hanlp-bootstrap-cache')
 
     try {
@@ -184,9 +188,9 @@ describe('hanlp bootstrap runner cache lifecycle', () => {
     } finally {
       tempDb.cleanup()
     }
-  })
+  }))
 
-  it('reruns HanLP when any cache key dimension changes', async () => {
+  it('reruns HanLP when any cache key dimension changes', databaseFixture.wrap(async () => {
     const tempDb = createTempDatabaseCopy('hanlp-bootstrap-miss')
 
     try {
@@ -220,9 +224,9 @@ describe('hanlp bootstrap runner cache lifecycle', () => {
     } finally {
       tempDb.cleanup()
     }
-  })
+  }))
 
-  it('fails clearly when HanLP is unavailable and no valid cache exists', async () => {
+  it('fails clearly when HanLP is unavailable and no valid cache exists', databaseFixture.wrap(async () => {
     const tempDb = createTempDatabaseCopy('hanlp-bootstrap-error')
 
     try {
@@ -241,9 +245,9 @@ describe('hanlp bootstrap runner cache lifecycle', () => {
     } finally {
       tempDb.cleanup()
     }
-  })
+  }))
 
-  it('fails clearly on malformed JSON output when no cache exists', async () => {
+  it('fails clearly on malformed JSON output when no cache exists', databaseFixture.wrap(async () => {
     const tempDb = createTempDatabaseCopy('hanlp-bootstrap-malformed')
 
     try {
@@ -260,9 +264,9 @@ describe('hanlp bootstrap runner cache lifecycle', () => {
     } finally {
       tempDb.cleanup()
     }
-  })
+  }))
 
-  it('initializes formal character entities once, ignores temporary roles, and stays idempotent on rerun', async () => {
+  it('initializes formal character entities once, ignores temporary roles, and stays idempotent on rerun', databaseFixture.wrap(async () => {
     const tempDb = createTempDatabaseCopy('hanlp-bootstrap-init')
 
     try {
@@ -304,9 +308,9 @@ describe('hanlp bootstrap runner cache lifecycle', () => {
     } finally {
       tempDb.cleanup()
     }
-  })
+  }))
 
-  it('preserves stronger user-confirmed formal entities on bootstrap rerun', async () => {
+  it('preserves stronger user-confirmed formal entities on bootstrap rerun', databaseFixture.wrap(async () => {
     const tempDb = createTempDatabaseCopy('hanlp-bootstrap-preserve-confirmed')
 
     try {
@@ -378,9 +382,9 @@ describe('hanlp bootstrap runner cache lifecycle', () => {
     } finally {
       tempDb.cleanup()
     }
-  })
+  }))
 
-  ;(LOCAL_HANLP_SMOKE_ENABLED ? it : it.skip)('runs a tiny local-only HanLP smoke when explicitly enabled and the script exists', async () => {
+  ;(LOCAL_HANLP_SMOKE_ENABLED ? it : it.skip)('runs a tiny local-only HanLP smoke when explicitly enabled and the script exists', databaseFixture.wrap(async () => {
     const tempDb = createTempDatabaseCopy('hanlp-bootstrap-local-smoke')
 
     try {
@@ -402,5 +406,5 @@ describe('hanlp bootstrap runner cache lifecycle', () => {
     } finally {
       tempDb.cleanup()
     }
-  }, 30_000)
+  }), 30_000)
 })

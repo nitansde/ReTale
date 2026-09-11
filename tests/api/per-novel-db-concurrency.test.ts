@@ -1,3 +1,4 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
@@ -6,11 +7,12 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+const databaseFixture = createScopedDatabaseFixture()
+
 const cleanupDirectories: string[] = []
 const cleanupDatabases: DatabaseSync[] = []
 const originalDataDir = process.env.RETALE_DATA_DIR
 const API_TEST_TIMEOUT_MS = 30_000
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const lifecycleRaceChildPath = path.join(process.cwd(), 'tests', 'fixtures', 'process', 'novel-lifecycle-race-child.mjs')
 
 vi.setConfig({ testTimeout: API_TEST_TIMEOUT_MS, hookTimeout: API_TEST_TIMEOUT_MS })
@@ -469,7 +471,7 @@ async function createNovelDatabases(prefix: string) {
   }
 }
 
-afterEach(async () => {
+afterEach(databaseFixture.wrap(async () => {
   restoreEnvVar('RETALE_DATA_DIR', originalDataDir)
   vi.useRealTimers()
   vi.unstubAllGlobals()
@@ -500,7 +502,7 @@ afterEach(async () => {
     // Ignore gate reset import failures during test cleanup fallback.
   }
   vi.restoreAllMocks()
-  delete globalForSqlite.sqlite
+  delete databaseFixture.database
   vi.resetModules()
 
   while (cleanupDatabases.length > 0) {
@@ -521,10 +523,10 @@ afterEach(async () => {
       fs.rmSync(directory, { recursive: true, force: true })
     }
   }
-})
+}))
 
 describe('per-novel database concurrency matrix', () => {
-  it('serializes concurrent control-database transactions and keeps nested wrappers in the outer transaction', async () => {
+  it('serializes concurrent control-database transactions and keeps nested wrappers in the outer transaction', databaseFixture.wrap(async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-control-transactions-'))
     cleanupDirectories.push(tempRoot)
     process.env.RETALE_DATA_DIR = path.join(tempRoot, 'data')
@@ -569,9 +571,9 @@ describe('per-novel database concurrency matrix', () => {
       { key: 'control-nested' },
       { key: 'control-second' },
     ])
-  })
+  }))
 
-  it('does not let a deferred child inherit a completed control transaction', async () => {
+  it('does not let a deferred child inherit a completed control transaction', databaseFixture.wrap(async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-control-deferred-child-'))
     cleanupDirectories.push(tempRoot)
     process.env.RETALE_DATA_DIR = path.join(tempRoot, 'data')
@@ -601,9 +603,9 @@ describe('per-novel database concurrency matrix', () => {
       'SELECT key FROM AppSetting WHERE key LIKE ? ORDER BY key',
       'control-%',
     )).toEqual([{ key: 'control-outer' }])
-  })
+  }))
 
-  it('waits for an unawaited nested control transaction before committing the outer transaction', async () => {
+  it('waits for an unawaited nested control transaction before committing the outer transaction', databaseFixture.wrap(async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-control-unawaited-nested-'))
     cleanupDirectories.push(tempRoot)
     process.env.RETALE_DATA_DIR = path.join(tempRoot, 'data')
@@ -639,9 +641,9 @@ describe('per-novel database concurrency matrix', () => {
       { key: 'control-nested-unawaited' },
       { key: 'control-outer-unawaited' },
     ])
-  })
+  }))
 
-  it('rolls back the outer transaction when an unawaited nested control transaction fails', async () => {
+  it('rolls back the outer transaction when an unawaited nested control transaction fails', databaseFixture.wrap(async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-control-unawaited-failure-'))
     cleanupDirectories.push(tempRoot)
     process.env.RETALE_DATA_DIR = path.join(tempRoot, 'data')
@@ -662,9 +664,9 @@ describe('per-novel database concurrency matrix', () => {
       'SELECT key FROM AppSetting WHERE key LIKE ? ORDER BY key',
       'control-%-failure',
     )).toEqual([])
-  })
+  }))
 
-  it('keeps transaction queues independent for different control database files', async () => {
+  it('keeps transaction queues independent for different control database files', databaseFixture.wrap(async () => {
     const firstDatabasePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'retale-control-a-')), 'control.db')
     const secondDatabasePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'retale-control-b-')), 'control.db')
     cleanupDirectories.push(path.dirname(firstDatabasePath), path.dirname(secondDatabasePath))
@@ -674,8 +676,8 @@ describe('per-novel database concurrency matrix', () => {
     const firstRawDb = initializeDatabase(new DatabaseSync(firstDatabasePath), { mode: 'control', schemaSql: CONTROL_SCHEMA_SQL })
     const secondRawDb = initializeDatabase(new DatabaseSync(secondDatabasePath), { mode: 'control', schemaSql: CONTROL_SCHEMA_SQL })
     cleanupDatabases.push(firstRawDb, secondRawDb)
-    const firstDb = createDatabaseAccess(firstRawDb, { serializeTransactions: true, transactionKey: firstRawDb })
-    const secondDb = createDatabaseAccess(secondRawDb, { serializeTransactions: true, transactionKey: secondRawDb })
+    const firstDb = createDatabaseAccess(firstRawDb, { transactionKey: firstRawDb })
+    const secondDb = createDatabaseAccess(secondRawDb, { transactionKey: secondRawDb })
     const firstEntered = createDeferred<void>()
     const releaseFirst = createDeferred<void>()
 
@@ -691,9 +693,9 @@ describe('per-novel database concurrency matrix', () => {
 
     releaseFirst.resolve()
     await expect(first).resolves.toBeUndefined()
-  })
+  }))
 
-  it('keeps nested same-novel transaction wrappers inside one database transaction', async () => {
+  it('keeps nested same-novel transaction wrappers inside one database transaction', databaseFixture.wrap(async () => {
     const { alphaRawDb, createNovelDatabaseAccess } = await createNovelDatabases('retale-per-novel-nested-transaction')
     const outerDb = createNovelDatabaseAccess('novel-alpha')
     const nestedDb = createNovelDatabaseAccess('novel-alpha')
@@ -740,9 +742,9 @@ describe('per-novel database concurrency matrix', () => {
       { key: 'nested-transaction-inner' },
       { key: 'nested-transaction-outer' },
     ])
-  })
+  }))
 
-  it('waits for unawaited nested same-novel transactions and rolls back their failures', async () => {
+  it('waits for unawaited nested same-novel transactions and rolls back their failures', databaseFixture.wrap(async () => {
     const { createNovelDatabaseAccess } = await createNovelDatabases('retale-per-novel-unawaited-nested-transaction')
     const outerDb = createNovelDatabaseAccess('novel-alpha')
     const nestedDb = createNovelDatabaseAccess('novel-alpha')
@@ -781,9 +783,9 @@ describe('per-novel database concurrency matrix', () => {
       'SELECT key FROM AppSetting WHERE key LIKE ? ORDER BY key',
       'unawaited-nested-%',
     )).toEqual([])
-  })
+  }))
 
-  it('drains an unawaited nested same-novel transaction before rolling back an outer failure', async () => {
+  it('drains an unawaited nested same-novel transaction before rolling back an outer failure', databaseFixture.wrap(async () => {
     const { createNovelDatabaseAccess } = await createNovelDatabases('retale-per-novel-outer-failure-drain')
     const outerDb = createNovelDatabaseAccess('novel-alpha')
     const nestedDb = createNovelDatabaseAccess('novel-alpha')
@@ -823,9 +825,9 @@ describe('per-novel database concurrency matrix', () => {
       'outer-failure-drain',
       'nested-after-outer-failure',
     )).toEqual([])
-  })
+  }))
 
-  it('queues stale timer descendants behind a newer same-novel gate owner', async () => {
+  it('queues stale timer descendants behind a newer same-novel gate owner', databaseFixture.wrap(async () => {
     const { runWithPerNovelWriteGate } = await createNovelDatabases('retale-per-novel-stale-descendant')
     const staleCallbackReady = createDeferred<void>()
     const runStaleCallback = createDeferred<void>()
@@ -863,9 +865,9 @@ describe('per-novel database concurrency matrix', () => {
     await newerOwner
     await staleCallbackEntered.promise
     await staleDescendant
-  })
+  }))
 
-  it.each(['publish-first', 'claim-first'] as const)('fences separate-process lifecycle races when %s', async (winner) => {
+  it.each(['publish-first', 'claim-first'] as const)('fences separate-process lifecycle races when %s', databaseFixture.wrap(async (winner) => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `retale-lifecycle-${winner}-`))
     cleanupDirectories.push(tempRoot)
     const dataRoot = path.join(tempRoot, 'data')
@@ -949,9 +951,9 @@ describe('per-novel database concurrency matrix', () => {
       expect(fs.existsSync(novelDirectory)).toBe(false)
       expect(fs.existsSync(quarantinePath)).toBe(true)
     }
-  })
+  }))
 
-  it('keeps the active graph queryable and preserves chapter saves while rebuild compute is running', async () => {
+  it('keeps the active graph queryable and preserves chapter saves while rebuild compute is running', databaseFixture.wrap(async () => {
     const { getNovelDb } = await createNovelDatabases('retale-per-novel-compute-overlap')
     const computeRawDb = getNovelDb('novel-compute-overlap')
     const { novelId, branchId } = seedKnowledgeRebuildFixture(computeRawDb, 'novel-compute-overlap', 1)
@@ -1051,9 +1053,9 @@ describe('per-novel database concurrency matrix', () => {
        WHERE novelId = ? AND branchId = ? AND status NOT IN ('rejected', 'outdated', 'potentially_stale')`
     ).get(novelId, branchId)).toMatchObject({ count: 1 })
     expect(computeRawDb.prepare('SELECT status FROM KnowledgeJob WHERE id = ?').get(started.jobId)).toMatchObject({ status: 'succeeded' })
-  })
+  }))
 
-  it('queues chapter saves behind the same-novel publish transaction and preserves both changes', async () => {
+  it('queues chapter saves behind the same-novel publish transaction and preserves both changes', databaseFixture.wrap(async () => {
     const { createNovelDatabaseAccess, getNovelDb, withPerNovelWriteTransaction } = await createNovelDatabases('retale-per-novel-publish-vs-save')
     const publishRawDb = getNovelDb('novel-publish-save')
     seedKnowledgeRebuildFixture(publishRawDb, 'novel-publish-save', 1)
@@ -1106,9 +1108,9 @@ describe('per-novel database concurrency matrix', () => {
       knowledgeStatus: 'ready',
     })
     expect(publishRawDb.prepare('SELECT rawText FROM KnowledgeChapter WHERE id = ?').get('chapter-1')).toMatchObject({ rawText: '发布期间保存的章节正文' })
-  })
+  }))
 
-  it('serializes continue-block writes with chapter saves and preserves both datasets', async () => {
+  it('serializes continue-block writes with chapter saves and preserves both datasets', databaseFixture.wrap(async () => {
     const { alphaRawDb, createNovelDatabaseAccess } = await createNovelDatabases('retale-per-novel-continue-vs-save')
     const alphaDb = createNovelDatabaseAccess('novel-alpha')
     const saveRelease = createDeferred<void>()
@@ -1159,9 +1161,9 @@ describe('per-novel database concurrency matrix', () => {
     expect(alphaRawDb.prepare('SELECT contentHtml FROM WorkspaceRuntimeChapter WHERE workspaceStateId = ? AND id = ?').get('singleton', 'novel-alpha-chapter-1')).toMatchObject({
       contentHtml: '<p>续写并发保存正文</p>',
     })
-  })
+  }))
 
-  it('serializes rewrite checkpoints with knowledge job updates without clobbering unrelated payloads', async () => {
+  it('serializes rewrite checkpoints with knowledge job updates without clobbering unrelated payloads', databaseFixture.wrap(async () => {
     const { alphaRawDb, createNovelDatabaseAccess, runWithPerNovelWriteGate } = await createNovelDatabases('retale-per-novel-rewrite-vs-job-update')
     const alphaDb = createNovelDatabaseAccess('novel-alpha')
     insertRecoverableRewriteJob(alphaRawDb, 'novel-alpha', 'novel-alpha:main')
@@ -1241,9 +1243,9 @@ describe('per-novel database concurrency matrix', () => {
     expect(rewritePayload.result?.content).toBe('新的可恢复改写结果')
     expect(knowledgeRow.currentStep).toBe('knowledge write step')
     expect(knowledgePayload).toMatchObject({ phase: 'write', preserved: true })
-  })
+  }))
 
-  it('serves the active retrieval index while rebuild writes a pending table and promotes atomically', async () => {
+  it('serves the active retrieval index while rebuild writes a pending table and promotes atomically', databaseFixture.wrap(async () => {
     await createNovelDatabases('retale-per-novel-retrieval-overlap')
     const novelId = 'novel-alpha'
     const branchId = 'novel-alpha:main'
@@ -1291,7 +1293,7 @@ describe('per-novel database concurrency matrix', () => {
     const retrievalIndex = await import('@/lib/server/retrieval-index')
     const resolverModule = await import('@/lib/server/db-resolver')
     const retrievalRawDb = resolverModule.getNovelDb(novelId)
-    globalForSqlite.sqlite = retrievalRawDb
+    databaseFixture.database = retrievalRawDb
     seedNovel(retrievalRawDb, novelId, 'Fixture Novel')
     retrievalRawDb.prepare(
       `INSERT INTO KnowledgeChapter (
@@ -1443,9 +1445,9 @@ describe('per-novel database concurrency matrix', () => {
     })
     expect(promotedSearch.warning).toBeUndefined()
     expect(promotedSearch.matches.some((match) => match.text === '新的检索正文内容。')).toBe(true)
-  })
+  }))
 
-  it('keeps beta writes working while alpha sqlite is locked by another writer', async () => {
+  it('keeps beta writes working while alpha sqlite is locked by another writer', databaseFixture.wrap(async () => {
     const { alphaDbFilePath, betaRawDb, createNovelDatabaseAccess } = await createNovelDatabases('retale-per-novel-sqlite-lock-isolation')
     const alphaWriter = openSecondaryDatabase(alphaDbFilePath)
     const alphaContender = openSecondaryDatabase(alphaDbFilePath)
@@ -1467,9 +1469,9 @@ describe('per-novel database concurrency matrix', () => {
     })
 
     alphaWriter.exec('ROLLBACK')
-  })
+  }))
 
-  it('serializes same-novel writes while leaving cross-novel writes independent', async () => {
+  it('serializes same-novel writes while leaving cross-novel writes independent', databaseFixture.wrap(async () => {
     const { createNovelDatabaseAccess, runWithPerNovelWriteGate } = await createNovelDatabases('retale-per-novel-write-gate')
     const alphaDb = createNovelDatabaseAccess('novel-alpha')
     const betaDb = createNovelDatabaseAccess('novel-beta')
@@ -1503,9 +1505,9 @@ describe('per-novel database concurrency matrix', () => {
     await expect(queuedAlphaWritePromise).resolves.toBeUndefined()
     expect(queuedAlphaWriteStarted).toBe(true)
     expect(alphaDb.queryOne<{ payload: string }>('SELECT payload FROM WorkspaceState WHERE id = ?', 'alpha-write-queued')?.payload).toBe('{"alpha":2}')
-  })
+  }))
 
-  it('allows nested same-novel gates without deadlock while preserving the outer ownership', async () => {
+  it('allows nested same-novel gates without deadlock while preserving the outer ownership', databaseFixture.wrap(async () => {
     const { runWithPerNovelWriteGate } = await createNovelDatabases('retale-per-novel-write-gate-reentrant')
     const events: string[] = []
 
@@ -1518,5 +1520,5 @@ describe('per-novel database concurrency matrix', () => {
     })).resolves.toBeUndefined()
 
     expect(events).toEqual(['outer-enter', 'inner-enter', 'outer-exit'])
-  })
+  }))
 })

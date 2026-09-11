@@ -1,13 +1,15 @@
+import { createScopedDatabaseFixture } from '@/tests/helpers/database-fixture'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { initializeDatabase } from '@/lib/server/sqlite'
-import { registerLegacyNovelDatabase, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
+import { registerNovelDatabaseFixture, resetNovelDatabaseTestState } from '@/tests/helpers/novel-db'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
+
+const databaseFixture = createScopedDatabaseFixture()
 
 const cleanups: Array<() => void> = []
 const novelDatabaseDisposers: Array<() => void> = []
-const globalForSqlite = globalThis as { sqlite?: DatabaseSync; fetch?: typeof fetch }
 
 function createAiSettings() {
   return {
@@ -95,7 +97,7 @@ function seedFutureJumpFixture(database: DatabaseSync) {
   ).run('if_fixture_001', 'novel-001', 'novel-001:main', 'what_if', 1, 10, 'IF 决裂线', '让男女主在这里彻底决裂。', null, 10, null, 'chapter-10', 'what-if-001', null, 0, 'rose', 'active')
 }
 
-afterEach(() => {
+afterEach(databaseFixture.wrap(() => {
   vi.restoreAllMocks()
 
   while (novelDatabaseDisposers.length) {
@@ -103,14 +105,14 @@ afterEach(() => {
   }
   resetNovelDatabaseTestState()
 
-  if (globalForSqlite.sqlite) {
+  if (databaseFixture.database) {
     try {
-      ;(globalForSqlite.sqlite as DatabaseSync & { close?: () => void }).close?.()
+      ;(databaseFixture.database as DatabaseSync & { close?: () => void }).close?.()
     } catch (_closeError) {
       void _closeError
       // Ignore close failures so temporary files can still be removed.
     }
-    delete globalForSqlite.sqlite
+    delete databaseFixture.database
   }
 
   while (cleanups.length) {
@@ -118,10 +120,10 @@ afterEach(() => {
   }
 
   vi.resetModules()
-})
+}))
 
 describe('future-jump-service success', () => {
-  it('generates and revises a two-stage future jump with validated outputs', async () => {
+  it('generates and revises a two-stage future jump with validated outputs', databaseFixture.wrap(async () => {
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => createAiSettings(),
     }))
@@ -129,9 +131,9 @@ describe('future-jump-service success', () => {
     const tempDatabase = createTempDatabaseCopy('retale-future-jump-service-success')
     cleanups.push(tempDatabase.cleanup)
     const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
-    globalForSqlite.sqlite = database
+    databaseFixture.database = database
     seedFutureJumpFixture(database)
-    novelDatabaseDisposers.push(registerLegacyNovelDatabase(database, ['novel-001']))
+    novelDatabaseDisposers.push(registerNovelDatabaseFixture(database, ['novel-001']))
 
     const fetchMock = vi.fn()
     const longBridge = '决裂之后，男主把原本要与女主共享的线索全部压在自己手里，他坚信真正的问题出在女主身边，于是故意切断联系，只凭零碎情报独自追查。女主被这份怀疑逼得心灰意冷，也不再解释，而是带着自己的判断去追索反派的暗线。两人越走越远，原本互补的能力被硬生生拆成彼此掣肘的盲区，旧日默契在一次次错过里变成更深的误会。反派情报网敏锐地捕捉到他们的裂缝，先挑动外围势力散布假消息，再借泄密者把女主引到孤立地点。男主因为不肯求证女主的行踪，始终晚半步；女主则误以为男主已经默认放弃自己，强撑着独自周旋。两人身边原本愿意调停的盟友，也因为长期收不到完整真相，只能各自站队，让误会越积越深。等双方终于意识到真正的敌人并不是彼此时，反派已经完成布置，把这场情感与信任上的断裂，推成了女主被绑走的必然后果。'
@@ -195,5 +197,5 @@ describe('future-jump-service success', () => {
     const persisted = findFutureJumpRunById(generated.run.id, createNovelDatabaseAccess('novel-001'))
     expect(persisted?.revisions).toHaveLength(2)
     expect(persisted?.errorMessage).toBeNull()
-  }, 45000)
+  }), 45000)
 })

@@ -938,10 +938,6 @@ async function readRewriteResponseResult(response: Response): Promise<RewriteRes
   return createResultPayload({ provider: 'context-stream', title: '生成版本', content })
 }
 
-async function runRecoverableRewriteJob(jobId: string) {
-  throw new Error('runRecoverableRewriteJob requires novel-scoped routing')
-}
-
 async function runRecoverableRewriteJobInNovel(jobId: string, novelId: string) {
   const db = getNovelRouteDb(novelId)
   const row = readRecoverableRewriteJob(jobId, db)
