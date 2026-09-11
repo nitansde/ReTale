@@ -6,7 +6,7 @@ import { mergeKnowledgeRebuildTelemetryPayloadForTesting } from '@/lib/server/kn
 
 describe('knowledge rebuild payload profiling telemetry', () => {
   const root = process.cwd()
-  const artifactPath = path.join(root, '.sisyphus/evidence/task-9-profiling.json')
+  const artifactPath = path.join(process.env.TASK_EVIDENCE_DIR!, 'task-9-profiling.json')
 
   it('records rebuild timing fields in payload', () => {
     const basePayload = {

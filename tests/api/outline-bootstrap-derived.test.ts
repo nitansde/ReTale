@@ -9,8 +9,7 @@ import { createOutlineNode, createOutlineNodeChapter } from '@/lib/server/outlin
 import { listOutlineNodes } from '@/lib/server/outline-node-store'
 import { initializeDatabase } from '@/lib/server/sqlite'
 
-const ROOT = process.cwd()
-const EVIDENCE_DIR = path.join(ROOT, '.sisyphus/evidence/task-4-outline-bootstrap')
+const EVIDENCE_DIR = process.env.TASK_EVIDENCE_DIR!
 
 const cleanups: Array<() => void> = []
 

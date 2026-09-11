@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { isNotFoundErrorMessage, jsonError, readJsonObject, requireNonEmptyId, toErrorMessage } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES, jsonError, readJsonObject, requireNonEmptyId, toErrorMessage } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { appendRoleplayMessage, createRoleplayLatestTurnVariant, findRoleplaySessionById } from '@/lib/server/roleplay-store'
 import { uid } from '@/lib/utils'
@@ -8,7 +8,7 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
   try {
     const { sessionId: rawSessionId } = await context.params
     const sessionId = requireNonEmptyId(rawSessionId, 'sessionId')
-    const body = await readJsonObject(request)
+    const body = await readJsonObject(request, MAX_GENERATION_JSON_BODY_BYTES)
     const novelId = requireNonEmptyId(String(body.novelId ?? ''), 'novelId')
     const branchId = requireNonEmptyId(String(body.branchId ?? ''), 'branchId')
     const db = createNovelDatabaseAccess(novelId)
@@ -40,7 +40,9 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
 
     return NextResponse.json(result, { status: 201 })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     const message = toErrorMessage(error, 'Failed to append roleplay message')
-    return jsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
+    return jsonError(message, 500)
   }
 }

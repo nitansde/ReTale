@@ -13,6 +13,7 @@ import {
   deleteRawTextEmbeddingCacheEntries,
   garbageCollectRawTextEmbeddingCacheEntries,
   lookupRawTextEmbeddingCacheEntries,
+  pruneInactiveRawTextEmbeddingCache,
   upsertRawTextEmbeddingCacheEntries,
 } from '@/lib/server/retrieval-embedding-cache'
 import {
@@ -664,18 +665,33 @@ export async function precomputeRawTextEmbeddingCache(params: {
         : null
     )
 
-  return runWithNovelDatabaseAccess(params.novelId, () => precomputeRawTextEmbeddingCacheImpl({
-    ...params,
-    settingsSnapshot: {
-      ...params.settingsSnapshot,
-      cacheModelIdentity,
-    },
-    healMissingKnowledgeChapterDerivedArtifacts,
-    loadRawTextRetrievalDocs,
-    buildRawTextRetrievalEmbeddingInput: (row) => buildRawTextRetrievalEmbeddingInput(row, {
-      maxCodePoints: embeddingInputMaxCodePoints,
-    }),
-  }))
+  return runWithNovelDatabaseAccess(params.novelId, async () => {
+    const result = await precomputeRawTextEmbeddingCacheImpl({
+      ...params,
+      settingsSnapshot: {
+        ...params.settingsSnapshot,
+        cacheModelIdentity,
+      },
+      healMissingKnowledgeChapterDerivedArtifacts,
+      loadRawTextRetrievalDocs,
+      buildRawTextRetrievalEmbeddingInput: (row) => buildRawTextRetrievalEmbeddingInput(row, {
+        maxCodePoints: embeddingInputMaxCodePoints,
+      }),
+    })
+    if (!result.cancelled && !result.degraded) {
+      await pruneInactiveRawTextEmbeddingCache({
+        novelId: params.novelId,
+        currentIdentities: () => {
+          const current = loadStoredAISettings().embeddings
+          return [
+            { provider: current.provider, model: getEmbeddingCacheModelIdentity(current) },
+            { provider: params.settingsSnapshot.provider, model: cacheModelIdentity },
+          ]
+        },
+      })
+    }
+    return result
+  })
 }
 
 function formatElapsed(elapsedMs: number) {

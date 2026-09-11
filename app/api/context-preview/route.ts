@@ -1,3 +1,4 @@
+import { readJsonObject, apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES } from '@/lib/server/api-route'
 import { NextResponse } from 'next/server'
 import { buildGenerationContextPreview } from '@/lib/server/context-builder'
 import { runWithNovelDatabaseAccess } from '@/lib/server/database-access'
@@ -24,7 +25,7 @@ function normalizeBranchContextInclusion(value: unknown) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json()
+    const body = await readJsonObject(request, MAX_GENERATION_JSON_BODY_BYTES)
     const operationType = parseOperationType(body.operationType)
     if (!operationType) {
       return NextResponse.json({ ok: false, error: INVALID_OPERATION_TYPE_ERROR }, { status: 400 })
@@ -66,6 +67,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, preview })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return NextResponse.json(
       {
         ok: false,

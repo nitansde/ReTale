@@ -236,7 +236,7 @@ describe('raw-text embedding cache repository', () => {
         provider: 'openai-compatible',
         model: 'text-embedding-3-small',
         embeddingInputHash: secondHash,
-        vector: [0.4, 0.5, 0.6],
+        vector: [0.4, 0.5, 0.6].map(Math.fround),
         vectorDimension: 3,
       }),
       expect.objectContaining({
@@ -244,7 +244,7 @@ describe('raw-text embedding cache repository', () => {
         provider: 'openai-compatible',
         model: 'text-embedding-3-small',
         embeddingInputHash: firstHash,
-        vector: [0.1, 0.2, 0.3],
+        vector: [0.1, 0.2, 0.3].map(Math.fround),
         vectorDimension: 3,
       }),
     ])
@@ -262,7 +262,7 @@ describe('raw-text embedding cache repository', () => {
     })).toEqual([
       expect.objectContaining({
         embeddingInputHash: firstHash,
-        vector: [0.1, 0.2, 0.3],
+        vector: [0.1, 0.2, 0.3].map(Math.fround),
       }),
     ])
 
@@ -286,7 +286,7 @@ describe('raw-text embedding cache repository', () => {
       expect.objectContaining({
         branchId: 'novel_cache:draft',
         embeddingInputHash: thirdHash,
-        vector: [1.5, 1.6, 1.7],
+        vector: [1.5, 1.6, 1.7].map(Math.fround),
       }),
     ])
 
@@ -360,7 +360,7 @@ describe('raw-text embedding cache repository', () => {
           provider,
           model,
           embeddingInputHash,
-          vectorJson,
+          vectorBlob,
           vectorDimension,
           lastSeenAt,
           createdAt,
@@ -373,7 +373,7 @@ describe('raw-text embedding cache repository', () => {
       'openai-compatible',
       'text-embedding-3-small',
       corruptHash,
-      JSON.stringify([1, null, 3]),
+      new Uint8Array([0, 0, 128, 127, 0, 0, 0, 0, 0, 0, 64, 64]),
       3,
     )
 
@@ -544,7 +544,7 @@ describe('raw-text embedding cache repository', () => {
       scope,
       embeddingInputHashes: [retainedHash, removedHash],
     })).toEqual([
-      expect.objectContaining({ embeddingInputHash: retainedHash, vector: [0.1, 0.2, 0.3] }),
+      expect.objectContaining({ embeddingInputHash: retainedHash, vector: [0.1, 0.2, 0.3].map(Math.fround) }),
     ])
 
     const movedOriginal = {

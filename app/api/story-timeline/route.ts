@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { noStoreJson } from '@/lib/server/api-route'
+import { readJsonObject, apiRequestErrorResponse, noStoreJson } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { findStoryBranch, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { abortRecoverableRewriteJobsForDeletedTimelineNode } from '@/lib/server/recoverable-rewrite-jobs'
@@ -28,6 +28,8 @@ export async function GET(request: Request) {
     const payload = loadStoryTimeline(novelId, branchId, db)
     return noStoreJson(payload)
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return noStoreJson(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to load story timeline' },
       { status: 500 }
@@ -48,7 +50,7 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ ok: false, error: 'branchId is required' }, { status: 400 })
     }
 
-    const body = await request.json() as { nodeId?: unknown }
+    const body = await readJsonObject(request)
     const nodeId = typeof body.nodeId === 'string' ? body.nodeId.trim() : ''
     if (!nodeId) {
       return NextResponse.json({ ok: false, error: 'nodeId is required' }, { status: 400 })
@@ -75,6 +77,8 @@ export async function DELETE(request: Request) {
     deleteStoryTimelineNode(nodeId, db)
     return NextResponse.json({ ok: true, nodeId })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to delete story timeline node' },
       { status: 500 }

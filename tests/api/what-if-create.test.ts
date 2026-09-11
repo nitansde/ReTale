@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 import type { AISettings } from '@/lib/types'
 
-const EVIDENCE_DIR = path.join(process.cwd(), '.sisyphus/evidence/task-7-what-if')
+const EVIDENCE_DIR = process.env.TASK_EVIDENCE_DIR!
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDataDir = process.env.RETALE_DATA_DIR

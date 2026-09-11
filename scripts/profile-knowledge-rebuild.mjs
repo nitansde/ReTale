@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 
 const ROOT = process.cwd()
-const EVIDENCE_FILE = path.join(ROOT, '.sisyphus/evidence/task-9-profiling.json')
+const EVIDENCE_FILE = path.join(process.env.TASK_EVIDENCE_DIR || path.join(ROOT, '.sisyphus/evidence'), 'task-9-profiling.json')
 const FIXED_EXTRACTION_UNIT_MS = 150
 const FIXED_EMBEDDING_BATCH_MS = 60
 const REQUIRED_RUN_METRICS = [

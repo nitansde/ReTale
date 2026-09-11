@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { findSelectionSpan, inferSelectionRange, splitContextLines } from '@/lib/selection-range'
 import { buildChapterScopedGraphContext, buildGraphAwareContext } from '@/lib/server/graph-context'
 import { loadExplicitAuthoredContext, type ExplicitAuthoredContext } from '@/lib/server/authored-context'
 import { loadEntityStatesByEntityIds } from '@/lib/server/graph-store'
@@ -306,26 +307,6 @@ export function buildRoleplayContextBlock(messages: readonly RoleplayContextMess
 function selectWindow<T>(items: T[], start: number, end: number) {
   return items.slice(Math.max(0, start), Math.min(items.length, end))
 }
-
-function inferSelectionRange(lines: Array<{ lineNo: number; text: string }>, selectedText: string) {
-  const trimmed = selectedText.trim()
-  if (!trimmed) return { lineStart: null, lineEnd: null }
-
-  for (const line of lines) {
-    if (line.text.includes(trimmed) || trimmed.includes(line.text)) {
-      return { lineStart: line.lineNo, lineEnd: line.lineNo }
-    }
-  }
-
-  const fragments = trimmed.split(/\s+/).filter(Boolean).slice(0, 4)
-  const matched = lines.filter((line) => fragments.some((fragment) => fragment.length >= 2 && line.text.includes(fragment)))
-  if (!matched.length) return { lineStart: null, lineEnd: null }
-  return {
-    lineStart: matched[0].lineNo,
-    lineEnd: matched[matched.length - 1].lineNo,
-  }
-}
-
 function buildNeighborhoodText(lines: Array<{ lineNo: number; text: string }>, lineStart: number | null, lineEnd: number | null) {
   if (lineStart === null || lineEnd === null) {
     return lines.slice(0, 20).map((line) => `${line.lineNo}. ${line.text}`).join('\n')
@@ -335,51 +316,6 @@ function buildNeighborhoodText(lines: Array<{ lineNo: number; text: string }>, l
   const endIndex = Math.min(lines.length, lineEnd + 20)
   return selectWindow(lines, startIndex, endIndex).map((line) => `${line.lineNo}. ${line.text}`).join('\n')
 }
-
-function splitContextLines(text: string) {
-  return text.replace(/\r\n?/g, '\n').split('\n').map((line, index) => ({
-    lineNo: index + 1,
-    text: line,
-  }))
-}
-
-function findSelectionEndOffset(text: string, selectedText: string) {
-  const trimmedSelection = selectedText.trim()
-  if (!trimmedSelection) return null
-
-  const directIndex = text.indexOf(trimmedSelection)
-  if (directIndex >= 0) return directIndex + trimmedSelection.length
-
-  const normalizedCharacters: string[] = []
-  const originalOffsets: number[] = []
-  let pendingWhitespaceOffset: number | null = null
-
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index]
-    if (/\s/.test(character)) {
-      if (normalizedCharacters.length && pendingWhitespaceOffset === null) {
-        pendingWhitespaceOffset = index
-      }
-      continue
-    }
-
-    if (pendingWhitespaceOffset !== null) {
-      normalizedCharacters.push(' ')
-      originalOffsets.push(pendingWhitespaceOffset)
-      pendingWhitespaceOffset = null
-    }
-    normalizedCharacters.push(character)
-    originalOffsets.push(index)
-  }
-
-  const normalizedSelection = trimmedSelection.replace(/\s+/g, ' ')
-  const normalizedIndex = normalizedCharacters.join('').indexOf(normalizedSelection)
-  if (normalizedIndex < 0) return null
-
-  const normalizedEndIndex = normalizedIndex + normalizedSelection.length - 1
-  return (originalOffsets[normalizedEndIndex] ?? text.length - 1) + 1
-}
-
 function buildChapterTextThroughSelection(
   chapterText: string,
   selectedText: string,
@@ -388,7 +324,7 @@ function buildChapterTextThroughSelection(
   const normalizedChapterText = chapterText.replace(/\r\n?/g, '\n').trim()
   if (!normalizedChapterText) return '（当前章节暂无正文）'
 
-  const selectionEndOffset = findSelectionEndOffset(normalizedChapterText, selectedText)
+  const selectionEndOffset = findSelectionSpan(normalizedChapterText, selectedText)?.end ?? null
   if (selectionEndOffset !== null) {
     return normalizedChapterText.slice(0, selectionEndOffset).trimEnd()
   }
@@ -1295,82 +1231,70 @@ export async function buildGenerationContext(
       })
     : null
 
-  const [storedLines, recentChapters, entities, facts, events, worlds] = await Promise.all([
-    Promise.resolve(
-      queryAll<{ lineNo: number; text: string }>(
-        'SELECT lineNo, text FROM ChapterLine WHERE chapterId = ? ORDER BY lineNo ASC',
-        chapter.id
-      )
-    ),
-    Promise.resolve(
-      queryAll<{ chapterNo: number; title: string | null; rawText: string | null }>(
-        `
-          SELECT chapterNo, title, rawText
-          FROM KnowledgeChapter
-          WHERE novelId = ? AND branchId = ? AND chapterNo < ?
-          ORDER BY chapterNo DESC
-          LIMIT 5
-        `,
-        request.novelId,
-        branchId,
-        chapter.chapterNo
-      )
-    ),
-    Promise.resolve(loadEntitiesWithAliases(request.novelId, branchId, chapter.chapterNo)),
-    Promise.resolve(
-      queryAll<FactRow & { sourceChapter: number }>(
-        `
-          SELECT f.subjectEntityId, f.objectEntityId, f.predicate, f.valueJson, f.sourceChapter,
-                 se.canonicalName as subjectCanonicalName,
-                 oe.canonicalName as objectCanonicalName
-           FROM KnowledgeFact f
-           LEFT JOIN KnowledgeEntity se ON se.id = f.subjectEntityId
-           LEFT JOIN KnowledgeEntity oe ON oe.id = f.objectEntityId
-           WHERE f.novelId = ? AND f.branchId = ? AND f.validFromChapter <= ?
-            AND f.validUntilChapter > ?
-            AND f.status NOT IN ('rejected', 'outdated', 'potentially_stale')
-          ORDER BY f.sourceChapter DESC
-          LIMIT 30
-        `,
-        request.novelId,
-        branchId,
-        chapter.chapterNo,
-        chapter.chapterNo
-      )
-    ),
-    Promise.resolve(
-      queryAll<{ chapterNo: number; name: string; summary: string }>(
-        `
-          SELECT chapterNo, name, summary
-          FROM KnowledgeEvent
-          WHERE novelId = ? AND branchId = ? AND chapterNo <= ?
-            AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
-          ORDER BY importance DESC, chapterNo DESC
-          LIMIT 12
-        `,
-        request.novelId,
-        branchId,
-        chapter.chapterNo
-      )
-    ),
-    Promise.resolve(
-      queryAll<{ term: string; category: string | null; definition: string }>(
-        `
-           SELECT term, category, definition
-           FROM KnowledgeWorld
-           WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
-            AND validUntilChapter > ?
-            AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
-          ORDER BY firstSeenChapter ASC
-          LIMIT 12
-        `,
-        request.novelId,
-        branchId,
-        chapter.chapterNo,
-        chapter.chapterNo
-      )
-    ),
-  ])
+  const storedLines = queryAll<{ lineNo: number; text: string }>(
+    'SELECT lineNo, text FROM ChapterLine WHERE chapterId = ? ORDER BY lineNo ASC',
+    chapter.id
+  )
+  const recentChapters = queryAll<{ chapterNo: number; title: string | null; rawText: string | null }>(
+    `
+      SELECT chapterNo, title, rawText
+      FROM KnowledgeChapter
+      WHERE novelId = ? AND branchId = ? AND chapterNo < ?
+      ORDER BY chapterNo DESC
+      LIMIT 5
+    `,
+    request.novelId,
+    branchId,
+    chapter.chapterNo
+  )
+  const entities = loadEntitiesWithAliases(request.novelId, branchId, chapter.chapterNo)
+  const facts = queryAll<FactRow & { sourceChapter: number }>(
+    `
+      SELECT f.subjectEntityId, f.objectEntityId, f.predicate, f.valueJson, f.sourceChapter,
+             se.canonicalName as subjectCanonicalName,
+             oe.canonicalName as objectCanonicalName
+       FROM KnowledgeFact f
+       LEFT JOIN KnowledgeEntity se ON se.id = f.subjectEntityId
+       LEFT JOIN KnowledgeEntity oe ON oe.id = f.objectEntityId
+       WHERE f.novelId = ? AND f.branchId = ? AND f.validFromChapter <= ?
+        AND f.validUntilChapter > ?
+        AND f.status NOT IN ('rejected', 'outdated', 'potentially_stale')
+      ORDER BY f.sourceChapter DESC
+      LIMIT 30
+    `,
+    request.novelId,
+    branchId,
+    chapter.chapterNo,
+    chapter.chapterNo
+  )
+  const events = queryAll<{ chapterNo: number; name: string; summary: string }>(
+    `
+      SELECT chapterNo, name, summary
+      FROM KnowledgeEvent
+      WHERE novelId = ? AND branchId = ? AND chapterNo <= ?
+        AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+      ORDER BY importance DESC, chapterNo DESC
+      LIMIT 12
+    `,
+    request.novelId,
+    branchId,
+    chapter.chapterNo
+  )
+  const worlds = queryAll<{ term: string; category: string | null; definition: string }>(
+    `
+       SELECT term, category, definition
+       FROM KnowledgeWorld
+       WHERE novelId = ? AND branchId = ? AND validFromChapter <= ?
+        AND validUntilChapter > ?
+        AND status NOT IN ('rejected', 'outdated', 'potentially_stale')
+      ORDER BY firstSeenChapter ASC
+      LIMIT 12
+    `,
+    request.novelId,
+    branchId,
+    chapter.chapterNo,
+    chapter.chapterNo
+  )
 
   const storedChapterText = buildFullChapterText(chapter.rawText, storedLines)
   const sourceText = request.sourceText?.trim()

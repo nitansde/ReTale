@@ -1,5 +1,6 @@
+import { InputValidationError } from '@/lib/server/domain-errors'
 import { NextResponse } from 'next/server'
-import { isNotFoundErrorMessage, jsonError, readJsonObject, toErrorMessage } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES, jsonError, readJsonObject, toErrorMessage } from '@/lib/server/api-route'
 import { createFutureJumpRun } from '@/lib/server/future-jump-service'
 import type { FutureJumpCreateRequest, FutureJumpSourceContext } from '@/lib/story-branch-types'
 
@@ -16,13 +17,13 @@ function normalizeSourceContext(body: Record<string, unknown>): FutureJumpSource
     const record = nested as Record<string, unknown>
     const chapterNo = parsePositiveInteger(record.chapterNo)
     if (!chapterNo) {
-      throw new Error('sourceContext.chapterNo must be a positive integer')
+      throw new InputValidationError('sourceContext.chapterNo must be a positive integer')
     }
     const nodeType = typeof record.nodeType === 'string' && validNodeTypes.includes(record.nodeType as typeof validNodeTypes[number])
       ? record.nodeType as FutureJumpSourceContext['nodeType']
       : null
     if (!nodeType) {
-      throw new Error('sourceContext.nodeType is invalid')
+      throw new InputValidationError('sourceContext.nodeType is invalid')
     }
 
     return {
@@ -36,7 +37,7 @@ function normalizeSourceContext(body: Record<string, unknown>): FutureJumpSource
 
   const chapterNo = parsePositiveInteger(body.sourceChapterNo)
   if (!chapterNo) {
-    throw new Error('sourceContext.chapterNo must be a positive integer')
+    throw new InputValidationError('sourceContext.chapterNo must be a positive integer')
   }
 
   return {
@@ -56,7 +57,7 @@ function normalizeSourceContext(body: Record<string, unknown>): FutureJumpSource
 
 export async function POST(request: Request) {
   try {
-    const body = await readJsonObject(request)
+    const body = await readJsonObject(request, MAX_GENERATION_JSON_BODY_BYTES)
     const result = await createFutureJumpRun({
       novelId: String(body.novelId ?? ''),
       sourceContext: normalizeSourceContext(body),
@@ -68,7 +69,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result)
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     const message = toErrorMessage(error, 'Failed to create future jump run')
-    return jsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
+    return jsonError(message, 500)
   }
 }

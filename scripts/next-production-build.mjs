@@ -2,6 +2,7 @@ import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { buildKnowledgeWorker } from './build-knowledge-worker.mjs'
 import {
   computeNextProductionSourceFingerprint,
   writeNextProductionBuildProvenance,
@@ -29,6 +30,7 @@ export async function runNextProductionBuild(args = [], options = {}) {
       || 'tsconfig.build.json',
   }
   const source = computeNextProductionSourceFingerprint(repoRoot)
+  await (options.buildWorker ?? buildKnowledgeWorker)({ repoRoot })
   const spawnProcess = options.spawn ?? spawn
   const child = spawnProcess(process.execPath, [nextCli, ...buildNextProductionBuildArgs(args)], {
     cwd: repoRoot,

@@ -98,6 +98,33 @@ afterEach(() => {
   while (databases.length) databases.pop()?.close()
 })
 
+describe('generation selection boundaries', () => {
+  it('builds the neighborhood from the selected paragraphs past blank lines', async () => {
+    const { database, db } = createFixture()
+    insertEntity(database, 'opening-person', 'OpeningPerson')
+    insertEntity(database, 'nearby-person', 'NearbyPerson')
+    const sourceText = [
+      'OpeningPerson waits.', '',
+      ...Array.from({ length: 50 }, (_, index) => `Unrelated paragraph ${index}.`),
+      'NearbyPerson arrives.', '', 'The letter opens.', 'Unselected ending.',
+    ].join('\n')
+    const result = await runWithDatabaseAccessScope(db, () => buildGenerationContext(buildRequest({
+      sourceText,
+      selectedText: 'NearbyPerson arrives.\n\nThe letter opens.',
+      branchContextNodeId: undefined,
+      userInstruction: 'Rewrite the selected passage',
+    })))
+    expect(result.selectedLineStart).toBe(53)
+    expect(result.selectedLineEnd).toBe(55)
+    const characters = result.promptBlocks.find((block) => block.id === 'characters')?.content
+    expect(characters).toContain('NearbyPerson')
+    expect(characters).not.toContain('OpeningPerson')
+    const prefix = result.promptBlocks.find((block) => block.id === 'neighborhood')?.content
+    expect(prefix).toContain('The letter opens.')
+    expect(prefix).not.toContain('Unselected ending.')
+  })
+})
+
 describe('chapter-scoped GraphRAG seeds', () => {
   it('reuses every resolved chapter character from EntityMention and EntityAppearance without a five/eight entity cap', async () => {
     const { database, db } = createFixture()

@@ -1,3 +1,6 @@
+import { assertDatabaseTransactionAccess, beginSqliteTransaction, getDatabaseTransactionKey, observeOutwardNestedTransaction, runSerializedDatabaseTransaction } from '@/lib/server/database-transactions'
+import { isSqliteLockError, runWithSqliteBusyRetry } from '@/lib/server/sqlite-busy'
+export { isSqliteLockError, runWithSqliteBusyRetry } from '@/lib/server/sqlite-busy'
 import fs from 'node:fs'
 import path from 'node:path'
 import type * as NodeSqlite from 'node:sqlite'
@@ -55,55 +58,6 @@ const { DatabaseSync } = loadNodeSqlite()
 
 export const SQLITE_BUSY_TIMEOUT_MS = 15_000
 const SQLITE_WAL_ATTEMPT_BUSY_TIMEOUT_MS = 250
-const SQLITE_BUSY_RETRY_DELAYS_MS = [25, 50, 100, 200] as const
-
-function getErrorCode(error: unknown) {
-  if (typeof error !== 'object' || error === null || !('code' in error)) {
-    return ''
-  }
-
-  const code = (error as { code?: unknown }).code
-  return typeof code === 'string' ? code : ''
-}
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error)
-}
-
-export function isSqliteLockError(error: unknown) {
-  const code = getErrorCode(error)
-  if (code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED') {
-    return true
-  }
-
-  const message = getErrorMessage(error).toLowerCase()
-  return message.includes('database is locked')
-    || message.includes('database table is locked')
-    || message.includes('sqlite_busy')
-    || message.includes('sqlite_locked')
-}
-
-function sleepSync(ms: number) {
-  if (ms <= 0) return
-  const buffer = new SharedArrayBuffer(4)
-  Atomics.wait(new Int32Array(buffer), 0, 0, ms)
-}
-
-export function runWithSqliteBusyRetry<T>(operation: () => T, options: { delaysMs?: readonly number[] } = {}) {
-  const delaysMs = options.delaysMs ?? SQLITE_BUSY_RETRY_DELAYS_MS
-  for (let attempt = 0; attempt <= delaysMs.length; attempt += 1) {
-    try {
-      return operation()
-    } catch (error) {
-      if (!isSqliteLockError(error) || attempt === delaysMs.length) {
-        throw error
-      }
-      sleepSync(delaysMs[attempt])
-    }
-  }
-
-  throw new Error('SQLite busy retry exhausted')
-}
 
 function resolveDatabasePath(databaseUrl: string) {
   if (databaseUrl === ':memory:') return databaseUrl
@@ -166,6 +120,13 @@ export function initializeDatabase(database: DatabaseSync, options: InitializeDa
     execWithBusyRetry(database, schemaSql)
     runControlMigrations(database)
     return database
+  }
+
+  if (tableExists(database, 'RawTextEmbeddingCache') && (
+    tableHasColumns(database, 'RawTextEmbeddingCache', ['vectorJson'])
+    || !tableHasColumns(database, 'RawTextEmbeddingCache', ['vectorBlob'])
+  )) {
+    throw new Error('Embedding cache requires offline migration. Stop the server, back up the database, then run storage:migrate-vectors with --apply --retire-json until complete and --apply --finalize before restarting.')
   }
 
   const migrationPlan = getBootMigrationPlan(database)
@@ -884,6 +845,7 @@ function bootSchemaIsCurrent(database: DatabaseSync) {
     'output_schema_version',
   ])
     && tableHasColumns(database, 'PendingRetrievalIndex', ['rebuildFingerprint'])
+    && tableHasColumns(database, 'RawTextEmbeddingCache', ['vectorBlob'])
     && tableHasColumns(database, 'chapter_extraction_candidates', ['processing_batch_id', 'processing_result_json'])
     && tableExists(database, 'chapter_extraction_processing_batches')
     && tableHasColumns(database, 'character_candidates', [
@@ -1330,34 +1292,30 @@ function createLazyDatabaseProxy(): DatabaseSync {
 export const sqlite = createLazyDatabaseProxy()
 
 export function execute(sql: string, ...params: SqlParam[]) {
+  assertDatabaseTransactionAccess(getSingletonDatabase())
   return runWithSqliteBusyRetry(() => sqlite.prepare(sql).run(...params))
 }
 
 export function queryOne<T>(sql: string, ...params: SqlParam[]) {
+  assertDatabaseTransactionAccess(getSingletonDatabase())
   const row = runWithSqliteBusyRetry(() => sqlite.prepare(sql).get(...params))
   return (row ?? null) as T | null
 }
 
 export function queryAll<T>(sql: string, ...params: SqlParam[]) {
+  assertDatabaseTransactionAccess(getSingletonDatabase())
   return runWithSqliteBusyRetry(() => sqlite.prepare(sql).all(...params)) as T[]
 }
 
-export async function withTransaction<T>(callback: () => T | Promise<T>) {
-  execute('BEGIN IMMEDIATE')
-  try {
-    const result = await callback()
-    execute('COMMIT')
-    return result
-  } catch (error) {
-    try {
-      execute('ROLLBACK')
-    } catch (rollbackError) {
-      if (!isSqliteLockError(rollbackError)) {
-        console.warn('SQLite rollback failed after transaction error.', rollbackError)
-      }
-    }
-    throw error
-  }
+export function withTransaction<T>(callback: () => T | Promise<T>) {
+  const database = getSingletonDatabase()
+  const transactionKey = getDatabaseTransactionKey(database)
+  return observeOutwardNestedTransaction(transactionKey, runSerializedDatabaseTransaction(
+    transactionKey,
+    (sql) => database.prepare(sql).run(),
+    callback,
+    () => beginSqliteTransaction(database),
+  ))
 }
 
 export type { SqlParam }

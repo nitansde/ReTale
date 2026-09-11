@@ -252,7 +252,7 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
         continue
       }
 
-      if (current.sourceHash === sourceHash && current.chapterNo === chapterNo && current.title === chapter.title) {
+      if (current.rawText === rawText && current.sourceHash === sourceHash && current.chapterNo === chapterNo && current.title === chapter.title) {
         await db.withTransaction(() => {
           ensureKnowledgeChapterDerivedArtifacts({
             id: current.id,
@@ -277,7 +277,7 @@ async function performWorkspacePayloadToKnowledgeStoreSync(
           chapter.title,
           rawText,
           sourceHash,
-          current.sourceHash === sourceHash ? current.revision : current.revision + 1,
+          current.sourceHash === sourceHash && current.rawText === rawText ? current.revision : current.revision + 1,
           chapter.id,
         )
         replaceKnowledgeChapterDerivedArtifacts({

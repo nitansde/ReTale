@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { assertOwnedTestPath, createOwnedTestRoot } from './test-path-safety.mjs'
+import { resolveTestWorkers } from './vitest-file-runtime.mjs'
 
 const ROOT = process.cwd()
 const EVIDENCE_ROOT = path.join(ROOT, '.sisyphus/evidence/task-1-test-harness')
@@ -9,6 +10,7 @@ const TEST_RUNS_ROOT = path.join(ROOT, 'tests', '.runtime', 'test-runs')
 
 const suite = process.argv[2]
 const selector = process.argv[3] ?? 'all'
+const workers = resolveTestWorkers()
 
 if (!suite || !['unit', 'api'].includes(suite)) {
   console.error(`Unknown Vitest suite: ${suite ?? '<missing>'}`)
@@ -71,9 +73,10 @@ const tempDir = assertOwnedTestPath(testRoot, path.join(testRoot, 'tmp'), {
 fs.closeSync(fs.openSync(sourceDbPath, 'wx'))
 fs.mkdirSync(tempDir, { recursive: true })
 
-const outputFile = path.join(EVIDENCE_ROOT, `${suite}-report.json`)
+const outputFile = path.join(testRoot, `${suite}-report.json`)
 
 console.log(`[retale-vitest] Owned test root ${testRoot}`)
+console.log(`[retale-vitest] Up to ${workers} concurrent files; each file gets an isolated runtime`)
 console.log(`[retale-vitest] Dedicated source test DB ${sourceDbPath}`)
 console.log(`[retale-vitest] Runtime DATABASE_URL=file:${runtimeDbPath}`)
 console.log(`[retale-vitest] Runtime RETALE_DATA_DIR=${dataDir}`)
@@ -88,6 +91,7 @@ const result = spawnSync(
       ...process.env,
       NODE_OPTIONS: [process.env.NODE_OPTIONS, '--no-experimental-webstorage'].filter(Boolean).join(' '),
       RETALE_TEST_ROOT: testRoot,
+      RETALE_TEST_SUITE_ROOT: testRoot,
       RETALE_TEST_SOURCE_DB_PATH: sourceDbPath,
       DATABASE_URL: `file:${runtimeDbPath}`,
       RETALE_DATA_DIR: dataDir,
@@ -100,4 +104,11 @@ const result = spawnSync(
   }
 )
 
+// Keep the historical latest-report location for tooling; each run retains its
+// own authoritative report even when multiple suites run concurrently.
+if (fs.existsSync(outputFile)) {
+  const latestTemp = path.join(EVIDENCE_ROOT, `${suite}-report-${process.pid}.json`)
+  fs.copyFileSync(outputFile, latestTemp)
+  fs.renameSync(latestTemp, path.join(EVIDENCE_ROOT, `${suite}-report.json`))
+}
 process.exit(result.status ?? 1)

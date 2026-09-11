@@ -72,7 +72,9 @@ export function scheduleKnowledgeWorkerProcess(params: ScheduleKnowledgeWorkerPa
   ], {
     cwd: process.cwd(),
     detached: true,
-    stdio: 'ignore',
+    // The worker rotates its own diagnostics and survives the server exiting.
+    // Inherited stderr also exposes failures before its logger can initialize.
+    stdio: ['ignore', 'ignore', 'inherit'],
     env: {
       ...process.env,
       RETALE_KNOWLEDGE_WORKER: '1',
@@ -86,7 +88,10 @@ export function scheduleKnowledgeWorkerProcess(params: ScheduleKnowledgeWorkerPa
 
   scheduledWorkerJobs.add(workerKey)
   child.once('exit', () => scheduledWorkerJobs.delete(workerKey))
-  child.once('error', () => scheduledWorkerJobs.delete(workerKey))
+  child.once('error', (error) => {
+    scheduledWorkerJobs.delete(workerKey)
+    console.error(`Failed to spawn knowledge worker ${jobId}:`, error)
+  })
   child.unref()
   return true
 }

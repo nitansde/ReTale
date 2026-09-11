@@ -1,3 +1,5 @@
+import { formatProgressMessage } from '@/lib/i18n/progress-message'
+import { tm } from '@/lib/i18n/messages'
 import type {
   KnowledgeChapterCoverageOverview,
   KnowledgeRebuildStatus,
@@ -94,6 +96,7 @@ function operationPriority(status: string) {
 function resolveOperation(
   topLevelJob: KnowledgeRebuildStatus | null | undefined,
   retrievalTask: KnowledgeRebuildStatus | null | undefined,
+  translate: typeof tm,
 ): WorkspaceKnowledgeOperation | null {
   const jobs = [topLevelJob, retrievalTask]
     .filter((job): job is KnowledgeRebuildStatus => Boolean(job))
@@ -104,7 +107,7 @@ function resolveOperation(
   if (!job) return null
 
   const activeStep = job.steps.find((step) => step.status === 'running') ?? null
-  const phaseLabel = activeStep?.detail?.trim() || activeStep?.label || job.currentStep?.trim() || null
+  const phaseLabel = formatProgressMessage(activeStep?.detail?.trim() || activeStep?.label || job.currentStep, translate)
   let progressPercent: number | null = null
   let progressSource: WorkspaceKnowledgeOperation['progressSource'] = null
 
@@ -131,13 +134,13 @@ function resolveOperation(
 export function mapWorkspaceKnowledgeStatus(input: {
   overview: KnowledgeStatusOverview | null
   job?: KnowledgeRebuildStatus | null
-}): WorkspaceKnowledgeStatus {
+}, translate = tm): WorkspaceKnowledgeStatus {
   const analysis = mapAnalysisStatus(input.overview)
   const search = mapSearchStatus(input.overview)
   const analysisResultsUsable = analysis !== 'not_ready'
   const searchResultsUsable = search === 'partial' || search === 'ready'
   const searchMayBeStale = analysis === 'ready' && search !== 'ready'
-  const operation = resolveOperation(input.job, input.overview?.retrievalIndex.task)
+  const operation = resolveOperation(input.job, input.overview?.retrievalIndex.task, translate)
 
   let overall: WorkspaceKnowledgeOverallStatus
   if (!input.overview) {

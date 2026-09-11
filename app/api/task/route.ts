@@ -1,3 +1,4 @@
+import { readJsonObject, apiRequestErrorResponse } from '@/lib/server/api-route'
 import { NextResponse } from 'next/server'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { abortBackgroundTask, listActiveBackgroundTasks } from '@/lib/server/background-tasks'
@@ -25,6 +26,8 @@ export async function GET(request: Request) {
       }
     )
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to load background tasks' },
       { status: 500, headers: NO_STORE_HEADERS }
@@ -34,7 +37,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as unknown
+    const body = await readJsonObject(request)
     const jobId = body && typeof body === 'object' && !Array.isArray(body)
       ? typeof (body as { jobId?: unknown }).jobId === 'string'
         ? (body as { jobId: string }).jobId.trim()
@@ -60,6 +63,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result, { headers: NO_STORE_HEADERS })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to abort background task' },
       { status: 500, headers: NO_STORE_HEADERS }

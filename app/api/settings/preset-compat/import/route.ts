@@ -1,3 +1,4 @@
+import { readJsonObject, apiRequestErrorResponse, MAX_PRESET_JSON_BODY_BYTES } from '@/lib/server/api-route'
 import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import {
@@ -112,7 +113,7 @@ function assignNonDestructiveRegexIds(
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json().catch(() => null)
+    const body = await readJsonObject(request, MAX_PRESET_JSON_BODY_BYTES)
     if (!isRecord(body)) {
       return NextResponse.json({ ok: false, error: 'invalid_json_body' }, { status: 400 })
     }
@@ -226,7 +227,10 @@ export async function POST(request: Request) {
       importedIds: normalizedRegexes.map((regexRecord) => regexRecord.id),
       warnings: normalized.warnings,
     })
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Invalid JSON body') return NextResponse.json({ ok: false, error: 'invalid_json_body' }, { status: 400 })
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return NextResponse.json({ ok: false, error: 'failed_to_import_preset_compat_payload' }, { status: 500 })
   }
 }

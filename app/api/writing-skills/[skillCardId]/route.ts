@@ -1,4 +1,4 @@
-import { jsonError, noStoreJson, readJsonObject } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, jsonError, noStoreJson, readJsonObject } from '@/lib/server/api-route'
 import {
   refreshWritingSkillCardStaleness,
   resolveWritingSkillCardDetail,
@@ -52,6 +52,8 @@ export async function PATCH(request: Request, context: Context) {
     })
     return noStoreJson({ ok: true, card: resolveWritingSkillCardDetail({ cardId: skillCardId }) })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return jsonError(error instanceof Error ? error.message : 'Failed to update writing skill card', 400)
   }
 }
@@ -63,6 +65,8 @@ export async function DELETE(_request: Request, context: Context) {
       ? noStoreJson({ ok: true })
       : jsonError('写作技巧卡不存在', 404)
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return jsonError(error instanceof Error ? error.message : 'Failed to delete writing skill card', 400)
   }
 }

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { progressMessage } from '@/lib/i18n/progress-message'
 import type { ComponentProps } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -236,12 +237,12 @@ describe('WorkspaceKnowledgeControls durable cache cards', () => {
       jobType: 'extract_chapter_knowledge' as const,
       status: 'running',
       progress: 0.95,
-      currentStep: 'global phase',
+      currentStep: progressMessage('progress.extractChapter', { chapter: 7 }),
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
       etaMinutes: 2,
       steps: [
-        { key: 'extract' as const, label: 'Extract', status: 'running' as const, progress: 0.41, etaMinutes: 2, detail: 'Technical extraction detail' },
+        { key: 'extract' as const, label: 'Extract', status: 'running' as const, progress: 0.41, etaMinutes: 2, detail: progressMessage('progress.extractBatch', { remaining: 12, batch: 3, concurrency: 2 }) },
         { key: 'write' as const, label: 'Write', status: 'pending' as const, progress: 0, etaMinutes: null, detail: null },
       ],
     }
@@ -256,11 +257,13 @@ describe('WorkspaceKnowledgeControls durable cache cards', () => {
     const progress = screen.getByRole('progressbar')
     expect(progress).toHaveAttribute('aria-valuenow', '41')
     expect(screen.getAllByRole('progressbar')).toHaveLength(1)
-    expect(screen.getByTestId('workspace-knowledge-status')).not.toHaveTextContent('Technical extraction detail')
+    expect(screen.getByTestId('workspace-knowledge-status')).not.toHaveTextContent('progress.extractBatch')
 
     fireEvent.click(screen.getByRole('button', { name: /workspace.knowledge.status.advancedDetails/ }))
     expect(screen.getAllByRole('progressbar')).toHaveLength(1)
-    expect(screen.getByTestId('workspace-knowledge-advanced-details')).toHaveTextContent('Technical extraction detail')
+    expect(screen.getByTestId('workspace-knowledge-advanced-details')).toHaveTextContent('progress.extractBatch')
+    expect(screen.getByTestId('workspace-knowledge-advanced-details')).toHaveTextContent('progress.extractChapter')
+    expect(screen.getByTestId('workspace-knowledge-advanced-details')).not.toHaveTextContent('@retale-progress:')
     expect(screen.getByTestId('workspace-knowledge-advanced-details')).toHaveTextContent('workspace.knowledge.status.maintenanceEyebrow')
   })
 

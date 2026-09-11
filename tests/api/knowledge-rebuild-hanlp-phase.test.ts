@@ -1,3 +1,4 @@
+import { parseProgressMessage } from '@/lib/i18n/progress-message'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -372,7 +373,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
       pendingChapterIds: ['chapter-3'],
       extractedChapters: [{ chapterId: 'chapter-1' }, { chapterId: 'chapter-2' }],
     })
-    expect(firstWriteJob?.currentStep).toContain('第 1 章知识')
+    expect(parseProgressMessage(firstWriteJob?.currentStep)).toEqual({ key: 'progress.writeChapter', values: { chapter: 1 } })
     expect(firstWriteJob?.progress).toBeCloseTo(0.1 + (2 / 3) * 0.7)
     expect(firstWritePayload.steps?.find((step) => step.key === 'write')).toMatchObject({ status: 'running', progress: 0 })
     expect(queryOne<{ knowledgeStatus: string }>('SELECT knowledgeStatus FROM KnowledgeChapter WHERE id = ?', 'chapter-1')?.knowledgeStatus).toBe('stale')
@@ -1103,7 +1104,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
     const rebuildPromise = rebuildKnowledgeForNovel({ novelId })
 
     await waitForCondition(
-      () => Boolean(queryOne<{ currentStep: string | null }>('SELECT currentStep FROM KnowledgeJob WHERE novelId = ?', novelId)?.currentStep?.includes('HanLP')),
+      () => Boolean(parseProgressMessage(queryOne<{ currentStep: string | null }>('SELECT currentStep FROM KnowledgeJob WHERE novelId = ?', novelId)?.currentStep)?.key.startsWith('progress.hanlp')),
       'HanLP current step'
     )
 
@@ -1180,7 +1181,7 @@ describe('knowledge rebuild HanLP orchestration', () => {
     const rebuildPromise = rebuildKnowledgeForNovel({ novelId })
 
     await waitForCondition(
-      () => Boolean(queryOne<{ currentStep: string | null }>('SELECT currentStep FROM KnowledgeJob WHERE novelId = ?', novelId)?.currentStep?.includes('HanLP')),
+      () => Boolean(parseProgressMessage(queryOne<{ currentStep: string | null }>('SELECT currentStep FROM KnowledgeJob WHERE novelId = ?', novelId)?.currentStep)?.key.startsWith('progress.hanlp')),
       'HanLP current step'
     )
 

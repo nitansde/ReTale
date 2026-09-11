@@ -20,6 +20,7 @@
 
 # production
 /build
+/.retale-worker/
 
 # misc
 .DS_Store

@@ -14,8 +14,7 @@ import { getSourceDbPath } from '@/tests/helpers/temp-db'
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
 
-const ROOT = process.cwd()
-const EVIDENCE_DIR = path.join(ROOT, '.sisyphus/evidence/task-2-authored-schema')
+const EVIDENCE_DIR = process.env.TASK_EVIDENCE_DIR!
 
 const createdDirectories: string[] = []
 

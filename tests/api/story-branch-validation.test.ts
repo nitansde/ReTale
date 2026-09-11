@@ -9,7 +9,7 @@ import {
   whatIfSessionCreateSchema,
 } from '@/lib/server/story-branch-contracts'
 
-const EVIDENCE_DIR = path.join(process.cwd(), '.sisyphus/evidence/task-3-store-contracts')
+const EVIDENCE_DIR = process.env.TASK_EVIDENCE_DIR!
 
 describe('story branch validation contracts', () => {
   it('rejects malformed what-if and future-jump payloads', () => {

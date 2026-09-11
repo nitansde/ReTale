@@ -1,5 +1,7 @@
+import { progressMessage } from '@/lib/i18n/progress-message'
 import { describe, expect, it } from 'vitest'
 import { mapWorkspaceKnowledgeStatus } from '@/components/workspace/workspace-knowledge-status'
+import { getMessage } from '@/lib/i18n/messages'
 import type { KnowledgeRebuildStatus, KnowledgeStatusOverview } from '@/components/workspace/selection-novel-studio-helpers'
 
 const coverage = {
@@ -41,6 +43,14 @@ function job(
 }
 
 describe('mapWorkspaceKnowledgeStatus', () => {
+  it('uses the supplied locale for stored progress independently of browser document state', () => {
+    const input = { overview: null, job: job('extract_chapter_knowledge', 'running', { currentStep: progressMessage('progress.extract') }) }
+    expect(mapWorkspaceKnowledgeStatus(input, (key, values) => getMessage('en', key, values)).operation?.phaseLabel)
+      .toBe('Extracting chapter knowledge')
+    expect(mapWorkspaceKnowledgeStatus(input, (key, values) => getMessage('zh', key, values)).operation?.phaseLabel)
+      .toBe('抽取章节知识')
+  })
+
   it('returns loading only while the durable overview has not loaded', () => {
     expect(mapWorkspaceKnowledgeStatus({ overview: null, job: job('extract_chapter_knowledge', 'running') })).toMatchObject({
       overall: 'loading', analysis: 'not_ready', search: 'not_ready', operation: { stage: 'analysis', status: 'running' },

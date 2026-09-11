@@ -1,9 +1,10 @@
+import { jsonError, readJsonObject, apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES } from '@/lib/server/api-route'
 import { NextResponse } from 'next/server'
 import { createWhatIfSessionFromRewrite } from '@/lib/server/what-if-service'
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json()
+    const body = await readJsonObject(request, MAX_GENERATION_JSON_BODY_BYTES)
     const result = await createWhatIfSessionFromRewrite({
       novelId: String(body.novelId ?? ''),
       branchId: String(body.branchId ?? ''),
@@ -20,7 +21,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result)
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     const message = error instanceof Error ? error.message : 'Failed to create what-if session'
-    return NextResponse.json({ error: message }, { status: 400 })
+    return jsonError(message, 500)
   }
 }

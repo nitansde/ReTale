@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { jsonError, readJsonObject } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, jsonError, readJsonObject } from '@/lib/server/api-route'
 import type { AIScenarioKey } from '@/lib/types'
 import { listAvailableOpenAICompatibleModels } from '@/lib/server/openai-compatible'
 
@@ -21,6 +21,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, ...result })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return jsonError(error instanceof Error ? error.message : 'Failed to list OpenAI-compatible models', 500)
   }
 }

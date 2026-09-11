@@ -1,3 +1,5 @@
+import { InputValidationError, ResourceNotFoundError } from '@/lib/server/domain-errors'
+import { parseRequestInput } from '@/lib/server/request-validation'
 import { roleplayMessageCreateSchema, roleplaySessionCreateSchema } from '@/lib/server/story-branch-contracts'
 import { createStoryTimelineNode, findStoryTimelineNodeByRoleplaySessionId, getNextStoryTimelineLabelIndex } from '@/lib/server/story-timeline-store'
 import {
@@ -139,10 +141,10 @@ function assertMessageBelongsToSession(messageId: string | null | undefined, ses
   if (!messageId) return null
   const message = findRoleplayMessageById(messageId, db)
   if (!message) {
-    throw new Error(`${label} not found: ${messageId}`)
+    throw new ResourceNotFoundError(`${label} not found: ${messageId}`)
   }
   if (message.sessionId !== sessionId) {
-    throw new Error(`${label} does not belong to roleplay session: ${messageId}`)
+    throw new ResourceNotFoundError(`${label} does not belong to roleplay session: ${messageId}`)
   }
   return message
 }
@@ -175,7 +177,7 @@ export async function createRoleplaySession(
   rawInput: Omit<RoleplaySessionRecord, 'createdAt' | 'updatedAt'>,
   db: Db = defaultDb
 ) {
-  const input = roleplaySessionCreateSchema.parse(rawInput)
+  const input = parseRequestInput(roleplaySessionCreateSchema, rawInput)
   const timelineNodeId = uid('timeline-node')
 
   await db.withTransaction(async () => {
@@ -261,7 +263,7 @@ export async function appendRoleplayMessage(
   return db.withTransaction(() => {
     const session = findRoleplaySessionById(rawInput.sessionId, db)
     if (!session) {
-      throw new Error(`Roleplay session not found: ${rawInput.sessionId}`)
+      throw new ResourceNotFoundError(`Roleplay session not found: ${rawInput.sessionId}`)
     }
 
     const validatedParent = assertMessageBelongsToSession(rawInput.parentMessageId, rawInput.sessionId, 'Parent message', db)
@@ -274,7 +276,7 @@ export async function appendRoleplayMessage(
       'SELECT COALESCE(MAX(turn_index), 0) + 1 AS next_turn_index FROM roleplay_messages WHERE session_id = ?',
       rawInput.sessionId
     )
-    const input = roleplayMessageCreateSchema.parse({
+    const input = parseRequestInput(roleplayMessageCreateSchema, {
       ...rawInput,
       messageIndex: rawInput.messageIndex ?? nextMessageIndexRow?.next_message_index ?? 1,
       turnIndex: rawInput.turnIndex ?? nextTurnIndexRow?.next_turn_index ?? 1,
@@ -306,15 +308,15 @@ export async function createRoleplayLatestTurnVariant(
   return db.withTransaction(() => {
     const session = findRoleplaySessionById(input.sessionId, db)
     if (!session) {
-      throw new Error(`Roleplay session not found: ${input.sessionId}`)
+      throw new ResourceNotFoundError(`Roleplay session not found: ${input.sessionId}`)
     }
 
     const latestMessage = session.messages.at(-1)
     if (!latestMessage) {
-      throw new Error(`Cannot create latest-turn variant without messages: ${input.sessionId}`)
+      throw new InputValidationError(`Cannot create latest-turn variant without messages: ${input.sessionId}`)
     }
     if (input.role !== latestMessage.role) {
-      throw new Error(`Latest-turn variant role must match latest message role: expected ${latestMessage.role}`)
+      throw new InputValidationError(`Latest-turn variant role must match latest message role: expected ${latestMessage.role}`)
     }
 
     const variantGroupId = latestMessage.variantGroupId ?? uid('roleplay-variant-group')
@@ -344,7 +346,7 @@ export async function createRoleplayLatestTurnVariant(
     const forkedFromMessageId = input.forkedFromMessageId ?? latestMessage.id
     const validatedParent = assertMessageBelongsToSession(parentMessageId, input.sessionId, 'Parent message', db)
     const validatedFork = assertMessageBelongsToSession(forkedFromMessageId, input.sessionId, 'Fork source message', db)
-    const variantInput = roleplayMessageCreateSchema.parse({
+    const variantInput = parseRequestInput(roleplayMessageCreateSchema, {
       id: uid('roleplay-message'),
       sessionId: input.sessionId,
       messageIndex: nextMessageIndexRow?.next_message_index ?? latestMessage.messageIndex + 1,

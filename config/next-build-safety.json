@@ -20,24 +20,23 @@
       "minimumManifestCount": 1
     },
     {
+      "path": "scripts/worker-diagnostics.mjs",
+      "minimumManifestCount": 1
+    },
+    {
       "pathPattern": "node_modules/@lancedb/lancedb-*/lancedb.*.node",
       "minimumManifestCount": 1
     },
     {
-      "path": "node_modules/typescript/package.json",
+      "path": ".retale-worker/knowledge-worker-runtime.mjs",
       "minimumManifestCount": 1,
-      "maximumManifestCount": 1,
       "requiredManifestPatterns": [
         "server/app/api/knowledge-view/route.js.nft.json"
       ]
     },
     {
-      "path": "node_modules/typescript/lib/typescript.js",
-      "minimumManifestCount": 1,
-      "maximumManifestCount": 1,
-      "requiredManifestPatterns": [
-        "server/app/api/knowledge-view/route.js.nft.json"
-      ]
+      "path": ".retale-worker/knowledge-worker-runtime.mjs.map",
+      "minimumManifestCount": 1
     }
   ]
 }

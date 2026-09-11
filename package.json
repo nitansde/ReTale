@@ -2,6 +2,12 @@
   "name": "retale",
   "version": "0.1.0",
   "private": true,
+  "imports": {
+    "#html-entity-decoder": {
+      "browser": "./lib/html-entity-decoder.browser.ts",
+      "default": "./lib/html-entity-decoder.server.ts"
+    }
+  },
   "engines": {
     "node": ">=22.15.0"
   },
@@ -11,6 +17,11 @@
     "dev:prod": "node scripts/next-dev.mjs",
     "dev:test": "node scripts/next-test-server.mjs",
     "knowledge:worker": "node scripts/knowledge-worker.mjs",
+    "storage:migrate-progress": "node --experimental-strip-types scripts/progress-message-migration.mjs",
+    "storage:apply-retention": "node --experimental-strip-types scripts/apply-storage-retention.mjs",
+    "storage:preview": "node --experimental-strip-types scripts/preview-storage-maintenance.mjs",
+    "storage:migrate-vectors": "node --experimental-strip-types scripts/migrate-embedding-cache.mjs",
+    "storage:repair-text": "node scripts/repair-persisted-text.mjs",
     "server:prod": "npm run build && node scripts/next-production-start.mjs",
     "server:test": "node scripts/next-test-server.mjs",
     "build": "node scripts/next-production-build.mjs",
@@ -26,7 +37,8 @@
     "check:next-build-safety": "node scripts/verify-next-build-safety.mjs --evidence-dir .sisyphus/evidence/next-build-safety",
     "verify:workspace-import": "node scripts/verify-workspace-import.mjs",
     "verify:production-freshness": "node scripts/verify-production-freshness.mjs",
-    "setup:hanlp": "node scripts/setup-hanlp-runtime.mjs --smoke"
+    "setup:hanlp": "node scripts/setup-hanlp-runtime.mjs --smoke",
+    "build:worker": "node scripts/build-knowledge-worker.mjs"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.27.2",
@@ -34,6 +46,7 @@
     "@tiptap/starter-kit": "^3.23.1",
     "@xyflow/react": "^12.10.2",
     "clsx": "^2.1.1",
+    "entities": "^6.0.1",
     "lucide-react": "^1.14.0",
     "next": "16.3.0",
     "react": "19.2.4",
@@ -51,6 +64,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "esbuild": "^0.27.7",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
     "jsdom": "^26.1.0",

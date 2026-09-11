@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 
-const EVIDENCE_DIR = path.join(process.cwd(), '.sisyphus/evidence/task-3-continue-block-service')
+const EVIDENCE_DIR = process.env.TASK_EVIDENCE_DIR!
 const cleanups: Array<() => void> = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 const originalDataDir = process.env.RETALE_DATA_DIR

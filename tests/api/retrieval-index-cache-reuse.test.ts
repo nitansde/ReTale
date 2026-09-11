@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { decodeEmbeddingVector, encodeEmbeddingVector } from '@/lib/server/embedding-vector'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LOCAL_EMBEDDING_BASE_URL } from '@/lib/local-embedding'
 import type { EmbeddingsScenarioSettings } from '@/lib/types'
@@ -860,8 +861,8 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(warmStoredRows.find((row) => row.id === chapterSummaryDoc!.id)?.vector).toEqual([7, 7, 7])
 
     database.prepare('DELETE FROM RawTextEmbeddingCache WHERE embeddingInputHash = ?').run(packedHash)
-    database.prepare('UPDATE RawTextEmbeddingCache SET vectorJson = ?, vectorDimension = ? WHERE embeddingInputHash = ?')
-      .run(JSON.stringify([1, 1]), 2, sceneHash)
+    database.prepare('UPDATE RawTextEmbeddingCache SET vectorBlob = ?, vectorDimension = ? WHERE embeddingInputHash = ?')
+      .run(encodeEmbeddingVector([1, 1]), 2, sceneHash)
 
     embedTextsWithOllama.mockClear()
     mockLanceDb.database.createTable.mockClear()
@@ -876,15 +877,15 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(embedTextsWithOllama.mock.calls[1]?.[0]).toEqual([sceneInput])
 
     const repairedSceneRow = database.prepare(
-      'SELECT vectorJson, vectorDimension FROM RawTextEmbeddingCache WHERE embeddingInputHash = ?'
-    ).get(sceneHash) as { vectorJson: string; vectorDimension: number } | undefined
+      'SELECT vectorBlob, vectorDimension FROM RawTextEmbeddingCache WHERE embeddingInputHash = ?'
+    ).get(sceneHash) as { vectorBlob: Uint8Array; vectorDimension: number } | undefined
     expect(repairedSceneRow).toBeTruthy()
     expect(repairedSceneRow?.vectorDimension).toBe(3)
-    expect(JSON.parse(repairedSceneRow!.vectorJson)).toEqual([3, 3, 3])
+    expect(decodeEmbeddingVector(repairedSceneRow!.vectorBlob, repairedSceneRow!.vectorDimension)).toEqual([3, 3, 3])
 
     const repairedPackedRow = database.prepare(
-      'SELECT vectorJson, vectorDimension FROM RawTextEmbeddingCache WHERE embeddingInputHash = ?'
-    ).get(packedHash) as { vectorJson: string; vectorDimension: number } | undefined
+      'SELECT vectorBlob, vectorDimension FROM RawTextEmbeddingCache WHERE embeddingInputHash = ?'
+    ).get(packedHash) as { vectorBlob: Uint8Array; vectorDimension: number } | undefined
     expect(repairedPackedRow).toBeTruthy()
     expect(repairedPackedRow?.vectorDimension).toBe(3)
 
@@ -902,13 +903,13 @@ describe('retrieval-index cache reuse helpers', () => {
 
     expect(emptyHarness.embedTextsWithOllama).toHaveBeenCalledTimes(1)
     const emptyCacheRows = emptyHarness.database.prepare(
-      `SELECT embeddingInputHash, vectorJson, vectorDimension
+      `SELECT embeddingInputHash, vectorBlob, vectorDimension
        FROM RawTextEmbeddingCache
        WHERE branchId = ? AND provider = ? AND model = ?
        ORDER BY embeddingInputHash ASC`
     ).all('novel-001:main', 'ollama', 'unit-test-embedding-model') as Array<{
       embeddingInputHash: string
-      vectorJson: string
+      vectorBlob: Uint8Array
       vectorDimension: number
     }>
     expect(emptyCacheRows).toHaveLength(emptyHarness.retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length)
@@ -938,9 +939,9 @@ describe('retrieval-index cache reuse helpers', () => {
     const sceneHash = degradedHarness.retrievalCache.buildEmbeddingInputHash(sceneInput)
     degradedHarness.database.prepare(
       `INSERT INTO RawTextEmbeddingCache (
-        branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension, lastSeenAt, createdAt, updatedAt
+        branchId, provider, model, embeddingInputHash, vectorBlob, vectorDimension, lastSeenAt, createdAt, updatedAt
       ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-    ).run('novel-001:main', 'ollama', 'unit-test-embedding-model', sceneHash, JSON.stringify([1, 1]), 2)
+    ).run('novel-001:main', 'ollama', 'unit-test-embedding-model', sceneHash, encodeEmbeddingVector([1, 1]), 2)
 
     await expect(degradedHarness.retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({
       rowCount: degradedHarness.retrievalIndex.loadBranchRetrievalDocs('novel-001', 'novel-001:main').length,
@@ -955,11 +956,11 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(degradedHarness.embedTextsWithOllama.mock.calls[1]?.[0]).toEqual([sceneInput])
 
     const repairedSceneRow = degradedHarness.database.prepare(
-      'SELECT vectorJson, vectorDimension FROM RawTextEmbeddingCache WHERE embeddingInputHash = ?'
-    ).get(sceneHash) as { vectorJson: string; vectorDimension: number } | undefined
+      'SELECT vectorBlob, vectorDimension FROM RawTextEmbeddingCache WHERE embeddingInputHash = ?'
+    ).get(sceneHash) as { vectorBlob: Uint8Array; vectorDimension: number } | undefined
     expect(repairedSceneRow).toBeTruthy()
     expect(repairedSceneRow?.vectorDimension).toBe(3)
-    expect(JSON.parse(repairedSceneRow!.vectorJson)).toEqual([3, 3, 3])
+    expect(decodeEmbeddingVector(repairedSceneRow!.vectorBlob, repairedSceneRow!.vectorDimension)).toEqual([3, 3, 3])
   })
 
   it('garbage collects unreachable raw-text cache rows during precompute', async () => {

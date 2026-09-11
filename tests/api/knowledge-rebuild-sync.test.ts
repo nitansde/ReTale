@@ -86,6 +86,32 @@ function seedNovelRegistryStatus(
 }
 
 describe('syncWorkspacePayloadToKnowledgeStore', () => {
+  it('re-derives previously encoded raw text and spans from the unchanged chapter HTML', async () => {
+    const database = createTestDatabase('retale-knowledge-sync-entities')
+    database.prepare('INSERT INTO NovelRecord (id, title) VALUES (?, ?)').run('novel_entities', 'Entities')
+    database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run('novel_entities:main', 'novel_entities', 'main')
+    database.prepare(
+      `INSERT INTO KnowledgeChapter (
+        id, novelId, branchId, chapterNo, title, rawText, sourceHash, revision, knowledgeStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run('chapter_entities', 'novel_entities', 'novel_entities:main', 1, 'Entities', 'A &amp; B &lt;C&gt;', hashContent('A &amp; B &lt;C&gt;'), 1, 'ready')
+    const sync = createWorkspaceKnowledgeSync({ abortKnowledgeRebuildUntilIdle: vi.fn(async () => undefined) })
+    await sync({
+      currentNovelId: 'novel_entities',
+      localNovels: [{ id: 'novel_entities', title: 'Entities', summary: '', tags: [] }],
+      localChapters: [{
+        id: 'chapter_entities', novelId: 'novel_entities', title: 'Entities', order: 1,
+        content: '<p>A &amp; B &lt;C&gt;</p>', status: 'draft', wordCount: 7, updatedAt: 'now',
+      }],
+    }, { db: createDatabaseAccess(database) })
+    expect(database.prepare('SELECT rawText, sourceHash, revision, knowledgeStatus FROM KnowledgeChapter WHERE id = ?').get('chapter_entities'))
+      .toMatchObject({ rawText: 'A & B <C>', sourceHash: hashContent('A & B <C>'), revision: 2, knowledgeStatus: 'stale' })
+    expect(database.prepare('SELECT text FROM ChapterLine WHERE chapterId = ?').all('chapter_entities'))
+      .toEqual([{ text: 'A & B <C>' }])
+    expect(database.prepare('SELECT DISTINCT text FROM TextSpan WHERE chapterId = ?').all('chapter_entities'))
+      .toEqual([{ text: 'A & B <C>' }])
+  })
+
   it('aborts stale running rebuild jobs before removing stale novels', async () => {
     createTestDatabase('retale-knowledge-sync-stale-job-cleanup')
 

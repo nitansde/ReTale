@@ -1,3 +1,4 @@
+import { progressMessage } from '@/lib/i18n/progress-message'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { AIProvider, Chapter, KnowledgeExtractionScenarioSettings, KnowledgeRebuildChapterRange, PersistedNovelState } from '@/lib/types'
 import {
@@ -263,13 +264,13 @@ const activeKnowledgeRetrievalRuns = new Set<string>()
 const knowledgeJobAttemptContext = new AsyncLocalStorage<Map<string, string>>()
 
 const KNOWLEDGE_REBUILD_STEP_LABELS: Record<KnowledgeRebuildStepKey, string> = {
-  'hanlp-bootstrap': 'HanLP 引导扫描',
-  extract: '抽取章节知识',
-  'batch-sync': '整理批次结果',
-  cleanup: '清理旧知识',
-  write: '写入结构化知识',
-  'raw-embedding': '原文 Embedding 预计算',
-  index: '构建 Lance 检索索引',
+  'hanlp-bootstrap': progressMessage('progress.hanlpLabel'),
+  extract: progressMessage('progress.extract'),
+  'batch-sync': progressMessage('progress.batchLabel'),
+  cleanup: progressMessage('progress.cleanupLabel'),
+  write: progressMessage('progress.writeLabel'),
+  'raw-embedding': progressMessage('progress.rawEmbeddingLabel'),
+  index: progressMessage('progress.indexBuild'),
 }
 
 export type KnowledgeRebuildJobOutcome = 'completed' | 'paused' | 'aborted'
@@ -686,6 +687,12 @@ function normalizeKnowledgeRebuildJobPayload(payload: unknown) {
       ? {
           provider: embeddingSettingsSnapshot.provider,
           model: embeddingSettingsSnapshot.model,
+          cacheModelIdentity: typeof embeddingSettingsSnapshot.cacheModelIdentity === 'string'
+            ? embeddingSettingsSnapshot.cacheModelIdentity : undefined,
+          embeddingInputMaxCodePoints: typeof embeddingSettingsSnapshot.embeddingInputMaxCodePoints === 'number'
+            && Number.isFinite(embeddingSettingsSnapshot.embeddingInputMaxCodePoints)
+            && embeddingSettingsSnapshot.embeddingInputMaxCodePoints > 0
+            ? embeddingSettingsSnapshot.embeddingInputMaxCodePoints : null,
           embeddingBatchSize: Math.max(1, Math.floor(embeddingSettingsSnapshot.embeddingBatchSize)),
         }
       : undefined
@@ -859,9 +866,14 @@ function buildHanlpBootstrapStepDetail(payload: KnowledgeRebuildJobPayload, runt
         hanlp.totalChapterCount > 0 ? clampProgress(hanlp.completedChapterCount / hanlp.totalChapterCount) : 1,
         payload.stageStartedAtByKey?.['hanlp-bootstrap']
       )
-  const etaText = etaMinutes ? `，预计剩余 ${etaMinutes} 分钟` : ''
-
-  return `已完成 ${hanlp.completedChapterCount}/${Math.max(0, hanlp.totalChapterCount)} 章，缓存命中 ${hanlp.cacheHitCount}，缓存未命中 ${hanlp.cacheMissCount}，耗时 ${durationText}${etaText}`
+  return progressMessage(etaMinutes ? 'progress.hanlpDetailEta' : 'progress.hanlpDetail', {
+    completed: hanlp.completedChapterCount,
+    total: Math.max(0, hanlp.totalChapterCount),
+    hits: hanlp.cacheHitCount,
+    misses: hanlp.cacheMissCount,
+    duration: durationText,
+    ...(etaMinutes ? { minutes: etaMinutes } : {}),
+  })
 }
 
 function buildRawTextEmbeddingStepDetail(payload: KnowledgeRebuildJobPayload, runtime: { currentStep: string | null }, isCurrent: boolean) {
@@ -870,11 +882,11 @@ function buildRawTextEmbeddingStepDetail(payload: KnowledgeRebuildJobPayload, ru
     : null
 
   if (isCurrent) {
-    return runtime.currentStep ?? (progress !== null ? `原文向量缓存 ${progress}%` : '等待原文 Embedding 预计算完成')
+    return runtime.currentStep ?? (progress !== null ? progressMessage('progress.rawEmbeddingPercent', { percent: progress }) : progressMessage('progress.rawEmbeddingWait'))
   }
 
   if (progress === null) return null
-  return progress >= 100 ? '原文向量预计算已完成' : `原文向量缓存 ${progress}%`
+  return progress >= 100 ? progressMessage('progress.rawEmbeddingCompleted') : progressMessage('progress.rawEmbeddingPercent', { percent: progress })
 }
 
 function toProgressPercentValue(value: number) {
@@ -1003,26 +1015,29 @@ function getIndexProgressValue(progress?: KnowledgeRebuildIndexProgress) {
 }
 
 function getIndexCurrentStep(progress?: KnowledgeRebuildIndexProgress) {
-  if (!progress) return '构建 Lance 检索索引'
+  if (!progress) return progressMessage('progress.indexBuild')
 
   switch (progress.phase) {
     case 'loading':
-      return '整理 Lance 检索文档'
+      return progressMessage('progress.indexLoad')
     case 'embedding': {
-      const docsLabel = `${progress.embeddedRows}/${Math.max(progress.totalRows, 1)} 文档`
-      const batchesLabel = `${progress.completedBatches}/${Math.max(progress.totalBatches, 1)} 批`
-      return `生成检索向量（${docsLabel}，${batchesLabel}）`
+      return progressMessage('progress.indexEmbed', {
+        rows: progress.embeddedRows,
+        totalRows: Math.max(progress.totalRows, 1),
+        batches: progress.completedBatches,
+        totalBatches: Math.max(progress.totalBatches, 1),
+      })
     }
     case 'creating_table':
-      return '写入 Lance 检索表'
+      return progressMessage('progress.indexWrite')
     case 'building_text_index':
-      return '构建 Lance 全文索引'
+      return progressMessage('progress.indexText')
     case 'building_vector_index':
-      return '构建 Lance 向量索引'
+      return progressMessage('progress.indexVector')
     case 'completed':
-      return '构建 Lance 检索索引'
+      return progressMessage('progress.indexBuild')
     default:
-      return '构建 Lance 检索索引'
+      return progressMessage('progress.indexBuild')
   }
 }
 
@@ -1668,7 +1683,7 @@ async function waitForKnowledgeJobCompletion(jobId: string, options?: { timeoutM
     onTimeout: (timedOutJobId) => {
       updateKnowledgeJob(timedOutJobId, {
         status: 'failed',
-        currentStep: '超时',
+        currentStep: progressMessage('progress.timeout'),
         errorMessage: 'Knowledge rebuild timed out',
         payload: invalidateKnowledgeJobAttempt(timedOutJobId, {
           lastAction: 'timed_out',
@@ -1735,7 +1750,7 @@ function abortKnowledgeJob(jobId: string) {
 function pauseKnowledgeJob(jobId: string) {
   updateKnowledgeJob(jobId, {
     status: 'paused',
-    currentStep: '已暂停',
+    currentStep: progressMessage('progress.paused'),
     payload: invalidateKnowledgeJobAttempt(jobId, {
       lastAction: 'paused',
       lastActionAt: new Date().toISOString(),
@@ -1761,7 +1776,7 @@ export async function startKnowledgeRetrievalRebuildForNovel(params: { novelId: 
 
     if (activeJob?.id) {
       if (activeJob.status === 'paused') {
-        updateKnowledgeJob(activeJob.id, { status: 'queued', currentStep: '准备继续构建 Lance 检索索引' })
+        updateKnowledgeJob(activeJob.id, { status: 'queued', currentStep: progressMessage('progress.indexResume') })
         return { jobId: activeJob.id, outcome: 'queued' as KnowledgeRebuildStartOutcome }
       }
 
@@ -1775,7 +1790,7 @@ export async function startKnowledgeRetrievalRebuildForNovel(params: { novelId: 
       novelId: params.novelId,
       branchId,
       jobType: RETRIEVAL_REBUILD_JOB_TYPE,
-      currentStep: '准备构建 Lance 检索索引',
+      currentStep: progressMessage('progress.indexPrepare'),
       payload: {
         branchId,
         chapterRange,
@@ -1876,7 +1891,7 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
         novelId: params.novelId,
         branchId,
         jobType: RETRIEVAL_REBUILD_JOB_TYPE,
-        currentStep: '准备构建 Lance 检索索引',
+        currentStep: progressMessage('progress.indexPrepare'),
         payload: {
           branchId,
           chapterRange: normalizeKnowledgeRebuildChapterRange(params.chapterRange),
@@ -1911,7 +1926,7 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
     const claimedProgress = Math.max(0.94, queryOne<{ progress: number }>('SELECT progress FROM KnowledgeJob WHERE id = ?', job.id)?.progress ?? 0.94)
     const claimedJob = await claimQueuedKnowledgeJob({
       jobId: job.id,
-      currentStep: '等待原文 Embedding 预计算完成',
+      currentStep: progressMessage('progress.rawEmbeddingWait'),
       progress: claimedProgress,
       expectedAttemptId: params.attemptId,
     })
@@ -1942,7 +1957,7 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
       })
 
       updateKnowledgeJob(job.id, {
-        currentStep: '等待原文 Embedding 预计算完成',
+        currentStep: progressMessage('progress.rawEmbeddingWait'),
         progress: claimedProgress,
         payload: {
           ...(initialState?.payload ?? {}),
@@ -1975,7 +1990,7 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
         ? clampProgress(rawTextEmbeddingState.payload.rawTextEmbeddingProgress)
         : 0
       updateKnowledgeJob(job.id, {
-        currentStep: rawTextEmbeddingProgress >= 1 ? '确认原文 Embedding 预计算完成' : '等待原文 Embedding 预计算完成',
+        currentStep: rawTextEmbeddingProgress >= 1 ? progressMessage('progress.rawEmbeddingConfirm') : progressMessage('progress.rawEmbeddingWait'),
         progress: 0.94 + rawTextEmbeddingProgress * 0.02,
       })
       ensureRawTextEmbeddingPrecomputeStarted({
@@ -2006,7 +2021,7 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
         },
       })
 
-      updateKnowledgeJob(job.id, { status: 'succeeded', currentStep: '完成', progress: 1 })
+      updateKnowledgeJob(job.id, { status: 'succeeded', currentStep: progressMessage('progress.completed'), progress: 1 })
 
       return { jobId: job.id, outcome: 'completed' as const }
     })
@@ -2016,7 +2031,7 @@ async function rebuildKnowledgeRetrievalForNovel(params: RebuildKnowledgeForNove
     }
 
     if (error instanceof KnowledgeRebuildPausedError) {
-      updateKnowledgeJob(job.id, { status: 'paused', currentStep: '已暂停' }, { expectedAttemptId: claimedAttemptId })
+      updateKnowledgeJob(job.id, { status: 'paused', currentStep: progressMessage('progress.paused') }, { expectedAttemptId: claimedAttemptId })
       return { jobId: job.id, outcome: 'paused' as const }
     }
 
@@ -5873,7 +5888,7 @@ export async function startKnowledgeRebuildForNovel(params: { novelId: string; b
 
     if (activeJob?.id) {
       if (activeJob.status === 'paused') {
-        updateKnowledgeJob(activeJob.id, { status: 'queued', currentStep: '准备继续知识重建' })
+        updateKnowledgeJob(activeJob.id, { status: 'queued', currentStep: progressMessage('progress.rebuildResumePrepare') })
         return { jobId: activeJob.id, outcome: 'queued' as KnowledgeRebuildStartOutcome }
       }
 
@@ -5887,7 +5902,7 @@ export async function startKnowledgeRebuildForNovel(params: { novelId: string; b
       novelId: params.novelId,
       branchId,
       jobType: MAIN_KNOWLEDGE_JOB_TYPE,
-      currentStep: '准备重建',
+      currentStep: progressMessage('progress.rebuildPrepare'),
       payload: { branchId, chapterRange, rebuildStartChapter: chapterRange?.startChapter },
     })
 
@@ -5984,7 +5999,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
         novelId: params.novelId,
         branchId,
         jobType: MAIN_KNOWLEDGE_JOB_TYPE,
-        currentStep: '准备重建',
+        currentStep: progressMessage('progress.rebuildPrepare'),
         payload: { branchId, chapterRange: normalizeKnowledgeRebuildChapterRange(params.chapterRange), rebuildStartChapter: normalizeKnowledgeRebuildChapterRange(params.chapterRange)?.startChapter },
       })
 
@@ -5998,7 +6013,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
     const claimedProgress = Math.max(0.05, queryOne<{ progress: number }>('SELECT progress FROM KnowledgeJob WHERE id = ?', job.id)?.progress ?? 0)
     const claimedJob = await claimQueuedKnowledgeJob({
       jobId: job.id,
-      currentStep: jobState?.phase === 'extract' ? '抽取章节知识' : '继续知识重建',
+      currentStep: jobState?.phase === 'extract' ? progressMessage('progress.extract') : progressMessage('progress.rebuildResume'),
       progress: claimedProgress,
       expectedAttemptId: params.attemptId,
     })
@@ -6066,7 +6081,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
       }
 
       updateKnowledgeJob(job.id, {
-        currentStep: jobState?.phase === 'extract' ? '抽取章节知识' : '继续知识重建',
+        currentStep: jobState?.phase === 'extract' ? progressMessage('progress.extract') : progressMessage('progress.rebuildResume'),
         progress: claimedProgress,
       })
 
@@ -6112,7 +6127,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
           if (!remainingChapters.length) {
             if (!hanlpState.initializedCharacterEntities) {
               updateKnowledgeJob(job.id, {
-                currentStep: '根据 HanLP 聚合结果初始化人物层级',
+                currentStep: progressMessage('progress.hanlpInitialize'),
                 progress: 0.08,
               })
               assertKnowledgeRebuildContinues(job.id)
@@ -6138,7 +6153,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
           const hanlpParallelism = getHanlpBootstrapParallelism()
           const hanlpBatch = remainingChapters.slice(0, Math.min(hanlpParallelism, remainingChapters.length))
           updateKnowledgeJob(job.id, {
-            currentStep: `运行 HanLP 引导（剩余 ${remainingChapters.length} 章，本批 ${hanlpBatch.length} 章）`,
+            currentStep: progressMessage('progress.hanlpBatch', { remaining: remainingChapters.length, batch: hanlpBatch.length }),
             progress: hanlpState.totalChapterCount > 0 ? 0.01 + clampProgress(hanlpState.completedChapterCount / hanlpState.totalChapterCount) * 0.09 : 0.1,
           })
 
@@ -6169,7 +6184,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             upsertHanlpBootstrapCoverageMarker(params.novelId, result.chapter.chapterNo)
             const nextState = getKnowledgeRebuildJobState(job.id)
             updateKnowledgeJob(job.id, {
-              currentStep: `运行 HanLP 引导（已完成第 ${result.chapter.chapterNo} 章）`,
+              currentStep: progressMessage('progress.hanlpChapter', { chapter: result.chapter.chapterNo }),
               progress: (nextState?.payload.hanlpBootstrap?.totalChapterCount ?? 0) > 0
                 ? 0.01 + clampProgress((nextState?.payload.hanlpBootstrap?.completedChapterCount ?? 0) / Math.max(1, nextState?.payload.hanlpBootstrap?.totalChapterCount ?? 1)) * 0.09
                 : 0.1,
@@ -6181,7 +6196,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
         if (currentJobState.phase === 'extract') {
           if (!currentJobState.payload.inlineCleanupCompleted) {
             updateKnowledgeJob(job.id, {
-              currentStep: '准备按章节发布知识',
+              currentStep: progressMessage('progress.publishPrepare'),
               progress: getKnowledgeStructuredWorkProgress(currentJobState),
             })
             markInlineKnowledgeCleanupCompleted(job.id)
@@ -6214,7 +6229,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
           const configuredParallelism = getKnowledgeExtractionParallelism(extractionSettings)
           const extractionBatch = remainingChapters.slice(0, Math.min(configuredParallelism, remainingChapters.length))
           updateKnowledgeJob(job.id, {
-            currentStep: `并行抽取候选知识（剩余 ${remainingChapters.length} 章，本批 ${extractionBatch.length} 章，最大并发 ${configuredParallelism}）`,
+            currentStep: progressMessage('progress.extractBatch', { remaining: remainingChapters.length, batch: extractionBatch.length, concurrency: configuredParallelism }),
             progress: getKnowledgeStructuredWorkProgress(currentJobState),
           })
 
@@ -6267,7 +6282,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
               }
 
               updateKnowledgeJob(job.id, {
-                currentStep: `并行抽取候选知识（已完成第 ${chapter.chapterNo} 章）`,
+                currentStep: progressMessage('progress.extractChapter', { chapter: chapter.chapterNo }),
               })
             })
           )
@@ -6316,7 +6331,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
           })
 
           updateKnowledgeJob(job.id, {
-            currentStep: '按稳定章节顺序整理批次抽取结果',
+            currentStep: progressMessage('progress.batchOrder'),
             progress: getKnowledgeStructuredWorkProgress(currentJobState),
           })
           const batchContext = buildChapterExtractionBatchProcessingContext({
@@ -6356,7 +6371,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             throw new Error('Knowledge rebuild job state is missing before write')
           }
           setKnowledgeRebuildJobPhase(job.id, 'write', {
-            currentStep: `准备写入 ${writeState.extractedChapters.length} 章结构化知识`,
+            currentStep: progressMessage('progress.writePrepare', { chapters: writeState.extractedChapters.length }),
             progress: getKnowledgeStructuredWorkProgress(writeState),
           })
           continue
@@ -6430,7 +6445,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
             }
 
             updateKnowledgeJob(job.id, {
-              currentStep: `按章节顺序整理并写入第 ${chapter.chapterNo} 章知识`,
+              currentStep: progressMessage('progress.writeChapter', { chapter: chapter.chapterNo }),
             })
 
             assertKnowledgeRebuildContinues(job.id)
@@ -6526,7 +6541,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
         setKnowledgeRebuildJobPhase(job.id, 'write')
       }
 
-      updateKnowledgeJob(job.id, { status: 'succeeded', currentStep: '完成', progress: 1 })
+      updateKnowledgeJob(job.id, { status: 'succeeded', currentStep: progressMessage('progress.completed'), progress: 1 })
 
       return { jobId: job.id, outcome: 'completed' as const }
     })
@@ -6536,7 +6551,7 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
     }
 
     if (error instanceof KnowledgeRebuildPausedError) {
-      updateKnowledgeJob(job.id, { status: 'paused', currentStep: '已暂停' }, { expectedAttemptId: claimedAttemptId })
+      updateKnowledgeJob(job.id, { status: 'paused', currentStep: progressMessage('progress.paused') }, { expectedAttemptId: claimedAttemptId })
       return { jobId: job.id, outcome: 'paused' as const }
     }
 

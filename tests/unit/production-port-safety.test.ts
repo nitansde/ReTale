@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { assertPortAvailable, assertPortReleased, detectListeningPids } from '../../scripts/production-port-safety.mjs'
 import {
   buildNextProductionStartArgs,
@@ -235,25 +235,34 @@ describe('production build provenance', () => {
   it('writes provenance only after a successful build and rejects failed builds', async () => {
     const fixture = productionFixture('production build wrapper fixture')
     const successfulSpawnCalls: string[][] = []
+    const buildWorker = vi.fn(async () => ({}))
     const successfulSpawn = (_command: string, args: readonly string[]) => {
+      expect(buildWorker).toHaveBeenCalledWith({ repoRoot: fixture })
       successfulSpawnCalls.push([...args])
       const child = new EventEmitter() as ChildProcess
       queueMicrotask(() => child.emit('exit', 0, null))
       return child
     }
-    await expect(runNextProductionBuild([], { repoRoot: fixture, spawn: successfulSpawn })).resolves.toEqual(
+    await expect(runNextProductionBuild([], { repoRoot: fixture, spawn: successfulSpawn, buildWorker })).resolves.toEqual(
       expect.objectContaining({ provenancePath: path.join(fixture, '.next', NEXT_PRODUCTION_PROVENANCE_FILE) }),
     )
     expect(successfulSpawnCalls).toHaveLength(1)
     expect(successfulSpawnCalls[0].slice(1)).toEqual(['build', '--webpack'])
 
     fs.rmSync(path.join(fixture, '.next', NEXT_PRODUCTION_PROVENANCE_FILE))
+    const uncalledSpawn = vi.fn()
+    await expect(runNextProductionBuild([], {
+      repoRoot: fixture, spawn: uncalledSpawn,
+      buildWorker: async () => { throw new Error('worker compilation failed') },
+    })).rejects.toThrow('worker compilation failed')
+    expect(uncalledSpawn).not.toHaveBeenCalled()
+    expect(fs.existsSync(path.join(fixture, '.next', NEXT_PRODUCTION_PROVENANCE_FILE))).toBe(false)
     const failedSpawn = () => {
       const child = new EventEmitter() as ChildProcess
       queueMicrotask(() => child.emit('exit', 1, null))
       return child
     }
-    await expect(runNextProductionBuild([], { repoRoot: fixture, spawn: failedSpawn })).rejects.toThrow(/next build failed/)
+    await expect(runNextProductionBuild([], { repoRoot: fixture, spawn: failedSpawn, buildWorker })).rejects.toThrow(/next build failed/)
     expect(fs.existsSync(path.join(fixture, '.next', NEXT_PRODUCTION_PROVENANCE_FILE))).toBe(false)
   })
 })

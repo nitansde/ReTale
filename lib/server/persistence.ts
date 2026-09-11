@@ -22,6 +22,7 @@ import {
 } from '@/lib/server/db-resolver'
 import { runWithPerNovelWriteGate } from '@/lib/server/per-novel-write-gate'
 import { parseScopedWorkspacePayload } from '@/lib/server/workspace-novel-scope'
+import { previewWorkspaceBackupRetention } from '@/lib/server/storage-retention'
 
 type WorkspaceStateRow = {
   id: string
@@ -248,7 +249,6 @@ type SqliteTableRow = {
 }
 
 const [PRESET_COMPAT_LIBRARY_V1_KEY, AI_SETTINGS_V2_KEY, OLLAMA_TIMEOUT_MS_KEY] = PROTECTED_RESET_APP_SETTING_KEYS
-const WORKSPACE_BACKUP_RETENTION = 20
 const WORKSPACE_KNOWLEDGE_SYNC_STALE_MS = 5 * 60 * 1000
 const WORKSPACE_NOVEL_CLEANUP_SCAN_LIMIT = 25
 let workspaceNovelDeletedPurgeCursor: Pick<WorkspaceNovelRegistryRow, 'updatedAt' | 'novelId'> | null = null
@@ -885,20 +885,11 @@ export function createWorkspaceStateBackupInDb(db: DatabaseAccess, row: Workspac
 }
 
 export function pruneWorkspaceStateBackupsInDb(db: DatabaseAccess, id = 'singleton') {
-  db.execute(
-    `DELETE FROM WorkspaceStateBackup
-     WHERE workspaceStateId = ?
-       AND id NOT IN (
-         SELECT id
-         FROM WorkspaceStateBackup
-         WHERE workspaceStateId = ?
-         ORDER BY createdAt DESC, rowid DESC
-         LIMIT ?
-       )`,
-    id,
-    id,
-    WORKSPACE_BACKUP_RETENTION
-  )
+  const preview = previewWorkspaceBackupRetention(db, id)
+  for (const candidate of preview.candidates) {
+    db.execute('DELETE FROM WorkspaceStateBackup WHERE workspaceStateId = ? AND id = ?', id, candidate.id)
+  }
+  return preview
 }
 
 export function writeWorkspaceStateInDb(db: DatabaseAccess, id: string, payload: string, revision?: number) {

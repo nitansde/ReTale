@@ -1,3 +1,5 @@
+import { InputValidationError, ResourceNotFoundError } from '@/lib/server/domain-errors'
+import { parseRequestInput } from '@/lib/server/request-validation'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { loadExplicitAuthoredContext } from '@/lib/server/authored-context'
 import { buildKnowledgeExtractionStoryState } from '@/lib/server/context-builder'
@@ -496,7 +498,7 @@ function resolveFutureJumpCompatibilityWhatIfSessionId(params: {
   if (explicitWhatIfSessionId) {
     const session = findWhatIfSessionById(explicitWhatIfSessionId, params.db)
     if (!session) {
-      throw new Error(`What-if session not found: ${explicitWhatIfSessionId}`)
+      throw new ResourceNotFoundError(`What-if session not found: ${explicitWhatIfSessionId}`)
     }
     return session.id
   }
@@ -994,26 +996,26 @@ async function loadGenerationContext(params: {
         sourceNodeId: params.sourceContext.nodeId,
       })
   if (!session) {
-    throw new Error(`What-if session not found: ${params.whatIfSessionId}`)
+    throw new ResourceNotFoundError(`What-if session not found: ${params.whatIfSessionId}`)
   }
   if (session.novelId !== params.novelId || session.baseBranchId !== params.branchId) {
-    throw new Error('What-if session does not belong to the requested novel/branch')
+    throw new ResourceNotFoundError('What-if session does not belong to the requested novel/branch')
   }
 
   const outlineNode = findOutlineNodeById(params.targetOutlineNodeId, params.db)
   if (!outlineNode) {
-    throw new Error(`Target outline node not found: ${params.targetOutlineNodeId}`)
+    throw new ResourceNotFoundError(`Target outline node not found: ${params.targetOutlineNodeId}`)
   }
   if (outlineNode.novelId !== params.novelId || outlineNode.branchId !== params.branchId) {
-    throw new Error('Target outline node does not belong to the requested novel/branch')
+    throw new ResourceNotFoundError('Target outline node does not belong to the requested novel/branch')
   }
 
   const targetAnchor = listOutlineNodeChapters(params.targetOutlineNodeId, params.db).find((chapter) => chapter.id === params.targetOutlineChapterId) ?? null
   if (!targetAnchor) {
-    throw new Error(`Target outline chapter anchor not found: ${params.targetOutlineChapterId}`)
+    throw new ResourceNotFoundError(`Target outline chapter anchor not found: ${params.targetOutlineChapterId}`)
   }
   if (targetAnchor.chapterNo <= params.sourceContext.chapterNo) {
-    throw new Error(
+    throw new InputValidationError(
       targetAnchor.chapterNo === params.sourceContext.chapterNo
         ? 'Target chapter must be after the source chapter'
         : 'Target chapter must not be before the source chapter'
@@ -1026,7 +1028,7 @@ async function loadGenerationContext(params: {
 
   if (params.sourceContext.nodeId) {
     if (!sourceNode || sourceNode.branchId !== params.branchId || sourceNode.novelId !== params.novelId) {
-      throw new Error(`Source timeline node not found: ${params.sourceContext.nodeId}`)
+      throw new ResourceNotFoundError(`Source timeline node not found: ${params.sourceContext.nodeId}`)
     }
   }
 
@@ -1050,10 +1052,10 @@ async function loadGenerationContext(params: {
         params.sourceContext.chapterNo,
       )
   if (!sourceChapter) {
-    throw new Error(`Source chapter not found for branch context: chapter ${params.sourceContext.chapterNo}`)
+    throw new ResourceNotFoundError(`Source chapter not found for branch context: chapter ${params.sourceContext.chapterNo}`)
   }
   if (sourceChapter.chapterNo !== params.sourceContext.chapterNo) {
-    throw new Error('sourceContext.chapterId must match sourceContext.chapterNo')
+    throw new InputValidationError('sourceContext.chapterId must match sourceContext.chapterNo')
   }
 
   const targetChapter = targetAnchor.chapterId
@@ -1299,10 +1301,10 @@ export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<Fu
   const userFeedback = getRequiredString(input.userFeedback, 'userFeedback')
   const run = findFutureJumpRunById(runId, db)
   if (!run) {
-    throw new Error(`Future jump run not found: ${runId}`)
+    throw new ResourceNotFoundError(`Future jump run not found: ${runId}`)
   }
   if (run.baseBranchId !== branchId) {
-    throw new Error('Future jump run does not belong to the requested branch')
+    throw new ResourceNotFoundError('Future jump run does not belong to the requested branch')
   }
 
   const context = await loadGenerationContext({
@@ -1368,11 +1370,11 @@ export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<Fu
 }
 
 export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Promise<FutureJumpMutationResponse> {
-  const input = futureJumpCreateRequestSchema.parse(rawInput)
+  const input = parseRequestInput(futureJumpCreateRequestSchema, rawInput)
   const db = createNovelDatabaseAccess(input.novelId)
   const outlineNode = findOutlineNodeById(input.targetOutlineNodeId, db)
   if (!outlineNode) {
-    throw new Error(`Target outline node not found: ${input.targetOutlineNodeId}`)
+    throw new ResourceNotFoundError(`Target outline node not found: ${input.targetOutlineNodeId}`)
   }
   const parentNode = requireOptionalTimelineNodeInBranchContext({
     nodeId: input.parentTimelineNodeId,
@@ -1411,7 +1413,7 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
       (chapter) => chapter.id === generated.run.targetOutlineChapterId
     )
     if (!targetAnchor) {
-      throw new Error(`Target outline chapter anchor not found: ${generated.run.targetOutlineChapterId}`)
+      throw new ResourceNotFoundError(`Target outline chapter anchor not found: ${generated.run.targetOutlineChapterId}`)
     }
 
     const labelIndex = getNextStoryTimelineLabelIndex(outlineNode.novelId, outlineNode.branchId, 'future_jump', db)
@@ -1460,16 +1462,16 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
 }
 
 export async function reviseFutureJumpRun(rawInput: Pick<ReviseFutureJumpInput, 'runId'> & FutureJumpReviseRequest): Promise<FutureJumpMutationResponse> {
-  const input = futureJumpReviseRequestSchema.parse(rawInput)
+  const input = parseRequestInput(futureJumpReviseRequestSchema, rawInput)
   const db = createNovelDatabaseAccess(input.novelId)
   const run = findFutureJumpRunById(rawInput.runId, db)
   if (!run) {
-    throw new Error(`Future jump run not found: ${rawInput.runId}`)
+    throw new ResourceNotFoundError(`Future jump run not found: ${rawInput.runId}`)
   }
 
   const outlineNode = findOutlineNodeById(run.targetOutlineNodeId, db)
   if (!outlineNode) {
-    throw new Error(`Target outline node not found: ${run.targetOutlineNodeId}`)
+    throw new ResourceNotFoundError(`Target outline node not found: ${run.targetOutlineNodeId}`)
   }
 
   const revised = await reviseFutureJump({

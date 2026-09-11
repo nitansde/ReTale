@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { jsonError, noStoreJson, readJsonObject } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, jsonError, noStoreJson, readJsonObject } from '@/lib/server/api-route'
 import { scheduleWritingSkillDistillationJob } from '@/lib/server/writing-skill-background'
 import { createWritingSkillRandomSeed } from '@/lib/server/writing-skill-distillation-agent'
 import {
@@ -64,6 +64,8 @@ export async function POST(request: Request) {
     scheduleWritingSkillDistillationJob(job.id)
     return NextResponse.json({ ok: true, jobId: job.id, job }, { status: 202 })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return jsonError(error instanceof Error ? error.message : 'Failed to create writing skill job', 400)
   }
 }

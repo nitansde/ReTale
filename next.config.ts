@@ -22,31 +22,25 @@ const runtimeDataTraceExcludes = [
 const nextConfig: NextConfig = {
   serverExternalPackages: ['@lancedb/lancedb'],
   outputFileTracingExcludes: {
-    '/*': ['./next.config.ts', ...runtimeDataTraceExcludes],
+    '/*': [
+      './next.config.ts',
+      './scripts/typescript-runtime.mjs',
+      './node_modules/typescript/**/*',
+      ...runtimeDataTraceExcludes,
+    ],
   },
   outputFileTracingIncludes: {
     '/api/knowledge-view': [
-      './node_modules/typescript/package.json',
-      './node_modules/typescript/lib/typescript.js',
+      './.retale-worker/knowledge-worker-runtime.mjs',
+      './.retale-worker/knowledge-worker-runtime.mjs.map',
+      './scripts/worker-diagnostics.mjs',
     ],
   },
   allowedDevOrigins: ['**.*'],
-  headers() {
-    return [{
-      source: '/api/:path*',
-      headers: [
-        { key: 'Access-Control-Allow-Origin', value: '*' },
-        { key: 'Access-Control-Allow-Methods', value: 'GET, POST, PATCH, DELETE, OPTIONS' },
-        {
-          key: 'Access-Control-Allow-Headers',
-          value: 'Content-Type, Idempotency-Key, X-Retale-Base-Revision, X-Retale-Revision-Novel-Id, X-Retale-Resource-Novel-Id, X-Retale-Resource-Chapter-Id, X-Retale-Resource-Delete',
-        },
-        {
-          key: 'Access-Control-Expose-Headers',
-          value: 'ETag, X-Retale-Workspace-Revision, X-Retale-Revision-Novel-Id',
-        },
-      ],
-    }]
+  experimental: {
+    // Proxy buffers bodies before route handlers. Keep its cap above the largest
+    // application limit (16 MiB), so bounded readers can reject oversized bodies.
+    proxyClientMaxBodySize: '17mb',
   },
   distDir,
   typescript: {

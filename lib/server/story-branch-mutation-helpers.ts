@@ -1,3 +1,4 @@
+import { InputValidationError, ResourceNotFoundError } from '@/lib/server/domain-errors'
 import type { DatabaseAccess } from '@/lib/server/database-access'
 import type { StoryTimelineNodeRecord } from '@/lib/story-branch-types'
 import { findStoryTimelineNodeById } from '@/lib/server/story-timeline-store'
@@ -30,12 +31,12 @@ export function requireTimelineNodeInBranchContext(
 ): StoryTimelineNodeRecord {
   const nodeId = normalizeNodeId(params.nodeId)
   if (!nodeId) {
-    throw new Error(`${params.label} is required`)
+    throw new InputValidationError(`${params.label} is required`)
   }
 
   const node = findTimelineNodeInBranchContext(params)
   if (!node) {
-    throw new Error(`${params.label} not found: ${nodeId}`)
+    throw new ResourceNotFoundError(`${params.label} not found: ${nodeId}`)
   }
 
   return node

@@ -1,5 +1,6 @@
+import { progressMessage } from '@/lib/i18n/progress-message'
 import { after, NextResponse } from 'next/server'
-import { noStoreJson } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES, noStoreJson, readJsonObject } from '@/lib/server/api-route'
 import { buildGenerationContext } from '@/lib/server/context-builder'
 import { loadGenerationContextSnapshot } from '@/lib/server/generation-context-snapshot'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
@@ -459,7 +460,6 @@ async function readRewriteResponseResultWithProgress(
     return readRewriteResponseResult(response)
   }
 
-  const fallbackResponse = response.clone()
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   const provider = response.headers.get('x-retale-provider') ?? 'context-stream'
@@ -467,19 +467,22 @@ async function readRewriteResponseResultWithProgress(
   const writingSkills = readStreamWritingSkillMetadata(response)
   const writingSkillMetadata = buildWritingSkillMetadata(writingSkills)
   let content = ''
-  let lastPersistedLength = 0
-  let lastPersistedAt = 0
-  let hasPersistedPartial = false
+  let lastNormalizedLength = 0
+  let lastNormalizedAt = 0
+  let hasNormalizedPartial = false
 
   const persistPartial = (force = false) => {
+    const now = Date.now()
+    const shouldNormalize = force
+      || !hasNormalizedPartial
+      || content.length - lastNormalizedLength >= PARTIAL_REWRITE_PERSIST_MIN_CHARS
+      || now - lastNormalizedAt >= PARTIAL_REWRITE_PERSIST_MIN_MS
+    if (!shouldNormalize) return
+    lastNormalizedLength = content.length
+    lastNormalizedAt = now
+    hasNormalizedPartial = true
     const visibleContent = normalizeStreamedRewriteText(content)
     if (!visibleContent) return
-    const now = Date.now()
-    const shouldPersist = force
-      || !hasPersistedPartial
-      || visibleContent.length - lastPersistedLength >= PARTIAL_REWRITE_PERSIST_MIN_CHARS
-      || now - lastPersistedAt >= PARTIAL_REWRITE_PERSIST_MIN_MS
-    if (!shouldPersist) return
 
     const persistedContent = visibleContent.length > MAX_PARTIAL_REWRITE_RESULT_CHARS
       ? visibleContent.slice(0, MAX_PARTIAL_REWRITE_RESULT_CHARS)
@@ -488,7 +491,7 @@ async function readRewriteResponseResultWithProgress(
     updateRecoverableRewriteJob(jobId, {
       status: 'running',
       progress: 0.65,
-      currentStep: `正在流式生成改写版本（已输出 ${visibleContent.length} 字）`,
+      currentStep: progressMessage('progress.rewriteStream', { characters: visibleContent.length }),
       payload: {
         ...payload,
         result: createResultPayload({
@@ -502,9 +505,6 @@ async function readRewriteResponseResultWithProgress(
       },
       db,
     })
-    lastPersistedLength = visibleContent.length
-    lastPersistedAt = now
-    hasPersistedPartial = true
   }
 
   while (true) {
@@ -524,7 +524,11 @@ async function readRewriteResponseResultWithProgress(
 
   const finalContent = normalizeStreamedRewriteText(content)
   if (!finalContent) {
-    return readRewriteResponseResult(fallbackResponse)
+    return readRewriteResponseResult(new Response(content, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }))
   }
 
   return createResultPayload({
@@ -888,7 +892,7 @@ async function createRecoverableRewriteJob(body: Record<string, unknown>) {
       panel.novelId,
       panel.branchId,
       RECOVERABLE_REWRITE_JOB_TYPE,
-      '已创建可恢复魔改任务',
+      progressMessage('progress.rewriteCreated'),
       JSON.stringify(payload),
     )
   } catch (error) {
@@ -947,7 +951,7 @@ async function runRecoverableRewriteJobInNovel(jobId: string, novelId: string) {
   if (!payload) {
     db.execute(
       `UPDATE KnowledgeJob SET status = 'failed', progress = 0, currentStep = ?, errorMessage = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND jobType = ?`,
-      '魔改任务恢复数据损坏',
+      progressMessage('progress.rewriteInvalid'),
       'Recoverable rewrite job payload is invalid',
       jobId,
       RECOVERABLE_REWRITE_JOB_TYPE,
@@ -957,7 +961,7 @@ async function runRecoverableRewriteJobInNovel(jobId: string, novelId: string) {
 
   const claim = claimRecoverableRewriteJob(jobId, {
     progress: 0.35,
-    currentStep: '正在生成改写版本',
+    currentStep: progressMessage('progress.rewriteGenerate'),
     db,
   })
   if (!claim.claimed || !claim.attemptId) return
@@ -983,7 +987,7 @@ async function runRecoverableRewriteJobInNovel(jobId: string, novelId: string) {
       updateRecoverableRewriteJob(jobId, {
         status: 'succeeded',
         progress: 1,
-        currentStep: '完成',
+        currentStep: progressMessage('progress.completed'),
         payload: { ...payload, result },
         db,
       })
@@ -997,7 +1001,7 @@ async function runRecoverableRewriteJobInNovel(jobId: string, novelId: string) {
     updateRecoverableRewriteJob(jobId, {
       status: 'failed',
       progress: 0,
-      currentStep: '生成失败',
+      currentStep: progressMessage('progress.rewriteFailed'),
       payload: { ...payload, error: message },
       errorMessage: message,
       db,
@@ -1016,9 +1020,13 @@ export async function POST(request: Request) {
 }
 
 async function handleRewritePost(request: Request, options: { allowRecoverable: boolean; signal?: AbortSignal }) {
-  const body = await request.json().catch(() => null)
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    return NextResponse.json({ ok: false, error: 'Invalid JSON body' }, { status: 400 })
+  let body: Record<string, unknown>
+  try {
+    body = await readJsonObject(request, MAX_GENERATION_JSON_BODY_BYTES)
+  } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
+    throw error
   }
 
   const novelId = String(body.novelId ?? '').trim()

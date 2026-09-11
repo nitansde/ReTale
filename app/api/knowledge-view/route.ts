@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { jsonError, noStoreJson, readJsonObject } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, jsonError, noStoreJson, readJsonObject } from '@/lib/server/api-route'
 import {
   abortAuthoritativeKnowledgeRebuild,
   buildKnowledgeProjection,
@@ -97,6 +97,8 @@ export async function GET(request: Request) {
       : await buildProjection()
     return noStoreJson({ ok: true, ...projection })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return noStoreJson(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to load knowledge view' },
       { status: 500 }
@@ -159,6 +161,8 @@ export async function POST(request: Request) {
 
     return buildSuccessResponse(projection)
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to rebuild knowledge view' },
       { status: 500 }

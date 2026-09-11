@@ -1,3 +1,4 @@
+import { readJsonObject, apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES } from '@/lib/server/api-route'
 import { NextResponse } from 'next/server'
 import { buildGenerationContext, type GenerationContextRagArtifacts } from '@/lib/server/context-builder'
 import { runWithNovelDatabaseAccess } from '@/lib/server/database-access'
@@ -37,7 +38,7 @@ function normalizeBranchContextInclusion(value: unknown) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json().catch(() => null)
+    const body = await readJsonObject(request, MAX_GENERATION_JSON_BODY_BYTES)
     if (!body || typeof body !== 'object') {
       return NextResponse.json({ ok: false, error: 'Invalid JSON body' }, { status: 400 })
     }
@@ -106,6 +107,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, ...result, contextSnapshotId })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to build generation context' },
       { status: error instanceof Error && error.message.includes('Invalid novel ID') ? 400 : error instanceof Error && error.message.includes('not found') ? 404 : 500 }

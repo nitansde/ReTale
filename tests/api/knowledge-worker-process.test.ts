@@ -2,10 +2,38 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { buildKnowledgeWorker } from '../../scripts/build-knowledge-worker.mjs'
 import { createTempDatabaseCopy, hashFile } from '@/tests/helpers/temp-db'
 
 const workerPath = path.join(process.cwd(), 'scripts', 'knowledge-worker.mjs')
+let deploymentRoot: string
+
+beforeAll(async () => {
+  deploymentRoot = fs.mkdtempSync(path.join(process.env.RETALE_TEST_ROOT!, 'compiled-worker-'))
+  fs.mkdirSync(path.join(deploymentRoot, 'scripts'))
+  for (const file of ['knowledge-worker.mjs', 'worker-diagnostics.mjs']) {
+    fs.copyFileSync(path.join(process.cwd(), 'scripts', file), path.join(deploymentRoot, 'scripts', file))
+  }
+  // Only native LanceDB and its runtime dependencies are external to the bundle.
+  // Copy its dependency trace so this fixture has no compiler or source loader.
+  const { createRequire } = await import('node:module')
+  const require = createRequire(import.meta.url)
+  const { nodeFileTrace } = require('next/dist/compiled/@vercel/nft')
+  const { fileList } = await nodeFileTrace([require.resolve('@lancedb/lancedb')], { base: process.cwd() })
+  for (const file of fileList as Set<string>) {
+    if (!file.startsWith('node_modules/')) continue
+    const target = path.join(deploymentRoot, file)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.copyFileSync(path.join(process.cwd(), file), target)
+  }
+  expect(fs.existsSync(path.join(deploymentRoot, 'node_modules', 'typescript'))).toBe(false)
+  await buildKnowledgeWorker({ outdir: path.join(deploymentRoot, '.retale-worker') })
+}, 30_000)
+
+afterAll(() => {
+  if (deploymentRoot) fs.rmSync(deploymentRoot, { recursive: true, force: true })
+})
 
 function moveToPerNovelStorage(sourceDbPath: string, directory: string, novelId: string) {
   const novelDbPath = path.join(directory, 'data', 'novels', novelId, 'novel.db')
@@ -52,9 +80,10 @@ function runWorker(params: {
   jobId: string
   jobType?: 'extract_chapter_knowledge' | 'rebuild_retrieval_index'
   attemptId?: string
+  production?: boolean
 }) {
   return spawnSync(process.execPath, [
-    workerPath,
+    params.cwd === deploymentRoot ? path.join(deploymentRoot, 'scripts', 'knowledge-worker.mjs') : workerPath,
     '--job-id', params.jobId,
     '--job-type', params.jobType ?? 'extract_chapter_knowledge',
     '--novel-id', params.novelId,
@@ -68,6 +97,7 @@ function runWorker(params: {
     timeout: 30_000,
     env: {
       ...process.env,
+      NODE_ENV: params.production ? 'production' : 'test',
       RETALE_KNOWLEDGE_WORKER: '1',
       RETALE_DATA_DIR: path.dirname(path.dirname(path.dirname(params.novelDbPath))),
     },
@@ -90,6 +120,42 @@ function readKnowledgeJobSnapshot(database: DatabaseSync, jobId: string) {
 }
 
 describe('knowledge worker process bootstrap', () => {
+  it.each(['running', 'succeeded', 'cannot-persist'])('retains diagnostics without overwriting %s state', (scenario) => {
+    const temp = createTempDatabaseCopy('retale-worker-diagnostics')
+    const novelId = 'novel-worker-diagnostics'
+    const branchId = `${novelId}:main`
+    const jobId = 'job-worker-diagnostics'
+    const novelDbPath = moveToPerNovelStorage(temp.dbPath, temp.directory, novelId)
+    const invalidRepoRoot = path.join(temp.directory, 'invalid-root')
+    fs.mkdirSync(invalidRepoRoot)
+    const database = new DatabaseSync(novelDbPath)
+    try {
+      seedKnowledgeJob(database, { novelId, branchId, jobId, attemptId: 'current' })
+      if (scenario === 'cannot-persist') {
+        database.exec("CREATE TRIGGER reject_job_update BEFORE UPDATE ON KnowledgeJob BEGIN SELECT RAISE(ABORT, 'diagnostic persistence unavailable'); END")
+      } else {
+        database.prepare('UPDATE KnowledgeJob SET status = ? WHERE id = ?').run(scenario, jobId)
+      }
+      const before = readKnowledgeJobSnapshot(database, jobId)
+      const result = runWorker({
+        cwd: invalidRepoRoot, novelDbPath, novelId, branchId, jobId,
+        lanceDbPath: path.join(temp.directory, 'lancedb'), attemptId: 'current',
+      })
+      expect(result.status).toBe(1)
+      expect(readKnowledgeJobSnapshot(database, jobId)).toEqual(before)
+      const directory = path.join(path.dirname(novelDbPath), 'worker-logs')
+      const logs = fs.readdirSync(directory).map((file) => fs.readFileSync(path.join(directory, file), 'utf8')).join('\n')
+      expect(logs).toContain('Cannot find package')
+      if (scenario === 'cannot-persist') {
+        expect(logs).toContain('Failed to persist knowledge worker startup error')
+        expect(logs).toContain('diagnostic persistence unavailable')
+      }
+    } finally {
+      database.close()
+      temp.cleanup()
+    }
+  })
+
   it('loads the repository TypeScript graph and claims a queued isolated job', () => {
     const tempDatabase = createTempDatabaseCopy('retale-knowledge-worker-process')
     const novelId = 'novel-worker-process'
@@ -131,9 +197,12 @@ describe('knowledge worker process bootstrap', () => {
   })
 
   it.each([
-    { label: 'main', jobType: 'extract_chapter_knowledge' as const },
-    { label: 'retrieval', jobType: 'rebuild_retrieval_index' as const },
-  ])('allows only the matching scheduled attempt to claim a tokenized $label job', ({ label, jobType }) => {
+    { label: 'main source', jobType: 'extract_chapter_knowledge' as const, production: false },
+    { label: 'retrieval source', jobType: 'rebuild_retrieval_index' as const, production: false },
+    { label: 'main compiled', jobType: 'extract_chapter_knowledge' as const, production: true },
+    { label: 'retrieval compiled', jobType: 'rebuild_retrieval_index' as const, production: true },
+  ])('allows only the matching scheduled attempt to claim a tokenized $label job', ({ label: modeLabel, jobType, production }) => {
+    const label = modeLabel.replaceAll(' ', '-')
     const cases = [
       { label: 'matching', workerAttemptId: 'attempt-current', claimed: true },
       { label: 'stale', workerAttemptId: 'attempt-stale', claimed: false },
@@ -160,7 +229,8 @@ describe('knowledge worker process bootstrap', () => {
 
       try {
         const result = runWorker({
-          cwd: process.cwd(),
+          cwd: production ? deploymentRoot : process.cwd(),
+          production,
           novelDbPath,
           lanceDbPath: path.join(tempDatabase.directory, 'lancedb'),
           novelId,
@@ -232,7 +302,8 @@ describe('knowledge worker process bootstrap', () => {
     }
   })
 
-  it('fails only the exact queued matching attempt when application bootstrap cannot resolve from cwd', () => {
+  it.each([false, true])('fails only the exact queued matching attempt on bootstrap failure (production=%s)', (production) => {
+    const expectedError = production ? 'Cannot find module' : 'Cannot find package'
     const targetDatabase = createTempDatabaseCopy('retale-knowledge-worker-bootstrap-failure')
     const untouchedDatabase = createTempDatabaseCopy('retale-knowledge-worker-bootstrap-untouched')
     const novelId = 'novel-worker-bootstrap-failure'
@@ -258,6 +329,7 @@ describe('knowledge worker process bootstrap', () => {
     try {
       const result = runWorker({
         cwd: invalidRepoRoot,
+        production,
         novelDbPath,
         lanceDbPath: path.join(targetDatabase.directory, 'lancedb'),
         novelId,
@@ -268,7 +340,12 @@ describe('knowledge worker process bootstrap', () => {
 
       expect(result.error).toBeUndefined()
       expect(result.status).not.toBe(0)
-      expect(result.stderr).toContain('Cannot find package')
+      expect(result.stderr).toContain(expectedError)
+      const logDirectory = path.join(path.dirname(novelDbPath), 'worker-logs')
+      const diagnostics = fs.readdirSync(logDirectory)
+        .map((name) => fs.readFileSync(path.join(logDirectory, name), 'utf8')).join('\n')
+      expect(diagnostics).toContain(expectedError)
+      expect(diagnostics).toContain('knowledge-worker.mjs')
 
       const readDatabase = new DatabaseSync(novelDbPath, { readOnly: true })
       const targetJob = readDatabase.prepare(
@@ -281,7 +358,7 @@ describe('knowledge worker process bootstrap', () => {
 
       expect(targetJob.status).toBe('failed')
       expect(targetJob.errorMessage).toContain('Knowledge worker startup failed')
-      expect(targetJob.errorMessage).toContain('Cannot find package')
+      expect(targetJob.errorMessage).toContain(expectedError)
       expect(targetJob.errorMessage?.length).toBeLessThanOrEqual(2000)
       expect(targetJob.updatedAt).not.toBe('2000-01-01 00:00:00')
       expect(otherJob).toEqual({
@@ -296,7 +373,7 @@ describe('knowledge worker process bootstrap', () => {
     }
   })
 
-  it('does not let a stale startup failure overwrite a newer queued attempt', () => {
+  it.each([false, true])('does not let a stale startup failure overwrite a newer queued attempt (production=%s)', (production) => {
     const tempDatabase = createTempDatabaseCopy('retale-knowledge-worker-stale-startup-failure')
     const novelId = 'novel-worker-stale-startup-failure'
     const branchId = `${novelId}:main`
@@ -317,6 +394,7 @@ describe('knowledge worker process bootstrap', () => {
     try {
       const result = runWorker({
         cwd: invalidRepoRoot,
+        production,
         novelDbPath,
         lanceDbPath: path.join(tempDatabase.directory, 'lancedb'),
         novelId,

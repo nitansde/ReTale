@@ -1,5 +1,6 @@
 "use client"
 
+import { formatProgressMessage, isRawEmbeddingProgress } from '@/lib/i18n/progress-message'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useEditor } from '@tiptap/react'
@@ -1362,10 +1363,10 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   }, [mainKnowledgeRebuildStatus])
   const hanlpBootstrapPhaseLabel = useMemo(() => {
     const detail = hanlpBootstrapStep?.detail?.trim()
-    if (detail) return detail
+    if (detail) return formatProgressMessage(detail, t) || detail
     const currentStep = mainKnowledgeRebuildStatus?.currentStep?.trim()
     if (knowledgeRebuildFailed) return t('workspace.knowledge.bootstrapFailed')
-    if (currentStep) return currentStep
+    if (currentStep) return formatProgressMessage(currentStep, t) || currentStep
     if (knowledgeRebuildPaused) return t('workspace.knowledge.bootstrapWaitingContinue')
     return hanlpBootstrapHasProgressTelemetry ? t('workspace.knowledge.bootstrapCalculating') : t('workspace.knowledge.waitingProgress')
   }, [hanlpBootstrapHasProgressTelemetry, hanlpBootstrapStep, knowledgeRebuildFailed, knowledgeRebuildPaused, mainKnowledgeRebuildStatus, t])
@@ -1409,10 +1410,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     if (!rawTextEmbeddingActive) return null
     return rawTextEmbeddingProgress === undefined ? null : toProgressPercent(rawTextEmbeddingProgress)
   }, [rawTextEmbeddingActive, rawTextEmbeddingProgress])
-  const rawEmbeddingCurrentStep = useMemo(() => {
-    const currentStep = rawTextEmbeddingActiveStatus?.currentStep?.trim().toLowerCase() ?? ''
-    return currentStep.includes('raw') && currentStep.includes('embedding')
-  }, [rawTextEmbeddingActiveStatus])
+  const rawEmbeddingCurrentStep = isRawEmbeddingProgress(rawTextEmbeddingActiveStatus?.currentStep)
   const rawEmbeddingWaitingFinalization = Boolean(activeRawEmbeddingStep?.status === 'running')
   const rawEmbeddingRunningInParallel = rawTextEmbeddingActive && !rawEmbeddingWaitingFinalization && ((rawTextEmbeddingProgress !== undefined && toProgressPercent(rawTextEmbeddingProgress) < 100) || rawEmbeddingCurrentStep)
   const rawEmbeddingCompleted = rawTextEmbeddingPercent !== null && rawTextEmbeddingPercent >= 100
@@ -1451,7 +1449,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     if (task?.status === 'succeeded' || task?.status === 'completed' || task?.status === 'aborted') return null
     return task
   }, [knowledgeRebuildStatus, retrievalIndexOverview])
-  const retrievalTaskPhaseLabel = useMemo(() => resolveKnowledgeJobPhaseLabel(retrievalTaskStatus), [retrievalTaskStatus])
+  const retrievalTaskPhaseLabel = useMemo(() => resolveKnowledgeJobPhaseLabel(retrievalTaskStatus, t), [retrievalTaskStatus, t])
   const retrievalTaskStatusLabel = useMemo(() => formatKnowledgeJobStatusLabel(retrievalTaskStatus?.status), [retrievalTaskStatus])
   const retrievalControlsState = useMemo(() => resolveRetrievalTaskControlsState({ retrievalTask: retrievalTaskStatus, retrievalIndexOverview, knowledgeRebuildStatus, knowledgeActionLoading, knowledgeRebuilding }), [knowledgeActionLoading, knowledgeRebuildStatus, knowledgeRebuilding, retrievalIndexOverview, retrievalTaskStatus])
   const retrievalIndexStatusLine = useMemo(() => {

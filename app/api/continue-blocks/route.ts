@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createContinueBlockFromRewrite, regenerateContinueBlock } from '@/lib/server/continue-block-service'
-import { isNotFoundErrorMessage, jsonError, readJsonObject, toErrorMessage } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES, jsonError, readJsonObject, toErrorMessage } from '@/lib/server/api-route'
 import { normalizeWritingSkillCardIds } from '@/lib/writing-skill-selection'
 
 function readWritingSkillExampleCount(value: unknown) {
@@ -9,7 +9,7 @@ function readWritingSkillExampleCount(value: unknown) {
 
 export async function POST(request: Request) {
   try {
-    const body = await readJsonObject(request)
+    const body = await readJsonObject(request, MAX_GENERATION_JSON_BODY_BYTES)
     const result = await createContinueBlockFromRewrite({
       novelId: String(body.novelId ?? ''),
       branchId: String(body.branchId ?? ''),
@@ -29,14 +29,16 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result)
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     const message = toErrorMessage(error, 'Failed to create continue block')
-    return jsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
+    return jsonError(message, 500)
   }
 }
 
 export async function PUT(request: Request) {
   try {
-    const body = await readJsonObject(request)
+    const body = await readJsonObject(request, MAX_GENERATION_JSON_BODY_BYTES)
     const result = await regenerateContinueBlock({
       novelId: String(body.novelId ?? ''),
       branchId: String(body.branchId ?? ''),
@@ -55,7 +57,9 @@ export async function PUT(request: Request) {
 
     return NextResponse.json(result)
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     const message = toErrorMessage(error, 'Failed to regenerate continue block')
-    return jsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
+    return jsonError(message, 500)
   }
 }

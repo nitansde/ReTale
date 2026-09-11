@@ -1,3 +1,4 @@
+import { encodeEmbeddingVector } from '@/lib/server/embedding-vector'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -1454,9 +1455,9 @@ describe('/api/knowledge-view', () => {
 
     database.prepare(
       `INSERT INTO RawTextEmbeddingCache (
-        branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension
+        branchId, provider, model, embeddingInputHash, vectorBlob, vectorDimension
       ) VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(mainBranchId, embeddingProvider, embeddingModel, chapterOneHash, '[0.1,0.2]', 2)
+    ).run(mainBranchId, embeddingProvider, embeddingModel, chapterOneHash, encodeEmbeddingVector([0.1, 0.2]), 2)
     database.prepare(
       `INSERT INTO ActiveRetrievalIndex (
         branchId, scopeKey, tableName, scopeStartChapter, scopeEndChapter
@@ -1895,9 +1896,9 @@ describe('/api/knowledge-view', () => {
 
     database.prepare(
       `INSERT INTO RawTextEmbeddingCache (
-        branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension
+        branchId, provider, model, embeddingInputHash, vectorBlob, vectorDimension
       ) VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(mainBranchId, 'ollama', 'embed-model', 'raw-cache-target', '[0.1,0.2]', 2)
+    ).run(mainBranchId, 'ollama', 'embed-model', 'raw-cache-target', encodeEmbeddingVector([0.1, 0.2]), 2)
 
     const { POST } = await loadKnowledgeViewRoute()
     const response = await POST(createJsonRequest('http://localhost/api/knowledge-view', {
@@ -2052,10 +2053,10 @@ describe('/api/knowledge-view', () => {
     seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-main', chapterNo: 1 })
     database.prepare(
       `INSERT INTO RawTextEmbeddingCache (
-        branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension
+        branchId, provider, model, embeddingInputHash, vectorBlob, vectorDimension
       ) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`
     ).run(
-      mainBranchId, 'ollama', 'embed-model', 'raw-cache-target', '[0.1,0.2]', 2,
+      mainBranchId, 'ollama', 'embed-model', 'raw-cache-target', encodeEmbeddingVector([0.1, 0.2]), 2,
       altBranchId, 'ollama', 'embed-model', 'raw-cache-alt', '[0.2,0.3]', 2,
       otherMainBranchId, 'ollama', 'embed-model', 'raw-cache-other', '[0.3,0.4]', 2,
     )
@@ -2098,9 +2099,9 @@ describe('/api/knowledge-view', () => {
     insertExtractionCacheFixture(database, { idPrefix: 'blocked-main', novelId, branchId: mainBranchId, chapterId: 'chapter-blocked', chapterNo: 1 })
     database.prepare(
       `INSERT INTO RawTextEmbeddingCache (
-        branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension
+        branchId, provider, model, embeddingInputHash, vectorBlob, vectorDimension
       ) VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(mainBranchId, 'ollama', 'embed-model', 'raw-cache-blocked', '[0.1,0.2]', 2)
+    ).run(mainBranchId, 'ollama', 'embed-model', 'raw-cache-blocked', encodeEmbeddingVector([0.1, 0.2]), 2)
     database.prepare(
       `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
@@ -2132,9 +2133,9 @@ describe('/api/knowledge-view', () => {
     seedKnowledgeChapter(database, { novelId, branchId: mainBranchId, chapterId: 'chapter-retrieval-blocked', chapterNo: 1 })
     database.prepare(
       `INSERT INTO RawTextEmbeddingCache (
-        branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension
+        branchId, provider, model, embeddingInputHash, vectorBlob, vectorDimension
       ) VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(mainBranchId, 'ollama', 'embed-model', 'raw-cache-retrieval-blocked', '[0.1,0.2]', 2)
+    ).run(mainBranchId, 'ollama', 'embed-model', 'raw-cache-retrieval-blocked', encodeEmbeddingVector([0.1, 0.2]), 2)
     database.prepare(
       `INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status, currentStep, progress, payloadJson)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`

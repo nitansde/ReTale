@@ -110,7 +110,7 @@ describe('knowledge worker scheduler', () => {
     ])
     expect(firstSpawnOptions?.cwd).toBe(process.cwd())
     expect(firstSpawnOptions?.detached).toBe(true)
-    expect(firstSpawnOptions?.stdio).toBe('ignore')
+    expect(firstSpawnOptions?.stdio).toEqual(['ignore', 'ignore', 'inherit'])
     expect(childProcesses[0]?.unrefInvoked).toBe(true)
     expect(childProcesses[1]?.unrefInvoked).toBe(true)
     expect(firstSpawnOptions?.env?.RETALE_KNOWLEDGE_WORKER).toBe('1')

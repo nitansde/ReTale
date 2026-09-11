@@ -9,7 +9,7 @@ import { createStoryTimelineNode, findStoryTimelineNodeById, getNextStoryTimelin
 import { addWhatIfDelta, createWhatIfSession, findWhatIfSessionById } from '@/lib/server/what-if-store'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
-const EVIDENCE_DIR = path.join(process.cwd(), '.sisyphus/evidence/task-3-store-contracts')
+const EVIDENCE_DIR = process.env.TASK_EVIDENCE_DIR!
 type SqlParam = string | number | bigint | Uint8Array | null
 
 const cleanups: Array<() => void> = []

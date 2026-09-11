@@ -659,7 +659,7 @@ describe('roleplay session API', () => {
       sourceTextSnapshot: 'rewrite 正文：风吹动了窗纸，他还是没有转身。',
     }))
 
-    expect(response.status).toBe(400)
+    expect(response.status).toBe(500)
     await expect(response.json()).resolves.toEqual({ ok: false, error: 'forced roleplay timeline failure' })
     expect(database.prepare('SELECT COUNT(*) AS count FROM roleplay_sessions').get()).toMatchObject({ count: 0 })
     expect(database.prepare('SELECT COUNT(*) AS count FROM story_timeline_nodes WHERE roleplay_session_id IS NOT NULL').get()).toMatchObject({ count: 0 })

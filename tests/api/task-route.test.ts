@@ -312,18 +312,18 @@ describe('/api/task', () => {
     expect(payload.tasks.map((task) => task.jobId)).toEqual(['job_stale_retry_extract'])
     expect(payload.tasks[0]).toMatchObject({
       status: 'queued',
-      currentStep: expect.stringContaining('重新排队重试'),
+      currentStep: expect.stringContaining('progress.retry'),
       errorMessage: expect.stringContaining('无进度更新'),
     })
     expect(retriedRow).toMatchObject({
       status: 'queued',
-      currentStep: expect.stringContaining('重新排队重试'),
+      currentStep: expect.stringContaining('progress.retry'),
       errorMessage: expect.stringContaining('无进度更新'),
     })
     expect(retriedPayload.taskWatchdog).toMatchObject({ attemptCount: 1, lastAction: 'retried' })
     expect(failedRow).toMatchObject({
       status: 'failed',
-      currentStep: expect.stringContaining('最大重试次数'),
+      currentStep: expect.stringContaining('progress.retryExhausted'),
       errorMessage: expect.stringContaining('已标记失败'),
     })
     expect(failedPayload.taskWatchdog).toMatchObject({ attemptCount: 2, lastAction: 'failed' })

@@ -1,3 +1,4 @@
+import { progressMessage } from '@/lib/i18n/progress-message'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -174,6 +175,33 @@ afterEach(async () => {
 })
 
 describe('recoverable rewrite jobs', () => {
+  it.each([
+    { chunks: ['{"res', 'ult":"完成。"}'], expected: '完成。', status: 'succeeded' },
+    { chunks: [' ', '\n', '\t'], expected: undefined, status: 'failed' },
+  ])('handles wrapped and empty streams after consuming the original response ($status)', async ({ chunks, expected, status }) => {
+    await createTestDatabase('retale-rewrite-stream-result')
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const content of chunks) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`))
+        }
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+        controller.close()
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream, {
+      headers: { 'Content-Type': 'text/event-stream' },
+    })))
+    const { GET, POST, runRecoverableRewriteJobForTesting } = await importRewriteRoute()
+    const created = await (await POST(createRewriteRequest({ recoverableRewriteJob: true, stream: true }))).json()
+    await runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
+    const restored = await (await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))).json()
+    expect(restored.job.status).toBe(status)
+    if (expected) expect(restored.job.result).toMatchObject({ content: expected, provider: 'openai-compatible' })
+    else expect(restored.job.errorMessage).toBeTruthy()
+  })
+
   it('stores and restores one completed rewrite result', async () => {
     const { queryOne } = await createTestDatabase('retale-rewrite-recoverable')
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
@@ -742,7 +770,7 @@ describe('recoverable rewrite jobs', () => {
     const staleUpdate = updateRecoverableRewriteJob('rewrite-watchdog-guard', {
       status: 'succeeded',
       progress: 1,
-      currentStep: '完成',
+      currentStep: progressMessage('progress.completed'),
       payload: {
         ...basePayload,
         result: {

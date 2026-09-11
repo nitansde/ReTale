@@ -1,3 +1,5 @@
+import { progressEnMessages, progressZhMessages } from '@/lib/i18n/progress-messages'
+
 export const SUPPORTED_LOCALES = ['zh', 'en'] as const
 export const LOCALE_STORAGE_KEY = 'retale.locale'
 
@@ -5,6 +7,7 @@ export type Locale = (typeof SUPPORTED_LOCALES)[number]
 export type TranslationValues = Record<string, string | number>
 
 export const zhMessages = {
+  ...progressZhMessages,
   'common.close': '关闭',
   'language.label': '界面语言',
   'language.zh': '中文',
@@ -1172,6 +1175,7 @@ export type TranslationKey = keyof typeof zhMessages
 type MessageDictionary = Record<TranslationKey, string>
 
 export const enMessages: MessageDictionary = {
+  ...progressEnMessages,
   'common.close': 'Close',
   'language.label': 'Language',
   'language.zh': '中文',

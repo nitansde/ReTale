@@ -1,5 +1,6 @@
 "use client"
 
+import { formatProgressMessage } from '@/lib/i18n/progress-message'
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
@@ -160,7 +161,7 @@ export function TaskPageClient() {
           <div className="space-y-4">
             {sortedTasks.map((task) => {
               const progress = formatProgress(task.progress) ?? t('task.unknown')
-              const currentStep = task.currentStep?.trim() || t('task.noCurrentStep')
+              const currentStep = formatProgressMessage(task.currentStep, t) || t('task.noCurrentStep')
               return (
                 <article
                   key={task.jobId}

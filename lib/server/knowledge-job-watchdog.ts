@@ -1,3 +1,4 @@
+import { progressMessage } from '@/lib/i18n/progress-message'
 import type { KnowledgeJobType } from '@/lib/server/knowledge-rebuild'
 import type { DatabaseAccess } from '@/lib/server/database-access'
 import { RECOVERABLE_REWRITE_JOB_TYPE } from '@/lib/server/recoverable-rewrite-jobs'
@@ -118,7 +119,7 @@ function buildScopedKnowledgeJobWatchdogQuery(params: ReconcileKnowledgeJobWatch
 }
 
 function buildRetryCurrentStep(attemptCount: number, maxRetries: number) {
-  return `任务长时间无进度，准备重新排队重试（第 ${attemptCount}/${maxRetries} 次）`
+  return progressMessage('progress.retry', { attempt: attemptCount, maximum: maxRetries })
 }
 
 function buildRetryErrorMessage(staleTimeoutMs: number) {
@@ -126,7 +127,7 @@ function buildRetryErrorMessage(staleTimeoutMs: number) {
 }
 
 function buildFailureCurrentStep(maxRetries: number) {
-  return `任务长时间无进度，已达到最大重试次数（${maxRetries} 次）`
+  return progressMessage('progress.retryExhausted', { maximum: maxRetries })
 }
 
 function buildFailureErrorMessage(staleTimeoutMs: number, maxRetries: number) {

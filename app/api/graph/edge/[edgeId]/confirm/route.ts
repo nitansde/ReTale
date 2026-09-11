@@ -1,3 +1,4 @@
+import { readJsonObject, apiRequestErrorResponse } from '@/lib/server/api-route'
 import { NextResponse } from 'next/server'
 import { runWithNovelDatabaseAccess } from '@/lib/server/database-access'
 import { confirmEntityLink, loadEntityLinkById } from '@/lib/server/graph-store'
@@ -14,7 +15,7 @@ export async function POST(request: Request, context: RouteContext) {
       return NextResponse.json({ ok: false, error: 'edgeId is required' }, { status: 400 })
     }
 
-    const body = await request.json().catch(() => null)
+    const body = await readJsonObject(request)
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return NextResponse.json({ ok: false, error: 'Invalid JSON body' }, { status: 400 })
     }
@@ -34,6 +35,8 @@ export async function POST(request: Request, context: RouteContext) {
 
     return NextResponse.json({ ok: true, edge })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     const message = error instanceof Error ? error.message : 'Failed to confirm graph edge'
     const status = message.includes('Expected exactly one matching KnowledgeRelation') ? 409 : message.includes('Invalid novel ID') ? 400 : 500
     return NextResponse.json({ ok: false, error: message }, { status })

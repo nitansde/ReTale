@@ -13,6 +13,7 @@ import {
   TEST_OWNERSHIP_MARKER,
 } from '../../scripts/test-path-safety.mjs'
 import { createTempDatabaseCopy, getSourceDbPath, hashFile } from '@/tests/helpers/temp-db'
+import { createVitestFileRuntime, resolveTestWorkers } from '../../scripts/vitest-file-runtime.mjs'
 
 const repoRoot = process.cwd()
 const originalTestRoot = process.env.RETALE_TEST_ROOT
@@ -76,6 +77,43 @@ afterEach(() => {
 })
 
 describe('owned test runtime paths', () => {
+  it('isolates actual concurrent test files, including module-time singleton access', () => {
+    const suiteRoot = createOwnedTestRoot(currentOwnedRoot(), 'parallel-proof-', { repoRoot })
+    try {
+      const result = spawnSync(process.execPath, [
+        'node_modules/vitest/vitest.mjs', 'run', '--config', 'vitest.config.ts',
+        'tests/fixtures/vitest-isolation/first.test.mjs',
+        'tests/fixtures/vitest-isolation/second.test.mjs',
+      ], {
+        cwd: repoRoot, encoding: 'utf8', timeout: 30_000,
+        env: { ...process.env, RETALE_TEST_SUITE_ROOT: suiteRoot, RETALE_TEST_WORKERS: '2' },
+      })
+      expect(result.status, result.stdout + result.stderr).toBe(0)
+      const first = JSON.parse(fs.readFileSync(path.join(suiteRoot, 'barrier', 'first.json'), 'utf8'))
+      const second = JSON.parse(fs.readFileSync(path.join(suiteRoot, 'barrier', 'second.json'), 'utf8'))
+      for (const key of ['testRoot', 'database', 'source', 'temp', 'evidence', 'pid']) {
+        expect(first[key], key).not.toBe(second[key])
+      }
+    } finally {
+      removeOwnedTestTree(suiteRoot, currentOwnedRoot(), { repoRoot })
+    }
+  }, 35_000)
+
+  it('rejects an unowned suite before creating runtime files', () => {
+    const unowned = path.join(currentOwnedRoot(), 'unowned-suite')
+    expect(() => createVitestFileRuntime({ suiteRoot: unowned, testFile: 'example.test.ts', repoRoot })).toThrow(/ownership marker/)
+    expect(fs.existsSync(unowned)).toBe(false)
+  })
+
+  it('defaults to two workers and permits bounded overrides including serial runs', () => {
+    expect(resolveTestWorkers('')).toBe(2)
+    expect(resolveTestWorkers('1')).toBe(1)
+    expect(resolveTestWorkers('4')).toBe(4)
+    for (const value of ['0', '9', '-1', '1.5', 'NaN', '2x']) {
+      expect(() => resolveTestWorkers(value)).toThrow(/RETALE_TEST_WORKERS/)
+    }
+  })
+
   it('runs Vitest with explicit owned database, source, and data paths', () => {
     const testRoot = currentOwnedRoot()
     const databaseUrl = process.env.DATABASE_URL

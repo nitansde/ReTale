@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { isNotFoundErrorMessage, jsonError, noStoreJson, noStoreJsonError, readJsonObject, toErrorMessage } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES, jsonError, noStoreJson, noStoreJsonError, readJsonObject, toErrorMessage } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { listRoleplaySessionsByNovel, createRoleplaySession } from '@/lib/server/roleplay-store'
 import type { RoleplaySourceNodeType } from '@/lib/roleplay-types'
@@ -26,14 +26,16 @@ export async function GET(request: Request) {
 
     return noStoreJson({ sessions: listRoleplaySessionsByNovel(novelId, createNovelDatabaseAccess(novelId)) })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     const message = toErrorMessage(error, 'Failed to load roleplay sessions')
-    return noStoreJsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
+    return noStoreJsonError(message, 500)
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const body = await readJsonObject(request)
+    const body = await readJsonObject(request, MAX_GENERATION_JSON_BODY_BYTES)
     const novelId = String(body.novelId ?? '')
     const db = createNovelDatabaseAccess(novelId)
     const result = await createRoleplaySession({
@@ -56,7 +58,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ sessionId: result.session.id, timelineNodeId: result.timelineNodeId }, { status: 201 })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     const message = toErrorMessage(error, 'Failed to create roleplay session')
-    return jsonError(message, isNotFoundErrorMessage(message) ? 404 : 400)
+    return jsonError(message, 500)
   }
 }

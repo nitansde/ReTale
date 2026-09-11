@@ -1,3 +1,4 @@
+import { encodeEmbeddingVector } from '@/lib/server/embedding-vector'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -455,9 +456,9 @@ function insertBaseNovelGraph(database: DatabaseSync, novelId: FixtureNovelId, c
 
   database.prepare(
     `INSERT INTO RawTextEmbeddingCache (
-      branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension
+      branchId, provider, model, embeddingInputHash, vectorBlob, vectorDimension
     ) VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(branchId, 'fixture-provider', 'fixture-model', `${novelId}-embedding-hash`, JSON.stringify([0.1, 0.2, 0.3]), 3)
+  ).run(branchId, 'fixture-provider', 'fixture-model', `${novelId}-embedding-hash`, encodeEmbeddingVector([0.1, 0.2, 0.3]), 3)
 
   database.prepare(
     `INSERT INTO ActiveRetrievalIndex (branchId, scopeKey, tableName, scopeStartChapter, scopeEndChapter)

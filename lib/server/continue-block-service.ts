@@ -1,3 +1,5 @@
+import { ResourceNotFoundError } from '@/lib/server/domain-errors'
+import { parseRequestInput } from '@/lib/server/request-validation'
 import {
   continueBlockCreateRequestSchema,
   continueBlockMutationResponseSchema,
@@ -64,7 +66,7 @@ function buildContinueBlockSubtitle(params: {
 }
 
 export async function createContinueBlockFromRewrite(rawInput: ContinueBlockCreateRequest): Promise<ContinueBlockMutationResponse> {
-  const input = continueBlockCreateRequestSchema.parse(rawInput)
+  const input = parseRequestInput(continueBlockCreateRequestSchema, rawInput)
   const db = createNovelDatabaseAccess(input.novelId)
   const nodeType: StoryTimelineNodeType = input.parentTimelineNodeId ? 'continue_block' : 'rewrite'
   const { continueBlock, timelineNode } = await db.withTransaction(() => {
@@ -158,11 +160,11 @@ export async function createContinueBlockFromRewrite(rawInput: ContinueBlockCrea
 }
 
 export async function regenerateContinueBlock(rawInput: ContinueBlockRegenerateRequest): Promise<ContinueBlockMutationResponse> {
-  const input = continueBlockRegenerateRequestSchema.parse(rawInput)
+  const input = parseRequestInput(continueBlockRegenerateRequestSchema, rawInput)
   const db = createNovelDatabaseAccess(input.novelId)
   const existing = findContinueBlockById(input.continueBlockId, db)
   if (!existing || existing.novelId !== input.novelId || existing.branchId !== input.branchId) {
-    throw new Error(`Continue block not found: ${input.continueBlockId}`)
+    throw new ResourceNotFoundError(`Continue block not found: ${input.continueBlockId}`)
   }
 
   const timelineNode = findStoryTimelineNodeByContinueBlockId(existing.id, db)
@@ -198,7 +200,7 @@ export async function regenerateContinueBlock(rawInput: ContinueBlockRegenerateR
 
   const refreshedTimelineNode = timelineNode ?? findStoryTimelineNodeByContinueBlockId(existing.id, db)
   if (!refreshedTimelineNode) {
-    throw new Error(`Continue block timeline node not found: ${input.continueBlockId}`)
+    throw new ResourceNotFoundError(`Continue block timeline node not found: ${input.continueBlockId}`)
   }
 
   updateStoryTimelineNodePresentation(refreshedTimelineNode.id, {

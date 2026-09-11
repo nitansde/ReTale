@@ -1,5 +1,6 @@
 "use client"
 
+import { formatProgressMessage } from '@/lib/i18n/progress-message'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -1184,7 +1185,7 @@ export function SelectionNovelStudio() {
                     <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t('workspace.shell.generateVersion')}</p>
                     {rewriteFlow.loading ? (
                       <div className="rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">
-                        <p>{rewriteFlow.jobCurrentStep?.trim() || t('workspace.shell.generatingVersion')}</p>
+                        <p>{formatProgressMessage(rewriteFlow.jobCurrentStep, t) || t('workspace.shell.generatingVersion')}</p>
                         {rewriteFlow.jobId ? (
                           <button onClick={handleAbortRewriteGeneration} className="mt-3 inline-flex items-center gap-1.5 rounded-xl border border-rose-400/25 px-3 py-1.5 text-xs text-rose-100 transition hover:bg-rose-500/10">
                             <X className="h-3.5 w-3.5" /> {t('workspace.action.rewriteAbortedToast')}

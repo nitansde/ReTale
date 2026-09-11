@@ -1,3 +1,4 @@
+import { InputValidationError } from '@/lib/server/domain-errors'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -130,27 +131,27 @@ function assertExistingPathIsNotSymlink(candidatePath: string, label: string) {
 
 export function validateNovelId(novelId: string) {
   if (typeof novelId !== 'string') {
-    throw new Error('Invalid novel ID: expected a string')
+    throw new InputValidationError('Invalid novel ID: expected a string')
   }
 
   if (novelId.trim().length === 0) {
-    throw new Error('Invalid novel ID: value cannot be blank')
+    throw new InputValidationError('Invalid novel ID: value cannot be blank')
   }
 
   if (novelId !== novelId.trim()) {
-    throw new Error('Invalid novel ID: value cannot include leading or trailing whitespace')
+    throw new InputValidationError('Invalid novel ID: value cannot include leading or trailing whitespace')
   }
 
   if (novelId === '.' || novelId === '..') {
-    throw new Error(`Invalid novel ID: "${novelId}" is not allowed`)
+    throw new InputValidationError(`Invalid novel ID: "${novelId}" is not allowed`)
   }
 
   if (novelId.includes('/') || novelId.includes('\\')) {
-    throw new Error(`Invalid novel ID: "${novelId}" cannot contain path separators`)
+    throw new InputValidationError(`Invalid novel ID: "${novelId}" cannot contain path separators`)
   }
 
   if (!/^[A-Za-z0-9._-]+$/.test(novelId)) {
-    throw new Error(`Invalid novel ID: "${novelId}" contains unsupported characters`)
+    throw new InputValidationError(`Invalid novel ID: "${novelId}" contains unsupported characters`)
   }
 
   return novelId

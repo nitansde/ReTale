@@ -1,3 +1,4 @@
+import { parseRequestInput } from '@/lib/server/request-validation'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
@@ -373,7 +374,7 @@ function buildSubtitle(input: WhatIfCreateRequest, topDelta: ExtractedWhatIfDelt
 }
 
 export async function createWhatIfSessionFromRewrite(rawInput: WhatIfCreateRequest): Promise<WhatIfCreateResponse> {
-  const input = whatIfCreateRequestSchema.parse(rawInput)
+  const input = parseRequestInput(whatIfCreateRequestSchema, rawInput)
   const db = createNovelDatabaseAccess(input.novelId)
   const deltas = await extractWhatIfDeltas(input)
   const labelIndex = getNextStoryTimelineLabelIndex(input.novelId, input.branchId, 'what_if', db)

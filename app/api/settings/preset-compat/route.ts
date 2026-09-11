@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import type { PresetCompatLibrary } from '@/lib/preset-compat/types'
 import {
+  readJsonObject,
+  apiRequestErrorResponse,
+  MAX_PRESET_JSON_BODY_BYTES,
   formatRevisionEtag,
   ifNoneMatchMatches,
   PRIVATE_REVALIDATION_CACHE_CONTROL,
@@ -33,7 +36,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json().catch(() => null)
+    const body = await readJsonObject(request, MAX_PRESET_JSON_BODY_BYTES)
     if (!isRecord(body)) {
       return NextResponse.json({ ok: false, error: 'invalid_json_body' }, { status: 400 })
     }
@@ -65,7 +68,10 @@ export async function POST(request: Request) {
       revision: current.revision,
     })
     return NextResponse.json({ ok: true, library })
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Invalid JSON body') return NextResponse.json({ ok: false, error: 'invalid_json_body' }, { status: 400 })
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return NextResponse.json({ ok: false, error: 'failed_to_save_preset_compat_library' }, { status: 500 })
   }
 }

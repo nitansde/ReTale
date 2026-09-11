@@ -1,14 +1,18 @@
 import { NextResponse } from 'next/server'
 import type { PersistedNovelState } from '@/lib/types'
+import { DomainError, InputValidationError } from '@/lib/server/domain-errors'
 
 export const PRIVATE_REVALIDATION_CACHE_CONTROL = 'private, no-cache, max-age=0, must-revalidate'
 export const MAX_WORKSPACE_CHAPTERS = 2_000
 export const MAX_WORKSPACE_CHAPTER_CONTENT_CHARS = 1_000_000
 export const MAX_WORKSPACE_AGGREGATE_CHAPTER_CHARS = 8_000_000
+export const MAX_API_JSON_BODY_BYTES = 1024 * 1024
+export const MAX_GENERATION_JSON_BODY_BYTES = 8 * 1024 * 1024
+export const MAX_PRESET_JSON_BODY_BYTES = 16 * 1024 * 1024
 
-export class ApiRequestError extends Error {
-  constructor(readonly status: 400 | 403 | 413 | 415 | 422, message: string) {
-    super(message)
+export class ApiRequestError extends DomainError {
+  constructor(status: 400 | 403 | 413 | 415 | 422, message: string) {
+    super(status, message)
     this.name = 'ApiRequestError'
   }
 }
@@ -65,7 +69,9 @@ export function createByteLimitedRequest(request: Request, maxBytes: number, mes
         }
         if (bytesRead + value.byteLength > maxBytes) {
           const error = new ApiRequestError(413, message)
-          await reader.cancel(error).catch(() => undefined)
+          // A tee's cancellation can wait for its other reader. Surface the
+          // limit immediately instead of waiting on unrelated body consumers.
+          void reader.cancel(error).catch(() => undefined)
           controller.error(error)
           return
         }
@@ -90,6 +96,7 @@ export function createByteLimitedRequest(request: Request, maxBytes: number, mes
 }
 
 export async function readBoundedJsonObject(request: Request, maxBytes: number, sizeMessage: string) {
+  assertJsonMediaType(request)
   const limitedRequest = createByteLimitedRequest(request, maxBytes, sizeMessage)
   let payload: unknown
   try {
@@ -186,26 +193,21 @@ export function ifNoneMatchMatches(requestValue: string | null, currentEtag: str
   })
 }
 
-export async function readJsonObject(request: Request) {
-  const body = await request.json().catch(() => null)
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    throw new Error('Invalid JSON body')
-  }
+export async function readJsonObject(request: Request, maxBytes = MAX_API_JSON_BODY_BYTES) {
+  return readBoundedJsonObject(request, maxBytes, `JSON request body exceeds ${maxBytes} bytes`)
+}
 
-  return body as Record<string, unknown>
+export function apiRequestErrorResponse(error: unknown) {
+  return error instanceof DomainError ? noStoreJsonError(error.message, error.status) : null
 }
 
 export function requireNonEmptyId(value: string, field: string) {
   const normalized = value.trim()
   if (!normalized) {
-    throw new Error(`${field} is required`)
+    throw new InputValidationError(`${field} is required`)
   }
 
   return normalized
-}
-
-export function isNotFoundErrorMessage(message: string) {
-  return /not found|does not belong|not accessible/u.test(message)
 }
 
 export function toErrorMessage(error: unknown, fallback: string) {

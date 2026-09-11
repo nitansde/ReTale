@@ -820,7 +820,7 @@ CREATE TABLE IF NOT EXISTS RawTextEmbeddingCache (
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
   embeddingInputHash TEXT NOT NULL,
-  vectorJson TEXT NOT NULL,
+  vectorBlob BLOB NOT NULL,
   vectorDimension INTEGER NOT NULL,
   lastSeenAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

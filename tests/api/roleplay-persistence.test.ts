@@ -5,8 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeDatabase } from '@/lib/server/sqlite'
 
-const ROOT = process.cwd()
-const EVIDENCE_DIR = path.join(ROOT, '.sisyphus/evidence')
+const EVIDENCE_DIR = process.env.TASK_EVIDENCE_DIR!
 const createdDirectories: string[] = []
 const globalForSqlite = globalThis as { sqlite?: DatabaseSync }
 

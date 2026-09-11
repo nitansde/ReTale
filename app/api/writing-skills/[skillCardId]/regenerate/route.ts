@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { jsonError, readJsonObject } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, jsonError, readJsonObject } from '@/lib/server/api-route'
 import { scheduleWritingSkillDistillationJob } from '@/lib/server/writing-skill-background'
 import { createWritingSkillRandomSeed } from '@/lib/server/writing-skill-distillation-agent'
 import {
@@ -38,6 +38,8 @@ export async function POST(request: Request, context: Context) {
     scheduleWritingSkillDistillationJob(job.id)
     return NextResponse.json({ ok: true, jobId: job.id, job }, { status: 202 })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return jsonError(error instanceof Error ? error.message : 'Failed to regenerate writing skill card', 400)
   }
 }

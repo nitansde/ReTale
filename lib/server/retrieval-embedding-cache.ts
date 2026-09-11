@@ -1,6 +1,13 @@
 import { hashContent, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { execute, queryAll, withTransaction } from '@/lib/server/database-access'
 import { chunkValues } from '@/lib/utils'
+import { decodeEmbeddingVector, encodeEmbeddingVector } from '@/lib/server/embedding-vector'
+import {
+  isEmbeddingCacheScopeProtected,
+  previewEmbeddingCacheRetention,
+  readEmbeddingCacheJobReferences,
+  type EmbeddingCacheIdentity,
+} from '@/lib/server/storage-retention'
 
 export type RawTextEmbeddingCacheScope = {
   novelId: string
@@ -40,7 +47,7 @@ type RawTextEmbeddingCacheRow = {
   provider: string
   model: string
   embeddingInputHash: string
-  vectorJson: string
+  vectorBlob: Uint8Array
   vectorDimension: number
   lastSeenAt: string
   createdAt: string
@@ -86,36 +93,6 @@ function validateVector(vector: number[], expectedDimension?: number) {
   }
 
   return normalized
-}
-
-function parseStoredVector(row: RawTextEmbeddingCacheRow) {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(row.vectorJson)
-  } catch {
-    throw new Error('Stored embedding vector is not valid JSON')
-  }
-
-  if (!Array.isArray(parsed) || !parsed.length) {
-    throw new Error('Stored embedding vector must be a non-empty array')
-  }
-
-  const vector = parsed.map((value, index) => {
-    if (typeof value !== 'number' || !Number.isFinite(value)) {
-      throw new Error(`Stored embedding vector contains a non-finite value at index ${index}`)
-    }
-    return value
-  })
-
-  if (!Number.isInteger(row.vectorDimension) || row.vectorDimension <= 0) {
-    throw new Error('Stored embedding vector dimension must be a positive integer')
-  }
-
-  if (vector.length !== row.vectorDimension) {
-    throw new Error(`Stored embedding vector dimension mismatch: expected ${row.vectorDimension} but received ${vector.length}`)
-  }
-
-  return vector
 }
 
 function buildPlaceholders(count: number) {
@@ -176,7 +153,7 @@ export async function lookupRawTextEmbeddingCacheEntries(params: {
   for (const hashBatch of chunkValues(hashes)) {
     appendRows(rows, queryAll<RawTextEmbeddingCacheRow>(
       `
-        SELECT branchId, provider, model, embeddingInputHash, vectorJson, vectorDimension, lastSeenAt, createdAt, updatedAt
+        SELECT branchId, provider, model, embeddingInputHash, vectorBlob, vectorDimension, lastSeenAt, createdAt, updatedAt
         FROM RawTextEmbeddingCache
         WHERE branchId = ?
           AND provider = ?
@@ -200,7 +177,7 @@ export async function lookupRawTextEmbeddingCacheEntries(params: {
         provider: row.provider,
         model: row.model,
         embeddingInputHash: row.embeddingInputHash,
-        vector: parseStoredVector(row),
+        vector: decodeEmbeddingVector(row.vectorBlob, row.vectorDimension),
         vectorDimension: row.vectorDimension,
         lastSeenAt: row.lastSeenAt,
         createdAt: row.createdAt,
@@ -255,13 +232,13 @@ export async function upsertRawTextEmbeddingCacheEntries(params: {
 
   const scope = normalizeScope(params.scope)
   let expectedDimension: number | undefined
-  const dedupedEntries = new Map<string, { vector: number[] }>()
+  const dedupedEntries = new Map<string, { bytes: Uint8Array; dimension: number }>()
 
   for (const entry of params.entries) {
     const embeddingInput = requireTrimmedValue(entry.embeddingInput, 'Embedding input')
     const vector = validateVector(entry.vector, expectedDimension)
     expectedDimension ??= vector.length
-    dedupedEntries.set(buildEmbeddingInputHash(embeddingInput), { vector })
+    dedupedEntries.set(buildEmbeddingInputHash(embeddingInput), { bytes: encodeEmbeddingVector(vector), dimension: vector.length })
   }
 
   await withTransaction(() => {
@@ -273,7 +250,7 @@ export async function upsertRawTextEmbeddingCacheEntries(params: {
             provider,
             model,
             embeddingInputHash,
-            vectorJson,
+            vectorBlob,
             vectorDimension,
             lastSeenAt,
             createdAt,
@@ -281,7 +258,7 @@ export async function upsertRawTextEmbeddingCacheEntries(params: {
           )
           VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
           ON CONFLICT(branchId, provider, model, embeddingInputHash) DO UPDATE SET
-            vectorJson = excluded.vectorJson,
+            vectorBlob = excluded.vectorBlob,
             vectorDimension = excluded.vectorDimension,
             lastSeenAt = CURRENT_TIMESTAMP,
             updatedAt = CURRENT_TIMESTAMP
@@ -290,8 +267,8 @@ export async function upsertRawTextEmbeddingCacheEntries(params: {
         scope.provider,
         scope.model,
         embeddingInputHash,
-        JSON.stringify(entry.vector),
-        entry.vector.length,
+        entry.bytes,
+        entry.dimension,
       )
     }
   })
@@ -365,4 +342,36 @@ export async function garbageCollectRawTextEmbeddingCacheEntries(params: {
   })
 
   return deletedCount
+}
+
+export async function pruneInactiveRawTextEmbeddingCache(params: {
+  novelId: string
+  currentIdentities: readonly EmbeddingCacheIdentity[] | (() => readonly EmbeddingCacheIdentity[])
+}) {
+  // Run at rebuild completion, not on individual cache hits. Bound each pass so
+  // large inactive caches are reclaimed gradually without a single huge DELETE.
+  const currentIdentities = () => typeof params.currentIdentities === 'function'
+    ? params.currentIdentities() : params.currentIdentities
+  const preview = previewEmbeddingCacheRetention({ queryAll }, params.novelId, currentIdentities())
+  let deletedRows = 0
+  for (const scope of preview.scopes.filter((scope) => scope.eligible)) {
+    if (deletedRows >= 2000) break
+    await withTransaction(() => {
+      const jobs = readEmbeddingCacheJobReferences({ queryAll }, params.novelId)
+      if (isEmbeddingCacheScopeProtected(scope, currentIdentities(), jobs)) return
+      const changed = queryAll<{ lastSeenAt: string }>(
+        'SELECT MAX(lastSeenAt) AS lastSeenAt FROM RawTextEmbeddingCache WHERE branchId = ? AND provider = ? AND model = ?',
+        scope.branchId, scope.provider, scope.model,
+      )[0]
+      if (changed?.lastSeenAt !== scope.lastSeenAt) return
+      const result = execute(
+        `DELETE FROM RawTextEmbeddingCache WHERE rowid IN (
+           SELECT rowid FROM RawTextEmbeddingCache WHERE branchId = ? AND provider = ? AND model = ? LIMIT ?
+         )`,
+        scope.branchId, scope.provider, scope.model, Math.min(500, 2000 - deletedRows),
+      )
+      deletedRows += Number(result.changes)
+    })
+  }
+  return { preview, deletedRows }
 }

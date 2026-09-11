@@ -1,5 +1,6 @@
 "use client"
 
+import { formatProgressMessage } from '@/lib/i18n/progress-message'
 import { useState } from 'react'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { WorkspaceKnowledgeStatus } from '@/components/workspace/WorkspaceKnowledgeStatus'
@@ -111,7 +112,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
   const userStatus = mapWorkspaceKnowledgeStatus({
     overview: props.knowledgeStatusOverview,
     job: props.mainKnowledgeRebuildStatus ?? props.retrievalTaskStatus,
-  })
+  }, t)
 
   return (
     <div className="mb-4">
@@ -417,7 +418,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
               >
                 {props.knowledgeRebuildFailed
                   ? redactUserFacingDiagnostic(props.knowledgeRebuildFailureMessage)
-                  : redactUserFacingDiagnostic(props.mainKnowledgeRebuildStatus.currentStep) ||
+                  : redactUserFacingDiagnostic(formatProgressMessage(props.mainKnowledgeRebuildStatus.currentStep, t)) ||
                     (props.knowledgeRebuildPaused
                       ? t('workspace.knowledge.waitingContinue')
                       : t('workspace.knowledge.preparing'))}
@@ -538,7 +539,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                     return (
                       <div key={step.key} className="rounded-xl border border-white/8 bg-white/[0.03] px-2.5 py-2">
                         <div className="flex items-center justify-between gap-2 text-[11px]">
-                          <span className="text-zinc-200">{redactUserFacingDiagnostic(step.label)}</span>
+                          <span className="text-zinc-200">{redactUserFacingDiagnostic(formatProgressMessage(step.label, t))}</span>
                           <span className="text-zinc-500">{KNOWLEDGE_STEP_STATUS_LABELS[displayStatus]}</span>
                         </div>
                         {step.detail || (displayStatus === 'running' && step.etaMinutes) ||
@@ -547,7 +548,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                             <div className="mt-1 flex items-center justify-between gap-2 text-[10px] leading-4 text-zinc-500">
                               <span className="truncate">
                                 {step.detail
-                                  ? redactUserFacingDiagnostic(step.detail)
+                                  ? redactUserFacingDiagnostic(formatProgressMessage(step.detail, t))
                                   : KNOWLEDGE_STEP_STATUS_LABELS[displayStatus]}
                               </span>
                               {displayStatus === 'running' && step.etaMinutes

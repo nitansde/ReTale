@@ -105,7 +105,9 @@ describe('LocalEmbeddingWizard', () => {
       </I18nProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: '安装本地 RAG' }))
+    const openButton = await screen.findByRole('button', { name: '安装本地 RAG' })
+    await waitFor(() => expect(openButton).toBeEnabled())
+    fireEvent.click(openButton)
     fireEvent.click(screen.getByRole('button', { name: '下一步' }))
     fireEvent.change(screen.getByRole('combobox'), { target: { value: '__custom-hugging-face-gguf__' } })
 

@@ -1,16 +1,20 @@
 import { type ClassValue, clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
+import { decodeHTMLStrict } from '#html-entity-decoder'
+import { escapeText } from 'entities/escape'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
 export function htmlToPlainText(html: string) {
-  return html
+  const text = html
     .replace(/<\/p>/g, '\n\n')
     .replace(/<br\s*\/?>/g, '\n')
     .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
+  // Decode once, after stripping markup, so encoded literal tags remain prose.
+  return decodeHTMLStrict(text)
+    .replace(/\u00a0/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]+/g, ' ')
     .trim()
@@ -75,7 +79,7 @@ export function splitPlainTextParagraphs(text: string) {
 export function plainTextToHtml(text: string) {
   const paragraphs = splitPlainTextParagraphs(text)
   return (paragraphs.length ? paragraphs : ['　'])
-    .map((paragraph) => `<p>${paragraph.trim() || '　'}</p>`)
+    .map((paragraph) => `<p>${escapeText(paragraph.trim() || '　')}</p>`)
     .join('')
 }
 
@@ -87,7 +91,7 @@ export function plainTextLinesToHtml(text: string) {
     .filter(Boolean)
 
   return (paragraphs.length ? paragraphs : ['　'])
-    .map((paragraph) => `<p>${paragraph || '　'}</p>`)
+    .map((paragraph) => `<p>${escapeText(paragraph || '　')}</p>`)
     .join('')
 }
 
@@ -110,7 +114,7 @@ export function normalizeLegacySingleParagraphHtml(html: string) {
   }
 
   const normalizedText = paragraphContents
-    .map((content) => content.replace(/<br\s*\/?>/gi, '\n').replace(/&nbsp;/g, ' '))
+    .map((content) => decodeHTMLStrict(content.replace(/<br\s*\/?>/gi, '\n')).replace(/\u00a0/g, ' '))
     .join('\n')
   const nonEmptyLineCount = normalizedText.split('\n').filter((line) => line.trim()).length
   if (nonEmptyLineCount <= paragraphMatches.length) {

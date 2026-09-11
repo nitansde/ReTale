@@ -1,3 +1,4 @@
+import { progressMessage } from '@/lib/i18n/progress-message'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -233,7 +234,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     expect(result).toEqual({ jobId: 'job_stale_running_rebuild', outcome: 'queued' })
     expect(jobRow).toMatchObject({
       status: 'queued',
-      currentStep: expect.stringContaining('重新排队重试'),
+      currentStep: expect.stringContaining('progress.retry'),
       errorMessage: expect.stringContaining('无进度更新'),
     })
     expect(payload.taskWatchdog).toMatchObject({ attemptCount: 1, lastAction: 'retried' })
@@ -349,7 +350,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     const runningPayload = runningJob?.payloadJson ? JSON.parse(runningJob.payloadJson) as { phase?: string; rawTextEmbeddingProgress?: number } : null
     expect(runningJob).toMatchObject({
       status: 'running',
-      currentStep: '等待原文 Embedding 预计算完成',
+      currentStep: progressMessage('progress.rawEmbeddingWait'),
     })
     expect(runningJob?.progress).toBeGreaterThanOrEqual(0.94)
     expect(runningPayload).toMatchObject({
@@ -368,7 +369,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     expect(indexStarted).toBe(true)
     expect(completedJob).toMatchObject({
       status: 'succeeded',
-      currentStep: '完成',
+      currentStep: progressMessage('progress.completed'),
       progress: 1,
     })
     expect(completedPayload).toMatchObject({
@@ -438,7 +439,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     )
     expect(runningJob).toMatchObject({
       status: 'running',
-      currentStep: '等待原文 Embedding 预计算完成',
+      currentStep: progressMessage('progress.rawEmbeddingWait'),
     })
     expect(precomputeCalls).toBe(1)
     expect(indexCalls).toBe(0)
@@ -1221,7 +1222,7 @@ describe('knowledge rebuild raw-text precompute overlap', () => {
     )
     const waitingPayload = waitingJob?.payloadJson ? JSON.parse(waitingJob.payloadJson) as { phase?: string } : null
     expect(waitingPayload?.phase).toBe('write')
-    expect(waitingJob?.currentStep).toBe('完成')
+    expect(waitingJob?.currentStep).toBe(progressMessage('progress.completed'))
 
     await expect(rebuildPromise).resolves.toMatchObject({ outcome: 'completed' })
 

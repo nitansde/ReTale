@@ -1,5 +1,6 @@
 "use client"
 
+import { formatProgressMessage } from '@/lib/i18n/progress-message'
 import Link from 'next/link'
 import { useState } from 'react'
 import {
@@ -738,14 +739,14 @@ export function formatKnowledgeJobStatusLabel(status: string | null | undefined)
   }
 }
 
-export function resolveKnowledgeJobPhaseLabel(status: KnowledgeRebuildStatus | null | undefined) {
+export function resolveKnowledgeJobPhaseLabel(status: KnowledgeRebuildStatus | null | undefined, translate = tm) {
   if (!status) return null
   const activeStep = status.steps.find((step) => step.status === 'running' || step.status === 'paused') ?? null
   const detail = activeStep?.detail?.trim()
-  if (detail) return detail
+  if (detail) return formatProgressMessage(detail, translate)
   const currentStep = status.currentStep?.trim()
-  if (currentStep) return currentStep
-  return activeStep?.label ?? null
+  if (currentStep) return formatProgressMessage(currentStep, translate)
+  return formatProgressMessage(activeStep?.label, translate)
 }
 
 export function resolveRetrievalTaskControlsState(params: {

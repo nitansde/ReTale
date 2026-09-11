@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { noStoreJson } from '@/lib/server/api-route'
+import { readJsonObject, apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES, noStoreJson } from '@/lib/server/api-route'
 import { buildChapterGraphContext } from '@/lib/server/context-builder'
 import { buildGraphAwareContext } from '@/lib/server/graph-context'
 import { findStoryBranch, normalizeBranchId } from '@/lib/server/knowledge-store'
@@ -21,7 +21,7 @@ function normalizeMaxHops(value: unknown) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json().catch(() => null)
+    const body = await readJsonObject(request, MAX_GENERATION_JSON_BODY_BYTES)
     if (!body || typeof body !== 'object') {
       return NextResponse.json({ ok: false, error: 'Invalid JSON body' }, { status: 400 })
     }
@@ -83,6 +83,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, ...result })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to build graph context' },
       { status: error instanceof Error && error.message.includes('Invalid novel ID') ? 400 : error instanceof Error && (error.message.includes('not found') || error.message.includes('does not belong')) ? 404 : 500 }
@@ -113,6 +115,8 @@ export async function GET(request: Request) {
 
     return noStoreJson({ ok: true, ...result })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     return noStoreJson(
       { ok: false, error: error instanceof Error ? error.message : 'Failed to load chapter graph context' },
       { status: error instanceof Error && error.message.includes('Invalid novel ID') ? 400 : error instanceof Error && error.message.includes('not found') ? 404 : 500 }

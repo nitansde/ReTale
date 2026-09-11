@@ -1,3 +1,4 @@
+import { readJsonObject, apiRequestErrorResponse } from '@/lib/server/api-route'
 import { NextResponse } from 'next/server'
 import { runWithNovelDatabaseAccess } from '@/lib/server/database-access'
 import { editEntityLink, loadEntityLinkById } from '@/lib/server/graph-store'
@@ -61,7 +62,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       return NextResponse.json({ ok: false, error: 'edgeId is required' }, { status: 400 })
     }
 
-    const body = await request.json().catch(() => null)
+    const body = await readJsonObject(request)
     if (!body || typeof body !== 'object') {
       return NextResponse.json({ ok: false, error: 'Invalid JSON body' }, { status: 400 })
     }
@@ -116,6 +117,8 @@ export async function PATCH(request: Request, context: RouteContext) {
       edge,
     })
   } catch (error) {
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
     const message = error instanceof Error ? error.message : 'Failed to edit graph edge'
     const status = message.includes('Expected exactly one matching KnowledgeRelation') ? 409 : message.includes('must') || message.includes('Invalid JSON body') || message.includes('Invalid novel ID') ? 400 : 500
     return NextResponse.json({ ok: false, error: message }, { status })

@@ -12,6 +12,7 @@ import {
   removeOwnedTestTree,
 } from './test-path-safety.mjs'
 import { buildNextProductionBuildArgs } from './next-production-build.mjs'
+import { buildKnowledgeWorker } from './build-knowledge-worker.mjs'
 import { assertPortAvailable, assertPortReleased } from './production-port-safety.mjs'
 
 const ROOT = process.cwd()
@@ -213,6 +214,7 @@ async function main() {
     const runtimeEnv = createRuntimeEnvironment(config)
 
     console.log(`[retale-production-smoke] Building with owned runtime ${config.testRoot}`)
+    await buildKnowledgeWorker({ repoRoot: ROOT })
     const build = spawn(process.execPath, [NEXT_CLI_ENTRYPOINT, ...buildNextProductionBuildArgs()], {
       cwd: ROOT,
       env: runtimeEnv,
@@ -243,16 +245,22 @@ async function main() {
     })
     await waitForServer(server, () => serverSpawnError)
     await fetchRoute('/workspace')
-    const initialTaskPage = await fetchRoute('/task')
-    if (initialTaskPage.includes(TASK_MARKER)) throw new Error('/task contained the freshness marker before mutation')
-
-    insertFreshTask(novelDbPath)
-    const freshTaskPage = await fetchRoute('/task')
-    if (!freshTaskPage.includes(TASK_MARKER)) {
-      throw new Error('/task did not reflect post-build task-state mutation without rebuilding')
+    await fetchRoute('/task')
+    // The task page loads novel-scoped data through its API after hydration.
+    // Initial HTML contains the client shell, not persisted task rows.
+    const taskRoute = `/api/task?novelId=${encodeURIComponent(NOVEL_ID)}`
+    const initialTasks = JSON.parse(await fetchRoute(taskRoute))
+    if (!initialTasks.ok || initialTasks.tasks.some((task) => task.jobId === TASK_MARKER)) {
+      throw new Error('Unexpected task API state before mutation')
     }
 
-    console.log('[retale-production-smoke] /library, /workspace, and /task passed; /task reflected post-build SQLite state.')
+    insertFreshTask(novelDbPath)
+    const freshTasks = JSON.parse(await fetchRoute(taskRoute))
+    if (!freshTasks.ok || !freshTasks.tasks.some((task) => task.jobId === TASK_MARKER)) {
+      throw new Error('Task API did not reflect post-build task-state mutation without rebuilding')
+    }
+
+    console.log('[retale-production-smoke] /library, /workspace, and /task passed; the task API reflected post-build SQLite state.')
   } finally {
     try {
       await stopServer(server)
