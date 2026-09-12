@@ -75,7 +75,6 @@ describe('WorkspaceHeader', () => {
     fireEvent.click(screen.getByRole('button', { name: 'workspace.header.moreOptions' }))
 
     expect(screen.getByRole('dialog', { name: 'workspace.header.overflowTitle' })).toBeInTheDocument()
-    expect(screen.getByText('workspace.header.destructiveActions')).toBeInTheDocument()
     const knowledgeButton = screen.getByRole('button', { name: 'workspace.header.openKnowledge' })
     expect(knowledgeButton.querySelector('.lucide-brain')).toBeInTheDocument()
     fireEvent.click(knowledgeButton)

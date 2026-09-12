@@ -135,13 +135,6 @@ export function WorkspaceHeader({
             {t('settings.title')}
           </button>
         </div>
-        <section className="mt-6 border-t border-rose-400/15 pt-5" aria-labelledby="workspace-mobile-danger-title">
-          <h3 id="workspace-mobile-danger-title" className="text-xs font-medium uppercase tracking-[0.16em] text-rose-200/70">{t('workspace.header.destructiveActions')}</h3>
-          <button type="button" onClick={() => runOverflowAction(onDeleteNovel)} disabled={deletionPending} className="mt-3 flex min-h-11 w-full items-center gap-3 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 text-left text-sm text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60">
-            <Trash2 className="h-4 w-4" aria-hidden="true" />
-            {t('workspace.deleteNovel')}
-          </button>
-        </section>
       </DialogSurface>
     </header>
   )
