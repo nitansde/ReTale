@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { readLibraryKnowledgeStatus } from '@/lib/server/library-knowledge-status'
 import { NextResponse } from 'next/server'
 import {
   ApiRequestError,
@@ -158,6 +159,7 @@ async function loadNovelLibrarySummaries() {
       if (!summary) return null
       return {
         ...summary,
+        knowledgeStatus: readLibraryKnowledgeStatus(workspaceDb, row.novelId),
         title: row.title?.trim() || summary.title,
         author: row.author?.trim() || '',
         coverImage: await hasNovelCoverFile(row.novelId)

@@ -1,4 +1,5 @@
 import type { StoreApi } from 'zustand'
+import type { LibraryKnowledgeStatus } from '@/lib/library-knowledge-status'
 import type {
   AISettings,
   Chapter,
@@ -213,6 +214,7 @@ export type KnowledgeProjectionResult = KnowledgeProjectionPayload & {
 }
 
 export type LibrarySummary = {
+  knowledgeStatus?: LibraryKnowledgeStatus
   id: string
   title: string
   author?: string

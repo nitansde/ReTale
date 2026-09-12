@@ -127,9 +127,25 @@ export function ProjectGrid() {
   }
 
   useEffect(() => {
-    if (librarySummariesLoaded) return
-    loadLibrarySummaries().catch(() => undefined)
-  }, [librarySummariesLoaded, loadLibrarySummaries])
+    if (isImporting || isNovelDeletionPending || workspaceHandoffPending) return
+    let refreshing = false
+    const refresh = () => {
+      if (document.visibilityState === 'hidden' || refreshing) return
+      refreshing = true
+      loadLibrarySummaries({ fresh: true })
+        .catch(() => undefined)
+        .finally(() => { refreshing = false })
+    }
+    refresh()
+    const interval = window.setInterval(refresh, 10_000)
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [isImporting, isNovelDeletionPending, workspaceHandoffPending, loadLibrarySummaries])
   
   useEffect(() => {
     mountedRef.current = true

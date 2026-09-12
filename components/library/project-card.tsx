@@ -3,7 +3,18 @@
 import Image from 'next/image'
 import { LoaderCircle, Pencil, Trash2 } from 'lucide-react'
 import { useI18n } from '@/lib/i18n/provider'
+import type { LibraryKnowledgeStatus } from '@/lib/library-knowledge-status'
 import type { LibrarySummary } from '@/store/novel-store-types'
+
+const knowledgeStatusStyles: Record<LibraryKnowledgeStatus, string> = {
+  ready: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300',
+  building: 'border-sky-400/20 bg-sky-400/10 text-sky-300',
+  missing: 'border-zinc-400/15 bg-zinc-400/5 text-zinc-400',
+  partial: 'border-amber-400/20 bg-amber-400/10 text-amber-300',
+  paused: 'border-amber-400/20 bg-amber-400/10 text-amber-300',
+  failed: 'border-rose-400/20 bg-rose-400/10 text-rose-300',
+  unknown: 'border-zinc-400/15 bg-zinc-400/5 text-zinc-400',
+}
 
 export function ProjectCard({
   novel,
@@ -23,6 +34,7 @@ export function ProjectCard({
   disabled?: boolean
 }) {
   const { t } = useI18n()
+  const knowledgeStatus = novel.knowledgeStatus ?? 'unknown'
 
   return (
     <article className="group relative rounded-[24px] border border-white/8 bg-white/[0.04] p-4 shadow-[0_20px_60px_rgba(0,0,0,0.3)] backdrop-blur transition hover:border-white/12 hover:bg-white/[0.06] sm:rounded-[28px] sm:p-5">
@@ -77,23 +89,23 @@ export function ProjectCard({
                   ? t('library.cardAuthor', { author: novel.author })
                   : t('library.cardUnknownAuthor')}
               </p>
-              <p className="mt-1 line-clamp-2 text-sm leading-6 text-zinc-400">
-                {novel.summary}
-              </p>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              {novel.tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs text-zinc-300"
-                >
-                  {tag}
-                </span>
-              ))}
+            <div className="flex items-center border-t border-white/[0.06] pt-3">
+              <span
+                role="status"
+                className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-medium ${knowledgeStatusStyles[knowledgeStatus]}`}
+              >
+                {knowledgeStatus === 'building' ? (
+                  <LoaderCircle aria-hidden="true" className="h-3 w-3 motion-safe:animate-spin" />
+                ) : (
+                  <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+                )}
+                {t('library.cardKnowledgeStatus', { status: t(`library.knowledgeStatus.${knowledgeStatus}`) })}
+              </span>
             </div>
 
-            <div className="flex items-center justify-between text-xs text-zinc-500">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-zinc-500">
               <span>{t('library.cardChapterCount', { count: novel.chapterCount })}</span>
               <span>{t('library.cardWordCount', { count: novel.wordCount.toLocaleString() })}</span>
               <span>{novel.updatedAt}</span>

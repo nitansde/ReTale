@@ -95,6 +95,50 @@ afterEach(async () => {
 })
 
 describe('novel library metadata route', () => {
+  it('reports live mainline knowledge coverage and the latest build state in the library', async () => {
+    const { database, novelId } = await createFixture('retale-library-knowledge-status')
+    const { GET } = await import('@/app/api/novels/route')
+    const readStatus = async () => {
+      const response = await GET()
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.novels).toHaveLength(1)
+      return body.novels[0].knowledgeStatus
+    }
+    expect(await readStatus()).toBe('missing')
+    database.prepare("INSERT INTO StoryBranch (id, novelId, name) VALUES ('main', ?, 'main'), ('alternate', ?, 'alternate')")
+      .run(novelId, novelId)
+    database.prepare(`INSERT INTO KnowledgeChapter (id, novelId, branchId, chapterNo, rawText, sourceHash, knowledgeStatus)
+      VALUES ('chapter-1', ?, 'main', 1, 'Body', 'hash', 'ready')`).run(novelId)
+    expect(await readStatus()).toBe('ready')
+
+    database.prepare(`INSERT INTO WorkspaceRuntimeChapter (
+      id, workspaceStateId, novelId, title, sortOrder, contentHtml, originalContentHtml, status, wordCount, updatedAtLabel
+    ) SELECT 'chapter-2', workspaceStateId, novelId, 'Chapter 2', 2, contentHtml, originalContentHtml, status, wordCount, updatedAtLabel
+      FROM WorkspaceRuntimeChapter WHERE id = 'chapter-1'`).run()
+    expect(await readStatus()).toBe('partial')
+    database.prepare("UPDATE KnowledgeChapter SET isDirty = 1 WHERE id = 'chapter-1'").run()
+    expect(await readStatus()).toBe('missing')
+
+    database.prepare(`INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status)
+      VALUES ('build', ?, 'main', 'extract_chapter_knowledge', 'queued')`).run(novelId)
+    expect(await readStatus()).toBe('building')
+    for (const [jobStatus, badgeStatus] of [['running', 'building'], ['paused', 'paused'], ['failed', 'failed'], ['aborted', 'missing']]) {
+      database.prepare("UPDATE KnowledgeJob SET status = ? WHERE id = 'build'").run(jobStatus)
+      expect(await readStatus()).toBe(badgeStatus)
+    }
+    database.prepare("UPDATE KnowledgeJob SET status = 'failed' WHERE id = 'build'").run()
+    database.prepare(`INSERT INTO KnowledgeJob (id, novelId, branchId, jobType, status)
+      VALUES ('retry', ?, 'main', 'extract_chapter_knowledge', 'succeeded'),
+             ('alternate-build', ?, 'alternate', 'extract_chapter_knowledge', 'running'),
+             ('search-build', ?, 'main', 'rebuild_retrieval_index', 'running')`).run(novelId, novelId, novelId)
+    expect(await readStatus()).toBe('building')
+    database.prepare("UPDATE KnowledgeJob SET status = 'succeeded' WHERE id = 'search-build'").run()
+    expect(await readStatus()).toBe('missing')
+    database.prepare("UPDATE KnowledgeChapter SET isDirty = 0 WHERE id = 'chapter-1'").run()
+    expect(await readStatus()).toBe('partial')
+  })
+
   it('updates title and author while keeping the cover out of workspace payloads', async () => {
     const fixture = await createFixture('retale-novel-metadata')
     const jpeg = new File([

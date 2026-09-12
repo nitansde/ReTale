@@ -192,6 +192,19 @@ function setReadyStore(overrides: Partial<MockStoreState> = {}) {
 }
 
 describe('ProjectGrid chapter resolution', () => {
+  it('refreshes cached knowledge status on mount and when the library regains focus', async () => {
+    const loadLibrarySummaries = vi.fn(async () => undefined)
+    setReadyStore({ loadLibrarySummaries })
+    const view = render(<ProjectGrid />)
+    await act(async () => undefined)
+    expect(loadLibrarySummaries).toHaveBeenCalledExactlyOnceWith({ fresh: true })
+    await act(async () => { window.dispatchEvent(new Event('focus')) })
+    expect(loadLibrarySummaries).toHaveBeenCalledTimes(2)
+    view.unmount()
+    window.dispatchEvent(new Event('focus'))
+    expect(loadLibrarySummaries).toHaveBeenCalledTimes(2)
+  })
+
   beforeEach(() => {
     pushMock.mockReset()
     MockXMLHttpRequest.responseBody = null
@@ -386,7 +399,8 @@ describe('ProjectGrid chapter resolution', () => {
       await Promise.resolve()
     })
 
-    expect(loadLibrarySummaries).toHaveBeenCalledTimes(1)
+    // Refresh once on mount, then again for the completed operation.
+    expect(loadLibrarySummaries).toHaveBeenCalledTimes(2)
     expect(screen.getByText('服务器处理')).toBeInTheDocument()
     expect(screen.queryByText(/服务器已解析完成/)).not.toBeInTheDocument()
 
@@ -1015,7 +1029,8 @@ describe('ProjectGrid chapter resolution', () => {
     })
 
     expect(screen.getByText(expectedMessage)).toBeInTheDocument()
-    expect(loadLibrarySummaries).toHaveBeenCalledTimes(1)
+    // Refresh once on mount, then again for the completed operation.
+    expect(loadLibrarySummaries).toHaveBeenCalledTimes(2)
     expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
   })
 
@@ -1046,7 +1061,8 @@ describe('ProjectGrid chapter resolution', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete project' }))
 
     expect(await screen.findByText('服务器确认《Novel A》未被删除，已恢复权威状态。')).toBeInTheDocument()
-    expect(loadLibrarySummaries).toHaveBeenCalledTimes(1)
+    // Refresh once on mount, then again for the completed operation.
+    expect(loadLibrarySummaries).toHaveBeenCalledTimes(2)
     expect(screen.queryByText('无法确认《Novel A》是否已删除，请刷新书库后重试。')).not.toBeInTheDocument()
   })
 
@@ -1081,7 +1097,8 @@ describe('ProjectGrid chapter resolution', () => {
       expect(screen.getByText('无法确认《Novel A》是否已删除，请刷新书库后重试。')).toBeInTheDocument()
     })
     expect(rollbackNovelDeletion).not.toHaveBeenCalled()
-    expect(loadLibrarySummaries).toHaveBeenCalledTimes(1)
+    // Refresh once on mount, then again for the completed operation.
+    expect(loadLibrarySummaries).toHaveBeenCalledTimes(2)
     expect(setNovelDeletionPending.mock.calls).toEqual([[true], [false]])
   })
 })
