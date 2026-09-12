@@ -44,7 +44,8 @@ test('workspace autosave limits save churn after a single edit', async ({ page }
   await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
 
   const baselineSaveCount = workspaceSaveTimestamps.length
-  const editor = page.locator('[contenteditable="true"]').first()
+  const editor = page.getByTestId('workspace-chapter-reader').first()
+  await page.getByTestId('workspace-reader-edit-toggle').click()
   await editor.click()
   await page.keyboard.press('End')
   await page.keyboard.type(' UX流畅度验收')

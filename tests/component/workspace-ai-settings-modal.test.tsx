@@ -78,6 +78,7 @@ describe('WorkspaceAISettingsModal', () => {
     }
 
     render(<Harness />)
+    fireEvent.click(screen.getByRole('button', { name: 'AI 模型' }))
     const embeddingScenario = screen.getByTestId('ai-settings-scenario-embeddings')
     const modelSelect = within(embeddingScenario).getByRole('combobox')
     modelSelect.focus()

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { WorkspaceHeader } from '@/components/workspace/WorkspaceHeader'
 
@@ -75,7 +75,6 @@ describe('WorkspaceHeader', () => {
     fireEvent.click(screen.getByRole('button', { name: 'workspace.header.moreOptions' }))
 
     expect(screen.getByRole('dialog', { name: 'workspace.header.overflowTitle' })).toBeInTheDocument()
-    expect(screen.getByText('workspace.header.metrics')).toBeInTheDocument()
     expect(screen.getByText('workspace.header.destructiveActions')).toBeInTheDocument()
     const knowledgeButton = screen.getByRole('button', { name: 'workspace.header.openKnowledge' })
     expect(knowledgeButton.querySelector('.lucide-brain')).toBeInTheDocument()
@@ -84,7 +83,7 @@ describe('WorkspaceHeader', () => {
     expect(screen.queryByRole('dialog', { name: 'workspace.header.overflowTitle' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'workspace.header.moreOptions' }))
-    fireEvent.click(screen.getByRole('button', { name: 'workspace.header.modelSettings' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'settings.title' }))
     expect(actions.onOpenSettings).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('dialog', { name: 'workspace.header.overflowTitle' })).not.toBeInTheDocument()
   })

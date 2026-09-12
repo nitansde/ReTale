@@ -870,7 +870,7 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
   await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 — tokens')
   await expect(page.getByTestId('workspace-current-output-tokens')).toContainText('输出 — tokens')
 
-  await page.locator('[contenteditable="true"]').evaluate((editor) => {
+  await page.getByTestId('workspace-chapter-reader').evaluate((editor) => {
     const paragraph = editor.querySelector('p')
     const textNode = paragraph?.firstChild
     if (!paragraph || !textNode || textNode.nodeType !== Node.TEXT_NODE) {
@@ -1232,7 +1232,7 @@ test('full speculative branching flow persists through revise, reload, and reope
   await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
   await expect(page.getByTestId('workspace-chapter-view-toggle')).toBeVisible()
 
-  await page.locator('[contenteditable="true"]').evaluate((editor) => {
+  await page.getByTestId('workspace-chapter-reader').evaluate((editor) => {
     const paragraph = editor.querySelector('p')
     const textNode = paragraph?.firstChild
     if (!paragraph || !textNode || textNode.nodeType !== Node.TEXT_NODE) {

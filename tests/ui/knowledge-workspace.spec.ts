@@ -551,8 +551,9 @@ test('saving AI settings waits for the current full knowledge projection refresh
 
   const settingsButton = page.getByTestId('preset-compat-library-open').locator('xpath=following-sibling::button[1]')
   await settingsButton.click()
-  const settingsHeading = page.getByRole('heading', { name: /模型服务配置|Model service settings/ })
+  const settingsHeading = page.getByRole('heading', { name: /^(设置|Settings)$/ })
   await expect(settingsHeading).toBeVisible()
+  await page.getByRole('button', { name: /AI 模型|AI models/ }).click()
 
   const embeddingScenario = page.getByTestId('ai-settings-scenario-embeddings')
   const changedEmbeddingModel = 'nomic-embed-text:settings-refresh'

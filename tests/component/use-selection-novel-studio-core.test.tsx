@@ -20,6 +20,7 @@ const pushMock = vi.fn()
 type MockTipTapEditor = {
   getHTML: () => string
   getText: () => string
+  setEditable: (editable: boolean, emitUpdate: boolean) => void
   commands: { setContent: (content: string, options: { emitUpdate: false }) => void }
   view: { dom: HTMLDivElement }
 }
@@ -839,6 +840,7 @@ describe('useSelectionNovelStudioCore editor buffering', () => {
     tiptapMock.editor = {
       getHTML: () => html,
       getText: () => text,
+      setEditable: vi.fn(),
       commands: { setContent },
       view: { dom: document.createElement('div') },
     }

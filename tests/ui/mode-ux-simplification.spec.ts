@@ -574,7 +574,7 @@ function buildAfterFutureJumpContinueTimeline(): StoryTimelineResponse {
 }
 
 async function selectWholeEditorParagraph(page: Page) {
-  await page.locator('[contenteditable="true"]').evaluate((editor: HTMLElement) => {
+  await page.getByTestId('workspace-chapter-reader').evaluate((editor: HTMLElement) => {
     const paragraph = editor.querySelector('p')
     const textNode = paragraph?.firstChild
     if (!paragraph || !textNode || textNode.nodeType !== Node.TEXT_NODE) {

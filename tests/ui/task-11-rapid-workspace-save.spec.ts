@@ -25,7 +25,8 @@ async function importWorkspaceFixture(page: Page) {
 }
 
 async function replaceEditorText(page: Page, text: string) {
-  const editor = page.locator('[contenteditable="true"]').first()
+  const editor = page.getByTestId('workspace-chapter-reader').first()
+  if (await editor.getAttribute('contenteditable') !== 'true') await page.getByTestId('workspace-reader-edit-toggle').click()
   await editor.click()
   await page.keyboard.press('Meta+A')
   await page.keyboard.type(text)

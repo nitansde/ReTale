@@ -255,7 +255,7 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await page.getByTestId('timeline-chapter-10').getByRole('button').first().click()
   await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
 
-  await page.locator('[contenteditable="true"]').evaluate((editor) => {
+  await page.getByTestId('workspace-chapter-reader').evaluate((editor) => {
     const paragraph = editor.querySelector('p')
     const textNode = paragraph?.firstChild
     if (!paragraph || !textNode || textNode.nodeType !== Node.TEXT_NODE) {
@@ -294,7 +294,7 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await page.getByRole('button', { name: '关闭故事上下文' }).click()
   await page.getByRole('button', { name: '返回章节' }).click()
   await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
-  await expect(page.locator('[contenteditable="true"]')).toContainText('第10章正文：夜色压下来之前，他们已经开始互相试探。')
+  await expect(page.getByTestId('workspace-chapter-reader')).toContainText('第10章正文：夜色压下来之前，他们已经开始互相试探。')
 
   await openMobileChapterDrawer(page)
   await page.getByTestId('timeline-node-roleplay-node-1').click()

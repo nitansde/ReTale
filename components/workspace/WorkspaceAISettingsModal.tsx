@@ -9,6 +9,7 @@ import {
 } from '@/components/workspace/selection-novel-studio-helpers'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { LocalEmbeddingWizard } from '@/components/workspace/LocalEmbeddingWizard'
+import { WorkspaceAppearanceSettings } from '@/components/workspace/WorkspaceAppearanceSettings'
 import { useI18n } from '@/lib/i18n/provider'
 import { cn } from '@/lib/utils'
 import type { AIProvider, AISettings, AIScenarioKey } from '@/lib/types'
@@ -38,6 +39,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
   const { locale, t } = useI18n()
   const metaByScenario = getAIScenarioMeta(locale)
   const [saving, setSaving] = useState(false)
+  const [section, setSection] = useState<'appearance' | 'models'>('appearance')
 
   if (!props.open) return null
 
@@ -273,93 +275,115 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
       closeLabel={t('common.close')}
       closeDisabled={saving}
       busy={saving}
-      title={t('aiSettings.title')}
-      description={t('aiSettings.description')}
+      title={t('settings.title')}
+      description={t('settings.description')}
       className="max-w-2xl"
     >
-        <div className="space-y-6">
-          {(Object.keys(AI_SCENARIO_META) as AIScenarioKey[]).map((scenario) => {
-            const meta = metaByScenario[scenario]
-            const scenarioSettings = props.resolvedAISettings[scenario]
-            const scenarioStatus = props.scenarioStatusLabels.find((label) => label.startsWith(meta.shortLabel)) ?? ''
+      <div role="group" aria-label={t('settings.sections')} className="mb-6 flex gap-2 rounded-2xl border border-white/10 bg-black/20 p-1.5">
+        {(['appearance', 'models'] as const).map((item) => (
+          <button
+            key={item}
+            type="button"
+            aria-pressed={section === item}
+            onClick={() => setSection(item)}
+            disabled={saving}
+            className={cn(
+              'min-h-11 flex-1 rounded-xl px-4 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70 disabled:opacity-50',
+              section === item ? 'bg-violet-500/15 text-violet-100' : 'text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200',
+            )}
+          >
+            {t(`settings.${item}`)}
+          </button>
+        ))}
+      </div>
+      {section === 'appearance' ? <WorkspaceAppearanceSettings /> : (
+        <>
+          <p className="mb-4 text-sm leading-6 text-zinc-400">{t('aiSettings.description')}</p>
+          <div className="space-y-6">
+            {(Object.keys(AI_SCENARIO_META) as AIScenarioKey[]).map((scenario) => {
+              const meta = metaByScenario[scenario]
+              const scenarioSettings = props.resolvedAISettings[scenario]
+              const scenarioStatus = props.scenarioStatusLabels.find((label) => label.startsWith(meta.shortLabel)) ?? ''
 
-            return (
-              <div
-                key={scenario}
-                data-testid={`ai-settings-scenario-${scenario}`}
-                className="rounded-[24px] border border-white/10 bg-[#0b0d12] p-4"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="max-w-2xl">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{meta.eyebrow}</p>
-                    <h4 className="mt-2 text-sm font-medium text-zinc-100">{meta.title}</h4>
-                    <p className="mt-1 text-xs leading-5 text-zinc-500">{meta.description}</p>
+              return (
+                <div
+                  key={scenario}
+                  data-testid={`ai-settings-scenario-${scenario}`}
+                  className="rounded-[24px] border border-white/10 bg-[#0b0d12] p-4"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="max-w-2xl">
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{meta.eyebrow}</p>
+                      <h4 className="mt-2 text-sm font-medium text-zinc-100">{meta.title}</h4>
+                      <p className="mt-1 text-xs leading-5 text-zinc-500">{meta.description}</p>
+                    </div>
+                    <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
+                      {scenarioStatus}
+                    </span>
                   </div>
-                  <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
-                    {scenarioStatus}
-                  </span>
-                </div>
 
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {([
-                    ['openai-compatible', 'OpenAI-compatible API'],
-                    ['ollama', 'Ollama'],
-                  ] as Array<[AIProvider, string]>).map(([provider, label]) => {
-                    const active = scenarioSettings.provider === provider
-                    return (
-                      <button
-                        key={provider}
-                        type="button"
-                        onClick={() => props.updateScenarioProvider(scenario, provider)}
-                        className={cn(
-                          'rounded-full border px-3 py-2 text-xs transition',
-                          active
-                            ? 'border-violet-300/30 bg-violet-500/15 text-violet-100'
-                            : 'border-white/10 bg-black/20 text-zinc-300 hover:bg-white/[0.06]'
-                        )}
-                      >
-                        {label}
-                      </button>
-                    )
-                  })}
-                </div>
-
-                {scenario === 'embeddings' ? (
-                  <LocalEmbeddingWizard onConfigured={props.applyLocalEmbeddingSettings} />
-                ) : null}
-
-                {scenarioSettings.provider === 'openai-compatible'
-                  ? renderOpenAICompatibleFields(scenario)
-                  : renderOllamaFields(scenario)}
-
-                {scenario === 'embeddings' ? (
-                  <div className="mt-4 rounded-[22px] border border-white/8 bg-black/20 p-4">
-                    <label className="block">
-                      <span className="mb-2 block text-sm text-zinc-300">{t('aiSettings.embeddingBatchSize')}</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={128}
-                        value={props.resolvedAISettings.embeddings.embeddingBatchSize}
-                        onChange={(event) => props.updateEmbeddingBatchSize(event.target.value)}
-                        className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
-                      />
-                      <p className="mt-2 text-xs leading-5 text-zinc-500">{t('aiSettings.embeddingBatchHint')}</p>
-                    </label>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {([
+                      ['openai-compatible', 'OpenAI-compatible API'],
+                      ['ollama', 'Ollama'],
+                    ] as Array<[AIProvider, string]>).map(([provider, label]) => {
+                      const active = scenarioSettings.provider === provider
+                      return (
+                        <button
+                          key={provider}
+                          type="button"
+                          onClick={() => props.updateScenarioProvider(scenario, provider)}
+                          className={cn(
+                            'rounded-full border px-3 py-2 text-xs transition',
+                            active
+                              ? 'border-violet-300/30 bg-violet-500/15 text-violet-100'
+                              : 'border-white/10 bg-black/20 text-zinc-300 hover:bg-white/[0.06]'
+                          )}
+                        >
+                          {label}
+                        </button>
+                      )
+                    })}
                   </div>
-                ) : null}
-              </div>
-            )
-          })}
-        </div>
 
-        <div className="mt-6 flex items-center justify-between gap-3">
-          <p className="hidden text-sm text-zinc-500 sm:block">{t('aiSettings.currentStatus')} {props.scenarioStatusLabels.join(' / ')}</p>
-          <div className="flex gap-2">
-            <button onClick={props.onClose} disabled={saving} className="min-h-11 rounded-2xl border border-white/10 px-4 text-sm text-zinc-300 hover:bg-white/[0.06] disabled:opacity-50">{t('workspace.shell.cancel')}</button>
-            <button onClick={() => void handleSave()} disabled={saving} className="min-h-11 rounded-2xl bg-violet-500 px-4 text-sm font-medium text-white hover:bg-violet-400 disabled:opacity-60">{saving ? t('aiSettings.saving') : t('aiSettings.saveSettings')}</button>
+                  {scenario === 'embeddings' ? (
+                    <LocalEmbeddingWizard onConfigured={props.applyLocalEmbeddingSettings} />
+                  ) : null}
+
+                  {scenarioSettings.provider === 'openai-compatible'
+                    ? renderOpenAICompatibleFields(scenario)
+                    : renderOllamaFields(scenario)}
+
+                  {scenario === 'embeddings' ? (
+                    <div className="mt-4 rounded-[22px] border border-white/8 bg-black/20 p-4">
+                      <label className="block">
+                        <span className="mb-2 block text-sm text-zinc-300">{t('aiSettings.embeddingBatchSize')}</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={128}
+                          value={props.resolvedAISettings.embeddings.embeddingBatchSize}
+                          onChange={(event) => props.updateEmbeddingBatchSize(event.target.value)}
+                          className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+                        />
+                        <p className="mt-2 text-xs leading-5 text-zinc-500">{t('aiSettings.embeddingBatchHint')}</p>
+                      </label>
+                    </div>
+                  ) : null}
+                </div>
+              )
+            })}
           </div>
-        </div>
+
+          <div className="mt-6 flex items-center justify-between gap-3">
+            <p className="hidden text-sm text-zinc-500 sm:block">{t('aiSettings.currentStatus')} {props.scenarioStatusLabels.join(' / ')}</p>
+            <div className="flex gap-2">
+              <button onClick={props.onClose} disabled={saving} className="min-h-11 rounded-2xl border border-white/10 px-4 text-sm text-zinc-300 hover:bg-white/[0.06] disabled:opacity-50">{t('workspace.shell.cancel')}</button>
+              <button onClick={() => void handleSave()} disabled={saving} className="min-h-11 rounded-2xl bg-violet-500 px-4 text-sm font-medium text-white hover:bg-violet-400 disabled:opacity-60">{saving ? t('aiSettings.saving') : t('aiSettings.saveSettings')}</button>
+            </div>
+          </div>
+        </>
+      )}
     </DialogSurface>
   )
 }

@@ -8,6 +8,7 @@ import StarterKit from '@tiptap/starter-kit'
 import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/context-prompt-block-visibility'
 import type { NoticeVariant } from '@/components/ui/Notice'
 import { createChapterEditorBuffer } from '@/components/workspace/chapter-editor-buffer'
+import { useChapterReaderMode } from '@/components/workspace/use-chapter-reader-mode'
 import { Building2, Globe, LoaderCircle, MapPin, ScrollText, Users } from 'lucide-react'
 import {
   type PendingSourceJump,
@@ -1471,7 +1472,8 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     extensions: [StarterKit],
     content: currentChapter?.content ?? '',
     immediatelyRender: false,
-    editorProps: { attributes: { class: 'px-5 py-5 sm:px-8 sm:py-8 font-[family:var(--font-noto-serif-sc)] text-[1.06rem] leading-9 text-zinc-200 outline-none min-h-[62vh]' } },
+    editable: false,
+    editorProps: { attributes: { 'data-testid': 'workspace-chapter-reader', class: 'px-5 py-5 sm:px-8 sm:py-8 text-[1.06rem] leading-9 text-zinc-200 outline-none min-h-[62vh]' } },
     onUpdate({ editor }) {
       const chapterId = editorChapterIdRef.current
       if (chapterId) {
@@ -1492,6 +1494,12 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
       flushEditorBuffer()
     },
   })
+
+  const readerScope = currentChapter && currentChapter.contentLoaded !== false && !params.isNovelDeletionPending
+    && centerPaneView === 'body' && (!workspaceSelection || workspaceSelection.kind === 'chapter')
+    ? JSON.stringify([params.currentNovelId, currentChapter.id])
+    : null
+  const readerMode = useChapterReaderMode(editor, readerScope, saveWorkspaceBeforeNavigation)
 
   useEffect(() => {
     if (!editor || !currentChapter || currentChapter.contentLoaded === false) return
@@ -1966,6 +1974,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     setEditState,
     knowledgePanelReadOnly,
     editor,
+    readerMode,
     flushEditorBuffer,
     saveWorkspaceBeforeNavigation,
     editorRef,

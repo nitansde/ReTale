@@ -627,7 +627,7 @@ async function importWorkspaceFixture(page: Page, novelTitle: string) {
 }
 
 async function selectEntireChapter(page: Page) {
-  await page.locator('[contenteditable="true"]').first().evaluate((editor) => {
+  await page.getByTestId('workspace-chapter-reader').first().evaluate((editor) => {
     const paragraph = editor.querySelector('p')
     const textNode = paragraph?.firstChild
     if (!paragraph || !textNode || textNode.nodeType !== Node.TEXT_NODE) {
@@ -644,7 +644,8 @@ async function selectEntireChapter(page: Page) {
 }
 
 async function replaceEditorText(page: Page, text: string) {
-  const editor = page.locator('[contenteditable="true"]').first()
+  const editor = page.getByTestId('workspace-chapter-reader').first()
+  if (await editor.getAttribute('contenteditable') !== 'true') await page.getByTestId('workspace-reader-edit-toggle').click()
   await editor.click()
   await page.keyboard.press('End')
   await page.keyboard.insertText(` ${text}`)
@@ -667,7 +668,8 @@ async function openModelServiceSettings(page: Page) {
   await settingsButton.evaluate((node) => {
     ;(node as HTMLButtonElement).click()
   })
-  await expect(page.getByRole('heading', { name: 'Model service settings' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'AI models', exact: true }).click()
 }
 
 async function readBrowserWorkspaceSession(page: Page) {
@@ -997,7 +999,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await page.getByRole('button', { name: 'Save settings' }).click()
     const aiSettingsSave = await aiSettingsSaveResponsePromise
     expect(aiSettingsSave.ok()).toBeTruthy()
-    await expect(page.getByRole('heading', { name: 'Model service settings' })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toHaveCount(0)
 
     const persistedAiSettingsResponse = await timedRequest(
       'settings-ai-postsave-get',
@@ -1045,7 +1047,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await expect(embeddingOllamaScenario.locator('select')).not.toContainText('task12-ollama-text:latest')
     appendQaRow(qaRows, 'AI settings save + model discovery via settings UI', '[performance-before-after.md](./performance-before-after.md)', `Saved OpenAI-compatible rewrite/knowledge/embedding settings through the modal, used UI-driven OpenAI model discovery for rewrite plus UI-driven Ollama text/embedding discovery, then kept GET /api/settings/ai as a supplementary persistence readback; observed ${fakeOllama.requests.length} Ollama requests.`)
     await page.getByRole('button', { name: 'Cancel' }).click()
-    await expect(page.getByRole('heading', { name: 'Model service settings' })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toHaveCount(0)
 
     await page.getByRole('button', { name: 'Presets' }).evaluate((node) => {
       ;(node as HTMLButtonElement).click()

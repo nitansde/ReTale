@@ -610,7 +610,7 @@ test('workspace rewrite flow saves a macro-bearing preset binding and sends Alic
   await page.mouse.click(12, 12)
   await expect(page.getByTestId('preset-compat-library-modal')).toBeHidden()
 
-  await page.locator('[contenteditable="true"]').evaluate((editor) => {
+  await page.getByTestId('workspace-chapter-reader').evaluate((editor) => {
     const paragraph = editor.querySelector('p')
     const textNode = paragraph?.firstChild
     if (!paragraph || !textNode || textNode.nodeType !== Node.TEXT_NODE) {
@@ -736,7 +736,7 @@ test('workspace rewrite flow shows a localized creation error when the provider 
   })
 
   await page.goto('/workspace', { waitUntil: 'networkidle' })
-  await page.locator('[contenteditable="true"]').evaluate((editor) => {
+  await page.getByTestId('workspace-chapter-reader').evaluate((editor) => {
     const paragraph = editor.querySelector('p')
     const textNode = paragraph?.firstChild
     if (!paragraph || !textNode || textNode.nodeType !== Node.TEXT_NODE) {

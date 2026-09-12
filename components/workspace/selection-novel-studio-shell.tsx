@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
+import { WorkspaceReaderToolbar } from '@/components/workspace/WorkspaceReaderToolbar'
 import StarterKit from '@tiptap/starter-kit'
 import {
   BookOpen,
@@ -444,6 +445,12 @@ export function SelectionNovelStudio() {
             branchInstructionText={selectedTimelineInstructionText || null}
             chapterBodyView={
               <div className="px-0 py-0 sm:px-7 sm:py-6" data-testid="workspace-chapter-body-view">
+                <WorkspaceReaderToolbar
+                  isEditing={core.readerMode.isEditing}
+                  isSaving={core.readerMode.isSaving}
+                  onStartEditing={core.readerMode.startEditing}
+                  onFinishEditing={core.readerMode.finishEditing}
+                />
                 {selectionActions}
                 <div className="min-h-[62vh] bg-transparent shadow-none sm:rounded-[28px] sm:border sm:border-white/8 sm:bg-[#0b0d12] sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                   <EditorContent editor={editor} />

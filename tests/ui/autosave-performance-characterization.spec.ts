@@ -95,7 +95,8 @@ test('large-novel edit burst keeps autosaves ordered and chapter-scoped', async 
   })
 
   await page.goto('/workspace', { waitUntil: 'networkidle' })
-  const editor = page.locator('[contenteditable="true"]').first()
+  const editor = page.getByTestId('workspace-chapter-reader').first()
+  await page.getByTestId('workspace-reader-edit-toggle').click()
   await expect(editor).toBeVisible()
 
   const baselineSaveCount = resourceSaves.length

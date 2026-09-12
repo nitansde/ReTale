@@ -58,7 +58,7 @@ test('mobile workspace header opens mutually exclusive navigation sheets', async
   await page.goto('/workspace', { waitUntil: 'networkidle' })
 
   const header = page.getByTestId('workspace-mobile-header')
-  const editor = page.locator('[contenteditable="true"]').first()
+  const editor = page.getByTestId('workspace-chapter-reader').first()
   await expect(header).toBeVisible()
   await expect(editor).toBeVisible()
   const headerBox = await header.boundingBox()

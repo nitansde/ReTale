@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { ArrowLeft, BookOpen, Brain, Ellipsis, Gauge, ScrollText, Settings2, Trash2 } from 'lucide-react'
+import { ArrowLeft, BookOpen, Brain, Ellipsis, ScrollText, Settings2, Trash2 } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { IconButton } from '@/components/ui/IconButton'
 import { useI18n } from '@/lib/i18n/provider'
@@ -102,9 +102,9 @@ export function WorkspaceHeader({
             <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
             {t('workspace.preset')}
           </button>
-          <button type="button" onClick={onOpenSettings} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 transition hover:bg-white/[0.08]">
+          <button type="button" onClick={onOpenSettings} title={providerLabel} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 transition hover:bg-white/[0.08]">
             <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />
-            {providerLabel}
+            {t('settings.title')}
           </button>
           <button type="button" onClick={onDeleteNovel} disabled={deletionPending} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-rose-400/20 bg-rose-500/10 px-3 text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60">
             <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
@@ -121,18 +121,7 @@ export function WorkspaceHeader({
         description={t('workspace.header.overflowDescription')}
         placement="bottom"
       >
-        <section aria-labelledby="workspace-mobile-metrics-title">
-          <h3 id="workspace-mobile-metrics-title" className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">
-            <Gauge className="h-4 w-4" aria-hidden="true" />
-            {t('workspace.header.metrics')}
-          </h3>
-          <div className="mt-3 grid gap-2 text-sm text-zinc-300">
-            <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-2.5">{metrics.wordCount}</div>
-            <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-2.5">{metrics.inputTokens}</div>
-            <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-2.5">{metrics.outputTokens}</div>
-          </div>
-        </section>
-        <div className="mt-5 grid gap-2">
+        <div className="grid gap-2">
           <button type="button" onClick={() => runOverflowAction(onOpenKnowledge)} className="flex min-h-11 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 text-left text-sm text-zinc-200 transition hover:bg-white/[0.08]">
             <Brain className="h-4 w-4 text-violet-200" aria-hidden="true" />
             {t('workspace.header.openKnowledge')}
@@ -143,7 +132,7 @@ export function WorkspaceHeader({
           </button>
           <button type="button" onClick={() => runOverflowAction(onOpenSettings)} className="flex min-h-11 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 text-left text-sm text-zinc-200 transition hover:bg-white/[0.08]">
             <Settings2 className="h-4 w-4 text-violet-200" aria-hidden="true" />
-            {t('workspace.header.modelSettings')}
+            {t('settings.title')}
           </button>
         </div>
         <section className="mt-6 border-t border-rose-400/15 pt-5" aria-labelledby="workspace-mobile-danger-title">
