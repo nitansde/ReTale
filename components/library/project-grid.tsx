@@ -152,7 +152,7 @@ export function ProjectGrid() {
     setOpeningNovelId(novelId)
 
     try {
-      await loadFromBackend(novelId)
+      await loadFromBackend(novelId, chapterId)
       if (!ownsRequest()) return false
       const restoredChapterId = chapterId ?? useNovelStore.getState().currentChapterId
       const chapter = selectNovelChapter(novelId, restoredChapterId, chapterId === undefined)

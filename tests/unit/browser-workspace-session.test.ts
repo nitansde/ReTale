@@ -101,7 +101,7 @@ describe('browser workspace session', () => {
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/novels/novel-b') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-b') {
         return new Response(JSON.stringify({
           ...serverWorkspace,
           workspaceRevision: 7,
@@ -144,7 +144,7 @@ describe('browser workspace session', () => {
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/novels/novel-a') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-a') {
         return new Response(JSON.stringify({
           ...serverWorkspace,
           presetCompatSessionState: {

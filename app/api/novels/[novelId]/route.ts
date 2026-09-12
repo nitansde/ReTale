@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { revalidatedCompressedJson } from '@/lib/server/compressed-json'
 import {
   deleteNovelResource,
   getNovelResource,
@@ -32,7 +33,7 @@ function compactChapterContentForTransport(value: unknown) {
   return { chapters, compacted }
 }
 
-async function toNovelResourceResponse(response: Response) {
+async function toNovelResourceResponse(request: Request, response: Response) {
   if (!response.ok) return response
   const payload = await response.json() as Record<string, unknown>
   const {
@@ -47,10 +48,32 @@ async function toNovelResourceResponse(response: Response) {
     aiSettings: _aiSettings,
     ...resource
   } = payload
+  const search = new URL(request.url).searchParams
+  const view = search.get('view')
+  if (view === 'chapter') {
+    const chapter = Array.isArray(resource.localChapters)
+      ? resource.localChapters.find((entry: { id: string }) => entry.id === search.get('chapterId'))
+      : undefined
+    if (!chapter) return NextResponse.json({ ok: false, error: 'Chapter not found' }, {
+      status: 404, headers: { 'Cache-Control': 'no-store' },
+    })
+    return revalidatedCompressedJson(request, {
+      chapter, workspaceRevision: resource.workspaceRevision, revisionNovelId: resource.revisionNovelId,
+    }, { headers: response.headers })
+  }
+  if (view === 'workspace' && Array.isArray(resource.localChapters)) {
+    const chapters = resource.localChapters as Array<Record<string, unknown>>
+    const selected = chapters.find((chapter) => chapter.id === search.get('chapterId'))
+      ?? chapters.slice().sort((a, b) => Number(Boolean(a.parentChapterId)) - Number(Boolean(b.parentChapterId))
+        || Number(a.order) - Number(b.order) || String(a.id).localeCompare(String(b.id)))[0]
+    resource.localChapters = chapters.map((chapter) => chapter === selected ? chapter : {
+      ...chapter, content: '', originalContent: undefined, contentLoaded: false,
+    })
+  }
   const compactedChapterContent = compactChapterContentForTransport(resource.localChapters)
   const headers = new Headers(response.headers)
   headers.delete('content-length')
-  return Response.json({
+  return revalidatedCompressedJson(request, {
     ...resource,
     localChapters: compactedChapterContent.chapters,
     ...(compactedChapterContent.compacted
@@ -67,7 +90,7 @@ export async function GET(request: Request, context: { params: Promise<{ novelId
   if (!novelId) return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
 
   const response = await getNovelResource(request, novelId)
-  return new URL(request.url).searchParams.has('deletionStatus') ? response : toNovelResourceResponse(response)
+  return new URL(request.url).searchParams.has('deletionStatus') ? response : toNovelResourceResponse(request, response)
 }
 
 export async function POST(request: Request, context: { params: Promise<{ novelId: string }> }) {

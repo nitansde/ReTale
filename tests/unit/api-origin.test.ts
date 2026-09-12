@@ -13,6 +13,7 @@ describe('API browser origin protection', () => {
     const response = protectApiRequest(request({ Origin: 'http://retale.example:14500', 'Sec-Fetch-Site': 'same-origin' }), [])
     expect(response.headers.get('x-middleware-next')).toBe('1')
     expect(response.headers.has('access-control-allow-origin')).toBe(false)
+    expect(response.headers.get('vary')).toContain('Accept-Encoding')
   })
 
   it.each(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])(

@@ -24,6 +24,8 @@ export type Chapter = {
   title: string
   order: number
   content: string
+  /** Client workspace summary only; the server preserves this chapter's stored text on save. */
+  contentLoaded?: false
   originalContent?: string
   status: ChapterStatus
   wordCount: number

@@ -832,7 +832,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   }, [currentChapter?.id, flushChapterDraftCache])
 
   useEffect(() => {
-    if (!backendLoaded || !currentChapter) return
+    if (!backendLoaded || !currentChapter || currentChapter.contentLoaded === false) return
     const draft = readChapterDraft(currentChapter.novelId, currentChapter.id)
     if (!draft) return
     const attemptKey = `${draft.novelId}\u0000${draft.chapterId}\u0000${draft.savedAt}`
@@ -1494,7 +1494,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   })
 
   useEffect(() => {
-    if (!editor || !currentChapter) return
+    if (!editor || !currentChapter || currentChapter.contentLoaded === false) return
     const buffered = editorBufferRef.current.getBuffered()
     if (buffered?.chapterId === currentChapter.id) return
     if (editor.getHTML() !== currentChapter.content) {

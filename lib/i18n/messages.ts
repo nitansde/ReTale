@@ -232,6 +232,7 @@ export const zhMessages = {
   'workspace.statusEyebrow': '戏说工作区',
 
   'chapterNav.novel': '小说',
+  'chapterNav.loading': '正在加载章节…',
   'chapterNav.title': '章节导航',
   'chapterNav.newChapter': '+ 新建章节',
   'chapterNav.chapterCount': '{{count}} 章',
@@ -1400,6 +1401,7 @@ export const enMessages: MessageDictionary = {
   'workspace.statusEyebrow': 'ReTale Workspace',
 
   'chapterNav.novel': 'Novel',
+  'chapterNav.loading': 'Loading chapter…',
   'chapterNav.title': 'Chapters',
   'chapterNav.newChapter': '+ New chapter',
   'chapterNav.chapterCount': '{{count}} chapters',

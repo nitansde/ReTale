@@ -676,7 +676,7 @@ describe('ProjectGrid chapter resolution', () => {
       await Promise.resolve()
     })
 
-    expect(loadFromBackend).toHaveBeenCalledWith('novel-a')
+    expect(loadFromBackend).toHaveBeenCalledWith('novel-a', undefined)
     expect(setCurrentNovelId).toHaveBeenCalledWith('novel-a')
     expect(setCurrentChapterId).toHaveBeenCalledWith('ch-88')
     expect(pushMock).toHaveBeenCalledWith('/workspace')
@@ -744,7 +744,7 @@ describe('ProjectGrid chapter resolution', () => {
     })
 
     expect(loadFromBackend).toHaveBeenCalledTimes(1)
-    expect(loadFromBackend).toHaveBeenCalledWith('novel-a')
+    expect(loadFromBackend).toHaveBeenCalledWith('novel-a', undefined)
     expect(saveToBackend).not.toHaveBeenCalled()
     expect(setCurrentChapterId).toHaveBeenCalledTimes(1)
     expect(setCurrentChapterId).toHaveBeenCalledWith('ch-stale')
@@ -781,7 +781,7 @@ describe('ProjectGrid chapter resolution', () => {
     await waitFor(() => {
       expect(screen.getByText('进入工作区失败，请稍后重试。')).toBeInTheDocument()
     })
-    expect(loadFromBackend).toHaveBeenCalledWith('novel-a')
+    expect(loadFromBackend).toHaveBeenCalledWith('novel-a', undefined)
     expect(setCurrentNovelId).not.toHaveBeenCalled()
     expect(setCurrentChapterId).not.toHaveBeenCalled()
     expect(pushMock).not.toHaveBeenCalled()

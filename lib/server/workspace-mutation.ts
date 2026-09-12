@@ -265,6 +265,14 @@ function validateRequest(request: WorkspaceMutationRequest): ValidatedWorkspaceM
   const idempotencyKey = validateBoundedNonEmptyString(request.idempotencyKey, 'idempotencyKey', MAX_IDEMPOTENCY_KEY_LENGTH)
   const normalized = normalizeWorkspaceState(request.payload)
   const payload = scopeWorkspaceStateToNovel(normalized, novelId)
+  for (const chapter of payload.localChapters) {
+    if (chapter.contentLoaded !== undefined && chapter.contentLoaded !== false) {
+      invalidContract('contentLoaded must be false or absent')
+    }
+    if (chapter.contentLoaded === false && (chapter.content !== '' || chapter.originalContent !== undefined)) {
+      invalidContract('An unloaded chapter cannot include chapter text')
+    }
+  }
 
   return {
     kind: request.kind,
@@ -657,7 +665,22 @@ function runMutationTransaction(db: DatabaseAccess, request: ValidatedWorkspaceM
   }
 
   const nextRevision = currentRevision + 1
-  replaceWorkspaceRuntimeStateInDb(db, request.payload, nextRevision, request.workspaceStateId)
+  const storedChapters = new Map(current?.payload.localChapters.map((chapter) => [chapter.id, chapter]))
+  const payload = {
+    ...request.payload,
+    localChapters: request.payload.localChapters.map((chapter) => {
+      if (chapter.contentLoaded !== false) return chapter
+      const stored = storedChapters.get(chapter.id)
+      if (!stored || stored.novelId !== request.novelId) {
+        invalidContract('Unloaded chapter text must refer to an existing chapter in this novel')
+      }
+      const hydrated = { ...chapter, content: stored.content, wordCount: stored.wordCount }
+      delete hydrated.contentLoaded
+      if (stored.originalContent !== undefined) hydrated.originalContent = stored.originalContent
+      return hydrated
+    }),
+  }
+  replaceWorkspaceRuntimeStateInDb(db, payload, nextRevision, request.workspaceStateId)
   workspaceMutationFaultInjector?.('after_runtime')
 
   const committedRuntime = readWorkspaceRuntimeSnapshotFromDb(db, request.workspaceStateId)

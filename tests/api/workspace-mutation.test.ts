@@ -129,6 +129,47 @@ afterEach(async () => {
 })
 
 describe('canonical workspace mutation coordinator', () => {
+  it('preserves unloaded chapter text atomically during structural saves and retries', async () => {
+    const fixture = await createMutationFixture('retale-lazy-chapter-save')
+    const { runWorkspaceMutation } = await import('@/lib/server/workspace-mutation')
+    await runWorkspaceMutation(fullSnapshotRequest(fixture.novelId))
+    const payload = createPayload(fixture.novelId)
+    payload.localChapters[0] = {
+      ...payload.localChapters[0], title: 'Renamed without loading text', content: '', contentLoaded: false,
+    }
+    delete payload.localChapters[0].originalContent
+    const request = fullSnapshotRequest(fixture.novelId, '', { payload, baseRevision: 1, idempotencyKey: 'sparse-save' })
+    const saved = await runWorkspaceMutation(request)
+    const replay = await runWorkspaceMutation(request)
+    expect(replay).toEqual({ ...saved, replayed: true, shouldScheduleKnowledgeSync: false })
+    const surfaces = readSurfaces(fixture.database)
+    expect(surfaces.chapter).toMatchObject({
+      contentHtml: '<p>initial</p>', originalContentHtml: '<p>original</p>', title: 'Renamed without loading text',
+    })
+    const artifact = JSON.parse((surfaces.artifact as { payload: string }).payload)
+    expect(artifact.localChapters[0]).toMatchObject({ content: '<p>initial</p>', originalContent: '<p>original</p>' })
+    expect(artifact.localChapters[0]).not.toHaveProperty('contentLoaded')
+    await expect(runWorkspaceMutation({ ...request, idempotencyKey: 'stale-sparse' })).rejects.toMatchObject({ code: 'stale_revision' })
+    expect(readSurfaces(fixture.database)).toEqual(surfaces)
+  })
+
+  it.each(['missing-chapter', 'mixed-content'] as const)('rejects invalid unloaded chapter references: %s', async (failure) => {
+    const fixture = await createMutationFixture(`retale-lazy-${failure}`)
+    const { runWorkspaceMutation } = await import('@/lib/server/workspace-mutation')
+    await runWorkspaceMutation(fullSnapshotRequest(fixture.novelId))
+    const before = readSurfaces(fixture.database)
+    const payload = createPayload(fixture.novelId)
+    payload.localChapters[0] = {
+      ...payload.localChapters[0], content: failure === 'mixed-content' ? 'would erase stored text' : '', contentLoaded: false,
+      id: failure === 'missing-chapter' ? 'missing-chapter' : payload.localChapters[0].id,
+    }
+    delete payload.localChapters[0].originalContent
+    await expect(runWorkspaceMutation(fullSnapshotRequest(fixture.novelId, '', {
+      payload, baseRevision: 1, idempotencyKey: failure,
+    }))).rejects.toMatchObject({ code: 'invalid_mutation_contract' })
+    expect(readSurfaces(fixture.database)).toEqual(before)
+  })
+
   it('increments baseline revision for full snapshots and targeted chapter patches', async () => {
     const fixture = await createMutationFixture('retale-workspace-mutation-baseline')
     const { runWorkspaceMutation } = await import('@/lib/server/workspace-mutation')

@@ -208,6 +208,7 @@ export function selectSelectionNovelStudioStore(state: NovelStore) {
     setNovelDeletionPending: state.setNovelDeletionPending,
     reconcileNovelDeletion: state.reconcileNovelDeletion,
     backendLoaded: state.backendLoaded,
+    chapterLoadError: state.chapterLoadError,
     currentNovelId: state.currentNovelId,
     localNovels: state.localNovels,
     localChapters: state.localChapters,
@@ -256,7 +257,7 @@ export function SelectionNovelStudio() {
     deleteStoryExtractionCache, deleteStoryEmbeddingCache, refreshKnowledgeProjection, setPresetCompatSessionPhase,
     clearPresetCompatSessionStateForSelection, resetPresetCompatSessionStateForSelection, presetCompatSessionState,
     localCharacters, localWorldEntries, localTimelineEvents, localOutlines,
-    persistRevision, workspaceSaveFeedback,
+    persistRevision, workspaceSaveFeedback, chapterLoadError,
   } = useNovelStore(useShallow(selectSelectionNovelStudioStore))
   const autosaveTarget = `${currentNovelId}\u0000${persistRevision}`
   const readAutosaveTarget = useCallback(() => {
@@ -362,6 +363,26 @@ export function SelectionNovelStudio() {
         description={t('workspace.repairDescription')}
         ctaLabel={t('workspace.backToLibrary')}
       />
+    )
+  }
+
+  if (currentChapter.contentLoaded === false) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#0a0c12] px-6 text-zinc-300" data-testid="chapter-loading">
+        {chapterLoadError ? (
+          <div className="flex max-w-md flex-col items-center gap-4 text-center">
+            <p role="alert">{chapterLoadError}</p>
+            <button type="button" onClick={() => router.push('/library')} className="text-sm text-violet-300 hover:text-violet-200">
+              {t('workspace.backToLibrary')}
+            </button>
+          </div>
+        ) : (
+          <div role="status" className="flex items-center gap-3">
+            <LoaderCircle aria-hidden="true" className="h-5 w-5 animate-spin" />
+            <span>{t('chapterNav.loading')}</span>
+          </div>
+        )}
+      </main>
     )
   }
 

@@ -123,7 +123,7 @@ describe('preset compat session state', () => {
     expect(setPresetCompatSessionEntry(state, chapterSelection, 'rewrite', 'new_chat', true)).toBe(state)
   })
 
-  it('serializes only lightweight phase and reset metadata, then resets it without touching the preset library', () => {
+  it('serializes only lightweight phase and reset metadata, then resets it without touching the preset library', async () => {
     useNovelStore.setState({
       currentNovelId: 'novel-1',
       currentChapterId: 'chapter-1',
@@ -141,7 +141,7 @@ describe('preset compat session state', () => {
       true
     )
 
-    const exportedWorkspace = JSON.parse(useNovelStore.getState().exportWorkspace()) as {
+    const exportedWorkspace = JSON.parse(await useNovelStore.getState().exportWorkspace()) as {
       presetCompatSessionState: Record<string, Record<string, unknown>>
     }
 

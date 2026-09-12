@@ -122,7 +122,11 @@ describe('client request broker', () => {
 
   it('applies the timeout to response parsing after the transport resolves', async () => {
     vi.useFakeTimers()
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('available')))
+    let transportSignal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      transportSignal = init?.signal ?? undefined
+      return new Response('available')
+    }))
     let finishParsing: (value: string) => void = () => undefined
     const parsing = new Promise<string>((resolve) => { finishParsing = resolve })
 
@@ -134,6 +138,7 @@ describe('client request broker', () => {
 
     await vi.advanceTimersByTimeAsync(25)
     await expect(result).resolves.toMatchObject({ name: 'AbortError' })
+    expect(transportSignal?.aborted).toBe(true)
 
     finishParsing('too late')
     await vi.runAllTimersAsync()

@@ -266,7 +266,7 @@ export function readWorkspaceRuntimeSnapshotFromDb(
       id: chapter.id,
       novelId: chapter.novelId,
       parentChapterId: chapter.parentChapterId ?? undefined,
-      kind: chapter.kind as Chapter['kind'] | undefined,
+      kind: (chapter.kind ?? undefined) as Chapter['kind'],
       branchLabel: chapter.branchLabel ?? undefined,
       title: chapter.title,
       order: chapter.sortOrder,

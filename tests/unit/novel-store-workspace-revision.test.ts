@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PersistedNovelState } from '@/lib/types'
 import { createEmptyWorkspaceState } from '@/lib/workspace-state'
 import { resetClientRequestBrokerForTests } from '@/lib/client-request-broker'
-import { serializeState } from '@/store/novel-store-persistence'
+import { fetchAuthoritativeWorkspace, serializeState } from '@/store/novel-store-persistence'
 import { useNovelStore } from '@/store/novel-store'
 import { WorkspaceSaveError } from '@/store/novel-store-types'
 
@@ -48,7 +48,7 @@ function revisionResponse(payload: unknown, revision: number, novelId = 'novel-1
 async function hydrate(workspace = createWorkspace(), revision = 7) {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
-    if (url === '/api/novels/novel-1') {
+    if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-1') {
       return revisionResponse(workspace, revision)
     }
     if (url === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
@@ -106,7 +106,7 @@ describe('novel store workspace revision persistence', () => {
     expect(state.workspaceRevision).toBe(7)
     expect(state.revisionNovelId).toBe('novel-1')
     expect(state.lastAcknowledgedPersistedWorkspace).toEqual(serializeState(state))
-    for (const snapshot of [serializeState(state), state.snapshotPersistedState(), JSON.parse(state.exportWorkspace())]) {
+    for (const snapshot of [serializeState(state), state.snapshotPersistedState(), JSON.parse(await state.exportWorkspace())]) {
       expect(snapshot).not.toHaveProperty('workspaceRevision')
       expect(snapshot).not.toHaveProperty('revisionNovelId')
       expect(snapshot).not.toHaveProperty('lastAcknowledgedPersistedWorkspace')
@@ -121,7 +121,7 @@ describe('novel store workspace revision persistence', () => {
     const workspace = createWorkspace()
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/novels/novel-1') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-1') {
         return new Response(JSON.stringify({ ...workspace, workspaceRevision: 6, revisionNovelId: 'novel-1' }), { status: 200 })
       }
       if (url === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
@@ -131,6 +131,89 @@ describe('novel store workspace revision persistence', () => {
     await useNovelStore.getState().loadFromBackend('novel-1')
 
     expect(useNovelStore.getState()).toMatchObject({ workspaceRevision: 6, revisionNovelId: 'novel-1' })
+  })
+
+  it('revalidates the browser cache on every novel restore and reconciliation', async () => {
+    await hydrate()
+    await useNovelStore.getState().loadFromBackend('novel-1')
+    await expect(fetchAuthoritativeWorkspace('novel-1')).resolves.toEqual(createWorkspace())
+
+    const novelRequests = vi.mocked(fetch).mock.calls.filter(([url]) => new URL(String(url), 'http://localhost').pathname === '/api/novels/novel-1')
+    expect(novelRequests).toHaveLength(3)
+    for (const [, options] of novelRequests) expect(options?.cache).toBe('no-cache')
+    expect(String(novelRequests[0][0])).toContain('view=workspace')
+    expect(useNovelStore.getState()).toMatchObject({
+      workspaceRevision: 7,
+      revisionNovelId: 'novel-1',
+      lastAcknowledgedPersistedWorkspace: createWorkspace(),
+    })
+  })
+
+  it('loads chapter text on demand without dirtying the save baseline or fetching it twice', async () => {
+    const workspace = createWorkspace()
+    const stored = workspace.localChapters[1]
+    workspace.localChapters[1] = { ...stored, content: '', contentLoaded: false }
+    await hydrate(workspace)
+    const fetchMock = vi.fn(async () => revisionResponse({ chapter: stored }, 7))
+    vi.stubGlobal('fetch', fetchMock)
+    await Promise.all([
+      useNovelStore.getState().ensureChapterContent(stored.id),
+      useNovelStore.getState().ensureChapterContent(stored.id),
+    ])
+    await useNovelStore.getState().ensureChapterContent(stored.id)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]).toEqual([
+      '/api/novels/novel-1?view=chapter&chapterId=chapter-2', expect.objectContaining({ cache: 'no-cache' }),
+    ])
+    const state = useNovelStore.getState()
+    expect(state.localChapters[1]).toEqual(stored)
+    expect(state.lastAcknowledgedPersistedWorkspace?.localChapters[1]).toEqual(stored)
+    await state.saveToBackend()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves unloaded chapter markers on structural saves and refuses editing their empty placeholder', async () => {
+    const workspace = createWorkspace()
+    workspace.localChapters[1] = { ...workspace.localChapters[1], content: '', contentLoaded: false }
+    await hydrate(workspace)
+    expect(() => useNovelStore.getState().updateChapterContent('chapter-2', 'would overwrite')).toThrow('Load this chapter')
+    useNovelStore.getState().reorderChapters('novel-1', ['chapter-2', 'chapter-1'])
+    const fetchMock = vi.fn<typeof fetch>(async () => revisionResponse({
+      ok: true, operation: 'full-snapshot', novelId: 'novel-1', revision: 8, updatedAt: 'now',
+      replayed: false, shouldScheduleKnowledgeSync: true,
+    }, 8))
+    vi.stubGlobal('fetch', fetchMock)
+    await useNovelStore.getState().saveToBackend()
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('POST')
+    const payload = JSON.parse(fetchMock.mock.calls[0][1]?.body as string)
+    expect(payload.localChapters.find((chapter: { id: string }) => chapter.id === 'chapter-2')).toMatchObject({
+      content: '', contentLoaded: false,
+    })
+  })
+
+  it('rejects chapter downloads from a different revision without changing save authority', async () => {
+    const workspace = createWorkspace()
+    const stored = workspace.localChapters[1]
+    workspace.localChapters[1] = { ...stored, content: '', contentLoaded: false }
+    await hydrate(workspace)
+    vi.stubGlobal('fetch', vi.fn(async () => revisionResponse({ chapter: stored }, 8)))
+    await expect(useNovelStore.getState().ensureChapterContent(stored.id)).rejects.toThrow('changed on the server')
+    expect(useNovelStore.getState().workspaceRevision).toBe(7)
+    expect(useNovelStore.getState().localChapters[1].contentLoaded).toBe(false)
+  })
+
+  it('exports unloaded text only when requested and preserves unsaved local edits', async () => {
+    const full = createWorkspace()
+    const partial = createWorkspace()
+    partial.localChapters[1] = { ...partial.localChapters[1], content: '', contentLoaded: false }
+    await hydrate(partial)
+    useNovelStore.getState().updateChapterContent('chapter-1', 'Unsaved export edit')
+    const fetchMock = vi.fn<typeof fetch>(async () => revisionResponse(full, 7))
+    vi.stubGlobal('fetch', fetchMock)
+    const exported = JSON.parse(await useNovelStore.getState().exportWorkspace())
+    expect(exported.localChapters[0].content).toBe('Unsaved export edit')
+    expect(exported.localChapters[1]).toEqual(full.localChapters[1])
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/novels/novel-1')
   })
 
   it('dispatches a coalesced same-chapter delta as the exact revision-aware PATCH', async () => {
@@ -669,7 +752,7 @@ describe('novel store workspace revision persistence', () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockImplementationOnce(() => saveRequest.promise)
       .mockImplementationOnce(async (input) => {
-        if (String(input) === '/api/novels/novel-1') return revisionResponse(hydratedWorkspace, 8)
+        if (new URL(String(input), 'http://localhost').pathname === '/api/novels/novel-1') return revisionResponse(hydratedWorkspace, 8)
         if (String(input) === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
         throw new Error(`Unexpected fetch: ${String(input)}`)
       })
@@ -699,7 +782,7 @@ describe('novel store workspace revision persistence', () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>()
       .mockImplementationOnce(() => saveRequest.promise)
       .mockImplementationOnce(async (input) => {
-        if (String(input) === '/api/novels/novel-1') return revisionResponse(hydratedWorkspace, 8)
+        if (new URL(String(input), 'http://localhost').pathname === '/api/novels/novel-1') return revisionResponse(hydratedWorkspace, 8)
         if (String(input) === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
         throw new Error(`Unexpected fetch: ${String(input)}`)
       })
@@ -731,7 +814,7 @@ describe('novel store workspace revision persistence', () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>()
       .mockImplementationOnce(() => saveRequest.promise)
       .mockImplementationOnce(async (input) => {
-        if (String(input) === '/api/novels/novel-1') return revisionResponse(hydratedWorkspace, 7)
+        if (new URL(String(input), 'http://localhost').pathname === '/api/novels/novel-1') return revisionResponse(hydratedWorkspace, 7)
         if (String(input) === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
         throw new Error(`Unexpected fetch: ${String(input)}`)
       })

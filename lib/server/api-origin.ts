@@ -44,7 +44,8 @@ export function protectApiRequest(request: Request, allowedOrigins: readonly str
   const response = request.method === 'OPTIONS'
     ? new NextResponse(null, { status: 204 })
     : NextResponse.next()
-  response.headers.set('Vary', 'Origin, Sec-Fetch-Site')
+  // Proxy response headers override route headers, including encoding negotiation.
+  response.headers.set('Vary', 'Origin, Sec-Fetch-Site, Accept-Encoding')
   if (explicitlyAllowed) {
     response.headers.set('Access-Control-Allow-Origin', origin!)
     response.headers.set('Access-Control-Allow-Methods', ALLOWED_METHODS)

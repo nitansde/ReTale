@@ -25,7 +25,14 @@ export function getScopeSource(chapter: Chapter, scope: NovelStore['rewriteScope
 export function createRewriteActions(setPersisted: PersistedNovelStoreSet, get: NovelStoreGet): Pick<NovelStore, 'generateRewriteBatch'> {
   return {
     generateRewriteBatch: async ({ prompt } = {}) => {
+      const initial = get()
+      const ordered = initial.localChapters.filter((item) => item.novelId === initial.currentNovelId && !item.parentChapterId)
+        .slice().sort((a, b) => a.order - b.order)
+      const currentIndex = ordered.findIndex((item) => item.id === initial.currentChapterId)
+      const needed = new Set([initial.currentChapterId, ...ordered.slice(Math.max(0, currentIndex - 3), currentIndex + 1).map((chapter) => chapter.id)])
+      await Promise.all([...needed].filter(Boolean).map((id) => initial.ensureChapterContent(id)))
       const state = get()
+      if (state.currentNovelId !== initial.currentNovelId || state.currentChapterId !== initial.currentChapterId) return
       const chapter = state.localChapters.find((item) => item.id === state.currentChapterId)
       if (!chapter) return
       const mergedPrompt = prompt ?? state.promptText

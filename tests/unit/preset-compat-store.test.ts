@@ -246,7 +246,7 @@ describe('preset compat store lifecycle', () => {
           }],
         })
       }
-      if (url === '/api/novels/novel-first') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-first') {
         return Response.json(createWorkspacePayload('novel-first'))
       }
       if (url === '/api/settings/ai') return Response.json({})
@@ -255,7 +255,7 @@ describe('preset compat store lifecycle', () => {
 
     await useNovelStore.getState().loadFromBackend()
 
-    expect(requests.slice(0, 2)).toEqual(['/api/novels', '/api/novels/novel-first'])
+    expect(requests.slice(0, 2)).toEqual(['/api/novels', '/api/novels/novel-first?view=workspace&chapterId=novel-first-chapter'])
     expect(useNovelStore.getState()).toMatchObject({
       currentNovelId: 'novel-first',
       currentChapterId: 'novel-first-chapter',
@@ -321,7 +321,7 @@ describe('preset compat store lifecycle', () => {
       if (url === '/api/novels/novel-summary-only?deletionStatus=1') {
         return new Response(JSON.stringify({ ok: true, novelId: summary.id, deletionState: 'ready' }), { status: 200 })
       }
-      if (url === '/api/novels/novel-summary-only') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-summary-only') {
         return new Response(JSON.stringify(authoritative), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -427,7 +427,7 @@ describe('preset compat store lifecycle', () => {
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/novels/novel-1') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-1') {
         return new Response(JSON.stringify({
           ...workspacePayload,
           workspaceRevision: 3,
@@ -447,7 +447,7 @@ describe('preset compat store lifecycle', () => {
     expect(state.presetCompatLibraryLoading).toBe(false)
     expect(state.presetCompatLibraryError).toBe('')
 
-    const exportedWorkspace = JSON.parse(state.exportWorkspace()) as Record<string, unknown>
+    const exportedWorkspace = JSON.parse(await state.exportWorkspace()) as Record<string, unknown>
     expect(exportedWorkspace).not.toHaveProperty('presetCompatLibrary')
     expect(exportedWorkspace).not.toHaveProperty('presetCompatLibraryLoading')
     expect(exportedWorkspace).not.toHaveProperty('presetCompatLibraryError')
@@ -462,7 +462,7 @@ describe('preset compat store lifecycle', () => {
 
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url !== '/api/novels/novel-a') {
+      if (new URL(url, 'http://localhost').pathname !== '/api/novels/novel-a') {
         throw new Error(`Unexpected fetch: ${url}`)
       }
 
@@ -491,7 +491,7 @@ describe('preset compat store lifecycle', () => {
     const settingsRequest = Promise.withResolvers<Response>()
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/novels/novel-a') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-a') {
         return Promise.resolve(new Response(JSON.stringify(workspacePayload), { status: 200 }))
       }
       if (url === '/api/settings/ai') return settingsRequest.promise
@@ -512,7 +512,7 @@ describe('preset compat store lifecycle', () => {
   it('records and rejects a targeted workspace restore failure', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/novels/novel-a') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-a') {
         return new Response(JSON.stringify({ error: 'Targeted restore failed' }), { status: 500 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -539,17 +539,17 @@ describe('preset compat store lifecycle', () => {
 
     const duplicateOne = useNovelStore.getState().loadFromBackend('novel-a')
     const duplicateTwo = useNovelStore.getState().loadFromBackend('novel-a')
-    expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/novels/novel-a')).toHaveLength(1)
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/novels/novel-a?view=workspace')).toHaveLength(1)
 
     const newer = useNovelStore.getState().loadFromBackend('novel-b')
     await vi.waitFor(() => {
-      expect(pending.get('/api/novels/novel-a')?.signal?.aborted).toBe(true)
+      expect(pending.get('/api/novels/novel-a?view=workspace')?.signal?.aborted).toBe(true)
     })
-    pending.get('/api/novels/novel-b')?.resolve(new Response(JSON.stringify(createWorkspacePayload('novel-b'))))
+    pending.get('/api/novels/novel-b?view=workspace')?.resolve(new Response(JSON.stringify(createWorkspacePayload('novel-b'))))
     await newer
     expect(useNovelStore.getState().currentNovelId).toBe('novel-b')
 
-    pending.get('/api/novels/novel-a')?.resolve(new Response(JSON.stringify(createWorkspacePayload('novel-a'))))
+    pending.get('/api/novels/novel-a?view=workspace')?.resolve(new Response(JSON.stringify(createWorkspacePayload('novel-a'))))
     await Promise.all([duplicateOne, duplicateTwo])
     expect(useNovelStore.getState().currentNovelId).toBe('novel-b')
   })
@@ -577,7 +577,7 @@ describe('preset compat store lifecycle', () => {
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/novels/novel-1') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-1') {
         return new Response(JSON.stringify({
           ...workspacePayload,
           workspaceRevision: 3,
@@ -726,7 +726,7 @@ describe('preset compat store lifecycle', () => {
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === '/api/novels/novel-1' && init?.method === 'POST') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-1' && init?.method === 'POST') {
         requestBodies.push({
           url,
           body: JSON.parse(String(init.body)),
@@ -763,7 +763,7 @@ describe('preset compat store lifecycle', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       requests.push(url)
-      if (url === '/api/novels/novel-only') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-only') {
         return new Response(
           JSON.stringify({ ok: false, error: 'Refusing to overwrite a recoverable workspace with an empty payload' }),
           { status: 409 }
@@ -988,7 +988,7 @@ describe('preset compat store lifecycle', () => {
       if (url === '/api/novels/novel%20target%2F%3F?deletionStatus=1') {
         return new Response(JSON.stringify({ ok: true, novelId, deletionState: 'ready' }), { status: 200 })
       }
-      if (url === '/api/novels/novel%20target%2F%3F') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel%20target%2F%3F') {
         return new Response(JSON.stringify(authoritative), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -1064,7 +1064,7 @@ describe('preset compat store lifecycle', () => {
           deletionState: statusRequestCount === 1 ? 'deleting' : 'ready',
         }), { status: 200 })
       }
-      if (url === '/api/novels/novel-target') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-target') {
         return new Response(JSON.stringify(targetedWorkspace), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -1254,7 +1254,7 @@ describe('preset compat store lifecycle', () => {
       if (url === '/api/novels/novel-target?deletionStatus=1') {
         return new Response(JSON.stringify({ ok: true, novelId: 'novel-target', deletionState: 'ready' }), { status: 200 })
       }
-      if (url === '/api/novels/novel-target') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-target') {
         return new Response(JSON.stringify(unrelatedWorkspace), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -1391,7 +1391,7 @@ describe('preset compat store lifecycle', () => {
       if (url === '/api/novels/novel-target?deletionStatus=1') {
         return new Response(JSON.stringify({ ok: true, novelId: 'novel-target', deletionState: 'ready' }), { status: 200 })
       }
-      if (url === '/api/novels/novel-target') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-target') {
         return new Response(JSON.stringify(authoritative), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)
@@ -1439,7 +1439,7 @@ describe('preset compat store lifecycle', () => {
       if (url === '/api/novels/novel-target?deletionStatus=1') {
         return new Response(JSON.stringify({ ok: true, novelId: 'novel-target', deletionState: 'ready' }), { status: 200 })
       }
-      if (url === '/api/novels/novel-target') {
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/novel-target') {
         return new Response(JSON.stringify({ ok: true }), { status: 200 })
       }
       throw new Error(`Unexpected fetch: ${url}`)

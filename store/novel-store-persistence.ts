@@ -65,7 +65,7 @@ function decodeWorkspaceChapterContent(value: unknown) {
   return {
     ...value,
     localChapters: value.localChapters.map((chapter) => {
-      if (!isRecord(chapter) || typeof chapter.content !== 'string' || chapter.originalContent !== undefined) {
+      if (!isRecord(chapter) || chapter.contentLoaded === false || typeof chapter.content !== 'string' || chapter.originalContent !== undefined) {
         return chapter
       }
       return { ...chapter, originalContent: chapter.content }
@@ -170,13 +170,14 @@ async function fetchWithWorkspaceTimeout(
   url: string,
   timeoutMessage: string,
   signal?: AbortSignal,
-  options: { dedupe?: boolean } = {},
+  options: { dedupe?: boolean; cache?: RequestCache; timeoutMs?: number } = {},
 ) {
   try {
     return await requestClientGet(url, {
       dedupe: options.dedupe,
+      cache: options.cache,
       signal,
-      timeoutMs: WORKSPACE_RESTORE_TIMEOUT_MS,
+      timeoutMs: options.timeoutMs ?? WORKSPACE_RESTORE_TIMEOUT_MS,
       parse: async (response) => ({
         ok: response.ok,
         status: response.status,
@@ -449,10 +450,12 @@ export async function pollNovelDeletionStatus(novelId: string): Promise<NovelDel
   throw new Error('Novel deletion status remained deleting after all reconciliation attempts')
 }
 
-export async function fetchAuthoritativeWorkspace(novelId: string): Promise<PersistedNovelState> {
+export async function fetchAuthoritativeWorkspace(novelId: string, expectedRevision?: number | null): Promise<PersistedNovelState> {
   const response = await fetchWithWorkspaceTimeout(
     `/api/novels/${encodeURIComponent(novelId)}`,
-    'Workspace reconciliation timed out'
+    'Workspace reconciliation timed out',
+    undefined,
+    { cache: 'no-cache', timeoutMs: 120_000 },
   )
   const payload = decodeWorkspaceChapterContent(
     parseWorkspaceResponseBody(response, 'Workspace endpoint returned invalid JSON')
@@ -465,6 +468,12 @@ export async function fetchAuthoritativeWorkspace(novelId: string): Promise<Pers
   }
   if (response.status !== 200 || !isWorkspaceResponse(payload)) {
     throw new Error('Workspace endpoint returned an invalid workspace')
+  }
+  if (expectedRevision !== undefined) {
+    const authority = parseWorkspaceRevisionAuthority(payload, response)
+    if (!authority || authority.revisionNovelId !== novelId || authority.workspaceRevision !== expectedRevision) {
+      throw new Error('This novel changed on the server. Reopen it before exporting.')
+    }
   }
 
   const workspace = normalizeWorkspaceState(payload)
@@ -549,6 +558,7 @@ export function createPersistenceActions(
   'loadPresetCompatLibrary'
   | 'loadLibrarySummaries'
   | 'loadFromBackend'
+  | 'ensureChapterContent'
   | 'saveToBackend'
   | 'deleteNovelFromBackend'
   | 'savePresetCompatLibrary'
@@ -561,6 +571,7 @@ export function createPersistenceActions(
   let latestAuthorityGeneration = 0
   let authorityEpoch = 0
   let librarySummaryGeneration = 0
+  const chapterRequests = new Map<string, Promise<Chapter>>()
 
   const beginSave = () => {
     const generation = saveGeneration + 1
@@ -618,13 +629,25 @@ export function createPersistenceActions(
       const acknowledgedChapter = envelope.method === 'PATCH' && envelope.chapterId
         ? capturedSnapshot.localChapters.find((chapter) => chapter.id === envelope.chapterId) ?? null
         : null
-      const acknowledgedWorkspace = acknowledgedChapter && current.lastAcknowledgedPersistedWorkspace
+      let acknowledgedWorkspace = acknowledgedChapter && current.lastAcknowledgedPersistedWorkspace
         ? replaceAcknowledgedChapter(
             current.lastAcknowledgedPersistedWorkspace,
             envelope.chapterId!,
             acknowledgedChapter,
           )
         : capturedSnapshot
+      // A chapter may have been loaded while a structural save was in flight.
+      acknowledgedWorkspace = {
+        ...acknowledgedWorkspace,
+        localChapters: acknowledgedWorkspace.localChapters.map((chapter) => {
+          if (chapter.contentLoaded !== false) return chapter
+          const loaded = current.lastAcknowledgedPersistedWorkspace?.localChapters.find((item) => item.id === chapter.id)
+          if (!loaded || loaded.contentLoaded === false) return chapter
+          const hydrated = { ...chapter, content: loaded.content, originalContent: loaded.originalContent }
+          delete hydrated.contentLoaded
+          return hydrated
+        }),
+      }
       return {
         ...(advancesAuthority ? {
           workspaceRevision: acknowledgement.workspaceRevision,
@@ -730,6 +753,63 @@ export function createPersistenceActions(
   }
 
   return {
+    ensureChapterContent: async (chapterId) => {
+      const state = get()
+      const existing = state.localChapters.find((chapter) => chapter.id === chapterId)
+      if (!existing) throw new Error('Chapter not found')
+      if (existing.contentLoaded !== false) return existing
+      const revision = state.workspaceRevision
+      const novelId = state.revisionNovelId
+      const epoch = authorityEpoch
+      if (revision === null || novelId !== existing.novelId) throw new Error('Load this novel before opening a chapter')
+      const key = `${novelId}:${chapterId}:${revision}:${epoch}`
+      const pending = chapterRequests.get(key)
+      if (pending) return pending
+      const request = (async () => {
+        set({ chapterLoadError: '' })
+        try {
+          const response = await fetchWithWorkspaceTimeout(
+            `/api/novels/${encodeURIComponent(novelId)}?view=chapter&chapterId=${encodeURIComponent(chapterId)}`,
+            'Chapter download timed out', undefined, { cache: 'no-cache' },
+          )
+          const payload = parseWorkspaceResponseBody(response, 'Chapter endpoint returned invalid JSON')
+          if (!response.ok || !isRecord(payload)) throw new Error('Failed to load chapter')
+          const chapter = parseChapter(payload.chapter)
+          const authority = parseWorkspaceRevisionAuthority(payload, response)
+          if (!chapter || chapter.id !== chapterId || chapter.novelId !== novelId || !authority
+            || authority.revisionNovelId !== novelId) throw new Error('Chapter endpoint returned invalid chapter authority')
+          if (authority.workspaceRevision !== revision) throw new Error('This novel changed on the server. Reopen it to load the latest version.')
+          if (get().revisionNovelId !== novelId || get().workspaceRevision !== revision || authorityEpoch !== epoch) {
+            throw new Error('The workspace changed while the chapter was loading. Please try again.')
+          }
+          const hydrate = (items: Chapter[]) => items.map((item) => {
+            if (item.id !== chapterId || item.contentLoaded !== false) return item
+            const loaded = { ...item, content: chapter.content, originalContent: chapter.originalContent }
+            delete loaded.contentLoaded
+            return loaded
+          })
+          set((current) => ({
+            localChapters: hydrate(current.localChapters),
+            ...(current.lastAcknowledgedPersistedWorkspace ? {
+              lastAcknowledgedPersistedWorkspace: {
+                ...current.lastAcknowledgedPersistedWorkspace,
+                localChapters: hydrate(current.lastAcknowledgedPersistedWorkspace.localChapters),
+              },
+            } : {}),
+          }))
+          return chapter
+        } catch (error) {
+          if (get().currentNovelId === novelId && get().currentChapterId === chapterId && authorityEpoch === epoch) {
+            set({ chapterLoadError: error instanceof Error ? error.message : 'Failed to load chapter' })
+          }
+          throw error
+        } finally {
+          chapterRequests.delete(key)
+        }
+      })()
+      chapterRequests.set(key, request)
+      return request
+    },
     loadLibrarySummaries: async ({ fresh = false } = {}) => {
       const requestGeneration = librarySummaryGeneration + 1
       librarySummaryGeneration = requestGeneration
@@ -797,13 +877,14 @@ export function createPersistenceActions(
         throw error
       }
     },
-    loadFromBackend: async (novelId) => {
+    loadFromBackend: async (novelId, chapterId) => {
       const restoreGeneration = workspaceRestoreGeneration + 1
       workspaceRestoreGeneration = restoreGeneration
       const ownsRestore = () => workspaceRestoreGeneration === restoreGeneration
       set({
         backendLoadError: '',
         backendLoaded: false,
+        chapterLoadError: '',
       })
       authorityEpoch += 1
       activeWorkspaceRestoreController?.abort()
@@ -847,10 +928,16 @@ export function createPersistenceActions(
             return
           }
         }
+        const preferredChapterId = chapterId ?? browserSession.currentChapterIds[targetNovelId]
+          ?? get().librarySummaries.find((novel) => novel.id === targetNovelId)?.firstChapterId
+        const workspaceQuery = new URLSearchParams({ view: 'workspace' })
+        if (preferredChapterId) workspaceQuery.set('chapterId', preferredChapterId)
         const workspaceResponse = await fetchWithWorkspaceTimeout(
-          `/api/novels/${encodeURIComponent(targetNovelId)}`,
+          `/api/novels/${encodeURIComponent(targetNovelId)}?${workspaceQuery}`,
           'Workspace restore timed out',
           workspaceRestoreController.signal,
+          // Store the response, but validate it before establishing save authority.
+          { cache: 'no-cache' },
         )
         if (!workspaceResponse.ok) {
           const error = (() => {
@@ -867,6 +954,9 @@ export function createPersistenceActions(
         if (!ownsRestore()) return
         const normalizedWorkspace = serializeState(normalizeWorkspaceState(workspace))
         const browserWorkspace = applyBrowserSessionToWorkspace(normalizedWorkspace, targetNovelId)
+        if (chapterId && browserWorkspace.localChapters.some((chapter) => chapter.id === chapterId)) {
+          browserWorkspace.currentChapterId = chapterId
+        }
         const revisionAuthority = parseWorkspaceRevisionAuthority(workspace, workspaceResponse)
         const targetPresent = normalizedWorkspace.localNovels.some((item) => item.id === targetNovelId)
           || normalizedWorkspace.localChapters.some((item) => item.novelId === targetNovelId)
@@ -968,7 +1058,7 @@ export function createPersistenceActions(
         }
       }
 
-      const patchEligible = classification.kind === 'patch'
+      const patchEligible = classification.kind === 'patch' && classification.chapter.contentLoaded !== false
       const method: WorkspaceMutationMethod = patchEligible ? 'PATCH' : 'POST'
       const idempotencyKey = createUuid()
       const baseRevision = state.workspaceRevision

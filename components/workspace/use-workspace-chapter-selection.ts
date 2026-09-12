@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import type {
   GenerationContextBuildData,
@@ -9,6 +9,7 @@ import type {
   GraphSelection,
 } from '@/components/graph/types'
 import type { Chapter, ProductSurfaceId } from '@/lib/types'
+import { useNovelStore } from '@/store/novel-store'
 import type { WorkspaceCenterPaneView } from '@/components/workspace/use-workspace-pane-state'
 
 export type WorkspaceActionMode = ProductSurfaceId
@@ -84,10 +85,18 @@ export function useWorkspaceChapterSelection(options: UseWorkspaceChapterSelecti
     [currentNovelId, localChapters]
   )
 
-  const currentChapter = useMemo(
+  const selectedChapter = useMemo(
     () => sortedChapters.find((chapter) => chapter.id === currentChapterId) ?? sortedChapters[0],
     [currentChapterId, sortedChapters]
   )
+  const ensureChapterContent = useNovelStore((state) => state.ensureChapterContent)
+  const chapterLoadError = useNovelStore((state) => state.chapterLoadError)
+  useEffect(() => {
+    if (selectedChapter?.contentLoaded === false && !chapterLoadError) {
+      void ensureChapterContent(selectedChapter.id).catch(() => undefined)
+    }
+  }, [selectedChapter?.id, selectedChapter?.contentLoaded, ensureChapterContent, chapterLoadError])
+  const currentChapter = selectedChapter ?? null
 
   const parentChapter = useMemo(
     () => (currentChapter?.parentChapterId ? sortedChapters.find((chapter) => chapter.id === currentChapter.parentChapterId) ?? null : null),

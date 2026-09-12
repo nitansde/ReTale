@@ -237,6 +237,7 @@ export type NovelStore = PersistedNovelState & {
   isNovelDeletionPending: boolean
   backendLoaded: boolean
   backendLoadError: string
+  chapterLoadError: string
   librarySummaries: LibrarySummary[]
   librarySummariesLoaded: boolean
   librarySummariesError: string
@@ -278,7 +279,7 @@ export type NovelStore = PersistedNovelState & {
   addChapterBranch: (sourceChapterId: string, title?: string, content?: string) => void
   createNewChapter: () => void
   toggleFocusMode: () => void
-  exportWorkspace: () => string
+  exportWorkspace: () => Promise<string>
   importWorkspace: (payload: ImportPayload) => void
   resetWorkspace: () => void
   setPresetCompatSessionPhase: (
@@ -295,7 +296,8 @@ export type NovelStore = PersistedNovelState & {
   ) => void
   setHydrated: (value: boolean) => void
   loadLibrarySummaries: (options?: { fresh?: boolean }) => Promise<void>
-  loadFromBackend: (novelId?: string) => Promise<void>
+  loadFromBackend: (novelId?: string, chapterId?: string) => Promise<void>
+  ensureChapterContent: (chapterId: string) => Promise<Chapter>
   saveToBackend: (options?: WorkspaceSaveOptions) => Promise<void>
   deleteNovelFromBackend: (novelId: string) => Promise<DeleteNovelOutcome>
   reconcileNovelDeletionFromBackend: (transaction: NovelDeletionTransaction) => Promise<NovelDeletionReconciliationResult>

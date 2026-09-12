@@ -35,10 +35,10 @@ describe('novel store persist revision', () => {
 
     expect(serializeState(state)).not.toHaveProperty('persistRevision')
     expect(state.snapshotPersistedState()).not.toHaveProperty('persistRevision')
-    expect(JSON.parse(state.exportWorkspace())).not.toHaveProperty('persistRevision')
+    expect(JSON.parse(await state.exportWorkspace())).not.toHaveProperty('persistRevision')
     expect(serializeState(state)).not.toHaveProperty('workspaceSaveFeedback')
     expect(state.snapshotPersistedState()).not.toHaveProperty('workspaceSaveConflict')
-    expect(JSON.parse(state.exportWorkspace())).not.toHaveProperty('patchCapability')
+    expect(JSON.parse(await state.exportWorkspace())).not.toHaveProperty('patchCapability')
 
 
   })
@@ -130,7 +130,7 @@ describe('novel store persist revision', () => {
     }
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/novels/hydrated-novel') return new Response(JSON.stringify({
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/hydrated-novel') return new Response(JSON.stringify({
         ...workspace,
         workspaceRevision: 4,
         revisionNovelId: 'hydrated-novel',
@@ -169,7 +169,7 @@ describe('novel store persist revision', () => {
     }
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/novels/hydrated-novel') return new Response(JSON.stringify({
+      if (new URL(url, 'http://localhost').pathname === '/api/novels/hydrated-novel') return new Response(JSON.stringify({
         ...workspace,
         chapterContentEncoding: 'original-content-equals-content-v1',
         workspaceRevision: 4,

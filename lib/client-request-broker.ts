@@ -9,7 +9,6 @@ type ClientGetOptions<T> = {
 type InFlightEntry = {
   controller: AbortController
   consumers: number
-  settled: boolean
   promise: Promise<Response>
 }
 
@@ -36,14 +35,11 @@ function acquireClientGet<T>(url: string, options: ClientGetOptions<T>) {
     entry = {
       controller,
       consumers: 0,
-      settled: false,
       promise: fetch(url, { cache, signal: controller.signal }),
     }
     activeGets.add(entry)
     if (dedupe) inFlightGets.set(key, entry)
     void entry.promise.finally(() => {
-      entry!.settled = true
-      activeGets.delete(entry!)
       if (inFlightGets.get(key) === entry) inFlightGets.delete(key)
     }).catch(() => undefined)
   }
@@ -55,7 +51,11 @@ function acquireClientGet<T>(url: string, options: ClientGetOptions<T>) {
     released = true
     entry!.consumers -= 1
     queueMicrotask(() => {
-      if (!entry!.settled && entry!.consumers === 0) entry!.controller.abort()
+      if (entry!.consumers === 0) {
+        activeGets.delete(entry!)
+        // Fetch resolves at the headers; a timed-out body must also stop downloading.
+        entry!.controller.abort()
+      }
     })
   }
   return { promise: entry.promise, release }

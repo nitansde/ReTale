@@ -378,6 +378,7 @@ type NovelStore = PersistedNovelState & {
   isNovelDeletionPending: boolean
   backendLoaded: boolean
   backendLoadError: string
+  chapterLoadError: string
   librarySummaries: LibrarySummary[]
   librarySummariesLoaded: boolean
   librarySummariesError: string
@@ -419,7 +420,7 @@ type NovelStore = PersistedNovelState & {
   addChapterBranch: (sourceChapterId: string, title?: string, content?: string) => void
   createNewChapter: () => void
   toggleFocusMode: () => void
-  exportWorkspace: () => string
+  exportWorkspace: () => Promise<string>
   importWorkspace: (payload: ImportPayload) => void
   resetWorkspace: () => void
   setPresetCompatSessionPhase: (
@@ -436,7 +437,8 @@ type NovelStore = PersistedNovelState & {
   ) => void
   setHydrated: (value: boolean) => void
   loadLibrarySummaries: (options?: { fresh?: boolean }) => Promise<void>
-  loadFromBackend: (novelId?: string) => Promise<void>
+  loadFromBackend: (novelId?: string, chapterId?: string) => Promise<void>
+  ensureChapterContent: (chapterId: string) => Promise<Chapter>
   saveToBackend: (options?: WorkspaceSaveOptions) => Promise<void>
   deleteNovelFromBackend: (novelId: string) => Promise<DeleteNovelOutcome>
   reconcileNovelDeletionFromBackend: (transaction: NovelDeletionTransaction) => Promise<NovelDeletionReconciliationResult>
@@ -542,6 +544,7 @@ export const useNovelStore = create<NovelStore>((set, get) => {
   isNovelDeletionPending: false,
   backendLoaded: false,
   backendLoadError: '',
+  chapterLoadError: '',
   librarySummaries: [],
   librarySummariesLoaded: false,
   librarySummariesError: '',
@@ -660,7 +663,7 @@ export const useNovelStore = create<NovelStore>((set, get) => {
         : rememberedChapter?.id ?? chapters[0]?.id ?? '',
     }
   }),
-  setCurrentChapterId: (id) => set((state) => state.currentChapterId === id ? state : { currentChapterId: id }),
+  setCurrentChapterId: (id) => set((state) => state.currentChapterId === id ? state : { currentChapterId: id, chapterLoadError: '' }),
   setCurrentTab: (tab) => set((state) => state.currentTab === tab ? state : { currentTab: tab }),
   setHelperTab: (tab) => set((state) => state.helperTab === tab ? state : { helperTab: tab }),
   updateChapterContent: (id, html, wordCount) =>
@@ -668,6 +671,7 @@ export const useNovelStore = create<NovelStore>((set, get) => {
       const chapterIndex = getChapterIndex(state.localChapters, id)
       if (chapterIndex === undefined) return state
       const chapter = state.localChapters[chapterIndex]
+      if (chapter?.contentLoaded === false) throw new Error('Load this chapter before editing it')
       if (!chapter || chapter.content === html) return state
       const nextChapters = state.localChapters.slice()
       nextChapters[chapterIndex] = {
@@ -874,6 +878,7 @@ export const useNovelStore = create<NovelStore>((set, get) => {
     setPersisted((state) => {
       const candidate = state.rewriteCandidates.find((item) => item.id === id)
       const chapter = state.localChapters.find((item) => item.id === state.currentChapterId)
+      if (chapter?.contentLoaded === false) throw new Error('Load this chapter before applying a rewrite')
       if (!candidate || !chapter) return state
       return {
         currentTab: 'editor',
@@ -893,6 +898,7 @@ export const useNovelStore = create<NovelStore>((set, get) => {
     setPersisted((state) => {
       const candidate = state.rewriteCandidates.find((item) => item.id === id)
       const chapter = state.localChapters.find((item) => item.id === state.currentChapterId)
+      if (chapter?.contentLoaded === false) throw new Error('Load this chapter before inserting a rewrite')
       if (!candidate || !chapter) return state
       const nextText = `${htmlToPlainText(chapter.content)}\n\n${candidate.content}`
       return {
@@ -946,6 +952,7 @@ export const useNovelStore = create<NovelStore>((set, get) => {
   ...createRewriteActions(setPersisted, get),
   addChapterBranch: (sourceChapterId, title, content) => setPersisted((state) => {
     const sourceChapter = state.localChapters.find((chapter) => chapter.id === sourceChapterId)
+    if (sourceChapter?.contentLoaded === false) throw new Error('Load this chapter before creating a branch')
     if (!sourceChapter) return state
     const branchId = uid('branch')
     const branchNumber = state.localChapters.filter((chapter) => chapter.parentChapterId === sourceChapterId).length + 1
@@ -959,7 +966,25 @@ export const useNovelStore = create<NovelStore>((set, get) => {
     const nextChapter: Chapter = { id: uid('ch'), novelId: state.currentNovelId, title: tm('store.newChapterTitle', { count: mainlineChapters.length + 1 }), order: mainlineChapters.length + 1, content: tm('store.newChapterBody'), originalContent: tm('store.newChapterBody'), status: 'draft', wordCount: 10, updatedAt: tm('store.newChapterUpdatedAt', { time: formatNowLabel() }), trajectory: [tm('store.newChapterTrajectory')] }
     return { currentChapterId: nextChapter.id, currentTab: 'editor', localChapters: [...state.localChapters, nextChapter] }
   }),
-  exportWorkspace: () => JSON.stringify(serializeState(get()), null, 2),
+  exportWorkspace: async () => {
+    const state = get()
+    const snapshot = serializeState(state)
+    if (!snapshot.localChapters.some((chapter) => chapter.contentLoaded === false)) return JSON.stringify(snapshot, null, 2)
+    const full = await fetchAuthoritativeWorkspace(state.currentNovelId, state.workspaceRevision)
+    // Export merges only missing text; unsaved local edits remain in the export.
+    const chapters = new Map(full.localChapters.map((chapter) => [chapter.id, chapter]))
+    return JSON.stringify({
+      ...snapshot,
+      localChapters: snapshot.localChapters.map((chapter) => {
+        if (chapter.contentLoaded !== false) return chapter
+        const stored = chapters.get(chapter.id)
+        if (!stored) throw new Error('A chapter was deleted on the server. Reopen the novel before exporting.')
+        const loaded = { ...chapter, content: stored.content, originalContent: stored.originalContent }
+        delete loaded.contentLoaded
+        return loaded
+      }),
+    }, null, 2)
+  },
   importWorkspace: (payload) => setPersisted((state) => normalizeWorkspaceState({
     ...serializeState(state),
     ...payload,
