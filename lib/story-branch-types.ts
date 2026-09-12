@@ -386,7 +386,7 @@ export type FutureJumpRevisionHistoryItem = {
 
 export type FutureJumpRunRecord = {
   id: string
-  sessionId: string
+  sourceTextSnapshot: string
   baseBranchId: string
   parentTimelineNodeId: string | null
   sourceContext: FutureJumpSourceContext

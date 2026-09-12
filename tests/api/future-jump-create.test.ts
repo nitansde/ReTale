@@ -447,3 +447,103 @@ describe('future-jump create API', () => {
     expect(runCount.count).toBe(initialRunCount)
   }))
 })
+
+
+describe('independent Future Jump sources', () => {
+  function requestBody(nodeType: 'chapter' | 'rewrite' | 'continue_block') {
+    return {
+      novelId: 'novel-001',
+      sourceContext: {
+        nodeId: nodeType === 'chapter' ? null : nodeType === 'rewrite' ? 'rewrite_fixture_025' : 'continue_fixture_025',
+        nodeType,
+        chapterId: 'chapter-25',
+        chapterNo: 25,
+        whatIfSessionId: null,
+      },
+      targetOutlineNodeId: 'outline-100',
+      targetOutlineChapterId: 'outline-anchor-100',
+    }
+  }
+  function createRequest(body: unknown) {
+    return new Request('http://localhost/api/future-jump/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  }
+  function removeWhatIf(database: DatabaseSync) {
+    database.exec("DELETE FROM story_timeline_nodes WHERE node_type='what_if'; DELETE FROM what_if_sessions")
+  }
+  function mockGeneration() {
+    vi.doMock('@/lib/server/ai-settings', () => ({ loadStoredAISettings: () => createAiSettings() }))
+    let call = 0
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(
+      call++ % 2 === 0 ? { bridgeSummary: '他们在迷雾中继续寻找线索，终于发现敌人的计划。'.repeat(18) } : { generatedTargetText: '目标章节的新正文。'.repeat(40) },
+    ) } }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it.each(['chapter', 'rewrite', 'continue_block'] as const)('creates, revises, reads, and deletes a %s source without What-if rows', async (nodeType) => databaseFixture.wrap(async () => {
+    const database = createTestDatabase('retale-independent-jump')
+    seedCreateFixture(database)
+    removeWhatIf(database)
+    const fetchMock = mockGeneration()
+    vi.resetModules()
+    const { POST } = await import('@/app/api/future-jump/runs/route')
+    const { GET, DELETE } = await import('@/app/api/future-jump/runs/[runId]/route')
+    const { reviseFutureJumpRun } = await import('@/lib/server/future-jump-service')
+    const response = await POST(createRequest(requestBody(nodeType)))
+    expect(response.status).toBe(200)
+    const { runId } = await response.json() as { runId: string }
+    const saved = database.prepare('SELECT * FROM future_jump_runs WHERE id=?').get(runId) as { source_text_snapshot: string; source_what_if_session_id: string | null }
+    const expectedSource = nodeType === 'chapter' ? '第25章正文' : nodeType === 'rewrite' ? 'rewrite 节点正文：误会已经深到无法当面解释。' : 'continue 节点正文：他把最后一次求证也压成了沉默。'
+    expect(saved.source_text_snapshot).toBe(expectedSource)
+    expect(saved.source_what_if_session_id).toBeNull()
+    expect(saved).not.toHaveProperty('session_id')
+    expect(database.prepare('SELECT count(*) AS count FROM what_if_sessions').get()).toEqual({ count: 0 })
+    // Source changes and subsequent deletion cannot erase the run's recorded input.
+    database.exec("UPDATE KnowledgeChapter SET rawText='Changed source' WHERE id='chapter-25'; UPDATE continue_blocks SET latest_text='Changed source'; DELETE FROM story_timeline_nodes WHERE node_type IN ('rewrite','continue_block')")
+    await reviseFutureJumpRun({ novelId: 'novel-001', runId, userFeedback: '保留源文本中的动机。' })
+    const revisionPrompt = String((fetchMock.mock.calls as unknown as [unknown, RequestInit][])[2]?.[1]?.body)
+    expect(revisionPrompt).toContain(expectedSource)
+    const read = await GET(new Request(`http://localhost/api/future-jump/runs/${runId}?branchId=novel-001:main`), { params: Promise.resolve({ runId }) })
+    expect(read.status).toBe(200)
+    expect(await read.json()).toMatchObject({ sourceTextSnapshot: expectedSource, sourceContext: { whatIfSessionId: null }, latestRevisionNo: 2 })
+    const deleted = await DELETE(new Request(`http://localhost/api/future-jump/runs/${runId}?branchId=novel-001:main`, { method: 'DELETE' }), { params: Promise.resolve({ runId }) })
+    expect(deleted.status).toBe(200)
+    expect(database.prepare('SELECT count(*) AS count FROM future_jump_runs').get()).toEqual({ count: 0 })
+    expect(database.prepare('SELECT count(*) AS count FROM future_jump_revisions').get()).toEqual({ count: 0 })
+    expect(database.prepare('SELECT count(*) AS count FROM what_if_sessions').get()).toEqual({ count: 0 })
+  })())
+
+  it.each(['cycle', 'wrong branch', 'wrong type', 'wrong chapter', 'legacy alias'] as const)('rejects %s before model calls or writes', async (invalid) => databaseFixture.wrap(async () => {
+    const database = createTestDatabase('retale-invalid-jump-source')
+    seedCreateFixture(database)
+    removeWhatIf(database)
+    const fetchMock = mockGeneration()
+    const body = requestBody('continue_block')
+    if (invalid === 'cycle') database.exec("UPDATE story_timeline_nodes SET parent_node_id='continue_fixture_025' WHERE id='rewrite_fixture_025'")
+    if (invalid === 'wrong branch') {
+      database.exec("INSERT INTO StoryBranch (id,novelId,name) VALUES ('novel-001:other','novel-001','other'); UPDATE story_timeline_nodes SET branch_id='novel-001:other' WHERE id='continue_fixture_025'")
+    }
+    if (invalid === 'wrong type') body.sourceContext.nodeType = 'rewrite'
+    if (invalid === 'wrong chapter') { body.sourceContext.chapterId = 'chapter-10'; body.sourceContext.chapterNo = 10 }
+    vi.resetModules()
+    const { POST } = await import('@/app/api/future-jump/runs/route')
+    const response = await POST(createRequest(invalid === 'legacy alias' ? { ...body, whatIfSessionId: 'old-alias' } : body))
+    expect([400, 404]).toContain(response.status)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(database.prepare('SELECT count(*) AS count FROM future_jump_runs').get()).toEqual({ count: 0 })
+    expect(database.prepare('SELECT count(*) AS count FROM what_if_sessions').get()).toEqual({ count: 0 })
+  })())
+
+  it('keeps a failed independent run without creating a placeholder What-if session', databaseFixture.wrap(async () => {
+    const database = createTestDatabase('retale-failed-independent-jump')
+    seedCreateFixture(database)
+    removeWhatIf(database)
+    mockGeneration().mockRejectedValue(new Error('provider unavailable'))
+    vi.resetModules()
+    const { POST } = await import('@/app/api/future-jump/runs/route')
+    const response = await POST(createRequest(requestBody('chapter')))
+    expect(response.status).toBe(500)
+    expect(database.prepare('SELECT status,source_text_snapshot FROM future_jump_runs').get()).toEqual({ status: 'failed', source_text_snapshot: '第25章正文' })
+    expect(database.prepare('SELECT count(*) AS count FROM what_if_sessions').get()).toEqual({ count: 0 })
+  }))
+})

@@ -177,7 +177,7 @@ export const futureJumpRevisionSchema = z.object({
 
 export const futureJumpRunCreateSchema = z.object({
   id: z.string().min(1),
-  sessionId: z.string().min(1),
+  sourceTextSnapshot: z.string(),
   baseBranchId: z.string().min(1),
   parentTimelineNodeId: z.string().nullable(),
   sourceContext: z.object({
@@ -209,12 +209,12 @@ export const futureJumpCreateRequestSchema = z.object({
     chapterId: z.string().min(1).nullable(),
     chapterNo: positiveInt,
     whatIfSessionId: z.string().min(1).nullable(),
-  }),
+  }).strict(),
   targetOutlineNodeId: z.string().min(1),
   targetOutlineChapterId: z.string().min(1),
   parentTimelineNodeId: z.string().nullable().optional(),
   userDirection: z.string().nullable().optional(),
-})
+}).strict()
 
 export const futureJumpMutationResponseSchema = z.object({
   runId: z.string().min(1),

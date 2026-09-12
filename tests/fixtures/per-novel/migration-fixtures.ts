@@ -656,7 +656,7 @@ function insertBaseNovelGraph(database: DatabaseSync, novelId: FixtureNovelId, c
 
   database.prepare(
     `INSERT INTO future_jump_runs (
-      id, session_id, base_branch_id, parent_timeline_node_id, source_timeline_node_id,
+      id, source_text_snapshot, base_branch_id, parent_timeline_node_id, source_timeline_node_id,
       source_timeline_node_type, source_chapter_id, source_what_if_session_id,
       target_outline_node_id, target_outline_chapter_id, source_chapter_no,
       target_chapter_no, user_direction, bridge_summary, generated_target_text,
@@ -664,7 +664,7 @@ function insertBaseNovelGraph(database: DatabaseSync, novelId: FixtureNovelId, c
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     futureJumpRunId,
-    sessionId,
+    `${novelId} source snapshot`,
     branchId,
     timelineNodeId,
     timelineNodeId,

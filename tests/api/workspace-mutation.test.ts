@@ -176,21 +176,17 @@ describe('canonical workspace mutation coordinator', () => {
     expect(fixture.database.prepare('SELECT contentHtml FROM WorkspaceRuntimeChapter').get()).toEqual({ contentHtml: '<p>patched</p>' })
   })
 
-  it('supports legacy and revision-aware full snapshots with shared revision semantics', async () => {
-    const fixture = await createMutationFixture('retale-workspace-mutation-full-modes')
+  it('rejects authorityless snapshots without changing storage', async () => {
+    const fixture = await createMutationFixture('retale-workspace-mutation-full-contract')
     const { runWorkspaceMutation } = await import('@/lib/server/workspace-mutation')
-
-    const legacy = await runWorkspaceMutation(fullSnapshotRequest(fixture.novelId, '<p>legacy</p>', {
-      baseRevision: null,
-      idempotencyKey: null,
-    }))
-    const aware = await runWorkspaceMutation(fullSnapshotRequest(fixture.novelId, '<p>aware</p>', {
-      baseRevision: 1,
-      idempotencyKey: 'aware-key',
-    }))
-
-    expect(legacy.revision).toBe(1)
-    expect(aware.revision).toBe(2)
+    const before = readSurfaces(fixture.database)
+    await expectMutationError(runWorkspaceMutation(fullSnapshotRequest(fixture.novelId, '<p>unsafe</p>', {
+      baseRevision: null as unknown as number,
+      idempotencyKey: null as unknown as string,
+    })), 'invalid_mutation_contract')
+    expect(readSurfaces(fixture.database)).toEqual(before)
+    const saved = await runWorkspaceMutation(fullSnapshotRequest(fixture.novelId))
+    expect(saved.revision).toBe(1)
     expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM WorkspaceMutationReplay').get()).toEqual({ count: 1 })
   })
 
@@ -436,7 +432,7 @@ describe('canonical workspace mutation coordinator', () => {
     })), 'empty_overwrite_blocked')
     await expectMutationError(runWorkspaceMutation(fullSnapshotRequest(fixture.novelId, '', {
       baseRevision: 1,
-      idempotencyKey: null,
+      idempotencyKey: null as unknown as string,
     })), 'invalid_mutation_contract')
   })
 

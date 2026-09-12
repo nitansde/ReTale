@@ -169,8 +169,6 @@ export type NovelDeletionStatusResult = Omit<NovelDeletionStatusObservation, 'de
 
 export type NovelDeletionReconciliationResult = 'deleted' | 'present'
 
-export type WorkspacePatchCapability = 'unknown' | 'supported' | 'unsupported'
-
 export type WorkspaceSaveFeedback =
   | { kind: 'save-failed' }
   | { kind: 'chapter-conflict' }
@@ -185,6 +183,7 @@ export type WorkspaceSaveConflict = {
 }
 
 export type WorkspaceSaveErrorCode =
+  | 'authority-required'
   | 'transport-indeterminate'
   | 'invalid-response'
   | 'http-rejected'
@@ -231,7 +230,6 @@ export type NovelStore = PersistedNovelState & {
   workspaceRevision: number | null
   revisionNovelId: string
   lastAcknowledgedPersistedWorkspace: PersistedNovelState | null
-  patchCapability: WorkspacePatchCapability
   workspaceSaveConflict: WorkspaceSaveConflict | null
   workspaceSaveFeedback: WorkspaceSaveFeedback | null
   isHydrated: boolean

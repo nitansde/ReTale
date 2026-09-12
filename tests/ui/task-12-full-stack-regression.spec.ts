@@ -934,9 +934,15 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
         ? { ...chapter, content: '<p>Task 12 restored export/import payload.</p>' }
         : chapter),
     }
+    const restoreAuthority = await page.request.get(`/api/novels/${encodeURIComponent(importResult.novelId)}`)
+    expect(restoreAuthority.ok()).toBeTruthy()
     const restoreResponse = await timedRequest(
       'novel-import-restore',
-      page.request.post(`/api/novels/${encodeURIComponent(importResult.novelId)}`, { data: restoredWorkspace }),
+      page.request.post(`/api/novels/${encodeURIComponent(importResult.novelId)}`, { data: restoredWorkspace, headers: {
+        'X-Retale-Base-Revision': restoreAuthority.headers()['x-retale-workspace-revision'],
+        'X-Retale-Revision-Novel-Id': importResult.novelId,
+        'Idempotency-Key': crypto.randomUUID(),
+      } }),
       (response) => response.status(),
       apiTimings,
     )

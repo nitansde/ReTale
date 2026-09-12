@@ -59,13 +59,13 @@ async function loadWhatIfSessionDetail(input: { novelId: string; branchId: strin
   return data
 }
 
-async function loadFutureMap(input: { novelId: string; branchId: string; sessionId: string; sourceChapterNo: number }) {
+async function loadFutureMap(input: { novelId: string; branchId: string; sessionId: string | null; sourceChapterNo: number }) {
   const params = new URLSearchParams({
     novelId: input.novelId,
     branchId: input.branchId,
     sourceChapterNo: String(input.sourceChapterNo),
-    parentSessionId: input.sessionId,
   })
+  if (input.sessionId) params.set('parentSessionId', input.sessionId)
   const response = await fetch(`/api/story-future-map?${params.toString()}`, { cache: 'no-store' })
   const data = await response.json() as FutureMapResponse & { error?: string }
   if (!response.ok) {
@@ -90,11 +90,13 @@ async function reviseFutureJumpRun(input: { runId: string; novelId: string; user
 async function loadFutureJumpBundle(input: { novelId: string; branchId: string; runId: string }) {
   const detail = await loadFutureJumpRunDetail({ runId: input.runId, branchId: input.branchId })
   const [parentSessionResult, futureMapResult] = await Promise.allSettled([
-    loadWhatIfSessionDetail({ novelId: input.novelId, branchId: input.branchId, sessionId: detail.sessionId }),
+    detail.sourceContext.whatIfSessionId
+      ? loadWhatIfSessionDetail({ novelId: input.novelId, branchId: input.branchId, sessionId: detail.sourceContext.whatIfSessionId })
+      : Promise.resolve(null),
     loadFutureMap({
       novelId: input.novelId,
       branchId: input.branchId,
-      sessionId: detail.sessionId,
+      sessionId: detail.sourceContext.whatIfSessionId,
       sourceChapterNo: detail.sourceChapterNo,
     }),
   ])

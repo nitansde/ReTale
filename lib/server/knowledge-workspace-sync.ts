@@ -80,7 +80,7 @@ async function deleteNovelProjectionArtifacts(novelId: string, branchId: string,
         WHERE run_id IN (
           SELECT id FROM future_jump_runs
           WHERE base_branch_id = ?
-             OR session_id IN (SELECT id FROM what_if_sessions WHERE novel_id = ?)
+             OR base_branch_id IN (SELECT id FROM StoryBranch WHERE novelId = ?)
         )
       `,
       branchId,
@@ -90,7 +90,7 @@ async function deleteNovelProjectionArtifacts(novelId: string, branchId: string,
       `
         DELETE FROM future_jump_runs
         WHERE base_branch_id = ?
-           OR session_id IN (SELECT id FROM what_if_sessions WHERE novel_id = ?)
+           OR base_branch_id IN (SELECT id FROM StoryBranch WHERE novelId = ?)
       `,
       branchId,
       novelId,

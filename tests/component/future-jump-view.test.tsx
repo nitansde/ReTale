@@ -64,7 +64,7 @@ const futureMapPayload: FutureMapResponse = {
 function buildRunDetail(latestRevisionNo: number, bridgeSummary: string, generatedTargetText: string): FutureJumpRunDetail {
   return {
     id: 'jump-run-001',
-    sessionId: 'what-if-session-001',
+    sourceTextSnapshot: '源正文',
     baseBranchId: 'novel-001:main',
     parentTimelineNodeId: 'if-node-1',
     sourceContext: {
@@ -286,6 +286,25 @@ describe('FutureJumpView', () => {
     expect(screen.getByTestId('future-jump-action-error')).toHaveTextContent('重新生成 Future Jump 失败，请稍后重试。')
     expect(screen.getByTestId('future-jump-action-error')).not.toHaveTextContent('SENTINEL')
     })
+  })
+
+  it('loads an independent run without requesting What-if metadata', async () => {
+    const detail = buildRunDetail(1, '独立桥接摘要', '独立未来正文')
+    detail.sourceContext = { ...detail.sourceContext, nodeId: null, nodeType: 'chapter', whatIfSessionId: null }
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url.startsWith('/api/future-jump/runs/')) return new Response(JSON.stringify(detail), { status: 200 })
+      if (url.startsWith('/api/story-future-map?')) {
+        expect(new URL(url, 'http://localhost').searchParams.has('parentSessionId')).toBe(false)
+        return new Response(JSON.stringify(futureMapPayload), { status: 200 })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<FutureJumpView novelId="novel-001" branchId="novel-001:main" runId="jump-run-001" sourceChapterNo={10} targetChapterNo={100} nodeTitle="JUMP-01" onContinueInFuture={() => undefined} />)
+    expect(await screen.findByTestId('future-jump-view')).toBeInTheDocument()
+    expect(screen.getByTestId('future-jump-text')).toHaveTextContent('独立未来正文')
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/what-if/'))).toBe(false)
   })
 
   it('keeps the persisted run view usable when parent session metadata fails to load', async () => {

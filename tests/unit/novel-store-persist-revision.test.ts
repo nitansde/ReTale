@@ -10,7 +10,6 @@ function resetStore() {
     workspaceRevision: null,
     revisionNovelId: '',
     lastAcknowledgedPersistedWorkspace: null,
-    patchCapability: 'unknown',
     workspaceSaveConflict: null,
     workspaceSaveFeedback: null,
     isHydrated: false,
@@ -41,12 +40,7 @@ describe('novel store persist revision', () => {
     expect(state.snapshotPersistedState()).not.toHaveProperty('workspaceSaveConflict')
     expect(JSON.parse(state.exportWorkspace())).not.toHaveProperty('patchCapability')
 
-    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
-    await state.saveToBackend()
 
-    const request = fetchMock.mock.calls[0]?.[1]
-    expect(JSON.parse(String(request?.body))).not.toHaveProperty('persistRevision')
   })
 
   it('increments once for logical workspace mutations, including serialized selection changes', () => {

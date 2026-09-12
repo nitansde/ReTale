@@ -176,10 +176,10 @@ function seedPersistenceFixture(database: DatabaseSync) {
   )
   database.prepare(
     `INSERT INTO future_jump_runs (
-      id, session_id, base_branch_id, parent_timeline_node_id, target_outline_node_id,
+      id, source_what_if_session_id, source_timeline_node_type, source_text_snapshot, base_branch_id, parent_timeline_node_id, target_outline_node_id,
       target_outline_chapter_id, source_chapter_no, target_chapter_no, user_direction,
       bridge_summary, generated_target_text, latest_revision_no, error_message, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, 'what_if', 'What-if 正文', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     FIXTURE_IDS.futureJumpRunId,
     FIXTURE_IDS.whatIfSessionId,

@@ -38,7 +38,7 @@ import {
 import { formatStoryBranchReadableLabel, prefixStoryBranchTitle } from '@/lib/story-branch-labels'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { findWhatIfSessionById } from '@/lib/server/what-if-store'
-import { createWhatIfSession } from '@/lib/server/what-if-store'
+import { findRoleplaySessionById } from '@/lib/server/roleplay-store'
 import type { DatabaseAccess } from '@/lib/server/database-access'
 import type {
   FutureJumpCreateRequest,
@@ -52,7 +52,6 @@ import type {
   WhatIfDeltaRecord,
   WhatIfSessionDetail,
 } from '@/lib/story-branch-types'
-import type { PresetCompatRuntimeMetadata } from '@/lib/preset-compat/runtime-integration'
 import type { PresetCompatPromptRuleRuntimeContext } from '@/lib/preset-compat/types'
 import { uid } from '@/lib/utils'
 
@@ -67,7 +66,6 @@ type StageKey = 'bridge' | 'rewrite'
 type GenerateFutureJumpInput = {
   novelId: string
   branchId: string
-  whatIfSessionId: string | null
   sourceContext: FutureJumpSourceContext
   targetOutlineNodeId: string
   targetOutlineChapterId: string
@@ -93,7 +91,7 @@ type FutureJumpMutationResult = {
 }
 
 type LoadedFutureJumpGenerationContext = {
-  session: WhatIfSessionDetail
+  session: WhatIfSessionDetail | null
   sourceContext: FutureJumpSourceContext
   sourceNodeContext: {
     nodeType: FutureJumpSourceContext['nodeType']
@@ -103,7 +101,7 @@ type LoadedFutureJumpGenerationContext = {
   outlineNode: OutlineNodeRecord
   targetAnchor: OutlineNodeChapterRecord
   sourceChapter: {
-    id: string
+    id: string | null
     chapterNo: number
     title: string | null
     summary: string | null
@@ -123,36 +121,6 @@ type LoadedFutureJumpGenerationContext = {
     bridgeSummary: string
     generatedTargetText: string
   } | null
-}
-
-function buildStandaloneWhatIfSession(params: {
-  novelId: string
-  branchId: string
-  sourceChapterNo: number
-  sourceNodeType: FutureJumpSourceContext['nodeType']
-  sourceNodeId: string | null
-  sourceNodeTitle?: string | null
-  sourceNodeText?: string | null
-}): WhatIfSessionDetail {
-  const timestamp = new Date(0).toISOString()
-  const sourceNodeLabel = params.sourceNodeTitle?.trim() || params.sourceNodeType
-  const sourceNodeText = params.sourceNodeText?.trim() || ''
-
-  return {
-    id: `standalone:${params.sourceNodeId ?? `${params.branchId}:${params.sourceChapterNo}`}`,
-    novelId: params.novelId,
-    baseBranchId: params.branchId,
-    sourceChapterNo: params.sourceChapterNo,
-    title: `Standalone Future Jump · ${sourceNodeLabel}`,
-    premise: `直接从当前${params.sourceNodeType}节点启动 Future Jump，并以该节点的已保存正文作为显式分支上下文。`,
-    selectedText: sourceNodeText,
-    originalText: sourceNodeText,
-    generatedText: sourceNodeText,
-    status: 'standalone',
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    deltas: [],
-  }
 }
 
 type OpenAICompatibleChatCompletionResponse = {
@@ -352,7 +320,8 @@ function validateTargetRewrite(result: unknown) {
   }
 }
 
-function buildDeltaContextLines(session: WhatIfSessionDetail) {
+function buildDeltaContextLines(session: WhatIfSessionDetail | null) {
+  if (!session) return '无 What-if 分歧；以来源正文作为分支上下文。'
   const lines = [
     `What-if 会话标题：${session.title}`,
     `分歧起点：第 ${session.sourceChapterNo} 章`,
@@ -420,14 +389,17 @@ function resolveSourceNodeContext(
 
   let authoredText: string | null = null
   if (sourceNode.nodeType === 'rewrite' || sourceNode.nodeType === 'continue_block') {
-    authoredText = sourceNode.latestText?.trim() || null
+    authoredText = sourceNode.latestText ?? ''
   } else if (sourceNode.nodeType === 'what_if') {
-    authoredText = session?.generatedText?.trim() || null
+    authoredText = session?.generatedText ?? ''
+  } else if (sourceNode.nodeType === 'roleplay_session') {
+    const roleplay = sourceNode.roleplaySessionId ? findRoleplaySessionById(sourceNode.roleplaySessionId, db) : null
+    authoredText = roleplay?.messages.map(message => `${message.role}: ${message.content}`).join('\n') || null
   } else if (sourceNode.nodeType === 'future_jump') {
     const sourceRun = sourceNode.futureJumpRunId ? findFutureJumpRunById(sourceNode.futureJumpRunId, db) : null
-    authoredText = sourceRun?.revisions.at(-1)?.generatedTargetText?.trim()
-      || sourceRun?.generatedTargetText?.trim()
-      || null
+    authoredText = sourceRun?.revisions.at(-1)?.generatedTargetText
+      ?? sourceRun?.generatedTargetText
+      ?? ''
   }
 
   return {
@@ -437,85 +409,32 @@ function resolveSourceNodeContext(
   }
 }
 
-function resolveCompatibilityWhatIfSessionIdFromSourceNode(sourceNode: ReturnType<typeof findStoryTimelineNodeById>, db: Db) {
-  let cursor = sourceNode
-  while (cursor) {
-    if (cursor.whatIfSessionId?.trim()) {
-      return cursor.whatIfSessionId.trim()
-    }
-    cursor = cursor.parentNodeId ? findStoryTimelineNodeById(cursor.parentNodeId, db) : null
-  }
-
-  return null
-}
-
-function ensureStandaloneWhatIfSession(params: {
-  novelId: string
-  branchId: string
-  sourceContext: FutureJumpSourceContext
-  sourceNode: ReturnType<typeof findStoryTimelineNodeById>
-  db: Db
-}) {
-  const sourceNodeContext = resolveSourceNodeContext(params.sourceNode, null, params.db)
-  const standaloneSession = buildStandaloneWhatIfSession({
-    novelId: params.novelId,
-    branchId: params.branchId,
-    sourceChapterNo: params.sourceContext.chapterNo,
-    sourceNodeType: params.sourceContext.nodeType,
-    sourceNodeId: params.sourceContext.nodeId,
-    sourceNodeTitle: sourceNodeContext?.nodeTitle,
-    sourceNodeText: sourceNodeContext?.authoredText,
-  })
-
-  const existing = findWhatIfSessionById(standaloneSession.id, params.db)
-  if (existing) {
-    return existing.id
-  }
-
-  createWhatIfSession({
-    id: standaloneSession.id,
-    novelId: standaloneSession.novelId,
-    baseBranchId: standaloneSession.baseBranchId,
-    sourceChapterNo: standaloneSession.sourceChapterNo,
-    title: standaloneSession.title,
-    premise: standaloneSession.premise,
-    selectedText: standaloneSession.selectedText,
-    originalText: standaloneSession.originalText,
-    generatedText: standaloneSession.generatedText,
-    status: standaloneSession.status,
-  }, params.db)
-
-  return standaloneSession.id
-}
-
-function resolveFutureJumpCompatibilityWhatIfSessionId(params: {
+function resolveFutureJumpWhatIfSource(params: {
   novelId: string
   branchId: string
   sourceContext: FutureJumpSourceContext
   db: Db
 }) {
-  const explicitWhatIfSessionId = params.sourceContext.whatIfSessionId?.trim()
-  if (explicitWhatIfSessionId) {
-    const session = findWhatIfSessionById(explicitWhatIfSessionId, params.db)
-    if (!session) {
-      throw new ResourceNotFoundError(`What-if session not found: ${explicitWhatIfSessionId}`)
-    }
-    return session.id
+  const explicitId = params.sourceContext.whatIfSessionId
+  let inheritedId: string | null = null
+  let cursorId = params.sourceContext.nodeId
+  const visited = new Set<string>()
+  while (cursorId) {
+    if (visited.has(cursorId) || visited.size >= 1000) throw new InputValidationError('Invalid source timeline lineage')
+    visited.add(cursorId)
+    const node = requireOptionalTimelineNodeInBranchContext({ nodeId: cursorId, novelId: params.novelId, branchId: params.branchId, label: 'Source timeline node', db: params.db })!
+    inheritedId = node.whatIfSessionId
+    if (!inheritedId && node.futureJumpRunId) inheritedId = findFutureJumpRunById(node.futureJumpRunId, params.db)?.sourceContext.whatIfSessionId ?? null
+    if (inheritedId) break
+    cursorId = node.parentNodeId
   }
-
-  const sourceNode = params.sourceContext.nodeId ? findStoryTimelineNodeById(params.sourceContext.nodeId, params.db) : null
-  const compatibilityFromLineage = resolveCompatibilityWhatIfSessionIdFromSourceNode(sourceNode, params.db)
-  if (compatibilityFromLineage) {
-    return compatibilityFromLineage
+  if (explicitId && inheritedId && explicitId !== inheritedId) throw new InputValidationError('What-if source does not match source timeline lineage')
+  const sessionId = explicitId ?? inheritedId
+  if (sessionId) {
+    const session = findWhatIfSessionById(sessionId, params.db)
+    if (!session || session.novelId !== params.novelId || session.baseBranchId !== params.branchId) throw new ResourceNotFoundError('What-if session does not belong to the requested novel/branch')
   }
-
-  return ensureStandaloneWhatIfSession({
-    novelId: params.novelId,
-    branchId: params.branchId,
-    sourceContext: params.sourceContext,
-    sourceNode,
-    db: params.db,
-  })
+  return sessionId
 }
 
 function buildTargetReferenceBlock(context: LoadedFutureJumpGenerationContext) {
@@ -885,7 +804,7 @@ async function runValidatedStage<T>(params: {
 function buildBridgeSystemPrompt() {
   return [
     '你是 ReTale 的 Future Jump 桥接生成器。',
-    '你必须严格依据已给出的 what-if 分歧、故事状态和目标未来节点。',
+    '你必须严格依据已保存的源正文、故事状态、目标未来节点，以及提供的 What-if 分歧（如有）。',
     '你只返回一个 JSON 对象，不要解释，不要 markdown，不要额外字段。',
     'bridgeSummary 必须是 300-600 个中文字符，聚焦关系、动机、误会、阵营变化与情绪后果。',
     '不要按章节回顾，不要写成提纲列表，不要生成目标章节正文。',
@@ -899,7 +818,7 @@ function buildBridgeUserPrompt(params: {
 }) {
   return [
     '# 任务',
-    '请解释：从源章节的 what-if 分歧出发，如何自然演变到目标未来节点。',
+    '请解释：从已保存的源正文与分歧（如有）出发，如何自然演变到目标未来节点。',
     '输出 schema：{"bridgeSummary":"300-600字中文摘要"}',
     '硬性要求：不要逐章复盘；不要写分析；不要写目标正文；必须自然连贯。',
     params.userFeedback?.trim() ? `修订意见：${params.userFeedback.trim()}` : '修订意见：无',
@@ -972,7 +891,7 @@ function buildRewriteUserPrompt(params: {
   ].join('\n')
 }
 
-function buildDeltaSummary(session: WhatIfSessionDetail) {
+function buildDeltaSummary(session: WhatIfSessionDetail | null) {
   return buildDeltaContextLines(session)
 }
 
@@ -984,21 +903,12 @@ async function loadGenerationContext(params: {
   targetOutlineNodeId: string
   targetOutlineChapterId: string
   futureJumpRunId?: string
+  sourceTextSnapshot?: string
   db: Db
 }) {
-  const session = params.whatIfSessionId
-    ? findWhatIfSessionById(params.whatIfSessionId, params.db)
-    : buildStandaloneWhatIfSession({
-        novelId: params.novelId,
-        branchId: params.branchId,
-        sourceChapterNo: params.sourceContext.chapterNo,
-        sourceNodeType: params.sourceContext.nodeType,
-        sourceNodeId: params.sourceContext.nodeId,
-      })
-  if (!session) {
-    throw new ResourceNotFoundError(`What-if session not found: ${params.whatIfSessionId}`)
-  }
-  if (session.novelId !== params.novelId || session.baseBranchId !== params.branchId) {
+  const session = params.whatIfSessionId ? findWhatIfSessionById(params.whatIfSessionId, params.db) : null
+  if (params.whatIfSessionId && !session) throw new ResourceNotFoundError(`What-if session not found: ${params.whatIfSessionId}`)
+  if (session && (session.novelId !== params.novelId || session.baseBranchId !== params.branchId)) {
     throw new ResourceNotFoundError('What-if session does not belong to the requested novel/branch')
   }
 
@@ -1032,7 +942,12 @@ async function loadGenerationContext(params: {
     }
   }
 
-  const sourceChapter = params.sourceContext.chapterId
+  if (sourceNode && sourceNode.nodeType !== params.sourceContext.nodeType) throw new InputValidationError('Source node type does not match the timeline node')
+  if (sourceNode && sourceNode.anchorChapterNo !== params.sourceContext.chapterNo) throw new InputValidationError('Source chapter does not match the timeline node')
+  if (!params.futureJumpRunId && params.sourceContext.nodeType !== 'chapter' && !sourceNode) throw new InputValidationError('A source timeline node is required for this source type')
+  if (params.sourceContext.nodeType === 'chapter' && params.sourceContext.nodeId) throw new InputValidationError('Chapter sources cannot specify a timeline node')
+
+  let sourceChapter = params.sourceContext.chapterId
     ? params.db.queryOne<LoadedFutureJumpGenerationContext['sourceChapter']>(
         `SELECT id, chapterNo, title, summary, rawText
            FROM KnowledgeChapter
@@ -1051,11 +966,18 @@ async function loadGenerationContext(params: {
         params.branchId,
         params.sourceContext.chapterNo,
       )
+  if (!sourceChapter && params.futureJumpRunId && params.sourceTextSnapshot !== undefined) {
+    sourceChapter = { id: null, chapterNo: params.sourceContext.chapterNo, title: null, summary: null, rawText: '' }
+  }
   if (!sourceChapter) {
     throw new ResourceNotFoundError(`Source chapter not found for branch context: chapter ${params.sourceContext.chapterNo}`)
   }
   if (sourceChapter.chapterNo !== params.sourceContext.chapterNo) {
     throw new InputValidationError('sourceContext.chapterId must match sourceContext.chapterNo')
+  }
+
+  if (params.sourceContext.nodeType === 'chapter' && params.sourceTextSnapshot !== undefined) {
+    sourceChapter = { ...sourceChapter, rawText: params.sourceTextSnapshot }
   }
 
   const targetChapter = targetAnchor.chapterId
@@ -1093,10 +1015,13 @@ async function loadGenerationContext(params: {
     session,
     sourceContext: {
       ...params.sourceContext,
+      whatIfSessionId: params.whatIfSessionId,
       chapterId: sourceChapter.id,
       chapterNo: sourceChapter.chapterNo,
     },
-    sourceNodeContext: resolveSourceNodeContext(sourceNode, session, params.db),
+    sourceNodeContext: params.sourceTextSnapshot !== undefined
+      ? { nodeType: params.sourceContext.nodeType, nodeTitle: sourceNode?.title ?? null, authoredText: params.sourceTextSnapshot }
+      : resolveSourceNodeContext(sourceNode, session, params.db),
     outlineNode,
     targetAnchor,
     sourceChapter,
@@ -1215,18 +1140,19 @@ export async function generateFutureJump(input: GenerateFutureJumpInput): Promis
   const context = await loadGenerationContext({
     novelId,
     branchId,
-    whatIfSessionId: input.whatIfSessionId?.trim() || null,
+    whatIfSessionId: resolveFutureJumpWhatIfSource({ novelId, branchId, sourceContext: input.sourceContext, db }),
     sourceContext: input.sourceContext,
     targetOutlineNodeId,
     targetOutlineChapterId,
     db,
   })
 
+  const parentNode = requireOptionalTimelineNodeInBranchContext({ nodeId: input.parentTimelineNodeId, novelId, branchId, label: 'Parent timeline node', db })
   const pendingRun = createFutureJumpRunRecord({
     id: uid('future-jump-run'),
-    sessionId: context.session.id,
-    baseBranchId: context.session.baseBranchId,
-    parentTimelineNodeId: input.parentTimelineNodeId ?? null,
+    sourceTextSnapshot: context.sourceContext.nodeType === 'chapter' ? context.sourceChapter.rawText : context.sourceNodeContext?.authoredText ?? '',
+    baseBranchId: branchId,
+    parentTimelineNodeId: parentNode?.id ?? null,
     sourceContext: context.sourceContext,
     targetOutlineNodeId: context.outlineNode.id,
     targetOutlineChapterId: context.targetAnchor.id,
@@ -1315,6 +1241,7 @@ export async function reviseFutureJump(input: ReviseFutureJumpInput): Promise<Fu
     targetOutlineNodeId: run.targetOutlineNodeId,
     targetOutlineChapterId: run.targetOutlineChapterId,
     futureJumpRunId: run.id,
+    sourceTextSnapshot: run.sourceTextSnapshot,
     db,
   })
 
@@ -1376,6 +1303,7 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
   if (!outlineNode) {
     throw new ResourceNotFoundError(`Target outline node not found: ${input.targetOutlineNodeId}`)
   }
+  if (outlineNode.novelId !== input.novelId) throw new ResourceNotFoundError('Target outline node does not belong to the requested novel')
   const parentNode = requireOptionalTimelineNodeInBranchContext({
     nodeId: input.parentTimelineNodeId,
     novelId: outlineNode.novelId,
@@ -1384,21 +1312,10 @@ export async function createFutureJumpRun(rawInput: FutureJumpCreateRequest): Pr
     db,
   })
 
-  const compatibilityWhatIfSessionId = resolveFutureJumpCompatibilityWhatIfSessionId({
-    novelId: outlineNode.novelId,
-    branchId: outlineNode.branchId,
-    sourceContext: input.sourceContext,
-    db,
-  })
-
   const generated = await generateFutureJump({
     novelId: outlineNode.novelId,
     branchId: outlineNode.branchId,
-    whatIfSessionId: compatibilityWhatIfSessionId,
-    sourceContext: {
-      ...input.sourceContext,
-      whatIfSessionId: compatibilityWhatIfSessionId,
-    },
+    sourceContext: input.sourceContext,
     targetOutlineNodeId: input.targetOutlineNodeId,
     targetOutlineChapterId: input.targetOutlineChapterId,
     parentTimelineNodeId: parentNode?.id ?? null,

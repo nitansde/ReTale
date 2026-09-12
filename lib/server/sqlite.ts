@@ -10,7 +10,7 @@ type DatabaseSync = NodeSqlite.DatabaseSync
 export type SqlParam = string | number | bigint | Uint8Array | null
 type DatabaseListRow = { name: string; file: string }
 export type DatabaseKind = 'full' | 'control'
-export const DATABASE_SCHEMA_VERSION = 3
+export const DATABASE_SCHEMA_VERSION = 4
 export const DATABASE_APPLICATION_IDS = { full: 0x52544e56, control: 0x5254434c } as const
 
 const processWithBuiltins = process as typeof process & {

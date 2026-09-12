@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { jsonError, noStoreJson, noStoreJsonError, requireNonEmptyId } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { deleteFutureJumpRun, findFutureJumpRunById } from '@/lib/server/future-jump-store'
-import { findWhatIfSessionById } from '@/lib/server/what-if-store'
 
 function resolveNovelIdFromBranchId(branchId: string) {
   const normalized = branchId.trim()
@@ -37,11 +36,6 @@ export async function GET(request: Request, ctx: RouteContext<'/api/future-jump/
       return noStoreJson({ ok: false, error: 'Future jump run not found for the requested branch context' }, { status: 404 })
     }
 
-    const session = findWhatIfSessionById(run.sessionId, db)
-    if (!session || session.baseBranchId !== branchId) {
-      return noStoreJson({ ok: false, error: 'Future jump run is not accessible in the requested branch context' }, { status: 404 })
-    }
-
     return noStoreJson(run)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load future jump run'
@@ -70,11 +64,6 @@ export async function DELETE(request: Request, ctx: RouteContext<'/api/future-ju
     const run = findFutureJumpRunById(runId, db)
     if (!run || run.baseBranchId !== branchId) {
       return NextResponse.json({ ok: false, error: 'Future jump run not found for the requested branch context' }, { status: 404 })
-    }
-
-    const session = findWhatIfSessionById(run.sessionId, db)
-    if (!session || session.baseBranchId !== branchId) {
-      return NextResponse.json({ ok: false, error: 'Future jump run is not accessible in the requested branch context' }, { status: 404 })
     }
 
     await deleteFutureJumpRun(runId, db)

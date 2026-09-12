@@ -14,11 +14,11 @@ afterEach(() => { for (const db of connections.splice(0)) db.close(); for (const
 describe('strict current database contract', () => {
   it.each(['full', 'control'] as const)('creates the complete %s schema with explicit version and kind', kind => {
     const db = initializeDatabase(open(), { mode: kind })
-    expect(readDatabaseSchemaVersion(db)).toEqual({ version: 3, applicationId: DATABASE_APPLICATION_IDS[kind] })
+    expect(readDatabaseSchemaVersion(db)).toEqual({ version: 4, applicationId: DATABASE_APPLICATION_IDS[kind] })
     expect(() => assertCurrentDatabaseSchema(db, kind)).not.toThrow()
     expect(() => initializeDatabase(db, { mode: kind })).not.toThrow()
   })
-  it.each([0, 1, 2, 4])('rejects version %s without changing the database file', version => {
+  it.each([0, 1, 2, 3, 5])('rejects version %s without changing the database file', version => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-schema-')); dirs.push(dir)
     const filename = path.join(dir, 'db.sqlite')
     const db = new DatabaseSync(filename)

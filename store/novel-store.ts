@@ -82,7 +82,6 @@ import type {
   DeleteNovelOutcome,
   NovelDeletionReconciliationResult,
   NovelDeletionTransaction,
-  WorkspacePatchCapability,
   WorkspaceSaveConflict,
   WorkspaceSaveFeedback,
   WorkspaceSaveOptions,
@@ -372,7 +371,6 @@ type NovelStore = PersistedNovelState & {
   workspaceRevision: number | null
   revisionNovelId: string
   lastAcknowledgedPersistedWorkspace: PersistedNovelState | null
-  patchCapability: WorkspacePatchCapability
   workspaceSaveConflict: WorkspaceSaveConflict | null
   workspaceSaveFeedback: WorkspaceSaveFeedback | null
   isHydrated: boolean
@@ -537,7 +535,6 @@ export const useNovelStore = create<NovelStore>((set, get) => {
   workspaceRevision: null,
   revisionNovelId: '',
   lastAcknowledgedPersistedWorkspace: null,
-  patchCapability: 'unknown',
   workspaceSaveConflict: null,
   workspaceSaveFeedback: null,
   isHydrated: false,
@@ -657,6 +654,7 @@ export const useNovelStore = create<NovelStore>((set, get) => {
     const rememberedChapter = chapters.find((chapter) => chapter.id === rememberedChapterId)
     return {
       currentNovelId: id,
+      ...(state.currentNovelId !== id ? { backendLoaded: false, workspaceRevision: null, revisionNovelId: '', lastAcknowledgedPersistedWorkspace: null } : {}),
       currentChapterId: currentChapterBelongsToNovel
         ? state.currentChapterId
         : rememberedChapter?.id ?? chapters[0]?.id ?? '',
@@ -838,11 +836,12 @@ export const useNovelStore = create<NovelStore>((set, get) => {
     }
   },
   snapshotPersistedState: () => serializeState(get()),
-  restorePersistedState: (snapshot) => set({
+  restorePersistedState: (snapshot) => set((state) => ({
     ...snapshot,
+    ...(state.currentNovelId !== snapshot.currentNovelId ? { workspaceRevision: null, revisionNovelId: '', lastAcknowledgedPersistedWorkspace: null, backendLoaded: false } : {}),
     workspaceSaveConflict: null,
     workspaceSaveFeedback: null,
-  }),
+  })),
   setNovelDeletionPending: (pending) => set({ isNovelDeletionPending: pending }),
   reconcileNovelDeletion: (nextNovelId) => set((state) => {
     if (nextNovelId === null) {
@@ -1011,7 +1010,7 @@ export const useNovelStore = create<NovelStore>((set, get) => {
       ? state
       : { presetCompatSessionState }
   }),
-  ...createPersistenceActions(set, get, initialState),
+  ...createPersistenceActions(set, get),
   bindPresetCompatPresetToSurface: (surfaceId, presetId) => set((state) => {
     const binding = state.presetCompatLibrary.surfaceBindings[surfaceId]
     if (!binding) {

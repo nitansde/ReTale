@@ -104,7 +104,7 @@ function seedRuntime(config) {
   const controlDb = initializeDatabase(new DatabaseSync(path.join(config.dataDir, 'control.db')), { mode: 'control' })
   controlDb.prepare(
     `INSERT INTO NovelRegistry (novelId, safeNovelId, title, dbFilePath, lanceDbPath, schemaVersion, migrationStatus)
-     VALUES (?, ?, ?, ?, ?, '3', 'ready')`
+     VALUES (?, ?, ?, ?, ?, '4', 'ready')`
   ).run(NOVEL_ID, NOVEL_ID, 'Production Smoke Novel', novelDbPath, lanceDbPath)
   controlDb.close()
 

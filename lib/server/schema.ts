@@ -4,7 +4,7 @@ export const PROTECTED_RESET_APP_SETTING_KEYS = [
   'OLLAMA_TIMEOUT_MS',
 ] as const
 
-export const CURRENT_NOVEL_SCHEMA_VERSION = '3'
+export const CURRENT_NOVEL_SCHEMA_VERSION = '4'
 
 export const CONTROL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS AppSetting (
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS NovelRegistry (
   author TEXT,
   dbFilePath TEXT NOT NULL UNIQUE,
   lanceDbPath TEXT NOT NULL UNIQUE,
-  schemaVersion TEXT NOT NULL DEFAULT '3',
+  schemaVersion TEXT NOT NULL DEFAULT '4',
   migrationStatus TEXT NOT NULL DEFAULT 'pending',
   lifecycleToken TEXT,
   leaseExpiresAt TEXT,
@@ -1062,13 +1062,13 @@ CREATE TABLE IF NOT EXISTS outline_node_chapters (
 
 CREATE TABLE IF NOT EXISTS future_jump_runs (
   id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL,
   base_branch_id TEXT NOT NULL,
   parent_timeline_node_id TEXT,
   source_timeline_node_id TEXT,
-  source_timeline_node_type TEXT,
+  source_timeline_node_type TEXT NOT NULL CHECK (source_timeline_node_type IN ('chapter', 'rewrite', 'continue_block', 'what_if', 'future_jump', 'roleplay_session')),
   source_chapter_id TEXT,
   source_what_if_session_id TEXT,
+  source_text_snapshot TEXT NOT NULL,
   target_outline_node_id TEXT NOT NULL,
   target_outline_chapter_id TEXT NOT NULL,
   source_chapter_no INTEGER NOT NULL,
@@ -1083,7 +1083,6 @@ CREATE TABLE IF NOT EXISTS future_jump_runs (
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (session_id) REFERENCES what_if_sessions(id) ON DELETE CASCADE,
   FOREIGN KEY (base_branch_id) REFERENCES StoryBranch(id) ON DELETE CASCADE,
   FOREIGN KEY (parent_timeline_node_id) REFERENCES story_timeline_nodes(id) ON DELETE SET NULL,
   FOREIGN KEY (source_timeline_node_id) REFERENCES story_timeline_nodes(id) ON DELETE SET NULL,
@@ -1167,7 +1166,7 @@ CREATE INDEX IF NOT EXISTS idx_outline_nodes_branch_chapter ON outline_nodes(nov
 CREATE INDEX IF NOT EXISTS idx_outline_nodes_source_type ON outline_nodes(branch_id, source_type);
 CREATE INDEX IF NOT EXISTS idx_outline_node_chapters_outline_primary_sort ON outline_node_chapters(outline_node_id, is_primary, sort_order);
 CREATE INDEX IF NOT EXISTS idx_outline_node_chapters_chapter_anchor ON outline_node_chapters(chapter_no, chapter_id);
-CREATE INDEX IF NOT EXISTS idx_future_jump_runs_session ON future_jump_runs(session_id);
+CREATE INDEX IF NOT EXISTS idx_future_jump_runs_what_if_source ON future_jump_runs(source_what_if_session_id);
 CREATE INDEX IF NOT EXISTS idx_future_jump_runs_parent_node ON future_jump_runs(parent_timeline_node_id);
 CREATE INDEX IF NOT EXISTS idx_future_jump_runs_target_outline ON future_jump_runs(target_outline_node_id);
 CREATE INDEX IF NOT EXISTS idx_future_jump_runs_target_outline_chapter ON future_jump_runs(target_outline_chapter_id);

@@ -277,8 +277,8 @@ type WorkspaceMutationMethod = 'PATCH' | 'POST'
 type WorkspaceMutationEnvelope = {
   method: WorkspaceMutationMethod
   body: string
-  idempotencyKey: string | null
-  baseRevision: number | null
+  idempotencyKey: string
+  baseRevision: number
   capturedSnapshot: PersistedNovelState
   revisionOwner: string
   chapterId: string | null
@@ -381,9 +381,7 @@ async function executeMutationEnvelope(
       : `/api/novels/${encodeURIComponent(envelope.capturedSnapshot.currentNovelId)}`
     const response = await fetch(resourceUrl, {
       method: envelope.method,
-      headers: envelope.baseRevision === null || envelope.idempotencyKey === null
-        ? { 'Content-Type': 'application/json' }
-        : createRevisionHeaders(envelope.baseRevision, envelope.idempotencyKey, envelope.revisionOwner),
+      headers: createRevisionHeaders(envelope.baseRevision, envelope.idempotencyKey, envelope.revisionOwner),
       body: envelope.body,
       signal: controller.signal,
       keepalive: options.lifecycle === true && canUseWorkspaceMutationKeepalive(envelope),
@@ -547,7 +545,6 @@ export function serializeState(state: PersistedNovelState): PersistedNovelState 
 export function createPersistenceActions(
   set: NovelStoreSet,
   get: NovelStoreGet,
-  initialState: PersistedNovelState
 ): Pick<NovelStore,
   'loadPresetCompatLibrary'
   | 'loadLibrarySummaries'
@@ -597,45 +594,22 @@ export function createPersistenceActions(
     generation: number,
     saveAuthorityEpoch: number,
     envelope: WorkspaceMutationEnvelope,
-    priorAuthority: {
-      workspaceRevision: number | null
-      revisionNovelId: string
-      lastAcknowledgedPersistedWorkspace: PersistedNovelState | null
-    },
     acknowledgement: WorkspaceRevisionAuthority,
   ) => {
     set((current) => {
       const capturedSnapshot = envelope.capturedSnapshot
       if (current.currentNovelId !== capturedSnapshot.currentNovelId) return current
 
-      const transfersAuthority = priorAuthority.revisionNovelId !== ''
-        && priorAuthority.revisionNovelId !== acknowledgement.revisionNovelId
-        && saveAuthorityEpoch === authorityEpoch
-        && acknowledgement.revisionNovelId === capturedSnapshot.currentNovelId
-        && current.workspaceRevision === priorAuthority.workspaceRevision
-        && current.revisionNovelId === priorAuthority.revisionNovelId
-        && current.lastAcknowledgedPersistedWorkspace === priorAuthority.lastAcknowledgedPersistedWorkspace
-      const sameOwner = !transfersAuthority
-        && priorAuthority.revisionNovelId === acknowledgement.revisionNovelId
-        && current.revisionNovelId === acknowledgement.revisionNovelId
-      const adoptsInitialAuthority = priorAuthority.revisionNovelId === ''
-        && current.revisionNovelId === ''
-        && acknowledgement.revisionNovelId === capturedSnapshot.currentNovelId
-      if (!sameOwner && !transfersAuthority && !adoptsInitialAuthority) return current
-
-      const currentRevision = transfersAuthority ? null : current.workspaceRevision
+      if (envelope.revisionOwner !== acknowledgement.revisionNovelId
+        || current.revisionNovelId !== acknowledgement.revisionNovelId
+        || saveAuthorityEpoch !== authorityEpoch) return current
+      const currentRevision = current.workspaceRevision
       if (currentRevision !== null && acknowledgement.workspaceRevision < currentRevision) return current
-      if (
-        saveAuthorityEpoch < authorityEpoch
-        && currentRevision !== null
-        && acknowledgement.workspaceRevision <= currentRevision
-      ) return current
       const advancesAuthority = currentRevision === null
         || acknowledgement.workspaceRevision > currentRevision
         || generation >= latestAuthorityGeneration
       const mayClearConflict = generation >= latestSaveOutcomeGeneration
         && (!current.workspaceSaveConflict
-          || transfersAuthority
           || acknowledgement.workspaceRevision >= current.workspaceSaveConflict.currentRevision)
       if (!advancesAuthority && !mayClearConflict) return current
 
@@ -671,21 +645,16 @@ export function createPersistenceActions(
     envelope: WorkspaceMutationEnvelope
     stale: { currentRevision: number; chapter: Chapter | null }
   }) => {
-    let conflictApplied = false
     set((current) => {
       if (
-        current.currentNovelId !== params.envelope.capturedSnapshot.currentNovelId
+        params.saveAuthorityEpoch !== authorityEpoch
+        || current.currentNovelId !== params.envelope.capturedSnapshot.currentNovelId
         || current.revisionNovelId !== params.envelope.revisionOwner
         || current.lastAcknowledgedPersistedWorkspace === null
       ) return current
 
       const currentRevision = current.workspaceRevision
       if (currentRevision !== null && params.stale.currentRevision < currentRevision) return current
-      if (
-        params.saveAuthorityEpoch < authorityEpoch
-        && currentRevision !== null
-        && params.stale.currentRevision <= currentRevision
-      ) return current
       const advancesAuthority = currentRevision === null
         || params.stale.currentRevision > currentRevision
         || params.generation >= latestAuthorityGeneration
@@ -695,7 +664,6 @@ export function createPersistenceActions(
       if (advancesAuthority) latestAuthorityGeneration = params.generation
       if (mayApplyConflict) {
         latestSaveOutcomeGeneration = params.generation
-        conflictApplied = true
       }
       const isChapterConflict = params.envelope.method === 'PATCH'
         && params.envelope.chapterId !== null
@@ -732,7 +700,6 @@ export function createPersistenceActions(
         } : {}),
       }
     })
-    return conflictApplied
   }
 
   const importCompatPayload = async (
@@ -836,7 +803,9 @@ export function createPersistenceActions(
       const ownsRestore = () => workspaceRestoreGeneration === restoreGeneration
       set({
         backendLoadError: '',
+        backendLoaded: false,
       })
+      authorityEpoch += 1
       activeWorkspaceRestoreController?.abort()
       const workspaceRestoreController = new AbortController()
       activeWorkspaceRestoreController = workspaceRestoreController
@@ -974,15 +943,19 @@ export function createPersistenceActions(
     saveToBackend: async (options = {}) => {
       const state = get()
       const capturedSnapshot = serializeState(state)
-      const hasMatchingAuthority = state.workspaceRevision !== null
-        && state.revisionNovelId === capturedSnapshot.currentNovelId
-        && state.lastAcknowledgedPersistedWorkspace !== null
-      const classification = hasMatchingAuthority
-        ? classifyWorkspacePersistence(state.lastAcknowledgedPersistedWorkspace!, capturedSnapshot)
-        : { kind: 'post' as const }
+      if (!capturedSnapshot.currentNovelId && capturedSnapshot.localNovels.length === 0 && capturedSnapshot.localChapters.length === 0) return
+      if (!state.backendLoaded || state.backendLoadError
+        || state.workspaceRevision === null
+        || state.revisionNovelId !== capturedSnapshot.currentNovelId
+        || state.lastAcknowledgedPersistedWorkspace === null
+        || state.lastAcknowledgedPersistedWorkspace.currentNovelId !== capturedSnapshot.currentNovelId) {
+        set({ workspaceSaveFeedback: { kind: 'save-failed' } })
+        throw workspaceSaveFailure('authority-required', 'Load this novel before saving. Local edits have been preserved for reconciliation.')
+      }
+      const classification = classifyWorkspacePersistence(state.lastAcknowledgedPersistedWorkspace, capturedSnapshot)
       if (classification.kind === 'none') return
       const conflict = state.workspaceSaveConflict
-      if (conflict && hasMatchingAuthority) {
+      if (conflict) {
         const unchangedRejectedChapter = classification.kind === 'patch'
           && classification.chapter.id === conflict.chapterId
           && createChapterFingerprint(classification.chapter) === conflict.rejectedChapterFingerprint
@@ -993,16 +966,12 @@ export function createPersistenceActions(
           set({ workspaceSaveFeedback: { kind: 'structural-conflict' } })
           throw workspaceSaveFailure('conflict-blocked', 'Workspace structural conflict requires reconciliation')
         }
-        if (state.patchCapability === 'unsupported') {
-          set({ workspaceSaveFeedback: { kind: 'structural-conflict' } })
-          throw workspaceSaveFailure('conflict-blocked', 'Workspace structural conflict requires reconciliation')
-        }
       }
 
-      const patchEligible = classification.kind === 'patch' && state.patchCapability !== 'unsupported'
+      const patchEligible = classification.kind === 'patch'
       const method: WorkspaceMutationMethod = patchEligible ? 'PATCH' : 'POST'
-      const idempotencyKey = hasMatchingAuthority ? createUuid() : null
-      const baseRevision = hasMatchingAuthority ? state.workspaceRevision : null
+      const idempotencyKey = createUuid()
+      const baseRevision = state.workspaceRevision
       const patchBody = classification.kind === 'patch' ? {
         novelId: state.revisionNovelId,
         chapterId: classification.chapter.id,
@@ -1021,23 +990,12 @@ export function createPersistenceActions(
         chapterFingerprint: classification.kind === 'patch' ? createChapterFingerprint(classification.chapter) : null,
       }
       const saveAuthorityEpoch = authorityEpoch
-      const priorAuthority = {
-        workspaceRevision: state.workspaceRevision,
-        revisionNovelId: state.revisionNovelId,
-        lastAcknowledgedPersistedWorkspace: state.lastAcknowledgedPersistedWorkspace,
-      }
       const generation = beginSave()
       try {
-        let activeEnvelope = envelope
         let result: WorkspaceMutationResponse
         try {
           result = await executeMutationEnvelope(envelope, options)
-        } catch (error) {
-          if (envelope.baseRevision === null || envelope.idempotencyKey === null) {
-            applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
-            if (error instanceof TypedWorkspaceSaveError && error.code === 'invalid-response') throw error
-            throw workspaceSaveFailure('transport-indeterminate', 'Workspace save result could not be confirmed')
-          }
+        } catch {
           try {
             result = await executeMutationEnvelope(envelope, options)
           } catch (retryError) {
@@ -1047,48 +1005,19 @@ export function createPersistenceActions(
           }
         }
 
-        if (envelope.method === 'PATCH' && (result.response.status === 405 || result.response.status === 501)) {
-          set({ patchCapability: 'unsupported' })
-          const fallbackEnvelope: WorkspaceMutationEnvelope = {
-            ...envelope,
-            method: 'POST',
-            body: JSON.stringify(envelope.capturedSnapshot),
-            idempotencyKey: createUuid(),
-            chapterId: null,
-            chapterFingerprint: null,
-          }
-          try {
-            result = await executeMutationEnvelope(fallbackEnvelope, options)
-            activeEnvelope = fallbackEnvelope
-          } catch {
-            try {
-              result = await executeMutationEnvelope(fallbackEnvelope, options)
-              activeEnvelope = fallbackEnvelope
-            } catch (retryError) {
-              applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
-              if (retryError instanceof TypedWorkspaceSaveError && retryError.code === 'invalid-response') throw retryError
-              throw workspaceSaveFailure('transport-indeterminate', 'Workspace save result could not be confirmed')
-            }
-          }
-        } else if (envelope.method === 'PATCH') {
-          set((current) => current.patchCapability === 'unsupported' ? current : { patchCapability: 'supported' })
-        }
-
         if (
-          activeEnvelope.baseRevision !== null
-          && activeEnvelope.idempotencyKey !== null
-          && result.response.ok
-          && parseMutationSuccess(result.response, result.payload, activeEnvelope.revisionOwner) === null
+          result.response.ok
+          && parseMutationSuccess(result.response, result.payload, envelope.revisionOwner) === null
         ) {
           try {
-            result = await executeMutationEnvelope(activeEnvelope, options)
+            result = await executeMutationEnvelope(envelope, options)
           } catch {
             applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
             throw workspaceSaveFailure('transport-indeterminate', 'Workspace save result could not be confirmed')
           }
           if (
             !result.response.ok
-            || parseMutationSuccess(result.response, result.payload, activeEnvelope.revisionOwner) === null
+            || parseMutationSuccess(result.response, result.payload, envelope.revisionOwner) === null
           ) {
             applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
             throw workspaceSaveFailure('invalid-response', 'Workspace save returned an invalid revision acknowledgement')
@@ -1096,16 +1025,15 @@ export function createPersistenceActions(
         }
 
         if (!result.response.ok) {
-          const stale = parseStaleRevisionPayload(result.payload, activeEnvelope.method === 'PATCH')
-          if (stale && hasMatchingAuthority) {
-            const isChapterConflict = activeEnvelope.method === 'PATCH'
-              && activeEnvelope.chapterId !== null
-              && activeEnvelope.chapterFingerprint !== null
-            const conflictApplied = applyStaleResult({ generation, saveAuthorityEpoch, envelope: activeEnvelope, stale })
+          const stale = parseStaleRevisionPayload(result.payload, envelope.method === 'PATCH')
+          if (stale) {
+            const isChapterConflict = envelope.method === 'PATCH'
+              && envelope.chapterId !== null
+              && envelope.chapterFingerprint !== null
+            applyStaleResult({ generation, saveAuthorityEpoch, envelope, stale })
             if (isChapterConflict) {
               throw workspaceSaveFailure('stale-revision', 'Workspace chapter conflict requires reconciliation')
             }
-            void conflictApplied
             throw workspaceSaveFailure('conflict-blocked', 'Workspace structural conflict requires reconciliation')
           }
           applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
@@ -1115,23 +1043,12 @@ export function createPersistenceActions(
           throw workspaceSaveFailure('http-rejected', message)
         }
 
-        if (!hasMatchingAuthority) {
-          if (!isRecord(result.payload) || result.payload.ok !== true) {
-            applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
-            throw workspaceSaveFailure('invalid-response', 'Workspace save returned an invalid response')
-          }
-          const acknowledgement = parseMutationSuccess(result.response, result.payload, capturedSnapshot.currentNovelId)
-          if (acknowledgement) {
-            applySaveSuccess(generation, saveAuthorityEpoch, activeEnvelope, priorAuthority, acknowledgement)
-          }
-          return
-        }
         const acknowledgement = parseMutationSuccess(result.response, result.payload, state.revisionNovelId)
         if (!acknowledgement) {
           applySaveFailure(generation, saveAuthorityEpoch, capturedSnapshot.currentNovelId)
           throw workspaceSaveFailure('invalid-response', 'Workspace save returned an invalid revision acknowledgement')
         }
-        applySaveSuccess(generation, saveAuthorityEpoch, activeEnvelope, priorAuthority, acknowledgement)
+        applySaveSuccess(generation, saveAuthorityEpoch, envelope, acknowledgement)
       } finally {
         finishSave()
       }

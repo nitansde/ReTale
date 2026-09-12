@@ -170,10 +170,10 @@ function createFixture(database: DatabaseSync) {
   )
   database.prepare(
     `INSERT INTO future_jump_runs (
-      id, session_id, base_branch_id, parent_timeline_node_id, target_outline_node_id,
+      id, source_what_if_session_id, source_timeline_node_type, source_text_snapshot, base_branch_id, parent_timeline_node_id, target_outline_node_id,
       target_outline_chapter_id, source_chapter_no, target_chapter_no, user_direction,
       bridge_summary, generated_target_text, latest_revision_no, error_message, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, 'what_if', 'What-if 正文', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     FIXTURE_IDS.futureJumpRunId,
     FIXTURE_IDS.whatIfSessionId,
@@ -234,10 +234,10 @@ function snapshotIsolation(database: DatabaseSync) {
       'SELECT id, generated_text, status FROM what_if_sessions ORDER BY id ASC'
     ).all() as Array<{ id: string; generated_text: string; status: string }>,
     futureJumpRuns: database.prepare(
-      'SELECT id, session_id, generated_target_text, latest_revision_no, status FROM future_jump_runs ORDER BY id ASC'
+      'SELECT id, source_what_if_session_id, generated_target_text, latest_revision_no, status FROM future_jump_runs ORDER BY id ASC'
     ).all() as Array<{
       id: string
-      session_id: string
+      source_what_if_session_id: string | null
       generated_target_text: string
       latest_revision_no: number
       status: string

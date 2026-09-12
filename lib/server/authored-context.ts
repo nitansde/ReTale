@@ -48,9 +48,6 @@ function formatDeltaSummary(delta: WhatIfDeltaRecord) {
 function validateWhatIfSession(request: ExplicitAuthoredContextRequest, session: WhatIfSessionDetail | null, requestedId?: string) {
   if (!requestedId) return
   if (!session) {
-    if (requestedId.startsWith('standalone:')) {
-      return
-    }
     throw new Error(`What-if session not found: ${requestedId}`)
   }
   if (session.novelId !== request.novelId || session.baseBranchId !== request.branchId) {
@@ -69,7 +66,7 @@ function validateFutureJumpRun(request: ExplicitAuthoredContextRequest, run: Fut
 }
 
 function resolveFutureJumpWhatIfSessionId(run: FutureJumpRunDetail | null) {
-  return run?.sourceContext.whatIfSessionId?.trim() || run?.sessionId || undefined
+  return run?.sourceContext.whatIfSessionId?.trim() || undefined
 }
 
 function formatFutureJumpSourceContextLine(run: FutureJumpRunDetail) {

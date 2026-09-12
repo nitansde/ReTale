@@ -68,8 +68,8 @@ export type FullSnapshotMutationRequest = {
   payload: PersistedNovelState
   backupReason: 'workspace-save' | 'explicit-reset' | 'import-txt'
   allowEmptyReset: boolean
-  baseRevision: number | null
-  idempotencyKey: string | null
+  baseRevision: number
+  idempotencyKey: string
 }
 
 export type WorkspaceMutationRequest = ChapterPatchMutationRequest | FullSnapshotMutationRequest
@@ -213,7 +213,7 @@ function validateBoundedNonEmptyString(value: unknown, field: string, maxLength:
 }
 
 function validateRevision(value: unknown, field: string) {
-  if (!Number.isInteger(value) || Number(value) < 0) {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) {
     invalidContract(`${field} must be an integer greater than or equal to zero`)
   }
   return Number(value)
@@ -261,15 +261,8 @@ function validateRequest(request: WorkspaceMutationRequest): ValidatedWorkspaceM
   if (typeof request.allowEmptyReset !== 'boolean') {
     invalidContract('allowEmptyReset must be a boolean')
   }
-  const hasRevision = request.baseRevision !== null
-  const hasKey = request.idempotencyKey !== null
-  if (hasRevision !== hasKey) {
-    invalidContract('baseRevision and idempotencyKey must either both be present or both be null')
-  }
-  const baseRevision = request.baseRevision === null ? null : validateRevision(request.baseRevision, 'baseRevision')
-  const idempotencyKey = request.idempotencyKey === null
-    ? null
-    : validateBoundedNonEmptyString(request.idempotencyKey, 'idempotencyKey', MAX_IDEMPOTENCY_KEY_LENGTH)
+  const baseRevision = validateRevision(request.baseRevision, 'baseRevision')
+  const idempotencyKey = validateBoundedNonEmptyString(request.idempotencyKey, 'idempotencyKey', MAX_IDEMPOTENCY_KEY_LENGTH)
   const normalized = normalizeWorkspaceState(request.payload)
   const payload = scopeWorkspaceStateToNovel(normalized, novelId)
 
@@ -464,9 +457,11 @@ function applyChapterPatch(
   }
 }
 
+type ArtifactRequest = { workspaceStateId: string; kind: 'chapter-patch' } | { workspaceStateId: string; kind: 'full-snapshot'; backupReason: FullSnapshotMutationRequest['backupReason'] }
+
 function persistArtifact(
   db: DatabaseAccess,
-  request: ValidatedWorkspaceMutation,
+  request: ArtifactRequest,
   payload: PersistedNovelState,
 ) {
   const serializedPayload = JSON.stringify(serializeNovelResourceState(payload))
@@ -486,7 +481,7 @@ function persistArtifact(
 
 function persistArtifactAndSync(
   db: DatabaseAccess,
-  request: ValidatedWorkspaceMutation,
+  request: ArtifactRequest,
   payload: PersistedNovelState,
   updatedAt: string,
 ) {
@@ -501,7 +496,6 @@ function insertReplayAndPrune(
   requestHash: string,
   result: WorkspaceMutationResult,
 ) {
-  if (!request.idempotencyKey) return
   workspaceMutationFaultInjector?.('before_replay')
   db.execute(
     `INSERT INTO WorkspaceMutationReplay (
@@ -627,17 +621,15 @@ function runChapterPatchTransaction(db: DatabaseAccess, request: ValidatedChapte
 }
 
 function runMutationTransaction(db: DatabaseAccess, request: ValidatedWorkspaceMutation, requestHash: string) {
-  if (request.idempotencyKey) {
-    const replay = readReplay(db, request.workspaceStateId, request.idempotencyKey)
-    if (replay) {
-      if (replay.operation !== request.kind || replay.requestHash !== requestHash) {
-        throw new WorkspaceMutationError('idempotency_key_reused', 'Idempotency key was already used for another mutation', {
-          novelId: request.novelId,
-          workspaceStateId: request.workspaceStateId,
-        })
-      }
-      return replayResult(replay)
+  const replay = readReplay(db, request.workspaceStateId, request.idempotencyKey)
+  if (replay) {
+    if (replay.operation !== request.kind || replay.requestHash !== requestHash) {
+      throw new WorkspaceMutationError('idempotency_key_reused', 'Idempotency key was already used for another mutation', {
+        novelId: request.novelId,
+        workspaceStateId: request.workspaceStateId,
+      })
     }
+    return replayResult(replay)
   }
 
   if (request.kind === 'chapter-patch') {
@@ -646,7 +638,7 @@ function runMutationTransaction(db: DatabaseAccess, request: ValidatedWorkspaceM
 
   const current = readWorkspaceRuntimeSnapshotFromDb(db, request.workspaceStateId)
   const currentRevision = current?.revision ?? 0
-  if (request.baseRevision !== null && request.baseRevision !== currentRevision) {
+  if (request.baseRevision !== currentRevision) {
     throw new WorkspaceMutationError('stale_revision', 'Workspace revision is stale', {
       novelId: request.novelId,
       workspaceStateId: request.workspaceStateId,
@@ -810,16 +802,7 @@ export async function createWorkspaceNovelFromSnapshot(params: {
         if (!committedRuntime || committedRuntime.revision !== 1) {
           throw new WorkspaceMutationError('persistence_failed', 'Imported workspace runtime was not persisted', { novelId, workspaceStateId })
         }
-        const request: ValidatedFullSnapshot = {
-          kind: 'full-snapshot',
-          novelId,
-          workspaceStateId,
-          payload,
-          backupReason: 'import-txt',
-          allowEmptyReset: false,
-          baseRevision: null,
-          idempotencyKey: null,
-        }
+        const request: ArtifactRequest = { kind: 'full-snapshot', workspaceStateId, backupReason: 'import-txt' }
         persistArtifactAndSync(db, request, committedRuntime.payload, committedRuntime.updatedAt)
         return {
           ok: true,

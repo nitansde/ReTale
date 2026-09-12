@@ -60,26 +60,15 @@ function revisionResponse(payload: ReturnType<typeof normalizeWorkspaceState>, r
   )
 }
 
-function readRevisionContract(request: Request, required = false) {
+function readRevisionContract(request: Request) {
   const idempotencyKey = request.headers.get('Idempotency-Key')
   const baseRevisionValue = request.headers.get('X-Retale-Base-Revision')
   const revisionNovelIdValue = request.headers.get('X-Retale-Revision-Novel-Id')
-  const presentCount = [idempotencyKey, baseRevisionValue, revisionNovelIdValue]
-    .filter((value) => value !== null).length
-  if (presentCount > 0 && presentCount < 3) {
+  if (idempotencyKey === null || baseRevisionValue === null || revisionNovelIdValue === null) {
     throw new WorkspaceMutationError(
       'invalid_mutation_contract',
-      'Idempotency-Key, X-Retale-Base-Revision, and X-Retale-Revision-Novel-Id must be provided together',
+      'Idempotency-Key, X-Retale-Base-Revision, and X-Retale-Revision-Novel-Id are required',
     )
-  }
-  if (idempotencyKey === null || baseRevisionValue === null || revisionNovelIdValue === null) {
-    if (required) {
-      throw new WorkspaceMutationError(
-        'invalid_mutation_contract',
-        'Idempotency-Key, X-Retale-Base-Revision, and X-Retale-Revision-Novel-Id are required',
-      )
-    }
-    return { idempotencyKey: null, baseRevision: null, revisionNovelId: null }
   }
   if (!idempotencyKey.trim()) {
     throw new WorkspaceMutationError('invalid_mutation_contract', 'Idempotency-Key must be non-empty')
@@ -96,17 +85,6 @@ function readRevisionContract(request: Request, required = false) {
     throw new WorkspaceMutationError('invalid_mutation_contract', 'X-Retale-Base-Revision must be a safe non-negative integer')
   }
   return { idempotencyKey, baseRevision, revisionNovelId }
-}
-
-function readRequiredRevisionContract(request: Request) {
-  const contract = readRevisionContract(request, true)
-  if (contract.idempotencyKey === null || contract.baseRevision === null || contract.revisionNovelId === null) {
-    throw new WorkspaceMutationError(
-      'invalid_mutation_contract',
-      'Idempotency-Key, X-Retale-Base-Revision, and X-Retale-Revision-Novel-Id are required',
-    )
-  }
-  return contract
 }
 
 function readChapterPatchBody(payload: Record<string, unknown>) {
@@ -394,7 +372,7 @@ export async function saveNovelResource(request: Request, novelId: string) {
     const resourcePayload = stripBrowserSessionState(normalizedPayload, novelId)
 
     const revisionContract = readRevisionContract(request)
-    if (revisionContract.revisionNovelId !== null && revisionContract.revisionNovelId !== novelId) {
+    if (revisionContract.revisionNovelId !== novelId) {
       throw new WorkspaceMutationError(
         'invalid_mutation_contract',
         'X-Retale-Revision-Novel-Id must match the resolved workspace novel',
@@ -436,7 +414,7 @@ export async function patchChapterResource(request: Request, chapterId: string) 
     assertJsonMediaType(request)
     const payload = await readBoundedJsonObject(request, MAX_WORKSPACE_PATCH_BODY_BYTES, 'Workspace patch JSON body exceeds 4 MiB')
 
-    const revisionContract = readRequiredRevisionContract(request)
+    const revisionContract = readRevisionContract(request)
     const patch = readChapterPatchBody(payload)
     if (patch.chapterId !== chapterId) {
       throw new WorkspaceMutationError(

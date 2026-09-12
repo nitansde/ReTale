@@ -207,7 +207,7 @@ describe('story branch stores', () => {
     const futureJumpRun = await createFutureJumpRunWithInitialRevision(
       {
         id: 'jump-run-001',
-        sessionId: 'what-if-session-001',
+        sourceTextSnapshot: '源正文',
         baseBranchId: 'novel-001:main',
         parentTimelineNodeId: 'if_fixture_001',
         sourceContext: {

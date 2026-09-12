@@ -250,7 +250,7 @@ describe('authored branching schema migrations', () => {
         'idx_outline_nodes_source_type',
         'idx_outline_node_chapters_outline_primary_sort',
         'idx_outline_node_chapters_chapter_anchor',
-        'idx_future_jump_runs_session',
+        'idx_future_jump_runs_what_if_source',
         'idx_future_jump_runs_parent_node',
         'idx_future_jump_runs_target_outline',
         'idx_future_jump_runs_target_outline_chapter',

@@ -148,6 +148,9 @@ function createWorkspaceRequest(payload: Record<string, unknown>, headers: Recor
     body: JSON.stringify(payload),
     headers: {
       'Content-Type': 'application/json',
+      'X-Retale-Base-Revision': '0',
+      'X-Retale-Revision-Novel-Id': novelId,
+      'Idempotency-Key': crypto.randomUUID(),
       ...headers,
     },
   })
@@ -438,6 +441,29 @@ describe('per-novel database resolver', () => {
     expect(novelDb.prepare('SELECT value FROM AppSetting WHERE key = ?').get('AI_SETTINGS_V2')).toEqual({ value: 'novel-decoy' })
   }))
 
+  it.each(['missing all', 'missing revision', 'missing owner', 'missing key', 'wrong owner'])(
+    'rejects a full save with %s without writing any surface',
+    async (invalid) => databaseFixture.wrap(async () => {
+      const dataRootPath = createTempDataRoot()
+      const resolver = await loadResolverModule(dataRootPath)
+      const controlDb = resolver.getControlDb()
+      const novelDb = resolver.getNovelDb('novel-alpha')
+      seedReadyNovelRegistryRows(controlDb, dataRootPath, ['novel-alpha'])
+      const snapshot = () => ['WorkspaceRuntimeState', 'WorkspaceRuntimeChapter', 'WorkspaceState', 'WorkspaceStateBackup', 'WorkspaceMutationReplay', 'WorkspaceKnowledgeSyncState']
+        .map((table) => novelDb.prepare(`SELECT * FROM ${table}`).all())
+      const before = snapshot()
+      const request = createWorkspaceRequest(createNovelWorkspacePayload('novel-alpha', 'Rejected content'))
+      const names = { 'missing revision': 'X-Retale-Base-Revision', 'missing owner': 'X-Retale-Revision-Novel-Id', 'missing key': 'Idempotency-Key' }
+      if (invalid === 'missing all') for (const name of Object.values(names)) request.headers.delete(name)
+      else if (invalid === 'wrong owner') request.headers.set('X-Retale-Revision-Novel-Id', 'novel-other')
+      else request.headers.delete(names[invalid as keyof typeof names])
+      const { saveNovel } = await importNovelResourceRoutesWithAfterCallbacks()
+      const response = await saveNovel(request, { params: Promise.resolve({ novelId: 'novel-alpha' }) })
+      expect(response.status).toBe(422)
+      expect(snapshot()).toEqual(before)
+    })(),
+  )
+
   it('saves workspace runtime and artifacts only into the targeted novel database', databaseFixture.wrap(async () => {
     const dataRootPath = createTempDataRoot()
     const resolver = await loadResolverModule(dataRootPath)
@@ -600,12 +626,12 @@ describe('per-novel database resolver', () => {
       ).run('shared-outline-anchor', 'shared-outline-node', 100, `${novelId}-chapter-100`, `${novelId} 第100章`, 1, 0)
       database.prepare(
         `INSERT INTO future_jump_runs (
-          id, session_id, base_branch_id, parent_timeline_node_id, source_timeline_node_id,
+          id, source_text_snapshot, base_branch_id, parent_timeline_node_id, source_timeline_node_id,
           source_timeline_node_type, source_chapter_id, source_what_if_session_id, target_outline_node_id,
           target_outline_chapter_id, source_chapter_no, target_chapter_no, user_direction,
           bridge_summary, generated_target_text, latest_revision_no, error_message, status
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run('shared-jump-run', 'shared-what-if-session', branchId, null, null, 'chapter', `${novelId}-chapter-10`, 'shared-what-if-session', 'shared-outline-node', 'shared-outline-anchor', 10, 100, `${novelId} direction`, `${novelId} bridge`, labels.runTitle, 1, null, 'generated')
+      ).run('shared-jump-run', `${novelId} source`, branchId, null, null, 'chapter', `${novelId}-chapter-10`, 'shared-what-if-session', 'shared-outline-node', 'shared-outline-anchor', 10, 100, `${novelId} direction`, `${novelId} bridge`, labels.runTitle, 1, null, 'generated')
       database.prepare(
         `INSERT INTO future_jump_revisions (
           id, run_id, revision_no, revision_kind, user_feedback, bridge_summary, generated_target_text

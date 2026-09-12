@@ -35,7 +35,6 @@ function resetStore() {
     workspaceRevision: null,
     revisionNovelId: '',
     lastAcknowledgedPersistedWorkspace: null,
-    patchCapability: 'unknown',
     workspaceSaveConflict: null,
     workspaceSaveFeedback: null,
     isHydrated: false,

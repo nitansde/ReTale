@@ -478,8 +478,7 @@ describe('preset compat future jump runtime', () => {
     const result = await service.generateFutureJump({
       novelId: 'novel-001',
       branchId: 'novel-001:main',
-      whatIfSessionId: 'what-if-001',
-      sourceContext: {
+        sourceContext: {
         nodeId: 'if_fixture_001',
         nodeType: 'what_if',
         chapterId: 'chapter-10',
@@ -711,8 +710,7 @@ describe('preset compat future jump runtime', () => {
     const result = await service.generateFutureJump({
       novelId: 'novel-001',
       branchId: 'novel-001:main',
-      whatIfSessionId: 'what-if-001',
-      sourceContext: {
+        sourceContext: {
         nodeId: 'if_fixture_001',
         nodeType: 'what_if',
         chapterId: 'chapter-10',

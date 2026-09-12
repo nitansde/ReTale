@@ -26,7 +26,6 @@ function resetStore() {
     workspaceRevision: null,
     revisionNovelId: '',
     lastAcknowledgedPersistedWorkspace: null,
-    patchCapability: 'unknown',
     workspaceSaveConflict: null,
     workspaceSaveFeedback: null,
     isHydrated: false,
@@ -241,41 +240,39 @@ describe('novel store workspace revision persistence', () => {
   })
 
   it.each([
+    ['missing revision', { workspaceRevision: null, revisionNovelId: 'novel-1', lastAcknowledgedPersistedWorkspace: createWorkspace() }],
     ['owner mismatch', { workspaceRevision: 7, revisionNovelId: 'novel-other', lastAcknowledgedPersistedWorkspace: createWorkspace() }],
     ['no baseline', { workspaceRevision: 7, revisionNovelId: 'novel-1', lastAcknowledgedPersistedWorkspace: null }],
-  ])('retains legacy POST compatibility for %s', async (_name, authority) => {
+    ['baseline mismatch', { workspaceRevision: 7, revisionNovelId: 'novel-1', lastAcknowledgedPersistedWorkspace: { ...createWorkspace(), currentNovelId: 'novel-other' } }],
+  ])('refuses saving with %s and preserves local edits without fetching authority', async (_name, authority) => {
     useNovelStore.getState().restorePersistedState(createWorkspace())
-    useNovelStore.setState(authority)
-    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    useNovelStore.setState({ ...authority, backendLoaded: true })
+    useNovelStore.getState().updateChapterContent('chapter-1', '<p>Unsaved draft</p>', 2)
+    const fetchMock = vi.fn<typeof fetch>()
     vi.stubGlobal('fetch', fetchMock)
-
-    await useNovelStore.getState().saveToBackend()
-
-    const request = fetchMock.mock.calls[0]?.[1]
-    expect(request?.method).toBe('POST')
-    expect(request?.headers).toEqual({ 'Content-Type': 'application/json' })
+    await expect(useNovelStore.getState().saveToBackend()).rejects.toMatchObject({ code: 'authority-required' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(useNovelStore.getState().localChapters[0]?.content).toBe('<p>Unsaved draft</p>')
+    expect(useNovelStore.getState().workspaceSaveFeedback).toEqual({ kind: 'save-failed' })
   })
 
-  it('adopts a canonical acknowledgement returned by a legacy POST', async () => {
-    const workspace = createWorkspace()
-    useNovelStore.getState().restorePersistedState(workspace)
-    vi.stubGlobal('fetch', vi.fn(async () => revisionResponse({
-      ok: true,
-      operation: 'full-snapshot',
-      novelId: 'novel-1',
-      revision: 1,
-      updatedAt: 'server-time',
-      replayed: false,
-      shouldScheduleKnowledgeSync: true,
-    }, 1)))
+  it('refuses autosave while hydration is pending and clears authority when switching novels', async () => {
+    await hydrate()
+    useNovelStore.getState().updateChapterContent('chapter-1', '<p>Draft</p>', 2)
+    useNovelStore.setState({ backendLoaded: false })
+    const fetchMock = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(useNovelStore.getState().saveToBackend({ lifecycle: true })).rejects.toMatchObject({ code: 'authority-required' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    useNovelStore.getState().setCurrentNovelId('novel-other')
+    expect(useNovelStore.getState()).toMatchObject({ workspaceRevision: null, revisionNovelId: '', lastAcknowledgedPersistedWorkspace: null, backendLoaded: false })
+  })
 
+  it('does not send saves for an empty library', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', fetchMock)
     await useNovelStore.getState().saveToBackend()
-
-    expect(useNovelStore.getState()).toMatchObject({
-      workspaceRevision: 1,
-      revisionNovelId: 'novel-1',
-      lastAcknowledgedPersistedWorkspace: workspace,
-    })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('accepts replay success and advances acknowledgement from the sent snapshot', async () => {
@@ -343,18 +340,6 @@ describe('novel store workspace revision persistence', () => {
     expectSameMutationEnvelope(fetchMock.mock.calls[0]?.[1], fetchMock.mock.calls[1]?.[1])
   })
 
-  it('does not retry an authorityless legacy POST and classifies transport failure as indeterminate', async () => {
-    useNovelStore.getState().restorePersistedState(createWorkspace())
-    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('offline'))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(useNovelStore.getState().saveToBackend()).rejects.toMatchObject({
-      code: 'transport-indeterminate',
-    })
-
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(useNovelStore.getState().workspaceSaveFeedback).toEqual({ kind: 'save-failed' })
-  })
 
   it('does not retry an explicit revision-aware POST rejection', async () => {
     await hydrate()
@@ -448,63 +433,7 @@ describe('novel store workspace revision persistence', () => {
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'PATCH', keepalive: false })
   })
 
-  it.each([405, 501])('falls back from PATCH status %s to one revision-aware POST with a new key', async (status) => {
-    await hydrate()
-    useNovelStore.getState().updateChapterContent('chapter-1', '<p>Local</p>', 2)
-    const captured = serializeState(useNovelStore.getState())
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: false, error: 'unsupported' }), { status }))
-      .mockResolvedValueOnce(mutationSuccess(8))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await useNovelStore.getState().saveToBackend()
-
-    const patch = fetchMock.mock.calls[0]?.[1]
-    const post = fetchMock.mock.calls[1]?.[1]
-    expect(patch?.method).toBe('PATCH')
-    expect(post?.method).toBe('POST')
-    expect(JSON.parse(String(post?.body))).toEqual(captured)
-    expect((post?.headers as Record<string, string>)['X-Retale-Base-Revision']).toBe('7')
-    expect((patch?.headers as Record<string, string>)['X-Retale-Revision-Novel-Id']).toBe('novel-1')
-    expect((post?.headers as Record<string, string>)['X-Retale-Revision-Novel-Id']).toBe('novel-1')
-    expect((post?.headers as Record<string, string>)['Idempotency-Key']).not.toBe((patch?.headers as Record<string, string>)['Idempotency-Key'])
-    expect(useNovelStore.getState().patchCapability).toBe('unsupported')
-  })
-
-  it('retries an indeterminate fallback POST once with the exact same envelope', async () => {
-    await hydrate()
-    useNovelStore.getState().updateChapterContent('chapter-1', '<p>Local</p>', 2)
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: false, error: 'unsupported' }), { status: 405 }))
-      .mockRejectedValueOnce(new TypeError('response lost'))
-      .mockResolvedValueOnce(mutationSuccess(8, true))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await useNovelStore.getState().saveToBackend()
-
-    expect(fetchMock).toHaveBeenCalledTimes(3)
-    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe('POST')
-    expect(fetchMock.mock.calls[1]?.[1]?.headers).toMatchObject({ 'X-Retale-Revision-Novel-Id': 'novel-1' })
-    expectSameMutationEnvelope(fetchMock.mock.calls[1]?.[1], fetchMock.mock.calls[2]?.[1])
-  })
-
-  it('uses revision-aware POST for future chapter saves when PATCH is unsupported', async () => {
-    await hydrate()
-    useNovelStore.setState({ patchCapability: 'unsupported' })
-    useNovelStore.getState().updateChapterContent('chapter-1', '<p>Local</p>', 2)
-    const fetchMock = vi.fn<typeof fetch>(async () => mutationSuccess(8))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await useNovelStore.getState().saveToBackend()
-
-    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('POST')
-    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
-      'X-Retale-Base-Revision': '7',
-      'X-Retale-Revision-Novel-Id': 'novel-1',
-    })
-  })
-
-  it.each([409, 500])('does not fall back from explicit PATCH status %s', async (status) => {
+  it.each([405, 409, 500, 501])('does not fall back from explicit PATCH status %s', async (status) => {
     await hydrate()
     useNovelStore.getState().updateChapterContent('chapter-1', '<p>Local</p>', 2)
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ok: false, error: 'rejected' }), { status }))
@@ -730,7 +659,6 @@ describe('novel store workspace revision persistence', () => {
   it('ignores equal-revision delayed success from before same-novel authoritative hydration', async () => {
     await hydrate()
     useNovelStore.getState().updateChapterContent('chapter-1', '<p>Pre-hydration save</p>', 2)
-    const delayedSaveSnapshot = serializeState(useNovelStore.getState())
     const saveRequest = Promise.withResolvers<Response>()
     const hydratedWorkspace = createWorkspace()
     hydratedWorkspace.localChapters[0] = {
@@ -760,7 +688,6 @@ describe('novel store workspace revision persistence', () => {
     await delayedSave
 
     expect(useNovelStore.getState().lastAcknowledgedPersistedWorkspace).toEqual(hydratedWorkspace)
-    expect(useNovelStore.getState().lastAcknowledgedPersistedWorkspace).not.toEqual(delayedSaveSnapshot)
     expect(useNovelStore.getState().workspaceSaveFeedback).toBeNull()
   })
 
@@ -791,10 +718,9 @@ describe('novel store workspace revision persistence', () => {
     expect(useNovelStore.getState().lastAcknowledgedPersistedWorkspace).toEqual(hydratedWorkspace)
   })
 
-  it('accepts strictly higher delayed success from before same-novel authoritative hydration', async () => {
+  it('fences delayed success from before same-novel authoritative hydration', async () => {
     await hydrate()
     useNovelStore.getState().updateChapterContent('chapter-1', '<p>Committed after GET</p>', 2)
-    const delayedSaveSnapshot = serializeState(useNovelStore.getState())
     const saveRequest = Promise.withResolvers<Response>()
     const hydratedWorkspace = createWorkspace()
     hydratedWorkspace.localChapters[0] = {
@@ -821,159 +747,16 @@ describe('novel store workspace revision persistence', () => {
     await delayedSave
 
     expect(useNovelStore.getState()).toMatchObject({
-      workspaceRevision: 8,
-      lastAcknowledgedPersistedWorkspace: delayedSaveSnapshot,
+      workspaceRevision: 7,
+      lastAcknowledgedPersistedWorkspace: hydratedWorkspace,
       workspaceSaveFeedback: null,
     })
   })
 
-  it('keeps unsupported PATCH capability sticky when an older PATCH resolves later', async () => {
-    await hydrate()
-    const olderRequest = Promise.withResolvers<Response>()
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockImplementationOnce(() => olderRequest.promise)
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: false, error: 'unsupported' }), { status: 405 }))
-      .mockResolvedValueOnce(mutationSuccess(8))
-    vi.stubGlobal('fetch', fetchMock)
 
-    useNovelStore.getState().updateChapterContent('chapter-1', '<p>Older</p>', 2)
-    const olderSave = useNovelStore.getState().saveToBackend()
-    useNovelStore.getState().updateChapterContent('chapter-1', '<p>Newer</p>', 3)
-    const newerSave = useNovelStore.getState().saveToBackend()
 
-    await newerSave
-    expect(useNovelStore.getState().patchCapability).toBe('unsupported')
-    olderRequest.resolve(mutationSuccess(8))
-    await olderSave
 
-    expect(useNovelStore.getState().patchCapability).toBe('unsupported')
-  })
 
-  it('transfers canonical authority from the unchanged prior owner to the current novel', async () => {
-    const workspace = createWorkspace()
-    const nextNovel = { id: 'novel-2', title: 'Next', summary: '', tags: [] }
-    useNovelStore.getState().restorePersistedState({
-      ...workspace,
-      currentNovelId: 'novel-2',
-      currentChapterId: '',
-      localNovels: [...workspace.localNovels, nextNovel],
-    })
-    useNovelStore.setState({
-      workspaceRevision: 7,
-      revisionNovelId: 'novel-1',
-      lastAcknowledgedPersistedWorkspace: workspace,
-    })
-    const sent = serializeState(useNovelStore.getState())
-    vi.stubGlobal('fetch', vi.fn(async () => revisionResponse({
-      ok: true,
-      operation: 'full-snapshot',
-      novelId: 'novel-2',
-      revision: 1,
-      updatedAt: 'server-time',
-      replayed: false,
-      shouldScheduleKnowledgeSync: true,
-    }, 1, 'novel-2')))
-
-    await useNovelStore.getState().saveToBackend()
-
-    expect(useNovelStore.getState()).toMatchObject({
-      workspaceRevision: 1,
-      revisionNovelId: 'novel-2',
-      lastAcknowledgedPersistedWorkspace: sent,
-    })
-  })
-
-  it('fences canonical authority transfer after hydration changes the authority epoch', async () => {
-    const workspace = createWorkspace()
-    const nextChapter = {
-      ...workspace.localChapters[0]!,
-      id: 'chapter-next',
-      novelId: 'novel-2',
-    }
-    const switchedWorkspace = {
-      ...workspace,
-      currentNovelId: 'novel-2',
-      currentChapterId: nextChapter.id,
-      localNovels: [...workspace.localNovels, { id: 'novel-2', title: 'Next', summary: '', tags: [] }],
-      localChapters: [...workspace.localChapters, nextChapter],
-    }
-    useNovelStore.getState().restorePersistedState(switchedWorkspace)
-    useNovelStore.setState({ workspaceRevision: 7, revisionNovelId: 'novel-1', lastAcknowledgedPersistedWorkspace: workspace })
-    const saveRequest = Promise.withResolvers<Response>()
-    const hydratedWorkspace = { ...switchedWorkspace, localNovels: switchedWorkspace.localNovels.map((novel) => ({ ...novel })) }
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockImplementationOnce(() => saveRequest.promise)
-      .mockImplementationOnce(async (input) => {
-        if (String(input) === '/api/novels/novel-2') return revisionResponse(hydratedWorkspace, 4, 'novel-2')
-        if (String(input) === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
-        throw new Error(`Unexpected fetch: ${String(input)}`)
-      })
-      .mockImplementationOnce(async (input) => {
-        if (String(input) === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
-        throw new Error(`Unexpected fetch: ${String(input)}`)
-      })
-    vi.stubGlobal('fetch', fetchMock)
-
-    const delayedSave = useNovelStore.getState().saveToBackend()
-    resetClientRequestBrokerForTests()
-    await useNovelStore.getState().loadFromBackend('novel-2')
-    const hydratedBaseline = useNovelStore.getState().lastAcknowledgedPersistedWorkspace
-    saveRequest.resolve(revisionResponse({ ok: true, novelId: 'novel-2', revision: 5 }, 5, 'novel-2'))
-    await delayedSave
-
-    expect(useNovelStore.getState()).toMatchObject({ workspaceRevision: 4, revisionNovelId: 'novel-2' })
-    expect(useNovelStore.getState().lastAcknowledgedPersistedWorkspace).toBe(hydratedBaseline)
-  })
-
-  it('fences canonical authority transfer after switching away from the captured novel', async () => {
-    const workspace = createWorkspace()
-    useNovelStore.getState().restorePersistedState({ ...workspace, currentNovelId: 'novel-2', currentChapterId: '' })
-    useNovelStore.setState({ workspaceRevision: 7, revisionNovelId: 'novel-1', lastAcknowledgedPersistedWorkspace: workspace })
-    const saveRequest = Promise.withResolvers<Response>()
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(() => saveRequest.promise))
-
-    const delayedSave = useNovelStore.getState().saveToBackend()
-    useNovelStore.getState().setCurrentNovelId('novel-3')
-    saveRequest.resolve(revisionResponse({ ok: true, novelId: 'novel-2', revision: 1 }, 1, 'novel-2'))
-    await delayedSave
-
-    expect(useNovelStore.getState()).toMatchObject({
-      currentNovelId: 'novel-3',
-      workspaceRevision: 7,
-      revisionNovelId: 'novel-1',
-    })
-  })
-
-  it('keeps the newer transferred authority when an older acknowledgement arrives later', async () => {
-    const workspace = createWorkspace()
-    const switchedWorkspace = {
-      ...workspace,
-      currentNovelId: 'novel-2',
-      currentChapterId: '',
-      localNovels: [...workspace.localNovels, { id: 'novel-2', title: 'Next', summary: '', tags: [] }],
-    }
-    useNovelStore.getState().restorePersistedState(switchedWorkspace)
-    useNovelStore.setState({ workspaceRevision: 7, revisionNovelId: 'novel-1', lastAcknowledgedPersistedWorkspace: workspace })
-    const olderRequest = Promise.withResolvers<Response>()
-    const newerRequest = Promise.withResolvers<Response>()
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>()
-      .mockImplementationOnce(() => olderRequest.promise)
-      .mockImplementationOnce(() => newerRequest.promise))
-
-    const olderSave = useNovelStore.getState().saveToBackend()
-    const newerSnapshot = serializeState(useNovelStore.getState())
-    const newerSave = useNovelStore.getState().saveToBackend()
-    newerRequest.resolve(revisionResponse({ ok: true, novelId: 'novel-2', revision: 2 }, 2, 'novel-2'))
-    await newerSave
-    olderRequest.resolve(revisionResponse({ ok: true, novelId: 'novel-2', revision: 1 }, 1, 'novel-2'))
-    await olderSave
-
-    expect(useNovelStore.getState()).toMatchObject({
-      workspaceRevision: 2,
-      revisionNovelId: 'novel-2',
-      lastAcknowledgedPersistedWorkspace: newerSnapshot,
-    })
-  })
 
   it('removes a server-deleted chapter only from the baseline and blocks automatic recreation', async () => {
     await hydrate()

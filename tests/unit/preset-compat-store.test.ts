@@ -716,7 +716,13 @@ describe('preset compat store lifecycle', () => {
     useNovelStore.getState().restorePersistedState(createWorkspacePayload('novel-1'))
     useNovelStore.setState({
       presetCompatLibrary: initialLibrary,
+      backendLoaded: true,
+      backendLoadError: '',
+      workspaceRevision: 1,
+      revisionNovelId: 'novel-1',
+      lastAcknowledgedPersistedWorkspace: createWorkspacePayload('novel-1'),
     })
+    useNovelStore.getState().createNewChapter()
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -725,7 +731,7 @@ describe('preset compat store lifecycle', () => {
           url,
           body: JSON.parse(String(init.body)),
         })
-        return new Response(JSON.stringify({ ok: true }), { status: 200 })
+        return new Response(JSON.stringify({ ok: true, novelId: 'novel-1', revision: 2 }), { status: 200, headers: { 'X-Retale-Workspace-Revision': '2', 'X-Retale-Revision-Novel-Id': 'novel-1' } })
       }
       if (url === '/api/knowledge-view') {
         return new Response(JSON.stringify({
@@ -766,9 +772,9 @@ describe('preset compat store lifecycle', () => {
       throw new Error(`Unexpected fetch: ${url}`)
     }))
 
-    await expect(useNovelStore.getState().saveToBackend()).rejects.toThrow('Refusing to overwrite a recoverable workspace with an empty payload')
+    await expect(useNovelStore.getState().saveToBackend()).rejects.toMatchObject({ code: 'authority-required' })
 
-    expect(requests).toEqual(['/api/novels/novel-only'])
+    expect(requests).toEqual([])
     expect(useNovelStore.getState().isSaving).toBe(false)
   })
 

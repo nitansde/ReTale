@@ -168,9 +168,9 @@ Runtime data lives under `RETALE_DATA_DIR` (default: `data/`) with this layout:
 
 The app reads and writes only this migrated per-novel layout at runtime. The old repository-root `dev.db` is no longer a runtime database source.
 
-SQLite schema version **3** is the only runtime format. Fresh files receive the complete control or novel schema and explicit version/kind markers. Opening an existing file validates its version, kind, and required tables, indexes, and triggers; startup never upgrades an older file. Server code must enter `runWithNovelDatabaseAccess(novelId, callback)` or receive an explicit `DatabaseAccess`. Calling database helpers outside a scope fails; neither `DATABASE_URL` nor `globalThis.sqlite` supplies a shared fallback.
+SQLite schema version **4** is the only runtime format. Fresh files receive the complete control or novel schema and explicit version/kind markers. Opening an existing file validates its version, kind, and required tables, indexes, and triggers; startup never upgrades an older file. Server code must enter `runWithNovelDatabaseAccess(novelId, callback)` or receive an explicit `DatabaseAccess`. Calling database helpers outside a scope fails; neither `DATABASE_URL` nor `globalThis.sqlite` supplies a shared fallback.
 
-The current library was migrated to schema v3 and verified by the user. The one-time schema migration tool and its archived tests have been deleted. Existing files must already use the current schema; restore a verified compatible backup or use the application version matching an older database. The separate vector/progress maintenance tools do not upgrade an older library to schema v3.
+The current library uses schema v4. The one-time schema migration tool has been deleted. Existing files must already use the current schema; restore a verified compatible backup or use the application version matching an older database. The separate vector/progress maintenance tools do not upgrade an older library to schema v4.
 
 Per-novel `lancedb/` directories are part of the runtime layout, so LanceDB-backed knowledge retrieval artifacts are stored and rebuilt per novel instead of through a single global `.lancedb/` directory.
 

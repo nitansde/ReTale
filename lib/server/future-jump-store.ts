@@ -20,11 +20,11 @@ const defaultDb: Db = { execute, queryAll, queryOne, withTransaction }
 
 type FutureJumpRunRow = {
   id: string
-  session_id: string
+  source_text_snapshot: string
   base_branch_id: string
   parent_timeline_node_id: string | null
   source_timeline_node_id: string | null
-  source_timeline_node_type: string | null
+  source_timeline_node_type: FutureJumpSourceContext['nodeType']
   source_chapter_id: string | null
   source_what_if_session_id: string | null
   target_outline_node_id: string
@@ -59,23 +59,17 @@ type FutureJumpRevisionRow = {
 function toFutureJumpSourceContext(row: FutureJumpRunRow): FutureJumpSourceContext {
   return {
     nodeId: row.source_timeline_node_id,
-    nodeType: row.source_timeline_node_type === 'chapter'
-      || row.source_timeline_node_type === 'rewrite'
-      || row.source_timeline_node_type === 'continue_block'
-      || row.source_timeline_node_type === 'what_if'
-      || row.source_timeline_node_type === 'future_jump'
-      ? row.source_timeline_node_type
-      : 'what_if',
+    nodeType: row.source_timeline_node_type,
     chapterId: row.source_chapter_id,
     chapterNo: row.source_chapter_no,
-    whatIfSessionId: row.source_what_if_session_id ?? row.session_id,
+    whatIfSessionId: row.source_what_if_session_id,
   }
 }
 
 function toFutureJumpRunRecord(row: FutureJumpRunRow): FutureJumpRunRecord {
   return {
     id: row.id,
-    sessionId: row.session_id,
+    sourceTextSnapshot: row.source_text_snapshot,
     baseBranchId: row.base_branch_id,
     parentTimelineNodeId: row.parent_timeline_node_id,
     sourceContext: toFutureJumpSourceContext(row),
@@ -146,9 +140,9 @@ export function findFutureJumpRunById(id: string, db: Db = defaultDb): FutureJum
   }
 }
 
-export function listFutureJumpRunsBySessionId(sessionId: string, db: Db = defaultDb) {
+export function listFutureJumpRunsByWhatIfSourceId(sessionId: string, db: Db = defaultDb) {
   const rows = db.queryAll<FutureJumpRunRow>(
-    'SELECT * FROM future_jump_runs WHERE session_id = ? ORDER BY created_at ASC, id ASC',
+    'SELECT * FROM future_jump_runs WHERE source_what_if_session_id = ? ORDER BY created_at ASC, id ASC',
     sessionId
   )
 
@@ -158,13 +152,13 @@ export function listFutureJumpRunsBySessionId(sessionId: string, db: Db = defaul
 export function createFutureJumpRun(input: Omit<FutureJumpRunRecord, 'createdAt' | 'updatedAt'>, db: Db = defaultDb) {
   db.execute(
     `INSERT INTO future_jump_runs (
-      id, session_id, base_branch_id, parent_timeline_node_id, source_timeline_node_id,
+      id, source_text_snapshot, base_branch_id, parent_timeline_node_id, source_timeline_node_id,
       source_timeline_node_type, source_chapter_id, source_what_if_session_id, target_outline_node_id,
       target_outline_chapter_id, source_chapter_no, target_chapter_no, user_direction,
       bridge_summary, generated_target_text, latest_input_tokens, latest_output_tokens, latest_revision_no, error_message, status
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.id,
-    input.sessionId,
+    input.sourceTextSnapshot,
     input.baseBranchId,
     input.parentTimelineNodeId,
     input.sourceContext.nodeId,
@@ -195,13 +189,13 @@ export async function createFutureJumpRunWithInitialRevision(
   await db.withTransaction(async () => {
     db.execute(
       `INSERT INTO future_jump_runs (
-        id, session_id, base_branch_id, parent_timeline_node_id, source_timeline_node_id,
+        id, source_text_snapshot, base_branch_id, parent_timeline_node_id, source_timeline_node_id,
         source_timeline_node_type, source_chapter_id, source_what_if_session_id, target_outline_node_id,
         target_outline_chapter_id, source_chapter_no, target_chapter_no, user_direction,
         bridge_summary, generated_target_text, latest_input_tokens, latest_output_tokens, latest_revision_no, error_message, status
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       input.id,
-      input.sessionId,
+      input.sourceTextSnapshot,
       input.baseBranchId,
       input.parentTimelineNodeId,
       input.sourceContext.nodeId,

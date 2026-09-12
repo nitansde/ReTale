@@ -6,7 +6,7 @@ import {
   listStoryTimelineNodes,
   listStoryTimelineNodesByFutureJumpRunIds,
 } from '@/lib/server/story-timeline-store'
-import { listFutureJumpRunsBySessionId } from '@/lib/server/future-jump-store'
+import { listFutureJumpRunsByWhatIfSourceId } from '@/lib/server/future-jump-store'
 import type { WhatIfDeltaRecord, WhatIfSessionDetail, WhatIfSessionRecord } from '@/lib/story-branch-types'
 
 type Db = {
@@ -161,7 +161,7 @@ export async function deleteWhatIfSession(sessionId: string, db: Db = defaultDb)
   if (!session) return null
 
   await db.withTransaction(async () => {
-    const futureJumpRuns = listFutureJumpRunsBySessionId(sessionId, db)
+    const futureJumpRuns = listFutureJumpRunsByWhatIfSourceId(sessionId, db)
     const futureJumpRunIds = futureJumpRuns.map((run) => run.id)
     const sessionTimelineNode = findStoryTimelineNodeByWhatIfSessionId(sessionId, db)
     const allTimelineNodes = listStoryTimelineNodes(session.novelId, session.baseBranchId, db)
@@ -182,7 +182,7 @@ export async function deleteWhatIfSession(sessionId: string, db: Db = defaultDb)
     }
 
     deleteStoryTimelineNodesByIds(Array.from(orderedNodeIds), db)
-    db.execute('DELETE FROM future_jump_runs WHERE session_id = ?', sessionId)
+    db.execute('DELETE FROM future_jump_runs WHERE source_what_if_session_id = ?', sessionId)
     db.execute('DELETE FROM what_if_sessions WHERE id = ?', sessionId)
   })
 
