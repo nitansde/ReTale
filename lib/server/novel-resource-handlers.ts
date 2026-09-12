@@ -24,6 +24,7 @@ import {
   loadWorkspacePayloadFromRuntimeOrRecovery,
   loadWorkspaceSnapshotFromRuntimeOrRecovery,
   readWorkspaceLibrarySummary,
+  readWorkspaceChapterBatchFromDb,
 } from '@/lib/server/workspace-resilience'
 import { resolveWorkspaceNovelId, scopeWorkspaceStateToNovel } from '@/lib/server/workspace-novel-scope'
 import { createEmptyWorkspaceState, normalizeWorkspaceState } from '@/lib/workspace-state'
@@ -331,6 +332,26 @@ export async function getNovelResource(request: Request, novelId: string) {
   schedulePendingWorkspaceNovelCleanupScan()
 
   try {
+    const view = searchParams.get('view')
+    if (view === 'chapter' || view === 'chapters') {
+      const chapterIds = searchParams.getAll('chapterId')
+      if (!chapterIds.length || chapterIds.length > (view === 'chapter' ? 1 : 8)
+        || chapterIds.some((id) => !id.trim() || id.length > 200) || new Set(chapterIds).size !== chapterIds.length) {
+        return noStoreJson({ ok: false, error: 'Provide between 1 and 8 unique chapter IDs (one for view=chapter)' }, { status: 400 })
+      }
+      const db = getNovelWorkspaceDb(novelId)
+      if (!hasWorkspaceRuntimeState('singleton', db)) {
+        await loadWorkspacePayloadFromRuntimeOrRecovery('singleton', db)
+      }
+      const batch = readWorkspaceChapterBatchFromDb(db, novelId, chapterIds)
+      if (!batch) return noStoreJson({ ok: false, error: 'Chapter not found' }, { status: 404 })
+      return noStoreJson(view === 'chapter' ? {
+        chapter: batch.chapters[0], workspaceRevision: batch.workspaceRevision, revisionNovelId: novelId,
+      } : batch, { headers: {
+        'X-Retale-Workspace-Revision': String(batch.workspaceRevision),
+        'X-Retale-Revision-Novel-Id': novelId,
+      } })
+    }
     const snapshot = await loadWorkspaceSnapshotFromRuntimeOrRecovery('singleton', getNovelWorkspaceDb(novelId))
     scheduleWorkspaceKnowledgeSyncRecovery(novelId)
     return revisionResponse(snapshot.payload, snapshot.revision, novelId)

@@ -172,6 +172,88 @@ describe('novel store workspace revision persistence', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('prefetches following chapters in bounded batches, wraps around, and keeps saves sparse', async () => {
+    const workspace = createWorkspace()
+    const chapters = Array.from({ length: 20 }, (_, index) => ({
+      ...workspace.localChapters[0], id: `chapter-${index + 1}`, order: index + 1,
+      content: `Body ${index + 1}`, originalContent: `Original ${index + 1}`,
+    }))
+    workspace.currentChapterId = 'chapter-10'
+    workspace.localChapters = chapters.map((chapter) => chapter.id === workspace.currentChapterId ? chapter : {
+      ...chapter, content: '', originalContent: undefined, contentLoaded: false,
+    })
+    await hydrate(workspace)
+    useNovelStore.getState().setCurrentChapterId('chapter-10')
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      if (init?.method === 'POST') return mutationSuccess(8)
+      const ids = new URL(String(input), 'http://localhost').searchParams.getAll('chapterId')
+      return revisionResponse({ chapters: ids.map((id) => chapters.find((chapter) => chapter.id === id)) }, 7)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const signal = new AbortController().signal
+    while (await useNovelStore.getState().prefetchChapterContent(signal)) { /* drain idle batches */ }
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock.mock.calls[0][0]).toContain('chapterId=chapter-11')
+    for (const [input, init] of fetchMock.mock.calls) {
+      expect(new URL(String(input), 'http://localhost').searchParams.getAll('chapterId').length).toBeLessThanOrEqual(8)
+      expect(init).toMatchObject({ priority: 'low', cache: 'no-cache' })
+    }
+    expect(useNovelStore.getState().localChapters).toEqual(chapters)
+    expect(useNovelStore.getState().persistRevision).toBe(0)
+    await useNovelStore.getState().ensureChapterContent('chapter-11')
+    await useNovelStore.getState().saveToBackend()
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    useNovelStore.getState().updateChapterContent('chapter-11', 'Edited text', 2)
+    useNovelStore.getState().reorderChapters('novel-1', chapters.map((chapter) => chapter.id).reverse())
+    await useNovelStore.getState().saveToBackend()
+    const body = JSON.parse(fetchMock.mock.calls[3][1]?.body as string)
+    expect(body.localChapters.find((chapter: { id: string }) => chapter.id === 'chapter-11').content).toBe('Edited text')
+    expect(body.localChapters.filter((chapter: { contentLoaded?: false }) => chapter.contentLoaded === false)).toHaveLength(19)
+    expect(useNovelStore.getState().lastAcknowledgedPersistedWorkspace?.localChapters.every((chapter) => chapter.contentLoaded !== false)).toBe(true)
+  })
+
+  it.each(['abort', 'revision', 'novel', 'server-revision', 'invalid-batch'] as const)(
+    'discards a background batch after %s without changing foreground feedback', async (change) => {
+      const workspace = createWorkspace()
+      const stored = workspace.localChapters[1]
+      workspace.localChapters[1] = { ...stored, content: '', contentLoaded: false }
+      await hydrate(workspace)
+      let resolve!: (response: Response) => void
+      vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((done) => { resolve = done })))
+      const controller = new AbortController()
+      const pending = useNovelStore.getState().prefetchChapterContent(controller.signal)
+      const rejected = expect(pending).rejects.toThrow()
+      if (change === 'abort') controller.abort()
+      if (change === 'revision') useNovelStore.setState({ workspaceRevision: 8 })
+      if (change === 'novel') useNovelStore.setState({ currentNovelId: 'novel-2' })
+      useNovelStore.setState({ chapterLoadError: 'Existing foreground error' })
+      resolve(revisionResponse({ chapters: change === 'invalid-batch' ? [] : [stored] }, change === 'server-revision' ? 8 : 7))
+      await rejected
+      expect(useNovelStore.getState().localChapters[1].contentLoaded).toBe(false)
+      expect(useNovelStore.getState().chapterLoadError).toBe('Existing foreground error')
+      expect(useNovelStore.getState().workspaceSaveFeedback).toBeNull()
+    },
+  )
+
+  it('preserves foreground edits and local metadata when a background batch arrives', async () => {
+    const workspace = createWorkspace()
+    const stored = workspace.localChapters[1]
+    workspace.localChapters[1] = { ...stored, content: '', contentLoaded: false }
+    await hydrate(workspace)
+    let resolve!: (response: Response) => void
+    const fetchMock = vi.fn<typeof fetch>().mockImplementationOnce(() => new Promise<Response>((done) => { resolve = done }))
+      .mockImplementationOnce(async () => revisionResponse({ chapter: stored }, 7))
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = useNovelStore.getState().prefetchChapterContent(new AbortController().signal)
+    await useNovelStore.getState().ensureChapterContent('chapter-2')
+    useNovelStore.getState().updateChapterContent('chapter-2', 'Local edit', 2)
+    useNovelStore.getState().reorderChapters('novel-1', ['chapter-2', 'chapter-1'])
+    resolve(revisionResponse({ chapters: [stored] }, 7))
+    await pending
+    expect(useNovelStore.getState().localChapters.find((chapter) => chapter.id === 'chapter-2')).toMatchObject({ content: 'Local edit', order: 1 })
+    expect(useNovelStore.getState().lastAcknowledgedPersistedWorkspace?.localChapters[1].content).toBe(stored.content)
+  })
+
   it('preserves unloaded chapter markers on structural saves and refuses editing their empty placeholder', async () => {
     const workspace = createWorkspace()
     workspace.localChapters[1] = { ...workspace.localChapters[1], content: '', contentLoaded: false }
@@ -319,7 +401,17 @@ describe('novel store workspace revision persistence', () => {
       'X-Retale-Base-Revision': '7',
       'X-Retale-Revision-Novel-Id': 'novel-1',
     })
-    expect(JSON.parse(String(request?.body))).toEqual(captured)
+    const sent = JSON.parse(String(request?.body))
+    const baseline = createWorkspace()
+    // Resolve preservation markers as the server does, then compare the complete intended snapshot.
+    sent.localChapters = sent.localChapters.map((chapter: PersistedNovelState['localChapters'][number]) => {
+      if (chapter.contentLoaded !== false) return chapter
+      const stored = baseline.localChapters.find((item) => item.id === chapter.id)!
+      const hydrated = { ...chapter, content: stored.content, originalContent: stored.originalContent }
+      delete hydrated.contentLoaded
+      return hydrated
+    })
+    expect(sent).toEqual(captured)
   })
 
   it.each([

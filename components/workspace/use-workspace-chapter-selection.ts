@@ -10,6 +10,7 @@ import type {
 } from '@/components/graph/types'
 import type { Chapter, ProductSurfaceId } from '@/lib/types'
 import { useNovelStore } from '@/store/novel-store'
+import { useWorkspaceChapterPrefetch } from '@/components/workspace/use-workspace-chapter-prefetch'
 import type { WorkspaceCenterPaneView } from '@/components/workspace/use-workspace-pane-state'
 
 export type WorkspaceActionMode = ProductSurfaceId
@@ -68,6 +69,7 @@ type UseWorkspaceChapterSelectionOptions = {
 }
 
 export function useWorkspaceChapterSelection(options: UseWorkspaceChapterSelectionOptions) {
+  useWorkspaceChapterPrefetch()
   const {
     localChapters,
     currentNovelId,

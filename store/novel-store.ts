@@ -439,6 +439,7 @@ type NovelStore = PersistedNovelState & {
   loadLibrarySummaries: (options?: { fresh?: boolean }) => Promise<void>
   loadFromBackend: (novelId?: string, chapterId?: string) => Promise<void>
   ensureChapterContent: (chapterId: string) => Promise<Chapter>
+  prefetchChapterContent: (signal: AbortSignal) => Promise<boolean>
   saveToBackend: (options?: WorkspaceSaveOptions) => Promise<void>
   deleteNovelFromBackend: (novelId: string) => Promise<DeleteNovelOutcome>
   reconcileNovelDeletionFromBackend: (transaction: NovelDeletionTransaction) => Promise<NovelDeletionReconciliationResult>

@@ -50,16 +50,8 @@ async function toNovelResourceResponse(request: Request, response: Response) {
   } = payload
   const search = new URL(request.url).searchParams
   const view = search.get('view')
-  if (view === 'chapter') {
-    const chapter = Array.isArray(resource.localChapters)
-      ? resource.localChapters.find((entry: { id: string }) => entry.id === search.get('chapterId'))
-      : undefined
-    if (!chapter) return NextResponse.json({ ok: false, error: 'Chapter not found' }, {
-      status: 404, headers: { 'Cache-Control': 'no-store' },
-    })
-    return revalidatedCompressedJson(request, {
-      chapter, workspaceRevision: resource.workspaceRevision, revisionNovelId: resource.revisionNovelId,
-    }, { headers: response.headers })
+  if (view === 'chapter' || view === 'chapters') {
+    return revalidatedCompressedJson(request, payload, { headers: response.headers })
   }
   if (view === 'workspace' && Array.isArray(resource.localChapters)) {
     const chapters = resource.localChapters as Array<Record<string, unknown>>

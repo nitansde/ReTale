@@ -170,12 +170,13 @@ async function fetchWithWorkspaceTimeout(
   url: string,
   timeoutMessage: string,
   signal?: AbortSignal,
-  options: { dedupe?: boolean; cache?: RequestCache; timeoutMs?: number } = {},
+  options: { dedupe?: boolean; cache?: RequestCache; timeoutMs?: number; priority?: RequestPriority } = {},
 ) {
   try {
     return await requestClientGet(url, {
       dedupe: options.dedupe,
       cache: options.cache,
+      priority: options.priority,
       signal,
       timeoutMs: options.timeoutMs ?? WORKSPACE_RESTORE_TIMEOUT_MS,
       parse: async (response) => ({
@@ -551,6 +552,21 @@ export function serializeState(state: PersistedNovelState): PersistedNovelState 
   }
 }
 
+function omitUnchangedChapterBodies(snapshot: PersistedNovelState, baseline: PersistedNovelState) {
+  const stored = new Map(baseline.localChapters.map((chapter) => [chapter.id, chapter]))
+  return {
+    ...snapshot,
+    localChapters: snapshot.localChapters.map((chapter) => {
+      const previous = stored.get(chapter.id)
+      if (!previous || previous.contentLoaded === false || previous.novelId !== chapter.novelId
+        || previous.content !== chapter.content || previous.originalContent !== chapter.originalContent
+        || previous.wordCount !== chapter.wordCount) return chapter
+      // The revision contract lets the server preserve these bodies atomically.
+      return { ...chapter, content: '', originalContent: undefined, contentLoaded: false as const }
+    }),
+  }
+}
+
 export function createPersistenceActions(
   set: NovelStoreSet,
   get: NovelStoreGet,
@@ -559,6 +575,7 @@ export function createPersistenceActions(
   | 'loadLibrarySummaries'
   | 'loadFromBackend'
   | 'ensureChapterContent'
+  | 'prefetchChapterContent'
   | 'saveToBackend'
   | 'deleteNovelFromBackend'
   | 'savePresetCompatLibrary'
@@ -572,6 +589,52 @@ export function createPersistenceActions(
   let authorityEpoch = 0
   let librarySummaryGeneration = 0
   const chapterRequests = new Map<string, Promise<Chapter>>()
+
+  const downloadChapters = async (chapterIds: string[], background: boolean, signal?: AbortSignal) => {
+    const state = get()
+    const revision = state.workspaceRevision
+    const novelId = state.revisionNovelId
+    const epoch = authorityEpoch
+    if (revision === null || !novelId || state.currentNovelId !== novelId) throw new Error('Load this novel before opening a chapter')
+    const query = new URLSearchParams({ view: background ? 'chapters' : 'chapter' })
+    chapterIds.forEach((id) => query.append('chapterId', id))
+    const response = await fetchWithWorkspaceTimeout(
+      `/api/novels/${encodeURIComponent(novelId)}?${query}`,
+      'Chapter download timed out', signal, { cache: 'no-cache', priority: background ? 'low' : 'high' },
+    )
+    const payload = parseWorkspaceResponseBody(response, 'Chapter endpoint returned invalid JSON')
+    if (!response.ok || !isRecord(payload)) throw new Error('Failed to load chapter')
+    const authority = parseWorkspaceRevisionAuthority(payload, response)
+    const entries = background ? payload.chapters : [payload.chapter]
+    if (!Array.isArray(entries) || entries.length !== chapterIds.length || !authority
+      || authority.revisionNovelId !== novelId) throw new Error('Chapter endpoint returned invalid chapter authority')
+    const chapters = entries.map(parseChapter)
+    if (chapters.some((chapter, index) => !chapter || chapter.id !== chapterIds[index] || chapter.novelId !== novelId)
+      || entries.some((chapter) => chapter.contentLoaded !== undefined)) throw new Error('Chapter endpoint returned invalid chapters')
+    if (authority.workspaceRevision !== revision) throw new Error('This novel changed on the server. Reopen it to load the latest version.')
+    if (signal?.aborted || get().currentNovelId !== novelId || get().revisionNovelId !== novelId
+      || get().workspaceRevision !== revision || authorityEpoch !== epoch) {
+      throw new Error('The workspace changed while the chapter was loading. Please try again.')
+    }
+    const loaded = new Map((chapters as Chapter[]).map((chapter) => [chapter.id, chapter]))
+    const hydrate = (items: Chapter[]) => items.map((item) => {
+      const chapter = loaded.get(item.id)
+      if (!chapter || item.contentLoaded !== false) return item
+      const hydrated = { ...item, content: chapter.content, originalContent: chapter.originalContent }
+      delete hydrated.contentLoaded
+      return hydrated
+    })
+    set((current) => ({
+      localChapters: hydrate(current.localChapters),
+      ...(current.lastAcknowledgedPersistedWorkspace ? {
+        lastAcknowledgedPersistedWorkspace: {
+          ...current.lastAcknowledgedPersistedWorkspace,
+          localChapters: hydrate(current.lastAcknowledgedPersistedWorkspace.localChapters),
+        },
+      } : {}),
+    }))
+    return chapters as Chapter[]
+  }
 
   const beginSave = () => {
     const generation = saveGeneration + 1
@@ -768,36 +831,8 @@ export function createPersistenceActions(
       const request = (async () => {
         set({ chapterLoadError: '' })
         try {
-          const response = await fetchWithWorkspaceTimeout(
-            `/api/novels/${encodeURIComponent(novelId)}?view=chapter&chapterId=${encodeURIComponent(chapterId)}`,
-            'Chapter download timed out', undefined, { cache: 'no-cache' },
-          )
-          const payload = parseWorkspaceResponseBody(response, 'Chapter endpoint returned invalid JSON')
-          if (!response.ok || !isRecord(payload)) throw new Error('Failed to load chapter')
-          const chapter = parseChapter(payload.chapter)
-          const authority = parseWorkspaceRevisionAuthority(payload, response)
-          if (!chapter || chapter.id !== chapterId || chapter.novelId !== novelId || !authority
-            || authority.revisionNovelId !== novelId) throw new Error('Chapter endpoint returned invalid chapter authority')
-          if (authority.workspaceRevision !== revision) throw new Error('This novel changed on the server. Reopen it to load the latest version.')
-          if (get().revisionNovelId !== novelId || get().workspaceRevision !== revision || authorityEpoch !== epoch) {
-            throw new Error('The workspace changed while the chapter was loading. Please try again.')
-          }
-          const hydrate = (items: Chapter[]) => items.map((item) => {
-            if (item.id !== chapterId || item.contentLoaded !== false) return item
-            const loaded = { ...item, content: chapter.content, originalContent: chapter.originalContent }
-            delete loaded.contentLoaded
-            return loaded
-          })
-          set((current) => ({
-            localChapters: hydrate(current.localChapters),
-            ...(current.lastAcknowledgedPersistedWorkspace ? {
-              lastAcknowledgedPersistedWorkspace: {
-                ...current.lastAcknowledgedPersistedWorkspace,
-                localChapters: hydrate(current.lastAcknowledgedPersistedWorkspace.localChapters),
-              },
-            } : {}),
-          }))
-          return chapter
+          const chapters = await downloadChapters([chapterId], false)
+          return chapters[0]
         } catch (error) {
           if (get().currentNovelId === novelId && get().currentChapterId === chapterId && authorityEpoch === epoch) {
             set({ chapterLoadError: error instanceof Error ? error.message : 'Failed to load chapter' })
@@ -809,6 +844,22 @@ export function createPersistenceActions(
       })()
       chapterRequests.set(key, request)
       return request
+    },
+    prefetchChapterContent: async (signal) => {
+      const state = get()
+      if (signal.aborted || !state.backendLoaded || state.backendLoadError || state.isSaving
+        || state.workspaceSaveConflict || state.isNovelDeletionPending || state.chapterLoadError
+        || state.currentNovelId !== state.revisionNovelId) return false
+      const chapters = state.localChapters.filter((chapter) => chapter.novelId === state.currentNovelId)
+        .slice().sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))
+      const selectedIndex = chapters.findIndex((chapter) => chapter.id === state.currentChapterId)
+      if (selectedIndex < 0 || chapters[selectedIndex].contentLoaded === false) return false
+      // Warm the following chapters first, then wrap around to finish the novel.
+      const ids = [...chapters.slice(selectedIndex + 1), ...chapters.slice(0, selectedIndex)]
+        .filter((chapter) => chapter.contentLoaded === false).slice(0, 8).map((chapter) => chapter.id)
+      if (!ids.length) return false
+      await downloadChapters(ids, true, signal)
+      return true
     },
     loadLibrarySummaries: async ({ fresh = false } = {}) => {
       const requestGeneration = librarySummaryGeneration + 1
@@ -1071,7 +1122,7 @@ export function createPersistenceActions(
       } : null
       const envelope: WorkspaceMutationEnvelope = {
         method,
-        body: JSON.stringify(method === 'PATCH' ? patchBody : capturedSnapshot),
+        body: JSON.stringify(method === 'PATCH' ? patchBody : omitUnchangedChapterBodies(capturedSnapshot, state.lastAcknowledgedPersistedWorkspace)),
         idempotencyKey,
         baseRevision,
         capturedSnapshot,

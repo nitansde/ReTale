@@ -126,11 +126,33 @@ describe('novel resource routes', () => {
       expect(unloaded).toMatchObject({ content: '', contentLoaded: false })
       expect(unloaded).not.toHaveProperty('originalContent')
     }
+    resourceHandlers.getNovel.mockResolvedValue(Response.json({
+      chapter: { id: 'second', order: 2, content: 'Second body', originalContent: 'Second original' },
+      workspaceRevision: 9, revisionNovelId: 'novel-a',
+    }))
     const single = await getNovel(new Request('http://localhost/api/novels/novel-a?view=chapter&chapterId=second'), context)
     expect(await single.json()).toEqual({
       chapter: { id: 'second', order: 2, content: 'Second body', originalContent: 'Second original' },
       workspaceRevision: 9, revisionNovelId: 'novel-a',
     })
+  })
+
+  it('compresses and revalidates background chapter batches with their revision authority', async () => {
+    const batch = {
+      chapters: [{ id: 'first', content: 'Long chapter text. '.repeat(200) }, { id: 'second', content: 'Second' }],
+      workspaceRevision: 9, revisionNovelId: 'novel-a',
+    }
+    resourceHandlers.getNovel.mockImplementation(() => Response.json(batch, { headers: {
+      'X-Retale-Workspace-Revision': '9', 'X-Retale-Revision-Novel-Id': 'novel-a',
+    } }))
+    const url = 'http://localhost/api/novels/novel-a?view=chapters&chapterId=first&chapterId=second'
+    const context = { params: Promise.resolve({ novelId: 'novel-a' }) }
+    const response = await getNovel(new Request(url, { headers: { 'Accept-Encoding': 'gzip' } }), context)
+    expect(JSON.parse(gunzipSync(Buffer.from(await response.arrayBuffer())).toString())).toEqual(batch)
+    expect(response.headers.get('X-Retale-Workspace-Revision')).toBe('9')
+    const cached = await getNovel(new Request(url, { headers: { 'If-None-Match': response.headers.get('ETag')! } }), context)
+    expect(cached.status).toBe(304)
+    expect(await cached.text()).toBe('')
   })
 
   it.each([

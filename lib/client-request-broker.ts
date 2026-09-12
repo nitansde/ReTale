@@ -1,4 +1,5 @@
 type ClientGetOptions<T> = {
+  priority?: RequestPriority
   cache?: RequestCache
   dedupe?: boolean
   signal?: AbortSignal
@@ -35,7 +36,7 @@ function acquireClientGet<T>(url: string, options: ClientGetOptions<T>) {
     entry = {
       controller,
       consumers: 0,
-      promise: fetch(url, { cache, signal: controller.signal }),
+      promise: fetch(url, { cache, signal: controller.signal, ...(options.priority ? { priority: options.priority } : {}) }),
     }
     activeGets.add(entry)
     if (dedupe) inFlightGets.set(key, entry)

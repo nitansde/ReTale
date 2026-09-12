@@ -499,6 +499,45 @@ describe('per-novel database resolver', () => {
     })
   }))
 
+  it('reads bounded chapter batches directly from the targeted runtime with current revision authority', databaseFixture.wrap(async () => {
+    const dataRootPath = createTempDataRoot()
+    const resolver = await loadResolverModule(dataRootPath)
+    seedReadyNovelRegistryRows(resolver.getControlDb(), dataRootPath, ['novel-alpha', 'novel-beta'])
+    vi.doMock('@/lib/server/knowledge-rebuild', () => ({ syncWorkspacePayloadToKnowledgeStore: vi.fn(async () => {}) }))
+    const { saveNovel, getNovel } = await importNovelResourceRoutesWithAfterCallbacks()
+    for (const novelId of ['novel-alpha', 'novel-beta']) {
+      const response = await saveNovel(createWorkspaceRequest(createNovelWorkspacePayload(novelId, novelId)), {
+        params: Promise.resolve({ novelId }),
+      })
+      expect(response.status).toBe(200)
+    }
+    const resilience = await import('@/lib/server/workspace-resilience')
+    const fullRead = vi.spyOn(resilience, 'loadWorkspaceSnapshotFromRuntimeOrRecovery')
+    const context = { params: Promise.resolve({ novelId: 'novel-alpha' }) }
+    for (const view of ['chapter', 'chapters']) {
+      const response = await getNovel(new Request(`http://localhost/api/novels/novel-alpha?view=${view}&chapterId=novel-alpha-chapter-1`), context)
+      expect(response.status).toBe(200)
+      const payload = await response.json()
+      expect(payload).toMatchObject({ workspaceRevision: 1, revisionNovelId: 'novel-alpha' })
+      expect(view === 'chapter' ? payload.chapter : payload.chapters[0]).toMatchObject({
+        id: 'novel-alpha-chapter-1', novelId: 'novel-alpha', content: expect.any(String),
+      })
+      expect(response.headers.get('X-Retale-Workspace-Revision')).toBe('1')
+    }
+    expect(fullRead).not.toHaveBeenCalled()
+    for (const [query, status] of [
+      ['chapterId=novel-beta-chapter-1', 404],
+      ['chapterId=missing', 404],
+      ['', 400],
+      ['chapterId=novel-alpha-chapter-1&chapterId=novel-alpha-chapter-1', 400],
+      [Array.from({ length: 9 }, (_, i) => `chapterId=chapter-${i}`).join('&'), 400],
+    ] as const) {
+      const response = await getNovel(new Request(`http://localhost/api/novels/novel-alpha?view=chapters&${query}`), context)
+      expect(response.status).toBe(status)
+      expect(response.headers.get('Cache-Control')).toBe('no-store')
+    }
+  }))
+
   it('evicts and removes only the deleted novel storage while leaving sibling routing usable', databaseFixture.wrap(async () => {
     const dataRootPath = createTempDataRoot()
     const resolver = await loadResolverModule(dataRootPath)

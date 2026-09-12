@@ -214,6 +214,38 @@ function findWorkspaceStateForRecovery(id: string, db?: WorkspaceRecoveryDb) {
   )
 }
 
+function runtimeChapterToChapter(chapter: WorkspaceRuntimeChapterRow): Chapter {
+  return {
+    id: chapter.id,
+    novelId: chapter.novelId,
+    parentChapterId: chapter.parentChapterId ?? undefined,
+    kind: (chapter.kind ?? undefined) as Chapter['kind'],
+    branchLabel: chapter.branchLabel ?? undefined,
+    title: chapter.title,
+    order: chapter.sortOrder,
+    content: chapter.contentHtml,
+    originalContent: chapter.originalContentHtml ?? undefined,
+    status: chapter.status as Chapter['status'],
+    wordCount: chapter.wordCount,
+    updatedAt: chapter.updatedAtLabel,
+    trajectory: normalizeStringArray(readJsonArray(chapter.trajectoryJson)),
+  }
+}
+
+export function readWorkspaceChapterBatchFromDb(db: DatabaseAccess, novelId: string, chapterIds: string[]) {
+  // Read bodies and their revision in one statement so they describe the same snapshot.
+  const rows = db.queryAll<WorkspaceRuntimeChapterRow & { revision: number }>(
+    `SELECT c.*, s.revision
+     FROM WorkspaceRuntimeChapter c
+     JOIN WorkspaceRuntimeState s ON s.id = c.workspaceStateId
+     WHERE c.workspaceStateId = ? AND c.novelId = ? AND c.id IN (${chapterIds.map(() => '?').join(',')})`,
+    WORKSPACE_ID, novelId, ...chapterIds,
+  )
+  if (rows.length !== chapterIds.length) return null
+  const chapters = new Map(rows.map((row) => [row.id, runtimeChapterToChapter(row)]))
+  return { chapters: chapterIds.map((id) => chapters.get(id)!), workspaceRevision: rows[0].revision, revisionNovelId: novelId }
+}
+
 export function readWorkspaceRuntimeSnapshotFromDb(
   db: DatabaseAccess,
   id = WORKSPACE_ID,
@@ -262,21 +294,7 @@ export function readWorkspaceRuntimeSnapshotFromDb(
       summary: novel.summary,
       tags: normalizeStringArray(readJsonArray(novel.tagsJson)),
     })),
-    localChapters: chapters.map((chapter) => ({
-      id: chapter.id,
-      novelId: chapter.novelId,
-      parentChapterId: chapter.parentChapterId ?? undefined,
-      kind: (chapter.kind ?? undefined) as Chapter['kind'],
-      branchLabel: chapter.branchLabel ?? undefined,
-      title: chapter.title,
-      order: chapter.sortOrder,
-      content: chapter.contentHtml,
-      originalContent: chapter.originalContentHtml ?? undefined,
-      status: chapter.status as Chapter['status'],
-      wordCount: chapter.wordCount,
-      updatedAt: chapter.updatedAtLabel,
-      trajectory: normalizeStringArray(readJsonArray(chapter.trajectoryJson)),
-    })),
+    localChapters: chapters.map(runtimeChapterToChapter),
     rewriteCandidates: readJsonArray(meta?.rewriteCandidatesJson ?? '[]'),
     rewriteHistory: readJsonArray(meta?.rewriteHistoryJson ?? '[]'),
     trajectories: readJsonArray(meta?.trajectoriesJson ?? '[]'),
