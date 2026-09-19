@@ -321,6 +321,7 @@ export const AI_SCENARIO_META: Record<AIScenarioKey, {
   eyebrow: string
   title: string
   description: string
+  recommendation: string
   shortLabel: string
   ollamaPurpose: 'text' | 'embedding'
   openAIPlaceholder: string
@@ -328,8 +329,9 @@ export const AI_SCENARIO_META: Record<AIScenarioKey, {
 }> = {
   rewrite: {
     eyebrow: 'Rewrite',
-    title: '改写模型',
-    description: '魔改、扩写与角色扮演。',
+    title: '写作 AI 模型',
+    description: '负责魔改、续写和角色扮演。',
+    recommendation: '推荐 DeepSeek 等写作风格自由的模型。',
     shortLabel: '改写',
     ollamaPurpose: 'text',
     openAIPlaceholder: 'deepseek-v4-flash',
@@ -337,8 +339,9 @@ export const AI_SCENARIO_META: Record<AIScenarioKey, {
   },
   knowledgeExtraction: {
     eyebrow: 'Knowledge extraction',
-    title: '知识抽取',
-    description: '人物、设定与关系图谱。',
+    title: '知识库构建 AI 模型',
+    description: '整理人物、关系与设定，记住前情。',
+    recommendation: '对模型能力要求不高，优先选便宜的小模型（如 gpt-oss-120b 或本地模型）。',
     shortLabel: '知识',
     ollamaPurpose: 'text',
     openAIPlaceholder: 'gpt-4.1-mini',
@@ -346,11 +349,12 @@ export const AI_SCENARIO_META: Record<AIScenarioKey, {
   },
   embeddings: {
     eyebrow: 'Embeddings',
-    title: '向量模型',
-    description: '原文向量化与检索。',
+    title: 'Embedding 模型',
+    description: '语义搜索，帮助写作贴近原著。',
+    recommendation: '不配置也能魔改，但写作无法完美贴近原著，且无法语义搜索。',
     shortLabel: '向量',
     ollamaPurpose: 'embedding',
-    openAIPlaceholder: 'text-embedding-3-large',
+    openAIPlaceholder: 'text-embedding-3-small',
     ollamaPlaceholder: 'nomic-embed-text',
   },
 }
@@ -363,8 +367,9 @@ export function getAIScenarioMeta(locale: Locale): typeof AI_SCENARIO_META {
   return {
     rewrite: {
       eyebrow: 'Rewrite',
-      title: 'Rewrite model',
-      description: 'Rewrite, expansion, and roleplay.',
+      title: 'Writing AI model',
+      description: 'Rewrites, continuations, and roleplay.',
+      recommendation: 'Consider DeepSeek or another model with a flexible writing style.',
       shortLabel: 'Rewrite',
       ollamaPurpose: 'text',
       openAIPlaceholder: 'deepseek-v4-flash',
@@ -372,8 +377,9 @@ export function getAIScenarioMeta(locale: Locale): typeof AI_SCENARIO_META {
     },
     knowledgeExtraction: {
       eyebrow: 'Knowledge extraction',
-      title: 'Knowledge extraction',
-      description: 'Characters, world details, and graph data.',
+      title: 'Knowledge-building AI model',
+      description: 'Tracks characters, relationships, and story details.',
+      recommendation: 'This task is less demanding. Prefer a low-cost model, such as gpt-oss-120b or a local model.',
       shortLabel: 'Knowledge',
       ollamaPurpose: 'text',
       openAIPlaceholder: 'gpt-4.1-mini',
@@ -382,10 +388,11 @@ export function getAIScenarioMeta(locale: Locale): typeof AI_SCENARIO_META {
     embeddings: {
       eyebrow: 'Embeddings',
       title: 'Embedding model',
-      description: 'Source vectorization and retrieval.',
+      description: 'Semantic search and closer alignment with the original.',
+      recommendation: 'Without embeddings, rewriting still works, but the writing cannot fully match the original work and semantic search is unavailable.',
       shortLabel: 'Embedding',
       ollamaPurpose: 'embedding',
-      openAIPlaceholder: 'text-embedding-3-large',
+      openAIPlaceholder: 'text-embedding-3-small',
       ollamaPlaceholder: 'nomic-embed-text',
     },
   }

@@ -1,4 +1,4 @@
-import { normalizeAISettings } from '@/lib/ai-settings'
+import { DEFAULT_OPENAI_EMBEDDING_MODEL, normalizeAISettings } from '@/lib/ai-settings'
 import type { AISettings } from '@/lib/types'
 import { safeParseJson } from '@/lib/server/json-parse'
 import { findAppSettings, upsertAppSettings } from '@/lib/server/persistence'
@@ -42,6 +42,7 @@ function createEnvironmentBackedAISettings(): AISettings {
   const openAIBaseUrl = process.env.OPENAI_COMPATIBLE_BASE_URL?.trim() || 'https://api.openai.com/v1'
   const openAIApiKey = process.env.OPENAI_COMPATIBLE_API_KEY?.trim() || ''
   const openAIModel = process.env.OPENAI_COMPATIBLE_MODEL?.trim() || 'gpt-4.1-mini'
+  const openAIEmbeddingModel = process.env.OPENAI_COMPATIBLE_EMBEDDING_MODEL?.trim() || DEFAULT_OPENAI_EMBEDDING_MODEL
   const ollamaBaseUrl = process.env.OLLAMA_BASE_URL?.trim() || 'http://127.0.0.1:11434'
   const ollamaRewriteModel = process.env.OLLAMA_REWRITE_MODEL?.trim() || ''
   const ollamaKnowledgeModel = process.env.OLLAMA_MODEL?.trim() || ''
@@ -89,8 +90,8 @@ function createEnvironmentBackedAISettings(): AISettings {
         apiKey: openAIApiKey,
         apiKeyConfigured: Boolean(openAIApiKey),
         apiKeyMasked: '',
-        model: openAIModel,
-        configured: Boolean(openAIBaseUrl && openAIModel && openAIApiKey),
+        model: openAIEmbeddingModel,
+        configured: Boolean(openAIBaseUrl && openAIEmbeddingModel && openAIApiKey),
       },
       ollama: {
         baseUrl: ollamaBaseUrl,

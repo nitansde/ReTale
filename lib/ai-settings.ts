@@ -19,6 +19,7 @@ type PartialAISettings = Partial<{
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini'
+export const DEFAULT_OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small'
 const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
 const DEFAULT_OPENAI_EXTRACTION_PARALLELISM = 5
 const DEFAULT_OLLAMA_EXTRACTION_PARALLELISM = 1
@@ -118,7 +119,10 @@ function createDefaultKnowledgeExtractionOllamaProviderSettings(): KnowledgeExtr
 function createDefaultEmbeddingsScenarioSettings(): EmbeddingsScenarioSettings {
   return {
     provider: 'ollama',
-    openAICompatible: createDefaultOpenAICompatibleProviderSettings(),
+    openAICompatible: {
+      ...createDefaultOpenAICompatibleProviderSettings(),
+      model: DEFAULT_OPENAI_EMBEDDING_MODEL,
+    },
     ollama: createDefaultOllamaProviderSettings(),
     embeddingBatchSize: DEFAULT_EMBEDDING_BATCH_SIZE,
   }

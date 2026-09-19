@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LocalEmbeddingWizard } from '@/components/workspace/LocalEmbeddingWizard'
 import { I18nProvider } from '@/lib/i18n/provider'
@@ -47,6 +47,7 @@ const baseStatus: LocalEmbeddingRuntimeStatus = {
 }
 
 afterEach(() => {
+  cleanup()
   vi.unstubAllGlobals()
 })
 
@@ -67,8 +68,12 @@ describe('LocalEmbeddingWizard', () => {
       </I18nProvider>,
     )
 
-    expect(await screen.findByText(/无法构建语义向量索引/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '安装本地 RAG' }))
+    expect(screen.getByText(/写作无法完美贴近原著/)).toBeInTheDocument()
+    const openButton = screen.getByRole('button', { name: '安装本地 RAG' })
+    await waitFor(() => expect(openButton).toBeEnabled())
+    expect(screen.getByText('即将安装的模型')).toBeVisible()
+    expect(screen.getByText('qwen3-embedding-4b-q4_k_m', { exact: true })).toBeVisible()
+    fireEvent.click(openButton)
     expect(screen.getByText(/只是一套 Embedding 服务/)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '下一步' }))
@@ -87,6 +92,26 @@ describe('LocalEmbeddingWizard', () => {
       action: 'install',
       modelId: 'qwen3-embedding-4b-q4_k_m',
     }]))
+  })
+
+  it('applies installed settings only while the installation entry is selected', async () => {
+    const connection = { ...baseStatus.connection, model: 'qwen3-embedding-4b-q4_k_m' }
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      ...baseStatus, installed: true, configured: true, phase: 'stopped', connection,
+    })))
+    const onConfigured = vi.fn()
+    const { rerender } = render(<LocalEmbeddingWizard active={false} onConfigured={onConfigured} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: '管理本地 RAG' })).toBeEnabled())
+    expect(screen.getByText('已安装的模型')).toBeVisible()
+    expect(screen.getByText(connection.model, { exact: true })).toBeVisible()
+    expect(onConfigured).not.toHaveBeenCalled()
+    rerender(<LocalEmbeddingWizard active onConfigured={onConfigured} />)
+    await waitFor(() => expect(onConfigured).toHaveBeenCalledWith(connection))
+    expect(onConfigured).toHaveBeenCalledTimes(1)
+    rerender(<LocalEmbeddingWizard active={false} onConfigured={onConfigured} />)
+    expect(onConfigured).toHaveBeenCalledTimes(1)
+    rerender(<LocalEmbeddingWizard active onConfigured={onConfigured} />)
+    await waitFor(() => expect(onConfigured).toHaveBeenCalledTimes(2))
   })
 
   it('requires a risk acknowledgement and a second confirmation for custom GGUF models', async () => {

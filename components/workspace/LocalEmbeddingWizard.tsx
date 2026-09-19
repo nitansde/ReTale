@@ -6,6 +6,7 @@ import { useI18n } from '@/lib/i18n/provider'
 import { cn } from '@/lib/utils'
 
 type LocalEmbeddingWizardProps = {
+  active?: boolean
   onConfigured: (settings: { baseUrl: string; apiKey: string; model: string }) => void
 }
 
@@ -25,7 +26,7 @@ function formatBytes(bytes: number, locale: string) {
   return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(bytes / 1_000_000)} MB`
 }
 
-export function LocalEmbeddingWizard({ onConfigured }: LocalEmbeddingWizardProps) {
+export function LocalEmbeddingWizard({ active = true, onConfigured }: LocalEmbeddingWizardProps) {
   const { locale, t } = useI18n()
   const [status, setStatus] = useState<LocalEmbeddingRuntimeStatus | null>(null)
   const [loadError, setLoadError] = useState('')
@@ -69,6 +70,10 @@ export function LocalEmbeddingWizard({ onConfigured }: LocalEmbeddingWizardProps
 
   useEffect(() => {
     const model = status?.connection.model
+    if (!active) {
+      configuredSignatureRef.current = ''
+      return
+    }
     if (!status?.installed || !status.configured || !model) return
     const signature = `${status.connection.baseUrl}\u0000${model}`
     if (configuredSignatureRef.current === signature) return
@@ -78,7 +83,7 @@ export function LocalEmbeddingWizard({ onConfigured }: LocalEmbeddingWizardProps
       apiKey: status.connection.apiKey,
       model,
     })
-  }, [onConfigured, status])
+  }, [active, onConfigured, status])
 
   const selectedModel = useMemo(
     () => status?.models.find((model) => model.id === selectedModelId) ?? null,
@@ -124,6 +129,11 @@ export function LocalEmbeddingWizard({ onConfigured }: LocalEmbeddingWizardProps
   }
 
   const phaseLabel = status ? t(`aiSettings.local.phase.${status.phase}`) : t('aiSettings.local.loading')
+  const displayedModel = status?.installed
+    ? status.connection.model || status.selectedModelId
+    : customSelected
+      ? customFileName.trim() || t('aiSettings.local.customOption')
+      : selectedModel?.id
 
   return (
     <div className="mt-4 rounded-[22px] border border-violet-300/15 bg-violet-500/[0.06] p-4">
@@ -132,6 +142,10 @@ export function LocalEmbeddingWizard({ onConfigured }: LocalEmbeddingWizardProps
           <p className="text-[11px] uppercase tracking-[0.16em] text-violet-200/70">llama.cpp · Local RAG</p>
           <h5 className="mt-1 text-sm font-medium text-zinc-100">{t('aiSettings.local.title')}</h5>
           <p className="mt-2 text-xs leading-5 text-zinc-400">{t('aiSettings.local.summary')}</p>
+          {displayedModel ? <p className="mt-3 text-sm leading-6">
+            <span className="text-zinc-400">{t(status?.installed ? 'aiSettings.local.installedModel' : 'aiSettings.local.installModel')}</span>
+            <span className="block font-medium text-zinc-100 [overflow-wrap:anywhere]">{displayedModel}</span>
+          </p> : null}
         </div>
         <span className={cn(
           'rounded-full border px-3 py-1 text-[11px]',

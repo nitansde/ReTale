@@ -1,6 +1,9 @@
 "use client"
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
+import { ChevronDown, RefreshCw, TriangleAlert } from 'lucide-react'
+import { isAIScenarioConfigured } from '@/lib/ai-settings'
+import { LOCAL_EMBEDDING_BASE_URL } from '@/lib/local-embedding'
 import {
   AI_SCENARIO_META,
   getAIScenarioMeta,
@@ -40,6 +43,12 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
   const { locale, t } = useI18n()
   const metaByScenario = getAIScenarioMeta(locale)
   const [saving, setSaving] = useState(false)
+  const [expandedScenario, setExpandedScenario] = useState<AIScenarioKey | null>(props.initialSection === 'models' ? 'rewrite' : null)
+  const [localInstallSelected, setLocalInstallSelected] = useState(() => (
+    props.resolvedAISettings.embeddings.provider === 'openai-compatible'
+    && props.resolvedAISettings.embeddings.openAICompatible.baseUrl.trim().replace(/\/$/, '') === LOCAL_EMBEDDING_BASE_URL
+  ))
+  const formId = useId()
   const [section, setSection] = useState<'appearance' | 'models'>(props.initialSection ?? 'appearance')
 
   if (!props.open) return null
@@ -56,217 +65,54 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
     }
   }
 
-  const renderOpenAICompatibleFields = (scenario: AIScenarioKey) => {
-    const scenarioSettings = props.resolvedAISettings[scenario]
-    const knowledgeExtractionSettings = scenario === 'knowledgeExtraction' ? props.resolvedAISettings.knowledgeExtraction : null
-    const currentModels = props.openAICompatibleModelsByScenario[scenario]
-    const loading = props.openAICompatibleModelsLoading[scenario]
-    const selectedModel = currentModels.some((model) => model.id === scenarioSettings.openAICompatible.model)
-      ? scenarioSettings.openAICompatible.model
-      : ''
+  const fieldClass = 'min-h-11 w-full min-w-0 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2.5 text-base text-zinc-100 outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60 sm:text-sm'
 
-    return (
-      <div className="mt-4 border-t border-white/10 pt-4">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">OpenAI-compatible API</p>
-            <p className="mt-1 text-sm text-zinc-300">{t('aiSettings.scenarioConfigDescription')}</p>
-          </div>
+  const renderFields = (scenario: AIScenarioKey) => {
+    const settings = props.resolvedAISettings[scenario]
+    const isOpenAI = settings.provider === 'openai-compatible'
+    const connection = isOpenAI ? settings.openAICompatible : settings.ollama
+    const models = isOpenAI ? props.openAICompatibleModelsByScenario[scenario] : props.ollamaModelsByScenario[scenario]
+    const loading = isOpenAI ? props.openAICompatibleModelsLoading[scenario] : props.ollamaModelsLoading[scenario]
+    const error = isOpenAI ? '' : props.ollamaModelsError[scenario]
+    const modelInputId = `${formId}-${scenario}-model`
+    const listId = `${modelInputId}-options`
+    const updateField = (field: 'baseUrl' | 'model', value: string) => {
+      if (isOpenAI) props.updateScenarioOpenAIField(scenario, field, value)
+      else props.updateScenarioOllamaField(scenario, field, value)
+    }
+
+    return <div className="space-y-4">
+      <label className="block">
+        <span className="mb-1.5 block text-sm text-zinc-300">{isOpenAI ? 'Base URL' : 'Ollama Base URL'}</span>
+        <input value={connection.baseUrl} onChange={(event) => updateField('baseUrl', event.target.value)} className={fieldClass} placeholder={isOpenAI ? 'https://api.openai.com/v1' : 'http://127.0.0.1:11434'} autoCapitalize="none" spellCheck={false} />
+      </label>
+      {isOpenAI ? <label className="block">
+        <span className="mb-1.5 block text-sm text-zinc-300">API Key</span>
+        <input type="password" autoComplete="off" value={settings.openAICompatible.apiKey} onChange={(event) => props.updateScenarioOpenAIField(scenario, 'apiKey', event.target.value)} className={fieldClass} placeholder={settings.openAICompatible.apiKeyMasked || 'sk-...'} />
+        {settings.openAICompatible.apiKeyConfigured && !settings.openAICompatible.apiKey ? <p className="mt-1.5 text-xs leading-5 text-zinc-500">{t('aiSettings.apiKeyHint')}</p> : null}
+      </label> : null}
+      <div>
+        <div className="flex items-center justify-between gap-3">
+          <label htmlFor={modelInputId} className="text-sm text-zinc-300">Model</label>
           <button
             type="button"
+            disabled={loading || saving}
             onClick={() => {
-              props.loadOpenAICompatibleModels(
-                scenario,
-                scenarioSettings.openAICompatible.baseUrl,
-                scenarioSettings.openAICompatible.apiKey
-              )
+              if (isOpenAI) props.loadOpenAICompatibleModels(scenario, connection.baseUrl, settings.openAICompatible.apiKey)
+              else props.loadOllamaModels(scenario, connection.baseUrl)
             }}
-            className="shrink-0 rounded-2xl border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/[0.06]"
+            className="inline-flex min-h-11 shrink-0 items-center gap-1.5 text-xs text-violet-300 disabled:opacity-50"
           >
-              {loading ? t('aiSettings.refreshing') : t('aiSettings.refreshModels')}
-            </button>
-        </div>
-
-        <div className="space-y-4">
-          <label className="block">
-            <span className="mb-2 block text-sm text-zinc-300">Base URL</span>
-            <input
-              value={scenarioSettings.openAICompatible.baseUrl}
-              onChange={(event) => props.updateScenarioOpenAIField(scenario, 'baseUrl', event.target.value)}
-              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
-              placeholder="https://api.openai.com/v1"
-            />
-            <p className="mt-2 text-xs leading-5 text-zinc-500">
-              {t('aiSettings.baseUrlHint')}
-            </p>
-          </label>
-
-          <label className="block">
-            <span className="mb-2 block text-sm text-zinc-300">API Key</span>
-            <input
-              value={scenarioSettings.openAICompatible.apiKey}
-              onChange={(event) => props.updateScenarioOpenAIField(scenario, 'apiKey', event.target.value)}
-              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
-              placeholder={scenarioSettings.openAICompatible.apiKeyMasked || 'sk-...'}
-            />
-            {scenarioSettings.openAICompatible.apiKeyConfigured && !scenarioSettings.openAICompatible.apiKey ? (
-              <p className="mt-2 text-xs leading-5 text-zinc-500">{t('aiSettings.apiKeyHint')}</p>
-            ) : null}
-          </label>
-
-          <label className="block">
-            <span className="mb-2 block text-sm text-zinc-300">Model</span>
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <p className="text-xs leading-5 text-zinc-500">
-                {loading
-                  ? t('aiSettings.loadingModels')
-                  : currentModels.length > 0
-                    ? t('aiSettings.modelsFound', { count: currentModels.length })
-                    : t('aiSettings.modelsManual')}
-              </p>
-            </div>
-            <select
-              value={selectedModel}
-              onChange={(event) => props.updateScenarioOpenAIField(scenario, 'model', event.target.value)}
-              disabled={loading || currentModels.length === 0}
-              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <option value="">
-                {loading
-                  ? t('aiSettings.loadingModels')
-                  : currentModels.length > 0
-                    ? t('aiSettings.selectDiscoveredModel')
-                    : t('aiSettings.noDiscoveredModels')}
-              </option>
-              {currentModels.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.label}
-                </option>
-              ))}
-            </select>
-            <p className="mt-2 text-xs leading-5 text-zinc-500">{t('aiSettings.applyModelHint')}</p>
-            <input
-              value={scenarioSettings.openAICompatible.model}
-              onChange={(event) => props.updateScenarioOpenAIField(scenario, 'model', event.target.value)}
-              className="mt-3 w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
-              placeholder={metaByScenario[scenario].openAIPlaceholder}
-            />
-          </label>
-
-          {!loading && scenarioSettings.openAICompatible.baseUrl.trim() && currentModels.length === 0 ? (
-            <p className="text-sm text-zinc-500">{t('aiSettings.noOpenAIModels')}</p>
-          ) : null}
-
-          {scenario === 'knowledgeExtraction' ? (
-            <label className="block">
-              <span className="mb-2 block text-sm text-zinc-300">{t('aiSettings.parallelism')}</span>
-              <input
-                type="number"
-                min={1}
-                max={20}
-                value={knowledgeExtractionSettings?.openAICompatible.parallelism ?? 5}
-                onChange={(event) => props.updateKnowledgeExtractionParallelism('openai-compatible', event.target.value)}
-                className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
-              />
-              <p className="mt-2 text-xs leading-5 text-zinc-500">{t('aiSettings.openAiParallelismHint')}</p>
-            </label>
-          ) : null}
-        </div>
-      </div>
-    )
-  }
-
-  const renderOllamaFields = (scenario: AIScenarioKey) => {
-    const scenarioSettings = props.resolvedAISettings[scenario]
-    const knowledgeExtractionSettings = scenario === 'knowledgeExtraction' ? props.resolvedAISettings.knowledgeExtraction : null
-    const currentModels = props.ollamaModelsByScenario[scenario]
-    const loading = props.ollamaModelsLoading[scenario]
-    const error = props.ollamaModelsError[scenario]
-    const purpose = metaByScenario[scenario].ollamaPurpose
-
-    return (
-      <div className="mt-4 border-t border-white/10 pt-4">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('aiSettings.ollamaEyebrow')}</p>
-            <p className="mt-1 text-sm text-zinc-300">
-              {purpose === 'embedding'
-                ? t('aiSettings.ollamaEmbeddingPurpose')
-                : t('aiSettings.ollamaTextPurpose')}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              props.loadOllamaModels(scenario, scenarioSettings.ollama.baseUrl)
-            }}
-            className="rounded-2xl border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/[0.06]"
-          >
-            {loading ? t('aiSettings.refreshing') : t('aiSettings.refreshLocalModels')}
+            <RefreshCw aria-hidden="true" className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+            {loading ? t('aiSettings.refreshing') : t('aiSettings.refreshModels')}
           </button>
         </div>
-
-        <div className="space-y-4">
-          <label className="block">
-            <span className="mb-2 block text-sm text-zinc-300">Ollama Base URL</span>
-            <input
-              value={scenarioSettings.ollama.baseUrl}
-              onChange={(event) => props.updateScenarioOllamaField(scenario, 'baseUrl', event.target.value)}
-              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
-              placeholder="http://127.0.0.1:11434"
-            />
-          </label>
-
-          <label className="block">
-            <span className="mb-2 block text-sm text-zinc-300">Model</span>
-            <select
-              value={scenarioSettings.ollama.model}
-              onChange={(event) => props.updateScenarioOllamaField(scenario, 'model', event.target.value)}
-              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
-            >
-              <option value="">
-                {purpose === 'embedding' ? t('aiSettings.autoSelectEmbedding') : t('aiSettings.autoSelectText')}
-              </option>
-              {currentModels.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.label}
-                </option>
-              ))}
-            </select>
-            <input
-              value={scenarioSettings.ollama.model}
-              onChange={(event) => props.updateScenarioOllamaField(scenario, 'model', event.target.value)}
-              className="mt-3 w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
-              placeholder={metaByScenario[scenario].ollamaPlaceholder}
-            />
-          </label>
-
-          {error ? <p className="text-sm text-rose-300">{error}</p> : null}
-          {!error && !loading && currentModels.length === 0 ? (
-            <p className="text-sm text-zinc-500">
-              {purpose === 'embedding'
-                ? t('aiSettings.noLocalEmbedding')
-                : t('aiSettings.noLocalText')}
-            </p>
-          ) : null}
-
-          {scenario === 'knowledgeExtraction' ? (
-            <label className="block">
-              <span className="mb-2 block text-sm text-zinc-300">{t('aiSettings.parallelism')}</span>
-              <input
-                type="number"
-                min={1}
-                max={20}
-                value={knowledgeExtractionSettings?.ollama.parallelism ?? 1}
-                onChange={(event) => props.updateKnowledgeExtractionParallelism('ollama', event.target.value)}
-                className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
-              />
-              <p className="mt-2 text-xs leading-5 text-zinc-500">{t('aiSettings.ollamaParallelismHint')}</p>
-            </label>
-          ) : null}
-        </div>
+        <input id={modelInputId} list={listId} value={connection.model} onChange={(event) => updateField('model', event.target.value)} className={fieldClass} placeholder={isOpenAI ? metaByScenario[scenario].openAIPlaceholder : metaByScenario[scenario].ollamaPlaceholder} autoCapitalize="none" spellCheck={false} />
+        <datalist id={listId}>{models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}</datalist>
+        <p className="mt-1.5 text-xs leading-5 text-zinc-500">{t(isOpenAI ? 'aiSettings.modelInputHint' : 'aiSettings.localModelInputHint')}</p>
+        {error ? <p role="alert" className="mt-2 text-xs leading-5 text-rose-300">{error}</p> : null}
       </div>
-    )
+    </div>
   }
 
   return (
@@ -304,80 +150,101 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
       </div>
       {section === 'appearance' ? <WorkspaceAppearanceSettings /> : (
         <>
-          <p className="mb-4 text-sm leading-6 text-zinc-400">{t('aiSettings.description')}</p>
-          <div className="space-y-6">
+          <p className="mb-3 text-sm leading-6 text-zinc-400">{t('aiSettings.description')}</p>
+          <div className="divide-y divide-white/10">
             {(Object.keys(AI_SCENARIO_META) as AIScenarioKey[]).map((scenario) => {
               const meta = metaByScenario[scenario]
-              const scenarioSettings = props.resolvedAISettings[scenario]
-              const scenarioStatus = props.scenarioStatusLabels.find((label) => label.startsWith(meta.shortLabel)) ?? ''
+              const settings = props.resolvedAISettings[scenario]
+              const configured = isAIScenarioConfigured(settings)
+              const connection = settings.provider === 'openai-compatible' ? settings.openAICompatible : settings.ollama
+              const expanded = expandedScenario === scenario
+              const showLocalInstall = scenario === 'embeddings' && localInstallSelected
+              const panelId = `${formId}-${scenario}-panel`
+              const headingId = `${formId}-${scenario}-heading`
 
-              return (
-                <div
-                  key={scenario}
-                  data-testid={`ai-settings-scenario-${scenario}`}
-                  className="border-b border-white/10 pb-6"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="max-w-2xl">
-                      <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{meta.eyebrow}</p>
-                      <h4 className="mt-2 text-sm font-medium text-zinc-100">{meta.title}</h4>
-                      <p className="mt-1 text-xs leading-5 text-zinc-500">{meta.description}</p>
-                    </div>
-                    <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
-                      {scenarioStatus}
+              return <section key={scenario} data-testid={`ai-settings-scenario-${scenario}`}>
+                <h3>
+                  <button
+                    type="button"
+                    id={headingId}
+                    aria-label={meta.title}
+                    aria-expanded={expanded}
+                    aria-controls={panelId}
+                    disabled={saving}
+                    onClick={() => setExpandedScenario(expanded ? null : scenario)}
+                    className="flex w-full items-center gap-3 py-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60 disabled:opacity-50"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="text-base font-medium text-zinc-100">{meta.title}</span>
+                        <span className={cn('shrink-0 text-[11px]', scenario === 'embeddings' ? 'text-zinc-500' : 'text-violet-300')}>{t(scenario === 'embeddings' ? 'aiSettings.optional' : 'aiSettings.required')}</span>
+                      </span>
+                      <span className="mt-1 block text-sm font-normal leading-5 text-zinc-400">{meta.description}</span>
+                      <span className={cn('mt-2 block truncate text-xs font-normal', configured ? 'text-emerald-300' : 'text-zinc-500')}>
+                        {configured ? connection.model : t(scenario === 'embeddings' ? 'aiSettings.notAdded' : 'aiSettings.needsSetup')}
+                      </span>
                     </span>
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {([
-                      ['openai-compatible', 'OpenAI-compatible API'],
-                      ['ollama', 'Ollama'],
-                    ] as Array<[AIProvider, string]>).map(([provider, label]) => {
-                      const active = scenarioSettings.provider === provider
-                      return (
-                        <button
-                          key={provider}
-                          type="button"
-                          onClick={() => props.updateScenarioProvider(scenario, provider)}
-                          className={cn(
-                            'rounded-full border px-3 py-2 text-xs transition',
-                            active
-                              ? 'border-violet-300/30 bg-violet-500/15 text-violet-100'
-                              : 'border-white/10 bg-black/20 text-zinc-300 hover:bg-white/[0.06]'
-                          )}
-                        >
-                          {label}
-                        </button>
-                      )
-                    })}
-                  </div>
-
-                  {scenario === 'embeddings' ? (
-                    <LocalEmbeddingWizard onConfigured={props.applyLocalEmbeddingSettings} />
-                  ) : null}
-
-                  {scenarioSettings.provider === 'openai-compatible'
-                    ? renderOpenAICompatibleFields(scenario)
-                    : renderOllamaFields(scenario)}
-
-                  {scenario === 'embeddings' ? (
-                    <div className="mt-4 border-t border-white/10 pt-4">
-                      <label className="block">
-                        <span className="mb-2 block text-sm text-zinc-300">{t('aiSettings.embeddingBatchSize')}</span>
-                        <input
-                          type="number"
-                          min={1}
-                          max={128}
-                          value={props.resolvedAISettings.embeddings.embeddingBatchSize}
-                          onChange={(event) => props.updateEmbeddingBatchSize(event.target.value)}
-                          className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
-                        />
-                        <p className="mt-2 text-xs leading-5 text-zinc-500">{t('aiSettings.embeddingBatchHint')}</p>
-                      </label>
+                    <ChevronDown aria-hidden="true" className={cn('h-4 w-4 shrink-0 text-zinc-500 transition-transform', expanded && 'rotate-180')} />
+                  </button>
+                </h3>
+                <div id={panelId} role="region" aria-labelledby={headingId} hidden={!expanded} className="pb-5">
+                  {scenario !== 'embeddings' ? <p className="mb-4 text-sm leading-6 text-zinc-400">{meta.recommendation}</p> : null}
+                  <fieldset disabled={saving} className="min-w-0">
+                    <legend className="sr-only">{t('aiSettings.connectionType')}</legend>
+                    <div className={cn('mb-4 grid gap-1', scenario === 'embeddings' ? 'grid-cols-3' : 'grid-cols-2')}>
+                      {([
+                        ['openai-compatible', t('aiSettings.modelApi')],
+                        ['ollama', t('aiSettings.localModel')],
+                      ] as Array<[AIProvider, string]>).map(([provider, label]) => <button
+                        key={provider}
+                        type="button"
+                        aria-pressed={!showLocalInstall && settings.provider === provider}
+                        onClick={() => {
+                          if (scenario === 'embeddings') setLocalInstallSelected(false)
+                          props.updateScenarioProvider(scenario, provider)
+                        }}
+                        className={cn('min-h-12 rounded-xl px-2 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60', !showLocalInstall && settings.provider === provider ? 'bg-violet-500/15 text-violet-100' : 'text-zinc-400 hover:bg-white/5')}
+                      >{label}</button>)}
+                      {scenario === 'embeddings' ? <button
+                        type="button"
+                        aria-pressed={showLocalInstall}
+                        onClick={() => setLocalInstallSelected(true)}
+                        className={cn('min-h-12 rounded-xl px-2 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60', showLocalInstall ? 'bg-violet-500/15 text-violet-100' : 'text-zinc-400 hover:bg-white/5')}
+                      >{t('aiSettings.localSetup')}</button> : null}
                     </div>
-                  ) : null}
+                    {scenario === 'embeddings' ? <p className="mb-4 text-sm leading-6 text-zinc-400 [overflow-wrap:anywhere]">
+                      <span className="block">{t(!showLocalInstall && settings.provider === 'openai-compatible' ? 'aiSettings.embeddingApiRecommendation' : 'aiSettings.embeddingLocalRecommendation')}</span>
+                      <span className="block">{meta.recommendation}</span>
+                    </p> : null}
+                    <div hidden={showLocalInstall}>{renderFields(scenario)}</div>
+                    {scenario === 'embeddings' ? <div hidden={!showLocalInstall}>
+                      <p className="flex gap-2 text-sm leading-6 text-amber-200/90">
+                        <TriangleAlert aria-hidden="true" className="mt-1 h-4 w-4 shrink-0" />
+                        <span>{t('aiSettings.local.hardwareRecommendation')}</span>
+                      </p>
+                      <LocalEmbeddingWizard active={showLocalInstall} onConfigured={props.applyLocalEmbeddingSettings} />
+                    </div> : null}
+                    {scenario !== 'rewrite' ? <details className="group mt-4 border-t border-white/10">
+                      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between text-base font-medium text-zinc-200 [&::-webkit-details-marker]:hidden">
+                        {t('aiSettings.advancedOptions')}
+                        <ChevronDown aria-hidden="true" className="h-4 w-4 transition-transform group-open:rotate-180" />
+                      </summary>
+                      <label className="block pb-2">
+                        <span className="mb-1.5 block text-sm text-zinc-300">{t(scenario === 'embeddings' ? 'aiSettings.embeddingBatchSize' : 'aiSettings.parallelism')}</span>
+                        <input
+                          type="number" min={1} max={scenario === 'embeddings' ? 128 : 20}
+                          value={scenario === 'embeddings' ? props.resolvedAISettings.embeddings.embeddingBatchSize : settings.provider === 'openai-compatible' ? props.resolvedAISettings.knowledgeExtraction.openAICompatible.parallelism : props.resolvedAISettings.knowledgeExtraction.ollama.parallelism}
+                          onChange={(event) => {
+                            if (scenario === 'embeddings') props.updateEmbeddingBatchSize(event.target.value)
+                            else props.updateKnowledgeExtractionParallelism(settings.provider, event.target.value)
+                          }}
+                          className={fieldClass}
+                        />
+                      </label>
+                    </details> : null}
+                  </fieldset>
                 </div>
-              )
+              </section>
             })}
           </div>
 

@@ -556,6 +556,7 @@ test('saving AI settings waits for the current full knowledge projection refresh
   await page.getByRole('button', { name: /AI 模型|AI models/ }).click()
 
   const embeddingScenario = page.getByTestId('ai-settings-scenario-embeddings')
+  await embeddingScenario.getByRole('button', { name: /Embedding (模型|model)/ }).click()
   const changedEmbeddingModel = 'nomic-embed-text:settings-refresh'
   const embeddingModelInput = embeddingScenario.getByPlaceholder('nomic-embed-text')
   await embeddingModelInput.fill(changedEmbeddingModel)
