@@ -7,6 +7,7 @@ import {
   BookOpen,
   Check,
   FilePlus2,
+  House,
   LoaderCircle,
   RefreshCw,
   Sparkles,
@@ -14,7 +15,7 @@ import {
   Upload,
   X,
 } from 'lucide-react'
-import { LanguageSwitcher } from '@/components/i18n/language-switcher'
+import { LibraryPageShell, LIBRARY_ACTION_ROW_CLASS_NAME, LIBRARY_PRIMARY_ACTION_CLASS_NAME, LIBRARY_SECONDARY_ACTION_CLASS_NAME } from '@/components/library/LibraryPageShell'
 import { Notice } from '@/components/ui/Notice'
 import { useI18n } from '@/lib/i18n/provider'
 import {
@@ -314,8 +315,8 @@ export function WritingSkillStudio() {
 
   const budgetControls = (
     <div className="space-y-4">
-      <div className="flex min-w-0 items-center justify-between gap-4 rounded-2xl border border-violet-300/15 bg-violet-500/[0.06] px-4 py-3">
-        <span className="shrink-0 text-xs uppercase tracking-[0.16em] text-violet-300/70">{t('writingSkill.currentModel')}</span>
+      <div className="flex min-w-0 items-center justify-between gap-4 border-t border-white/10 py-3">
+        <span className="shrink-0 text-xs text-zinc-500">{t('writingSkill.currentModel')}</span>
         <span className={`min-w-0 text-right text-sm [overflow-wrap:anywhere] ${activeModel ? 'text-zinc-100' : 'text-amber-200'}`}>
           {activeModel?.model || modelError || t('writingSkill.modelUnavailable')}
         </span>
@@ -327,7 +328,7 @@ export function WritingSkillStudio() {
             aria-label={t('writingSkill.contextWindowLabel')}
             value={scanContextWindow}
             onChange={(event) => setScanContextWindow(event.target.value as WritingSkillContextWindow)}
-            className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+            className="min-h-11 w-full rounded-xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
           >
             <option value="32k">{t('writingSkill.contextWindow32k')}</option>
             <option value="64k">{t('writingSkill.contextWindow64k')}</option>
@@ -345,7 +346,7 @@ export function WritingSkillStudio() {
             aria-label={t('writingSkill.totalBudgetLabel')}
             value={scanTotalBudget}
             onChange={(event) => setScanTotalBudget(event.target.value as WritingSkillTotalBudget)}
-            className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+            className="min-h-11 w-full rounded-xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
           >
             <option value="128k">{t('writingSkill.totalBudget128k')}</option>
             <option value="256k">{t('writingSkill.totalBudget256k')}</option>
@@ -371,15 +372,15 @@ export function WritingSkillStudio() {
           {sources.map((source) => {
             const selected = selectedSourceKeys.has(sourceKey(source))
             return (
-              <div key={sourceKey(source)} className={`flex min-w-0 max-w-full items-center gap-3 overflow-hidden rounded-2xl border p-3 transition ${selected ? 'border-violet-300/30 bg-violet-500/10' : 'border-white/8 bg-white/[0.025]'}`}>
+              <div key={sourceKey(source)} className={`flex min-w-0 max-w-full items-center gap-3 overflow-hidden border-b px-1 py-3 transition sm:rounded-xl sm:border sm:p-3 ${selected ? 'border-violet-300/30 bg-violet-500/10' : 'border-white/8 sm:bg-white/[0.025]'}`}>
                 <button
                   type="button"
                   aria-pressed={selected}
                   onClick={() => toggleSource(source)}
-                  className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden text-left"
+                  className="flex min-h-11 min-w-0 flex-1 items-center gap-3 overflow-hidden text-left"
                 >
                   <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border ${selected ? 'border-violet-300/40 bg-violet-400 text-white' : 'border-white/15 text-transparent'}`}>
-                    <Check className="h-3.5 w-3.5" />
+                    <Check className="h-4 w-4" aria-hidden="true" />
                   </span>
                   <span className="min-w-0 flex-1 overflow-hidden">
                     <span className="block max-w-full whitespace-normal text-sm leading-5 text-zinc-100 [overflow-wrap:anywhere]">{source.title}</span>
@@ -394,7 +395,7 @@ export function WritingSkillStudio() {
                     onClick={() => void deleteMaterial(source)}
                     disabled={saving}
                     aria-label={t('writingSkill.materialDeleteAria', { title: source.title })}
-                    className="shrink-0 rounded-xl border border-rose-400/15 p-2 text-rose-200 transition hover:bg-rose-500/10 disabled:opacity-50"
+                    className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl text-rose-200 transition hover:bg-rose-500/10 disabled:opacity-50"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -404,7 +405,7 @@ export function WritingSkillStudio() {
           })}
         </div>
       ) : (
-        <p className="rounded-2xl border border-dashed border-white/10 px-4 py-5 text-sm text-zinc-500">
+        <p className="py-4 text-sm text-zinc-500">
           {uploaded ? t('writingSkill.noUploadedSources') : t('writingSkill.noLibrarySources')}
         </p>
       )}
@@ -412,28 +413,19 @@ export function WritingSkillStudio() {
   )
 
   return (
-    <main className="min-h-screen bg-[#0a0c12] px-4 py-6 text-zinc-100 sm:px-8 sm:py-8">
-      <div className="mx-auto max-w-7xl">
-        <header className="mb-8">
-          <Link href="/library" className="mb-5 inline-flex items-center gap-2 text-sm text-zinc-400 transition hover:text-zinc-100">
-            <ArrowLeft className="h-4 w-4" /> {t('writingSkill.backToLibrary')}
-          </Link>
-          <div className="flex items-center justify-between gap-4">
-            <p className="text-sm uppercase tracking-[0.28em] text-violet-300/60">{t('writingSkill.pageEyebrow')}</p>
-            <LanguageSwitcher />
-          </div>
-          <div className="mt-3 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
-            <div>
-              <h1 className="text-4xl font-semibold tracking-tight">{t('writingSkill.pageTitle')}</h1>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-zinc-400">{t('writingSkill.pageDescription')}</p>
-            </div>
+    <LibraryPageShell title={t('writingSkill.pageTitle')} description={t('writingSkill.pageDescription')}>
+        <div className="mb-6">
+          <div className={LIBRARY_ACTION_ROW_CLASS_NAME}>
+            <Link href="/library" aria-label={t('writingSkill.backToLibrary')} className={LIBRARY_SECONDARY_ACTION_CLASS_NAME}>
+              <House className="h-4 w-4 shrink-0" aria-hidden="true" /> {t('workspace.header.home')}
+            </Link>
             <button
               type="button"
               onClick={() => uploadRef.current?.click()}
               disabled={uploading}
-              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-violet-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-50"
+              className={LIBRARY_PRIMARY_ACTION_CLASS_NAME}
             >
-              {uploading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              {uploading ? <LoaderCircle className="h-4 w-4 shrink-0 motion-safe:animate-spin" aria-hidden="true" /> : <Upload className="h-4 w-4 shrink-0" aria-hidden="true" />}
               {uploading ? t('writingSkill.materialUploading') : t('writingSkill.materialUpload')}
             </button>
           </div>
@@ -448,13 +440,13 @@ export function WritingSkillStudio() {
               event.target.value = ''
             }}
           />
-        </header>
+        </div>
 
         {saveNotice ? <Notice variant="success" className="mb-5">{saveNotice}</Notice> : null}
         {sourceError ? <Notice variant="error" className="mb-5">{sourceError}</Notice> : null}
 
         {studioState.kind === 'running' ? (
-          <section className="rounded-[28px] border border-violet-300/15 bg-violet-500/[0.06] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.3)]">
+          <section className="border-b border-white/10 pb-6 sm:rounded-[24px] sm:border sm:bg-white/[0.04] sm:p-5">
             <div className="flex items-start gap-4">
               <div className="rounded-2xl bg-violet-500/15 p-3 text-violet-200"><LoaderCircle className="h-6 w-6 animate-spin" /></div>
               <div className="min-w-0 flex-1">
@@ -474,7 +466,7 @@ export function WritingSkillStudio() {
             </div>
           </section>
         ) : studioState.kind === 'result' ? (
-          <section className="rounded-[28px] border border-white/8 bg-white/[0.035] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.3)] sm:p-7">
+          <section className="border-b border-white/10 pb-6 sm:rounded-[24px] sm:border sm:bg-white/[0.04] sm:p-5">
             <button type="button" onClick={() => setStudioState({ kind: 'cards' })} className="mb-6 inline-flex items-center gap-2 text-sm text-zinc-400 hover:text-zinc-100">
               <ArrowLeft className="h-4 w-4" /> {t('writingSkill.backToCards')}
             </button>
@@ -567,13 +559,13 @@ export function WritingSkillStudio() {
                 value={refineInstruction}
                 onChange={(event) => setRefineInstruction(event.target.value)}
                 maxLength={300}
-                className="min-h-24 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
+                className="min-h-24 w-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
                 placeholder={t('writingSkill.refinePlaceholder')}
               />
               <span className="mt-2 block text-xs leading-5 text-zinc-500">{t('writingSkill.refineHint')}</span>
             </label>
             <div className="mt-5 flex flex-wrap gap-2">
-              <button type="button" onClick={() => void updateCard(studioState.card)} disabled={saving} className="rounded-2xl bg-violet-500 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50">
+              <button type="button" onClick={() => void updateCard(studioState.card)} disabled={saving} className={LIBRARY_PRIMARY_ACTION_CLASS_NAME}>
                 {saving ? t('writingSkill.saving') : t('writingSkill.saveAndUse')}
               </button>
               <button type="button" onClick={() => void startJob(`/api/writing-skills/${encodeURIComponent(studioState.card.id)}/regenerate`, { scanContextWindow, scanTotalBudget })} className="inline-flex items-center gap-2 rounded-2xl border border-white/10 px-4 py-2.5 text-sm text-zinc-300">
@@ -588,19 +580,19 @@ export function WritingSkillStudio() {
             </div>
           </section>
         ) : studioState.kind === 'error' ? (
-          <section className="space-y-4 rounded-[28px] border border-rose-400/15 bg-rose-500/[0.05] p-6">
+          <section className="space-y-4 border-b border-white/10 pb-6 sm:rounded-[24px] sm:border sm:bg-white/[0.04] sm:p-5">
             <Notice variant="error">{studioState.message}</Notice>
             <button type="button" onClick={() => setStudioState({ kind: 'cards' })} className="rounded-2xl border border-white/10 px-4 py-2.5 text-sm text-zinc-300">{t('writingSkill.tryAgain')}</button>
           </section>
         ) : (
           <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-            <aside className="min-w-0 max-w-full space-y-6 overflow-hidden rounded-[28px] border border-white/8 bg-white/[0.035] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.3)] sm:p-6">
+            <aside className="min-w-0 max-w-full space-y-6 overflow-hidden border-b border-white/10 pb-6 sm:rounded-[24px] sm:border sm:bg-white/[0.04] sm:p-5">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <h2 className="flex items-center gap-2 text-lg font-medium"><BookOpen className="h-5 w-5 text-violet-300" /> {t('writingSkill.sourcesTitle')}</h2>
+                  <h2 className="flex items-center gap-2 text-base font-medium sm:text-lg"><BookOpen className="h-4 w-4 shrink-0 text-violet-300" aria-hidden="true" /> {t('writingSkill.sourcesTitle')}</h2>
                   <p className="mt-2 text-sm leading-6 text-zinc-500">{t('writingSkill.sourcesDescription')}</p>
                 </div>
-                <span className="shrink-0 rounded-full bg-violet-500/10 px-3 py-1 text-xs text-violet-200">{t('writingSkill.selectedSources', { count: selectedSources.length })}</span>
+                <span className="shrink-0 py-1 text-xs text-zinc-500">{t('writingSkill.selectedSources', { count: selectedSources.length })}</span>
               </div>
               {sourcesLoading ? (
                 <p className="flex items-center gap-2 text-sm text-zinc-400"><LoaderCircle className="h-4 w-4 animate-spin" /> {t('writingSkill.sourcesLoading')}</p>
@@ -616,10 +608,10 @@ export function WritingSkillStudio() {
             </aside>
 
             <div className="min-w-0 space-y-6">
-              <section className="min-w-0 overflow-hidden rounded-[28px] border border-white/8 bg-white/[0.035] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.3)] sm:p-6">
+              <section className="min-w-0 overflow-hidden border-b border-white/10 pb-6 sm:rounded-[24px] sm:border sm:bg-white/[0.04] sm:p-5">
                 <div className="mb-5">
-                  <p className="text-xs uppercase tracking-[0.2em] text-violet-300/60">{t('writingSkill.createEyebrow')}</p>
-                  <h2 className="mt-2 text-xl font-medium">{t('writingSkill.createTitle')}</h2>
+                  <p className="text-xs text-zinc-500">{t('writingSkill.createEyebrow')}</p>
+                  <h2 className="mt-2 text-base font-medium sm:text-lg">{t('writingSkill.createTitle')}</h2>
                 </div>
                 <label className="block">
                   <span className="mb-2 block text-sm font-medium text-zinc-200">{t('writingSkill.question')}</span>
@@ -639,15 +631,15 @@ export function WritingSkillStudio() {
                   type="button"
                   onClick={startCreate}
                   disabled={!instruction.trim() || !selectedSources.length}
-                  className="mt-5 inline-flex items-center gap-2 rounded-2xl bg-violet-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-40"
+                  className={`mt-5 ${LIBRARY_PRIMARY_ACTION_CLASS_NAME}`}
                 >
                   <Sparkles className="h-4 w-4" /> {t('writingSkill.start')}
                 </button>
               </section>
 
-              <section className="min-w-0 overflow-hidden rounded-[28px] border border-white/8 bg-white/[0.035] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.3)] sm:p-6">
+              <section className="min-w-0 overflow-hidden border-b border-white/10 pb-6 sm:rounded-[24px] sm:border sm:bg-white/[0.04] sm:p-5">
                 <div className="mb-4 flex items-center justify-between gap-3">
-                  <h2 className="text-lg font-medium">{t('writingSkill.cardsTitle')}</h2>
+                  <h2 className="text-base font-medium sm:text-lg">{t('writingSkill.cardsTitle')}</h2>
                   <span className="text-xs text-zinc-500">{cards.length}</span>
                 </div>
                 {cardsLoading ? (
@@ -659,7 +651,7 @@ export function WritingSkillStudio() {
                         key={card.id}
                         type="button"
                         onClick={() => void loadCardDetail(card.id).then((detail) => setStudioState({ kind: 'result', card: detail })).catch((error) => setStudioState({ kind: 'error', message: error instanceof Error ? error.message : t('writingSkill.loadFailed') }))}
-                        className="min-w-0 max-w-full overflow-hidden rounded-2xl border border-white/8 bg-white/[0.025] p-4 text-left transition hover:border-violet-300/20 hover:bg-white/[0.05]"
+                        className="min-h-11 min-w-0 max-w-full overflow-hidden border-b border-white/8 py-4 text-left transition hover:border-violet-300/20 hover:bg-white/[0.05] sm:rounded-xl sm:border sm:bg-white/[0.025] sm:p-4"
                       >
                         <div className="flex min-w-0 items-start justify-between gap-3">
                           <p className="min-w-0 flex-1 whitespace-normal text-sm font-medium text-zinc-100 [overflow-wrap:anywhere]">{card.title}</p>
@@ -671,8 +663,8 @@ export function WritingSkillStudio() {
                     ))}
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-white/10 px-5 py-8 text-center">
-                    <FilePlus2 className="mx-auto h-6 w-6 text-zinc-600" />
+                  <div className="py-6 text-center">
+                    <FilePlus2 className="mx-auto h-4 w-4 text-zinc-600" aria-hidden="true" />
                     <p className="mt-3 text-sm text-zinc-500">{t('writingSkill.noExisting')}</p>
                   </div>
                 )}
@@ -680,7 +672,6 @@ export function WritingSkillStudio() {
             </div>
           </div>
         )}
-      </div>
-    </main>
+    </LibraryPageShell>
   )
 }

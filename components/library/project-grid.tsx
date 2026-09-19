@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { LoaderCircle, Sparkles } from 'lucide-react'
+import { LoaderCircle, Sparkles, Upload } from 'lucide-react'
+import { LIBRARY_ACTION_ROW_CLASS_NAME, LIBRARY_PRIMARY_ACTION_CLASS_NAME, LIBRARY_SECONDARY_ACTION_CLASS_NAME } from './LibraryPageShell'
 import { BookMetadataDialog } from './BookMetadataDialog'
 import { ProjectCard } from './project-card'
 import { Notice, type NoticeVariant } from '@/components/ui/Notice'
@@ -347,19 +348,20 @@ export function ProjectGrid() {
             {t('library.restoreLoading')}
           </div>
         ) : null}
-        <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+        <div className={LIBRARY_ACTION_ROW_CLASS_NAME}>
           <Link
             href="/writing-skills"
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-violet-300/20 bg-violet-500/12 px-4 text-sm font-medium text-violet-100 transition hover:bg-violet-500/22"
+            className={LIBRARY_SECONDARY_ACTION_CLASS_NAME}
           >
-            <Sparkles className="h-4 w-4" aria-hidden="true" /> {t('library.writingSkillsButton')}
+            <Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" /> {t('library.writingSkillsButton')}
           </Link>
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
             disabled={isImporting || workspaceHandoffPending || editingNovel !== null}
-            className="min-h-11 rounded-2xl border border-indigo-400/20 bg-indigo-500/90 px-4 text-sm font-medium text-white shadow-[0_12px_30px_rgba(99,102,241,0.28)] transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+            className={LIBRARY_PRIMARY_ACTION_CLASS_NAME}
           >
+            {isImporting ? <LoaderCircle className="h-4 w-4 shrink-0 motion-safe:animate-spin" aria-hidden="true" /> : <Upload className="h-4 w-4 shrink-0" aria-hidden="true" />}
             {importFeedback.status === 'uploading'
               ? t('library.uploading')
               : importFeedback.status === 'processing'
