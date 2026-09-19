@@ -20,6 +20,9 @@ const runtimeDataTraceExcludes = [
 ];
 
 const nextConfig: NextConfig = {
+  // The draggable DevTools badge can release an expired pointer capture on touch
+  // devices. Keep it out of the reader UI; runtime error overlays still work.
+  devIndicators: false,
   serverExternalPackages: ['@lancedb/lancedb'],
   outputFileTracingExcludes: {
     '/*': [

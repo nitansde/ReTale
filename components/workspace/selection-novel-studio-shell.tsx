@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import { useDesktopWorkspaceLayout } from '@/components/workspace/use-desktop-workspace-layout'
 import { WorkspaceReaderToolbar } from '@/components/workspace/WorkspaceReaderToolbar'
+import { WorkspaceRewriteGuide } from '@/components/workspace/WorkspaceRewriteGuide'
 import { BookSearchDialog } from '@/components/workspace/BookSearchDialog'
 import StarterKit from '@tiptap/starter-kit'
 import {
@@ -418,7 +419,10 @@ export function SelectionNovelStudio() {
           mobileReaderAction={!desktop && activeWorkspaceSelection.kind === 'chapter' ? (
             centerPaneView === 'graph'
               ? <button type="button" onClick={() => setCenterPaneView('body')} className="min-h-12 flex-1 rounded-xl text-sm text-violet-200">{t('workspace.centerPane.bodyTab')}</button>
-              : <WorkspaceReaderToolbar compact isEditing={core.readerMode.isEditing} isSaving={core.readerMode.isSaving} onStartEditing={core.readerMode.startEditing} onFinishEditing={core.readerMode.finishEditing} />
+              : <>
+                  {!core.readerMode.isEditing ? <WorkspaceRewriteGuide /> : null}
+                  <WorkspaceReaderToolbar compact isEditing={core.readerMode.isEditing} isSaving={core.readerMode.isSaving} onStartEditing={core.readerMode.startEditing} onFinishEditing={core.readerMode.finishEditing} />
+                </>
           ) : null}
           onOpenChapters={() => setLeftPanelOpen(true)}
           onOpenContext={() => setReferencePanelOpen(true)}
