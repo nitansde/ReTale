@@ -7,6 +7,7 @@ import { GraphFlowCanvas } from '@/components/graph/graph-flow-canvas'
 import { GraphInspector } from '@/components/graph/graph-inspector'
 import type { ChapterGraphContextData, GraphContextSourceMeta, GraphReviewControls, GraphSelection } from '@/components/graph/types'
 import { useI18n } from '@/lib/i18n/provider'
+import { formatContextWarning } from '@/lib/context-warnings'
 import { cn } from '@/lib/utils'
 import type { GraphEdge, GraphNode } from '@/lib/server/graph-types'
 import type { Chapter } from '@/lib/types'
@@ -108,7 +109,7 @@ export function ChapterGraphBrowser(props: {
   onJumpToEvidenceSource?: (item: ChapterGraphContextData['lanceEvidence'][number]) => void
   canJumpToEvidenceSource?: (item: ChapterGraphContextData['lanceEvidence'][number]) => boolean
 }) {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
   const [evidenceOpen, setEvidenceOpen] = useState(true)
   const visibleGraph = props.data?.graphContext ?? null
   const nodeById = useMemo(() => new Map((visibleGraph?.nodes ?? []).map((node) => [node.id, node] as const)), [visibleGraph?.nodes])
@@ -117,7 +118,7 @@ export function ChapterGraphBrowser(props: {
   const chapterTitle = props.chapter.title
   const sourceMeta = props.data?.sourceMeta ?? props.sourceMeta
   const inheritedFromParent = sourceMeta?.mode === 'inherited-parent'
-  const warningList = props.data?.warnings ?? visibleGraph?.warnings ?? []
+  const warningList = (props.data?.warnings ?? visibleGraph?.warnings ?? []).map((warning) => formatContextWarning(warning, locale))
   const lanceEvidence = props.data?.lanceEvidence ?? []
 
   const evidenceOpenResolved = selectedEdge?.evidenceQuote || selectedEdge?.evidenceLocation ? true : evidenceOpen

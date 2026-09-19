@@ -270,6 +270,16 @@ export function normalizeAISettings(value?: unknown): AISettings {
   }
 }
 
+export function isAIScenarioConfigured(settings: AIScenarioSettings): boolean {
+  if (settings.provider === 'ollama') {
+    const { configured, baseUrl, model } = settings.ollama
+    return Boolean(configured && baseUrl.trim() && model.trim())
+  }
+
+  const { configured, baseUrl, model, apiKey, apiKeyConfigured } = settings.openAICompatible
+  return Boolean(configured && baseUrl.trim() && model.trim() && (apiKey.trim() || apiKeyConfigured))
+}
+
 export function sanitizeAISettingsForClient(settings: AISettings): AISettings {
   const normalized = normalizeAISettings(settings)
 

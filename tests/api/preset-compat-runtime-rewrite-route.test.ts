@@ -462,6 +462,23 @@ afterEach(() => {
 })
 
 describe('preset compat rewrite route runtime', () => {
+  it('uses only the current book preset override, including an explicit opt-out', async () => {
+    const library = createCreativeLibrary()
+    library.presets['book-preset'] = { ...library.presets['rewrite-preset'], id: 'book-preset', name: 'Book preset' }
+    library.novelRewritePresetIds = { 'book-a': 'book-preset', 'book-b': null }
+    vi.doMock('@/lib/server/ai-settings', () => ({ loadStoredAISettings: () => createAiSettings('openai-compatible') }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({ loadStoredPresetCompatLibrary: () => library }))
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ choices: [{ message: { content: JSON.stringify({ result: 'RAW OUTPUT' }) } }] })))
+    const { POST } = await import('@/app/api/rewrite/route')
+    for (const [novelId, activePresetId] of [['book-a', 'book-preset'], ['book-b', null], ['book-c', 'rewrite-preset']]) {
+      const response = await POST(createRequest('rewrite', { novelId, stream: false }))
+      expect(response.status).toBe(200)
+      const payload = await response.json()
+      expect(payload.presetCompat.runtimeSnapshot.activePresetId).toBe(activePresetId)
+    }
+    expect(library.surfaceBindings.rewrite.presetId).toBe('rewrite-preset')
+  })
+
   it.each(REWRITE_ROUTE_RUNTIME_SURFACES)('applies runtime prompt rules, regexes, and sampler options for %s', async (surfaceId) => {
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => createAiSettings('openai-compatible'),

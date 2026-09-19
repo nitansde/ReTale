@@ -454,6 +454,7 @@ type NovelStore = PersistedNovelState & {
   importPresetCompatPreset: (params: Omit<ImportPresetCompatPayloadParams, 'kind'>) => Promise<PresetCompatImportResult>
   importPresetCompatRegexBundle: (params: Omit<ImportPresetCompatPayloadParams, 'kind'>) => Promise<PresetCompatImportResult>
   bindPresetCompatPresetToSurface: (surfaceId: PresetCompatSurfaceId, presetId: string | null) => void
+  bindPresetCompatPresetToNovel: (novelId: string, presetId: string | null) => void
   deletePresetCompatPreset: (presetId: string) => void
   attachPresetCompatStandaloneRegex: (presetId: string, regexId: string) => void
   detachPresetCompatStandaloneRegex: (presetId: string, regexId: string) => void
@@ -1065,6 +1066,20 @@ export const useNovelStore = create<NovelStore>((set, get) => {
       presetCompatLibraryError: '',
     }
   }),
+  bindPresetCompatPresetToNovel: (novelId, presetId) => set((state) => {
+    if (!novelId.trim()) return state
+    if (presetId !== null && !state.presetCompatLibrary.presets[presetId]) {
+      return { presetCompatLibraryError: 'preset_not_found' }
+    }
+    return {
+      presetCompatLibrary: {
+        ...state.presetCompatLibrary,
+        novelRewritePresetIds: { ...state.presetCompatLibrary.novelRewritePresetIds, [novelId]: presetId },
+      },
+      presetCompatLibraryDirty: true,
+      presetCompatLibraryError: '',
+    }
+  }),
   deletePresetCompatPreset: (presetId) => set((state) => {
     const preset = state.presetCompatLibrary.presets[presetId]
     if (!preset) {
@@ -1094,6 +1109,7 @@ export const useNovelStore = create<NovelStore>((set, get) => {
         ...state.presetCompatLibrary,
         presets: nextPresets,
         surfaceBindings: nextSurfaceBindings,
+        novelRewritePresetIds: Object.fromEntries(Object.entries(state.presetCompatLibrary.novelRewritePresetIds ?? {}).map(([novelId, id]) => [novelId, id === presetId ? null : id])),
       },
       presetCompatLibraryDirty: true,
       presetCompatLibraryError: '',

@@ -413,6 +413,9 @@ function normalizePresetCompatLibrary(value: unknown): PresetCompatLibrary {
     presets: normalizePresets(value.presets),
     standaloneRegexes: normalizeStandaloneRegexes(value.standaloneRegexes),
     surfaceBindings: normalizeSurfaceBindings(value.surfaceBindings),
+    novelRewritePresetIds: isRecord(value.novelRewritePresetIds)
+      ? Object.fromEntries(Object.entries(value.novelRewritePresetIds).filter((entry): entry is [string, string | null] => Boolean(entry[0].trim()) && (entry[1] === null || typeof entry[1] === 'string')))
+      : {},
     builtinSystemPrompts: normalizeBuiltinSystemPrompts(value.builtinSystemPrompts),
     lastImportedAt: normalizeNullableString(value.lastImportedAt),
     lastExportedAt: normalizeNullableString(value.lastExportedAt),

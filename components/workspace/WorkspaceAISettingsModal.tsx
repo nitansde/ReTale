@@ -16,6 +16,7 @@ import type { AIProvider, AISettings, AIScenarioKey } from '@/lib/types'
 
 type WorkspaceAISettingsModalProps = {
   open: boolean
+  initialSection?: 'appearance' | 'models'
   onClose: () => void
   onSave: () => Promise<void> | void
   scenarioStatusLabels: string[]
@@ -39,7 +40,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
   const { locale, t } = useI18n()
   const metaByScenario = getAIScenarioMeta(locale)
   const [saving, setSaving] = useState(false)
-  const [section, setSection] = useState<'appearance' | 'models'>('appearance')
+  const [section, setSection] = useState<'appearance' | 'models'>(props.initialSection ?? 'appearance')
 
   if (!props.open) return null
 

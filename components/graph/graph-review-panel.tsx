@@ -6,6 +6,7 @@ import { GraphEvidenceDrawer } from '@/components/graph/graph-evidence-drawer'
 import { GraphFlowCanvas } from '@/components/graph/graph-flow-canvas'
 import { GraphInspector } from '@/components/graph/graph-inspector'
 import { useI18n } from '@/lib/i18n/provider'
+import { formatContextWarning } from '@/lib/context-warnings'
 import type { GraphEdge, GraphNode } from '@/lib/server/graph-types'
 
 export function GraphReviewPanel(props: {
@@ -40,7 +41,7 @@ export function GraphReviewPanel(props: {
   canJumpToEvidenceSource: (item: GenerationContextEvidence) => boolean
   onRefresh: () => void
 }) {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
   const nodeById = new Map(props.graphNodes.map((node) => [node.id, node] as const))
   const selectedEdge = props.selection?.type === 'edge' ? props.selection.edge : null
   const visiblePromptBlocks = getVisibleAdvancedContextPromptBlocks(props.context.promptBlocks)
@@ -76,7 +77,7 @@ export function GraphReviewPanel(props: {
       {props.context.warnings.length ? (
         <div className="mb-4 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
           {props.context.warnings.map((warning) => (
-            <p key={warning}>{warning}</p>
+            <p key={warning}>{formatContextWarning(warning, locale)}</p>
           ))}
         </div>
       ) : null}

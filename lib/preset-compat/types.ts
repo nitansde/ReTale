@@ -302,6 +302,7 @@ export type PresetCompatLibrary = {
   presets: Record<string, PresetCompatPresetRecord>
   standaloneRegexes: Record<string, PresetCompatRegexRecord>
   surfaceBindings: Record<PresetCompatSurfaceId, PresetCompatSurfaceBinding>
+  novelRewritePresetIds?: Record<string, string | null>
   builtinSystemPrompts: Record<PresetCompatCreativeSurfaceId, PresetCompatBuiltinSystemPrompt>
   lastImportedAt: string | null
   lastExportedAt: string | null

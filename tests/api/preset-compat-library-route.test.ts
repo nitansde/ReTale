@@ -130,7 +130,9 @@ describe('preset compat library route', () => {
       createdAt: '2026-05-15T00:00:00.000Z',
       updatedAt: '2026-05-15T00:00:00.000Z',
     }
+    library.novelRewritePresetIds = { 'book-a': 'preset-a', 'book-b': null }
     const saved = await saveStoredPresetCompatLibrary(library)
+    expect(saved.novelRewritePresetIds).toEqual({ 'book-a': 'preset-a', 'book-b': null })
 
     vi.resetModules()
     const { GET } = await import('@/app/api/settings/preset-compat/route')

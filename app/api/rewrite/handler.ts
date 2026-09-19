@@ -1150,6 +1150,7 @@ async function handleRewriteBody(
     promptBlocks: readonly GenerationContextBlock[] | null,
   ) => applyPresetCompatCreativeRuntime({
     surfaceId: runtimeSurfaceId,
+    novelId: typeof body.novelId === 'string' ? body.novelId : null,
     providerDefaults: {
       provider: rewriteProvider,
       openAICompatible: {

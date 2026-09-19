@@ -9,6 +9,9 @@ import { EditorContent, useEditor } from '@tiptap/react'
 import { useDesktopWorkspaceLayout } from '@/components/workspace/use-desktop-workspace-layout'
 import { WorkspaceReaderToolbar } from '@/components/workspace/WorkspaceReaderToolbar'
 import { WorkspaceRewriteGuide } from '@/components/workspace/WorkspaceRewriteGuide'
+import { WorkspaceAISetupPrompt } from '@/components/workspace/WorkspaceAISetupPrompt'
+import { WorkspaceContextPresetSelect } from '@/components/workspace/WorkspaceContextPresetSelect'
+import { ContextWarningButton } from '@/components/graph/context-warning-button'
 import { BookSearchDialog } from '@/components/workspace/BookSearchDialog'
 import StarterKit from '@tiptap/starter-kit'
 import {
@@ -63,7 +66,7 @@ import {
   toChapterTimelineSelection,
   writeWorkspaceSelectionToSearchParams,
 } from '@/components/workspace/workspace-selection'
-import { normalizeAISettings } from '@/lib/ai-settings'
+import { isAIScenarioConfigured, normalizeAISettings } from '@/lib/ai-settings'
 import { useI18n } from '@/lib/i18n/provider'
 import type { PresetCompatSurfaceId } from '@/lib/preset-compat/types'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
@@ -230,6 +233,7 @@ export function selectSelectionNovelStudioStore(state: NovelStore) {
     saveAISettings: state.saveAISettings,
     loadPresetCompatLibrary: state.loadPresetCompatLibrary,
     savePresetCompatLibrary: state.savePresetCompatLibrary,
+    presetCompatLibraryLoading: state.presetCompatLibraryLoading,
     rebuildStoryKnowledge: state.rebuildStoryKnowledge,
     rebuildStoryRetrievalIndex: state.rebuildStoryRetrievalIndex,
     pauseStoryKnowledgeRebuild: state.pauseStoryKnowledgeRebuild,
@@ -259,7 +263,7 @@ export function SelectionNovelStudio() {
   const {
     loadFromBackend, saveToBackend, deleteNovelFromBackend, reconcileNovelDeletionFromBackend, isNovelDeletionPending, beginNovelDeletion, rollbackNovelDeletion, setNovelDeletionPending, reconcileNovelDeletion, backendLoaded, currentNovelId, localNovels, localChapters, currentChapterId,
     setCurrentChapterId, updateChapterContent, createNewChapter, deleteChapter, deleteNovel, aiSettings, setAISettings,
-    saveAISettings, loadPresetCompatLibrary, savePresetCompatLibrary, rebuildStoryKnowledge, rebuildStoryRetrievalIndex,
+    saveAISettings, loadPresetCompatLibrary, savePresetCompatLibrary, presetCompatLibraryLoading, rebuildStoryKnowledge, rebuildStoryRetrievalIndex,
     pauseStoryKnowledgeRebuild, abortStoryKnowledgeRebuild, deleteStoryKnowledgeGraph, deleteStoryHanlpCache,
     deleteStoryExtractionCache, deleteStoryEmbeddingCache, refreshKnowledgeProjection, setPresetCompatSessionPhase,
     clearPresetCompatSessionStateForSelection, resetPresetCompatSessionStateForSelection, presetCompatSessionState,
@@ -323,6 +327,22 @@ export function SelectionNovelStudio() {
     && activeContinueBlockRewriteContext?.variant === 'continue'
   const desktop = useDesktopWorkspaceLayout()
   const [searchNovelId, setSearchNovelId] = useState<string | null>(null)
+  const [settingsInitialSection, setSettingsInitialSection] = useState<'appearance' | 'models'>('appearance')
+  const rewriteModelConfigured = isAIScenarioConfigured(resolvedAISettings.rewrite)
+  const openAIModelSettings = () => {
+    setSettingsInitialSection('models')
+    setSettingsOpen(true)
+  }
+  const clearChapterSelection = () => {
+    window.getSelection()?.removeAllRanges()
+    core.setSelectionText('')
+    core.setToolbarPos(null)
+  }
+  const chapterSelectionActions = rewriteModelConfigured ? selectionActions : (
+    <div className={desktop ? 'mb-3' : undefined}>
+      <WorkspaceAISetupPrompt onOpenSettings={openAIModelSettings} onClearSelection={selectionText.trim() ? clearChapterSelection : undefined} />
+    </div>
+  )
   const activeContextTokenEstimate = useMemo(() => generationContext
     ? resolveActiveGenerationContextTokenEstimate({
         blocks: generationContext.promptBlocks,
@@ -415,12 +435,12 @@ export function SelectionNovelStudio() {
           }}
           hideMobileToolbar={activeWorkspaceSelection.kind === 'roleplay_session'}
           onOpenGraph={activeWorkspaceSelection.kind === 'chapter' ? () => setCenterPaneView('graph') : undefined}
-          mobileSelectionActions={!desktop && !core.readerMode.isEditing && activeWorkspaceSelection.kind === 'chapter' && centerPaneView === 'body' && selectionText.trim() ? selectionActions : null}
+          mobileSelectionActions={!desktop && !core.readerMode.isEditing && activeWorkspaceSelection.kind === 'chapter' && centerPaneView === 'body' && selectionText.trim() ? chapterSelectionActions : null}
           mobileReaderAction={!desktop && activeWorkspaceSelection.kind === 'chapter' ? (
             centerPaneView === 'graph'
               ? <button type="button" onClick={() => setCenterPaneView('body')} className="min-h-12 flex-1 rounded-xl text-sm text-violet-200">{t('workspace.centerPane.bodyTab')}</button>
               : <>
-                  {!core.readerMode.isEditing ? <WorkspaceRewriteGuide /> : null}
+                  {!core.readerMode.isEditing ? <WorkspaceRewriteGuide modelConfigured={rewriteModelConfigured} provider={resolvedAISettings.rewrite.provider} onOpenSettings={openAIModelSettings} /> : null}
                   <WorkspaceReaderToolbar compact isEditing={core.readerMode.isEditing} isSaving={core.readerMode.isSaving} onStartEditing={core.readerMode.startEditing} onFinishEditing={core.readerMode.finishEditing} />
                 </>
           ) : null}
@@ -430,7 +450,7 @@ export function SelectionNovelStudio() {
           onOpenPresets={() => {
             setPresetCompatLibraryOpen(true)
           }}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={() => { setSettingsInitialSection('appearance'); setSettingsOpen(true) }}
           onDeleteNovel={() => { void handleDeleteNovel() }}
           onBackToLibrary={async () => {
             if (await saveWorkspaceBeforeNavigation()) router.push('/library')
@@ -476,7 +496,7 @@ export function SelectionNovelStudio() {
                   onStartEditing={core.readerMode.startEditing}
                   onFinishEditing={core.readerMode.finishEditing}
                 /> : null}
-                {desktop ? selectionActions : null}
+                {desktop ? chapterSelectionActions : null}
                 <div className="min-h-[62vh] bg-transparent shadow-none sm:rounded-[28px] sm:border sm:border-white/8 sm:bg-[#0b0d12] sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                   <EditorContent editor={editor} />
                 </div>
@@ -874,7 +894,7 @@ export function SelectionNovelStudio() {
         </div>
       </div>
 
-      {desktop && activeWorkspaceSelection.kind === 'chapter' && centerPaneView === 'body' && toolbarPos && selectionText && !activeMode ? (
+      {desktop && rewriteModelConfigured && activeWorkspaceSelection.kind === 'chapter' && centerPaneView === 'body' && toolbarPos && selectionText && !activeMode ? (
         <div
           ref={toolbarRef}
           className="pointer-events-none fixed z-40"
@@ -918,6 +938,7 @@ export function SelectionNovelStudio() {
       {settingsOpen ? (
         <WorkspaceAISettingsModal
           open
+          initialSection={settingsInitialSection}
           onClose={() => setSettingsOpen(false)}
           onSave={saveSettings}
           scenarioStatusLabels={scenarioStatusLabels}
@@ -985,7 +1006,7 @@ export function SelectionNovelStudio() {
           className="mx-auto max-w-3xl sm:mb-6 sm:rounded-[24px]"
           footer={activeMode === 'rewrite' ? (
             <div className="flex flex-wrap items-center gap-2" data-testid="rewrite-actions">
-              <button onClick={handleRewrite} disabled={rewriteFlow.loading || saveContinueBlockPending} className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-violet-500 px-4 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60">
+              <button onClick={handleRewrite} disabled={rewriteFlow.loading || saveContinueBlockPending || presetCompatLibraryLoading} className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-violet-500 px-4 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60">
                 {rewriteFlow.loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {t('workspace.shell.generateVersion')}
               </button>
               {rewriteFlow.loading && rewriteFlow.jobId ? <button onClick={handleAbortRewriteGeneration} className="min-h-11 rounded-xl px-3 text-sm text-rose-200">{t('workspace.action.rewriteAbortedToast')}</button> : null}
@@ -1119,35 +1140,39 @@ export function SelectionNovelStudio() {
 
                 {generationContext && activeGraphContext ? (
                   <div className="border-b border-white/10 py-3">
-                    <button
-                      type="button"
-                      data-testid="workspace-context-panel-toggle"
-                      aria-expanded={contextPanelOpen}
-                      onClick={() => setContextPanelOpen((current) => !current)}
-                      className="flex min-h-11 w-full items-center justify-between gap-3 text-left transition hover:text-white"
-                    >
-                      <div>
-                        <p className="text-sm text-zinc-300">{t('workspace.shell.advancedContext')}</p>
-                        <p className="mt-1 hidden text-sm text-zinc-400 lg:block">
-                          {t(isContinueBlockContinuation
-                            ? 'workspace.shell.advancedContinuationContextDescription'
-                            : 'workspace.shell.advancedContextDescription')}
-                        </p>
-                        <div className="mt-2 hidden flex-wrap gap-2 text-[11px] text-zinc-400 lg:flex">
-                          <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.seedEntitiesCount', { count: activeSeedEntityCount })}</span>
-                          <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.relationsCount', { count: activeGraphEdgeCount })}</span>
-                          <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.evidenceCount', { count: activeEvidenceCount })}</span>
-                          <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.promptBlocksCount', { count: activePromptBlockCount })}</span>
+                    <div className="flex items-start gap-1">
+                      <button
+                        type="button"
+                        data-testid="workspace-context-panel-toggle"
+                        aria-expanded={contextPanelOpen}
+                        onClick={() => setContextPanelOpen((current) => !current)}
+                        className="flex min-h-11 min-w-0 flex-1 items-center justify-between gap-3 text-left transition hover:text-white"
+                      >
+                        <div>
+                          <p className="text-sm text-zinc-300">{t('workspace.shell.advancedContext')}</p>
+                          <p className="mt-1 hidden text-sm text-zinc-400 lg:block">
+                            {t(isContinueBlockContinuation
+                              ? 'workspace.shell.advancedContinuationContextDescription'
+                              : 'workspace.shell.advancedContextDescription')}
+                          </p>
+                          <div className="mt-2 hidden flex-wrap gap-2 text-[11px] text-zinc-400 lg:flex">
+                            <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.seedEntitiesCount', { count: activeSeedEntityCount })}</span>
+                            <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.relationsCount', { count: activeGraphEdgeCount })}</span>
+                            <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.evidenceCount', { count: activeEvidenceCount })}</span>
+                            <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.promptBlocksCount', { count: activePromptBlockCount })}</span>
+                          </div>
                         </div>
-                      </div>
-                      <span className="inline-flex items-center gap-2 py-1.5 text-xs text-zinc-400">
-                        {contextPanelOpen ? t('workspace.shell.collapse') : t('workspace.shell.expand')}
-                        <ChevronDown className={cn('h-4 w-4 transition', contextPanelOpen && 'rotate-180')} />
-                      </span>
-                    </button>
+                        <span className="inline-flex items-center gap-2 py-1.5 text-xs text-zinc-400">
+                          {contextPanelOpen ? t('workspace.shell.collapse') : t('workspace.shell.expand')}
+                          <ChevronDown className={cn('h-4 w-4 transition', contextPanelOpen && 'rotate-180')} />
+                        </span>
+                      </button>
+                      <ContextWarningButton warnings={[...generationContext.warnings, ...activeGraphContext.warnings]} overview={knowledgeStatusOverview} />
+                    </div>
 
                     {contextPanelOpen ? (
                       <div className="pt-3" data-testid="workspace-context-panel">
+                        {currentNovelId ? <WorkspaceContextPresetSelect key={currentNovelId} novelId={currentNovelId} disabled={rewriteFlow.loading || saveContinueBlockPending} onOpenLibrary={() => setPresetCompatLibraryOpen(true)} /> : null}
                         <GraphReviewPanel
                           context={{
                             ...generationContext,

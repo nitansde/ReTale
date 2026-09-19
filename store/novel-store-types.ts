@@ -315,6 +315,7 @@ export type NovelStore = PersistedNovelState & {
   importPresetCompatPreset: (params: Omit<ImportPresetCompatPayloadParams, 'kind'>) => Promise<PresetCompatImportResult>
   importPresetCompatRegexBundle: (params: Omit<ImportPresetCompatPayloadParams, 'kind'>) => Promise<PresetCompatImportResult>
   bindPresetCompatPresetToSurface: (surfaceId: PresetCompatSurfaceId, presetId: string | null) => void
+  bindPresetCompatPresetToNovel: (novelId: string, presetId: string | null) => void
   deletePresetCompatPreset: (presetId: string) => void
   attachPresetCompatStandaloneRegex: (presetId: string, regexId: string) => void
   detachPresetCompatStandaloneRegex: (presetId: string, regexId: string) => void

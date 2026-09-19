@@ -18,6 +18,7 @@ import {
   type PresetCompatRuntimeMetadata,
 } from '@/lib/preset-compat/runtime-integration'
 import { loadStoredPresetCompatLibrary } from '@/lib/server/preset-compat-library'
+import { withNovelRewritePreset } from '@/lib/preset-compat/novel-preset'
 
 export type PresetCompatCreativeRuntime = {
   resolvedRuntime: PresetCompatResolvedRuntime
@@ -52,12 +53,13 @@ function hasActiveAssistantOutputRegex(rules: readonly PresetCompatRegexRecord[]
 
 export function applyPresetCompatCreativeRuntime(params: {
   surfaceId: PresetCompatSurfaceId
+  novelId?: string | null
   providerDefaults: PresetCompatRuntimeProviderDefaults
   systemPrompt: string
   userPrompt: string
   promptRuleRuntimeContext?: PresetCompatPromptRuleRuntimeContext
 }) : PresetCompatCreativeRuntime {
-  const library = loadStoredPresetCompatLibrary()
+  const library = withNovelRewritePreset(loadStoredPresetCompatLibrary(), params.novelId)
   const resolvedRuntime = resolvePresetCompatRuntime({
     library,
     surfaceId: params.surfaceId,
