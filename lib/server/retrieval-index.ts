@@ -1085,11 +1085,11 @@ async function buildRetrievalEmbeddingPlan(params: {
   return plannedRows
 }
 
-async function embedRetrievalQuery(query: string) {
+async function embedRetrievalQuery(query: string, signal?: AbortSignal) {
   const settings = loadStoredAISettings().embeddings
   const result = settings.provider === 'openai-compatible'
-    ? await embedTextsWithOpenAICompatible(query, settings.openAICompatible, { inputType: 'query' })
-    : await embedTextsWithOllama(query, settings.ollama)
+    ? await embedTextsWithOpenAICompatible(query, settings.openAICompatible, { inputType: 'query', ...(signal ? { signal } : {}) })
+    : await embedTextsWithOllama(query, settings.ollama, ...(signal ? [{ signal }] : []))
   if (!result.enabled || !result.embeddings?.[0]) {
     throw new Error(result.error || 'Failed to generate LanceDB query embedding')
   }
@@ -2749,6 +2749,76 @@ export async function deleteBranchRetrievalIndex(novelId: string, branchId: stri
 
 export async function deleteBranchRetrievalIndexFromChapter(novelId: string, branchId: string, _fromChapterNo: number) {
   await runWithNovelDatabaseAccess(novelId, () => deleteBranchRetrievalIndex(novelId, branchId))
+}
+
+async function openBookSearchTables(novelId: string, branchId: string) {
+  const indexes = getActiveBranchTableRows(branchId)
+    .filter((row) => branchTableNameBelongsToBranch(branchId, row.tableName))
+  const tables: Array<{ table: lancedb.Table; dimension: number }> = []
+  if (!indexes.length) return tables
+  const database = await getDatabase(novelId)
+  const names = new Set(await database.tableNames())
+  const settings = loadStoredAISettings().embeddings
+  for (const index of indexes) {
+    if (!names.has(index.tableName)) continue
+    const table = await database.openTable(index.tableName)
+    const [sample] = await table.query().where("sourceType = 'text_span'").limit(1).toArray() as RetrievalDocRow[]
+    // Different models are not comparable, even at equal dimensions.
+    if (!sample || sample.embeddingProvider !== settings.provider
+      || sample.embeddingModel !== getEmbeddingModel(settings)
+      || !isUsableStoredVector(sample.vector)) continue
+    tables.push({ table, dimension: sample.embeddingDimension })
+  }
+  return tables
+}
+
+export async function hasLanceBookTextEmbeddings(novelId: string, branchId: string) {
+  return runWithNovelDatabaseAccess(novelId, async () => (await openBookSearchTables(novelId, branchId)).length > 0)
+}
+
+// Reader search uses only existing original-text vectors, including chapter-range
+// indexes. It must never build an index as a side effect of a search request.
+export async function searchLanceBookText(params: {
+  novelId: string
+  branchId: string
+  query: string
+  limit: number
+  signal?: AbortSignal
+}): Promise<{ available: boolean; matches: LanceEvidenceMatch[] }> {
+  return runWithNovelDatabaseAccess(params.novelId, async () => {
+    const tables = await openBookSearchTables(params.novelId, params.branchId)
+    let queryVector: number[] | undefined
+    let available = false
+    const matches = new Map<string, LanceEvidenceMatch>()
+    for (const { table, dimension } of tables) {
+      queryVector ??= await embedRetrievalQuery(params.query, AbortSignal.any([
+        AbortSignal.timeout(15_000), ...(params.signal ? [params.signal] : []),
+      ]))
+      if (dimension !== queryVector.length) continue
+      const rows = await table.query()
+        .where("sourceType = 'text_span'")
+        .nearestTo(queryVector)
+        .column('vector')
+        .distanceType('l2')
+        .nprobes(LANCEDB_VECTOR_INDEX_NPROBES)
+        .limit(params.limit)
+        .toArray() as RetrievalDocSearchRow[]
+      available = true
+      for (const row of rows) {
+        if (row.branchId !== params.branchId || !row.chapterId) continue
+        const score = 1 / (1 + Math.max(0, row._distance ?? Infinity))
+        if ((matches.get(row.id)?.score ?? -Infinity) >= score) continue
+        matches.set(row.id, {
+          id: row.id, sourceId: row.sourceId, sourceType: row.sourceType,
+          chapterId: row.chapterId, chapterNo: row.chapterNo,
+          lineStart: row.lineStart >= 0 ? row.lineStart : null,
+          lineEnd: row.lineEnd >= 0 ? row.lineEnd : null,
+          title: row.title, sourceLabel: row.sourceLabel, text: row.text, score,
+        })
+      }
+    }
+    return { available, matches: [...matches.values()].sort((a, b) => b.score - a.score).slice(0, params.limit) }
+  })
 }
 
 export async function searchLanceEvidence(params: {

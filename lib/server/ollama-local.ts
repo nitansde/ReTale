@@ -1454,14 +1454,14 @@ async function getOllamaRewriteConfig(configOverride?: Partial<OllamaProviderSet
   )
 }
 
-async function getOllamaEmbeddingConfig(configOverride?: Partial<OllamaProviderSettings>): Promise<OllamaConfig> {
+async function getOllamaEmbeddingConfig(configOverride?: Partial<OllamaProviderSettings>, signal?: AbortSignal): Promise<OllamaConfig> {
   const stored = getStoredOllamaSettings('embeddings')
   const baseUrl = configOverride?.baseUrl?.trim() || stored.baseUrl
   const timeoutMs = stored.timeoutMs
 
   let detectedModels: OllamaModelOption[] = []
   try {
-    const available = await listAvailableOllamaModels(baseUrl, 'embedding')
+    const available = await listAvailableOllamaModels(baseUrl, 'embedding', signal)
     detectedModels = available.models
   } catch {
     return {
@@ -1495,9 +1495,10 @@ async function getOllamaEmbeddingConfig(configOverride?: Partial<OllamaProviderS
 
 export async function embedTextsWithOllama(
   input: string | string[],
-  configOverride?: Partial<OllamaProviderSettings>
+  configOverride?: Partial<OllamaProviderSettings>,
+  options?: { signal?: AbortSignal },
 ): Promise<OllamaEmbeddingResult> {
-  const config = await getOllamaEmbeddingConfig(configOverride)
+  const config = await getOllamaEmbeddingConfig(configOverride, options?.signal)
   if (!config.enabled || !config.model) {
     return {
       enabled: false,
@@ -1520,6 +1521,7 @@ export async function embedTextsWithOllama(
   const controller = new AbortController()
   const effectiveTimeoutMs = Math.max(config.timeoutMs, NON_STREAM_PROVIDER_TIMEOUT_MS)
   const timeout = setTimeout(() => controller.abort(), effectiveTimeoutMs)
+  const embeddingSignal = options?.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal
   const requestBaseUrl = config.baseUrl.replace(/\/$/, '')
   let requestUrl = `${requestBaseUrl}/api/embed`
   const requestBody = {
@@ -1534,7 +1536,7 @@ export async function embedTextsWithOllama(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
       cache: 'no-store',
-      signal: controller.signal,
+      signal: embeddingSignal,
     })
 
     if (response.status === 404) {
@@ -1544,7 +1546,7 @@ export async function embedTextsWithOllama(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
         cache: 'no-store',
-        signal: controller.signal,
+        signal: embeddingSignal,
       })
     }
 

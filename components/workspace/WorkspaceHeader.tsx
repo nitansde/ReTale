@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { ArrowLeft, BookOpen, Brain, Ellipsis, ScrollText, Settings2, Trash2 } from 'lucide-react'
+import { ArrowLeft, Brain, BookOpen, Ellipsis, ScrollText, Search, Settings2, Trash2 } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { IconButton } from '@/components/ui/IconButton'
 import { useI18n } from '@/lib/i18n/provider'
@@ -18,6 +18,7 @@ export function WorkspaceHeader({
   metrics,
   providerLabel,
   deletionPending,
+  onSearch,
   onOpenChapters,
   onOpenContext,
   onOpenKnowledge,
@@ -30,6 +31,7 @@ export function WorkspaceHeader({
   metrics: WorkspaceMetrics
   providerLabel: string
   deletionPending: boolean
+  onSearch: () => void
   onOpenChapters: () => void
   onOpenContext: () => void
   onOpenKnowledge: () => void
@@ -56,7 +58,7 @@ export function WorkspaceHeader({
 
   return (
     <header className="sticky top-0 z-30 mb-2 border-b border-white/10 bg-[#0d1017]/92 px-4 py-2 shadow-[0_14px_40px_rgba(0,0,0,0.3)] backdrop-blur-2xl sm:mb-4 sm:rounded-[24px] sm:border sm:py-3 sm:shadow-[0_20px_70px_rgba(0,0,0,0.35)] lg:rounded-[28px]">
-      <div className="grid grid-cols-[44px_44px_minmax(0,1fr)_44px_44px] items-center gap-1 lg:hidden" data-testid="workspace-mobile-header">
+      <div className="grid grid-cols-[44px_44px_44px_minmax(0,1fr)_44px_44px] items-center gap-1 lg:hidden" data-testid="workspace-mobile-header">
         <Link
           href="/library"
           onNavigate={handleBackNavigation}
@@ -66,6 +68,9 @@ export function WorkspaceHeader({
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
         </Link>
+        <IconButton label={t('bookSearch.open')} title={t('bookSearch.title')} onClick={onSearch} disabled={deletionPending} data-testid="workspace-book-search-open">
+          <Search className="h-4 w-4" aria-hidden="true" />
+        </IconButton>
         <IconButton label={t('workspace.header.openChapters')} onClick={onOpenChapters}>
           <BookOpen className="h-4 w-4" aria-hidden="true" />
         </IconButton>
@@ -89,6 +94,12 @@ export function WorkspaceHeader({
           >
             <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           </Link>
+          <IconButton label={t('bookSearch.open')} title={t('bookSearch.title')} onClick={onSearch} disabled={deletionPending} data-testid="workspace-book-search-open-desktop" className="shrink-0">
+            <Search className="h-4 w-4" aria-hidden="true" />
+          </IconButton>
+          <IconButton label={t('workspace.header.openChapters')} onClick={onOpenChapters} className="shrink-0">
+            <BookOpen className="h-4 w-4" aria-hidden="true" />
+          </IconButton>
           <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">{t('workspace.headerEyebrow')}</p>
             <h1 className="mt-1 truncate text-xl font-semibold tracking-tight text-zinc-100">{title}</h1>

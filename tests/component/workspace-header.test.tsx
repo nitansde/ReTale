@@ -28,6 +28,7 @@ vi.mock('@/lib/i18n/provider', () => ({
 
 function renderHeader() {
   const actions = {
+    onSearch: vi.fn(),
     onOpenChapters: vi.fn(),
     onOpenContext: vi.fn(),
     onOpenKnowledge: vi.fn(),
@@ -49,13 +50,18 @@ function renderHeader() {
 }
 
 describe('WorkspaceHeader', () => {
-  it('provides five mobile slots with four 44px controls and the requested icons', () => {
+  it('places the search control immediately before the book control', () => {
     const actions = renderHeader()
     const header = screen.getByTestId('workspace-mobile-header')
 
-    expect(header).toHaveClass('grid-cols-[44px_44px_minmax(0,1fr)_44px_44px]')
-    expect(header.children).toHaveLength(5)
-    const chapterButton = screen.getByRole('button', { name: 'workspace.header.openChapters' })
+    expect(header).toHaveClass('grid-cols-[44px_44px_44px_minmax(0,1fr)_44px_44px]')
+    expect(header.children).toHaveLength(6)
+    const chapterButton = within(header).getByRole('button', { name: 'workspace.header.openChapters' })
+    const searchButton = within(header).getByRole('button', { name: 'bookSearch.open' })
+    expect(searchButton.nextElementSibling).toBe(chapterButton)
+    expect(searchButton.querySelector('svg')).toBeInTheDocument()
+    fireEvent.click(searchButton)
+    expect(actions.onSearch).toHaveBeenCalledTimes(1)
     const contextButton = screen.getByRole('button', { name: 'workspace.header.openContext' })
     const optionsButton = screen.getByRole('button', { name: 'workspace.header.moreOptions' })
     expect(chapterButton).toHaveClass('min-h-11', 'min-w-11')

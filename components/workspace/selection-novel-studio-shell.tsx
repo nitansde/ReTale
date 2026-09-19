@@ -6,6 +6,7 @@ import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import { WorkspaceReaderToolbar } from '@/components/workspace/WorkspaceReaderToolbar'
+import { BookSearchDialog } from '@/components/workspace/BookSearchDialog'
 import StarterKit from '@tiptap/starter-kit'
 import {
   BookOpen,
@@ -315,6 +316,7 @@ export function SelectionNovelStudio() {
   } = actions
   const isContinueBlockContinuation = rewriteLaunchSource === 'continue_block'
     && activeContinueBlockRewriteContext?.variant === 'continue'
+  const [searchNovelId, setSearchNovelId] = useState<string | null>(null)
   const activeContextTokenEstimate = useMemo(() => generationContext
     ? resolveActiveGenerationContextTokenEstimate({
         blocks: generationContext.promptBlocks,
@@ -390,6 +392,19 @@ export function SelectionNovelStudio() {
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(129,140,248,0.12),_transparent_30%),#0a0c12] text-zinc-100">
       <div className="mx-auto flex min-h-screen max-w-[1720px] flex-col px-0 pb-10 pt-0 sm:px-5 sm:pt-3 lg:px-6">
+        {searchNovelId === currentNovelId ? (
+          <BookSearchDialog key={currentNovelId} novelId={currentNovelId}
+            onClose={() => setSearchNovelId(null)}
+            onSelect={(match) => {
+              setSearchNovelId(null)
+              if (match.selection) {
+                setCenterPaneView('body')
+                handleTimelineSelection(match.selection)
+              } else {
+                jumpToGraphSource(match)
+              }
+            }} />
+        ) : null}
         <WorkspaceHeader
           title={workspaceHeaderTitle}
           metrics={{
@@ -399,6 +414,11 @@ export function SelectionNovelStudio() {
           }}
           providerLabel={providerLabel}
           deletionPending={isNovelDeletionPending}
+          onSearch={() => {
+            void saveWorkspaceBeforeNavigation().then((saved) => {
+              if (saved) setSearchNovelId(currentNovelId)
+            })
+          }}
           onOpenChapters={() => setLeftPanelOpen(true)}
           onOpenContext={() => setReferencePanelOpen(true)}
           onOpenKnowledge={() => setKnowledgePanelOpen(true)}

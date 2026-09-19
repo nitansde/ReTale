@@ -1531,7 +1531,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   }, [flushAndSaveWorkspace, flushChapterDraftCache])
 
   useEffect(() => {
-    if (centerPaneView !== 'body' || !currentChapter || !pendingSourceJump) return
+    if (centerPaneView !== 'body' || !currentChapter || currentChapter.contentLoaded === false || !pendingSourceJump) return
     if (pendingSourceJump.chapterId !== currentChapter.id) return
     const timer = window.setTimeout(() => {
       const root = editorRef.current

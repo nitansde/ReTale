@@ -809,7 +809,7 @@ export async function streamRewriteWithOpenAICompatible(
 export async function embedTextsWithOpenAICompatible(
   input: string | string[],
   configOverride?: Partial<OpenAICompatibleProviderSettings>,
-  options?: { inputType?: 'document' | 'query' },
+  options?: { inputType?: 'document' | 'query'; signal?: AbortSignal },
 ): Promise<OpenAICompatibleEmbeddingResult> {
   const config = getConfig('embeddings', configOverride)
   if (!config.enabled) {
@@ -844,6 +844,7 @@ export async function embedTextsWithOpenAICompatible(
     const { response, cleanup } = await requestProviderEndpoint({
       provider: 'openai-compatible',
       action: 'OpenAI-compatible embedding request',
+      inputSignal: options?.signal,
       url: `${config.baseUrl.replace(/\/$/, '')}/embeddings`,
       model: config.model,
       requestBody,
