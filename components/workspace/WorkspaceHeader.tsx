@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { ArrowLeft, Brain, BookOpen, Ellipsis, ScrollText, Search, Settings2, Trash2 } from 'lucide-react'
+import { ArrowLeft, BookMarked, BookOpen, Ellipsis, ScrollText, Search, Settings2, Trash2 } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { IconButton } from '@/components/ui/IconButton'
 import { useI18n } from '@/lib/i18n/provider'
@@ -76,7 +76,7 @@ export function WorkspaceHeader({
         </IconButton>
         <h1 className="min-w-0 truncate px-1 text-sm font-semibold tracking-tight text-zinc-100" title={title}>{title}</h1>
         <IconButton label={t('workspace.header.openContext')} onClick={onOpenContext}>
-          <Brain className="h-4 w-4" aria-hidden="true" />
+          <BookMarked className="h-4 w-4" aria-hidden="true" />
         </IconButton>
         <IconButton label={t('workspace.header.moreOptions')} onClick={() => setOverflowOpen(true)} aria-expanded={overflowOpen}>
           <Ellipsis className="h-4 w-4" aria-hidden="true" />
@@ -134,7 +134,7 @@ export function WorkspaceHeader({
       >
         <div className="grid gap-2">
           <button type="button" onClick={() => runOverflowAction(onOpenKnowledge)} className="flex min-h-11 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 text-left text-sm text-zinc-200 transition hover:bg-white/[0.08]">
-            <Brain className="h-4 w-4 text-violet-200" aria-hidden="true" />
+            <BookMarked className="h-4 w-4 text-violet-200" aria-hidden="true" />
             {t('workspace.header.openKnowledge')}
           </button>
           <button type="button" onClick={() => runOverflowAction(onOpenPresets)} className="flex min-h-11 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 text-left text-sm text-zinc-200 transition hover:bg-white/[0.08]">

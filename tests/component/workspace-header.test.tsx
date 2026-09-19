@@ -65,7 +65,7 @@ describe('WorkspaceHeader', () => {
     const contextButton = screen.getByRole('button', { name: 'workspace.header.openContext' })
     const optionsButton = screen.getByRole('button', { name: 'workspace.header.moreOptions' })
     expect(chapterButton).toHaveClass('min-h-11', 'min-w-11')
-    expect(contextButton.querySelector('.lucide-brain')).toBeInTheDocument()
+    expect(contextButton.querySelector('.lucide-book-marked')).toBeInTheDocument()
     expect(optionsButton.querySelector('.lucide-ellipsis')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'workspace.header.openKnowledge' })).not.toBeInTheDocument()
 
@@ -82,7 +82,7 @@ describe('WorkspaceHeader', () => {
 
     expect(screen.getByRole('dialog', { name: 'workspace.header.overflowTitle' })).toBeInTheDocument()
     const knowledgeButton = screen.getByRole('button', { name: 'workspace.header.openKnowledge' })
-    expect(knowledgeButton.querySelector('.lucide-brain')).toBeInTheDocument()
+    expect(knowledgeButton.querySelector('.lucide-book-marked')).toBeInTheDocument()
     fireEvent.click(knowledgeButton)
     expect(actions.onOpenKnowledge).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('dialog', { name: 'workspace.header.overflowTitle' })).not.toBeInTheDocument()
