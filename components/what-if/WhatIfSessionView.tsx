@@ -140,7 +140,7 @@ export function WhatIfSessionView(props: {
   return (
     <div className="space-y-4 px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-what-if-view">
       <section
-        className="overflow-hidden rounded-[28px] border border-fuchsia-400/20 bg-[radial-gradient(circle_at_top,_rgba(217,70,239,0.14),_transparent_40%),#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
+        className="overflow-hidden rounded-[28px] border border-fuchsia-400/20 bg-[radial-gradient(circle_at_top,_rgba(217,70,239,0.14),_transparent_40%),var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
         data-testid="what-if-view"
       >
         <div className="flex flex-col gap-5 px-5 py-5 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between">
@@ -152,7 +152,7 @@ export function WhatIfSessionView(props: {
             </p>
             <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-zinc-300">
               {metaPills.map((pill) => (
-                <span key={pill} className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{pill}</span>
+                <span key={pill} className="rounded-full border border-line/10 bg-shade/20 px-3 py-1.5">{pill}</span>
               ))}
             </div>
           </div>
@@ -172,7 +172,7 @@ export function WhatIfSessionView(props: {
               type="button"
               onClick={() => detail && props.onRegenerateWhatIf(detail)}
               disabled={!canRunActions}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-fuchsia-300/25 bg-black/20 px-4 py-3 text-sm text-fuchsia-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-fuchsia-300/25 bg-shade/20 px-4 py-3 text-sm text-fuchsia-100 transition hover:bg-overlay/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <RefreshCcw className="h-4 w-4" />
               {t('whatIf.regenerate')}
@@ -181,7 +181,7 @@ export function WhatIfSessionView(props: {
               type="button"
               onClick={() => detail && props.onContinueInBranch(detail)}
               disabled={!canRunActions}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 transition hover:bg-overlay/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <GitBranch className="h-4 w-4" />
               {t('whatIf.continueInBranch')}
@@ -191,7 +191,7 @@ export function WhatIfSessionView(props: {
       </section>
 
       {loading ? (
-        <section className="rounded-[24px] border border-white/8 bg-black/20 p-5 text-sm text-zinc-300">
+        <section className="rounded-[24px] border border-line/8 bg-shade/20 p-5 text-sm text-zinc-300">
           <div className="flex items-center gap-2 text-zinc-100">
             <LoaderCircle className="h-4 w-4 animate-spin text-fuchsia-300" />
             {t('whatIf.loading')}
@@ -208,7 +208,7 @@ export function WhatIfSessionView(props: {
       {!loading && detail ? (
         <>
           <div className="grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-            <section className="rounded-[24px] border border-white/8 bg-black/20 p-5">
+            <section className="rounded-[24px] border border-line/8 bg-shade/20 p-5">
               <div className="flex items-start gap-3">
                 <div className="mt-0.5 rounded-2xl border border-fuchsia-300/18 bg-fuchsia-500/10 p-2 text-fuchsia-100">
                   <Sparkles className="h-4 w-4" />
@@ -229,26 +229,26 @@ export function WhatIfSessionView(props: {
           <WhatIfDeltaPanel deltas={detail.deltas} />
 
           {historyEntries.length ? (
-            <section className="rounded-[24px] border border-white/8 bg-black/20 p-5" data-testid="what-if-revision-history">
+            <section className="rounded-[24px] border border-line/8 bg-shade/20 p-5" data-testid="what-if-revision-history">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('whatIf.history')}</p>
                   <p className="mt-1 text-sm text-zinc-300">{t('whatIf.historyDescription')}</p>
                 </div>
-                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{t('whatIf.historyCount', { count: historyEntries.length })}</span>
+                <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-[11px] text-zinc-300">{t('whatIf.historyCount', { count: historyEntries.length })}</span>
               </div>
 
               <div className="mt-4 space-y-4">
                 {historyEntries.map((revision) => {
                   const revisionPreview = formatStoryBranchInstructionPreview(revision.userInstruction)
                   return (
-                    <article key={`${revision.revisionNo}-${revision.createdAt}`} className="rounded-[20px] border border-white/8 bg-white/[0.03] p-4" data-testid={`what-if-history-item-${revision.revisionNo}`}>
+                    <article key={`${revision.revisionNo}-${revision.createdAt}`} className="rounded-[20px] border border-line/8 bg-overlay/[0.03] p-4" data-testid={`what-if-history-item-${revision.revisionNo}`}>
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <p className="text-sm font-medium text-zinc-100">{t('whatIf.historyRevision', { count: revision.revisionNo, kind: revision.revisionKind })}</p>
                           {revisionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">{t('continue.instructionPreview')} · {revisionPreview}</p> : null}
                         </div>
-                        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-400">{formatCreatedAt(revision.createdAt)}</span>
+                        <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-[11px] text-zinc-400">{formatCreatedAt(revision.createdAt)}</span>
                       </div>
                       <div className="mt-3 rounded-[18px] border border-fuchsia-300/18 bg-fuchsia-500/10 p-4">
                         {renderReaderBodyParagraphs(revision.generatedText, 'text-zinc-100')}

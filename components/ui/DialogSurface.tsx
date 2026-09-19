@@ -172,7 +172,7 @@ export function DialogSurface({
   return createPortal(
     <div
       data-testid={backdropTestId}
-      className={cn('dialog-backdrop fixed inset-0 z-[70] flex bg-[#05060a]/72 backdrop-blur-md backdrop-saturate-150', backdropClassName)}
+      className={cn('dialog-backdrop fixed inset-0 z-[70] flex bg-scrim/72 backdrop-blur-md backdrop-saturate-150', backdropClassName)}
       onClick={(event) => {
         if (!closeDisabled && closeOnBackdrop && event.target === event.currentTarget) onClose()
       }}
@@ -187,7 +187,7 @@ export function DialogSurface({
         aria-busy={busy || undefined}
         tabIndex={-1}
         className={cn(
-          'dialog-surface flex min-h-0 flex-col overflow-hidden border border-white/10 bg-[#0d1017] px-5 pt-5 text-zinc-100 shadow-[0_30px_120px_rgba(0,0,0,0.58)] outline-none',
+          'dialog-surface flex min-h-0 flex-col overflow-hidden border border-line/10 bg-panel px-5 pt-5 text-zinc-100 shadow-[0_30px_120px_rgb(0_0_0/calc(0.58*var(--shadow-strength)))] outline-none',
           PLACEMENT_STYLES[placement],
           className,
           mobileFullscreen && 'max-sm:m-0 max-sm:h-dvh max-sm:max-h-dvh max-sm:w-full max-sm:max-w-none max-sm:rounded-none max-sm:border-0',
@@ -201,7 +201,7 @@ export function DialogSurface({
               aria-label={closeLabel}
               disabled={closeDisabled}
               onClick={onClose}
-              className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl text-zinc-300 transition hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl text-zinc-300 transition hover:bg-overlay/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <X className="h-4 w-4" aria-hidden="true" />
             </button>
@@ -209,7 +209,7 @@ export function DialogSurface({
         </div>
         {description ? <p id={descriptionId} className="mt-2 shrink-0 text-sm leading-6 text-zinc-400">{description}</p> : null}
         <div data-testid="dialog-content" className={cn('mt-5 min-h-0 flex-1 overflow-y-auto overscroll-contain pb-5', !footer && 'pb-[max(1.25rem,env(safe-area-inset-bottom))]', contentClassName)}>{children}</div>
-        {footer ? <div className="-mx-5 shrink-0 border-t border-white/10 bg-[#0d1017] px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]" data-testid="dialog-footer">{footer}</div> : null}
+        {footer ? <div className="-mx-5 shrink-0 border-t border-line/10 bg-panel px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]" data-testid="dialog-footer">{footer}</div> : null}
       </div>
     </div>,
     document.body

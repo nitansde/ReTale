@@ -408,11 +408,11 @@ export function WorkspaceStatusState(props: {
   const Icon = props.icon
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(129,140,248,0.12),_transparent_30%),#0a0c12] text-zinc-100">
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_var(--page-glow),_transparent_30%),var(--background)] text-zinc-100">
       <div className="mx-auto flex min-h-screen max-w-[1600px] items-center justify-center px-3 py-8 sm:px-5 lg:px-6">
-        <section className="w-full max-w-2xl rounded-[30px] border border-white/10 bg-[#11141d] p-6 shadow-[0_28px_90px_rgba(0,0,0,0.35)] sm:p-8">
-          <div className="rounded-[24px] border border-white/8 bg-[#0b0d12] p-6 sm:p-7">
-            <div className="mb-5 inline-flex h-14 w-14 items-center justify-center rounded-[20px] border border-white/10 bg-white/[0.04] text-zinc-200">
+        <section className="w-full max-w-2xl rounded-[30px] border border-line/10 bg-raised p-6 shadow-[0_28px_90px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))] sm:p-8">
+          <div className="rounded-[24px] border border-line/8 bg-surface p-6 sm:p-7">
+            <div className="mb-5 inline-flex h-14 w-14 items-center justify-center rounded-[20px] border border-line/10 bg-overlay/[0.04] text-zinc-200">
               <Icon className={cn('h-6 w-6', props.icon === LoaderCircle && 'animate-spin')} />
             </div>
             <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">{t('workspace.statusEyebrow')}</p>
@@ -422,7 +422,7 @@ export function WorkspaceStatusState(props: {
               <div className="mt-6">
                 <Link
                   href="/library"
-                  className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-zinc-100 transition hover:bg-white/[0.08]"
+                  className="inline-flex items-center gap-2 rounded-2xl border border-line/10 bg-overlay/[0.04] px-4 py-2.5 text-sm text-zinc-100 transition hover:bg-overlay/[0.08]"
                 >
                   <ArrowLeft className="h-4 w-4" />
                   {props.ctaLabel}
@@ -1017,8 +1017,8 @@ export function WorkspaceCharacterReferenceCard({
         </div>
         {!knowledgePanelReadOnly ? (
           <div className="flex gap-1">
-            <button onClick={onEdit} className="rounded-lg border border-white/10 p-1.5 text-zinc-400 hover:text-zinc-200"><Pencil className="h-3 w-3" /></button>
-            <button onClick={onDelete} className="rounded-lg border border-white/10 p-1.5 text-rose-400 hover:text-rose-300"><Trash2 className="h-3 w-3" /></button>
+            <button onClick={onEdit} className="rounded-lg border border-line/10 p-1.5 text-zinc-400 hover:text-zinc-200"><Pencil className="h-3 w-3" /></button>
+            <button onClick={onDelete} className="rounded-lg border border-line/10 p-1.5 text-rose-400 hover:text-rose-300"><Trash2 className="h-3 w-3" /></button>
           </div>
         ) : null}
       </div>
@@ -1033,18 +1033,18 @@ export function WorkspaceCharacterReferenceCard({
             </span>
           ) : null}
           {aliasBadges.map((alias) => (
-            <span key={`${char.id}-${alias}`} className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">
+            <span key={`${char.id}-${alias}`} className="rounded-full border border-line/10 px-2 py-0.5 text-[10px] text-zinc-400">
               {t('workspace.character.aliasBadge', { alias })}
             </span>
           ))}
-          {genderSummary ? <span data-testid="workspace-character-gender-badge" className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{genderSummary}</span> : null}
+          {genderSummary ? <span data-testid="workspace-character-gender-badge" className="rounded-full border border-line/10 px-2 py-0.5 text-[10px] text-zinc-400">{genderSummary}</span> : null}
         </div>
       ) : null}
       {showProfile ? (
         <div className="space-y-2">
           <div id={`workspace-character-profile-${char.id}`} className="space-y-2 text-xs leading-5 text-zinc-300">
             {visibleProfileSections.map((section) => (
-              <div key={section.key} className="rounded-xl border border-white/8 bg-white/[0.03] px-2.5 py-2">
+              <div key={section.key} className="rounded-xl border border-line/8 bg-overlay/[0.03] px-2.5 py-2">
                 <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">{section.label}</p>
                 <p className="mt-1 text-zinc-200">{section.summary}</p>
                 {section.note ? <p className={cn('mt-1 text-zinc-400', !isExpanded && cardCanExpand && 'line-clamp-2')}>{t('workspace.character.noteLine', { value: section.note })}</p> : null}
@@ -1058,7 +1058,7 @@ export function WorkspaceCharacterReferenceCard({
               aria-expanded={isExpanded}
               aria-controls={`workspace-character-profile-${char.id}`}
               onClick={() => setIsExpanded((current) => !current)}
-              className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] text-zinc-400 transition hover:border-white/20 hover:text-zinc-200"
+              className="inline-flex items-center gap-1 rounded-lg border border-line/10 px-2 py-1 text-[11px] text-zinc-400 transition hover:border-line/20 hover:text-zinc-200"
             >
               <ChevronDown className={cn('h-3 w-3 transition-transform', isExpanded && 'rotate-180')} />
               {isExpanded ? t('workspace.character.collapseDetails') : t('workspace.character.expandDetails')}

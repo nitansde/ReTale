@@ -92,7 +92,7 @@ export function WorkspaceKnowledgeStatus({
       ? phaseProgressLabel
       : 'workspace.knowledge.status.progress.job'
     return (
-      <div className="mt-2 border-t border-white/8 pt-2">
+      <div className="mt-2 border-t border-line/8 pt-2">
         <div className="flex items-center justify-between gap-3 text-[11px]">
           <span className={cn(operation.status === 'failed' ? 'text-rose-200' : operation.status === 'paused' ? 'text-amber-200' : 'text-violet-200')}>
             {t(`workspace.knowledge.status.operation.${operation.status}` as TranslationKey)}
@@ -106,7 +106,7 @@ export function WorkspaceKnowledgeStatus({
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={progress}
-            className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10"
+            className="mt-2 h-1.5 overflow-hidden rounded-full bg-overlay/10"
           >
             <div className="h-full rounded-full bg-violet-300 transition-[width]" style={{ width: `${progress}%` }} />
           </div>
@@ -123,7 +123,7 @@ export function WorkspaceKnowledgeStatus({
       </h3>
 
       <div className="mt-3 space-y-2">
-        <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-2.5">
+        <div className="rounded-2xl border border-line/8 bg-shade/20 px-3 py-2.5">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2.5">
               <StatusIcon status={analysisStatus} className={cn('h-4 w-4 shrink-0', status.analysis === 'ready' ? 'text-emerald-300' : status.analysis === 'partial' ? 'text-amber-300' : 'text-zinc-500')} />
@@ -133,7 +133,7 @@ export function WorkspaceKnowledgeStatus({
           </div>
           {renderOperation(analysisOperation, 'workspace.knowledge.status.progress.phase.analysis')}
         </div>
-        <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-2.5">
+        <div className="rounded-2xl border border-line/8 bg-shade/20 px-3 py-2.5">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2.5">
               <StatusIcon status={searchStatus} className={cn('h-4 w-4 shrink-0', status.search === 'ready' ? 'text-emerald-300' : status.search === 'partial' ? 'text-amber-300' : status.search === 'pending' ? 'animate-spin text-violet-300' : 'text-zinc-500')} />
@@ -166,7 +166,7 @@ export function WorkspaceKnowledgeStatus({
           type="button"
           aria-expanded={advancedDetailsOpen}
           onClick={() => onAdvancedDetailsChange(!advancedDetailsOpen)}
-          className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-4 text-xs text-zinc-300 transition hover:bg-white/[0.08]"
+          className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-line/10 bg-shade/20 px-4 text-xs text-zinc-300 transition hover:bg-overlay/[0.08]"
         >
           {t(advancedDetailsOpen ? 'workspace.knowledge.status.hideAdvancedDetails' : 'workspace.knowledge.status.advancedDetails')}
           <ChevronDown className={cn('h-4 w-4 transition-transform', advancedDetailsOpen && 'rotate-180')} aria-hidden="true" />

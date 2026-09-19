@@ -56,7 +56,7 @@ export function GraphReviewPanel(props: {
         <button
           type="button"
           onClick={props.onRefresh}
-          className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-white/[0.06]"
+          className="inline-flex items-center gap-2 rounded-2xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06]"
         >
           <RefreshCcw className="h-4 w-4" />
           {t('graph.refreshContext')}
@@ -64,14 +64,14 @@ export function GraphReviewPanel(props: {
       </div>
 
       <div className="mb-4 flex flex-wrap gap-2 text-[11px] text-zinc-400">
-        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">{t('graph.chapterOnly', { chapterNo: props.context.chapterNo })}</span>
+        <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1">{t('graph.chapterOnly', { chapterNo: props.context.chapterNo })}</span>
         {props.context.sourceMeta?.mode === 'inherited-parent' ? (
           <span className="rounded-full border border-fuchsia-300/20 bg-fuchsia-500/10 px-3 py-1 text-fuchsia-100">
             {t('graph.inheritedFromMainline', { chapterNo: props.context.sourceMeta.chapterNo })}
           </span>
         ) : null}
-        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">{t('graph.selectedLines', { start: props.context.selectedLineStart ?? '?', end: props.context.selectedLineEnd ?? '?' })}</span>
-        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">{t('graph.promptApproxTokens', { count: props.context.tokenEstimate })}</span>
+        <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1">{t('graph.selectedLines', { start: props.context.selectedLineStart ?? '?', end: props.context.selectedLineEnd ?? '?' })}</span>
+        <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1">{t('graph.promptApproxTokens', { count: props.context.tokenEstimate })}</span>
       </div>
 
       {props.context.warnings.length ? (

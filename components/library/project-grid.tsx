@@ -344,7 +344,7 @@ export function ProjectGrid() {
             {t('library.restoreError', { message: toUserFacingWorkspaceError(backendLoadError || librarySummariesError, locale) })}
           </div>
         ) : !librarySummariesLoaded ? (
-          <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-zinc-300">
+          <div className="w-full max-w-xl rounded-2xl border border-line/10 bg-overlay/[0.04] px-4 py-3 text-sm text-zinc-300">
             {t('library.restoreLoading')}
           </div>
         ) : null}

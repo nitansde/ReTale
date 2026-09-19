@@ -15,7 +15,7 @@ export function WorkspaceAISetupPrompt({ onOpenSettings, onClearSelection }: {
       <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={onOpenSettings} className="min-h-11 shrink-0 rounded-xl bg-violet-500 px-4 text-sm font-medium text-white transition hover:bg-violet-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70">
         {t('workspace.aiSetup.openSettings')}
       </button>
-      {onClearSelection ? <button type="button" aria-label={t('workspace.mobile.clearSelection')} onClick={onClearSelection} className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl text-zinc-400 hover:bg-white/5"><X className="h-4 w-4" aria-hidden="true" /></button> : null}
+      {onClearSelection ? <button type="button" aria-label={t('workspace.mobile.clearSelection')} onClick={onClearSelection} className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl text-zinc-400 hover:bg-overlay/5"><X className="h-4 w-4" aria-hidden="true" /></button> : null}
     </div>
   )
 }

@@ -144,7 +144,7 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
 
   const content = (
     <>
-      <section className="space-y-3 lg:rounded-[24px] lg:border lg:border-white/8 lg:bg-white/[0.03] lg:p-3">
+      <section className="space-y-3 lg:rounded-[24px] lg:border lg:border-line/8 lg:bg-overlay/[0.03] lg:p-3">
         <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-1 lg:grid-cols-[minmax(0,1fr)_auto]">
           <p className="text-xs text-zinc-500">{t('chapterNav.chapterCount', { count: mainlineChapters.length })}</p>
           <button
@@ -153,7 +153,7 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
               props.onCreateChapter()
               props.onClose()
             }}
-            className="min-h-11 rounded-xl px-2 text-sm font-medium text-violet-300 transition hover:bg-white/5 lg:order-first lg:col-span-2 lg:bg-violet-500 lg:text-white"
+            className="min-h-11 rounded-xl px-2 text-sm font-medium text-violet-300 transition hover:bg-overlay/5 lg:order-first lg:col-span-2 lg:bg-violet-500 lg:text-white"
           >
             {t('chapterNav.newChapter')}
           </button>
@@ -163,7 +163,7 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
             onClick={() => {
               updateNavigationState({ searchQuery: '', windowStart: centeredWindowStart })
             }}
-            className="inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-white/8 bg-black/20 px-2.5 text-[11px] text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-default disabled:opacity-45"
+            className="inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-line/8 bg-shade/20 px-2.5 text-[11px] text-zinc-300 transition hover:bg-overlay/[0.06] disabled:cursor-default disabled:opacity-45"
           >
             <LocateFixed className="h-3.5 w-3.5" aria-hidden="true" />
             {t('chapterNav.currentChapter')}
@@ -181,14 +181,14 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
             }}
             aria-label={t('chapterNav.searchLabel')}
             placeholder={t('chapterNav.searchPlaceholder')}
-            className="min-h-11 w-full rounded-xl border border-white/8 bg-black/25 py-2 pl-10 pr-10 text-base lg:text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-violet-400/35 focus:bg-black/35"
+            className="min-h-11 w-full rounded-xl border border-line/8 bg-shade/25 py-2 pl-10 pr-10 text-base lg:text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-violet-400/35 focus:bg-shade/35"
           />
           {searchQuery ? (
             <button
               type="button"
               onClick={() => updateNavigationState({ searchQuery: '' })}
               aria-label={t('chapterNav.clearSearch')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl p-2 text-zinc-500 transition hover:bg-white/[0.06] hover:text-zinc-200"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl p-2 text-zinc-500 transition hover:bg-overlay/[0.06] hover:text-zinc-200"
             >
               <X className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
@@ -211,7 +211,7 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
               type="button"
               disabled={!canShowPrevious}
               onClick={() => updateNavigationState({ windowStart: Math.max(0, normalizedWindowStart - CHAPTER_NAVIGATION_WINDOW_SIZE) })}
-              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-2xl border border-white/8 bg-black/20 px-3 text-xs text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
+              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-2xl border border-line/8 bg-shade/20 px-3 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
             >
               <ChevronLeft className="h-4 w-4" aria-hidden="true" />
               {t('chapterNav.previousRange')}
@@ -225,7 +225,7 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
                   normalizedWindowStart + CHAPTER_NAVIGATION_WINDOW_SIZE,
                 ),
               })}
-              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-2xl border border-white/8 bg-black/20 px-3 text-xs text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
+              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-2xl border border-line/8 bg-shade/20 px-3 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
             >
               {t('chapterNav.nextRange')}
               <ChevronRight className="h-4 w-4" aria-hidden="true" />
@@ -260,7 +260,7 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
               onDeleteBranchNode={props.onDeleteBranchNode}
             />
           ) : (
-            <div className="flex min-h-48 items-center justify-center rounded-2xl border border-dashed border-white/8 bg-black/15 px-4 text-center text-sm leading-6 text-zinc-500">
+            <div className="flex min-h-48 items-center justify-center rounded-2xl border border-dashed border-line/8 bg-shade/15 px-4 text-center text-sm leading-6 text-zinc-500">
               {searching ? t('chapterNav.noSearchResults') : t('chapterNav.noChapters')}
             </div>
           )}
@@ -271,7 +271,7 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
 
   if (desktop) {
     return (
-      <aside className="sticky top-3 self-start rounded-[30px] border border-white/10 bg-[#11141d] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.3)]" data-testid="workspace-chapter-nav">
+      <aside className="sticky top-3 self-start rounded-[30px] border border-line/10 bg-raised p-4 shadow-[0_24px_70px_rgb(0_0_0/calc(0.3*var(--shadow-strength)))]" data-testid="workspace-chapter-nav">
         <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">{t('chapterNav.novel')}</p>
         <h2 className="mb-4 mt-1 text-lg font-semibold text-zinc-100">{t('chapterNav.title')}</h2>
         {content}

@@ -40,14 +40,14 @@ export function ProjectCard({
   const knowledgeStatus = novel.knowledgeStatus ?? 'unknown'
 
   return (
-    <article className="group relative border-b border-white/10 py-4 transition sm:rounded-[24px] sm:border sm:bg-white/[0.04] sm:p-5">
-      <button type="button" aria-label={t('library.cardOptionsAria', { title: novel.title })} onClick={() => setMenuOpen(true)} disabled={deleting || opening || disabled} className="absolute right-0 top-3 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-white/5 disabled:opacity-50 sm:hidden"><Ellipsis className="h-4 w-4" aria-hidden="true" /></button>
+    <article className="group relative border-b border-line/10 py-4 transition sm:rounded-[24px] sm:border sm:bg-overlay/[0.04] sm:p-5">
+      <button type="button" aria-label={t('library.cardOptionsAria', { title: novel.title })} onClick={() => setMenuOpen(true)} disabled={deleting || opening || disabled} className="absolute right-0 top-3 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-overlay/5 disabled:opacity-50 sm:hidden"><Ellipsis className="h-4 w-4" aria-hidden="true" /></button>
       <div className="absolute right-7 top-7 z-10 hidden gap-2 sm:right-8 sm:top-8 sm:flex">
         <button
           type="button"
           onClick={onEdit}
           disabled={deleting || opening || disabled}
-          className="rounded-2xl border border-white/15 bg-black/55 p-2 text-zinc-100 shadow-lg backdrop-blur transition hover:bg-indigo-500/70 disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded-2xl border border-line/15 bg-shade/55 p-2 text-zinc-100 shadow-lg backdrop-blur transition hover:bg-indigo-500/70 disabled:cursor-not-allowed disabled:opacity-60"
           aria-label={t('library.cardEditAria', { title: novel.title })}
         >
           <Pencil className="h-4 w-4" />
@@ -56,7 +56,7 @@ export function ProjectCard({
           type="button"
           onClick={onDelete}
           disabled={deleting || opening || disabled}
-          className="rounded-2xl border border-rose-300/20 bg-black/55 p-2 text-rose-100 shadow-lg backdrop-blur transition hover:bg-rose-500/70 disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded-2xl border border-rose-300/20 bg-shade/55 p-2 text-rose-100 shadow-lg backdrop-blur transition hover:bg-rose-500/70 disabled:cursor-not-allowed disabled:opacity-60"
           aria-label={t('library.cardDeleteAria', { title: novel.title })}
         >
           <Trash2 className="h-4 w-4" />
@@ -85,7 +85,7 @@ export function ProjectCard({
 
           <div className="min-w-0 flex-1 space-y-2 sm:space-y-3">
             <div>
-              <h2 className="break-words pr-10 text-base font-medium tracking-tight text-zinc-100 sm:pr-0 sm:text-lg group-hover:text-white">
+              <h2 className="break-words pr-10 text-base font-medium tracking-tight text-zinc-100 sm:pr-0 sm:text-lg group-hover:text-heading">
                 {novel.title}
               </h2>
               <p className="mt-1 text-xs text-zinc-500">
@@ -95,7 +95,7 @@ export function ProjectCard({
               </p>
             </div>
 
-            <div className="flex items-center sm:border-t sm:border-white/[0.06] sm:pt-3">
+            <div className="flex items-center sm:border-t sm:border-line/[0.06] sm:pt-3">
               <span
                 role="status"
                 className={`inline-flex items-center gap-2 rounded-full text-xs font-medium max-sm:border-0 max-sm:bg-transparent sm:border sm:px-2.5 sm:py-1 ${knowledgeStatusStyles[knowledgeStatus]}`}
@@ -124,7 +124,7 @@ export function ProjectCard({
           </div>
       </button>
       <DialogSurface open={menuOpen} onClose={() => setMenuOpen(false)} title={novel.title} closeLabel={t('common.close')} placement="bottom">
-        <div className="grid divide-y divide-white/10">
+        <div className="grid divide-y divide-line/10">
           <button type="button" onClick={() => { setMenuOpen(false); onEdit() }} className="flex min-h-12 items-center gap-3 text-left text-sm text-zinc-200" aria-label={t('library.cardEditAria', { title: novel.title })}><Pencil className="h-4 w-4" />{t('library.cardEditAria', { title: novel.title })}</button>
           <button type="button" onClick={() => { setMenuOpen(false); onDelete() }} className="flex min-h-12 items-center gap-3 text-left text-sm text-rose-300" aria-label={t('library.cardDeleteAria', { title: novel.title })}><Trash2 className="h-4 w-4" />{t('library.cardDeleteAria', { title: novel.title })}</button>
         </div>

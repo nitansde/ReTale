@@ -34,7 +34,7 @@ export function WorkspaceContextPresetSelect({ novelId, disabled, onOpenLibrary 
     ? binding.presetId : ''
   const presets = Object.values(library.presets).sort((a, b) => a.name.localeCompare(b.name, locale))
 
-  return <div className="mb-5 border-b border-white/10 pb-5">
+  return <div className="mb-5 border-b border-line/10 pb-5">
     <div className="mb-2 flex items-center justify-between gap-3">
       <label htmlFor={id} className="text-sm text-zinc-300">{t('workspace.contextPreset.label')}</label>
       <button type="button" onClick={onOpenLibrary} disabled={disabled || loading} className="min-h-11 shrink-0 px-1 text-xs text-violet-300 transition hover:text-violet-200 disabled:opacity-40">{t('workspace.contextPreset.manage')}</button>
@@ -49,7 +49,7 @@ export function WorkspaceContextPresetSelect({ novelId, disabled, onOpenLibrary 
         bindPreset(novelId, event.target.value || null)
         void saveLibrary().catch(() => undefined)
       }}
-      className="min-h-11 w-full min-w-0 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2.5 text-sm text-zinc-100 outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70 disabled:opacity-50"
+      className="min-h-11 w-full min-w-0 rounded-xl border border-line/10 bg-surface px-3 py-2.5 text-sm text-zinc-100 outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70 disabled:opacity-50"
     >
       <option value="">{loading && !selectedId ? t('common.loading') : t('preset.noPreset')}</option>
       {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}

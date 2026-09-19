@@ -18,7 +18,7 @@ const STATUS_LABEL_KEYS = {
 
 function Metric(props: { label: string; value: string }) {
   return (
-    <div className="rounded-[18px] border border-white/8 bg-black/20 px-3 py-2">
+    <div className="rounded-[18px] border border-line/8 bg-shade/20 px-3 py-2">
       <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">{props.label}</p>
       <p className="mt-1 text-sm text-zinc-200">{props.value}</p>
     </div>
@@ -86,7 +86,7 @@ function NodeInspector(props: {
               type="button"
               disabled={props.generationState.inclusionState === 'excluded' || props.generationState.inclusionState === 'unavailable'}
               onClick={() => props.onToggleNodeExcluded?.(node, true)}
-              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:opacity-50"
             >
               <Ban className="h-3.5 w-3.5" />
                {t('graph.nodeExcludeEdges')}
@@ -166,7 +166,7 @@ function EdgeInspector(props: {
               type="button"
               disabled={props.mutationPending}
               onClick={() => props.onToggleEdgeExcluded?.(edge, !props.excluded)}
-              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:opacity-50"
             >
               <Ban className="h-3.5 w-3.5" />
                {props.excluded ? t('graph.includeThisRun') : t('graph.excludeThisRun')}
@@ -175,7 +175,7 @@ function EdgeInspector(props: {
               type="button"
               disabled={props.mutationPending}
               onClick={() => setEditing((current) => !current)}
-              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:opacity-50"
             >
               <Pencil className="h-3.5 w-3.5" />
                {editing ? t('graph.collapseEdgeEdit') : t('graph.expandEdgeEdit')}
@@ -185,14 +185,14 @@ function EdgeInspector(props: {
           {props.mutationError ? <p className="mt-3 text-xs leading-6 text-rose-200">{props.mutationError}</p> : null}
 
           {editing ? (
-            <div className="mt-3 grid gap-3 rounded-[18px] border border-white/8 bg-black/20 p-3">
+            <div className="mt-3 grid gap-3 rounded-[18px] border border-line/8 bg-shade/20 p-3">
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block">
                   <span className="mb-1 block text-[11px] uppercase tracking-[0.14em] text-zinc-500">{t('graph.edgeEdit.linkType')}</span>
                   <input
                     value={draft.linkType}
                     onChange={(event) => setDraft((current) => ({ ...current, linkType: event.target.value }))}
-                    className="w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none"
+                    className="w-full rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none"
                   />
                 </label>
                 <label className="block">
@@ -200,7 +200,7 @@ function EdgeInspector(props: {
                   <input
                     value={draft.label}
                     onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))}
-                    className="w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none"
+                    className="w-full rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none"
                     placeholder={t('graph.edgeEdit.labelPlaceholder')}
                   />
                 </label>
@@ -211,7 +211,7 @@ function EdgeInspector(props: {
                 <textarea
                   value={draft.description}
                   onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
-                  className="min-h-[84px] w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none"
+                  className="min-h-[84px] w-full rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none"
                   placeholder={t('graph.edgeEdit.descriptionPlaceholder')}
                 />
               </label>
@@ -222,7 +222,7 @@ function EdgeInspector(props: {
                   <select
                     value={draft.polarity}
                     onChange={(event) => setDraft((current) => ({ ...current, polarity: event.target.value as GraphEdgeEditDraft['polarity'] }))}
-                    className="w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none"
+                    className="w-full rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none"
                   >
                       <option value="">{t('graph.edgeEdit.unset')}</option>
                     <option value="positive">positive</option>
@@ -239,7 +239,7 @@ function EdgeInspector(props: {
                     max={5}
                     value={draft.strength}
                     onChange={(event) => setDraft((current) => ({ ...current, strength: Number(event.target.value || 1) }))}
-                    className="w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none"
+                    className="w-full rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none"
                   />
                 </label>
                 <label className="block">
@@ -249,7 +249,7 @@ function EdgeInspector(props: {
                     min={1}
                     value={draft.validFromChapter}
                     onChange={(event) => setDraft((current) => ({ ...current, validFromChapter: Number(event.target.value || 1) }))}
-                    className="w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none"
+                    className="w-full rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none"
                   />
                 </label>
                 <label className="block">
@@ -259,7 +259,7 @@ function EdgeInspector(props: {
                     min={1}
                     value={draft.validUntilChapter}
                     onChange={(event) => setDraft((current) => ({ ...current, validUntilChapter: event.target.value }))}
-                    className="w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none"
+                    className="w-full rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none"
                     placeholder={t('graph.edgeEdit.validUntilPlaceholder')}
                   />
                 </label>
@@ -270,7 +270,7 @@ function EdgeInspector(props: {
                   type="checkbox"
                   checked={draft.includeByDefault}
                   onChange={(event) => setDraft((current) => ({ ...current, includeByDefault: event.target.checked }))}
-                  className="h-4 w-4 rounded border-white/20 bg-[#0b0d12]"
+                  className="h-4 w-4 rounded border-line/20 bg-surface"
                 />
                 {t('graph.edgeEdit.includeByDefault')}
               </label>
@@ -292,7 +292,7 @@ function EdgeInspector(props: {
                     setDraft(buildEdgeEditDraft(edge))
                     setEditing(false)
                   }}
-                  className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-50"
+                  className="inline-flex items-center gap-2 rounded-xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:opacity-50"
                 >
                   <X className="h-3.5 w-3.5" />
                    {t('graph.edgeEdit.cancel')}
@@ -365,7 +365,7 @@ export function GraphInspector(props: {
   }
 
   return (
-    <aside className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+    <aside className="rounded-[24px] border border-line/8 bg-shade/20 p-4">
       {node ? <NodeInspector node={node} mode={mode} generationState={nodeGenerationState} onToggleNodeExcluded={props.onToggleNodeExcluded} /> : null}
       {edge ? (
         <EdgeInspector

@@ -124,7 +124,7 @@ function EventCard(props: {
         'w-full rounded-[24px] border p-4 text-left transition',
         props.selected
           ? 'border-sky-300/35 bg-sky-500/12 shadow-[0_18px_60px_rgba(14,165,233,0.12)]'
-          : 'border-white/8 bg-black/20 hover:border-white/15 hover:bg-white/[0.05]',
+          : 'border-line/8 bg-shade/20 hover:border-line/15 hover:bg-overlay/[0.05]',
         props.dimmed && !props.selected && 'opacity-60'
       )}
     >
@@ -137,7 +137,7 @@ function EventCard(props: {
         </div>
         <div className="flex flex-wrap gap-2 text-[11px]">
           <span className={cn('rounded-full border px-2.5 py-1', sourceMeta.tone)}>{sourceMeta.label}</span>
-          <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-zinc-300">
+          <span className="rounded-full border border-line/10 bg-shade/20 px-2.5 py-1 text-zinc-300">
             {t('whatIf.deltaConfidence', { value: formatConfidence(props.event.confidence, t('whatIf.unlabeled')) })}
           </span>
         </div>
@@ -146,16 +146,16 @@ function EventCard(props: {
       <p className="mt-3 text-sm leading-6 text-zinc-300">{resolveEventSummary(props.event.summary)}</p>
 
       {props.event.originalOutcome ? (
-        <div className="mt-3 rounded-[18px] border border-white/8 bg-white/[0.03] p-3 text-xs leading-6 text-zinc-400">
+        <div className="mt-3 rounded-[18px] border border-line/8 bg-overlay/[0.03] p-3 text-xs leading-6 text-zinc-400">
           <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">Original outcome</p>
           <p className="mt-1">{props.event.originalOutcome}</p>
         </div>
       ) : null}
 
       <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-zinc-300">
-        <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">track {props.event.trackKey}</span>
+        <span className="rounded-full border border-line/10 bg-shade/20 px-2.5 py-1">track {props.event.trackKey}</span>
         {props.event.chapterNo !== null ? (
-          <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1">{t('futureMap.chapterNode', { chapterNo: props.event.chapterNo })}</span>
+          <span className="rounded-full border border-line/10 bg-shade/20 px-2.5 py-1">{t('futureMap.chapterNode', { chapterNo: props.event.chapterNo })}</span>
         ) : null}
       </div>
     </button>
@@ -297,13 +297,13 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
       title={`Future map · ${title}`}
       busy={creating}
       closeDisabled={creating}
-      backdropClassName="bg-black/72"
+      backdropClassName="bg-shade/72"
       titleClassName="sr-only"
       contentClassName="mt-0 flex min-h-[calc(100vh-2rem)] flex-col sm:min-h-[calc(100vh-3rem)]"
-      className="my-4 min-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-[1680px] rounded-[34px] border-sky-300/20 p-0 shadow-[0_30px_120px_rgba(0,0,0,0.55)] sm:my-6 sm:min-h-[calc(100vh-3rem)] sm:w-[calc(100%-3rem)]"
+      className="my-4 min-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-[1680px] rounded-[34px] border-sky-300/20 p-0 shadow-[0_30px_120px_rgb(0_0_0/calc(0.55*var(--shadow-strength)))] sm:my-6 sm:min-h-[calc(100vh-3rem)] sm:w-[calc(100%-3rem)]"
     >
       <div className="flex flex-1 flex-col" data-testid="future-map-overlay">
-            <div className="border-b border-white/8 px-5 py-5 sm:px-7 sm:py-6">
+            <div className="border-b border-line/8 px-5 py-5 sm:px-7 sm:py-6">
               <div className="flex items-start justify-between gap-4">
                 <div className="max-w-4xl">
                   <p className="text-[11px] uppercase tracking-[0.22em] text-sky-200/70">Future map</p>
@@ -318,16 +318,16 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                   aria-label={t('futureMap.close')}
                   disabled={creating}
                   onClick={onClose}
-                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-line/10 text-zinc-300 transition hover:bg-overlay/[0.06] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <X className="h-4 w-4" aria-hidden="true" />
                 </button>
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2 text-xs text-zinc-300">
-                <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1.5">source {sourceContext.nodeType}</span>
-                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{t('futureMap.currentBranch')}</span>
-                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{t('futureJump.sourceChapter', { count: sourceContext.chapterNo })}</span>
+                <span className="rounded-full border border-sky-300/20 bg-shade/20 px-3 py-1.5">source {sourceContext.nodeType}</span>
+                <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1.5">{t('futureMap.currentBranch')}</span>
+                <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1.5">{t('futureJump.sourceChapter', { count: sourceContext.chapterNo })}</span>
               </div>
               <div className="mt-5 flex flex-wrap gap-2">
                 <button
@@ -344,7 +344,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                     'rounded-full border px-4 py-2 text-sm transition',
                     mode === 'history_node'
                       ? 'border-sky-300/35 bg-sky-500/12 text-sky-50'
-                      : 'border-white/10 bg-black/20 text-zinc-300 hover:bg-white/[0.05]'
+                      : 'border-line/10 bg-shade/20 text-zinc-300 hover:bg-overlay/[0.05]'
                   )}
                 >
                   {t('futureMap.historyNodeMode')}
@@ -363,7 +363,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                     'rounded-full border px-4 py-2 text-sm transition',
                     mode === 'direct_chapter'
                       ? 'border-sky-300/35 bg-sky-500/12 text-sky-50'
-                      : 'border-white/10 bg-black/20 text-zinc-300 hover:bg-white/[0.05]'
+                      : 'border-line/10 bg-shade/20 text-zinc-300 hover:bg-overlay/[0.05]'
                   )}
                 >
                   {t('futureMap.directChapterMode')}
@@ -373,7 +373,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
 
             {loading ? (
               <div className="flex flex-1 items-center justify-center px-6 py-12 text-sm text-zinc-200">
-                <div className="flex items-center gap-2 rounded-[24px] border border-white/8 bg-black/20 px-5 py-4">
+                <div className="flex items-center gap-2 rounded-[24px] border border-line/8 bg-shade/20 px-5 py-4">
                   <LoaderCircle className="h-4 w-4 animate-spin text-sky-300" />
                   {t('futureMap.loading')}
                 </div>
@@ -384,7 +384,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
               </div>
             ) : data ? (
               <div data-testid="future-map-layout" className="grid min-w-0 flex-1 gap-4 p-4 sm:p-5 lg:grid-cols-[248px_minmax(0,1.3fr)_360px] lg:p-6">
-                <aside data-testid="future-map-tracks" className="min-w-0 rounded-[28px] border border-white/8 bg-black/20 p-4">
+                <aside data-testid="future-map-tracks" className="min-w-0 rounded-[28px] border border-line/8 bg-shade/20 p-4">
                   <div className="flex items-center gap-2 text-zinc-200">
                     <GitBranch className="h-4 w-4 text-sky-300" />
                     <h4 className="text-sm font-medium">Tracks</h4>
@@ -402,7 +402,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                           onClick={() => handleTrackSelect(track.trackKey)}
                           className={cn(
                             'w-full rounded-[22px] border px-3 py-3 text-left transition',
-                            selected ? 'border-sky-300/35 bg-sky-500/12 text-sky-50' : 'border-white/8 bg-white/[0.03] text-zinc-200 hover:bg-white/[0.06]'
+                            selected ? 'border-sky-300/35 bg-sky-500/12 text-sky-50' : 'border-line/8 bg-overlay/[0.03] text-zinc-200 hover:bg-overlay/[0.06]'
                           )}
                         >
                           <div className="flex items-start justify-between gap-3">
@@ -410,7 +410,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                               <p className="text-sm font-medium">{track.phaseLabel || track.trackKey}</p>
                               <p className="mt-1 text-xs text-zinc-400">{track.trackKey}</p>
                             </div>
-                            <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] text-zinc-300">{track.eventCount}</span>
+                            <span className="rounded-full border border-line/10 bg-shade/20 px-2.5 py-1 text-[11px] text-zinc-300">{track.eventCount}</span>
                           </div>
                         </button>
                       )
@@ -418,7 +418,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                   </div>
                 </aside>
 
-                <section data-testid="future-map-candidates" className="min-w-0 rounded-[28px] border border-white/8 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.08),_transparent_40%),#0b0d12] p-4 sm:p-5">
+                <section data-testid="future-map-candidates" className="min-w-0 rounded-[28px] border border-line/8 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.08),_transparent_40%),var(--surface)] p-4 sm:p-5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{mode === 'history_node' ? 'History nodes' : 'Direct chapter anchors'}</p>
@@ -428,7 +428,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                           : t('futureMap.selectTrack')}
                       </h4>
                     </div>
-                    <div className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] text-zinc-300">
+                    <div className="rounded-full border border-line/10 bg-shade/20 px-3 py-1.5 text-[11px] text-zinc-300">
                       authored vs derived provenance visible
                     </div>
                   </div>
@@ -459,7 +459,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                                   'w-full rounded-[24px] border p-4 text-left transition',
                                   selected
                                     ? 'border-sky-300/35 bg-sky-500/12 shadow-[0_18px_60px_rgba(14,165,233,0.12)]'
-                                    : 'border-white/8 bg-black/20 hover:border-white/15 hover:bg-white/[0.05]'
+                                    : 'border-line/8 bg-shade/20 hover:border-line/15 hover:bg-overlay/[0.05]'
                                 )}
                               >
                                 <div className="flex items-start justify-between gap-3">
@@ -469,11 +469,11 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                                   </div>
                                   <div className="flex flex-wrap gap-2 text-[11px]">
                                     <span className={cn('rounded-full border px-2.5 py-1', sourceMeta.tone)}>{sourceMeta.label}</span>
-                                    <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-zinc-300">
+                                    <span className="rounded-full border border-line/10 bg-shade/20 px-2.5 py-1 text-zinc-300">
                                       {t('whatIf.deltaConfidence', { value: formatConfidence(option.event.confidence, t('whatIf.unlabeled')) })}
                                     </span>
                                     {option.chapter.isPrimary ? (
-                                      <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] text-zinc-300">primary</span>
+                                      <span className="rounded-full border border-line/10 bg-shade/20 px-2.5 py-1 text-[11px] text-zinc-300">primary</span>
                                     ) : null}
                                   </div>
                                 </div>
@@ -486,13 +486,13 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                           })}
                     </div>
                   ) : (
-                    <div className="mt-4 rounded-[24px] border border-dashed border-white/10 bg-black/20 p-5 text-sm leading-6 text-zinc-400">
+                    <div className="mt-4 rounded-[24px] border border-dashed border-line/10 bg-shade/20 p-5 text-sm leading-6 text-zinc-400">
                       {t('futureMap.noCandidates', { kind: mode === 'history_node' ? t('futureMap.nodeKind') : t('futureMap.chapterKind') })}
                     </div>
                   )}
                 </section>
 
-                <aside data-testid="future-map-confirmation" className="min-w-0 rounded-[28px] border border-white/8 bg-black/20 p-4 sm:p-5">
+                <aside data-testid="future-map-confirmation" className="min-w-0 rounded-[28px] border border-line/8 bg-shade/20 p-4 sm:p-5">
                   <div className="flex items-center gap-2 text-zinc-200">
                     <Sparkles className="h-4 w-4 text-sky-300" />
                     <h4 className="text-sm font-medium">Confirm target</h4>
@@ -503,7 +503,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                       : t('futureMap.directChapterModeHint')}
                   </p>
 
-                  <div className="mt-4 rounded-[22px] border border-white/8 bg-white/[0.03] p-4">
+                  <div className="mt-4 rounded-[22px] border border-line/8 bg-overlay/[0.03] p-4">
                     <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{mode === 'history_node' ? 'Step 1 · History node' : 'Step 1 · Direct chapter'}</p>
                     {selectedEvent ? (
                       <div className="mt-2 space-y-2">
@@ -515,7 +515,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                     )}
                   </div>
 
-                  <div className="mt-4 rounded-[22px] border border-white/8 bg-white/[0.03] p-4">
+                  <div className="mt-4 rounded-[22px] border border-line/8 bg-overlay/[0.03] p-4">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Step 2 · Resolved chapter</p>
                       <span className="text-[11px] text-zinc-500">{mode === 'history_node' ? 'auto-bound' : chapterOptions.length ? 'selected' : 'pending'}</span>
@@ -531,11 +531,11 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                               <p className="text-sm font-medium text-sky-50">{t('graph.chapterOnly', { chapterNo: selectedChapter.chapterNo })}</p>
                               <p className="mt-1 text-xs text-sky-100/75">{selectedChapter.chapterTitle || selectedChapter.chapterId || t('futureMap.unnamedChapterAnchor')}</p>
                             </div>
-                            {selectedChapter.isPrimary ? <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] text-zinc-300">primary</span> : null}
+                            {selectedChapter.isPrimary ? <span className="rounded-full border border-line/10 bg-shade/20 px-2.5 py-1 text-[11px] text-zinc-300">primary</span> : null}
                           </div>
                         </div>
                       ) : (
-                        <div className="rounded-[18px] border border-dashed border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-zinc-400">
+                        <div className="rounded-[18px] border border-dashed border-line/10 bg-shade/20 px-3 py-3 text-sm leading-6 text-zinc-400">
                           {selectedEvent ? t('futureMap.noResolvedChapterForSelection') : t('futureMap.noResolvedChapterYet')}
                         </div>
                       )}
@@ -549,7 +549,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                       onChange={(event) => setUserDirection(event.target.value)}
                       rows={4}
                       placeholder={t('futureMap.optionalDirectionPlaceholder')}
-                      className="mt-2 w-full rounded-[20px] border border-white/10 bg-[#0b0d12] px-3 py-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
+                      className="mt-2 w-full rounded-[20px] border border-line/10 bg-surface px-3 py-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
                     />
                   </label>
 

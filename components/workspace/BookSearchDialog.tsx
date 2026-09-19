@@ -98,7 +98,7 @@ export function BookSearchDialog({ novelId, onClose, onSelect }: {
             <label key={value} className="relative cursor-pointer">
               <input type="radio" name="book-search-mode" value={value} checked={mode === value}
                 onChange={() => changeMode(value)} className="peer absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0" />
-              <span className="flex min-h-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-3 text-sm text-zinc-400 transition peer-checked:border-violet-300/40 peer-checked:bg-violet-500/20 peer-checked:text-violet-100 peer-focus-visible:ring-2 peer-focus-visible:ring-violet-300/70">
+              <span className="flex min-h-11 items-center justify-center rounded-xl border border-line/10 bg-overlay/[0.03] px-3 text-sm text-zinc-400 transition peer-checked:border-violet-300/40 peer-checked:bg-violet-500/20 peer-checked:text-violet-100 peer-focus-visible:ring-2 peer-focus-visible:ring-violet-300/70">
                 {t(value === 'semantic' ? 'bookSearch.semantic' : 'bookSearch.exact')}
               </span>
             </label>
@@ -109,7 +109,7 @@ export function BookSearchDialog({ novelId, onClose, onSelect }: {
         <input ref={inputRef} type="search" value={query} onChange={(event) => changeQuery(event.target.value)}
           maxLength={BOOK_SEARCH_QUERY_LIMIT} aria-label={t('bookSearch.query')}
           placeholder={t(mode === 'semantic' ? 'bookSearch.placeholder' : 'bookSearch.exactPlaceholder')}
-          className="min-h-11 min-w-0 flex-1 rounded-xl border border-white/15 bg-black/20 px-3 text-sm outline-none focus:border-violet-300/60" />
+          className="min-h-11 min-w-0 flex-1 rounded-xl border border-line/15 bg-shade/20 px-3 text-sm outline-none focus:border-violet-300/60" />
         <button type="submit" disabled={loading || !query.trim()}
           className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-violet-500/20 px-4 text-sm text-violet-100 transition hover:bg-violet-500/30 disabled:opacity-50">
           {loading ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Search className="h-4 w-4" aria-hidden="true" />}
@@ -140,7 +140,7 @@ export function BookSearchDialog({ novelId, onClose, onSelect }: {
           {result.matches.map((match, index) => (
             <li key={`${match.chapterId}:${index}`}>
               <button type="button" onClick={() => onSelect(match)}
-                className="w-full rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-left transition hover:border-violet-300/30 hover:bg-violet-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70">
+                className="w-full rounded-2xl border border-line/10 bg-overlay/[0.03] p-4 text-left transition hover:border-violet-300/30 hover:bg-violet-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
                   <span>{t('bookSearch.chapter', { count: match.chapterNo })}</span>
                   {match.sourceType === 'rewrite' || match.sourceType === 'continue_block' ? (

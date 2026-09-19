@@ -219,7 +219,7 @@ export function FutureJumpView(props: {
   return (
     <div className="space-y-4 px-4 py-4 sm:px-7 sm:py-6" data-testid="workspace-future-jump-view">
       <section
-        className="overflow-hidden rounded-[28px] border border-sky-400/20 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.16),_transparent_42%),#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
+        className="overflow-hidden rounded-[28px] border border-sky-400/20 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.16),_transparent_42%),var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
         data-testid="future-jump-view"
       >
         <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-5 sm:px-6 sm:py-6">
@@ -230,16 +230,16 @@ export function FutureJumpView(props: {
             <p className="mt-3 text-sm leading-7 text-zinc-300">{t('futureJump.description')}</p>
           </div>
           <div className="flex flex-wrap gap-2 text-[11px] text-zinc-300">
-            {readableLabel ? <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1.5">{readableLabel}</span> : null}
-            {instructionPreview ? <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{t('continue.instructionPreview')} {instructionPreview}</span> : null}
-            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{t('futureJump.sourceChapter', { count: props.sourceChapterNo })}</span>
-            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{t('futureJump.targetChapter', { count: props.targetChapterNo })}</span>
+            {readableLabel ? <span className="rounded-full border border-sky-300/20 bg-shade/20 px-3 py-1.5">{readableLabel}</span> : null}
+            {instructionPreview ? <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1.5">{t('continue.instructionPreview')} {instructionPreview}</span> : null}
+            <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1.5">{t('futureJump.sourceChapter', { count: props.sourceChapterNo })}</span>
+            <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1.5">{t('futureJump.targetChapter', { count: props.targetChapterNo })}</span>
           </div>
         </div>
       </section>
 
       {loading ? (
-        <section className="rounded-[24px] border border-white/8 bg-black/20 p-5 text-sm text-zinc-300">
+        <section className="rounded-[24px] border border-line/8 bg-shade/20 p-5 text-sm text-zinc-300">
           <div className="flex items-center gap-2 text-zinc-100">
             <LoaderCircle className="h-4 w-4 animate-spin text-sky-300" />
             {t('futureJump.loading')}

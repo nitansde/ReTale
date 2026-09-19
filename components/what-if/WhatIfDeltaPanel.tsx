@@ -27,14 +27,14 @@ export function WhatIfDeltaPanel(props: {
           <h3 className="mt-2 text-lg font-semibold text-zinc-100">{t('whatIf.deltaTitle')}</h3>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">{t('whatIf.deltaDescription')}</p>
         </div>
-        <span className="rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] text-fuchsia-100">
+        <span className="rounded-full border border-fuchsia-300/20 bg-shade/20 px-3 py-1 text-[11px] text-fuchsia-100">
           {t('whatIf.deltaCount', { count: props.deltas.length })}
         </span>
       </div>
 
       <ul className="mt-4 space-y-3" data-testid="what-if-delta-list">
         {props.deltas.map((delta) => (
-          <li key={delta.id} className="rounded-[20px] border border-white/8 bg-black/20 p-4">
+          <li key={delta.id} className="rounded-[20px] border border-line/8 bg-shade/20 p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{delta.deltaType.replaceAll('_', ' ')}</p>
@@ -42,9 +42,9 @@ export function WhatIfDeltaPanel(props: {
               </div>
               <div className="flex flex-wrap gap-2 text-[11px]">
                 {delta.validFromChapter !== null ? (
-                  <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-zinc-300">{t('whatIf.deltaValidFromChapter', { chapterNo: delta.validFromChapter })}</span>
+                  <span className="rounded-full border border-line/10 bg-shade/20 px-2.5 py-1 text-zinc-300">{t('whatIf.deltaValidFromChapter', { chapterNo: delta.validFromChapter })}</span>
                 ) : null}
-                <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-zinc-300">{t('whatIf.deltaConfidence', { value: formatConfidence(delta.confidence, t('whatIf.unlabeled')) })}</span>
+                <span className="rounded-full border border-line/10 bg-shade/20 px-2.5 py-1 text-zinc-300">{t('whatIf.deltaConfidence', { value: formatConfidence(delta.confidence, t('whatIf.unlabeled')) })}</span>
               </div>
             </div>
 

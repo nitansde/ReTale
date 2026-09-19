@@ -66,8 +66,8 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
                   'inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-medium transition',
                   desktop ? 'border' : 'flex-1',
                   props.activeMode === mode
-                    ? 'border-violet-300/30 bg-violet-500/20 text-white'
-                    : 'border-white/10 bg-black/20 text-zinc-200 hover:bg-white/[0.08]',
+                    ? 'border-violet-300/30 bg-violet-500/20 text-heading'
+                    : 'border-line/10 bg-shade/20 text-zinc-200 hover:bg-overlay/[0.08]',
                   (!hasSelection || (mode === 'roleplay' && props.roleplaySessionStarting)) && 'cursor-not-allowed opacity-45'
                 )}
                 disabled={!hasSelection || (mode === 'roleplay' && props.roleplaySessionStarting)}
@@ -78,7 +78,7 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
             )
           })}
         </div>
-        {!desktop ? <button type="button" aria-label={t('workspace.mobile.clearSelection')} onClick={props.onClearSelection} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-white/5"><X className="h-4 w-4" aria-hidden="true" /></button> : null}
+        {!desktop ? <button type="button" aria-label={t('workspace.mobile.clearSelection')} onClick={props.onClearSelection} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-overlay/5"><X className="h-4 w-4" aria-hidden="true" /></button> : null}
       </div>
     )
   }
@@ -89,8 +89,8 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
         <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:flex-wrap">
           <button type="button" onClick={() => props.onReopenContinueBlockRewriteFlow('continue')} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.continue} className="min-h-11 shrink-0 rounded-2xl bg-fuchsia-500 px-4 text-sm font-medium text-white transition hover:bg-fuchsia-400">{t('workspace.continueWriting')}</button>
           <button type="button" onClick={() => props.onReopenContinueBlockRewriteFlow('regenerate')} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.regenerate} className="min-h-11 shrink-0 rounded-2xl border border-fuchsia-300/25 bg-fuchsia-500/10 px-4 text-sm text-fuchsia-50 transition hover:bg-fuchsia-500/20">{t('workspace.regenerateCurrentNode')}</button>
-          <button type="button" disabled={!props.hasFutureMapLaunch} onClick={props.onOpenContinueBlockFutureJump} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.futureJump} className="min-h-11 shrink-0 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-zinc-200 transition hover:bg-white/[0.08] disabled:opacity-50">{t('workspace.futureJumpRun')}</button>
-          <button type="button" onClick={props.onOpenAnchorChapter} className="min-h-11 shrink-0 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.backToAnchorChapter')}</button>
+          <button type="button" disabled={!props.hasFutureMapLaunch} onClick={props.onOpenContinueBlockFutureJump} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.futureJump} className="min-h-11 shrink-0 rounded-2xl border border-line/10 bg-shade/20 px-4 text-sm text-zinc-200 transition hover:bg-overlay/[0.08] disabled:opacity-50">{t('workspace.futureJumpRun')}</button>
+          <button type="button" onClick={props.onOpenAnchorChapter} className="min-h-11 shrink-0 rounded-2xl border border-line/10 bg-shade/20 px-4 text-sm text-zinc-200 transition hover:bg-overlay/[0.08]">{t('workspace.backToAnchorChapter')}</button>
         </div>
       </div>
     )
@@ -99,7 +99,7 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
   if (props.selection.kind === 'what_if') {
     return (
       <div data-testid="workspace-what-if-actions">
-        <button type="button" onClick={props.onOpenAnchorChapter} className="min-h-11 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.backToAnchorChapter')}</button>
+        <button type="button" onClick={props.onOpenAnchorChapter} className="min-h-11 rounded-2xl border border-line/10 bg-shade/20 px-4 text-sm text-zinc-200 transition hover:bg-overlay/[0.08]">{t('workspace.backToAnchorChapter')}</button>
       </div>
     )
   }
@@ -107,15 +107,15 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
   if (props.selection.kind === 'future_jump') {
     return (
       <div className="flex flex-wrap gap-2" data-testid="workspace-future-jump-actions">
-        <button type="button" onClick={props.onOpenFutureJumpSourceChapter} className="min-h-11 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.openSourceChapter')}</button>
-        <button type="button" onClick={props.onOpenFutureJumpTargetChapter} className="min-h-11 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.openTargetChapter')}</button>
+        <button type="button" onClick={props.onOpenFutureJumpSourceChapter} className="min-h-11 rounded-2xl border border-line/10 bg-shade/20 px-4 text-sm text-zinc-200 transition hover:bg-overlay/[0.08]">{t('workspace.openSourceChapter')}</button>
+        <button type="button" onClick={props.onOpenFutureJumpTargetChapter} className="min-h-11 rounded-2xl border border-line/10 bg-shade/20 px-4 text-sm text-zinc-200 transition hover:bg-overlay/[0.08]">{t('workspace.openTargetChapter')}</button>
       </div>
     )
   }
 
   return (
     <div data-testid="workspace-roleplay-session-actions">
-      <button type="button" onClick={props.onOpenAnchorChapter} className="min-h-11 rounded-2xl border border-white/10 bg-black/20 px-4 text-sm text-zinc-200 transition hover:bg-white/[0.08]">{t('workspace.backToAnchorChapter')}</button>
+      <button type="button" onClick={props.onOpenAnchorChapter} className="min-h-11 rounded-2xl border border-line/10 bg-shade/20 px-4 text-sm text-zinc-200 transition hover:bg-overlay/[0.08]">{t('workspace.backToAnchorChapter')}</button>
     </div>
   )
 }

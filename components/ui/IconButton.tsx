@@ -18,7 +18,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       type={type}
       aria-label={label}
       className={cn(
-        'inline-flex min-h-11 min-w-11 items-center justify-center rounded-2xl border border-white/10 bg-black/20 text-zinc-300 transition hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70 disabled:cursor-not-allowed disabled:opacity-50',
+        'inline-flex min-h-11 min-w-11 items-center justify-center rounded-2xl border border-line/10 bg-shade/20 text-zinc-300 transition hover:bg-overlay/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70 disabled:cursor-not-allowed disabled:opacity-50',
         className
       )}
       {...props}

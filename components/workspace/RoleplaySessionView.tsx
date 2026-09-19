@@ -487,7 +487,7 @@ export function RoleplaySessionView(props: {
 
   return (
     <div className="space-y-4 overflow-x-hidden px-3 py-3 sm:px-6 sm:py-5" data-testid="workspace-roleplay-session-view">
-      <section className="overflow-hidden rounded-[28px] border border-emerald-400/20 bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.14),_transparent_40%),#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+      <section className="overflow-hidden rounded-[28px] border border-emerald-400/20 bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.14),_transparent_40%),var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
         <div className="flex flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 max-w-3xl">
             <p className="text-[11px] uppercase tracking-[0.22em] text-emerald-200/70">{t('roleplay.persistedEyebrow')}</p>
@@ -497,13 +497,13 @@ export function RoleplaySessionView(props: {
             </p>
             <div className="mt-4 hidden flex-wrap gap-2 text-[11px] text-zinc-300 sm:flex">
               {metaPills.map((pill) => (
-                <span key={pill} className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{pill}</span>
+                <span key={pill} className="rounded-full border border-line/10 bg-shade/20 px-3 py-1.5">{pill}</span>
               ))}
             </div>
           </div>
 
           <div className="hidden w-full max-w-md space-y-2 sm:block">
-            <div className="rounded-[22px] border border-emerald-300/20 bg-black/20 px-4 py-3 text-xs text-emerald-100">
+            <div className="rounded-[22px] border border-emerald-300/20 bg-shade/20 px-4 py-3 text-xs text-emerald-100">
               {t('roleplay.timelineReopen')}
             </div>
             <div className="rounded-[22px] border border-amber-300/20 bg-amber-500/10 px-4 py-3 text-xs leading-6 text-amber-100">
@@ -514,7 +514,7 @@ export function RoleplaySessionView(props: {
       </section>
 
       {loading ? (
-        <section className="rounded-[24px] border border-white/8 bg-black/20 p-5 text-sm text-zinc-300">
+        <section className="rounded-[24px] border border-line/8 bg-shade/20 p-5 text-sm text-zinc-300">
           <div className="flex items-center gap-2 text-zinc-100">
             <LoaderCircle className="h-4 w-4 animate-spin text-emerald-300" />
             {t('roleplay.loading')}
@@ -529,8 +529,8 @@ export function RoleplaySessionView(props: {
       ) : null}
 
       {!loading && detail ? (
-        <section className="flex h-[calc(100dvh-19rem)] min-h-[420px] flex-col overflow-hidden rounded-[28px] border border-white/8 bg-[#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:min-h-[calc(100dvh-15rem)] sm:h-auto" data-testid="roleplay-chat-core">
-          <div className="border-b border-white/8 px-4 py-4 sm:px-5">
+        <section className="flex h-[calc(100dvh-19rem)] min-h-[420px] flex-col overflow-hidden rounded-[28px] border border-line/8 bg-surface shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:min-h-[calc(100dvh-15rem)] sm:h-auto" data-testid="roleplay-chat-core">
+          <div className="border-b border-line/8 px-4 py-4 sm:px-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('roleplay.sessionMessages')}</p>
@@ -549,13 +549,13 @@ export function RoleplaySessionView(props: {
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-zinc-300">{t('roleplay.messageCount', { count: detail.messages.length })}</span>
+              <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-zinc-300">{t('roleplay.messageCount', { count: detail.messages.length })}</span>
               <span
                 className={cn(
                   'rounded-full border px-3 py-1',
                   forkMessage
                     ? 'border-amber-300/25 bg-amber-500/10 text-amber-100'
-                    : 'border-white/10 bg-black/20 text-zinc-400'
+                    : 'border-line/10 bg-shade/20 text-zinc-400'
                 )}
                 data-testid="roleplay-fork-anchor"
               >
@@ -565,7 +565,7 @@ export function RoleplaySessionView(props: {
                 <button
                   type="button"
                   onClick={() => setForkMessageId(null)}
-                  className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-zinc-300 transition hover:bg-white/[0.08]"
+                  className="rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-zinc-300 transition hover:bg-overlay/[0.08]"
                 >
                    {t('roleplay.backToLatestBranch')}
                  </button>
@@ -596,10 +596,10 @@ export function RoleplaySessionView(props: {
                   disabled={!canForkFromMessage}
                   className={cn(
                     'block w-full min-w-0 rounded-[24px] border p-4 text-left transition',
-                    canForkFromMessage ? 'cursor-pointer hover:border-amber-300/30 hover:bg-white/[0.03]' : 'cursor-default',
+                    canForkFromMessage ? 'cursor-pointer hover:border-amber-300/30 hover:bg-overlay/[0.03]' : 'cursor-default',
                     isUser
                       ? 'border-emerald-300/16 bg-emerald-500/10 text-emerald-50'
-                      : 'border-white/8 bg-black/20 text-zinc-100',
+                      : 'border-line/8 bg-shade/20 text-zinc-100',
                     isForkTarget && 'border-amber-300/38 bg-amber-500/12 text-amber-50'
                   )}
                 >
@@ -650,7 +650,7 @@ export function RoleplaySessionView(props: {
             ) : null}
           </div>
 
-          <div className="sticky bottom-0 border-t border-white/8 bg-[linear-gradient(180deg,rgba(11,13,18,0.84),rgba(11,13,18,0.98))] px-3 pb-3 pt-3 backdrop-blur sm:px-4 sm:pb-4">
+          <div className="sticky bottom-0 border-t border-line/8 bg-[linear-gradient(180deg,rgb(var(--surface-rgb)/0.84),rgb(var(--surface-rgb)/0.98))] px-3 pb-3 pt-3 backdrop-blur sm:px-4 sm:pb-4">
             <div className="mb-3 flex flex-wrap items-start gap-2" data-testid="roleplay-fork-point-visual-state">
               {forkMessage ? (
                 <div className="inline-flex max-w-full items-start gap-2 rounded-[18px] border border-amber-300/22 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-100">
@@ -658,14 +658,14 @@ export function RoleplaySessionView(props: {
                   <span className="min-w-0 break-words">{t('roleplay.nextForkFrom', { index: forkMessage.messageIndex })}：{forkMessage.content.slice(0, 72)}{forkMessage.content.length > 72 ? '…' : ''}</span>
                 </div>
               ) : (
-                <div className="inline-flex items-center gap-2 rounded-[18px] border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-400">
+                <div className="inline-flex items-center gap-2 rounded-[18px] border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-400">
                   <CornerDownRight className="h-3.5 w-3.5" />
                   {t('roleplay.nextFollowLatest')}
                 </div>
               )}
             </div>
 
-            <div className="rounded-[26px] border border-white/10 bg-black/30 p-3 shadow-[0_-10px_30px_rgba(0,0,0,0.18)]">
+            <div className="rounded-[26px] border border-line/10 bg-shade/30 p-3 shadow-[0_-10px_30px_rgb(0_0_0/calc(0.18*var(--shadow-strength)))]">
               <textarea
                 ref={composerRef}
                 value={composerValue}
@@ -679,17 +679,17 @@ export function RoleplaySessionView(props: {
                   }
                 }}
                 placeholder={t('roleplay.composerPlaceholder')}
-                className="max-h-[220px] min-h-[84px] w-full resize-none overflow-y-auto rounded-[20px] border border-white/10 bg-[#0f1218] px-4 py-3 text-sm leading-7 text-zinc-100 outline-none transition focus:border-emerald-300/35"
+                className="max-h-[220px] min-h-[84px] w-full resize-none overflow-y-auto rounded-[20px] border border-line/10 bg-inset px-4 py-3 text-sm leading-7 text-zinc-100 outline-none transition focus:border-emerald-300/35"
               />
 
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                <details className="group max-w-full rounded-2xl border border-white/8 bg-black/20 px-3 py-2 text-xs text-zinc-400">
+                <details className="group max-w-full rounded-2xl border border-line/8 bg-shade/20 px-3 py-2 text-xs text-zinc-400">
                   <summary className="flex cursor-pointer list-none items-center gap-2 text-zinc-300">
                     <Settings2 className="h-3.5 w-3.5" />
                     {t('roleplay.advancedSettings')}
                     <ChevronDown className="h-3.5 w-3.5 transition group-open:rotate-180" />
                   </summary>
-                  <div className="mt-3 space-y-3 border-t border-white/8 pt-3">
+                  <div className="mt-3 space-y-3 border-t border-line/8 pt-3">
                     <div>
                         <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('roleplay.sourceExcerpt')}</p>
                         <p className="mt-2 whitespace-pre-wrap break-words leading-6 text-zinc-300">{detail.sourceSnapshot.selectedText.trim() || detail.sourceSnapshot.textSnapshot.trim() || t('roleplay.sourceExcerptEmpty')}</p>

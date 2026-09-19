@@ -128,31 +128,31 @@ export function ContinueBlockDetailView(props: {
 
   return (
     <div className="space-y-0 sm:space-y-4 sm:px-7 sm:py-6" data-testid="workspace-continue-block-view">
-      <section className="overflow-hidden border-b border-fuchsia-400/15 bg-[radial-gradient(circle_at_top,_rgba(217,70,239,0.1),_transparent_45%),#0b0d12] sm:rounded-[28px] sm:border sm:border-fuchsia-400/20 sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+      <section className="overflow-hidden border-b border-fuchsia-400/15 bg-[radial-gradient(circle_at_top,_rgba(217,70,239,0.1),_transparent_45%),var(--surface)] sm:rounded-[28px] sm:border sm:border-fuchsia-400/20 sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
         <div className="flex flex-col gap-4 px-5 py-5 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-3xl">
             <p className="text-[11px] uppercase tracking-[0.22em] text-fuchsia-200/70">{t('continue.savedEyebrow')}</p>
             <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{readableLabel || effectiveDetail?.title || props.nodeTitle || t('continue.defaultTitle')}</h3>
             <p className="mt-2 text-sm leading-6 text-zinc-400">{displaySubtitle}</p>
             {userRequest ? (
-              <div className="mt-4 rounded-[20px] border border-fuchsia-300/16 bg-black/20 px-4 py-3" data-testid="continue-block-user-request">
+              <div className="mt-4 rounded-[20px] border border-fuchsia-300/16 bg-shade/20 px-4 py-3" data-testid="continue-block-user-request">
                 <p className="text-[10px] uppercase tracking-[0.16em] text-fuchsia-200/65">{t('continue.userRequest')}</p>
                 <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-fuchsia-50">{userRequest}</p>
               </div>
             ) : null}
             <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-zinc-300">
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{t('continue.revision', { count: effectiveDetail?.latestRevisionNo ?? 1 })}</span>
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">{readableLabel || t('continue.chapter', { count: props.anchorChapterNo })}</span>
+              <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1.5">{t('continue.revision', { count: effectiveDetail?.latestRevisionNo ?? 1 })}</span>
+              <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1.5">{readableLabel || t('continue.chapter', { count: props.anchorChapterNo })}</span>
             </div>
           </div>
-          <div className="hidden rounded-[22px] border border-fuchsia-300/20 bg-black/20 px-4 py-3 text-xs uppercase tracking-[0.18em] text-fuchsia-100 sm:block" data-testid="workspace-continue-block-reader-mode">
+          <div className="hidden rounded-[22px] border border-fuchsia-300/20 bg-shade/20 px-4 py-3 text-xs uppercase tracking-[0.18em] text-fuchsia-100 sm:block" data-testid="workspace-continue-block-reader-mode">
             {t('continue.readerMode')}
           </div>
         </div>
       </section>
 
       {loading ? (
-        <section className="rounded-[24px] border border-white/8 bg-black/20 p-5 text-sm text-zinc-300">
+        <section className="rounded-[24px] border border-line/8 bg-shade/20 p-5 text-sm text-zinc-300">
           <div className="flex items-center gap-2 text-zinc-100">
             <LoaderCircle className="h-4 w-4 animate-spin text-fuchsia-300" />
             {t('continue.loading')}
@@ -168,30 +168,30 @@ export function ContinueBlockDetailView(props: {
 
       {effectiveDetail ? (
         <>
-          <section className="bg-[#0b0d12] px-5 py-5 sm:rounded-[28px] sm:border sm:border-white/8 sm:p-6 sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+          <section className="bg-surface px-5 py-5 sm:rounded-[28px] sm:border sm:border-line/8 sm:p-6 sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
             <div className="mb-3 hidden items-center justify-between gap-3 sm:flex">
               <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('continue.latestRevision')}</p>
             </div>
-            <div className="bg-transparent sm:rounded-[24px] sm:border sm:border-white/8 sm:bg-black/20 sm:p-5">
+            <div className="bg-transparent sm:rounded-[24px] sm:border sm:border-line/8 sm:bg-shade/20 sm:p-5">
               {renderReaderBodyParagraphs(effectiveReaderText || t('continue.emptyBody'), 'text-zinc-200', 'workspace-continue-block-reader-body')}
             </div>
           </section>
 
           {historyEntries.length ? (
-            <section className="rounded-[28px] border border-white/8 bg-[#0b0d12] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:p-6" data-testid="continue-block-revision-history">
+            <section className="rounded-[28px] border border-line/8 bg-surface p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] sm:p-6" data-testid="continue-block-revision-history">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('continue.history')}</p>
                   <p className="mt-1 text-sm text-zinc-300">{t('continue.historyDescription')}</p>
                 </div>
-                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">{t('continue.historyCount', { count: historyEntries.length })}</span>
+                <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-[11px] text-zinc-300">{t('continue.historyCount', { count: historyEntries.length })}</span>
               </div>
 
               <div className="mt-4 space-y-4">
                 {historyEntries.map((revision) => {
                   const revisionUserRequest = normalizeStoryBranchInstructionText(revision.userInstruction)
                   return (
-                    <article key={`${revision.revisionNo}-${revision.createdAt}`} className="rounded-[24px] border border-white/8 bg-black/20 p-4" data-testid={`continue-block-history-item-${revision.revisionNo}`}>
+                    <article key={`${revision.revisionNo}-${revision.createdAt}`} className="rounded-[24px] border border-line/8 bg-shade/20 p-4" data-testid={`continue-block-history-item-${revision.revisionNo}`}>
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <p className="text-sm font-medium text-zinc-100">{t('continue.historyRevision', { count: revision.revisionNo, kind: revision.revisionKind })}</p>
@@ -202,7 +202,7 @@ export function ContinueBlockDetailView(props: {
                             </div>
                           ) : null}
                         </div>
-                        <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-400">
+                        <div className="inline-flex items-center gap-2 rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-[11px] text-zinc-400">
                           <Clock3 className="h-3.5 w-3.5" />
                           {formatCreatedAt(revision.createdAt)}
                         </div>

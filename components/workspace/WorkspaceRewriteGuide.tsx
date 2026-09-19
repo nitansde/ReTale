@@ -21,7 +21,7 @@ export function WorkspaceRewriteGuide({ modelConfigured, provider, onOpenSetting
         onClick={() => setOpen(true)}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className="flex min-h-12 min-w-14 flex-1 flex-col items-center justify-center gap-1 rounded-xl text-xs text-violet-200 hover:bg-white/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70"
+        className="flex min-h-12 min-w-14 flex-1 flex-col items-center justify-center gap-1 rounded-xl text-xs text-violet-200 hover:bg-overlay/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70"
       >
         <Wand2 className="h-4 w-4 shrink-0 text-violet-300" aria-hidden="true" />
         {t('workspace.rewriteGuide.action')}

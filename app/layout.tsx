@@ -2,7 +2,9 @@ import type { Metadata } from 'next'
 import { Geist, Noto_Sans_SC, Noto_Serif_SC } from 'next/font/google'
 import { cookies } from 'next/headers'
 import { FontPreferencesProvider } from '@/components/FontPreferencesProvider'
+import { ThemePreferencesProvider } from '@/components/ThemePreferencesProvider'
 import { FONT_PREFERENCES_COOKIE, getFontPreferenceStyles, parseFontPreferences } from '@/lib/font-preferences'
+import { parseThemePreference, THEME_PREFERENCE_COOKIE } from '@/lib/theme-preferences'
 import { I18nProvider } from '@/lib/i18n/provider'
 import { isLocale, LOCALE_STORAGE_KEY } from '@/lib/i18n/messages'
 import './globals.css'
@@ -40,6 +42,7 @@ export default async function RootLayout({
   const cookieStore = await cookies()
   const storedLocale = cookieStore.get(LOCALE_STORAGE_KEY)?.value
   const fontPreferences = parseFontPreferences(cookieStore.get(FONT_PREFERENCES_COOKIE)?.value)
+  const initialTheme = parseThemePreference(cookieStore.get(THEME_PREFERENCE_COOKIE)?.value)
   const localeCookiePresent = Boolean(storedLocale && isLocale(storedLocale))
   const initialLocale = localeCookiePresent && storedLocale && isLocale(storedLocale) ? storedLocale : 'zh'
 
@@ -47,14 +50,17 @@ export default async function RootLayout({
     <html
       lang={initialLocale === 'zh' ? 'zh-CN' : 'en'}
       data-locale={initialLocale}
+      data-theme={initialTheme}
       style={getFontPreferenceStyles(fontPreferences)}
       className={`${geistSans.variable} ${notoSansSC.variable} ${notoSerifSC.variable} h-full antialiased`}
     >
-      <body className="min-h-full bg-[#0a0c12] text-zinc-100">
+      <body className="min-h-full bg-background text-zinc-100">
         <I18nProvider initialLocale={initialLocale} localeCookiePresent={localeCookiePresent}>
-          <FontPreferencesProvider initialPreferences={fontPreferences}>
-            {children}
-          </FontPreferencesProvider>
+          <ThemePreferencesProvider initialTheme={initialTheme}>
+            <FontPreferencesProvider initialPreferences={fontPreferences}>
+              {children}
+            </FontPreferencesProvider>
+          </ThemePreferencesProvider>
         </I18nProvider>
       </body>
     </html>

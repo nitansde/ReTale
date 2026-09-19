@@ -30,13 +30,13 @@ export function ContextWarningButton({ warnings, overview }: {
       {t('contextWarning.badge', { count: issues.length })}
     </button>
     <DialogSurface open={open} onClose={() => setOpen(false)} title={t('contextWarning.title')} description={t('contextWarning.description')} closeLabel={t('common.close')} placement="bottom" className="mx-auto max-w-lg">
-      <ul className="divide-y divide-white/10">
+      <ul className="divide-y divide-line/10">
         {issues.map((issue) => <li key={issue} className="flex items-start gap-3 py-3 first:pt-0">
           <AlertTriangle className="mt-1 h-4 w-4 shrink-0 text-amber-300" aria-hidden="true" />
           <p className="text-sm leading-6 text-zinc-300">{issue}</p>
         </li>)}
       </ul>
-      <p className="mt-4 border-t border-white/10 pt-4 text-sm leading-6 text-zinc-400">{t('contextWarning.nextStep')}</p>
+      <p className="mt-4 border-t border-line/10 pt-4 text-sm leading-6 text-zinc-400">{t('contextWarning.nextStep')}</p>
     </DialogSurface>
   </>
 }

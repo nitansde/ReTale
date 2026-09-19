@@ -230,20 +230,20 @@ export function PresetCompatBuiltinSystemPromptEditor({
           const rule = library.builtinSystemPrompts[surfaceId]
           const surfaceMeta = PRESET_COMPAT_EDITABLE_SURFACE_META[surfaceId]
           return (
-            <div key={surfaceId} className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4">
+            <div key={surfaceId} className="rounded-[20px] border border-line/8 bg-surface p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-medium text-zinc-100">{surfaceMeta.label}</p>
                   <p className="mt-1 text-xs leading-5 text-zinc-500">{t('preset.builtin.ownedNoExport')}</p>
                   <p className="mt-1 text-xs leading-5 text-zinc-500">{surfaceMeta.builtinPromptSummary}</p>
                 </div>
-                <label className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300">
+                <label className="inline-flex items-center gap-2 rounded-2xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300">
                   <input
                     type="checkbox"
                     data-testid={`preset-compat-builtin-system-toggle-${surfaceId}`}
                     checked={rule.enabled}
                     onChange={(event) => onUpdateBuiltinSystemPrompt(surfaceId, { enabled: event.target.checked })}
-                    className="h-3.5 w-3.5 rounded border-white/20 bg-transparent"
+                    className="h-3.5 w-3.5 rounded border-line/20 bg-transparent"
                   />
                   {t('preset.enabled')}
                 </label>
@@ -254,7 +254,7 @@ export function PresetCompatBuiltinSystemPromptEditor({
                   data-testid={`preset-compat-builtin-system-content-${surfaceId}`}
                   value={rule.content}
                   onChange={(event) => onUpdateBuiltinSystemPrompt(surfaceId, { content: event.target.value })}
-                  className="h-40 w-full rounded-[20px] border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-zinc-100 outline-none"
+                  className="h-40 w-full rounded-[20px] border border-line/10 bg-shade/20 px-4 py-3 text-sm leading-6 text-zinc-100 outline-none"
                 />
               </label>
             </div>
@@ -414,7 +414,7 @@ export function PresetCompatPresetEditor({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+      <div className="rounded-[24px] border border-line/8 bg-shade/20 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.details')}</p>
@@ -436,7 +436,7 @@ export function PresetCompatPresetEditor({
               type="button"
               data-testid={`preset-compat-preset-export-${preset.id}`}
               onClick={onExportPreset}
-              className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-zinc-100 transition hover:bg-white/[0.08]"
+              className="rounded-2xl border border-line/10 bg-overlay/[0.04] px-4 py-2 text-sm text-zinc-100 transition hover:bg-overlay/[0.08]"
             >
               {t('preset.exportPresetJson')}
             </button>
@@ -445,7 +445,7 @@ export function PresetCompatPresetEditor({
 
       </div>
 
-      <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+      <div className="rounded-[24px] border border-line/8 bg-shade/20 p-4">
         <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.surfaceBindings')}</p>
         <p className="mt-2 text-sm leading-6 text-zinc-400">{t('preset.surfaceBindingsDescription')}</p>
 
@@ -454,7 +454,7 @@ export function PresetCompatPresetEditor({
             const binding = library.surfaceBindings[surfaceId]
             const surfaceMeta = PRESET_COMPAT_EDITABLE_SURFACE_META[surfaceId]
             return (
-              <label key={surfaceId} className="block rounded-[20px] border border-white/8 bg-[#0b0d12] p-3">
+              <label key={surfaceId} className="block rounded-[20px] border border-line/8 bg-surface p-3">
                 <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">{surfaceMeta.label}</span>
                 <span
                   className="mb-3 block text-xs leading-5 text-zinc-500"
@@ -466,7 +466,7 @@ export function PresetCompatPresetEditor({
                   data-testid={`preset-compat-binding-${surfaceId}`}
                   value={binding?.presetId ?? ''}
                   onChange={(event) => onBindSurface(surfaceId, event.target.value || null)}
-                  className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
+                  className="w-full rounded-2xl border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 outline-none"
                 >
                   <option value="">{t('preset.noPreset')}</option>
                   {Object.values(library.presets).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
@@ -478,12 +478,12 @@ export function PresetCompatPresetEditor({
 
       </div>
 
-      <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+      <div className="rounded-[24px] border border-line/8 bg-shade/20 p-4">
         <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.generationSettings')}</p>
         <p className="mt-2 text-sm leading-6 text-zinc-400">{t('preset.generationSettingsDescription')}</p>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <label className="block rounded-[20px] border border-white/8 bg-[#0b0d12] p-3">
+          <label className="block rounded-[20px] border border-line/8 bg-surface p-3">
             <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">Context length</span>
             <input
               type="number"
@@ -491,10 +491,10 @@ export function PresetCompatPresetEditor({
               data-testid="preset-compat-runtime-openai-max-context"
               value={preset.runtimeSampler.openaiMaxContext ?? ''}
               onChange={(event) => updateRuntimeSamplerNumberField(event, 'openaiMaxContext', onUpdateRuntimeSampler)}
-              className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="w-full rounded-2xl border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 outline-none"
             />
           </label>
-          <label className="block rounded-[20px] border border-white/8 bg-[#0b0d12] p-3">
+          <label className="block rounded-[20px] border border-line/8 bg-surface p-3">
             <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">Max reply length</span>
             <input
               type="number"
@@ -502,10 +502,10 @@ export function PresetCompatPresetEditor({
               data-testid="preset-compat-runtime-max-tokens"
               value={preset.runtimeSampler.maxTokens ?? ''}
               onChange={(event) => updateRuntimeSamplerNumberField(event, 'maxTokens', onUpdateRuntimeSampler)}
-              className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="w-full rounded-2xl border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 outline-none"
             />
           </label>
-          <label className="block rounded-[20px] border border-white/8 bg-[#0b0d12] p-3">
+          <label className="block rounded-[20px] border border-line/8 bg-surface p-3">
             <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">Temperature</span>
             <input
               type="number"
@@ -513,10 +513,10 @@ export function PresetCompatPresetEditor({
               data-testid="preset-compat-runtime-temperature"
               value={preset.runtimeSampler.temperature ?? ''}
               onChange={(event) => updateRuntimeSamplerNumberField(event, 'temperature', onUpdateRuntimeSampler)}
-              className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="w-full rounded-2xl border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 outline-none"
             />
           </label>
-          <label className="block rounded-[20px] border border-white/8 bg-[#0b0d12] p-3">
+          <label className="block rounded-[20px] border border-line/8 bg-surface p-3">
             <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">Top P</span>
             <input
               type="number"
@@ -524,10 +524,10 @@ export function PresetCompatPresetEditor({
               data-testid="preset-compat-runtime-top-p"
               value={preset.runtimeSampler.topP ?? ''}
               onChange={(event) => updateRuntimeSamplerNumberField(event, 'topP', onUpdateRuntimeSampler)}
-              className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="w-full rounded-2xl border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 outline-none"
             />
           </label>
-          <label className="block rounded-[20px] border border-white/8 bg-[#0b0d12] p-3">
+          <label className="block rounded-[20px] border border-line/8 bg-surface p-3">
             <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">Frequency penalty</span>
             <input
               type="number"
@@ -535,10 +535,10 @@ export function PresetCompatPresetEditor({
               data-testid="preset-compat-runtime-frequency-penalty"
               value={preset.runtimeSampler.frequencyPenalty ?? ''}
               onChange={(event) => updateRuntimeSamplerNumberField(event, 'frequencyPenalty', onUpdateRuntimeSampler)}
-              className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="w-full rounded-2xl border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 outline-none"
             />
           </label>
-          <label className="block rounded-[20px] border border-white/8 bg-[#0b0d12] p-3">
+          <label className="block rounded-[20px] border border-line/8 bg-surface p-3">
             <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">Presence penalty</span>
             <input
               type="number"
@@ -546,16 +546,16 @@ export function PresetCompatPresetEditor({
               data-testid="preset-compat-runtime-presence-penalty"
               value={preset.runtimeSampler.presencePenalty ?? ''}
               onChange={(event) => updateRuntimeSamplerNumberField(event, 'presencePenalty', onUpdateRuntimeSampler)}
-              className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="w-full rounded-2xl border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 outline-none"
             />
           </label>
-          <label className="block rounded-[20px] border border-white/8 bg-[#0b0d12] p-3">
+          <label className="block rounded-[20px] border border-line/8 bg-surface p-3">
             <span className="mb-2 block text-xs uppercase tracking-[0.14em] text-zinc-500">Stream</span>
             <select
               data-testid="preset-compat-transport-stream-openai"
               value={preset.transport.streamOpenAI === null ? '' : String(preset.transport.streamOpenAI)}
               onChange={(event) => updateTransportStreamField(event, onUpdateTransport)}
-              className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="w-full rounded-2xl border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 outline-none"
             >
               <option value="">{t('preset.unset')}</option>
               <option value="true">{t('preset.enabled')}</option>
@@ -565,7 +565,7 @@ export function PresetCompatPresetEditor({
         </div>
       </div>
 
-      <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+      <div className="rounded-[24px] border border-line/8 bg-shade/20 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.runtimePromptPreview')}</p>
@@ -573,7 +573,7 @@ export function PresetCompatPresetEditor({
           </div>
           <div className="flex flex-wrap gap-2">
             {effectiveSelection ? (
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
+              <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-[11px] text-zinc-300">
                 {t('preset.scopeLabel', { value: activeSelectionLabel })}
               </span>
             ) : null}
@@ -586,19 +586,19 @@ export function PresetCompatPresetEditor({
         </div>
 
         <div className="mt-4 space-y-4">
-          <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4">
+          <div className="rounded-[20px] border border-line/8 bg-surface p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm leading-6 text-zinc-400">
                 {t('preset.previewManualHint')}
               </p>
               <div className="flex flex-wrap items-center gap-3">
-                <label className="block rounded-[18px] border border-white/8 bg-black/20 px-3 py-2">
+                <label className="block rounded-[18px] border border-line/8 bg-shade/20 px-3 py-2">
                   <span className="mb-2 block text-[11px] uppercase tracking-[0.14em] text-zinc-500">Surface</span>
                   <select
                     data-testid="preset-compat-preview-surface-select"
                     value={selectedPreviewSurfaceId}
                     onChange={handleSelectedPreviewSurfaceChange}
-                    className="w-full rounded-2xl border border-white/10 bg-[#090b10] px-4 py-2 text-sm text-zinc-100 outline-none"
+                    className="w-full rounded-2xl border border-line/10 bg-floating px-4 py-2 text-sm text-zinc-100 outline-none"
                   >
                     {PRESET_COMPAT_OPTED_IN_SURFACE_IDS.map((surfaceId) => <option key={surfaceId} value={surfaceId}>{SURFACE_LABELS[surfaceId]}</option>)}
                   </select>
@@ -607,7 +607,7 @@ export function PresetCompatPresetEditor({
                   type="button"
                   data-testid="preset-compat-preview-generate"
                   onClick={handleGenerateSurfacePreviews}
-                  className="rounded-2xl border border-white/10 bg-black/20 px-4 py-2 text-sm text-zinc-100 transition hover:bg-white/[0.06]"
+                  className="rounded-2xl border border-line/10 bg-shade/20 px-4 py-2 text-sm text-zinc-100 transition hover:bg-overlay/[0.06]"
                 >
                   {previewGenerationStatus === 'idle' ? t('preset.preview.generate') : previewGenerationStatus === 'generating' ? t('preset.preview.refreshing') : t('preset.preview.refresh')}
                 </button>
@@ -617,7 +617,7 @@ export function PresetCompatPresetEditor({
 
           {surfacePreview ? (
             <div
-              className="rounded-[22px] border border-white/8 bg-[#0b0d12] p-4"
+              className="rounded-[22px] border border-line/8 bg-surface p-4"
               data-testid={`preset-compat-preview-surface-${surfacePreview.surfaceId}`}
             >
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -638,7 +638,7 @@ export function PresetCompatPresetEditor({
                     type="button"
                     data-testid={`preset-compat-session-reset-${surfacePreview.surfaceId}`}
                     onClick={() => resetPresetCompatSessionStateForSelection(effectiveSelection, [surfacePreview.surfaceId], getResetPhaseForSurface())}
-                    className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-200 transition hover:bg-white/[0.06]"
+                    className="rounded-2xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-200 transition hover:bg-overlay/[0.06]"
                   >
                     {t('preset.resetCurrentContext')}
                   </button>
@@ -646,32 +646,32 @@ export function PresetCompatPresetEditor({
               </div>
 
               <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                <label className="block rounded-[18px] border border-white/8 bg-black/20 p-3">
+                <label className="block rounded-[18px] border border-line/8 bg-shade/20 p-3">
                   <span className="mb-2 block text-[11px] uppercase tracking-[0.14em] text-zinc-500">System preview</span>
                   <textarea
                     readOnly
                     value={surfacePreview.promptPreview.systemPrompt}
                     data-testid={`preset-compat-preview-system-${surfacePreview.surfaceId}`}
-                    className="h-28 w-full rounded-2xl border border-white/10 bg-[#090b10] px-4 py-3 text-xs leading-6 text-zinc-200 outline-none"
+                    className="h-28 w-full rounded-2xl border border-line/10 bg-floating px-4 py-3 text-xs leading-6 text-zinc-200 outline-none"
                   />
                 </label>
-                <label className="block rounded-[18px] border border-white/8 bg-black/20 p-3">
+                <label className="block rounded-[18px] border border-line/8 bg-shade/20 p-3">
                   <span className="mb-2 block text-[11px] uppercase tracking-[0.14em] text-zinc-500">User preview</span>
                   <textarea
                     readOnly
                     value={surfacePreview.promptPreview.userPrompt}
                     data-testid={`preset-compat-preview-user-${surfacePreview.surfaceId}`}
-                    className="h-28 w-full rounded-2xl border border-white/10 bg-[#090b10] px-4 py-3 text-xs leading-6 text-zinc-200 outline-none"
+                    className="h-28 w-full rounded-2xl border border-line/10 bg-floating px-4 py-3 text-xs leading-6 text-zinc-200 outline-none"
                   />
                 </label>
               </div>
             </div>
           ) : previewGenerationStatus === 'generating' ? (
-            <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">
+            <div className="rounded-[20px] border border-line/8 bg-surface p-4 text-sm text-zinc-400">
               {t('preset.generatingRuntimePreview')}
             </div>
           ) : (
-            <div className="rounded-[20px] border border-dashed border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-500">
+            <div className="rounded-[20px] border border-dashed border-line/8 bg-surface p-4 text-sm text-zinc-500">
               {t('preset.generatePreviewHint')}
             </div>
           )}
@@ -683,30 +683,30 @@ export function PresetCompatPresetEditor({
         onUpdateBuiltinSystemPrompt={onUpdateBuiltinSystemPrompt}
       />
 
-      <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+      <div className="rounded-[24px] border border-line/8 bg-shade/20 p-4">
         <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.promptRules')}</p>
         <div className="mt-4 space-y-3">
           {firstPromptRule ? (() => {
             const activeOnSurfaceCount = PRESET_COMPAT_OPTED_IN_SURFACE_IDS.filter((surfaceId) => preset.promptOrderLists[surfaceId]?.includes(firstPromptRule.id)).length
 
             return (
-              <div key={firstPromptRule.id} className="rounded-[22px] border border-white/8 bg-[#0b0d12] p-4">
+              <div key={firstPromptRule.id} className="rounded-[22px] border border-line/8 bg-surface p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-medium text-zinc-100">{firstPromptRule.name}</p>
-                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.roleLabel', { role: firstPromptRule.role })}</span>
-                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.activeOnSurfaceCount', { count: activeOnSurfaceCount })}</span>
+                      <span className="rounded-full border border-line/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.roleLabel', { role: firstPromptRule.role })}</span>
+                      <span className="rounded-full border border-line/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.activeOnSurfaceCount', { count: activeOnSurfaceCount })}</span>
                     </div>
                   </div>
 
-                  <label className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300">
+                  <label className="inline-flex items-center gap-2 rounded-2xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300">
                     <input
                       type="checkbox"
                       data-testid={`preset-compat-rule-toggle-${firstPromptRule.id}`}
                       checked={firstPromptRule.enabled}
                       onChange={(event) => onUpdatePromptRule(firstPromptRule.id, { enabled: event.target.checked })}
-                      className="h-3.5 w-3.5 rounded border-white/20 bg-transparent"
+                      className="h-3.5 w-3.5 rounded border-line/20 bg-transparent"
                     />
                     {t('preset.enabled')}
                   </label>
@@ -719,7 +719,7 @@ export function PresetCompatPresetEditor({
                     value={firstPromptRule.content}
                     disabled={firstPromptRule.forbidOverrides}
                     onChange={(event) => handleRuleContentChange(event, firstPromptRule.id, firstPromptRule.forbidOverrides, onUpdatePromptRule)}
-                    className="h-28 w-full rounded-[20px] border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none disabled:cursor-not-allowed disabled:text-zinc-500"
+                    className="h-28 w-full rounded-[20px] border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 outline-none disabled:cursor-not-allowed disabled:text-zinc-500"
                   />
                 </label>
               </div>
@@ -730,23 +730,23 @@ export function PresetCompatPresetEditor({
             const activeOnSurfaceCount = PRESET_COMPAT_OPTED_IN_SURFACE_IDS.filter((surfaceId) => preset.promptOrderLists[surfaceId]?.includes(rule.id)).length
 
             return (
-              <div key={rule.id} className="rounded-[22px] border border-white/8 bg-[#0b0d12] p-4">
+              <div key={rule.id} className="rounded-[22px] border border-line/8 bg-surface p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-medium text-zinc-100">{rule.name}</p>
-                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.roleLabel', { role: rule.role })}</span>
-                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.activeOnSurfaceCount', { count: activeOnSurfaceCount })}</span>
+                      <span className="rounded-full border border-line/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.roleLabel', { role: rule.role })}</span>
+                      <span className="rounded-full border border-line/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.activeOnSurfaceCount', { count: activeOnSurfaceCount })}</span>
                     </div>
                   </div>
 
-                  <label className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300">
+                  <label className="inline-flex items-center gap-2 rounded-2xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300">
                     <input
                       type="checkbox"
                       data-testid={`preset-compat-rule-toggle-${rule.id}`}
                       checked={rule.enabled}
                       onChange={(event) => onUpdatePromptRule(rule.id, { enabled: event.target.checked })}
-                      className="h-3.5 w-3.5 rounded border-white/20 bg-transparent"
+                      className="h-3.5 w-3.5 rounded border-line/20 bg-transparent"
                     />
                     {t('preset.enabled')}
                   </label>
@@ -759,7 +759,7 @@ export function PresetCompatPresetEditor({
                     value={rule.content}
                     disabled={rule.forbidOverrides}
                     onChange={(event) => handleRuleContentChange(event, rule.id, rule.forbidOverrides, onUpdatePromptRule)}
-                    className="h-28 w-full rounded-[20px] border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none disabled:cursor-not-allowed disabled:text-zinc-500"
+                    className="h-28 w-full rounded-[20px] border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 outline-none disabled:cursor-not-allowed disabled:text-zinc-500"
                   />
                 </label>
               </div>
@@ -767,14 +767,14 @@ export function PresetCompatPresetEditor({
           })}
 
           {visibleDeferredPromptRuleCount < deferredPromptRules.length ? (
-            <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">
+            <div className="rounded-[20px] border border-line/8 bg-surface p-4 text-sm text-zinc-400">
               {t('preset.remainingRulesLoading', { count: deferredPromptRules.length - visibleDeferredPromptRuleCount })}
             </div>
           ) : null}
         </div>
       </div>
 
-      <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+      <div className="rounded-[24px] border border-line/8 bg-shade/20 p-4">
         <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.embeddedRegex')}</p>
         <div className="mt-4 space-y-3">
           {preset.embeddedRegexes.length ? preset.embeddedRegexes.map((regexRecord) => (
@@ -785,12 +785,12 @@ export function PresetCompatPresetEditor({
               onUpdate={(updates) => onUpdateEmbeddedRegex(regexRecord.id, updates)}
             />
           )) : (
-            <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">{t('preset.noEmbeddedRegex')}</div>
+            <div className="rounded-[20px] border border-line/8 bg-surface p-4 text-sm text-zinc-400">{t('preset.noEmbeddedRegex')}</div>
           )}
         </div>
       </div>
 
-      <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+      <div className="rounded-[24px] border border-line/8 bg-shade/20 p-4">
         <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.standaloneRegexLibrary')}</p>
         <p className="mt-2 text-sm leading-6 text-zinc-400">{t('preset.standaloneRegexLibraryDescription')}</p>
         <div className="mt-4 space-y-3">
@@ -810,7 +810,7 @@ export function PresetCompatPresetEditor({
               />
             )
           }) : (
-            <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">{t('preset.importStandaloneRegexFirst')}</div>
+            <div className="rounded-[20px] border border-line/8 bg-surface p-4 text-sm text-zinc-400">{t('preset.importStandaloneRegexFirst')}</div>
           )}
         </div>
       </div>

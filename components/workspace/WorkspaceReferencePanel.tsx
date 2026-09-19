@@ -26,8 +26,8 @@ export function WorkspaceReferencePanel(props: {
 
   if (desktop) {
     return (
-      <aside className="rounded-[30px] border border-white/10 bg-[#11141d] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.35)] sm:p-5" data-testid="workspace-reference-panel">
-        <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-black/20 px-3 py-2">
+      <aside className="rounded-[30px] border border-line/10 bg-raised p-4 shadow-[0_28px_90px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))] sm:p-5" data-testid="workspace-reference-panel">
+        <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-line/8 bg-shade/20 px-3 py-2">
           <span className="text-xs font-medium text-zinc-300">{t('workspace.context.title')}</span>
           <span className="text-[11px] text-zinc-500" data-testid="workspace-reference-selection-kind">{props.contextLabel}</span>
         </div>
@@ -54,7 +54,7 @@ export function WorkspaceReferencePanel(props: {
         <div data-testid="workspace-reference-panel">
           {props.selectionActions}
           {knowledgeIncomplete ? (
-            <div className="mb-4 border-b border-white/10 pb-4" data-testid="workspace-story-knowledge-guide">
+            <div className="mb-4 border-b border-line/10 pb-4" data-testid="workspace-story-knowledge-guide">
               <p className="text-sm leading-6 text-zinc-400">
                 {t(knowledgeBuilding ? 'workspace.context.knowledgeBuilding' : 'workspace.context.knowledgeIncomplete')}
               </p>

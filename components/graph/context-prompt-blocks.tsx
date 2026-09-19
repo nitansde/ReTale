@@ -51,13 +51,13 @@ export function ContextPromptBlocks(props: {
   }
 
   return (
-    <section className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+    <section className="rounded-[24px] border border-line/8 bg-shade/20 p-4">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('graph.promptBlocksEyebrow')}</p>
           <p className="mt-1 text-sm text-zinc-300">{t('graph.promptBlocksDescription')}</p>
         </div>
-        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-400">
+        <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-[11px] text-zinc-400">
           {t('graph.blocksCount', { count: props.blocks.length })}
         </span>
       </div>
@@ -86,14 +86,14 @@ export function ContextPromptBlocks(props: {
               key={block.id}
               className={cn(
                 'block rounded-[22px] border px-4 py-3 transition',
-                enabled ? 'border-amber-300/20 bg-amber-500/10' : 'border-white/8 bg-black/30 opacity-65'
+                enabled ? 'border-amber-300/20 bg-amber-500/10' : 'border-line/8 bg-shade/30 opacity-65'
               )}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-sm font-medium text-zinc-100">{block.label}</p>
-                    <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-0.5 text-[10px] uppercase tracking-[0.14em] text-zinc-500">
+                    <span className="rounded-full border border-line/10 bg-shade/20 px-2.5 py-0.5 text-[10px] uppercase tracking-[0.14em] text-zinc-500">
                       {priorityLabels[block.priority]}
                     </span>
                   </div>
@@ -106,7 +106,7 @@ export function ContextPromptBlocks(props: {
                       aria-expanded={isExpanded}
                       aria-label={`${isExpanded ? t('graph.collapseLongText') : t('graph.expandLongText')}：${block.label}`}
                       onClick={toggleExpanded}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] text-zinc-300 transition hover:bg-white/[0.06]"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-line/10 bg-shade/20 px-2.5 py-1 text-[11px] text-zinc-300 transition hover:bg-overlay/[0.06]"
                     >
                       {isExpanded ? t('graph.collapseLongText') : t('graph.expandLongText')}
                       <ChevronDown className={cn('h-3.5 w-3.5 transition', isExpanded && 'rotate-180')} />
@@ -117,7 +117,7 @@ export function ContextPromptBlocks(props: {
                     aria-label={block.label}
                     checked={enabled}
                     onChange={(event) => props.onToggle(block.id, event.target.checked)}
-                    className="h-4 w-4 rounded border-white/20 bg-black/20 text-amber-400"
+                    className="h-4 w-4 rounded border-line/20 bg-shade/20 text-amber-400"
                   />
                 </div>
               </div>
@@ -134,13 +134,13 @@ export function ContextPromptBlocks(props: {
                 ) : null}
               </div>
               {isLong && isExpanded ? (
-                <div className="mt-3 flex justify-end border-t border-white/8 pt-3">
+                <div className="mt-3 flex justify-end border-t border-line/8 pt-3">
                   <button
                     type="button"
                     aria-controls={contentId}
                     aria-expanded="true"
                     onClick={toggleExpanded}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-white/[0.06]"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-line/10 bg-shade/20 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-overlay/[0.06]"
                   >
                     <ChevronDown className="h-3.5 w-3.5 rotate-180" />
                     {t('graph.collapseLongText')}

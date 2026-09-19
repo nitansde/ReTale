@@ -45,7 +45,7 @@ export function PresetCompatRegexEditor({ title, regexRecord, onUpdate, attachme
   const runtimePlacements = regexRecord.placements.filter((placement) => SUPPORTED_RUNTIME_REGEX_PLACEMENTS.has(placement))
 
   return (
-    <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+    <div className="rounded-[24px] border border-line/8 bg-shade/20 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{title ?? 'Regex rule'}</p>
@@ -81,20 +81,20 @@ export function PresetCompatRegexEditor({ title, regexRecord, onUpdate, attachme
                 'rounded-2xl border px-3 py-2 text-xs transition',
                 attachment.attached
                   ? 'border-violet-400/30 bg-violet-500/12 text-violet-100 hover:bg-violet-500/20'
-                  : 'border-white/10 bg-black/20 text-zinc-300 hover:bg-white/[0.06]'
+                  : 'border-line/10 bg-shade/20 text-zinc-300 hover:bg-overlay/[0.06]'
               )}
             >
               {attachment.attached ? 'Detach from preset' : 'Attach to preset'}
             </button>
           ) : null}
 
-          <label className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300">
+          <label className="inline-flex items-center gap-2 rounded-2xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300">
             <input
               type="checkbox"
               data-testid={`preset-compat-${attachment ? 'standalone' : 'embedded'}-regex-toggle-${regexRecord.id}`}
               checked={!regexRecord.disabled}
               onChange={(event) => onUpdate({ disabled: !event.target.checked })}
-              className="h-3.5 w-3.5 rounded border-white/20 bg-transparent"
+              className="h-3.5 w-3.5 rounded border-line/20 bg-transparent"
             />
             Runtime enabled
           </label>
@@ -116,7 +116,7 @@ export function PresetCompatRegexEditor({ title, regexRecord, onUpdate, attachme
           <input
             value={regexRecord.name}
             onChange={(event) => updateTextField(event, onUpdate, 'name')}
-            className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+            className="w-full rounded-2xl border border-line/10 bg-surface px-4 py-3 text-sm text-zinc-100 outline-none"
           />
         </label>
         <label className="block">
@@ -124,7 +124,7 @@ export function PresetCompatRegexEditor({ title, regexRecord, onUpdate, attachme
           <input
             value={regexRecord.flags}
             onChange={(event) => updateTextField(event, onUpdate, 'flags')}
-            className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+            className="w-full rounded-2xl border border-line/10 bg-surface px-4 py-3 text-sm text-zinc-100 outline-none"
             placeholder="gim"
           />
         </label>
@@ -136,7 +136,7 @@ export function PresetCompatRegexEditor({ title, regexRecord, onUpdate, attachme
           <textarea
             value={regexRecord.pattern}
             onChange={(event) => updateTextField(event, onUpdate, 'pattern')}
-            className="h-24 w-full rounded-[20px] border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+            className="h-24 w-full rounded-[20px] border border-line/10 bg-surface px-4 py-3 text-sm text-zinc-100 outline-none"
           />
         </label>
         <label className="block">
@@ -144,7 +144,7 @@ export function PresetCompatRegexEditor({ title, regexRecord, onUpdate, attachme
           <textarea
             value={regexRecord.replacement}
             onChange={(event) => updateTextField(event, onUpdate, 'replacement')}
-            className="h-24 w-full rounded-[20px] border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+            className="h-24 w-full rounded-[20px] border border-line/10 bg-surface px-4 py-3 text-sm text-zinc-100 outline-none"
           />
         </label>
       </div>

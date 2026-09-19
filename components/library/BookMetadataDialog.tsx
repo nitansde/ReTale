@@ -77,7 +77,7 @@ export function BookMetadataDialog({
       <form onSubmit={handleSubmit} className="space-y-5">
         <div className="grid gap-5 sm:grid-cols-[140px_minmax(0,1fr)]">
           <div>
-            <div className="relative aspect-[3/4] overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04]">
+            <div className="relative aspect-[3/4] overflow-hidden rounded-2xl border border-line/10 bg-overlay/[0.04]">
               {displayedCover ? (
                 <Image src={displayedCover} alt={t('library.metadataCoverPreview', { title: title || novel.title })} fill unoptimized sizes="140px" className="object-cover" />
               ) : (
@@ -131,11 +131,11 @@ export function BookMetadataDialog({
           <div className="space-y-4">
             <label className="block text-sm text-zinc-300">
               <span className="mb-2 block">{t('library.metadataTitleLabel')}</span>
-              <input ref={titleInputRef} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={200} disabled={saving} className="min-h-11 w-full rounded-xl border border-white/10 bg-black/25 px-3 outline-none focus:border-indigo-300/45" />
+              <input ref={titleInputRef} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={200} disabled={saving} className="min-h-11 w-full rounded-xl border border-line/10 bg-shade/25 px-3 outline-none focus:border-indigo-300/45" />
             </label>
             <label className="block text-sm text-zinc-300">
               <span className="mb-2 block">{t('library.metadataAuthorLabel')}</span>
-              <input value={author} onChange={(event) => setAuthor(event.target.value)} maxLength={200} disabled={saving} placeholder={t('library.metadataAuthorPlaceholder')} className="min-h-11 w-full rounded-xl border border-white/10 bg-black/25 px-3 outline-none focus:border-indigo-300/45" />
+              <input value={author} onChange={(event) => setAuthor(event.target.value)} maxLength={200} disabled={saving} placeholder={t('library.metadataAuthorPlaceholder')} className="min-h-11 w-full rounded-xl border border-line/10 bg-shade/25 px-3 outline-none focus:border-indigo-300/45" />
             </label>
             <p className="text-xs leading-5 text-zinc-500">{t('library.metadataCoverHint')}</p>
           </div>
@@ -144,7 +144,7 @@ export function BookMetadataDialog({
         {error ? <div role="alert" className="rounded-xl bg-rose-500/10 px-3 py-2 text-sm text-rose-100">{error}</div> : null}
 
         <div className="flex justify-end gap-2">
-          <button type="button" disabled={saving} onClick={onClose} className="min-h-11 rounded-xl border border-white/10 px-4 text-sm text-zinc-300">{t('common.close')}</button>
+          <button type="button" disabled={saving} onClick={onClose} className="min-h-11 rounded-xl border border-line/10 px-4 text-sm text-zinc-300">{t('common.close')}</button>
           <button type="submit" disabled={saving} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-indigo-500 px-4 text-sm font-medium text-white disabled:opacity-50">
             {saving ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
             {saving ? t('library.metadataSaving') : t('library.metadataSave')}

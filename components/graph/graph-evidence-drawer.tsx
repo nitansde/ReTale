@@ -44,7 +44,7 @@ export function GraphEvidenceDrawer(props: {
   }
 
   return (
-    <section className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+    <section className="rounded-[24px] border border-line/8 bg-shade/20 p-4">
       <button
         type="button"
         onClick={props.onToggle}
@@ -54,7 +54,7 @@ export function GraphEvidenceDrawer(props: {
           <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{copy.eyebrow}</p>
           <p className="mt-1 text-sm text-zinc-300">{copy.description}</p>
         </div>
-        <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-zinc-400">
+        <span className="inline-flex items-center gap-2 rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-xs text-zinc-400">
           {props.evidence.length}
           <ChevronDown className={cn('h-4 w-4 transition', props.open && 'rotate-180')} />
         </span>
@@ -75,7 +75,7 @@ export function GraphEvidenceDrawer(props: {
                     onClick={() => {
                       if (props.selectedEdge) props.onJumpToEdgeSource?.(props.selectedEdge)
                     }}
-                    className="inline-flex items-center gap-2 rounded-full border border-sky-300/20 bg-black/20 px-3 py-1 text-[11px] text-sky-50 transition hover:bg-white/[0.06]"
+                    className="inline-flex items-center gap-2 rounded-full border border-sky-300/20 bg-shade/20 px-3 py-1 text-[11px] text-sky-50 transition hover:bg-overlay/[0.06]"
                   >
                     <ArrowUpRight className="h-3.5 w-3.5" />
                     {t('graph.jumpToSource')}
@@ -92,7 +92,7 @@ export function GraphEvidenceDrawer(props: {
               const excluded = Boolean(props.excludedEvidenceIds?.includes(item.id))
               const canJumpToSource = props.canJumpToEvidenceSource?.(item) ?? false
               return (
-                <article key={item.id} className={cn('rounded-[20px] border p-4', excluded ? 'border-amber-300/20 bg-amber-500/10' : 'border-white/8 bg-white/[0.03]')}>
+                <article key={item.id} className={cn('rounded-[20px] border p-4', excluded ? 'border-amber-300/20 bg-amber-500/10' : 'border-line/8 bg-overlay/[0.03]')}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">{item.sourceLabel}{item.title ? ` · ${item.title}` : ''}</p>
@@ -103,7 +103,7 @@ export function GraphEvidenceDrawer(props: {
                         <button
                           type="button"
                           onClick={() => props.onJumpToEvidenceSource?.(item)}
-                          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300 transition hover:bg-white/[0.06]"
+                          className="inline-flex items-center gap-2 rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-[11px] text-zinc-300 transition hover:bg-overlay/[0.06]"
                         >
                           <ArrowUpRight className="h-3.5 w-3.5" />
                           {t('graph.jumpToSource')}
@@ -113,7 +113,7 @@ export function GraphEvidenceDrawer(props: {
                         <button
                           type="button"
                           onClick={() => props.onToggleEvidenceExcluded?.(item, !excluded)}
-                          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300 transition hover:bg-white/[0.06]"
+                          className="inline-flex items-center gap-2 rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-[11px] text-zinc-300 transition hover:bg-overlay/[0.06]"
                         >
                           <Ban className="h-3.5 w-3.5" />
                           {excluded ? t('graph.includeThisRun') : t('graph.excludeThisRun')}
@@ -126,7 +126,7 @@ export function GraphEvidenceDrawer(props: {
               )
             })
           ) : (
-            <div className="rounded-[20px] border border-white/8 bg-black/30 p-4 text-sm text-zinc-400">
+            <div className="rounded-[20px] border border-line/8 bg-shade/30 p-4 text-sm text-zinc-400">
               {copy.empty}
             </div>
           )}

@@ -392,7 +392,7 @@ export function SelectionNovelStudio() {
     if (!chapterLoadError) return <LoadingScreen />
 
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#0a0c12] px-6 text-zinc-300" data-testid="chapter-loading">
+      <main className="flex min-h-screen items-center justify-center bg-background px-6 text-zinc-300" data-testid="chapter-loading">
         <div className="flex max-w-md flex-col items-center gap-4 text-center">
           <p role="alert">{chapterLoadError}</p>
           <button type="button" onClick={() => router.push('/library')} className="text-sm text-violet-300 hover:text-violet-200">
@@ -404,7 +404,7 @@ export function SelectionNovelStudio() {
   }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(129,140,248,0.12),_transparent_30%),#0a0c12] text-zinc-100">
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_var(--page-glow),_transparent_30%),var(--background)] text-zinc-100">
       <div className="mx-auto flex min-h-screen max-w-[1720px] flex-col px-0 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-0 sm:px-5 sm:pt-3 lg:px-6 lg:pb-10">
         {searchNovelId === currentNovelId ? (
           <BookSearchDialog key={currentNovelId} novelId={currentNovelId}
@@ -497,7 +497,7 @@ export function SelectionNovelStudio() {
                   onFinishEditing={core.readerMode.finishEditing}
                 /> : null}
                 {desktop ? chapterSelectionActions : null}
-                <div className="min-h-[62vh] bg-transparent shadow-none sm:rounded-[28px] sm:border sm:border-white/8 sm:bg-[#0b0d12] sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+                <div className="min-h-[62vh] bg-transparent shadow-none sm:rounded-[28px] sm:border sm:border-line/8 sm:bg-surface sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                   <EditorContent editor={editor} />
                 </div>
               </div>
@@ -634,7 +634,7 @@ export function SelectionNovelStudio() {
             references={(
               <>
 
-            <div className="mb-4 flex gap-1 overflow-x-auto border-b border-white/10 pb-1 lg:flex-wrap" aria-label={t('workspace.context.title')}>
+            <div className="mb-4 flex gap-1 overflow-x-auto border-b border-line/10 pb-1 lg:flex-wrap" aria-label={t('workspace.context.title')}>
               {workspaceKnowledgeTabs.map(({ tab, label, icon: TabIcon }) => {
                 return (
                   <button
@@ -664,20 +664,20 @@ export function SelectionNovelStudio() {
                      const ef = editState.form
                      const setF = (key: string, val: string) => setEditState((s) => ({ ...s, form: { ...s.form, [key]: val } }))
                      return (
-                       <div key={char.id} className="rounded-2xl border border-white/8 bg-black/20 p-3">
+                       <div key={char.id} className="rounded-2xl border border-line/8 bg-shade/20 p-3">
                         {isEditing ? (
                           <>
-                            <input value={ef.name ?? ''} onChange={(e) => setF('name', e.target.value)} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.namePlaceholder')} />
-                            <input value={ef.role ?? ''} onChange={(e) => setF('role', e.target.value)} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.rolePlaceholder')} />
-                            <input value={ef.goal ?? ''} onChange={(e) => setF('goal', e.target.value)} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.goalPlaceholder')} />
-                            <input value={ef.trait ?? ''} onChange={(e) => setF('trait', e.target.value)} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.traitPlaceholder')} />
-                            <textarea value={ef.note ?? ''} onChange={(e) => setF('note', e.target.value)} className="w-full min-h-[60px] rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.notePlaceholder')} />
+                            <input value={ef.name ?? ''} onChange={(e) => setF('name', e.target.value)} className="w-full mb-2 rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.namePlaceholder')} />
+                            <input value={ef.role ?? ''} onChange={(e) => setF('role', e.target.value)} className="w-full mb-2 rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.rolePlaceholder')} />
+                            <input value={ef.goal ?? ''} onChange={(e) => setF('goal', e.target.value)} className="w-full mb-2 rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.goalPlaceholder')} />
+                            <input value={ef.trait ?? ''} onChange={(e) => setF('trait', e.target.value)} className="w-full mb-2 rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.traitPlaceholder')} />
+                            <textarea value={ef.note ?? ''} onChange={(e) => setF('note', e.target.value)} className="w-full min-h-[60px] rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.notePlaceholder')} />
                             <div className="flex gap-2 mt-2">
                               <button onClick={() => {
                                 useNovelStore.getState().updateCharacter(char.id, { name: ef.name ?? '', role: ef.role ?? '', goal: ef.goal ?? '', trait: ef.trait ?? '', note: ef.note ?? '' })
                                 setEditState({ type: null, id: null, form: {} })
                               }} className="flex-1 rounded-xl bg-emerald-500/20 text-emerald-200 px-3 py-1.5 text-xs">{t('workspace.shell.save')}</button>
-                              <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-white/10 text-zinc-400 px-3 py-1.5 text-xs">{t('workspace.shell.cancel')}</button>
+                              <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-line/10 text-zinc-400 px-3 py-1.5 text-xs">{t('workspace.shell.cancel')}</button>
                             </div>
                           </>
                         ) : (
@@ -692,23 +692,23 @@ export function SelectionNovelStudio() {
                     )
                   })}
                   {!knowledgePanelReadOnly ? (
-                    <button onClick={() => setEditState({ type: 'char', id: '__new__', form: { name: '', role: '', goal: '', trait: '', note: '' } })} className="w-full rounded-2xl border border-dashed border-white/10 px-3 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04]">
+                    <button onClick={() => setEditState({ type: 'char', id: '__new__', form: { name: '', role: '', goal: '', trait: '', note: '' } })} className="w-full rounded-2xl border border-dashed border-line/10 px-3 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-overlay/[0.04]">
                       <Plus className="h-3.5 w-3.5 inline mr-1" /> {t('workspace.shell.addCharacter')}
                     </button>
                   ) : null}
                   {!knowledgePanelReadOnly && editState.type === 'char' && editState.id === '__new__' && (
-                    <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
-                      <input value={editState.form.name ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, name: e.target.value } }))} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.namePlaceholder')} />
-                      <input value={editState.form.role ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, role: e.target.value } }))} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.rolePlaceholder')} />
-                      <input value={editState.form.goal ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, goal: e.target.value } }))} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.goalPlaceholder')} />
-                      <input value={editState.form.trait ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, trait: e.target.value } }))} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.traitPlaceholder')} />
-                      <textarea value={editState.form.note ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, note: e.target.value } }))} className="w-full min-h-[60px] rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.notePlaceholder')} />
+                    <div className="rounded-2xl border border-line/8 bg-shade/20 p-3">
+                      <input value={editState.form.name ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, name: e.target.value } }))} className="w-full mb-2 rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.namePlaceholder')} />
+                      <input value={editState.form.role ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, role: e.target.value } }))} className="w-full mb-2 rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.rolePlaceholder')} />
+                      <input value={editState.form.goal ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, goal: e.target.value } }))} className="w-full mb-2 rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.goalPlaceholder')} />
+                      <input value={editState.form.trait ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, trait: e.target.value } }))} className="w-full mb-2 rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.traitPlaceholder')} />
+                      <textarea value={editState.form.note ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, note: e.target.value } }))} className="w-full min-h-[60px] rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.notePlaceholder')} />
                       <div className="flex gap-2 mt-2">
                         <button onClick={() => {
                           useNovelStore.getState().addCharacter(currentNovelId, { name: editState.form.name ?? '', role: editState.form.role ?? '', goal: editState.form.goal ?? '', trait: editState.form.trait ?? '', note: editState.form.note ?? '' })
                           setEditState({ type: null, id: null, form: {} })
                         }} className="flex-1 rounded-xl bg-emerald-500/20 text-emerald-200 px-3 py-1.5 text-xs">{t('workspace.shell.create')}</button>
-                        <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-white/10 text-zinc-400 px-3 py-1.5 text-xs">{t('workspace.shell.cancel')}</button>
+                        <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-line/10 text-zinc-400 px-3 py-1.5 text-xs">{t('workspace.shell.cancel')}</button>
                       </div>
                     </div>
                   )}
@@ -725,24 +725,24 @@ export function SelectionNovelStudio() {
                     const ef = editState.form
                     const setF = (key: string, val: string) => setEditState((s) => ({ ...s, form: { ...s.form, [key]: val } }))
                     return (
-                      <div key={item.id} className="rounded-2xl border border-white/8 bg-black/20 p-3">
+                      <div key={item.id} className="rounded-2xl border border-line/8 bg-shade/20 p-3">
                         {isEditing ? (
                           <>
-                            <input value={ef.title ?? ''} onChange={(e) => setF('title', e.target.value)} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.titlePlaceholder')} />
-                            <select value={ef.type ?? 'main'} onChange={(e) => setF('type', e.target.value)} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none">
+                            <input value={ef.title ?? ''} onChange={(e) => setF('title', e.target.value)} className="w-full mb-2 rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.titlePlaceholder')} />
+                            <select value={ef.type ?? 'main'} onChange={(e) => setF('type', e.target.value)} className="w-full mb-2 rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none">
                               <option value="main">{OUTLINE_TYPE_LABELS.main}</option>
                               <option value="side">{OUTLINE_TYPE_LABELS.side}</option>
                               <option value="foreshadow">{OUTLINE_TYPE_LABELS.foreshadow}</option>
                               <option value="conflict">{OUTLINE_TYPE_LABELS.conflict}</option>
                               <option value="climax">{OUTLINE_TYPE_LABELS.climax}</option>
                             </select>
-                            <textarea value={ef.summary ?? ''} onChange={(e) => setF('summary', e.target.value)} className="w-full min-h-[60px] rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.summaryPlaceholder')} />
+                            <textarea value={ef.summary ?? ''} onChange={(e) => setF('summary', e.target.value)} className="w-full min-h-[60px] rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.summaryPlaceholder')} />
                             <div className="flex gap-2 mt-2">
                               <button onClick={() => {
                                 useNovelStore.getState().updateOutlineItem(item.id, { title: ef.title ?? '', type: (ef.type ?? 'main') as OutlineType, summary: ef.summary ?? '' })
                                 setEditState({ type: null, id: null, form: {} })
                               }} className="flex-1 rounded-xl bg-emerald-500/20 text-emerald-200 px-3 py-1.5 text-xs">{t('workspace.shell.save')}</button>
-                              <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-white/10 text-zinc-400 px-3 py-1.5 text-xs">{t('workspace.shell.cancel')}</button>
+                              <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-line/10 text-zinc-400 px-3 py-1.5 text-xs">{t('workspace.shell.cancel')}</button>
                             </div>
                           </>
                         ) : (
@@ -750,14 +750,14 @@ export function SelectionNovelStudio() {
                             <div className="flex items-center justify-between gap-2 mb-2">
                               <div className="flex items-center gap-2">
                                 <p className="text-sm font-medium text-zinc-100">{item.title}</p>
-                                <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-500">
+                                <span className="rounded-full border border-line/10 px-2 py-0.5 text-[10px] text-zinc-500">
                                   {OUTLINE_TYPE_LABELS[item.type]}
                                 </span>
                               </div>
                               {!knowledgePanelReadOnly ? (
                                 <div className="flex gap-1">
-                                  <button onClick={() => setEditState({ type: 'outline', id: item.id, form: { title: item.title, type: item.type, summary: item.summary } })} className="rounded-lg border border-white/10 p-1.5 text-zinc-400 hover:text-zinc-200"><Pencil className="h-3 w-3" /></button>
-                                  <button onClick={() => { useNovelStore.getState().deleteOutlineItem(item.id) }} className="rounded-lg border border-white/10 p-1.5 text-rose-400 hover:text-rose-300"><Trash2 className="h-3 w-3" /></button>
+                                  <button onClick={() => setEditState({ type: 'outline', id: item.id, form: { title: item.title, type: item.type, summary: item.summary } })} className="rounded-lg border border-line/10 p-1.5 text-zinc-400 hover:text-zinc-200"><Pencil className="h-3 w-3" /></button>
+                                  <button onClick={() => { useNovelStore.getState().deleteOutlineItem(item.id) }} className="rounded-lg border border-line/10 p-1.5 text-rose-400 hover:text-rose-300"><Trash2 className="h-3 w-3" /></button>
                                 </div>
                               ) : null}
                             </div>
@@ -765,7 +765,7 @@ export function SelectionNovelStudio() {
                             {item.relatedChapterIds.length > 0 && (
                               <div className="mt-2 flex flex-wrap gap-1">
                                 {item.relatedChapterIds.map((chId) => (
-                                  <span key={chId} className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-zinc-500">{localChapters.find((ch) => ch.id === chId)?.title ?? chId}</span>
+                                  <span key={chId} className="rounded-full bg-overlay/5 px-2 py-0.5 text-[10px] text-zinc-500">{localChapters.find((ch) => ch.id === chId)?.title ?? chId}</span>
                                 ))}
                               </div>
                             )}
@@ -775,27 +775,27 @@ export function SelectionNovelStudio() {
                     )
                   })}
                   {!knowledgePanelReadOnly ? (
-                    <button onClick={() => setEditState({ type: 'outline', id: '__new__', form: { title: '', type: 'main', summary: '' } })} className="w-full rounded-2xl border border-dashed border-white/10 px-3 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04]">
+                    <button onClick={() => setEditState({ type: 'outline', id: '__new__', form: { title: '', type: 'main', summary: '' } })} className="w-full rounded-2xl border border-dashed border-line/10 px-3 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-overlay/[0.04]">
                       <Plus className="h-3.5 w-3.5 inline mr-1" /> {t('workspace.shell.addOutlineItem')}
                     </button>
                   ) : null}
                   {!knowledgePanelReadOnly && editState.type === 'outline' && editState.id === '__new__' && (
-                    <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
-                      <input value={editState.form.title ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, title: e.target.value } }))} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.titlePlaceholder')} />
-                      <select value={editState.form.type ?? 'main'} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, type: e.target.value } }))} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none">
+                    <div className="rounded-2xl border border-line/8 bg-shade/20 p-3">
+                      <input value={editState.form.title ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, title: e.target.value } }))} className="w-full mb-2 rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.titlePlaceholder')} />
+                      <select value={editState.form.type ?? 'main'} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, type: e.target.value } }))} className="w-full mb-2 rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none">
                         <option value="main">{OUTLINE_TYPE_LABELS.main}</option>
                         <option value="side">{OUTLINE_TYPE_LABELS.side}</option>
                         <option value="foreshadow">{OUTLINE_TYPE_LABELS.foreshadow}</option>
                         <option value="conflict">{OUTLINE_TYPE_LABELS.conflict}</option>
                         <option value="climax">{OUTLINE_TYPE_LABELS.climax}</option>
                       </select>
-                      <textarea value={editState.form.summary ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, summary: e.target.value } }))} className="w-full min-h-[60px] rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.summaryPlaceholder')} />
+                      <textarea value={editState.form.summary ?? ''} onChange={(e) => setEditState((s) => ({ ...s, form: { ...s.form, summary: e.target.value } }))} className="w-full min-h-[60px] rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.summaryPlaceholder')} />
                       <div className="flex gap-2 mt-2">
                         <button onClick={() => {
                           useNovelStore.getState().addOutlineItem(currentNovelId, { title: editState.form.title ?? '', type: (editState.form.type ?? 'main') as OutlineType, summary: editState.form.summary ?? '' })
                           setEditState({ type: null, id: null, form: {} })
                         }} className="flex-1 rounded-xl bg-emerald-500/20 text-emerald-200 px-3 py-1.5 text-xs">{t('workspace.shell.create')}</button>
-                        <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-white/10 text-zinc-400 px-3 py-1.5 text-xs">{t('workspace.shell.cancel')}</button>
+                        <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-line/10 text-zinc-400 px-3 py-1.5 text-xs">{t('workspace.shell.cancel')}</button>
                       </div>
                     </div>
                   )}
@@ -818,15 +818,15 @@ export function SelectionNovelStudio() {
                     const ef = editState.form
                     const setF = (key: string, val: string) => setEditState((s) => ({ ...s, form: { ...s.form, [key]: val } }))
                     return (
-                      <div key={event.id} className="rounded-2xl border border-white/8 bg-black/20 p-3">
+                      <div key={event.id} className="rounded-2xl border border-line/8 bg-shade/20 p-3">
                         {isEditing ? (
                           <>
-                            <input value={ef.title ?? event.title} onChange={(e) => setF('title', e.target.value)} className="w-full mb-2 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.eventTitlePlaceholder')} />
+                            <input value={ef.title ?? event.title} onChange={(e) => setF('title', e.target.value)} className="w-full mb-2 rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.eventTitlePlaceholder')} />
                             <div className="grid grid-cols-2 gap-2 mb-2">
-                              <input value={ef.phase ?? event.phase} onChange={(e) => setF('phase', e.target.value)} className="w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.phasePlaceholder')} />
-                              <input value={ef.worldline ?? event.worldline} onChange={(e) => setF('worldline', e.target.value)} className="w-full rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.worldlinePlaceholder')} />
+                              <input value={ef.phase ?? event.phase} onChange={(e) => setF('phase', e.target.value)} className="w-full rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.phasePlaceholder')} />
+                              <input value={ef.worldline ?? event.worldline} onChange={(e) => setF('worldline', e.target.value)} className="w-full rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.worldlinePlaceholder')} />
                             </div>
-                            <textarea value={ef.summary ?? event.summary} onChange={(e) => setF('summary', e.target.value)} className="w-full min-h-[60px] rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.eventSummaryPlaceholder')} />
+                            <textarea value={ef.summary ?? event.summary} onChange={(e) => setF('summary', e.target.value)} className="w-full min-h-[60px] rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.eventSummaryPlaceholder')} />
                             <div className="flex gap-2 mt-2">
                               <button onClick={() => {
                                 useNovelStore.getState().updateTimelineEvent(event.id, {
@@ -837,7 +837,7 @@ export function SelectionNovelStudio() {
                                 })
                                 setEditState({ type: null, id: null, form: {} })
                               }} className="flex-1 rounded-xl bg-emerald-500/20 text-emerald-200 px-3 py-1.5 text-xs">{t('workspace.shell.save')}</button>
-                              <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-white/10 text-zinc-400 px-3 py-1.5 text-xs">{t('workspace.shell.cancel')}</button>
+                              <button onClick={() => setEditState({ type: null, id: null, form: {} })} className="flex-1 rounded-xl border border-line/10 text-zinc-400 px-3 py-1.5 text-xs">{t('workspace.shell.cancel')}</button>
                             </div>
                           </>
                         ) : (
@@ -846,14 +846,14 @@ export function SelectionNovelStudio() {
                               <div>
                                 <p className="text-sm font-medium text-zinc-100">{event.order}. {event.title}</p>
                                 <div className="mt-2 flex flex-wrap gap-2">
-                                  <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{event.phase}</span>
-                                  <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{event.worldline}</span>
+                                  <span className="rounded-full border border-line/10 px-2 py-0.5 text-[10px] text-zinc-400">{event.phase}</span>
+                                  <span className="rounded-full border border-line/10 px-2 py-0.5 text-[10px] text-zinc-400">{event.worldline}</span>
                                 </div>
                               </div>
                               {!knowledgePanelReadOnly ? (
                                 <div className="flex gap-1">
-                                  <button onClick={() => setEditState({ type: 'timeline', id: event.id, form: { title: event.title, phase: event.phase, worldline: event.worldline, summary: event.summary } })} className="rounded-lg border border-white/10 p-1.5 text-zinc-400 hover:text-zinc-200"><Pencil className="h-3 w-3" /></button>
-                                  <button onClick={() => useNovelStore.getState().deleteTimelineEvent(event.id)} className="rounded-lg border border-white/10 p-1.5 text-rose-400 hover:text-rose-300"><Trash2 className="h-3 w-3" /></button>
+                                  <button onClick={() => setEditState({ type: 'timeline', id: event.id, form: { title: event.title, phase: event.phase, worldline: event.worldline, summary: event.summary } })} className="rounded-lg border border-line/10 p-1.5 text-zinc-400 hover:text-zinc-200"><Pencil className="h-3 w-3" /></button>
+                                  <button onClick={() => useNovelStore.getState().deleteTimelineEvent(event.id)} className="rounded-lg border border-line/10 p-1.5 text-rose-400 hover:text-rose-300"><Trash2 className="h-3 w-3" /></button>
                                 </div>
                               ) : null}
                             </div>
@@ -861,7 +861,7 @@ export function SelectionNovelStudio() {
                             {event.chapterIds.length > 0 && (
                               <div className="mt-2 flex flex-wrap gap-1">
                                 {event.chapterIds.map((chId) => (
-                                  <span key={chId} className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-zinc-500">{localChapters.find((ch) => ch.id === chId)?.title ?? chId}</span>
+                                  <span key={chId} className="rounded-full bg-overlay/5 px-2 py-0.5 text-[10px] text-zinc-500">{localChapters.find((ch) => ch.id === chId)?.title ?? chId}</span>
                                 ))}
                               </div>
                             )}
@@ -880,7 +880,7 @@ export function SelectionNovelStudio() {
                         order: currentNovelTimelineEvents.length + 1,
                         chapterIds: currentChapter ? [currentChapter.id] : [],
                       })}
-                      className="w-full rounded-2xl border border-dashed border-white/10 px-3 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04]"
+                      className="w-full rounded-2xl border border-dashed border-line/10 px-3 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-overlay/[0.04]"
                     >
                       <Plus className="h-3.5 w-3.5 inline mr-1" /> {t('workspace.shell.addTimelineEvent')}
                     </button>
@@ -900,7 +900,7 @@ export function SelectionNovelStudio() {
           className="pointer-events-none fixed z-40"
           style={{ top: toolbarPos.top, left: toolbarPos.left, transform: 'translateX(-50%)' }}
         >
-          <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-white/10 bg-[#090b10]/96 p-1 shadow-[0_18px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+          <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-line/10 bg-floating/96 p-1 shadow-[0_18px_70px_rgb(0_0_0/calc(0.45*var(--shadow-strength)))] backdrop-blur-xl">
             {WORKSPACE_CHAPTER_ACTION_ENTRY_MODES.map((mode) => {
               const meta = ACTION_META[mode]
               const Icon = meta.icon
@@ -914,7 +914,7 @@ export function SelectionNovelStudio() {
                   disabled={mode === 'roleplay' && roleplaySessionStarting}
                   className={cn(
                     'inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs transition',
-                    activeMode === mode ? 'bg-violet-500 text-white' : 'text-zinc-300 hover:bg-white/[0.08]',
+                    activeMode === mode ? 'bg-violet-500 text-white' : 'text-zinc-300 hover:bg-overlay/[0.08]',
                     mode === 'roleplay' && roleplaySessionStarting && 'cursor-not-allowed opacity-60'
                   )}
                 >
@@ -929,7 +929,7 @@ export function SelectionNovelStudio() {
 
       {toast ? (
         <div className="fixed inset-x-3 top-[max(0.75rem,env(safe-area-inset-top))] z-[80] sm:left-auto sm:right-4 sm:w-full sm:max-w-sm">
-          <Notice variant={toastVariant} className="shadow-[0_12px_50px_rgba(0,0,0,0.35)]">
+          <Notice variant={toastVariant} className="shadow-[0_12px_50px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))]">
             {toast}
           </Notice>
         </div>
@@ -1001,7 +1001,7 @@ export function SelectionNovelStudio() {
           description={ACTION_META[activeMode].description}
           placement="bottom"
           backdropTestId="workspace-action-overlay"
-          backdropClassName="z-50 bg-black/55"
+          backdropClassName="z-50 bg-scrim/55"
           mobileFullscreen
           className="mx-auto max-w-3xl sm:mb-6 sm:rounded-[24px]"
           footer={activeMode === 'rewrite' ? (
@@ -1035,7 +1035,7 @@ export function SelectionNovelStudio() {
             ) : null}
 
             {contextPreviewLoading && !generationContext ? (
-              <div className="mb-4 rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">{t('workspace.shell.loadingContextEvidence')}</div>
+              <div className="mb-4 rounded-[24px] border border-line/8 bg-shade/20 p-4 text-sm text-zinc-400">{t('workspace.shell.loadingContextEvidence')}</div>
             ) : null}
 
             {!contextPreviewLoading && !generationContext && contextPreviewError ? (
@@ -1062,7 +1062,7 @@ export function SelectionNovelStudio() {
                           {t('workspace.shell.contextApproxTokens', { count: activeContextTokenEstimate.toLocaleString() })}
                         </span>
                       ) : null}
-                      <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-zinc-300">{rewriteFlow.provider || providerLabel}</span>
+                      <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-xs text-zinc-300">{rewriteFlow.provider || providerLabel}</span>
                     </div>
                   </div>
                 </div>
@@ -1075,10 +1075,10 @@ export function SelectionNovelStudio() {
 
                 <label className="block">
                   <span className="mb-2 block text-sm text-zinc-300">{t('workspace.shell.rewriteInstructionLabel')}</span>
-                  <textarea value={rewritePrompt} onChange={(event) => handleRewritePromptChange(event.target.value)} className="h-32 w-full rounded-xl border border-white/15 bg-black/10 px-4 py-3 text-base sm:text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.rewriteInstructionPlaceholder')} />
+                  <textarea value={rewritePrompt} onChange={(event) => handleRewritePromptChange(event.target.value)} className="h-32 w-full rounded-xl border border-line/15 bg-shade/10 px-4 py-3 text-base sm:text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.rewriteInstructionPlaceholder')} />
                 </label>
 
-                <details className="group/writing-skills border-b border-white/10 py-3">
+                <details className="group/writing-skills border-b border-line/10 py-3">
                   <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-sm text-zinc-300 outline-none focus-visible:ring-2 focus-visible:ring-violet-400 [&::-webkit-details-marker]:hidden">
                     <span>{t('workspace.shell.writingSkillLabel')}</span>
                     <span className="inline-flex shrink-0 items-center gap-2 text-xs text-zinc-400">
@@ -1090,7 +1090,7 @@ export function SelectionNovelStudio() {
                   <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
                     <fieldset className="min-w-0">
                       <legend className="sr-only">{t('workspace.shell.writingSkillLabel')}</legend>
-                      <div className="max-h-44 space-y-2 overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0d12] p-2.5">
+                      <div className="max-h-44 space-y-2 overflow-y-auto rounded-2xl border border-line/10 bg-surface p-2.5">
                         {writingSkillCardsLoading ? (
                           <p className="px-1 py-1 text-sm text-zinc-500">{t('workspace.shell.writingSkillLoading')}</p>
                         ) : writingSkillCards.length ? writingSkillCards.map((card) => {
@@ -1102,7 +1102,7 @@ export function SelectionNovelStudio() {
                                 'flex min-w-0 cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2 text-sm transition',
                                 checked
                                   ? 'border-violet-300/25 bg-violet-500/12 text-violet-50'
-                                  : 'border-transparent text-zinc-300 hover:border-white/10 hover:bg-white/[0.04]',
+                                  : 'border-transparent text-zinc-300 hover:border-line/10 hover:bg-overlay/[0.04]',
                               )}
                             >
                               <input
@@ -1113,7 +1113,7 @@ export function SelectionNovelStudio() {
                                     ? [...selectedWritingSkillCardIds, card.id]
                                     : selectedWritingSkillCardIds.filter((cardId) => cardId !== card.id),
                                 )}
-                                className="mt-0.5 h-4 w-4 shrink-0 rounded border-white/20 bg-black/20 text-violet-400"
+                                className="mt-0.5 h-4 w-4 shrink-0 rounded border-line/20 bg-shade/20 text-violet-400"
                               />
                               <span className="min-w-0 break-words leading-5">{card.title}</span>
                             </label>
@@ -1130,7 +1130,7 @@ export function SelectionNovelStudio() {
                         value={writingSkillExampleCount}
                         onChange={(event) => handleWritingSkillExampleCountChange(Number(event.target.value))}
                         disabled={!selectedWritingSkillCardIds.length}
-                        className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-3 py-2.5 text-sm text-zinc-100 outline-none disabled:opacity-40"
+                        className="w-full rounded-2xl border border-line/10 bg-surface px-3 py-2.5 text-sm text-zinc-100 outline-none disabled:opacity-40"
                       >
                         {WRITING_SKILL_RUNTIME_EXAMPLE_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}
                       </select>
@@ -1139,14 +1139,14 @@ export function SelectionNovelStudio() {
                 </details>
 
                 {generationContext && activeGraphContext ? (
-                  <div className="border-b border-white/10 py-3">
+                  <div className="border-b border-line/10 py-3">
                     <div className="flex items-start gap-1">
                       <button
                         type="button"
                         data-testid="workspace-context-panel-toggle"
                         aria-expanded={contextPanelOpen}
                         onClick={() => setContextPanelOpen((current) => !current)}
-                        className="flex min-h-11 min-w-0 flex-1 items-center justify-between gap-3 text-left transition hover:text-white"
+                        className="flex min-h-11 min-w-0 flex-1 items-center justify-between gap-3 text-left transition hover:text-heading"
                       >
                         <div>
                           <p className="text-sm text-zinc-300">{t('workspace.shell.advancedContext')}</p>
@@ -1156,10 +1156,10 @@ export function SelectionNovelStudio() {
                               : 'workspace.shell.advancedContextDescription')}
                           </p>
                           <div className="mt-2 hidden flex-wrap gap-2 text-[11px] text-zinc-400 lg:flex">
-                            <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.seedEntitiesCount', { count: activeSeedEntityCount })}</span>
-                            <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.relationsCount', { count: activeGraphEdgeCount })}</span>
-                            <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.evidenceCount', { count: activeEvidenceCount })}</span>
-                            <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.promptBlocksCount', { count: activePromptBlockCount })}</span>
+                            <span className="rounded-full border border-line/10 bg-shade/30 px-2.5 py-1">{t('workspace.shell.seedEntitiesCount', { count: activeSeedEntityCount })}</span>
+                            <span className="rounded-full border border-line/10 bg-shade/30 px-2.5 py-1">{t('workspace.shell.relationsCount', { count: activeGraphEdgeCount })}</span>
+                            <span className="rounded-full border border-line/10 bg-shade/30 px-2.5 py-1">{t('workspace.shell.evidenceCount', { count: activeEvidenceCount })}</span>
+                            <span className="rounded-full border border-line/10 bg-shade/30 px-2.5 py-1">{t('workspace.shell.promptBlocksCount', { count: activePromptBlockCount })}</span>
                           </div>
                         </div>
                         <span className="inline-flex items-center gap-2 py-1.5 text-xs text-zinc-400">
@@ -1270,7 +1270,7 @@ export function SelectionNovelStudio() {
                   <div className="hidden space-y-3 lg:block">
                     <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t('workspace.shell.generateVersion')}</p>
                     {rewriteFlow.loading ? (
-                      <div className="rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">
+                      <div className="rounded-[24px] border border-line/8 bg-shade/20 p-4 text-sm text-zinc-400">
                         <p>{formatProgressMessage(rewriteFlow.jobCurrentStep, t) || t('workspace.shell.generatingVersion')}</p>
                         {rewriteFlow.jobId ? (
                           <button onClick={handleAbortRewriteGeneration} className="mt-3 inline-flex items-center gap-1.5 rounded-xl border border-rose-400/25 px-3 py-1.5 text-xs text-rose-100 transition hover:bg-rose-500/10">
@@ -1285,17 +1285,17 @@ export function SelectionNovelStudio() {
                       <div className="w-full rounded-[24px] border border-violet-400/30 bg-violet-500/12 px-4 py-4 text-left">
                         <div className="flex items-center justify-between gap-3">
                           <p className="text-sm font-medium text-zinc-100">{selectedRewriteCandidate.title}</p>
-                          <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('workspace.shell.generatedBadge')}</span>
+                          <span className="rounded-full border border-line/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('workspace.shell.generatedBadge')}</span>
                         </div>
                         <p className="mt-2 line-clamp-2 text-xs leading-5 text-zinc-400">{selectedRewriteCandidate.summary}</p>
                         <p className="mt-3 line-clamp-4 text-xs leading-6 text-zinc-500">{selectedRewriteCandidate.content}</p>
                       </div>
                     ) : (
-                      <div className="rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">{t('workspace.shell.generatedEmpty')}</div>
+                      <div className="rounded-[24px] border border-line/8 bg-shade/20 p-4 text-sm text-zinc-400">{t('workspace.shell.generatedEmpty')}</div>
                     )}
                   </div>
 
-                  <div className="border-t border-white/10 pt-5">
+                  <div className="border-t border-line/10 pt-5">
                     {rewriteFlow.loading ? <p role="status" className="mb-4 text-sm text-violet-200 lg:hidden">{formatProgressMessage(rewriteFlow.jobCurrentStep, t) || t('workspace.shell.generatingVersion')}</p> : null}
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t('workspace.shell.previewResult')}</p>

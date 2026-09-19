@@ -225,7 +225,7 @@ export function WritingSkillDistillationPanel({
           aria-label={t('writingSkill.contextWindowLabel')}
           value={scanContextWindow}
           onChange={(event) => setScanContextWindow(event.target.value as WritingSkillContextWindow)}
-          className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+          className="w-full rounded-2xl border border-line/10 bg-surface px-4 py-3 text-sm text-zinc-100 outline-none"
         >
           <option value="32k">{t('writingSkill.contextWindow32k')}</option>
           <option value="64k">{t('writingSkill.contextWindow64k')}</option>
@@ -243,7 +243,7 @@ export function WritingSkillDistillationPanel({
           aria-label={t('writingSkill.totalBudgetLabel')}
           value={scanTotalBudget}
           onChange={(event) => setScanTotalBudget(event.target.value as WritingSkillTotalBudget)}
-          className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+          className="w-full rounded-2xl border border-line/10 bg-surface px-4 py-3 text-sm text-zinc-100 outline-none"
         >
           <option value="128k">{t('writingSkill.totalBudget128k')}</option>
           <option value="256k">{t('writingSkill.totalBudget256k')}</option>
@@ -280,7 +280,7 @@ export function WritingSkillDistillationPanel({
                 if (event.key === 'Enter' && instruction.trim()) startCreate()
               }}
               maxLength={120}
-              className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-zinc-100 outline-none focus:border-violet-300/40"
+              className="w-full rounded-2xl border border-line/10 bg-shade/20 px-4 py-3 text-zinc-100 outline-none focus:border-violet-300/40"
               placeholder={t('writingSkill.placeholder')}
             />
           </label>
@@ -295,7 +295,7 @@ export function WritingSkillDistillationPanel({
             <Sparkles className="h-4 w-4" /> {t('writingSkill.start')}
           </button>
 
-          <div className="border-t border-white/8 pt-5">
+          <div className="border-t border-line/8 pt-5">
             <p className="mb-3 text-xs uppercase tracking-[0.16em] text-zinc-500">{t('writingSkill.existing')}</p>
             {cardsLoading ? (
               <p className="flex items-center gap-2 text-sm text-zinc-400"><LoaderCircle className="h-4 w-4 animate-spin" /> {t('writingSkill.loading')}</p>
@@ -308,7 +308,7 @@ export function WritingSkillDistillationPanel({
                     onClick={() => {
                       void loadCardDetail(card.id).then((detail) => setAgentState({ kind: 'result', card: detail }))
                     }}
-                    className="rounded-2xl border border-white/8 bg-white/[0.03] p-3 text-left transition hover:bg-white/[0.06]"
+                    className="rounded-2xl border border-line/8 bg-overlay/[0.03] p-3 text-left transition hover:bg-overlay/[0.06]"
                   >
                     <p className="text-sm font-medium text-zinc-100">{card.title}</p>
                     <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">{card.summary}</p>
@@ -328,13 +328,13 @@ export function WritingSkillDistillationPanel({
               ? t('writingSkill.foundCandidates', { count: agentState.job.candidateCount })
               : t('writingSkill.processingHint')}
           </Notice>
-          <div className="h-2 overflow-hidden rounded-full bg-white/5">
+          <div className="h-2 overflow-hidden rounded-full bg-overlay/5">
             <div
               className="h-full rounded-full bg-violet-400 transition-all"
               style={{ width: `${Math.min(96, 12 + agentState.job.roundCount * 18 + (agentState.job.candidateCount > 0 ? 24 : 0))}%` }}
             />
           </div>
-          <button type="button" onClick={() => void cancelJob()} className="inline-flex items-center gap-2 rounded-2xl border border-white/10 px-4 py-2.5 text-sm text-zinc-300">
+          <button type="button" onClick={() => void cancelJob()} className="inline-flex items-center gap-2 rounded-2xl border border-line/10 px-4 py-2.5 text-sm text-zinc-300">
             <X className="h-4 w-4" /> {t('writingSkill.cancel')}
           </button>
         </div>
@@ -348,18 +348,18 @@ export function WritingSkillDistillationPanel({
               value={agentState.card.title}
               onChange={(event) => setAgentState({ kind: 'result', card: { ...agentState.card, title: event.target.value } })}
               maxLength={120}
-              className="w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-lg font-semibold text-zinc-100 outline-none"
+              className="w-full rounded-2xl border border-line/10 bg-shade/20 px-4 py-3 text-lg font-semibold text-zinc-100 outline-none"
             />
           </label>
           <p className="text-sm leading-7 text-zinc-300">{agentState.card.summary}</p>
           <div className="flex flex-wrap gap-2 text-xs text-zinc-400">
-            <span className="rounded-full border border-white/10 px-3 py-1">{t('writingSkill.ruleCount', { count: agentState.card.rules.length })}</span>
-            <span className="rounded-full border border-white/10 px-3 py-1">{t('writingSkill.avoidCount', { count: agentState.card.avoid.length })}</span>
-            <span className="rounded-full border border-white/10 px-3 py-1">{t('writingSkill.exampleCount', { count: agentState.card.examples.length })}</span>
+            <span className="rounded-full border border-line/10 px-3 py-1">{t('writingSkill.ruleCount', { count: agentState.card.rules.length })}</span>
+            <span className="rounded-full border border-line/10 px-3 py-1">{t('writingSkill.avoidCount', { count: agentState.card.avoid.length })}</span>
+            <span className="rounded-full border border-line/10 px-3 py-1">{t('writingSkill.exampleCount', { count: agentState.card.examples.length })}</span>
           </div>
           <div className="space-y-2">
             {agentState.card.rules.map((rule, index) => (
-              <div key={`${rule.text}-${index}`} className="rounded-2xl border border-white/8 bg-white/[0.03] p-3">
+              <div key={`${rule.text}-${index}`} className="rounded-2xl border border-line/8 bg-overlay/[0.03] p-3">
                 <p className="text-sm text-zinc-200">{index + 1}. {rule.text}</p>
               </div>
             ))}
@@ -382,7 +382,7 @@ export function WritingSkillDistillationPanel({
             </div>
             <div className="space-y-3">
               {agentState.card.examples.map((example, index) => (
-                <article key={example.id} className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <article key={example.id} className="rounded-2xl border border-line/8 bg-overlay/[0.03] p-4">
                   <p className="text-xs font-medium text-violet-200">{t('writingSkill.exampleLabel', { count: index + 1 })}</p>
                   {example.anonymizedText ? (
                     <p className="mt-3 max-h-56 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-7 text-zinc-300">
@@ -395,7 +395,7 @@ export function WritingSkillDistillationPanel({
               ))}
             </div>
           </section>
-          <details className="rounded-2xl border border-white/8 bg-black/20 p-4">
+          <details className="rounded-2xl border border-line/8 bg-shade/20 p-4">
             <summary className="cursor-pointer text-sm text-zinc-300">{t('writingSkill.advanced')}</summary>
             <div className="mt-4 space-y-4">
               <label className="block">
@@ -403,7 +403,7 @@ export function WritingSkillDistillationPanel({
                 <select
                   value={agentState.card.defaultExampleCount}
                   onChange={(event) => setAgentState({ kind: 'result', card: { ...agentState.card, defaultExampleCount: Number(event.target.value) } })}
-                  className="rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2 text-sm text-zinc-100"
+                  className="rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100"
                 >
                   {WRITING_SKILL_RUNTIME_EXAMPLE_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}
                 </select>
@@ -411,7 +411,7 @@ export function WritingSkillDistillationPanel({
               {scanBudgetControls}
               <div className="space-y-2">
                 {agentState.card.examples.map((example, index) => (
-                  <label key={example.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/8 px-3 py-2 text-xs text-zinc-400">
+                  <label key={example.id} className="flex items-center justify-between gap-3 rounded-xl border border-line/8 px-3 py-2 text-xs text-zinc-400">
                     <span>{t('writingSkill.exampleLabel', { count: index + 1 })}</span>
                     <input
                       type="checkbox"
@@ -435,7 +435,7 @@ export function WritingSkillDistillationPanel({
               value={refineInstruction}
               onChange={(event) => setRefineInstruction(event.target.value)}
               maxLength={300}
-              className="min-h-24 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="min-h-24 w-full rounded-2xl border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 outline-none"
               placeholder={t('writingSkill.refinePlaceholder')}
             />
             <span className="mt-2 block text-xs leading-5 text-zinc-500">{t('writingSkill.refineHint')}</span>
@@ -444,7 +444,7 @@ export function WritingSkillDistillationPanel({
             <button type="button" onClick={() => void updateCard(agentState.card)} disabled={saving} className="rounded-2xl bg-violet-500 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50">
               {saving ? t('writingSkill.saving') : t('writingSkill.saveAndUse')}
             </button>
-            <button type="button" onClick={() => void startJob(`/api/writing-skills/${encodeURIComponent(agentState.card.id)}/regenerate`, { resample: true, scanContextWindow, scanTotalBudget })} className="inline-flex items-center gap-2 rounded-2xl border border-white/10 px-4 py-2.5 text-sm text-zinc-300">
+            <button type="button" onClick={() => void startJob(`/api/writing-skills/${encodeURIComponent(agentState.card.id)}/regenerate`, { resample: true, scanContextWindow, scanTotalBudget })} className="inline-flex items-center gap-2 rounded-2xl border border-line/10 px-4 py-2.5 text-sm text-zinc-300">
               <RefreshCw className="h-4 w-4" /> {t('writingSkill.regenerate')}
             </button>
             <button type="button" onClick={() => refineInstruction.trim() && void startJob(`/api/writing-skills/${encodeURIComponent(agentState.card.id)}/refine`, { instruction: refineInstruction.trim() })} disabled={!refineInstruction.trim()} className="rounded-2xl border border-violet-400/30 bg-violet-500/10 px-4 py-2.5 text-sm text-violet-100 disabled:opacity-40">
@@ -460,7 +460,7 @@ export function WritingSkillDistillationPanel({
       {agentState.kind === 'error' ? (
         <div className="space-y-4">
           <Notice variant="error">{agentState.message}</Notice>
-          <button type="button" onClick={() => setAgentState({ kind: 'ready' })} className="rounded-2xl border border-white/10 px-4 py-2.5 text-sm text-zinc-300">{t('writingSkill.tryAgain')}</button>
+          <button type="button" onClick={() => setAgentState({ kind: 'ready' })} className="rounded-2xl border border-line/10 px-4 py-2.5 text-sm text-zinc-300">{t('writingSkill.tryAgain')}</button>
         </div>
       ) : null}
     </DialogSurface>

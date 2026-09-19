@@ -153,7 +153,7 @@ export function LocalEmbeddingWizard({ active = true, onConfigured }: LocalEmbed
             ? 'border-emerald-300/20 bg-emerald-500/10 text-emerald-200'
             : status?.phase === 'error'
               ? 'border-rose-300/20 bg-rose-500/10 text-rose-200'
-              : 'border-white/10 bg-black/20 text-zinc-300',
+              : 'border-line/10 bg-shade/20 text-zinc-300',
         )}>
           {phaseLabel}
         </span>
@@ -165,8 +165,8 @@ export function LocalEmbeddingWizard({ active = true, onConfigured }: LocalEmbed
 
       {status ? (
         <div className="mt-3 grid gap-2 text-xs text-zinc-400 sm:grid-cols-2">
-          <div className="rounded-2xl border border-white/8 bg-black/15 px-3 py-2">{status.platformLabel}</div>
-          <div className="rounded-2xl border border-white/8 bg-black/15 px-3 py-2">{t(`aiSettings.local.accelerator.${status.backend}`)}</div>
+          <div className="rounded-2xl border border-line/8 bg-shade/15 px-3 py-2">{status.platformLabel}</div>
+          <div className="rounded-2xl border border-line/8 bg-shade/15 px-3 py-2">{t(`aiSettings.local.accelerator.${status.backend}`)}</div>
         </div>
       ) : null}
 
@@ -185,7 +185,7 @@ export function LocalEmbeddingWizard({ active = true, onConfigured }: LocalEmbed
               {status.progress.totalBytes > 0 ? ` / ${formatBytes(status.progress.totalBytes, locale)}` : ` · ${t('aiSettings.local.unknownTotal')}`}
             </span>
           </div>
-          <div className="h-2 overflow-hidden rounded-full bg-black/30">
+          <div className="h-2 overflow-hidden rounded-full bg-shade/30">
             <div className="h-full rounded-full bg-violet-400 transition-[width]" style={{ width: `${status.progress.percent}%` }} />
           </div>
         </div>
@@ -207,7 +207,7 @@ export function LocalEmbeddingWizard({ active = true, onConfigured }: LocalEmbed
           {status && !status.supported ? <p className="self-center text-xs text-rose-200">{t('aiSettings.local.unsupported')}</p> : null}
         </div>
       ) : (
-        <div className="mt-4 rounded-[20px] border border-white/10 bg-black/20 p-4">
+        <div className="mt-4 rounded-[20px] border border-line/10 bg-shade/20 p-4">
           {!status?.installed && step === 1 ? (
             <div>
               <p className="text-xs font-medium text-zinc-200">{t('aiSettings.local.step1Title')}</p>
@@ -229,7 +229,7 @@ export function LocalEmbeddingWizard({ active = true, onConfigured }: LocalEmbed
                     setConfirmed(false)
                     setCustomRiskConfirmed(false)
                   }}
-                  className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+                  className="w-full rounded-2xl border border-line/10 bg-surface px-4 py-3 text-sm text-zinc-100 outline-none"
                 >
                   {status?.models.map((model) => (
                     <option key={model.id} value={model.id}>
@@ -253,7 +253,7 @@ export function LocalEmbeddingWizard({ active = true, onConfigured }: LocalEmbed
                         }}
                         placeholder="Qwen/Qwen3-Embedding-4B-GGUF"
                         autoComplete="off"
-                        className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
+                        className="w-full rounded-2xl border border-line/10 bg-surface px-4 py-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
                       />
                     </label>
                     <label className="block">
@@ -266,7 +266,7 @@ export function LocalEmbeddingWizard({ active = true, onConfigured }: LocalEmbed
                         }}
                         placeholder="Qwen3-Embedding-4B-Q4_K_M.gguf"
                         autoComplete="off"
-                        className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
+                        className="w-full rounded-2xl border border-line/10 bg-surface px-4 py-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
                       />
                     </label>
                   </div>
@@ -274,7 +274,7 @@ export function LocalEmbeddingWizard({ active = true, onConfigured }: LocalEmbed
                   <div className="rounded-2xl border border-amber-300/15 bg-amber-500/[0.06] p-3 text-xs leading-5 text-amber-100/85">
                     {t('aiSettings.local.customRisk')}
                   </div>
-                  <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-white/8 bg-black/15 p-3">
+                  <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-line/8 bg-shade/15 p-3">
                     <input
                       type="checkbox"
                       checked={customRiskConfirmed}
@@ -291,16 +291,16 @@ export function LocalEmbeddingWizard({ active = true, onConfigured }: LocalEmbed
                 <>
                   <p className="mt-3 text-xs leading-5 text-zinc-400">{t(`aiSettings.local.model.${selectedModel.profile}Description`)}</p>
                   <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-                    <div className="rounded-2xl border border-white/8 px-3 py-2 text-zinc-400">{t('aiSettings.local.download')}: {formatBytes(selectedModel.downloadBytes + (status?.runtimeDownloadBytes ?? 0), locale)}</div>
-                    <div className="rounded-2xl border border-white/8 px-3 py-2 text-zinc-400">{t('aiSettings.local.disk')}: {formatBytes(selectedModel.diskEstimateBytes, locale)}</div>
-                    <div className="rounded-2xl border border-white/8 px-3 py-2 text-zinc-400">{t('aiSettings.local.memory')}: {formatBytes(selectedModel.memoryMinBytes, locale)}–{formatBytes(selectedModel.memoryMaxBytes, locale)}</div>
-                    <div className="rounded-2xl border border-white/8 px-3 py-2 text-zinc-400">{selectedModel.dimension} dim · {selectedModel.quantization} · {selectedModel.license}</div>
+                    <div className="rounded-2xl border border-line/8 px-3 py-2 text-zinc-400">{t('aiSettings.local.download')}: {formatBytes(selectedModel.downloadBytes + (status?.runtimeDownloadBytes ?? 0), locale)}</div>
+                    <div className="rounded-2xl border border-line/8 px-3 py-2 text-zinc-400">{t('aiSettings.local.disk')}: {formatBytes(selectedModel.diskEstimateBytes, locale)}</div>
+                    <div className="rounded-2xl border border-line/8 px-3 py-2 text-zinc-400">{t('aiSettings.local.memory')}: {formatBytes(selectedModel.memoryMinBytes, locale)}–{formatBytes(selectedModel.memoryMaxBytes, locale)}</div>
+                    <div className="rounded-2xl border border-line/8 px-3 py-2 text-zinc-400">{selectedModel.dimension} dim · {selectedModel.quantization} · {selectedModel.license}</div>
                   </div>
                 </>
               ) : null}
               <p className="mt-3 text-xs leading-5 text-zinc-500">{t('aiSettings.local.runtimeNote')}</p>
               <div className="mt-4 flex justify-between gap-2">
-                <button type="button" onClick={() => { setStep(1); setConfirmed(false) }} className="min-h-10 rounded-2xl border border-white/10 px-4 text-xs text-zinc-300 hover:bg-white/[0.06]">{t('aiSettings.local.back')}</button>
+                <button type="button" onClick={() => { setStep(1); setConfirmed(false) }} className="min-h-10 rounded-2xl border border-line/10 px-4 text-xs text-zinc-300 hover:bg-overlay/[0.06]">{t('aiSettings.local.back')}</button>
                 <button type="button" onClick={() => setStep(3)} disabled={customSelected ? !customReady : !selectedModel} className="min-h-10 rounded-2xl bg-violet-500 px-4 text-xs text-white hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50">{t('aiSettings.local.next')}</button>
               </div>
             </div>
@@ -309,7 +309,7 @@ export function LocalEmbeddingWizard({ active = true, onConfigured }: LocalEmbed
           {(!status?.installed && step === 3) || status?.installed ? (
             <div>
               {!status?.installed ? (
-                <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-white/8 bg-black/15 p-3">
+                <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-line/8 bg-shade/15 p-3">
                   <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 accent-violet-500" />
                   <span className="text-xs leading-5 text-zinc-300">
                     {customSelected
@@ -321,11 +321,11 @@ export function LocalEmbeddingWizard({ active = true, onConfigured }: LocalEmbed
                 <p className="text-xs leading-5 text-zinc-300">{status.running ? t('aiSettings.local.runningBody') : t('aiSettings.local.stoppedBody')}</p>
               )}
               <div className="mt-4 flex flex-wrap justify-between gap-2">
-                <button type="button" onClick={() => { setExpanded(false); setConfirmed(false); setCustomRiskConfirmed(false) }} disabled={busy} className="min-h-10 rounded-2xl border border-white/10 px-4 text-xs text-zinc-300 hover:bg-white/[0.06] disabled:opacity-50">{t('aiSettings.local.closeWizard')}</button>
+                <button type="button" onClick={() => { setExpanded(false); setConfirmed(false); setCustomRiskConfirmed(false) }} disabled={busy} className="min-h-10 rounded-2xl border border-line/10 px-4 text-xs text-zinc-300 hover:bg-overlay/[0.06] disabled:opacity-50">{t('aiSettings.local.closeWizard')}</button>
                 {!status?.installed ? (
                   <button type="button" onClick={() => void runAction('install')} disabled={!confirmed || (customSelected ? !customReady : !selectedModel) || busy} className="min-h-10 rounded-2xl bg-violet-500 px-4 text-xs font-medium text-white hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50">{busy ? phaseLabel : t('aiSettings.local.confirmInstall')}</button>
                 ) : status.running ? (
-                  <button type="button" onClick={() => void runAction('stop')} disabled={busy} className="min-h-10 rounded-2xl border border-white/10 px-4 text-xs text-zinc-300 hover:bg-white/[0.06] disabled:opacity-50">{t('aiSettings.local.stop')}</button>
+                  <button type="button" onClick={() => void runAction('stop')} disabled={busy} className="min-h-10 rounded-2xl border border-line/10 px-4 text-xs text-zinc-300 hover:bg-overlay/[0.06] disabled:opacity-50">{t('aiSettings.local.stop')}</button>
                 ) : (
                   <button type="button" onClick={() => void runAction('start')} disabled={busy} className="min-h-10 rounded-2xl bg-violet-500 px-4 text-xs font-medium text-white hover:bg-violet-400 disabled:opacity-50">{t('aiSettings.local.start')}</button>
                 )}

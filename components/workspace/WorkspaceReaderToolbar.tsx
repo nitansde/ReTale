@@ -36,7 +36,7 @@ export function WorkspaceReaderToolbar({
         className={cn(
           'inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl border px-3 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70 disabled:opacity-60',
           compact && 'min-h-12 flex-col justify-center gap-1 border-transparent bg-transparent px-2',
-          isEditing ? 'border-violet-300/30 bg-violet-500/15 text-violet-100 hover:bg-violet-500/25' : compact ? 'border-transparent bg-transparent text-zinc-300 hover:bg-white/[0.05]' : 'border-white/10 bg-white/[0.04] text-zinc-200 hover:bg-white/[0.08]',
+          isEditing ? 'border-violet-300/30 bg-violet-500/15 text-violet-100 hover:bg-violet-500/25' : compact ? 'border-transparent bg-transparent text-zinc-300 hover:bg-overlay/[0.05]' : 'border-line/10 bg-overlay/[0.04] text-zinc-200 hover:bg-overlay/[0.08]',
         )}
       >
         <ActionIcon className={cn('h-3.5 w-3.5', isSaving && 'animate-spin')} aria-hidden="true" />

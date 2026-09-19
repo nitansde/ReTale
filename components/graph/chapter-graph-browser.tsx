@@ -21,7 +21,7 @@ function Pill(props: { label: string; tone?: 'default' | 'violet' | 'amber' | 'r
         props.tone === 'amber' && 'border-amber-300/20 bg-amber-500/12 text-amber-100',
         props.tone === 'rose' && 'border-rose-300/20 bg-rose-500/12 text-rose-100',
         props.tone === 'sky' && 'border-sky-300/20 bg-sky-500/12 text-sky-100',
-        (!props.tone || props.tone === 'default') && 'border-white/10 bg-black/20 text-zinc-300'
+        (!props.tone || props.tone === 'default') && 'border-line/10 bg-shade/20 text-zinc-300'
       )}
     >
       {props.label}
@@ -40,7 +40,7 @@ function formatEdgeLocation(edge: GraphEdge, emptyLabel: string, t: ReturnType<t
 function EdgeEvidencePanel(props: { edge: GraphEdge | null; source?: GraphNode; target?: GraphNode }) {
   const { t } = useI18n()
   return (
-    <section className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+    <section className="rounded-[24px] border border-line/8 bg-shade/20 p-4">
       <div className="flex items-start gap-3">
         <div className="mt-0.5 rounded-2xl border border-sky-400/20 bg-sky-500/10 p-2 text-sky-100">
           <Sparkles className="h-4 w-4" />
@@ -58,13 +58,13 @@ function EdgeEvidencePanel(props: { edge: GraphEdge | null; source?: GraphNode; 
                   {props.edge.evidenceQuote}
                 </p>
               ) : (
-                <p className="mt-3 rounded-[20px] border border-white/8 bg-black/30 p-4 text-sm leading-6 text-zinc-400">
+                <p className="mt-3 rounded-[20px] border border-line/8 bg-shade/30 p-4 text-sm leading-6 text-zinc-400">
                   {t('graph.edgeNoQuote')}
                 </p>
               )}
             </>
           ) : (
-            <p className="mt-2 rounded-[20px] border border-white/8 bg-black/30 p-4 text-sm leading-6 text-zinc-400">
+            <p className="mt-2 rounded-[20px] border border-line/8 bg-shade/30 p-4 text-sm leading-6 text-zinc-400">
               {t('graph.edgeSelectHint')}
             </p>
           )}
@@ -77,8 +77,8 @@ function EdgeEvidencePanel(props: { edge: GraphEdge | null; source?: GraphNode; 
 function GraphEmptyState(props: { chapterLabel: string; warning?: string }) {
   const { t } = useI18n()
   return (
-    <div className="rounded-[28px] border border-dashed border-white/10 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.08),_transparent_40%),#0b0d12] p-6 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-[20px] border border-white/10 bg-white/[0.04] text-zinc-200">
+    <div className="rounded-[28px] border border-dashed border-line/10 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.08),_transparent_40%),var(--surface)] p-6 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-[20px] border border-line/10 bg-overlay/[0.04] text-zinc-200">
         <Network className="h-6 w-6" />
       </div>
       <h3 className="mt-4 text-xl font-semibold text-zinc-100">{t('graph.emptyTitle')}</h3>
@@ -125,7 +125,7 @@ export function ChapterGraphBrowser(props: {
 
   return (
     <div className="space-y-4 px-4 py-4 sm:px-7 sm:py-6">
-      <section className="overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.12),_transparent_36%),#0b0d12] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+      <section className="overflow-hidden rounded-[28px] border border-line/10 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.12),_transparent_36%),var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
         <div className="flex flex-col gap-5 px-5 py-5 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-3xl">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">{t('graph.chapterBrowserEyebrow')}</p>
@@ -148,7 +148,7 @@ export function ChapterGraphBrowser(props: {
             <button
               type="button"
               onClick={props.onRefresh}
-              className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-zinc-200 transition hover:bg-white/[0.08]"
+              className="inline-flex items-center gap-2 rounded-2xl border border-line/10 bg-overlay/[0.04] px-4 py-2.5 text-sm text-zinc-200 transition hover:bg-overlay/[0.08]"
             >
               <RefreshCcw className={cn('h-4 w-4', props.loading && 'animate-spin')} />
               {t('graph.refresh')}
@@ -161,7 +161,7 @@ export function ChapterGraphBrowser(props: {
         <section className="rounded-[24px] border border-fuchsia-400/20 bg-fuchsia-500/10 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="max-w-3xl">
-              <div className="inline-flex items-center gap-2 rounded-full border border-fuchsia-300/20 bg-black/20 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-fuchsia-100">
+              <div className="inline-flex items-center gap-2 rounded-full border border-fuchsia-300/20 bg-shade/20 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-fuchsia-100">
                 <GitBranch className="h-3.5 w-3.5" />
                 {t('graph.branchInheritsParent')}
               </div>
@@ -173,7 +173,7 @@ export function ChapterGraphBrowser(props: {
               <button
                 type="button"
                 onClick={props.onJumpToParent}
-                className="rounded-2xl border border-white/10 bg-black/20 px-4 py-2.5 text-sm text-zinc-100 transition hover:bg-white/[0.08]"
+                className="rounded-2xl border border-line/10 bg-shade/20 px-4 py-2.5 text-sm text-zinc-100 transition hover:bg-overlay/[0.08]"
               >
                  {t('graph.jumpToParent')}
                </button>
@@ -203,7 +203,7 @@ export function ChapterGraphBrowser(props: {
       ) : null}
 
       {props.loading && !props.data ? (
-        <section className="rounded-[28px] border border-white/8 bg-black/20 p-6 text-sm text-zinc-400">
+        <section className="rounded-[28px] border border-line/8 bg-shade/20 p-6 text-sm text-zinc-400">
           <div className="flex items-center gap-2 text-zinc-200">
             <Globe className="h-4 w-4 text-sky-300" />
             {t('graph.loading')}

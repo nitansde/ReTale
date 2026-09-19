@@ -15,6 +15,7 @@ import {
   useNodesState,
 } from '@xyflow/react'
 import { useI18n } from '@/lib/i18n/provider'
+import { useThemePreferences } from '@/components/ThemePreferencesProvider'
 import { cn } from '@/lib/utils'
 import type { GraphEdge, GraphNode } from '@/lib/server/graph-types'
 import type { GraphReviewControls } from '@/components/graph/types'
@@ -36,24 +37,24 @@ function getNodeHop(nodeId: string, seedIds: Set<string>, edges: GraphEdge[]) {
 function getNodeTone(node: GraphNode, seedIds: Set<string>) {
   if (seedIds.has(node.id)) {
     return {
-      background: 'rgba(245, 158, 11, 0.18)',
-      borderColor: 'rgba(252, 211, 77, 0.44)',
-      textColor: '#fef3c7',
+      background: 'color-mix(in srgb, var(--color-amber-500) 18%, var(--surface))',
+      borderColor: 'color-mix(in srgb, var(--color-amber-300) 44%, transparent)',
+      textColor: 'var(--color-amber-100)',
     }
   }
 
   if (node.userConfirmed) {
     return {
-      background: 'rgba(56, 189, 248, 0.12)',
-      borderColor: 'rgba(125, 211, 252, 0.3)',
-      textColor: '#e0f2fe',
+      background: 'color-mix(in srgb, var(--color-sky-400) 12%, var(--surface))',
+      borderColor: 'color-mix(in srgb, var(--color-sky-300) 30%, transparent)',
+      textColor: 'var(--color-sky-100)',
     }
   }
 
   return {
-    background: 'rgba(255, 255, 255, 0.05)',
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    textColor: '#f4f4f5',
+    background: 'var(--raised)',
+    borderColor: 'color-mix(in srgb, var(--line) 12%, transparent)',
+    textColor: 'var(--foreground)',
   }
 }
 
@@ -115,7 +116,7 @@ function buildFlowNodes(nodes: GraphNode[], edges: GraphEdge[], seedIds: Set<str
         border: `1px solid ${tone.borderColor}`,
         background: tone.background,
         color: tone.textColor,
-        boxShadow: '0 16px 40px rgba(0, 0, 0, 0.28)',
+        boxShadow: '0 16px 40px rgb(0 0 0 / calc(0.28 * var(--shadow-strength)))',
         padding: 0,
         overflow: 'hidden',
         boxSizing: 'border-box',
@@ -133,17 +134,17 @@ function buildFlowEdges(edges: GraphEdge[]): Edge[] {
     type: 'smoothstep',
     animated: edge.status === 'potentially_stale',
     style: {
-      stroke: edge.status === 'potentially_stale' ? '#f59e0b' : edge.confidence < LOW_CONFIDENCE_THRESHOLD ? '#64748b' : '#38bdf8',
+      stroke: edge.status === 'potentially_stale' ? 'var(--color-amber-500)' : edge.confidence < LOW_CONFIDENCE_THRESHOLD ? 'var(--color-zinc-500)' : 'var(--color-sky-400)',
       strokeOpacity: edge.confidence < LOW_CONFIDENCE_THRESHOLD ? 0.55 : 0.88,
       strokeWidth: edge.hop === 1 ? 1.9 : 1.4,
     },
     labelStyle: {
-      fill: '#e4e4e7',
+      fill: 'var(--color-zinc-200)',
       fontSize: 11,
       fontWeight: 500,
     },
     labelBgStyle: {
-      fill: 'rgba(13, 16, 23, 0.92)',
+      fill: 'var(--panel)',
       fillOpacity: 1,
     },
   }))
@@ -162,6 +163,7 @@ function GraphFlowInner(props: {
   onRefresh: () => void
 }) {
   const { t } = useI18n()
+  const { theme } = useThemePreferences()
   const seedIds = useMemo(() => new Set(props.seedNodeIds), [props.seedNodeIds])
   const visibleEdges = useMemo(() => {
     return props.edges.filter((edge) => {
@@ -203,7 +205,7 @@ function GraphFlowInner(props: {
   }, [flowEdges, setEdges])
 
   return (
-    <div className="h-[500px] overflow-hidden rounded-[24px] border border-white/8 bg-[#090c12] sm:h-[580px] xl:h-[660px]">
+    <div className="h-[500px] overflow-hidden rounded-[24px] border border-line/8 bg-canvas sm:h-[580px] xl:h-[660px]">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -224,24 +226,24 @@ function GraphFlowInner(props: {
         maxZoom={1.45}
         defaultEdgeOptions={{ zIndex: 1 }}
         proOptions={{ hideAttribution: true }}
-        colorMode="dark"
+        colorMode={theme === 'dark' ? 'dark' : 'light'}
       >
-        <Background color="rgba(255,255,255,0.08)" gap={20} size={1} />
+        <Background color="color-mix(in srgb, var(--line) 8%, transparent)" gap={20} size={1} />
         <MiniMap
           pannable
           zoomable
-          nodeColor={(node) => (seedIds.has(node.id) ? 'rgba(251, 191, 36, 0.85)' : 'rgba(148, 163, 184, 0.8)')}
-          maskColor="rgba(4, 6, 10, 0.68)"
-          style={{ backgroundColor: 'rgba(10, 12, 18, 0.9)', border: '1px solid rgba(255,255,255,0.08)' }}
+          nodeColor={(node) => (seedIds.has(node.id) ? 'var(--color-amber-400)' : 'var(--color-zinc-400)')}
+          maskColor="var(--graph-mask)"
+          style={{ backgroundColor: 'var(--background)', border: '1px solid color-mix(in srgb, var(--line) 8%, transparent)' }}
         />
-        <Controls style={{ background: 'rgba(10, 12, 18, 0.92)', border: '1px solid rgba(255,255,255,0.08)' }} />
+        <Controls style={{ background: 'var(--background)', border: '1px solid color-mix(in srgb, var(--line) 8%, transparent)' }} />
         <Panel position="top-left" className="m-3 flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => props.onChangeControls({ ...props.controls, maxHops: 1 })}
             className={cn(
               'rounded-full border px-3 py-1.5 text-xs transition',
-              props.controls.maxHops === 1 ? 'border-amber-300/30 bg-amber-500/14 text-amber-100' : 'border-white/10 bg-black/40 text-zinc-400'
+              props.controls.maxHops === 1 ? 'border-amber-300/30 bg-amber-500/14 text-amber-100' : 'border-line/10 bg-shade/40 text-zinc-400'
             )}
           >
             1-hop
@@ -251,7 +253,7 @@ function GraphFlowInner(props: {
             onClick={() => props.onChangeControls({ ...props.controls, maxHops: 2 })}
             className={cn(
               'rounded-full border px-3 py-1.5 text-xs transition',
-              props.controls.maxHops === 2 ? 'border-amber-300/30 bg-amber-500/14 text-amber-100' : 'border-white/10 bg-black/40 text-zinc-400'
+              props.controls.maxHops === 2 ? 'border-amber-300/30 bg-amber-500/14 text-amber-100' : 'border-line/10 bg-shade/40 text-zinc-400'
             )}
           >
             2-hop
@@ -261,7 +263,7 @@ function GraphFlowInner(props: {
             onClick={() => props.onChangeControls({ ...props.controls, hideLowConfidence: !props.controls.hideLowConfidence })}
             className={cn(
               'rounded-full border px-3 py-1.5 text-xs transition',
-              props.controls.hideLowConfidence ? 'border-sky-300/30 bg-sky-500/14 text-sky-100' : 'border-white/10 bg-black/40 text-zinc-400'
+              props.controls.hideLowConfidence ? 'border-sky-300/30 bg-sky-500/14 text-sky-100' : 'border-line/10 bg-shade/40 text-zinc-400'
             )}
           >
             {t('graph.controls.hideLowConfidence')}
@@ -271,7 +273,7 @@ function GraphFlowInner(props: {
             onClick={() => props.onChangeControls({ ...props.controls, confirmedOnly: !props.controls.confirmedOnly })}
             className={cn(
               'rounded-full border px-3 py-1.5 text-xs transition',
-              props.controls.confirmedOnly ? 'border-emerald-300/30 bg-emerald-500/14 text-emerald-100' : 'border-white/10 bg-black/40 text-zinc-400'
+              props.controls.confirmedOnly ? 'border-emerald-300/30 bg-emerald-500/14 text-emerald-100' : 'border-line/10 bg-shade/40 text-zinc-400'
             )}
           >
             {t('graph.controls.confirmedOnly')}
@@ -281,7 +283,7 @@ function GraphFlowInner(props: {
             onClick={() => props.onChangeControls({ ...props.controls, showPotentiallyStale: !props.controls.showPotentiallyStale })}
             className={cn(
               'rounded-full border px-3 py-1.5 text-xs transition',
-              props.controls.showPotentiallyStale ? 'border-orange-300/30 bg-orange-500/14 text-orange-100' : 'border-white/10 bg-black/40 text-zinc-400'
+              props.controls.showPotentiallyStale ? 'border-orange-300/30 bg-orange-500/14 text-orange-100' : 'border-line/10 bg-shade/40 text-zinc-400'
             )}
           >
             {t('graph.controls.showPotentiallyStale')}
@@ -289,12 +291,12 @@ function GraphFlowInner(props: {
           <button
             type="button"
             onClick={props.onRefresh}
-            className="rounded-full border border-white/10 bg-black/40 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-white/[0.06]"
+            className="rounded-full border border-line/10 bg-shade/40 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-overlay/[0.06]"
           >
             {t('graph.controls.refresh')}
           </button>
         </Panel>
-        <Panel position="bottom-left" className="m-3 rounded-full border border-white/10 bg-black/55 px-3 py-1.5 text-[11px] text-zinc-400">
+        <Panel position="bottom-left" className="m-3 rounded-full border border-line/10 bg-shade/55 px-3 py-1.5 text-[11px] text-zinc-400">
           {props.loading ? t('graph.refreshing') : t('graph.statusCounts', { nodes: visibleNodes.length, edges: visibleEdges.length })}
         </Panel>
       </ReactFlow>

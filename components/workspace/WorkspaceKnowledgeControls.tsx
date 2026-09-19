@@ -126,13 +126,13 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
           Boolean(props.knowledgeActionLoading)}
       />
       {advancedDetailsOpen ? (
-        <div className="mt-3 rounded-[24px] border border-white/10 bg-black/20 p-4" data-testid="workspace-knowledge-advanced-details">
+        <div className="mt-3 rounded-[24px] border border-line/10 bg-shade/20 p-4" data-testid="workspace-knowledge-advanced-details">
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">{t('workspace.knowledge.status.maintenanceEyebrow')}</p>
               <p className="mt-1 text-xs leading-5 text-zinc-400">{t('workspace.knowledge.status.maintenanceDescription')}</p>
             </div>
-            <button type="button" onClick={props.onRebuildKnowledge} disabled={props.knowledgeRebuilding || props.knowledgeRebuildActive || Boolean(props.knowledgeActionLoading)} className="min-h-11 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-0">
+            <button type="button" onClick={props.onRebuildKnowledge} disabled={props.knowledgeRebuilding || props.knowledgeRebuildActive || Boolean(props.knowledgeActionLoading)} className="min-h-11 rounded-full border border-line/10 bg-shade/20 px-3 py-1.5 text-[11px] text-zinc-300 transition hover:bg-overlay/[0.08] disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-0">
               {props.knowledgeRebuilding
                 ? t('workspace.knowledge.processing')
                 : props.knowledgeRebuildPaused
@@ -142,7 +142,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                 : t('workspace.knowledge.startRebuild')}
             </button>
           </div>
-          <div className="mt-3 rounded-2xl border border-violet-300/15 bg-black/20 p-3">
+          <div className="mt-3 rounded-2xl border border-violet-300/15 bg-shade/20 p-3">
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-300">
               <span className="text-zinc-500">{t('workspace.knowledge.chapterRange')}</span>
               <button
@@ -154,7 +154,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                   'min-h-11 rounded-full border px-3 py-1 transition disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0',
                   props.knowledgeRebuildRangeMode === 'all'
                     ? 'border-violet-300/40 bg-violet-400/15 text-violet-50'
-                    : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:bg-white/[0.06]',
+                    : 'border-line/10 bg-overlay/[0.03] text-zinc-400 hover:bg-overlay/[0.06]',
                 )}
               >
                 {t('workspace.knowledge.rangeAll')}
@@ -168,7 +168,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                   'min-h-11 rounded-full border px-3 py-1 transition disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0',
                   props.knowledgeRebuildRangeMode === 'first'
                     ? 'border-violet-300/40 bg-violet-400/15 text-violet-50'
-                    : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:bg-white/[0.06]',
+                    : 'border-line/10 bg-overlay/[0.03] text-zinc-400 hover:bg-overlay/[0.06]',
                 )}
               >
                 {t('workspace.knowledge.rangeFirst')}
@@ -182,7 +182,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                   'min-h-11 rounded-full border px-3 py-1 transition disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0',
                   props.knowledgeRebuildRangeMode === 'custom'
                     ? 'border-violet-300/40 bg-violet-400/15 text-violet-50'
-                    : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:bg-white/[0.06]',
+                    : 'border-line/10 bg-overlay/[0.03] text-zinc-400 hover:bg-overlay/[0.06]',
                 )}
               >
                 {t('workspace.knowledge.rangeCustom')}
@@ -191,16 +191,16 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
             {props.knowledgeRebuildRangeMode === 'first' ? (
               <label className="mt-3 flex items-center gap-2 text-[11px] text-zinc-400">
                 {t('workspace.knowledge.processFirst')}
-                <input value={props.knowledgeRebuildFirstChapterCount} onChange={(event) => props.onSetKnowledgeRebuildFirstChapterCount(event.target.value)} disabled={props.knowledgeRebuildActive || props.knowledgeRebuilding || Boolean(props.knowledgeActionLoading)} inputMode="numeric" className="min-h-11 w-20 rounded-xl border border-white/10 bg-black/25 px-2 py-1.5 text-zinc-100 outline-none transition focus:border-violet-300/50 disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0" />
+                <input value={props.knowledgeRebuildFirstChapterCount} onChange={(event) => props.onSetKnowledgeRebuildFirstChapterCount(event.target.value)} disabled={props.knowledgeRebuildActive || props.knowledgeRebuilding || Boolean(props.knowledgeActionLoading)} inputMode="numeric" className="min-h-11 w-20 rounded-xl border border-line/10 bg-shade/25 px-2 py-1.5 text-zinc-100 outline-none transition focus:border-violet-300/50 disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0" />
                 {t('workspace.knowledge.chapterUnit')}
               </label>
             ) : null}
             {props.knowledgeRebuildRangeMode === 'custom' ? (
               <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-zinc-400">
                 <span>{t('workspace.knowledge.fromChapter')}</span>
-                <input value={props.knowledgeRebuildStartChapter} onChange={(event) => props.onSetKnowledgeRebuildStartChapter(event.target.value)} disabled={props.knowledgeRebuildActive || props.knowledgeRebuilding || Boolean(props.knowledgeActionLoading)} inputMode="numeric" className="min-h-11 w-20 rounded-xl border border-white/10 bg-black/25 px-2 py-1.5 text-zinc-100 outline-none transition focus:border-violet-300/50 disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0" />
+                <input value={props.knowledgeRebuildStartChapter} onChange={(event) => props.onSetKnowledgeRebuildStartChapter(event.target.value)} disabled={props.knowledgeRebuildActive || props.knowledgeRebuilding || Boolean(props.knowledgeActionLoading)} inputMode="numeric" className="min-h-11 w-20 rounded-xl border border-line/10 bg-shade/25 px-2 py-1.5 text-zinc-100 outline-none transition focus:border-violet-300/50 disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0" />
                 <span>{t('workspace.knowledge.toChapter')}</span>
-                <input value={props.knowledgeRebuildEndChapter} onChange={(event) => props.onSetKnowledgeRebuildEndChapter(event.target.value)} disabled={props.knowledgeRebuildActive || props.knowledgeRebuilding || Boolean(props.knowledgeActionLoading)} inputMode="numeric" className="min-h-11 w-20 rounded-xl border border-white/10 bg-black/25 px-2 py-1.5 text-zinc-100 outline-none transition focus:border-violet-300/50 disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0" />
+                <input value={props.knowledgeRebuildEndChapter} onChange={(event) => props.onSetKnowledgeRebuildEndChapter(event.target.value)} disabled={props.knowledgeRebuildActive || props.knowledgeRebuilding || Boolean(props.knowledgeActionLoading)} inputMode="numeric" className="min-h-11 w-20 rounded-xl border border-line/10 bg-shade/25 px-2 py-1.5 text-zinc-100 outline-none transition focus:border-violet-300/50 disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0" />
                 <span>{t('workspace.knowledge.chapterUnit')}</span>
               </div>
             ) : null}
@@ -213,14 +213,14 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                   <p className="text-[11px] uppercase tracking-[0.18em] text-violet-100/70">{t('workspace.knowledge.overviewEyebrow')}</p>
                   <p className="mt-1 leading-5 text-zinc-300">{t('workspace.knowledge.overviewDescription')}</p>
                 </div>
-                <span className="rounded-full border border-violet-300/20 bg-black/20 px-3 py-1.5 text-[11px] text-violet-100/85">
+                <span className="rounded-full border border-violet-300/20 bg-shade/20 px-3 py-1.5 text-[11px] text-violet-100/85">
                   {props.currentKnowledgeJobBusy
                     ? t('workspace.knowledge.jobRunning')
                     : t('workspace.knowledge.latestStatus')}
                 </span>
               </div>
               <div className="mt-3 space-y-2">
-                <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+                <div className="rounded-xl border border-line/8 bg-overlay/[0.03] px-3 py-2.5">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-medium text-zinc-100">{t('workspace.knowledge.extractionCacheLabel')}</p>
@@ -231,12 +231,12 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                         )}
                       </p>
                     </div>
-                    <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">
+                    <span className="rounded-full border border-violet-300/20 bg-shade/20 px-2.5 py-1 text-[10px] text-violet-100/85">
                       {formatKnowledgeCoverageBadge(props.extractionCacheOverview)}
                     </span>
                   </div>
                 </div>
-                <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+                <div className="rounded-xl border border-line/8 bg-overlay/[0.03] px-3 py-2.5">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-medium text-zinc-100">{t('workspace.knowledge.graphLabel')}</p>
@@ -247,12 +247,12 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                         )}
                       </p>
                     </div>
-                    <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">
+                    <span className="rounded-full border border-violet-300/20 bg-shade/20 px-2.5 py-1 text-[10px] text-violet-100/85">
                       {formatKnowledgeCoverageBadge(props.knowledgeGraphOverview)}
                     </span>
                   </div>
                 </div>
-                <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+                <div className="rounded-xl border border-line/8 bg-overlay/[0.03] px-3 py-2.5">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-medium text-zinc-100">{t('workspace.knowledge.embeddingCacheLabel')}</p>
@@ -263,7 +263,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                         )}
                       </p>
                     </div>
-                    <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">
+                    <span className="rounded-full border border-violet-300/20 bg-shade/20 px-2.5 py-1 text-[10px] text-violet-100/85">
                       {formatKnowledgeCoverageBadge(props.embeddingCacheOverview)}
                     </span>
                   </div>
@@ -277,7 +277,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                     </p>
                   ) : null}
                 </div>
-                <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+                <div className="rounded-xl border border-line/8 bg-overlay/[0.03] px-3 py-2.5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <p className="text-[11px] font-medium text-zinc-100">{t('workspace.knowledge.lancedbIndexLabel')}</p>
@@ -315,7 +315,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                         <p className="mt-2 text-[10px] leading-4 text-zinc-500">{props.retrievalControlsState.helperText}</p>
                       ) : null}
                     </div>
-                    <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">
+                    <span className="rounded-full border border-violet-300/20 bg-shade/20 px-2.5 py-1 text-[10px] text-violet-100/85">
                       {formatRetrievalIndexBadge(props.retrievalIndexOverview)}
                     </span>
                   </div>
@@ -369,7 +369,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                               ? 'border border-amber-400/20 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20'
                               : isPrimary
                               ? 'border border-violet-400/30 bg-violet-500/15 text-violet-100 hover:bg-violet-500/25'
-                              : 'border border-white/10 bg-white/[0.04] text-zinc-300 hover:bg-white/[0.08]',
+                              : 'border border-line/10 bg-overlay/[0.04] text-zinc-300 hover:bg-overlay/[0.08]',
                           )}
                         >
                           {isLoading ? loadingLabel : label}
@@ -387,7 +387,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                 'mt-3 rounded-2xl px-3 py-3 text-xs',
                 props.knowledgeRebuildFailed
                   ? 'border border-rose-300/20 bg-rose-500/[0.08] text-rose-50'
-                  : 'border border-violet-300/15 bg-black/20 text-zinc-300',
+                  : 'border border-violet-300/15 bg-shade/20 text-zinc-300',
               )}
             >
               <div className="mb-2 flex items-center justify-between gap-3">
@@ -449,7 +449,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                     <p className="text-[11px] font-medium text-violet-100">{t('workspace.knowledge.hanlpBootstrap')}</p>
                     <p className="mt-1 text-[10px] leading-4 text-violet-100/75">{redactUserFacingDiagnostic(props.hanlpBootstrapStatusLine)}</p>
                   </div>
-                  <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">
+                  <span className="rounded-full border border-violet-300/20 bg-shade/20 px-2.5 py-1 text-[10px] text-violet-100/85">
                     {typeof props.hanlpBootstrapCompletedChapterCount === 'number' &&
                         typeof props.hanlpBootstrapTotalChapterCount === 'number'
                       ? `${props.hanlpBootstrapCompletedChapterCount} / ${props.hanlpBootstrapTotalChapterCount} ${
@@ -503,7 +503,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                       <p className="text-[11px] font-medium text-violet-100">{t('workspace.knowledge.rawEmbeddingPrecompute')}</p>
                       <p className="mt-1 text-[10px] leading-4 text-violet-100/75">{redactUserFacingDiagnostic(props.rawTextEmbeddingStatusLine)}</p>
                     </div>
-                    <span className="rounded-full border border-violet-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-violet-100/85">
+                    <span className="rounded-full border border-violet-300/20 bg-shade/20 px-2.5 py-1 text-[10px] text-violet-100/85">
                       {redactUserFacingDiagnostic(props.rawTextEmbeddingPhaseBadge)}
                     </span>
                   </div>
@@ -537,7 +537,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                     })
 
                     return (
-                      <div key={step.key} className="rounded-xl border border-white/8 bg-white/[0.03] px-2.5 py-2">
+                      <div key={step.key} className="rounded-xl border border-line/8 bg-overlay/[0.03] px-2.5 py-2">
                         <div className="flex items-center justify-between gap-2 text-[11px]">
                           <span className="text-zinc-200">{redactUserFacingDiagnostic(formatProgressMessage(step.label, t))}</span>
                           <span className="text-zinc-500">{KNOWLEDGE_STEP_STATUS_LABELS[displayStatus]}</span>
@@ -585,7 +585,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                       : t('workspace.knowledge.resumeButton')}
                   </button>
                 ) : (
-                  <button type="button" onClick={props.onPauseKnowledge} disabled={!props.knowledgeRebuildActive || Boolean(props.knowledgeActionLoading)} className="min-h-11 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0">
+                  <button type="button" onClick={props.onPauseKnowledge} disabled={!props.knowledgeRebuildActive || Boolean(props.knowledgeActionLoading)} className="min-h-11 rounded-xl border border-line/10 bg-overlay/[0.04] px-3 py-2 text-[11px] text-zinc-300 transition hover:bg-overlay/[0.08] disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0">
                     {props.knowledgeActionLoading === 'pause'
                       ? t('workspace.knowledge.action.pausing')
                       : t('workspace.knowledge.pauseButton')}
@@ -612,7 +612,7 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                 </p>
                 <p className="mt-1 leading-5 text-zinc-400">{props.hanlpCacheDeleteState.helperText}</p>
               </div>
-              <button type="button" onClick={props.onToggleConfirmDeleteHanlpCache} disabled={props.hanlpCacheDeleteState.disabled} data-testid="workspace-delete-hanlp-cache" aria-label={t('workspace.knowledge.deleteHanlpCache')} className="min-h-11 rounded-full border border-sky-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-sky-100 transition hover:bg-sky-500/10 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-0">
+              <button type="button" onClick={props.onToggleConfirmDeleteHanlpCache} disabled={props.hanlpCacheDeleteState.disabled} data-testid="workspace-delete-hanlp-cache" aria-label={t('workspace.knowledge.deleteHanlpCache')} className="min-h-11 rounded-full border border-sky-400/20 bg-shade/20 px-3 py-1.5 text-[11px] text-sky-100 transition hover:bg-sky-500/10 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-0">
                 {t('workspace.knowledge.deleteHanlpCache')}
               </button>
             </div>
@@ -654,10 +654,10 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                 <p className="mt-1 leading-5 text-zinc-400">{props.extractionCacheDeleteState.helperText}</p>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-2">
-                <span className="rounded-full border border-emerald-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-emerald-100/85">
+                <span className="rounded-full border border-emerald-300/20 bg-shade/20 px-2.5 py-1 text-[10px] text-emerald-100/85">
                   {formatKnowledgeCoverageBadge(props.extractionCacheOverview)}
                 </span>
-                <button type="button" onClick={props.onToggleConfirmDeleteExtractionCache} disabled={props.extractionCacheDeleteState.disabled} data-testid="workspace-delete-extraction-cache" aria-label={t('workspace.knowledge.deleteExtractionCache')} className="min-h-11 rounded-full border border-emerald-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-emerald-100 transition hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-0">
+                <button type="button" onClick={props.onToggleConfirmDeleteExtractionCache} disabled={props.extractionCacheDeleteState.disabled} data-testid="workspace-delete-extraction-cache" aria-label={t('workspace.knowledge.deleteExtractionCache')} className="min-h-11 rounded-full border border-emerald-400/20 bg-shade/20 px-3 py-1.5 text-[11px] text-emerald-100 transition hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-0">
                   {t('workspace.knowledge.deleteExtractionCache')}
                 </button>
               </div>
@@ -674,10 +674,10 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                 <p className="mt-1 leading-5 text-zinc-400">{props.embeddingCacheDeleteState.helperText}</p>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-2">
-                <span className="rounded-full border border-amber-300/20 bg-black/20 px-2.5 py-1 text-[10px] text-amber-100/85">
+                <span className="rounded-full border border-amber-300/20 bg-shade/20 px-2.5 py-1 text-[10px] text-amber-100/85">
                   {redactUserFacingDiagnostic(props.rawTextEmbeddingPhaseBadge)}
                 </span>
-                <button type="button" onClick={props.onToggleConfirmDeleteEmbeddingCache} disabled={props.embeddingCacheDeleteState.disabled} data-testid="workspace-delete-embedding-cache" aria-label={t('workspace.knowledge.deleteEmbeddingCache')} className="min-h-11 rounded-full border border-amber-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-amber-100 transition hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-0">
+                <button type="button" onClick={props.onToggleConfirmDeleteEmbeddingCache} disabled={props.embeddingCacheDeleteState.disabled} data-testid="workspace-delete-embedding-cache" aria-label={t('workspace.knowledge.deleteEmbeddingCache')} className="min-h-11 rounded-full border border-amber-400/20 bg-shade/20 px-3 py-1.5 text-[11px] text-amber-100 transition hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-0">
                   {t('workspace.knowledge.deleteEmbeddingCache')}
                 </button>
               </div>
@@ -710,12 +710,12 @@ export function WorkspaceKnowledgeControls(props: WorkspaceKnowledgeControlsProp
                 <p className="text-[11px] uppercase tracking-[0.18em] text-rose-200/70">{t('workspace.knowledge.dangerZone')}</p>
                 <p className="mt-1 leading-5 text-zinc-400">{t('workspace.knowledge.dangerZoneDescription')}</p>
               </div>
-              <button type="button" onClick={props.onToggleConfirmDeleteKnowledge} disabled={props.knowledgeActionLoading === 'delete'} className="min-h-11 rounded-full border border-rose-400/20 bg-black/20 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-0">
+              <button type="button" onClick={props.onToggleConfirmDeleteKnowledge} disabled={props.knowledgeActionLoading === 'delete'} className="min-h-11 rounded-full border border-rose-400/20 bg-shade/20 px-3 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-0">
                 {t('workspace.knowledge.deleteKnowledgeGraph')}
               </button>
             </div>
           </div>
-          <p className="mt-3 rounded-2xl border border-white/8 bg-black/20 px-3 py-2 text-xs leading-5 text-zinc-400">{t('workspace.knowledge.readonlyNotice')}</p>
+          <p className="mt-3 rounded-2xl border border-line/8 bg-shade/20 px-3 py-2 text-xs leading-5 text-zinc-400">{t('workspace.knowledge.readonlyNotice')}</p>
         </div>
       ) : null}
       <ConfirmDialog open={props.confirmDeleteHanlpCache} onClose={props.onCancelDeleteHanlpCache} onConfirm={props.onDeleteHanlpCache} title={t('workspace.knowledge.confirmDeleteHanlpCache')} description={t('workspace.knowledge.confirmDeleteHanlpCacheDescription')} confirmLabel={props.knowledgeActionLoading === 'delete-hanlp-cache' ? t('workspace.knowledge.processing') : t('workspace.knowledge.confirmDeleteHanlpCache')} cancelLabel={t('workspace.knowledge.cancel')} busy={props.knowledgeActionLoading === 'delete-hanlp-cache'} />

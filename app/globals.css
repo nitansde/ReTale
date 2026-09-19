@@ -1,11 +1,15 @@
 @import "tailwindcss";
+@import "./themes.css";
 
-:root {
-  color-scheme: dark;
-  --background: #0a0c12;
-  --foreground: #f4f4f5;
-  --font-app-ui: var(--font-noto-sans-sc), var(--font-geist-sans), sans-serif;
-  --font-app-reading: var(--font-noto-serif-sc), serif;
+/* Defaults belong in the base layer so the selected theme takes precedence. */
+@layer base {
+  :root {
+    color-scheme: dark;
+    --background: #0a0c12;
+    --foreground: #f4f4f5;
+    --font-app-ui: var(--font-noto-sans-sc), var(--font-geist-sans), sans-serif;
+    --font-app-reading: var(--font-noto-serif-sc), serif;
+  }
 }
 
 @theme inline {
@@ -36,7 +40,7 @@ body {
 
 .ProseMirror {
   min-height: 62vh;
-  color: #e4e4e7;
+  color: var(--color-zinc-200);
 }
 
 .ProseMirror:focus {
@@ -55,9 +59,9 @@ body {
 }
 
 .ProseMirror blockquote {
-  border-left: 3px solid rgba(255, 255, 255, 0.15);
+  border-left: 3px solid color-mix(in srgb, var(--line) 15%, transparent);
   padding-left: 1rem;
-  color: #a1a1aa;
+  color: var(--color-zinc-400);
 }
 
 .ProseMirror ul {

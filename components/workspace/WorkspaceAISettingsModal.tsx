@@ -65,7 +65,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
     }
   }
 
-  const fieldClass = 'min-h-11 w-full min-w-0 rounded-xl border border-white/10 bg-[#0b0d12] px-3 py-2.5 text-base text-zinc-100 outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60 sm:text-sm'
+  const fieldClass = 'min-h-11 w-full min-w-0 rounded-xl border border-line/10 bg-surface px-3 py-2.5 text-base text-zinc-100 outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60 sm:text-sm'
 
   const renderFields = (scenario: AIScenarioKey) => {
     const settings = props.resolvedAISettings[scenario]
@@ -131,7 +131,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
         <button onClick={() => void handleSave()} disabled={saving} className="min-h-11 rounded-xl bg-violet-500 px-4 text-sm font-medium text-white hover:bg-violet-400 disabled:opacity-60">{saving ? t('aiSettings.saving') : t('aiSettings.saveSettings')}</button>
       </div> : undefined}
     >
-      <div role="group" aria-label={t('settings.sections')} className="mb-6 flex gap-2 rounded-2xl border border-white/10 bg-black/20 p-1.5">
+      <div role="group" aria-label={t('settings.sections')} className="mb-6 flex gap-2 rounded-2xl border border-line/10 bg-shade/20 p-1.5">
         {(['appearance', 'models'] as const).map((item) => (
           <button
             key={item}
@@ -141,7 +141,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
             disabled={saving}
             className={cn(
               'min-h-11 flex-1 rounded-xl px-4 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70 disabled:opacity-50',
-              section === item ? 'bg-violet-500/15 text-violet-100' : 'text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200',
+              section === item ? 'bg-violet-500/15 text-violet-100' : 'text-zinc-400 hover:bg-overlay/[0.06] hover:text-zinc-200',
             )}
           >
             {t(`settings.${item}`)}
@@ -151,7 +151,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
       {section === 'appearance' ? <WorkspaceAppearanceSettings /> : (
         <>
           <p className="mb-3 text-sm leading-6 text-zinc-400">{t('aiSettings.description')}</p>
-          <div className="divide-y divide-white/10">
+          <div className="divide-y divide-line/10">
             {(Object.keys(AI_SCENARIO_META) as AIScenarioKey[]).map((scenario) => {
               const meta = metaByScenario[scenario]
               const settings = props.resolvedAISettings[scenario]
@@ -203,13 +203,13 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
                           if (scenario === 'embeddings') setLocalInstallSelected(false)
                           props.updateScenarioProvider(scenario, provider)
                         }}
-                        className={cn('min-h-12 rounded-xl px-2 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60', !showLocalInstall && settings.provider === provider ? 'bg-violet-500/15 text-violet-100' : 'text-zinc-400 hover:bg-white/5')}
+                        className={cn('min-h-12 rounded-xl px-2 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60', !showLocalInstall && settings.provider === provider ? 'bg-violet-500/15 text-violet-100' : 'text-zinc-400 hover:bg-overlay/5')}
                       >{label}</button>)}
                       {scenario === 'embeddings' ? <button
                         type="button"
                         aria-pressed={showLocalInstall}
                         onClick={() => setLocalInstallSelected(true)}
-                        className={cn('min-h-12 rounded-xl px-2 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60', showLocalInstall ? 'bg-violet-500/15 text-violet-100' : 'text-zinc-400 hover:bg-white/5')}
+                        className={cn('min-h-12 rounded-xl px-2 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60', showLocalInstall ? 'bg-violet-500/15 text-violet-100' : 'text-zinc-400 hover:bg-overlay/5')}
                       >{t('aiSettings.localSetup')}</button> : null}
                     </div>
                     {scenario === 'embeddings' ? <p className="mb-4 text-sm leading-6 text-zinc-400 [overflow-wrap:anywhere]">
@@ -224,7 +224,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
                       </p>
                       <LocalEmbeddingWizard active={showLocalInstall} onConfigured={props.applyLocalEmbeddingSettings} />
                     </div> : null}
-                    {scenario !== 'rewrite' ? <details className="group mt-4 border-t border-white/10">
+                    {scenario !== 'rewrite' ? <details className="group mt-4 border-t border-line/10">
                       <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between text-base font-medium text-zinc-200 [&::-webkit-details-marker]:hidden">
                         {t('aiSettings.advancedOptions')}
                         <ChevronDown aria-hidden="true" className="h-4 w-4 transition-transform group-open:rotate-180" />

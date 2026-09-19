@@ -22,7 +22,7 @@ export function FutureJumpControlPanel(props: {
           <h3 className="mt-2 text-lg font-semibold text-zinc-100">{t('futureJump.revisionControlsTitle')}</h3>
           <p className="mt-2 text-sm leading-6 text-zinc-300">{t('futureJump.revisionControlsDescription')}</p>
         </div>
-        <span className="rounded-full border border-sky-300/20 bg-black/20 px-3 py-1 text-[11px] text-sky-100">{t('futureJump.latestRevisionBadge', { count: props.latestRevisionNo })}</span>
+        <span className="rounded-full border border-sky-300/20 bg-shade/20 px-3 py-1 text-[11px] text-sky-100">{t('futureJump.latestRevisionBadge', { count: props.latestRevisionNo })}</span>
       </div>
 
       <label className="mt-4 block">
@@ -30,7 +30,7 @@ export function FutureJumpControlPanel(props: {
         <textarea
           value={props.feedback}
           onChange={(event) => props.onFeedbackChange(event.target.value)}
-          className="min-h-[140px] w-full rounded-[22px] border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none"
+          className="min-h-[140px] w-full rounded-[22px] border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 outline-none"
           placeholder={t('futureJump.revisionFeedbackPlaceholder')}
           data-testid="future-jump-feedback"
         />
@@ -51,7 +51,7 @@ export function FutureJumpControlPanel(props: {
           type="button"
           onClick={props.onContinue}
           disabled={props.continueDisabled}
-          className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-2xl border border-line/10 bg-shade/20 px-4 py-3 text-sm text-zinc-100 transition hover:bg-overlay/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
           data-testid="future-jump-continue"
         >
           <ArrowRight className="h-4 w-4" />

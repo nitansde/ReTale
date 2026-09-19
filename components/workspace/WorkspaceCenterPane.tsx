@@ -61,9 +61,9 @@ export function WorkspaceCenterPane(props: {
   }
 
   return (
-    <section className="min-w-0 overflow-hidden bg-transparent shadow-none sm:rounded-[30px] sm:border sm:border-white/10 sm:bg-[#11141d] sm:shadow-[0_28px_90px_rgba(0,0,0,0.35)]" data-testid="workspace-center-pane">
+    <section className="min-w-0 overflow-hidden bg-transparent shadow-none sm:rounded-[30px] sm:border sm:border-line/10 sm:bg-raised sm:shadow-[0_28px_90px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))]" data-testid="workspace-center-pane">
       <div className={cn(
-        'border-y border-white/8 bg-[#0d1017]/88 px-4 py-3 backdrop-blur-xl sm:border-x-0 sm:border-t-0 sm:bg-transparent sm:px-7 sm:py-4 sm:backdrop-blur-none',
+        'border-y border-line/8 bg-panel/88 px-4 py-3 backdrop-blur-xl sm:border-x-0 sm:border-t-0 sm:bg-transparent sm:px-7 sm:py-4 sm:backdrop-blur-none',
         'hidden lg:block',
       )}>
         <div className="flex flex-wrap items-center justify-between gap-3 sm:items-start">
@@ -74,7 +74,7 @@ export function WorkspaceCenterPane(props: {
           </div>
           <div className={cn('flex items-center gap-2 sm:flex-wrap sm:justify-end sm:gap-3', isChapter && 'w-full sm:w-auto')}>
             {isChapter ? (
-              <div className="inline-flex shrink-0 rounded-[18px] border border-white/10 bg-black/25 p-1 text-sm text-zinc-400 sm:rounded-[22px]" data-testid="workspace-chapter-view-toggle">
+              <div className="inline-flex shrink-0 rounded-[18px] border border-line/10 bg-shade/25 p-1 text-sm text-zinc-400 sm:rounded-[22px]" data-testid="workspace-chapter-view-toggle">
                 {(['body', 'graph'] as const).map((view) => (
                   <button
                     key={view}
@@ -82,7 +82,7 @@ export function WorkspaceCenterPane(props: {
                     onClick={() => props.onCenterPaneViewChange(view)}
                     className={cn(
                       'min-h-9 rounded-[14px] px-4 py-2 transition sm:rounded-[18px]',
-                      props.centerPaneView === view ? 'bg-white/10 text-zinc-100 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'
+                      props.centerPaneView === view ? 'bg-overlay/10 text-zinc-100 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'
                     )}
                   >
                     {view === 'body' ? t('workspace.centerPane.bodyTab') : t('workspace.centerPane.graphTab')}
@@ -95,7 +95,7 @@ export function WorkspaceCenterPane(props: {
                 <span className="font-medium">{branchReadableLabel || t('workspace.centerPane.branchView')}</span>
               </div>
             )}
-            <div className="min-w-0 flex-1 rounded-[18px] border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-400 sm:flex-none sm:rounded-[22px] sm:px-4 sm:py-3 sm:leading-6">
+            <div className="min-w-0 flex-1 rounded-[18px] border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-400 sm:flex-none sm:rounded-[22px] sm:px-4 sm:py-3 sm:leading-6">
               <div className="flex min-w-0 items-center gap-2">
                 {isChapter ? (
                   props.centerPaneView === 'body' ? <BookOpen className="h-4 w-4 text-violet-300" /> : <Globe className="h-4 w-4 text-sky-300" />
@@ -110,7 +110,7 @@ export function WorkspaceCenterPane(props: {
       </div>
 
       {!isChapter && props.selectionActions ? (
-        <div className="border-b border-white/8 px-3 py-3 sm:px-7 sm:py-4">
+        <div className="border-b border-line/8 px-3 py-3 sm:px-7 sm:py-4">
           {props.selectionActions}
         </div>
       ) : null}

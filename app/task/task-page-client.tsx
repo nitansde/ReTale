@@ -52,13 +52,13 @@ function getStatusClasses(status: string) {
     case 'queued':
       return 'border-violet-400/30 bg-violet-500/12 text-violet-100'
     default:
-      return 'border-white/10 bg-white/[0.04] text-zinc-200'
+      return 'border-line/10 bg-overlay/[0.04] text-zinc-200'
   }
 }
 
 function TaskMetaRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[18px] border border-white/8 bg-black/20 px-3 py-2">
+    <div className="rounded-[18px] border border-line/8 bg-shade/20 px-3 py-2">
       <dt className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{label}</dt>
       <dd className="mt-1 text-sm text-zinc-200">{value}</dd>
     </div>
@@ -132,29 +132,29 @@ export function TaskPageClient() {
   }
 
   return (
-    <main className="min-h-screen bg-[#0a0c12] px-4 py-6 text-zinc-100 sm:px-6 sm:py-8">
+    <main className="min-h-screen bg-background px-4 py-6 text-zinc-100 sm:px-6 sm:py-8">
       <div className="mx-auto max-w-5xl">
-        <Link href="/library" className="mb-5 inline-flex min-h-11 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 text-sm text-zinc-300 transition hover:bg-white/[0.08]">
+        <Link href="/library" className="mb-5 inline-flex min-h-11 items-center gap-2 rounded-2xl border border-line/10 bg-overlay/[0.04] px-4 text-sm text-zinc-300 transition hover:bg-overlay/[0.08]">
           <ArrowLeft className="h-4 w-4" aria-hidden="true" /> {t('task.backToLibrary')}
         </Link>
         <header className="mb-8">
           <p className="text-sm uppercase tracking-[0.28em] text-zinc-500">{t('task.eyebrow')}</p>
-          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">{t('task.title')}</h1>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-heading">{t('task.title')}</h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">{t('task.description')}</p>
         </header>
 
-        <section className="mb-6 rounded-[28px] border border-white/8 bg-[radial-gradient(circle_at_top_left,_rgba(124,58,237,0.16),_transparent_38%),rgba(255,255,255,0.04)] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur">
+        <section className="mb-6 rounded-[28px] border border-line/8 bg-[radial-gradient(circle_at_top_left,_rgba(124,58,237,0.16),_transparent_38%),rgba(255,255,255,0.04)] p-5 shadow-[0_20px_60px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))] backdrop-blur">
           <div>
             <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('task.activeTasks')}</p>
-            <p className="mt-2 text-3xl font-semibold tracking-tight text-white">{sortedTasks.length}</p>
+            <p className="mt-2 text-3xl font-semibold tracking-tight text-heading">{sortedTasks.length}</p>
           </div>
         </section>
 
         {sortedTasks.length === 0 ? (
-          <section className="rounded-[28px] border border-dashed border-white/10 bg-[radial-gradient(circle_at_top,_rgba(99,102,241,0.08),_transparent_36%),#0b0d12] p-8 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+          <section className="rounded-[28px] border border-dashed border-line/10 bg-[radial-gradient(circle_at_top,_rgba(99,102,241,0.08),_transparent_36%),var(--surface)] p-8 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
             <div className="mx-auto max-w-2xl">
               <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">{t('task.allQuiet')}</p>
-              <h2 className="mt-3 text-2xl font-semibold tracking-tight text-white">{t('task.noActiveTasks')}</h2>
+              <h2 className="mt-3 text-2xl font-semibold tracking-tight text-heading">{t('task.noActiveTasks')}</h2>
             </div>
           </section>
         ) : (
@@ -165,7 +165,7 @@ export function TaskPageClient() {
               return (
                 <article
                   key={task.jobId}
-                  className="rounded-[28px] border border-white/8 bg-white/[0.04] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur"
+                  className="rounded-[28px] border border-line/8 bg-overlay/[0.04] p-5 shadow-[0_20px_60px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))] backdrop-blur"
                 >
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
@@ -173,12 +173,12 @@ export function TaskPageClient() {
                         <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${getStatusClasses(task.status)}`}>
                           {formatStatus(task.status)}
                         </span>
-                        <span className="inline-flex items-center rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-zinc-300">
+                        <span className="inline-flex items-center rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-xs text-zinc-300">
                           {formatJobType(task.jobType)}
                         </span>
                       </div>
 
-                      <h2 className="mt-4 text-lg font-semibold tracking-tight text-white">{task.jobId}</h2>
+                      <h2 className="mt-4 text-lg font-semibold tracking-tight text-heading">{task.jobId}</h2>
                       <p className="mt-2 text-sm leading-6 text-zinc-400">{currentStep}</p>
                     </div>
 
@@ -188,12 +188,12 @@ export function TaskPageClient() {
                         novelId={task.novelId ?? novelId}
                         onAborted={() => setTasks((current) => current.filter((item) => item.jobId !== task.jobId))}
                       />
-                      <div className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-zinc-300 lg:min-w-56">
+                      <div className="rounded-[20px] border border-line/8 bg-shade/20 px-4 py-3 text-sm text-zinc-300 lg:min-w-56">
                         <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.16em] text-zinc-500">
                           <span>{t('task.progress')}</span>
                           <span>{progress}</span>
                         </div>
-                        <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+                        <div className="mt-3 h-2 overflow-hidden rounded-full bg-overlay/10">
                           <div
                             className="h-full rounded-full bg-[linear-gradient(90deg,rgba(129,140,248,0.9),rgba(168,85,247,0.95))]"
                             style={{

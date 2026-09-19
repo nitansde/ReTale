@@ -213,7 +213,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
       className="max-h-[calc(100vh-1.5rem)] max-w-7xl rounded-[28px] p-4 sm:max-h-[88vh] sm:w-[calc(100%-3rem)] sm:rounded-[32px] sm:p-5"
     >
         {statusMessage || resolvedErrorMessage ? (
-          <div className="sticky top-0 z-20 mb-4 space-y-2 bg-[#0d1017]/94 py-2 backdrop-blur-xl">
+          <div className="sticky top-0 z-20 mb-4 space-y-2 bg-panel/94 py-2 backdrop-blur-xl">
             {statusMessage ? <p className="rounded-2xl border border-emerald-400/20 bg-emerald-500/12 px-4 py-3 text-sm text-emerald-50 shadow-lg">{statusMessage}</p> : null}
             {resolvedErrorMessage ? <p className="rounded-2xl border border-rose-400/20 bg-rose-500/12 px-4 py-3 text-sm text-rose-50 shadow-lg">{resolvedErrorMessage}</p> : null}
           </div>
@@ -221,7 +221,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
 
         <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
           <div className="space-y-4">
-            <div className="border-b border-white/10 pb-5 sm:rounded-[24px] sm:border sm:bg-black/20 sm:p-4">
+            <div className="border-b border-line/10 pb-5 sm:rounded-[24px] sm:border sm:bg-shade/20 sm:p-4">
               <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.import')}</p>
               <div className="mt-4 space-y-3">
                 <label className="block">
@@ -255,7 +255,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
               </div>
             </div>
 
-            <div className="border-b border-white/10 pb-5 sm:rounded-[24px] sm:border sm:bg-black/20 sm:p-4">
+            <div className="border-b border-line/10 pb-5 sm:rounded-[24px] sm:border sm:bg-shade/20 sm:p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                     <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.libraryState')}</p>
@@ -265,7 +265,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                   'rounded-full border px-3 py-1 text-[11px]',
                   presetCompatLibraryLoading || saving
                     ? 'border-violet-400/20 bg-violet-500/10 text-violet-100'
-                    : 'border-white/10 bg-black/20 text-zinc-300'
+                    : 'border-line/10 bg-shade/20 text-zinc-300'
                 )}>
                   {presetCompatLibraryLoading || saving ? t('preset.processing') : t('preset.ready')}
                 </span>
@@ -283,14 +283,14 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                 <button
                   type="button"
                   onClick={handleExportRegexBundle}
-                  className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-zinc-100 transition hover:bg-white/[0.08]"
+                  className="rounded-2xl border border-line/10 bg-overlay/[0.04] px-4 py-2 text-sm text-zinc-100 transition hover:bg-overlay/[0.08]"
                 >
                   {t('preset.exportRegexBundle')}
                 </button>
               </div>
             </div>
 
-            <div className="border-b border-white/10 pb-5 sm:rounded-[24px] sm:border sm:bg-black/20 sm:p-4">
+            <div className="border-b border-line/10 pb-5 sm:rounded-[24px] sm:border sm:bg-shade/20 sm:p-4">
               <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.list')}</p>
               <div className="mt-4 space-y-2">
                 {presets.length ? presets.map((preset) => (
@@ -302,17 +302,17 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                       'w-full rounded-[20px] border px-4 py-3 text-left transition',
                       selectedPreset?.id === preset.id
                         ? 'border-violet-400/30 bg-violet-500/12'
-                        : 'border-white/8 bg-[#0b0d12] hover:bg-white/[0.06]'
+                        : 'border-line/8 bg-surface hover:bg-overlay/[0.06]'
                     )}
                   >
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-sm font-medium text-zinc-100">{preset.name}</p>
-                      <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.ruleCount', { count: preset.promptRules.length })}</span>
+                      <span className="rounded-full border border-line/10 px-2 py-0.5 text-[10px] text-zinc-400">{t('preset.ruleCount', { count: preset.promptRules.length })}</span>
                     </div>
                     <p className="mt-2 text-xs leading-5 text-zinc-400">{t('preset.regexSummary', { embedded: preset.embeddedRegexes.length, attached: preset.attachedStandaloneRegexIds.length })}</p>
                   </button>
                 )) : (
-                  <div className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4 text-sm text-zinc-400">{t('preset.empty')}</div>
+                  <div className="rounded-[20px] border border-line/8 bg-surface p-4 text-sm text-zinc-400">{t('preset.empty')}</div>
                 )}
               </div>
             </div>
@@ -363,20 +363,20 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                       const rule = presetCompatLibrary.builtinSystemPrompts[surfaceId]
                       const surfaceMeta = PRESET_COMPAT_EDITABLE_SURFACE_META[surfaceId]
                       return (
-                        <div key={surfaceId} className="rounded-[20px] border border-white/8 bg-[#0b0d12] p-4">
+                        <div key={surfaceId} className="rounded-[20px] border border-line/8 bg-surface p-4">
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
                               <p className="text-sm font-medium text-zinc-100">{BUILTIN_SURFACE_LABELS[surfaceId]}</p>
                               <p className="mt-1 text-xs leading-5 text-zinc-500">{t('preset.builtin.ownedNoExport')}</p>
                               <p className="mt-1 text-xs leading-5 text-zinc-500">{surfaceMeta.builtinPromptSummary}</p>
                             </div>
-                            <label className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-300">
+                            <label className="inline-flex items-center gap-2 rounded-2xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300">
                               <input
                                 type="checkbox"
                                 data-testid={`preset-compat-builtin-system-toggle-${surfaceId}`}
                                 checked={rule.enabled}
                                 onChange={(event) => updatePresetCompatBuiltinSystemPrompt(surfaceId, { enabled: event.target.checked })}
-                                className="h-3.5 w-3.5 rounded border-white/20 bg-transparent"
+                                className="h-3.5 w-3.5 rounded border-line/20 bg-transparent"
                               />
                               {t('preset.enabled')}
                             </label>
@@ -387,7 +387,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                               data-testid={`preset-compat-builtin-system-content-${surfaceId}`}
                               value={rule.content}
                               onChange={(event) => updatePresetCompatBuiltinSystemPrompt(surfaceId, { content: event.target.value })}
-                              className="h-40 w-full rounded-[20px] border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-zinc-100 outline-none"
+                              className="h-40 w-full rounded-[20px] border border-line/10 bg-shade/20 px-4 py-3 text-sm leading-6 text-zinc-100 outline-none"
                             />
                           </label>
                         </div>
@@ -396,7 +396,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                   </div>
                 </div>
 
-                <div className="rounded-[24px] border border-white/8 bg-black/20 p-8 text-sm leading-7 text-zinc-400">
+                <div className="rounded-[24px] border border-line/8 bg-shade/20 p-8 text-sm leading-7 text-zinc-400">
                   {t('preset.importFirstDescription')}
                 </div>
               </div>

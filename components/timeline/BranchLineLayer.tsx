@@ -44,7 +44,7 @@ export function BranchLineLayer(props: {
             strokeWidth={selected ? 2.8 : highlighted ? 2.4 : 2}
             className={cn(
               'transition-all',
-              selected ? 'stroke-sky-300' : highlighted ? 'stroke-fuchsia-300/90' : 'stroke-white/22'
+              selected ? 'stroke-sky-300' : highlighted ? 'stroke-fuchsia-300/90' : 'stroke-line/22'
             )}
           />
         )

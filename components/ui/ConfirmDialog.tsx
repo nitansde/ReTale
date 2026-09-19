@@ -43,7 +43,7 @@ export function ConfirmDialog({
             if (!busy) onClose()
           }}
           disabled={busy}
-          className="min-h-11 rounded-xl border border-white/10 bg-white/[0.04] px-4 text-sm text-zinc-300 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+          className="min-h-11 rounded-xl border border-line/10 bg-overlay/[0.04] px-4 text-sm text-zinc-300 transition hover:bg-overlay/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {cancelLabel}
         </button>
