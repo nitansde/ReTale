@@ -411,12 +411,14 @@ export async function markKnowledgeStaleFromChapter(params: {
       params.fromChapterNo
     )
 
+    // Match rebuild cleanup by source chapter. An open validity interval does
+    // not make knowledge from an unchanged earlier chapter stale.
     db.execute(
       `
         UPDATE KnowledgeFact
         SET status = 'outdated', updatedAt = CURRENT_TIMESTAMP
         WHERE novelId = ? AND branchId = ?
-          AND validUntilChapter > ?
+          AND sourceChapter >= ?
           AND status != 'user_confirmed'
       `,
       params.novelId,
@@ -429,7 +431,7 @@ export async function markKnowledgeStaleFromChapter(params: {
         UPDATE KnowledgeRelation
         SET status = 'outdated', updatedAt = CURRENT_TIMESTAMP
         WHERE novelId = ? AND branchId = ?
-          AND validUntilChapter > ?
+          AND sourceChapter >= ?
           AND status != 'user_confirmed'
       `,
       params.novelId,
@@ -442,7 +444,7 @@ export async function markKnowledgeStaleFromChapter(params: {
         UPDATE EntityLink
         SET status = 'potentially_stale', updatedAt = CURRENT_TIMESTAMP
         WHERE novelId = ? AND branchId = ?
-          AND validUntilChapter > ?
+          AND sourceChapter >= ?
           AND status != 'user_confirmed'
       `,
       params.novelId,
@@ -455,7 +457,7 @@ export async function markKnowledgeStaleFromChapter(params: {
         UPDATE EntityState
         SET status = 'potentially_stale', updatedAt = CURRENT_TIMESTAMP
         WHERE novelId = ? AND branchId = ?
-          AND validUntilChapter > ?
+          AND sourceChapter >= ?
           AND status != 'user_confirmed'
       `,
       params.novelId,
@@ -493,7 +495,7 @@ export async function markKnowledgeStaleFromChapter(params: {
         UPDATE KnowledgeWorld
         SET status = 'outdated', updatedAt = CURRENT_TIMESTAMP
         WHERE novelId = ? AND branchId = ?
-          AND validUntilChapter > ?
+          AND validFromChapter >= ?
           AND status != 'user_confirmed'
       `,
       params.novelId,

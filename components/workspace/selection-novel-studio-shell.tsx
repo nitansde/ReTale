@@ -1028,55 +1028,65 @@ export function SelectionNovelStudio() {
                   <textarea value={rewritePrompt} onChange={(event) => handleRewritePromptChange(event.target.value)} className="h-28 w-full rounded-[24px] border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.rewriteInstructionPlaceholder')} />
                 </label>
 
-                <div className="grid gap-3 rounded-[24px] border border-white/8 bg-black/20 p-4 sm:grid-cols-[1fr_auto]">
-                  <fieldset className="min-w-0">
-                    <legend className="mb-2 block text-sm text-zinc-300">{t('workspace.shell.writingSkillLabel')}</legend>
-                    <div className="max-h-44 space-y-2 overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0d12] p-2.5">
-                      {writingSkillCardsLoading ? (
-                        <p className="px-1 py-1 text-sm text-zinc-500">{t('workspace.shell.writingSkillLoading')}</p>
-                      ) : writingSkillCards.length ? writingSkillCards.map((card) => {
-                        const checked = selectedWritingSkillCardIds.includes(card.id)
-                        return (
-                          <label
-                            key={card.id}
-                            className={cn(
-                              'flex min-w-0 cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2 text-sm transition',
-                              checked
-                                ? 'border-violet-300/25 bg-violet-500/12 text-violet-50'
-                                : 'border-transparent text-zinc-300 hover:border-white/10 hover:bg-white/[0.04]',
-                            )}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(event) => handleWritingSkillSelectionChange(
-                                event.target.checked
-                                  ? [...selectedWritingSkillCardIds, card.id]
-                                  : selectedWritingSkillCardIds.filter((cardId) => cardId !== card.id),
+                <details className="group/writing-skills rounded-[24px] border border-white/8 bg-black/20 p-4">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-sm text-zinc-300 outline-none focus-visible:ring-2 focus-visible:ring-violet-400 [&::-webkit-details-marker]:hidden">
+                    <span>{t('workspace.shell.writingSkillLabel')}</span>
+                    <span className="inline-flex shrink-0 items-center gap-2 text-xs text-zinc-400">
+                      <span className="group-open/writing-skills:hidden">{t('workspace.shell.expand')}</span>
+                      <span className="hidden group-open/writing-skills:inline">{t('workspace.shell.collapse')}</span>
+                      <ChevronDown aria-hidden="true" className="h-4 w-4 transition group-open/writing-skills:rotate-180" />
+                    </span>
+                  </summary>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
+                    <fieldset className="min-w-0">
+                      <legend className="sr-only">{t('workspace.shell.writingSkillLabel')}</legend>
+                      <div className="max-h-44 space-y-2 overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0d12] p-2.5">
+                        {writingSkillCardsLoading ? (
+                          <p className="px-1 py-1 text-sm text-zinc-500">{t('workspace.shell.writingSkillLoading')}</p>
+                        ) : writingSkillCards.length ? writingSkillCards.map((card) => {
+                          const checked = selectedWritingSkillCardIds.includes(card.id)
+                          return (
+                            <label
+                              key={card.id}
+                              className={cn(
+                                'flex min-w-0 cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2 text-sm transition',
+                                checked
+                                  ? 'border-violet-300/25 bg-violet-500/12 text-violet-50'
+                                  : 'border-transparent text-zinc-300 hover:border-white/10 hover:bg-white/[0.04]',
                               )}
-                              className="mt-0.5 h-4 w-4 shrink-0 rounded border-white/20 bg-black/20 text-violet-400"
-                            />
-                            <span className="min-w-0 break-words leading-5">{card.title}</span>
-                          </label>
-                        )
-                      }) : (
-                        <p className="px-1 py-1 text-sm text-zinc-500">{t('workspace.shell.writingSkillNone')}</p>
-                      )}
-                    </div>
-                    {writingSkillCardsError ? <p className="mt-2 text-xs text-rose-300">{writingSkillCardsError}</p> : null}
-                  </fieldset>
-                  <label className="block sm:w-36">
-                    <span className="mb-2 block text-sm text-zinc-300">{t('workspace.shell.writingSkillExampleCount')}</span>
-                    <select
-                      value={writingSkillExampleCount}
-                      onChange={(event) => handleWritingSkillExampleCountChange(Number(event.target.value))}
-                      disabled={!selectedWritingSkillCardIds.length}
-                      className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-3 py-2.5 text-sm text-zinc-100 outline-none disabled:opacity-40"
-                    >
-                      {WRITING_SKILL_RUNTIME_EXAMPLE_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}
-                    </select>
-                  </label>
-                </div>
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) => handleWritingSkillSelectionChange(
+                                  event.target.checked
+                                    ? [...selectedWritingSkillCardIds, card.id]
+                                    : selectedWritingSkillCardIds.filter((cardId) => cardId !== card.id),
+                                )}
+                                className="mt-0.5 h-4 w-4 shrink-0 rounded border-white/20 bg-black/20 text-violet-400"
+                              />
+                              <span className="min-w-0 break-words leading-5">{card.title}</span>
+                            </label>
+                          )
+                        }) : (
+                          <p className="px-1 py-1 text-sm text-zinc-500">{t('workspace.shell.writingSkillNone')}</p>
+                        )}
+                      </div>
+                      {writingSkillCardsError ? <p className="mt-2 text-xs text-rose-300">{writingSkillCardsError}</p> : null}
+                    </fieldset>
+                    <label className="block sm:w-36">
+                      <span className="mb-2 block text-sm text-zinc-300">{t('workspace.shell.writingSkillExampleCount')}</span>
+                      <select
+                        value={writingSkillExampleCount}
+                        onChange={(event) => handleWritingSkillExampleCountChange(Number(event.target.value))}
+                        disabled={!selectedWritingSkillCardIds.length}
+                        className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-3 py-2.5 text-sm text-zinc-100 outline-none disabled:opacity-40"
+                      >
+                        {WRITING_SKILL_RUNTIME_EXAMPLE_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                </details>
 
                 {generationContext && activeGraphContext ? (
                   <div className="rounded-[24px] border border-amber-400/18 bg-amber-500/[0.08] p-3">
