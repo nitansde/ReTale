@@ -133,7 +133,7 @@ export function StoryTimeline(props: {
   const selectedNodeId = props.activeSelection?.kind === 'chapter' ? null : props.activeSelection?.nodeId ?? null
 
   return (
-    <div ref={containerRef} className="relative space-y-3">
+    <div ref={containerRef} className="relative space-y-1 lg:space-y-3">
       <BranchLineLayer
         width={layout.width}
         height={layout.height}
@@ -192,9 +192,7 @@ export function StoryTimeline(props: {
                     />
                   )
                 })
-              ) : (
-                <div className="hidden lg:block" />
-              )
+              ) : null
             }
           />
         )

@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react'
+import { useEffect, useId, useRef, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
+import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -19,8 +20,25 @@ const FOCUSABLE_SELECTOR = [
   'input:not([disabled])',
   'select:not([disabled])',
   'textarea:not([disabled])',
+  'summary',
   '[tabindex]:not([tabindex="-1"])',
 ].join(',')
+
+const openSurfaces: HTMLElement[] = []
+let modalCount = 0
+let originalBodyOverflow = ''
+
+function focusableElements(surface: HTMLElement) {
+  return Array.from(surface.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((element) => {
+    for (let parent: HTMLElement | null = element; parent && parent !== surface; parent = parent.parentElement) {
+      if (parent.hidden || getComputedStyle(parent).display === 'none' || getComputedStyle(parent).visibility === 'hidden') return false
+      if (parent instanceof HTMLDetailsElement && !parent.open && !parent.querySelector('summary')?.contains(element)) return false
+    }
+    return true
+  })
+}
+
+const subscribeToHydration = () => () => {}
 
 export function DialogSurface({
   open,
@@ -41,6 +59,8 @@ export function DialogSurface({
   titleClassName,
   contentClassName,
   className,
+  footer,
+  mobileFullscreen = false,
 }: {
   open: boolean
   onClose: () => void
@@ -60,7 +80,10 @@ export function DialogSurface({
   titleClassName?: string
   contentClassName?: string
   className?: string
+  footer?: ReactNode
+  mobileFullscreen?: boolean
 }) {
+  const mounted = useSyncExternalStore(subscribeToHydration, () => true, () => false)
   const titleId = useId()
   const descriptionId = useId()
   const surfaceRef = useRef<HTMLDivElement>(null)
@@ -76,20 +99,25 @@ export function DialogSurface({
   }, [closeDisabled])
 
   useEffect(() => {
-    if (!open) return
+    if (!open || !mounted) return
 
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const previousOverflow = document.body.style.overflow
-    if (modal) document.body.style.overflow = 'hidden'
+    if (modal) {
+      if (modalCount === 0) originalBodyOverflow = document.body.style.overflow
+      modalCount += 1
+      document.body.style.overflow = 'hidden'
+    }
 
     const surface = surfaceRef.current
+    if (surface) openSurfaces.push(surface)
     const requestedFocus = initialFocusRef?.current
     const focusable = requestedFocus && surface?.contains(requestedFocus)
       ? requestedFocus
-      : surface?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+      : surface ? focusableElements(surface)[0] : null
     ;(focusable ?? surface)?.focus()
 
     function handleKeyDown(event: KeyboardEvent) {
+      if (openSurfaces.at(-1) !== surface) return
       if (event.key === 'Escape') {
         event.preventDefault()
         if (closeDisabledRef.current) return
@@ -98,15 +126,15 @@ export function DialogSurface({
       }
       if (event.key !== 'Tab' || !surface) return
 
-      const focusableElements = Array.from(surface.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
-      if (focusableElements.length === 0) {
+      const elements = focusableElements(surface)
+      if (elements.length === 0) {
         event.preventDefault()
         surface.focus()
         return
       }
 
-      const first = focusableElements[0]
-      const last = focusableElements[focusableElements.length - 1]
+      const first = elements[0]
+      const last = elements[elements.length - 1]
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault()
         last.focus()
@@ -117,24 +145,31 @@ export function DialogSurface({
     }
 
     function handleFocusIn(event: FocusEvent) {
-      if (!surface || surface.contains(event.target as Node)) return
-      const firstFocusable = surface.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+      if (!surface || openSurfaces.at(-1) !== surface || surface.contains(event.target as Node)) return
+      const firstFocusable = focusableElements(surface)[0]
       ;(firstFocusable ?? surface).focus()
     }
 
     document.addEventListener('keydown', handleKeyDown)
     document.addEventListener('focusin', handleFocusIn)
     return () => {
+      if (surface) {
+        const index = openSurfaces.indexOf(surface)
+        if (index >= 0) openSurfaces.splice(index, 1)
+      }
       document.removeEventListener('keydown', handleKeyDown)
       document.removeEventListener('focusin', handleFocusIn)
-      if (modal) document.body.style.overflow = previousOverflow
-      previouslyFocused?.focus()
+      if (modal) {
+        modalCount -= 1
+        if (modalCount === 0) document.body.style.overflow = originalBodyOverflow
+      }
+      if (previouslyFocused?.isConnected) previouslyFocused.focus()
     }
-  }, [initialFocusRef, modal, open])
+  }, [initialFocusRef, modal, mounted, open])
 
-  if (!open) return null
+  if (!open || !mounted) return null
 
-  return (
+  return createPortal(
     <div
       data-testid={backdropTestId}
       className={cn('dialog-backdrop fixed inset-0 z-[70] flex bg-[#05060a]/72 backdrop-blur-md backdrop-saturate-150', backdropClassName)}
@@ -152,12 +187,13 @@ export function DialogSurface({
         aria-busy={busy || undefined}
         tabIndex={-1}
         className={cn(
-          'dialog-surface overflow-y-auto border border-white/10 bg-[#0d1017]/96 px-5 pt-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] text-zinc-100 shadow-[0_30px_120px_rgba(0,0,0,0.58)] outline-none supports-[backdrop-filter]:backdrop-blur-2xl',
+          'dialog-surface flex min-h-0 flex-col overflow-hidden border border-white/10 bg-[#0d1017] px-5 pt-5 text-zinc-100 shadow-[0_30px_120px_rgba(0,0,0,0.58)] outline-none',
           PLACEMENT_STYLES[placement],
-          className
+          className,
+          mobileFullscreen && 'max-sm:m-0 max-sm:h-dvh max-sm:max-h-dvh max-sm:w-full max-sm:max-w-none max-sm:rounded-none max-sm:border-0',
         )}
       >
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex shrink-0 items-center justify-between gap-4">
           <h2 id={titleId} className={cn('min-w-0 text-lg font-semibold text-zinc-100', titleClassName)}>{title}</h2>
           {closeLabel ? (
             <button
@@ -165,15 +201,17 @@ export function DialogSurface({
               aria-label={closeLabel}
               disabled={closeDisabled}
               onClick={onClose}
-              className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-black/20 text-zinc-300 transition hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl text-zinc-300 transition hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <X className="h-4 w-4" aria-hidden="true" />
             </button>
           ) : null}
         </div>
-        {description ? <p id={descriptionId} className="mt-2 text-sm leading-6 text-zinc-400">{description}</p> : null}
-        <div className={cn('mt-5', contentClassName)}>{children}</div>
+        {description ? <p id={descriptionId} className="mt-2 shrink-0 text-sm leading-6 text-zinc-400">{description}</p> : null}
+        <div data-testid="dialog-content" className={cn('mt-5 min-h-0 flex-1 overflow-y-auto overscroll-contain pb-5', !footer && 'pb-[max(1.25rem,env(safe-area-inset-bottom))]', contentClassName)}>{children}</div>
+        {footer ? <div className="-mx-5 shrink-0 border-t border-white/10 bg-[#0d1017] px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]" data-testid="dialog-footer">{footer}</div> : null}
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

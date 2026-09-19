@@ -144,26 +144,26 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
 
   const content = (
     <>
-      <button
-        type="button"
-        onClick={() => {
-          props.onCreateChapter()
-          props.onClose()
-        }}
-        className="mb-4 min-h-11 w-full rounded-2xl bg-violet-500 px-4 text-sm font-medium text-white transition hover:bg-violet-400"
-      >
-        {t('chapterNav.newChapter')}
-      </button>
-      <section className="space-y-3 rounded-[24px] border border-white/8 bg-white/[0.03] p-3">
-        <div className="flex items-center justify-between gap-3 px-1">
+      <section className="space-y-3 lg:rounded-[24px] lg:border lg:border-white/8 lg:bg-white/[0.03] lg:p-3">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-1 lg:grid-cols-[minmax(0,1fr)_auto]">
           <p className="text-xs text-zinc-500">{t('chapterNav.chapterCount', { count: mainlineChapters.length })}</p>
+          <button
+            type="button"
+            onClick={() => {
+              props.onCreateChapter()
+              props.onClose()
+            }}
+            className="min-h-11 rounded-xl px-2 text-sm font-medium text-violet-300 transition hover:bg-white/5 lg:order-first lg:col-span-2 lg:bg-violet-500 lg:text-white"
+          >
+            {t('chapterNav.newChapter')}
+          </button>
           <button
             type="button"
             disabled={alreadyCentered}
             onClick={() => {
               updateNavigationState({ searchQuery: '', windowStart: centeredWindowStart })
             }}
-            className="inline-flex min-h-8 items-center gap-1.5 rounded-xl border border-white/8 bg-black/20 px-2.5 text-[11px] text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-default disabled:opacity-45"
+            className="inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-white/8 bg-black/20 px-2.5 text-[11px] text-zinc-300 transition hover:bg-white/[0.06] disabled:cursor-default disabled:opacity-45"
           >
             <LocateFixed className="h-3.5 w-3.5" aria-hidden="true" />
             {t('chapterNav.currentChapter')}
@@ -181,7 +181,7 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
             }}
             aria-label={t('chapterNav.searchLabel')}
             placeholder={t('chapterNav.searchPlaceholder')}
-            className="min-h-11 w-full rounded-2xl border border-white/8 bg-black/25 py-2 pl-10 pr-10 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-violet-400/35 focus:bg-black/35"
+            className="min-h-11 w-full rounded-xl border border-white/8 bg-black/25 py-2 pl-10 pr-10 text-base lg:text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-violet-400/35 focus:bg-black/35"
           />
           {searchQuery ? (
             <button
@@ -239,7 +239,7 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
 
         <div
           ref={timelineScrollRef}
-          className="max-h-[calc(100vh-21rem)] min-h-48 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]"
+          className="max-h-[calc(100dvh-17rem)] min-h-48 lg:max-h-[calc(100vh-21rem)] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]"
           data-testid="chapter-navigation-scroll"
         >
           {visibleChapters.length ? (
@@ -285,8 +285,8 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
       onClose={props.onClose}
       closeLabel={t('chapterNav.close')}
       title={t('chapterNav.title')}
-      description={t('chapterNav.description')}
       placement="left"
+      className="w-[94vw] max-w-md rounded-r-2xl"
     >
       <div data-testid="workspace-chapter-nav">{content}</div>
     </DialogSurface>

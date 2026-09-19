@@ -64,7 +64,7 @@ export function WorkspaceCenterPane(props: {
     <section className="min-w-0 overflow-hidden bg-transparent shadow-none sm:rounded-[30px] sm:border sm:border-white/10 sm:bg-[#11141d] sm:shadow-[0_28px_90px_rgba(0,0,0,0.35)]" data-testid="workspace-center-pane">
       <div className={cn(
         'border-y border-white/8 bg-[#0d1017]/88 px-4 py-3 backdrop-blur-xl sm:border-x-0 sm:border-t-0 sm:bg-transparent sm:px-7 sm:py-4 sm:backdrop-blur-none',
-        !isChapter && 'hidden sm:block',
+        'hidden lg:block',
       )}>
         <div className="flex flex-wrap items-center justify-between gap-3 sm:items-start">
           <div className={cn('min-w-0', isChapter && 'hidden sm:block')}>

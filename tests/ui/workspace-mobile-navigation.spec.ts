@@ -6,6 +6,8 @@ test.use({
 })
 
 test('mobile workspace header opens mutually exclusive navigation sheets', async ({ page }) => {
+  let knowledgeReady = false
+  const knowledgeMutations: string[] = []
   const workspacePayload = {
     currentNovelId: 'novel-mobile',
     currentChapterId: 'chapter-mobile',
@@ -38,6 +40,13 @@ test('mobile workspace header opens mutually exclusive navigation sheets', async
   })
 
   await page.route('**/api/knowledge-view*', async (route) => {
+    if (route.request().method() === 'POST') knowledgeMutations.push(route.request().postData() ?? '')
+    const coverage = {
+      status: knowledgeReady ? 'full' : 'missing',
+      coveredChapterCount: knowledgeReady ? 1 : 0,
+      totalChapterCount: 1,
+      validThroughChapterNo: knowledgeReady ? 1 : null,
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -50,7 +59,12 @@ test('mobile workspace header opens mutually exclusive navigation sheets', async
         localCharacters: [],
         knowledgeRebuildStatus: null,
         hanlpCacheSnapshot: null,
-        knowledgeStatusOverview: null,
+        knowledgeStatusOverview: {
+          knowledgeGraph: coverage,
+          extractionCache: coverage,
+          embeddingCache: { ...coverage, provider: null, model: null },
+          retrievalIndex: { status: coverage.status, indexedScopeCount: knowledgeReady ? 1 : 0, task: null },
+        },
       }),
     })
   })
@@ -60,10 +74,16 @@ test('mobile workspace header opens mutually exclusive navigation sheets', async
   const header = page.getByTestId('workspace-mobile-header')
   const editor = page.getByTestId('workspace-chapter-reader').first()
   await expect(header).toBeVisible()
+  await expect(header.getByRole('button', { name: '打开章节导航' })).toBeVisible()
+  const homeLink = page.getByTestId('workspace-mobile-toolbar').getByRole('link', { name: '返回书库' })
+  await expect(homeLink).toHaveText('主页')
   await expect(editor).toBeVisible()
   const headerBox = await header.boundingBox()
   expect(headerBox).not.toBeNull()
   expect(headerBox!.x + headerBox!.width).toBeLessThanOrEqual(375)
+  expect((await header.getByRole('heading').boundingBox())!.width).toBeGreaterThan(200)
+  expect((await editor.boundingBox())!.y).toBeLessThan(150)
+  await expect(page.getByTestId('workspace-chapter-actions')).toHaveCount(0)
 
   for (const name of ['返回书库', '打开章节导航', '打开故事上下文', '更多选项']) {
     const control = page.getByRole(name === '返回书库' ? 'link' : 'button', { name, exact: true })
@@ -97,12 +117,28 @@ test('mobile workspace header opens mutually exclusive navigation sheets', async
   await expect(page.getByRole('dialog', { name: '故事上下文' })).toBeVisible()
   await expect(page.getByTestId('workspace-reference-panel')).toHaveCount(1)
   await expect(page.getByRole('dialog', { name: '知识状态' })).toHaveCount(0)
+  const rebuildGuide = page.getByRole('button', { name: '去重建知识库' })
+  await expect(rebuildGuide).toBeInViewport()
+  await rebuildGuide.click()
+  await expect(page.getByRole('dialog', { name: '故事上下文' })).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: '知识状态' })).toBeVisible()
+  expect(knowledgeMutations).toEqual([])
+  await page.getByRole('button', { name: '关闭知识状态' }).click()
+  await page.getByRole('button', { name: '打开故事上下文' }).click()
   await page.getByRole('button', { name: '关闭故事上下文' }).click()
 
   await page.getByRole('button', { name: '更多选项' }).click()
   await expect(page.getByRole('dialog', { name: '工作区选项' })).toBeVisible()
+
   {
     const optionsDialog = page.getByRole('dialog', { name: '工作区选项' })
+    const optionsBackdrop = optionsDialog.locator('xpath=..')
+    expect(await optionsBackdrop.evaluate((element) => element.parentElement === document.body)).toBe(true)
+    expect((await optionsBackdrop.boundingBox())!.height).toBe(844)
+    await expect.poll(async () => {
+      const optionsBox = (await optionsDialog.boundingBox())!
+      return Math.round(optionsBox.y + optionsBox.height)
+    }).toBe(844)
     await page.getByRole('button', { name: '打开知识状态' }).click()
     await expect(optionsDialog).toHaveCount(0)
     await expect(page.getByRole('dialog', { name: '知识状态' })).toBeVisible()
@@ -112,6 +148,15 @@ test('mobile workspace header opens mutually exclusive navigation sheets', async
 
   await page.getByRole('button', { name: '更多选项' }).click()
   await expect(page.getByRole('dialog', { name: '工作区选项' })).toBeVisible()
+
+  knowledgeReady = true
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.getByRole('button', { name: '打开故事上下文' }).click()
+  await expect(page.getByRole('dialog', { name: '故事上下文' })).toBeVisible()
+  await expect(page.getByTestId('workspace-story-knowledge-guide')).toHaveCount(0)
+  await page.getByRole('button', { name: '关闭故事上下文' }).click()
+  await homeLink.click()
+  await expect(page).toHaveURL(/\/library$/)
 })
 
 test('mobile knowledge sheet presents one phase-local progressbar and durable terminal coverage', async ({ page }) => {
@@ -206,8 +251,10 @@ test('mobile knowledge sheet presents one phase-local progressbar and durable te
   })
 
   await page.goto('/workspace', { waitUntil: 'networkidle' })
-  await page.getByRole('button', { name: '更多选项' }).click()
-  await page.getByRole('button', { name: '打开知识状态' }).click()
+  await page.getByRole('button', { name: '打开故事上下文' }).click()
+  await expect(page.getByRole('button', { name: '去重建知识库' })).toHaveCount(0)
+  await page.getByRole('button', { name: '查看构建进度' }).click()
+  await expect(page.getByRole('dialog', { name: '故事上下文' })).toHaveCount(0)
 
   const knowledgeDialog = page.getByRole('dialog', { name: '知识状态' })
   const summary = page.getByTestId('workspace-knowledge-status')
@@ -251,7 +298,8 @@ test('mobile knowledge sheet presents one phase-local progressbar and durable te
   await expect(advanced).toContainText('Ollama · qwen3-embedding:4b · batch 32')
   await expect(page.getByRole('progressbar')).toHaveCount(1)
 
-  const expandedOverflow = await knowledgeDialog.evaluate((dialog) => ({
+  const knowledgeContent = knowledgeDialog.getByTestId('dialog-content')
+  const expandedOverflow = await knowledgeContent.evaluate((dialog) => ({
     documentClientWidth: document.documentElement.clientWidth,
     documentScrollWidth: document.documentElement.scrollWidth,
     sheetClientWidth: dialog.clientWidth,
@@ -262,13 +310,13 @@ test('mobile knowledge sheet presents one phase-local progressbar and durable te
   expect(expandedOverflow.documentScrollWidth).toBeLessThanOrEqual(expandedOverflow.documentClientWidth)
   expect(expandedOverflow.sheetScrollWidth).toBeLessThanOrEqual(expandedOverflow.sheetClientWidth)
   expect(expandedOverflow.sheetScrollHeight).toBeGreaterThan(expandedOverflow.sheetClientHeight)
-  await knowledgeDialog.evaluate((dialog) => { dialog.scrollTop = dialog.scrollHeight })
-  await expect.poll(() => knowledgeDialog.evaluate((dialog) => dialog.scrollTop)).toBeGreaterThan(0)
+  await knowledgeContent.evaluate((dialog) => { dialog.scrollTop = dialog.scrollHeight })
+  await expect.poll(() => knowledgeContent.evaluate((dialog) => dialog.scrollTop)).toBeGreaterThan(0)
 
   activeRefresh = false
   await page.reload({ waitUntil: 'networkidle' })
-  await page.getByRole('button', { name: '更多选项' }).click()
-  await page.getByRole('button', { name: '打开知识状态' }).click()
+  await page.getByRole('button', { name: '打开故事上下文' }).click()
+  await page.getByRole('button', { name: '去重建知识库' }).click()
 
   const terminalSummary = page.getByTestId('workspace-knowledge-status')
   await expect(terminalSummary).toContainText('至第 5 章')

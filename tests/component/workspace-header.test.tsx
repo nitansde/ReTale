@@ -50,21 +50,21 @@ function renderHeader() {
 }
 
 describe('WorkspaceHeader', () => {
-  it('places the search control immediately before the book control', () => {
+  it('keeps the title in the header and reading actions in the mobile toolbar', () => {
     const actions = renderHeader()
     const header = screen.getByTestId('workspace-mobile-header')
 
-    expect(header).toHaveClass('grid-cols-[44px_44px_44px_minmax(0,1fr)_44px_44px]')
-    expect(header.children).toHaveLength(6)
+    expect(within(header).getByRole('heading')).toHaveTextContent('A very long current chapter title')
+    expect(within(header).queryByRole('button', { name: 'bookSearch.open' })).not.toBeInTheDocument()
+    const toolbar = screen.getByTestId('workspace-mobile-toolbar')
     const chapterButton = within(header).getByRole('button', { name: 'workspace.header.openChapters' })
-    const searchButton = within(header).getByRole('button', { name: 'bookSearch.open' })
-    expect(searchButton.nextElementSibling).toBe(chapterButton)
-    expect(searchButton.querySelector('svg')).toBeInTheDocument()
+    expect(within(toolbar).getByRole('link', { name: 'workspace.header.backToLibrary' })).toHaveTextContent('workspace.header.home')
+    const searchButton = within(toolbar).getByRole('button', { name: 'bookSearch.open' })
     fireEvent.click(searchButton)
     expect(actions.onSearch).toHaveBeenCalledTimes(1)
     const contextButton = screen.getByRole('button', { name: 'workspace.header.openContext' })
     const optionsButton = screen.getByRole('button', { name: 'workspace.header.moreOptions' })
-    expect(chapterButton).toHaveClass('min-h-11', 'min-w-11')
+    expect(chapterButton).toBeEnabled()
     expect(contextButton.querySelector('.lucide-book-marked')).toBeInTheDocument()
     expect(optionsButton.querySelector('.lucide-ellipsis')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'workspace.header.openKnowledge' })).not.toBeInTheDocument()
@@ -80,7 +80,8 @@ describe('WorkspaceHeader', () => {
     const actions = renderHeader()
     fireEvent.click(screen.getByRole('button', { name: 'workspace.header.moreOptions' }))
 
-    expect(screen.getByRole('dialog', { name: 'workspace.header.overflowTitle' })).toBeInTheDocument()
+    const dialog = screen.getByRole('dialog', { name: 'workspace.header.overflowTitle' })
+    expect(dialog.parentElement?.parentElement).toBe(document.body)
     const knowledgeButton = screen.getByRole('button', { name: 'workspace.header.openKnowledge' })
     expect(knowledgeButton.querySelector('.lucide-book-marked')).toBeInTheDocument()
     fireEvent.click(knowledgeButton)
@@ -98,15 +99,15 @@ describe('WorkspaceHeader', () => {
     const pendingBack = new Promise<void>((resolve) => { resolveBack = resolve })
     const actions = renderHeader()
     actions.onBackToLibrary.mockReturnValueOnce(pendingBack)
-    const backLinks = screen.getAllByRole('link', { name: 'workspace.header.backToLibrary' })
+    const backLink = within(screen.getByTestId('workspace-mobile-toolbar')).getByRole('link', { name: 'workspace.header.backToLibrary' })
 
-    fireEvent.click(backLinks[0])
-    fireEvent.click(backLinks[0])
+    fireEvent.click(backLink)
+    fireEvent.click(backLink)
 
     expect(actions.onBackToLibrary).toHaveBeenCalledTimes(1)
-    expect(backLinks[0]).toHaveAttribute('aria-busy', 'true')
+    expect(backLink).toHaveAttribute('aria-busy', 'true')
 
     resolveBack()
-    await waitFor(() => expect(backLinks[0]).toHaveAttribute('aria-busy', 'false'))
+    await waitFor(() => expect(backLink).toHaveAttribute('aria-busy', 'false'))
   })
 })

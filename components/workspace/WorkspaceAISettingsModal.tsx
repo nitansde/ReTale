@@ -65,7 +65,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
       : ''
 
     return (
-      <div className="mt-4 rounded-[22px] border border-white/8 bg-black/20 p-4">
+      <div className="mt-4 border-t border-white/10 pt-4">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">OpenAI-compatible API</p>
@@ -92,7 +92,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
             <input
               value={scenarioSettings.openAICompatible.baseUrl}
               onChange={(event) => props.updateScenarioOpenAIField(scenario, 'baseUrl', event.target.value)}
-              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
               placeholder="https://api.openai.com/v1"
             />
             <p className="mt-2 text-xs leading-5 text-zinc-500">
@@ -105,7 +105,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
             <input
               value={scenarioSettings.openAICompatible.apiKey}
               onChange={(event) => props.updateScenarioOpenAIField(scenario, 'apiKey', event.target.value)}
-              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
               placeholder={scenarioSettings.openAICompatible.apiKeyMasked || 'sk-...'}
             />
             {scenarioSettings.openAICompatible.apiKeyConfigured && !scenarioSettings.openAICompatible.apiKey ? (
@@ -128,7 +128,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
               value={selectedModel}
               onChange={(event) => props.updateScenarioOpenAIField(scenario, 'model', event.target.value)}
               disabled={loading || currentModels.length === 0}
-              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm disabled:cursor-not-allowed disabled:opacity-60"
             >
               <option value="">
                 {loading
@@ -147,7 +147,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
             <input
               value={scenarioSettings.openAICompatible.model}
               onChange={(event) => props.updateScenarioOpenAIField(scenario, 'model', event.target.value)}
-              className="mt-3 w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="mt-3 w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
               placeholder={metaByScenario[scenario].openAIPlaceholder}
             />
           </label>
@@ -165,7 +165,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
                 max={20}
                 value={knowledgeExtractionSettings?.openAICompatible.parallelism ?? 5}
                 onChange={(event) => props.updateKnowledgeExtractionParallelism('openai-compatible', event.target.value)}
-                className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+                className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
               />
               <p className="mt-2 text-xs leading-5 text-zinc-500">{t('aiSettings.openAiParallelismHint')}</p>
             </label>
@@ -184,7 +184,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
     const purpose = metaByScenario[scenario].ollamaPurpose
 
     return (
-      <div className="mt-4 rounded-[22px] border border-white/8 bg-black/20 p-4">
+      <div className="mt-4 border-t border-white/10 pt-4">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">{t('aiSettings.ollamaEyebrow')}</p>
@@ -211,7 +211,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
             <input
               value={scenarioSettings.ollama.baseUrl}
               onChange={(event) => props.updateScenarioOllamaField(scenario, 'baseUrl', event.target.value)}
-              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
               placeholder="http://127.0.0.1:11434"
             />
           </label>
@@ -221,7 +221,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
             <select
               value={scenarioSettings.ollama.model}
               onChange={(event) => props.updateScenarioOllamaField(scenario, 'model', event.target.value)}
-              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
             >
               <option value="">
                 {purpose === 'embedding' ? t('aiSettings.autoSelectEmbedding') : t('aiSettings.autoSelectText')}
@@ -235,7 +235,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
             <input
               value={scenarioSettings.ollama.model}
               onChange={(event) => props.updateScenarioOllamaField(scenario, 'model', event.target.value)}
-              className="mt-3 w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+              className="mt-3 w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
               placeholder={metaByScenario[scenario].ollamaPlaceholder}
             />
           </label>
@@ -258,7 +258,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
                 max={20}
                 value={knowledgeExtractionSettings?.ollama.parallelism ?? 1}
                 onChange={(event) => props.updateKnowledgeExtractionParallelism('ollama', event.target.value)}
-                className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+                className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
               />
               <p className="mt-2 text-xs leading-5 text-zinc-500">{t('aiSettings.ollamaParallelismHint')}</p>
             </label>
@@ -278,6 +278,11 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
       title={t('settings.title')}
       description={t('settings.description')}
       className="max-w-2xl"
+      mobileFullscreen
+      footer={section === 'models' ? <div className="flex justify-end gap-2">
+        <button onClick={props.onClose} disabled={saving} className="min-h-11 rounded-xl px-4 text-sm text-zinc-300 disabled:opacity-50">{t('workspace.shell.cancel')}</button>
+        <button onClick={() => void handleSave()} disabled={saving} className="min-h-11 rounded-xl bg-violet-500 px-4 text-sm font-medium text-white hover:bg-violet-400 disabled:opacity-60">{saving ? t('aiSettings.saving') : t('aiSettings.saveSettings')}</button>
+      </div> : undefined}
     >
       <div role="group" aria-label={t('settings.sections')} className="mb-6 flex gap-2 rounded-2xl border border-white/10 bg-black/20 p-1.5">
         {(['appearance', 'models'] as const).map((item) => (
@@ -309,7 +314,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
                 <div
                   key={scenario}
                   data-testid={`ai-settings-scenario-${scenario}`}
-                  className="rounded-[24px] border border-white/10 bg-[#0b0d12] p-4"
+                  className="border-b border-white/10 pb-6"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="max-w-2xl">
@@ -355,7 +360,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
                     : renderOllamaFields(scenario)}
 
                   {scenario === 'embeddings' ? (
-                    <div className="mt-4 rounded-[22px] border border-white/8 bg-black/20 p-4">
+                    <div className="mt-4 border-t border-white/10 pt-4">
                       <label className="block">
                         <span className="mb-2 block text-sm text-zinc-300">{t('aiSettings.embeddingBatchSize')}</span>
                         <input
@@ -364,7 +369,7 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
                           max={128}
                           value={props.resolvedAISettings.embeddings.embeddingBatchSize}
                           onChange={(event) => props.updateEmbeddingBatchSize(event.target.value)}
-                          className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-sm text-zinc-100 outline-none"
+                          className="w-full rounded-2xl border border-white/10 bg-[#0b0d12] px-4 py-3 text-base text-zinc-100 outline-none sm:text-sm"
                         />
                         <p className="mt-2 text-xs leading-5 text-zinc-500">{t('aiSettings.embeddingBatchHint')}</p>
                       </label>
@@ -375,13 +380,6 @@ export function WorkspaceAISettingsModal(props: WorkspaceAISettingsModalProps) {
             })}
           </div>
 
-          <div className="mt-6 flex items-center justify-between gap-3">
-            <p className="hidden text-sm text-zinc-500 sm:block">{t('aiSettings.currentStatus')} {props.scenarioStatusLabels.join(' / ')}</p>
-            <div className="flex gap-2">
-              <button onClick={props.onClose} disabled={saving} className="min-h-11 rounded-2xl border border-white/10 px-4 text-sm text-zinc-300 hover:bg-white/[0.06] disabled:opacity-50">{t('workspace.shell.cancel')}</button>
-              <button onClick={() => void handleSave()} disabled={saving} className="min-h-11 rounded-2xl bg-violet-500 px-4 text-sm font-medium text-white hover:bg-violet-400 disabled:opacity-60">{saving ? t('aiSettings.saving') : t('aiSettings.saveSettings')}</button>
-            </div>
-          </div>
         </>
       )}
     </DialogSurface>

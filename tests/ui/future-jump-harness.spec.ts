@@ -34,7 +34,7 @@ test('future-jump harness smoke', async ({ page }) => {
   await expect(page.getByText('第1章 初入现场')).toBeVisible()
 
   const pageText = await page.locator('body').innerText()
-  expect(pageText.includes('正在恢复工作区')).toBeFalsy()
+  await expect(page.getByTestId('app-loading-screen')).toHaveCount(0)
 
   await page.screenshot({
     path: path.join(evidenceDirectory, 'future-jump-harness-smoke.png'),

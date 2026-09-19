@@ -2,9 +2,11 @@
 
 import { formatProgressMessage } from '@/lib/i18n/progress-message'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
+import { useDesktopWorkspaceLayout } from '@/components/workspace/use-desktop-workspace-layout'
 import { WorkspaceReaderToolbar } from '@/components/workspace/WorkspaceReaderToolbar'
 import { BookSearchDialog } from '@/components/workspace/BookSearchDialog'
 import StarterKit from '@tiptap/starter-kit'
@@ -35,9 +37,11 @@ import { WorkspaceChapterNav } from '@/components/workspace/WorkspaceChapterNav'
 import { WorkspaceHeader } from '@/components/workspace/WorkspaceHeader'
 import { WorkspaceWorldEntriesPanel } from '@/components/workspace/WorkspaceWorldEntriesPanel'
 import { WorkspaceReferencePanel } from '@/components/workspace/WorkspaceReferencePanel'
+import { mapWorkspaceKnowledgeStatus } from '@/components/workspace/workspace-knowledge-status'
 import { WorkspaceKnowledgeControls } from '@/components/workspace/WorkspaceKnowledgeControls'
 import { WorkspaceSelectionActions } from '@/components/workspace/WorkspaceSelectionActions'
 import { DialogSurface } from '@/components/ui/DialogSurface'
+import { LoadingScreen } from '@/components/ui/LoadingScreen'
 import { Notice } from '@/components/ui/Notice'
 import { useSelectionNovelStudioActions } from '@/components/workspace/use-selection-novel-studio-actions'
 import { useSelectionNovelStudioCore } from '@/components/workspace/use-selection-novel-studio-core'
@@ -316,6 +320,7 @@ export function SelectionNovelStudio() {
   } = actions
   const isContinueBlockContinuation = rewriteLaunchSource === 'continue_block'
     && activeContinueBlockRewriteContext?.variant === 'continue'
+  const desktop = useDesktopWorkspaceLayout()
   const [searchNovelId, setSearchNovelId] = useState<string | null>(null)
   const activeContextTokenEstimate = useMemo(() => generationContext
     ? resolveActiveGenerationContextTokenEstimate({
@@ -338,13 +343,7 @@ export function SelectionNovelStudio() {
             : t('workspace.context.futureJump')
 
   if (!backendLoaded) {
-    return (
-      <WorkspaceStatusState
-        icon={LoaderCircle}
-        title={t('workspace.loadingTitle')}
-        description={t('workspace.loadingDescription')}
-      />
-    )
+    return <LoadingScreen />
   }
 
   if (!hasWorkspaceContent) {
@@ -360,38 +359,32 @@ export function SelectionNovelStudio() {
 
   if (!currentChapter) {
     return (
-      <WorkspaceStatusState
-        icon={LoaderCircle}
-        title={t('workspace.repairTitle')}
-        description={t('workspace.repairDescription')}
-        ctaLabel={t('workspace.backToLibrary')}
-      />
+      <LoadingScreen>
+        <Link href="/library" className="inline-flex min-h-11 items-center rounded-lg px-3 transition hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70">
+          {t('workspace.backToLibrary')}
+        </Link>
+      </LoadingScreen>
     )
   }
 
   if (currentChapter.contentLoaded === false) {
+    if (!chapterLoadError) return <LoadingScreen />
+
     return (
       <main className="flex min-h-screen items-center justify-center bg-[#0a0c12] px-6 text-zinc-300" data-testid="chapter-loading">
-        {chapterLoadError ? (
-          <div className="flex max-w-md flex-col items-center gap-4 text-center">
-            <p role="alert">{chapterLoadError}</p>
-            <button type="button" onClick={() => router.push('/library')} className="text-sm text-violet-300 hover:text-violet-200">
-              {t('workspace.backToLibrary')}
-            </button>
-          </div>
-        ) : (
-          <div role="status" className="flex items-center gap-3">
-            <LoaderCircle aria-hidden="true" className="h-5 w-5 animate-spin" />
-            <span>{t('chapterNav.loading')}</span>
-          </div>
-        )}
+        <div className="flex max-w-md flex-col items-center gap-4 text-center">
+          <p role="alert">{chapterLoadError}</p>
+          <button type="button" onClick={() => router.push('/library')} className="text-sm text-violet-300 hover:text-violet-200">
+            {t('workspace.backToLibrary')}
+          </button>
+        </div>
       </main>
     )
   }
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(129,140,248,0.12),_transparent_30%),#0a0c12] text-zinc-100">
-      <div className="mx-auto flex min-h-screen max-w-[1720px] flex-col px-0 pb-10 pt-0 sm:px-5 sm:pt-3 lg:px-6">
+      <div className="mx-auto flex min-h-screen max-w-[1720px] flex-col px-0 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-0 sm:px-5 sm:pt-3 lg:px-6 lg:pb-10">
         {searchNovelId === currentNovelId ? (
           <BookSearchDialog key={currentNovelId} novelId={currentNovelId}
             onClose={() => setSearchNovelId(null)}
@@ -419,6 +412,14 @@ export function SelectionNovelStudio() {
               if (saved) setSearchNovelId(currentNovelId)
             })
           }}
+          hideMobileToolbar={activeWorkspaceSelection.kind === 'roleplay_session'}
+          onOpenGraph={activeWorkspaceSelection.kind === 'chapter' ? () => setCenterPaneView('graph') : undefined}
+          mobileSelectionActions={!desktop && !core.readerMode.isEditing && activeWorkspaceSelection.kind === 'chapter' && centerPaneView === 'body' && selectionText.trim() ? selectionActions : null}
+          mobileReaderAction={!desktop && activeWorkspaceSelection.kind === 'chapter' ? (
+            centerPaneView === 'graph'
+              ? <button type="button" onClick={() => setCenterPaneView('body')} className="min-h-12 flex-1 rounded-xl text-sm text-violet-200">{t('workspace.centerPane.bodyTab')}</button>
+              : <WorkspaceReaderToolbar compact isEditing={core.readerMode.isEditing} isSaving={core.readerMode.isSaving} onStartEditing={core.readerMode.startEditing} onFinishEditing={core.readerMode.finishEditing} />
+          ) : null}
           onOpenChapters={() => setLeftPanelOpen(true)}
           onOpenContext={() => setReferencePanelOpen(true)}
           onOpenKnowledge={() => setKnowledgePanelOpen(true)}
@@ -465,13 +466,13 @@ export function SelectionNovelStudio() {
             branchInstructionText={selectedTimelineInstructionText || null}
             chapterBodyView={
               <div className="px-0 py-0 sm:px-7 sm:py-6" data-testid="workspace-chapter-body-view">
-                <WorkspaceReaderToolbar
+                {desktop ? <WorkspaceReaderToolbar
                   isEditing={core.readerMode.isEditing}
                   isSaving={core.readerMode.isSaving}
                   onStartEditing={core.readerMode.startEditing}
                   onFinishEditing={core.readerMode.finishEditing}
-                />
-                {selectionActions}
+                /> : null}
+                {desktop ? selectionActions : null}
                 <div className="min-h-[62vh] bg-transparent shadow-none sm:rounded-[28px] sm:border sm:border-white/8 sm:bg-[#0b0d12] sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                   <EditorContent editor={editor} />
                 </div>
@@ -594,34 +595,35 @@ export function SelectionNovelStudio() {
             open={referencePanelOpen}
             onClose={() => setReferencePanelOpen(false)}
             knowledgeOpen={knowledgePanelOpen}
+            onKnowledgeOpen={() => {
+              setReferencePanelOpen(false)
+              setKnowledgePanelOpen(true)
+            }}
             onKnowledgeClose={() => setKnowledgePanelOpen(false)}
+            knowledgeStatus={mapWorkspaceKnowledgeStatus({
+              overview: knowledgeStatusOverview,
+              job: mainKnowledgeRebuildStatus ?? retrievalTaskStatus,
+            }, t)}
             contextLabel={contextLabel}
             selectionActions={null}
             knowledgeControls={knowledgeControls}
             references={(
               <>
 
-            <div className="mb-3 grid grid-cols-2 gap-2 text-[11px] text-zinc-500">
-              <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">{t('workspace.shell.charactersCount', { count: currentNovelVisibleCharacterCount })}</div>
-              <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">{t('workspace.shell.organizationsCount', { count: currentNovelWorldEntryGroups.organizations.length })}</div>
-              <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">{t('workspace.shell.locationsCount', { count: currentNovelWorldEntryGroups.locations.length })}</div>
-              <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">{t('workspace.shell.worldbuildingCount', { count: currentNovelWorldEntryGroups.worldbuilding.length })}</div>
-              <div className="rounded-xl border border-white/8 bg-black/20 px-3 py-2">{t('workspace.shell.timelineCount', { count: currentNovelTimelineEvents.length })}</div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-1 rounded-2xl bg-black/30 p-1 mb-4">
+            <div className="mb-4 flex gap-1 overflow-x-auto border-b border-white/10 pb-1 lg:flex-wrap" aria-label={t('workspace.context.title')}>
               {workspaceKnowledgeTabs.map(({ tab, label, icon: TabIcon }) => {
                 return (
                   <button
                     key={tab}
+                    aria-pressed={refTab === tab}
                     onClick={() => { setRefTab(tab); setEditState({ type: null, id: null, form: {} }) }}
                     className={cn(
-                      'inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium transition justify-center',
-                      refTab === tab ? 'bg-white/10 text-zinc-100 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'
+                      'inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 border-b-2 px-3 py-2 text-sm transition',
+                      refTab === tab ? 'border-violet-400 text-violet-200' : 'border-transparent text-zinc-400 hover:text-zinc-200'
                     )}
                   >
                     <TabIcon className="h-3.5 w-3.5" />
-                    {label}
+                    {label}<span className="text-xs text-zinc-500">{({ characters: currentNovelVisibleCharacterCount, organizations: currentNovelWorldEntryGroups.organizations.length, locations: currentNovelWorldEntryGroups.locations.length, worldbuilding: currentNovelWorldEntryGroups.worldbuilding.length, outline: currentNovelOutlines.length, timeline: currentNovelTimelineEvents.length })[tab]}</span>
                   </button>
                 )
               })}
@@ -868,7 +870,7 @@ export function SelectionNovelStudio() {
         </div>
       </div>
 
-      {activeWorkspaceSelection.kind === 'chapter' && centerPaneView === 'body' && toolbarPos && selectionText && !activeMode ? (
+      {desktop && activeWorkspaceSelection.kind === 'chapter' && centerPaneView === 'body' && toolbarPos && selectionText && !activeMode ? (
         <div
           ref={toolbarRef}
           className="pointer-events-none fixed z-40"
@@ -975,12 +977,35 @@ export function SelectionNovelStudio() {
           placement="bottom"
           backdropTestId="workspace-action-overlay"
           backdropClassName="z-50 bg-black/55"
-          className="max-w-3xl bg-[#0d1017] p-4 shadow-[0_-20px_80px_rgba(0,0,0,0.5)] sm:mb-6 sm:rounded-[32px] sm:p-5"
+          mobileFullscreen
+          className="mx-auto max-w-3xl sm:mb-6 sm:rounded-[24px]"
+          footer={activeMode === 'rewrite' ? (
+            <div className="flex flex-wrap items-center gap-2" data-testid="rewrite-actions">
+              <button onClick={handleRewrite} disabled={rewriteFlow.loading || saveContinueBlockPending} className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-violet-500 px-4 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60">
+                {rewriteFlow.loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {t('workspace.shell.generateVersion')}
+              </button>
+              {rewriteFlow.loading && rewriteFlow.jobId ? <button onClick={handleAbortRewriteGeneration} className="min-h-11 rounded-xl px-3 text-sm text-rose-200">{t('workspace.action.rewriteAbortedToast')}</button> : null}
+              {selectedRewriteCandidate && !rewriteFlow.loading ? <>
+                <button onClick={handleSaveContinueBlock} disabled={saveContinueBlockPending} className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-fuchsia-500/15 px-4 text-sm text-fuchsia-100 disabled:opacity-40">
+                  {saveContinueBlockPending ? <><LoaderCircle className="h-4 w-4 animate-spin" />{t('workspace.shell.savePending')}</> : t('workspace.shell.saveAsContinueBlock')}
+                </button>
+                <details className="w-full" open={desktop}>
+                  <summary className="min-h-11 cursor-pointer py-3 text-sm text-zinc-300 lg:hidden">{t('workspace.mobile.resultActions')}</summary>
+                  <div className="flex flex-wrap gap-1">
+                    <button onClick={handleCreateWhatIf} disabled={saveContinueBlockPending} className="min-h-11 rounded-xl px-3 text-sm text-violet-200 disabled:opacity-40">{t('workspace.shell.createWhatIf')}</button>
+                    {rewriteLaunchSource !== 'future_jump' ? <button onClick={() => applyFullChapter(selectedRewriteCandidate.content)} className="min-h-11 rounded-xl px-3 text-sm text-zinc-300">{t('workspace.shell.replaceBody')}</button> : null}
+                    <button onClick={() => copyText('rewrite', selectedRewriteCandidate.content)} className="min-h-11 rounded-xl px-3 text-sm text-zinc-300">{t(copied === 'rewrite' ? 'workspace.shell.copied' : 'workspace.shell.copyResult')}</button>
+                    <button onClick={() => handleRewritePromptChange((current) => `${current}\n\n${t('workspace.shell.continueRewritePromptAppend')}`)} className="min-h-11 rounded-xl px-3 text-sm text-zinc-300">{t('workspace.shell.continueRewrite')}</button>
+                  </div>
+                </details>
+              </> : null}
+            </div>
+          ) : undefined}
         >
             {!isContinueBlockContinuation ? (
-              <div className="mb-4 rounded-[24px] border border-white/8 bg-black/20 p-4" data-testid="workspace-selected-excerpt">
+              <div className="mb-5 border-l-2 border-violet-400/50 pl-4" data-testid="workspace-selected-excerpt">
                 <p className="mb-2 text-xs uppercase tracking-[0.16em] text-zinc-500">{t('workspace.shell.selectedExcerpt')}</p>
-                <p className="whitespace-pre-wrap text-sm leading-7 text-zinc-300">{lockedSelectionText || selectionText}</p>
+                <p className="line-clamp-3 whitespace-pre-wrap text-sm leading-6 text-zinc-400">{lockedSelectionText || selectionText}</p>
               </div>
             ) : null}
 
@@ -994,7 +1019,7 @@ export function SelectionNovelStudio() {
 
             {activeMode === 'rewrite' ? (
               <div className="space-y-4">
-                <div className="rounded-[26px] border border-violet-400/20 bg-violet-500/10 p-4">
+                <div className="hidden lg:block">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-[11px] uppercase tracking-[0.18em] text-violet-200/70">{t('workspace.shell.rewriteStudio')}</p>
@@ -1025,11 +1050,11 @@ export function SelectionNovelStudio() {
 
                 <label className="block">
                   <span className="mb-2 block text-sm text-zinc-300">{t('workspace.shell.rewriteInstructionLabel')}</span>
-                  <textarea value={rewritePrompt} onChange={(event) => handleRewritePromptChange(event.target.value)} className="h-28 w-full rounded-[24px] border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.rewriteInstructionPlaceholder')} />
+                  <textarea value={rewritePrompt} onChange={(event) => handleRewritePromptChange(event.target.value)} className="h-32 w-full rounded-xl border border-white/15 bg-black/10 px-4 py-3 text-base sm:text-sm text-zinc-100 outline-none" placeholder={t('workspace.shell.rewriteInstructionPlaceholder')} />
                 </label>
 
-                <details className="group/writing-skills rounded-[24px] border border-white/8 bg-black/20 p-4">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-sm text-zinc-300 outline-none focus-visible:ring-2 focus-visible:ring-violet-400 [&::-webkit-details-marker]:hidden">
+                <details className="group/writing-skills border-b border-white/10 py-3">
+                  <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-sm text-zinc-300 outline-none focus-visible:ring-2 focus-visible:ring-violet-400 [&::-webkit-details-marker]:hidden">
                     <span>{t('workspace.shell.writingSkillLabel')}</span>
                     <span className="inline-flex shrink-0 items-center gap-2 text-xs text-zinc-400">
                       <span className="group-open/writing-skills:hidden">{t('workspace.shell.expand')}</span>
@@ -1089,29 +1114,29 @@ export function SelectionNovelStudio() {
                 </details>
 
                 {generationContext && activeGraphContext ? (
-                  <div className="rounded-[24px] border border-amber-400/18 bg-amber-500/[0.08] p-3">
+                  <div className="border-b border-white/10 py-3">
                     <button
                       type="button"
                       data-testid="workspace-context-panel-toggle"
                       aria-expanded={contextPanelOpen}
                       onClick={() => setContextPanelOpen((current) => !current)}
-                      className="flex w-full items-start justify-between gap-3 rounded-[20px] border border-white/10 bg-black/20 px-4 py-3 text-left transition hover:bg-white/[0.05]"
+                      className="flex min-h-11 w-full items-center justify-between gap-3 text-left transition hover:text-white"
                     >
                       <div>
-                        <p className="text-[11px] uppercase tracking-[0.18em] text-amber-200/70">{t('workspace.shell.advancedContext')}</p>
-                        <p className="mt-1 text-sm text-zinc-200">
+                        <p className="text-sm text-zinc-300">{t('workspace.shell.advancedContext')}</p>
+                        <p className="mt-1 hidden text-sm text-zinc-400 lg:block">
                           {t(isContinueBlockContinuation
                             ? 'workspace.shell.advancedContinuationContextDescription'
                             : 'workspace.shell.advancedContextDescription')}
                         </p>
-                        <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-zinc-400">
+                        <div className="mt-2 hidden flex-wrap gap-2 text-[11px] text-zinc-400 lg:flex">
                           <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.seedEntitiesCount', { count: activeSeedEntityCount })}</span>
                           <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.relationsCount', { count: activeGraphEdgeCount })}</span>
                           <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.evidenceCount', { count: activeEvidenceCount })}</span>
                           <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1">{t('workspace.shell.promptBlocksCount', { count: activePromptBlockCount })}</span>
                         </div>
                       </div>
-                      <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-zinc-300">
+                      <span className="inline-flex items-center gap-2 py-1.5 text-xs text-zinc-400">
                         {contextPanelOpen ? t('workspace.shell.collapse') : t('workspace.shell.expand')}
                         <ChevronDown className={cn('h-4 w-4 transition', contextPanelOpen && 'rotate-180')} />
                       </span>
@@ -1209,37 +1234,11 @@ export function SelectionNovelStudio() {
                   </div>
                 ) : null}
 
-                <div className="flex flex-wrap gap-2">
-                  <button onClick={handleRewrite} disabled={rewriteFlow.loading} className="inline-flex items-center gap-2 rounded-2xl bg-violet-500 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60">
-                    {rewriteFlow.loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {t('workspace.shell.generateVersion')}
-                  </button>
-                  {rewriteFlow.loading && rewriteFlow.jobId ? (
-                    <button onClick={handleAbortRewriteGeneration} className="inline-flex items-center gap-2 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100 transition hover:bg-rose-500/20">
-                      <X className="h-4 w-4" /> {t('workspace.action.rewriteAbortedToast')}
-                    </button>
-                  ) : null}
-                  <button onClick={handleSaveContinueBlock} disabled={!selectedRewriteCandidate || saveContinueBlockPending} className="rounded-2xl border border-fuchsia-400/30 bg-fuchsia-500/10 px-4 py-3 text-sm text-fuchsia-100 transition hover:bg-fuchsia-500/20 disabled:opacity-40">
-                    {saveContinueBlockPending ? <span className="inline-flex items-center gap-2"><LoaderCircle className="h-4 w-4 animate-spin" /> {t('workspace.shell.savePending')}</span> : t('workspace.shell.saveAsContinueBlock')}
-                  </button>
-                  <button onClick={handleCreateWhatIf} disabled={!selectedRewriteCandidate || saveContinueBlockPending} className="rounded-2xl border border-violet-400/30 bg-violet-500/10 px-4 py-3 text-sm text-violet-100 transition hover:bg-violet-500/20 disabled:opacity-40">
-                    {t('workspace.shell.createWhatIf')}
-                  </button>
-                  <button onClick={() => selectedRewriteCandidate && applyFullChapter(selectedRewriteCandidate.content)} disabled={!selectedRewriteCandidate || rewriteLaunchSource === 'future_jump'} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
-                    {rewriteLaunchSource === 'future_jump' ? t('workspace.shell.keepBodyUnchanged') : t('workspace.shell.replaceBody')}
-                  </button>
-                  <button onClick={() => selectedRewriteCandidate && copyText('rewrite', selectedRewriteCandidate.content)} disabled={!selectedRewriteCandidate} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
-                    {copied === 'rewrite' ? <span className="inline-flex items-center gap-2"><Check className="h-4 w-4" /> {t('workspace.shell.copied')}</span> : t('workspace.shell.copyResult')}
-                  </button>
-                  <button onClick={() => selectedRewriteCandidate && handleRewritePromptChange((current) => `${current}\n\n${t('workspace.shell.continueRewritePromptAppend')}`)} disabled={!selectedRewriteCandidate} className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">
-                    {t('workspace.shell.continueRewrite')}
-                  </button>
-                </div>
-
                 {saveContinueBlockError ? <p data-testid="continue-block-save-error" className="text-sm text-rose-300">{saveContinueBlockError}</p> : null}
                 {rewriteFlow.error ? <p data-testid="rewrite-flow-error" className="text-sm text-rose-300">{rewriteFlow.error}</p> : null}
 
-                <div className="grid gap-3 lg:grid-cols-[0.9fr_1.4fr]">
-                  <div className="space-y-3">
+                {rewriteFlow.loading || selectedRewriteCandidate || previewRewriteContent ? <div className="grid gap-3 lg:grid-cols-[0.9fr_1.4fr]" data-testid="rewrite-result">
+                  <div className="hidden space-y-3 lg:block">
                     <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t('workspace.shell.generateVersion')}</p>
                     {rewriteFlow.loading ? (
                       <div className="rounded-[24px] border border-white/8 bg-black/20 p-4 text-sm text-zinc-400">
@@ -1267,14 +1266,15 @@ export function SelectionNovelStudio() {
                     )}
                   </div>
 
-                  <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+                  <div className="border-t border-white/10 pt-5">
+                    {rewriteFlow.loading ? <p role="status" className="mb-4 text-sm text-violet-200 lg:hidden">{formatProgressMessage(rewriteFlow.jobCurrentStep, t) || t('workspace.shell.generatingVersion')}</p> : null}
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t('workspace.shell.previewResult')}</p>
                       {selectedRewriteCandidate ? <span className="text-xs text-zinc-500">{selectedRewriteCandidate.title}</span> : null}
                     </div>
                     <p className="min-h-72 whitespace-pre-wrap text-sm leading-7 text-zinc-300">{previewRewriteContent || t('workspace.shell.previewEmpty')}</p>
                   </div>
-                </div>
+                </div> : null}
               </div>
             ) : null}
 

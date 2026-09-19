@@ -1,7 +1,9 @@
 "use client"
 
 import Image from 'next/image'
-import { LoaderCircle, Pencil, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { DialogSurface } from '@/components/ui/DialogSurface'
+import { Ellipsis, LoaderCircle, Pencil, Trash2 } from 'lucide-react'
 import { useI18n } from '@/lib/i18n/provider'
 import type { LibraryKnowledgeStatus } from '@/lib/library-knowledge-status'
 import type { LibrarySummary } from '@/store/novel-store-types'
@@ -34,11 +36,13 @@ export function ProjectCard({
   disabled?: boolean
 }) {
   const { t } = useI18n()
+  const [menuOpen, setMenuOpen] = useState(false)
   const knowledgeStatus = novel.knowledgeStatus ?? 'unknown'
 
   return (
-    <article className="group relative rounded-[24px] border border-white/8 bg-white/[0.04] p-4 shadow-[0_20px_60px_rgba(0,0,0,0.3)] backdrop-blur transition hover:border-white/12 hover:bg-white/[0.06] sm:rounded-[28px] sm:p-5">
-      <div className="absolute right-7 top-7 z-10 flex gap-2 sm:right-8 sm:top-8">
+    <article className="group relative border-b border-white/10 py-4 transition sm:rounded-[24px] sm:border sm:bg-white/[0.04] sm:p-5">
+      <button type="button" aria-label={t('library.cardOptionsAria', { title: novel.title })} onClick={() => setMenuOpen(true)} disabled={deleting || opening || disabled} className="absolute right-0 top-3 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-white/5 disabled:opacity-50 sm:hidden"><Ellipsis className="h-4 w-4" aria-hidden="true" /></button>
+      <div className="absolute right-7 top-7 z-10 hidden gap-2 sm:right-8 sm:top-8 sm:flex">
         <button
           type="button"
           onClick={onEdit}
@@ -64,9 +68,9 @@ export function ProjectCard({
         onClick={onOpen}
         disabled={opening || disabled}
         aria-busy={opening}
-        className="block w-full text-left disabled:cursor-progress"
+        className="flex w-full gap-4 text-left disabled:cursor-progress sm:block"
       >
-          <div className="relative mb-4 h-40 overflow-hidden rounded-[20px] bg-[radial-gradient(circle_at_top_left,_rgba(124,156,255,0.45),_transparent_35%),radial-gradient(circle_at_bottom_right,_rgba(168,85,247,0.25),_transparent_35%),linear-gradient(135deg,_rgba(255,255,255,0.05),_rgba(255,255,255,0.01))] sm:mb-5 sm:h-48 sm:rounded-[22px]">
+          <div className="relative h-24 w-16 shrink-0 overflow-hidden rounded-lg sm:mb-4 sm:h-40 sm:w-auto bg-[radial-gradient(circle_at_top_left,_rgba(124,156,255,0.45),_transparent_35%),radial-gradient(circle_at_bottom_right,_rgba(168,85,247,0.25),_transparent_35%),linear-gradient(135deg,_rgba(255,255,255,0.05),_rgba(255,255,255,0.01))] sm:mb-5 sm:h-48 sm:rounded-[22px]">
             {novel.coverImage ? (
               <Image
                 src={novel.coverImage}
@@ -79,9 +83,9 @@ export function ProjectCard({
             ) : null}
           </div>
 
-          <div className="space-y-3">
+          <div className="min-w-0 flex-1 space-y-2 sm:space-y-3">
             <div>
-              <h2 className="text-lg font-semibold tracking-tight text-zinc-100 group-hover:text-white">
+              <h2 className="break-words pr-10 text-base font-medium tracking-tight text-zinc-100 sm:pr-0 sm:text-lg group-hover:text-white">
                 {novel.title}
               </h2>
               <p className="mt-1 text-xs text-zinc-500">
@@ -91,10 +95,10 @@ export function ProjectCard({
               </p>
             </div>
 
-            <div className="flex items-center border-t border-white/[0.06] pt-3">
+            <div className="flex items-center sm:border-t sm:border-white/[0.06] sm:pt-3">
               <span
                 role="status"
-                className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-medium ${knowledgeStatusStyles[knowledgeStatus]}`}
+                className={`inline-flex items-center gap-2 rounded-full text-xs font-medium max-sm:border-0 max-sm:bg-transparent sm:border sm:px-2.5 sm:py-1 ${knowledgeStatusStyles[knowledgeStatus]}`}
               >
                 {knowledgeStatus === 'building' ? (
                   <LoaderCircle aria-hidden="true" className="h-3 w-3 motion-safe:animate-spin" />
@@ -108,7 +112,7 @@ export function ProjectCard({
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-zinc-500">
               <span>{t('library.cardChapterCount', { count: novel.chapterCount })}</span>
               <span>{t('library.cardWordCount', { count: novel.wordCount.toLocaleString() })}</span>
-              <span>{novel.updatedAt}</span>
+              <span className="hidden sm:inline">{novel.updatedAt}</span>
             </div>
 
             {opening ? (
@@ -119,6 +123,12 @@ export function ProjectCard({
             ) : null}
           </div>
       </button>
+      <DialogSurface open={menuOpen} onClose={() => setMenuOpen(false)} title={novel.title} closeLabel={t('common.close')} placement="bottom">
+        <div className="grid divide-y divide-white/10">
+          <button type="button" onClick={() => { setMenuOpen(false); onEdit() }} className="flex min-h-12 items-center gap-3 text-left text-sm text-zinc-200" aria-label={t('library.cardEditAria', { title: novel.title })}><Pencil className="h-4 w-4" />{t('library.cardEditAria', { title: novel.title })}</button>
+          <button type="button" onClick={() => { setMenuOpen(false); onDelete() }} className="flex min-h-12 items-center gap-3 text-left text-sm text-rose-300" aria-label={t('library.cardDeleteAria', { title: novel.title })}><Trash2 className="h-4 w-4" />{t('library.cardDeleteAria', { title: novel.title })}</button>
+        </div>
+      </DialogSurface>
     </article>
   )
 }

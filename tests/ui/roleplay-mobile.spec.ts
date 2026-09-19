@@ -275,6 +275,8 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await page.getByTestId('workspace-chapter-roleplay-entry').click()
 
   await expect(page.getByTestId('workspace-roleplay-session-view')).toBeVisible()
+  await expect(page.getByTestId('workspace-mobile-toolbar')).toHaveCount(0)
+  await page.getByRole('button', { name: '更多选项' }).click()
   await page.getByRole('button', { name: '打开故事上下文' }).click()
   await expect(page.getByTestId('workspace-roleplay-session-actions')).toBeVisible()
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('角色扮演')
@@ -290,6 +292,7 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await page.getByTestId('roleplay-message-0').click()
   await expect(page.getByTestId('roleplay-fork-anchor')).toContainText('下轮从 #1 分叉')
 
+  await page.getByRole('button', { name: '更多选项' }).click()
   await page.getByRole('button', { name: '打开故事上下文' }).click()
   await page.getByRole('button', { name: '关闭故事上下文' }).click()
   await page.getByRole('button', { name: '返回章节' }).click()

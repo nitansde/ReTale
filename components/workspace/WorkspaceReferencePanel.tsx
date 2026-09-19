@@ -1,15 +1,19 @@
 "use client"
 
 import type { ReactNode } from 'react'
+import { ArrowRight } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { useDesktopWorkspaceLayout } from '@/components/workspace/use-desktop-workspace-layout'
+import type { WorkspaceKnowledgeStatus } from '@/components/workspace/workspace-knowledge-status'
 import { useI18n } from '@/lib/i18n/provider'
 
 export function WorkspaceReferencePanel(props: {
   open: boolean
   onClose: () => void
   knowledgeOpen: boolean
+  onKnowledgeOpen: () => void
   onKnowledgeClose: () => void
+  knowledgeStatus: WorkspaceKnowledgeStatus
   contextLabel: string
   selectionActions: ReactNode
   knowledgeControls: ReactNode
@@ -17,6 +21,8 @@ export function WorkspaceReferencePanel(props: {
 }) {
   const { t } = useI18n()
   const desktop = useDesktopWorkspaceLayout()
+  const knowledgeIncomplete = props.knowledgeStatus.overall !== 'loading' && props.knowledgeStatus.overall !== 'ready'
+  const knowledgeBuilding = props.knowledgeStatus.operation?.status === 'running' || props.knowledgeStatus.operation?.status === 'queued'
 
   if (desktop) {
     return (
@@ -39,14 +45,29 @@ export function WorkspaceReferencePanel(props: {
         onClose={props.onClose}
         closeLabel={t('workspace.context.close')}
         title={t('workspace.context.title')}
-        description={t('workspace.context.description')}
         placement="right"
+        mobileFullscreen
       >
         <div className="mb-4">
-          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-zinc-400" data-testid="workspace-reference-selection-kind">{props.contextLabel}</span>
+          <span className="text-xs text-zinc-400" data-testid="workspace-reference-selection-kind">{props.contextLabel}</span>
         </div>
         <div data-testid="workspace-reference-panel">
           {props.selectionActions}
+          {knowledgeIncomplete ? (
+            <div className="mb-4 border-b border-white/10 pb-4" data-testid="workspace-story-knowledge-guide">
+              <p className="text-sm leading-6 text-zinc-400">
+                {t(knowledgeBuilding ? 'workspace.context.knowledgeBuilding' : 'workspace.context.knowledgeIncomplete')}
+              </p>
+              <button
+                type="button"
+                onClick={props.onKnowledgeOpen}
+                className="mt-2 inline-flex min-h-11 items-center gap-2 rounded-xl bg-violet-500/15 px-3 text-sm font-medium text-violet-200 transition hover:bg-violet-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70"
+              >
+                {t(knowledgeBuilding ? 'workspace.context.viewKnowledgeProgress' : 'workspace.context.rebuildKnowledge')}
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
           {props.references}
         </div>
       </DialogSurface>

@@ -209,6 +209,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
       description={t('preset.description')}
       backdropClassName="z-[65]"
       surfaceTestId="preset-compat-library-modal"
+      mobileFullscreen
       className="max-h-[calc(100vh-1.5rem)] max-w-7xl rounded-[28px] p-4 sm:max-h-[88vh] sm:w-[calc(100%-3rem)] sm:rounded-[32px] sm:p-5"
     >
         {statusMessage || resolvedErrorMessage ? (
@@ -220,7 +221,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
 
         <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
           <div className="space-y-4">
-            <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+            <div className="border-b border-white/10 pb-5 sm:rounded-[24px] sm:border sm:bg-black/20 sm:p-4">
               <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.import')}</p>
               <div className="mt-4 space-y-3">
                 <label className="block">
@@ -254,7 +255,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
               </div>
             </div>
 
-            <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+            <div className="border-b border-white/10 pb-5 sm:rounded-[24px] sm:border sm:bg-black/20 sm:p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                     <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.libraryState')}</p>
@@ -289,7 +290,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
               </div>
             </div>
 
-            <div className="rounded-[24px] border border-white/8 bg-black/20 p-4">
+            <div className="border-b border-white/10 pb-5 sm:rounded-[24px] sm:border sm:bg-black/20 sm:p-4">
               <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('preset.list')}</p>
               <div className="mt-4 space-y-2">
                 {presets.length ? presets.map((preset) => (

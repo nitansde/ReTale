@@ -1,5 +1,7 @@
 "use client"
 
+import { X } from 'lucide-react'
+import { useDesktopWorkspaceLayout } from '@/components/workspace/use-desktop-workspace-layout'
 import { ACTION_META, CHAPTER_ACTION_ENTRY_TEST_IDS, CONTINUE_BLOCK_ACTION_TEST_IDS } from '@/components/workspace/selection-novel-studio-helpers'
 import { useI18n } from '@/lib/i18n/provider'
 import { WORKSPACE_CHAPTER_ACTION_ENTRY_MODES, type WorkspaceActionMode } from '@/components/workspace/use-workspace-chapter-selection'
@@ -15,6 +17,7 @@ type WorkspaceSelectionActionsProps = {
   activeMode: WorkspaceActionMode | null
   roleplaySessionStarting: boolean
   hasFutureMapLaunch: boolean
+  onClearSelection: () => void
   onOpenActionMode: (mode: WorkspaceActionMode) => void
   onReopenContinueBlockRewriteFlow: (variant: 'continue' | 'regenerate') => void
   onOpenContinueBlockFutureJump: () => void
@@ -25,16 +28,19 @@ type WorkspaceSelectionActionsProps = {
 
 export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps) {
   const { t } = useI18n()
+  const desktop = useDesktopWorkspaceLayout()
 
   if (props.selection.kind === 'chapter') {
     const hasSelection = Boolean(props.selectionText.trim())
 
+    if (!hasSelection && !desktop) return null
+
     return (
       <div
-        className="mb-3 flex items-center gap-2 rounded-2xl border border-violet-400/20 bg-violet-500/[0.08] px-2.5 py-2 sm:px-3"
+        className={cn("flex items-center gap-2", desktop ? "mb-3 rounded-2xl border border-violet-400/20 bg-violet-500/[0.08] px-3 py-2" : "min-h-12")}
         data-testid="workspace-chapter-actions"
       >
-        <div className="mr-auto flex min-w-0 items-center gap-2 px-1">
+        <div className={desktop ? "mr-auto flex min-w-0 items-center gap-2 px-1" : "sr-only"}>
           <span className="hidden shrink-0 text-[10px] font-medium uppercase tracking-[0.18em] text-violet-200/70 sm:inline">
             {t('workspace.chapterActionsEyebrow')}
           </span>
@@ -42,7 +48,7 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
             {hasSelection ? t('workspace.chapterActionsReady') : t('workspace.chapterActionsIdle')}
           </span>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className={desktop ? "flex shrink-0 items-center gap-1.5" : "flex flex-1 items-center gap-2"}>
           {WORKSPACE_CHAPTER_ACTION_ENTRY_MODES.map((mode) => {
             const meta = ACTION_META[mode]
             const Icon = meta.icon
@@ -57,7 +63,8 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
                   props.onOpenActionMode(mode)
                 }}
                 className={cn(
-                  'inline-flex min-h-9 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-medium transition sm:px-3',
+                  'inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-medium transition',
+                  desktop ? 'border' : 'flex-1',
                   props.activeMode === mode
                     ? 'border-violet-300/30 bg-violet-500/20 text-white'
                     : 'border-white/10 bg-black/20 text-zinc-200 hover:bg-white/[0.08]',
@@ -71,6 +78,7 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
             )
           })}
         </div>
+        {!desktop ? <button type="button" aria-label={t('workspace.mobile.clearSelection')} onClick={props.onClearSelection} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-white/5"><X className="h-4 w-4" aria-hidden="true" /></button> : null}
       </div>
     )
   }

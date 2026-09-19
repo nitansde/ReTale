@@ -614,6 +614,49 @@ function expectTypographyToMatch(actual: Awaited<ReturnType<typeof readTypograph
   expect(actual).toEqual(expected)
 }
 
+for (const width of [360, 390, 430]) {
+  test(`mobile rewrite keeps generation reachable and reveals result actions after completion at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 })
+    await mockNovelResourceApi(page, () => buildWorkspacePayload())
+    await page.route('**/api/settings/ai', (route) => route.fulfill({ json: buildWorkspacePayload().aiSettings }))
+    await page.route('**/api/settings/preset-compat', (route) => route.fulfill({ json: createDefaultPresetCompatLibrary() }))
+    await page.route('**/api/story-timeline*', (route) => route.fulfill({ json: buildBaseTimeline() }))
+    await page.route('**/api/knowledge-view*', (route) => route.fulfill({ json: buildKnowledgeViewPayload() }))
+    await page.route('**/api/rag/build-generation-context', (route) => route.fulfill({ json: buildGenerationContextPayload() }))
+    await page.route('**/api/rewrite*', (route) => {
+      if (route.request().method() === 'GET' && !new URL(route.request().url()).searchParams.has('jobId')) {
+        return route.fulfill({ json: { ok: true, job: null } })
+      }
+      return route.fulfill({ json: { ok: true, job: buildRecoverableRewriteJob({
+        jobId: 'mobile-rewrite',
+        content: route.request().method() === 'GET' ? '移动端改写结果：门后的誓言改变了方向。' : null,
+      }) } })
+    })
+    await page.goto('/workspace', { waitUntil: 'networkidle' })
+    const reader = page.getByTestId('workspace-chapter-reader')
+    const original = await reader.innerHTML()
+    await selectWholeEditorParagraph(page)
+    await expect(page.getByRole('button', { name: '魔改', exact: true })).toHaveCount(1)
+    await page.getByTestId('workspace-chapter-rewrite-entry').click()
+    const dialog = page.getByRole('dialog', { name: '魔改 · 全章重写' })
+    const generate = dialog.getByRole('button', { name: '生成版本', exact: true })
+    await expect(generate).toBeInViewport({ ratio: 1 })
+    await expect(dialog.getByRole('button', { name: '保存为续写块' })).toHaveCount(0)
+    await expect(dialog.getByTestId('rewrite-result')).toHaveCount(0)
+    await expect.poll(() => dialog.boundingBox()).toEqual({ x: 0, y: 0, width, height: 800 })
+    await page.getByTestId('workspace-context-panel-toggle').click()
+    await expect(page.getByTestId('workspace-context-panel')).toBeVisible()
+    await expect(generate).toBeInViewport({ ratio: 1 })
+    await generate.click()
+    await expect(dialog.getByRole('button', { name: '保存为续写块' })).toBeEnabled()
+    await expect(dialog.getByTestId('rewrite-result')).toContainText('移动端改写结果')
+    await dialog.getByText('结果操作', { exact: true }).click()
+    await expect(dialog.getByRole('button', { name: '创建 What-if' })).toBeVisible()
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+    expect(await reader.innerHTML()).toBe(original)
+  })
+}
+
 test('simplified mode flow covers import, continue-block lineage, future-jump continue, collapsed context, and obsolete-surface absence', async ({ page }) => {
   let imported = false
   let timelineState = buildBaseTimeline()

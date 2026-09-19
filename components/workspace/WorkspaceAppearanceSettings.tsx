@@ -25,7 +25,7 @@ export function WorkspaceAppearanceSettings() {
 
       <div className="grid gap-4 sm:grid-cols-2">
         {(['interfaceFont', 'readingFont'] as const).map((field) => (
-          <div key={field} className="min-w-0 rounded-[24px] border border-white/10 bg-[#0b0d12] p-4">
+          <div key={field} className="min-w-0 border-b border-white/10 pb-5">
             <label className="block">
               <span className="mb-1 block text-sm font-medium text-zinc-200">{t(`appearance.${field}`)}</span>
               <span className="mb-4 block text-xs leading-5 text-zinc-400">{t(`appearance.${field}Hint`)}</span>
@@ -35,7 +35,7 @@ export function WorkspaceAppearanceSettings() {
                 onChange={(event) => {
                   if (isFontId(event.target.value)) setPreferences({ ...preferences, [field]: event.target.value })
                 }}
-                className="min-h-11 w-full rounded-xl border border-white/15 bg-[#11141c] px-3 py-2 text-sm text-zinc-100 outline-none focus-visible:border-violet-300/60 focus-visible:ring-2 focus-visible:ring-violet-300/30"
+                className="min-h-11 w-full rounded-xl border border-white/15 bg-[#11141c] px-3 py-2 text-base text-zinc-100 sm:text-sm outline-none focus-visible:border-violet-300/60 focus-visible:ring-2 focus-visible:ring-violet-300/30"
               >
                 {(['chinese', 'english'] as const).map((group) => (
                   <optgroup key={group} label={t(`appearance.${group}`)}>

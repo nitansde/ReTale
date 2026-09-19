@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WorkspaceChapterNav } from '@/components/workspace/WorkspaceChapterNav'
 import { WorkspaceReferencePanel } from '@/components/workspace/WorkspaceReferencePanel'
+import { mapWorkspaceKnowledgeStatus } from '@/components/workspace/workspace-knowledge-status'
 
 vi.mock('@/lib/i18n/provider', () => ({
   useI18n: () => ({
@@ -125,7 +126,9 @@ describe('responsive workspace panels', () => {
         open={false}
         onClose={vi.fn()}
         knowledgeOpen={false}
+        onKnowledgeOpen={vi.fn()}
         onKnowledgeClose={vi.fn()}
+        knowledgeStatus={mapWorkspaceKnowledgeStatus({ overview: null })}
         contextLabel="Chapter"
         selectionActions={<div>selection actions</div>}
         knowledgeControls={<div>knowledge controls</div>}
@@ -144,7 +147,9 @@ describe('responsive workspace panels', () => {
     setDesktopLayout(false)
     const props = {
       onClose: vi.fn(),
+      onKnowledgeOpen: vi.fn(),
       onKnowledgeClose: vi.fn(),
+      knowledgeStatus: mapWorkspaceKnowledgeStatus({ overview: null }),
       contextLabel: 'Chapter',
       selectionActions: <div>selection actions</div>,
       knowledgeControls: <div>knowledge controls</div>,
