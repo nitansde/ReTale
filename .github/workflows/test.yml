@@ -62,7 +62,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-evidence-${{ github.sha }}
-          path: .sisyphus/evidence/task-1-test-harness/ui
+          path: tests/artifacts/evidence/task-1-test-harness/ui
           if-no-files-found: ignore
           include-hidden-files: true
 
@@ -71,7 +71,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: performance-evidence-${{ github.sha }}
-          path: .sisyphus/evidence/performance-characterization
+          path: tests/artifacts/evidence/performance-characterization
           if-no-files-found: ignore
           include-hidden-files: true
 
@@ -80,6 +80,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: next-build-safety-evidence-${{ github.sha }}
-          path: .sisyphus/evidence/next-build-safety
+          path: tests/artifacts/evidence/next-build-safety
           if-no-files-found: ignore
           include-hidden-files: true

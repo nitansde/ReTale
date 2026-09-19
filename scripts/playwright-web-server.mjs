@@ -65,7 +65,7 @@ const child = spawn('node', ['scripts/next-test-server.mjs'], {
     RETALE_SERVER_DATABASE_PATH: tempDbPath,
     RETALE_SERVER_DATABASE_URL: `file:${tempDbPath}`,
     RETALE_SERVER_TEST_ROOT: SAFE_QA_EVIDENCE_ROOT,
-    RETALE_SERVER_TSCONFIG_PATH: path.join('.sisyphus', 'evidence', 'task-1-test-harness', 'next-test-tsconfig.json'),
+    RETALE_SERVER_TSCONFIG_PATH: path.join('tests', 'artifacts', 'evidence', 'task-1-test-harness', 'next-test-tsconfig.json'),
   },
 })
 

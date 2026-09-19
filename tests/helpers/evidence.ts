@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const ROOT = process.cwd()
-const DEFAULT_EVIDENCE_DIR = path.join(ROOT, '.sisyphus/evidence/task-1-test-harness')
+const DEFAULT_EVIDENCE_DIR = path.join(ROOT, 'tests/artifacts/evidence/task-1-test-harness')
 
 export function ensureEvidenceDir(subdirectory?: string) {
   const targetDirectory = subdirectory

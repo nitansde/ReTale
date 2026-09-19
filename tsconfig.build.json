@@ -18,7 +18,8 @@
   "exclude": [
     "node_modules",
     "tests",
-    ".sisyphus",
+    "build",
+    "logs",
     "evidence",
     "**/*.test.ts",
     "**/*.test.tsx",

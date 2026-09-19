@@ -25,7 +25,7 @@ test('font preferences apply independently, survive reload, and work on mobile',
   await expect(editor).toHaveCSS('font-family', /^Georgia,/)
   await expect(dialog.getByRole('status')).toHaveText('Changes apply instantly and are saved in this browser.')
 
-  const evidenceDir = path.join(process.cwd(), '.sisyphus/evidence/font-preferences')
+  const evidenceDir = path.join(process.cwd(), 'tests/artifacts/evidence/font-preferences')
   fs.mkdirSync(evidenceDir, { recursive: true })
   await page.screenshot({ path: path.join(evidenceDir, 'desktop.png'), animations: 'disabled' })
 

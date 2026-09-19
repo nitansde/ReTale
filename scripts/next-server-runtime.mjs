@@ -27,12 +27,12 @@ const SERVER_MODES = {
     label: 'isolated test dev server',
     host: '127.0.0.1',
     port: 3000,
-    databaseUrl: 'file:.sisyphus/runtime/test-server/dev-test.db',
-    databasePath: path.join(ROOT, '.sisyphus', 'runtime', 'test-server', 'dev-test.db'),
-    dataDir: path.join(ROOT, '.sisyphus', 'runtime', 'test-server', 'data'),
-    distDir: path.join('.sisyphus', 'runtime', 'test-server', 'next-dist'),
-    tsconfigPath: path.join('.sisyphus', 'runtime', 'test-server', 'tsconfig.json'),
-    testRoot: path.join(ROOT, '.sisyphus', 'runtime', 'test-server'),
+    databaseUrl: 'file:tests/artifacts/runtime/test-server/dev-test.db',
+    databasePath: path.join(ROOT, 'tests', 'artifacts', 'runtime', 'test-server', 'dev-test.db'),
+    dataDir: path.join(ROOT, 'tests', 'artifacts', 'runtime', 'test-server', 'data'),
+    distDir: path.join('tests', 'artifacts', 'runtime', 'test-server', 'next-dist'),
+    tsconfigPath: path.join('tests', 'artifacts', 'runtime', 'test-server', 'tsconfig.json'),
+    testRoot: path.join(ROOT, 'tests', 'artifacts', 'runtime', 'test-server'),
   },
 }
 
@@ -172,7 +172,7 @@ function ensureIsolatedTestTsconfig(config) {
   }
 
   const tsconfigContents = {
-    extends: '../../../tsconfig.json',
+    extends: path.relative(path.dirname(path.join(ROOT, config.tsconfigPath)), path.join(ROOT, 'tsconfig.json')),
   }
 
   fs.writeFileSync(path.join(ROOT, config.tsconfigPath), `${JSON.stringify(tsconfigContents, null, 2)}\n`)
@@ -205,7 +205,7 @@ function printHelp(invokedAs) {
   console.log('')
   console.log('Profiles:')
   console.log('  next-dev.mjs        0.0.0.0:14500 + file:./dev.db + default .next')
-  console.log('  next-test-server.mjs 127.0.0.1:3000 + owned .sisyphus/runtime/test-server runtime')
+  console.log('  next-test-server.mjs 127.0.0.1:3000 + owned tests/artifacts/runtime/test-server runtime')
   console.log('')
   console.log('Flags:')
   console.log('  --help           Show this help message')

@@ -13,7 +13,7 @@ function readOption(name, fallback) {
 
 export function main() {
   if (process.argv.includes('--help')) {
-    console.log('Usage: node scripts/verify-next-build-safety.mjs --evidence-dir <.sisyphus/evidence/name> [--dist-dir <path>] [--config <path>]')
+    console.log('Usage: node scripts/verify-next-build-safety.mjs --evidence-dir <tests/artifacts/evidence/name> [--dist-dir <path>] [--config <path>]')
     return
   }
   const repoRoot = process.cwd()

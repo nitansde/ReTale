@@ -12,7 +12,7 @@
 
 # testing
 /coverage
-/tests/.runtime/
+/tests/artifacts/
 
 # next.js
 /.next/
@@ -20,6 +20,7 @@
 
 # production
 /build
+/logs/
 /.retale-worker/
 
 # misc
@@ -65,8 +66,4 @@ next-env.d.ts
 .lancedb
 prompt.md
 
-# opencode
-.sisyphus
-
 external
-.omo

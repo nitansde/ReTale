@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 
-const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/full-project-refactor')
+const evidenceDirectory = path.join(process.cwd(), 'tests/artifacts/evidence/full-project-refactor')
 const fixturePath = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
 
 async function importWorkspaceFixture(page: Page) {

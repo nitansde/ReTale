@@ -5,8 +5,8 @@ import { assertOwnedTestPath, createOwnedTestRoot } from './test-path-safety.mjs
 import { resolveTestWorkers } from './vitest-file-runtime.mjs'
 
 const ROOT = process.cwd()
-const EVIDENCE_ROOT = path.join(ROOT, '.sisyphus/evidence/task-1-test-harness')
-const TEST_RUNS_ROOT = path.join(ROOT, 'tests', '.runtime', 'test-runs')
+const EVIDENCE_ROOT = path.join(ROOT, 'tests/artifacts/evidence/task-1-test-harness')
+const TEST_RUNS_ROOT = path.join(ROOT, 'tests', 'artifacts', 'runtime', 'test-runs')
 
 const suite = process.argv[2]
 const selector = process.argv[3] ?? 'all'
@@ -104,7 +104,7 @@ const result = spawnSync(
   }
 )
 
-// Keep the historical latest-report location for tooling; each run retains its
+// Keep a latest-report location for tooling; each run retains its
 // own authoritative report even when multiple suites run concurrently.
 if (fs.existsSync(outputFile)) {
   const latestTemp = path.join(EVIDENCE_ROOT, `${suite}-report-${process.pid}.json`)

@@ -4,7 +4,7 @@ import { defineConfig } from '@playwright/test'
 import { SAFE_QA_BASE_URL, SAFE_QA_LIBRARY_URL } from './scripts/roleplay-safe-qa.mjs'
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url))
-const evidenceDir = path.join(rootDir, '.sisyphus/evidence/task-1-test-harness/ui')
+const evidenceDir = path.join(rootDir, 'tests/artifacts/evidence/task-1-test-harness/ui')
 
 export default defineConfig({
   testDir: './tests/ui',

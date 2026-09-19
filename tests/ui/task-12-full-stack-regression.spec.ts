@@ -6,7 +6,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { createRoleplaySafeDataPath } from '../../scripts/roleplay-safe-qa.mjs'
 
 const ROOT = process.cwd()
-const evidenceDirectory = path.join(ROOT, '.sisyphus/evidence/full-project-refactor')
+const evidenceDirectory = path.join(ROOT, 'tests/artifacts/evidence/full-project-refactor')
 const fixturePath = path.join(ROOT, 'scripts/fixtures/workspace-import-smoke.txt')
 const task12NovelTitle = 'task-12-full-stack-regression-novel'
 const presetFixturePath = path.join(ROOT, 'tests/fixtures/preset-compat/synthetic-sillytavern-preset.json')

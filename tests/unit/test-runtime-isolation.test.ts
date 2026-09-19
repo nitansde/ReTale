@@ -205,7 +205,7 @@ describe('owned test runtime paths', () => {
       dataDir: string
       databasePath: string
     }
-    const serverTestRoot = path.join(repoRoot, '.sisyphus', 'runtime', 'test-server')
+    const serverTestRoot = path.join(repoRoot, 'tests', 'artifacts', 'runtime', 'test-server')
 
     expect(config.port).toBe(3000)
     expect(() => assertOwnedTestPath(serverTestRoot, config.databasePath, { repoRoot })).not.toThrow()
@@ -239,7 +239,7 @@ describe('owned test runtime paths', () => {
     expect(fileSnapshot(rootDatabasePath)).toEqual(databaseSnapshotBefore)
   })
 
-  it('allocates production freshness paths inside a marker-owned .sisyphus root', () => {
+  it('allocates production freshness paths inside a marker-owned test artifact root', () => {
     const output = execFileSync(process.execPath, ['scripts/verify-production-freshness.mjs', '--print-config'], {
       cwd: repoRoot,
       encoding: 'utf8',
@@ -251,7 +251,7 @@ describe('owned test runtime paths', () => {
       dataDir: string
       distPath: string
     }
-    const productionSmokeRunsRoot = path.join(repoRoot, '.sisyphus', 'runtime', 'production-smoke-runs')
+    const productionSmokeRunsRoot = path.join(repoRoot, 'tests', 'artifacts', 'runtime', 'production-smoke-runs')
 
     try {
       expect(() => assertOwnedTestPath(config.testRoot, config.databasePath, { repoRoot })).not.toThrow()

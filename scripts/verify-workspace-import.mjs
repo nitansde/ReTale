@@ -12,7 +12,7 @@ import {
 
 const ROOT = process.cwd()
 const FIXTURE_PATH = path.join(ROOT, 'scripts/fixtures/workspace-import-smoke.txt')
-const RUNS_ROOT = path.join(ROOT, '.sisyphus', 'runtime')
+const RUNS_ROOT = path.join(ROOT, 'tests', 'artifacts', 'runtime')
 const PORT = 3000
 const HOST = '127.0.0.1'
 const SERVER_URL = `http://${HOST}:${PORT}`

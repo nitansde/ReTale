@@ -69,7 +69,7 @@ export function getDataRootPath() {
           || process.env.NEXT_PHASE === 'phase-production-build'
           || process.env.__NEXT_PRIVATE_BUILD_WORKER === '1'
 
-        return path.resolve(process.cwd(), isBuildPhase ? '.sisyphus/runtime/next-build-data' : 'data')
+        return path.resolve(process.cwd(), isBuildPhase ? 'build/runtime/next-build-data' : 'data')
       })()
 
   if (process.env.VITEST === 'true') {

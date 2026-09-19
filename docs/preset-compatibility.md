@@ -233,7 +233,7 @@ Stable macro diagnostic codes for later parser/runtime tasks are:
 
 ## Detailed field mapping
 
-The field-by-field implementation table lives in [`docs/preset-compatibility-field-mapping.md`](./preset-compatibility-field-mapping.md). That file records actual storage paths, normalization and export behavior, runtime effect, UI effect, degradation reasons, and test references.
+The field-by-field implementation table lives in [`docs/preset-compatibility-field-mapping.md`](./preset-compatibility-field-mapping.md). It records actual storage paths, normalization and export behavior, runtime effect, UI effect, degradation reasons, and test references.
 
 ## Limitations
 

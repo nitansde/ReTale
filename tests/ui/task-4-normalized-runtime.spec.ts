@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { expect, test, type Page } from '@playwright/test'
 import { createRoleplaySafeDataPath } from '../../scripts/roleplay-safe-qa.mjs'
 
-const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/full-project-refactor')
+const evidenceDirectory = path.join(process.cwd(), 'tests/artifacts/evidence/full-project-refactor')
 const fixturePath = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
 
 function resolveTestDatabasePath() {

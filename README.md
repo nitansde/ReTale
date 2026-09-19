@@ -55,7 +55,7 @@ RETALE_TASK_STALE_TIMEOUT_MS="1800000"
 RETALE_TASK_MAX_RETRIES="1"
 RETALE_DATA_DIR="data"
 LLM_DEBUG_LOG="0"
-LLM_DEBUG_LOG_DIR=".sisyphus/llm-debug"
+LLM_DEBUG_LOG_DIR="logs/llm-debug"
 ```
 
 You can also update the AI settings from the app UI.
@@ -130,9 +130,9 @@ npm run dev:test
   - Next development output: `.next/dev`
 - `npm run dev:test` / `npm run server:test`
   - URL: `http://127.0.0.1:3000`
-  - Legacy-source env: `.sisyphus/runtime/test-server/dev-test.db`
-  - Migrated runtime storage: `.sisyphus/runtime/test-server/data/`
-  - Next dist dir: `.sisyphus/runtime/test-server/next-dist`
+  - Legacy-source env: `tests/artifacts/runtime/test-server/dev-test.db`
+  - Migrated runtime storage: `tests/artifacts/runtime/test-server/data/`
+  - Next dist dir: `tests/artifacts/runtime/test-server/next-dist`
 
 The test wrapper overrides inherited `DATABASE_URL`, `RETALE_DATA_DIR`, and `RETALE_NEXT_DIST_DIR` with paths inside a marker-owned test root. The daily wrapper continues to force its production `DATABASE_URL` and default Next dist directory. The public scripts are fixed-mode wrappers: `--hostname/-H` and `--port/-p` are rejected instead of changing the target server profile. If port `14500` or `3000` is already occupied, the wrapper exits with a clear error instead of killing unknown processes. Internal marker-owned test path overrides remain reserved for the Playwright web-server helper.
 
@@ -154,9 +154,9 @@ npm run check:next-build-safety
 npm run start
 ```
 
-`npm run build` uses webpack by default for reliable production builds, selects `tsconfig.build.json` so Next's production type check covers application and server sources without test or evidence inputs, then records a deterministic fingerprint of tracked and untracked production inputs inside the selected Next dist directory. An intentional Turbopack trial remains available with `npm run build -- --turbopack`. `npm run start` launches that existing build only when its fingerprint still matches the current source; it refuses missing or stale provenance and asks you to rebuild. `npm run check:next-build-safety` scans that build's initial `/workspace` and `/library` JavaScript sizes, output-file traces, and required runtime assets, then writes hidden evidence to `.sisyphus/evidence/next-build-safety/next-build-safety.json`.
+`npm run build` uses webpack by default for reliable production builds, selects `tsconfig.build.json` so Next's production type check covers application and server sources without test or evidence inputs, then records a deterministic fingerprint of tracked and untracked production inputs inside the selected Next dist directory. An intentional Turbopack trial remains available with `npm run build -- --turbopack`. `npm run start` launches that existing build only when its fingerprint still matches the current source; it refuses missing or stale provenance and asks you to rebuild. `npm run check:next-build-safety` scans that build's initial `/workspace` and `/library` JavaScript sizes, output-file traces, and required runtime assets, then writes test evidence to `tests/artifacts/evidence/next-build-safety/next-build-safety.json`.
 
-Run `npm run verify:production-freshness` to exercise an isolated real `next build` / `next start` lifecycle through the installed Next CLI. The harness uses marker-owned database, data, and Next dist paths under `.sisyphus/runtime/production-smoke-runs/`, so its build neither replaces `.next` nor scans or mutates production `data/` or root `dev.db`. It starts on `127.0.0.1:3000`, checks `/library`, `/workspace`, and `/task`, then inserts an active task after the build and verifies `/task` reflects it without rebuilding. Port `3000` must be free; the harness refuses to kill an unknown listener and stops its own server on success, failure, or termination.
+Run `npm run verify:production-freshness` to exercise an isolated real `next build` / `next start` lifecycle through the installed Next CLI. The harness uses marker-owned database, data, and Next dist paths under `tests/artifacts/runtime/production-smoke-runs/`, so its build neither replaces `.next` nor scans or mutates production `data/` or root `dev.db`. It starts on `127.0.0.1:3000`, checks `/library`, `/workspace`, and `/task`, then inserts an active task after the build and verifies `/task` reflects it without rebuilding. Port `3000` must be free; the harness refuses to kill an unknown listener and stops its own server on success, failure, or termination.
 
 ## Per-novel storage
 
@@ -216,4 +216,14 @@ There is no server workspace endpoint. Browser clients use only the novel and ch
 
 ### Test isolation and concurrency
 
-`npm run test:unit` and `npm run test:api` run at most two test files concurrently. Each file receives its own marked database, source database, data directory, temporary directory, and evidence directory before application modules load. Set `RETALE_TEST_WORKERS=1` for a serial run, or an integer up to 8 when evaluating another limit. Tests within a file keep their existing ordering. Each suite retains its own JSON report under the printed run root; the historical `.sisyphus/evidence/task-1-test-harness/` path contains the latest report. Run tests through these wrappers so the ownership checks and isolation environment are present.
+`npm run test:unit` and `npm run test:api` run at most two test files concurrently. Each file receives its own marked database, source database, data directory, temporary directory, and evidence directory before application modules load. Set `RETALE_TEST_WORKERS=1` for a serial run, or an integer up to 8 when evaluating another limit. Tests within a file keep their existing ordering. Each suite retains its own JSON report under the printed run root; the `tests/artifacts/evidence/task-1-test-harness/` directory contains the latest report. Run tests through these wrappers so the ownership checks and isolation environment are present.
+
+## Generated files and logs
+
+- `tests/artifacts/runtime/`: isolated test databases, temporary files, and test server builds.
+- `tests/artifacts/evidence/`: test reports, browser screenshots/traces, and verification output.
+- `tests/artifacts/typegen/`: Next route types generated by `npm run typecheck`.
+- `logs/llm-debug/`: application request/response logs when `LLM_DEBUG_LOG=1`; override with `LLM_DEBUG_LOG_DIR`.
+- `build/runtime/next-build-data/`: isolated application data created during production builds.
+
+These generated directories are ignored by Git. Stop the relevant tests or builds before clearing their artifacts; subsequent commands recreate the directories they need. Logs may be removed when no longer needed. Production application data remains in `data/` and is not part of artifact cleanup.

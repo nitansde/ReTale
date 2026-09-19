@@ -262,6 +262,28 @@ afterEach(async () => {
 })
 
 describe('llm debug logging', () => {
+  it('writes enabled logs to the visible logs directory when no override is configured', async () => {
+    const root = await createTempRoot()
+    delete process.env.LLM_DEBUG_LOG_DIR
+    process.env.LLM_DEBUG_LOG = '1'
+    vi.spyOn(process, 'cwd').mockReturnValue(root)
+
+    const { writeLlmDebugLog } = await import('@/lib/server/llm-debug-log')
+    await writeLlmDebugLog({
+      folder: 'rewrite',
+      provider: 'openai-compatible',
+      model: 'test-model',
+      streamed: false,
+      request: { url: 'https://example.test/v1', body: { prompt: 'test prompt' } },
+      response: { status: 200, rawText: 'test response' },
+    })
+
+    expect(await fs.readdir(root)).toEqual(['logs'])
+    const files = await listJsonFiles(path.join(root, 'logs', 'llm-debug', 'rewrite'))
+    expect(files).toHaveLength(1)
+    expect(JSON.parse(await fs.readFile(files[0], 'utf8')).response.rawText).toBe('test response')
+  })
+
   it('does not create prompt logs when the debug flag is disabled', async () => {
     const root = await createTempRoot()
     process.env.LLM_DEBUG_LOG = '0'

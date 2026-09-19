@@ -44,7 +44,7 @@ function isLlmDebugLogEnabled() {
 
 function getLogRoot() {
   const configured = process.env.LLM_DEBUG_LOG_DIR?.trim()
-  return configured ? path.resolve(configured) : path.join(process.cwd(), '.sisyphus', 'llm-debug')
+  return configured ? path.resolve(configured) : path.join(process.cwd(), 'logs', 'llm-debug')
 }
 
 function safePathSegment(value: string) {

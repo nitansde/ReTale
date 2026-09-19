@@ -3,7 +3,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { gzipSync } from 'node:zlib'
 
-const UNSAFE_SEGMENTS = new Set(['data', 'backups', '.lancedb', '.omo', '.sisyphus', 'tests', 'external', 'corpora'])
+const UNSAFE_SEGMENTS = new Set(['data', 'backups', '.lancedb', 'logs', 'build', 'tests', 'external', 'corpora'])
 const QA_IMAGE_PATTERN = /(?:^|[/\\])(?:qa|playwright|screenshots?|evidence)(?:[/\\]|[^/\\]*[-_.])[^/\\]*\.(?:png|jpe?g|webp)$/iu
 const DATABASE_PATTERN = /(?:^|[/\\])[^/\\]*\.(?:db|sqlite|sqlite3)(?:(?:[.-])(?:wal|shm|journal))?$/iu
 const DATABASE_SIDECAR_PATTERN = /(?:^|[/\\])[^/\\]*\.(?:wal|shm)$/iu
@@ -381,11 +381,11 @@ export function assertSafeEvidenceDirectory(evidenceDir, repoRoot) {
     throw new Error(`[next-build-safety] Evidence directory must stay inside the repository: ${resolvedEvidenceDir}`)
   }
   const segments = toPosixPath(relativePath).split('/')
-  if (segments[0] !== '.sisyphus' || segments[1] !== 'evidence' || segments.length < 3) {
-    throw new Error(`[next-build-safety] Evidence directory must be a child of .sisyphus/evidence: ${resolvedEvidenceDir}`)
+  if (segments[0] !== 'tests' || segments[1] !== 'artifacts' || segments[2] !== 'evidence' || segments.length < 4) {
+    throw new Error(`[next-build-safety] Evidence directory must be a child of tests/artifacts/evidence: ${resolvedEvidenceDir}`)
   }
   const canonicalRepoRoot = fs.realpathSync.native(resolvedRepoRoot)
-  const evidenceBase = path.join(resolvedRepoRoot, '.sisyphus', 'evidence')
+  const evidenceBase = path.join(resolvedRepoRoot, 'tests', 'artifacts', 'evidence')
   fs.mkdirSync(evidenceBase, { recursive: true })
   const canonicalEvidenceBase = fs.realpathSync.native(evidenceBase)
   if (!isContainedPath(canonicalRepoRoot, canonicalEvidenceBase)) {
@@ -393,7 +393,7 @@ export function assertSafeEvidenceDirectory(evidenceDir, repoRoot) {
   }
   const canonicalEvidenceDir = canonicalizePotentialPath(resolvedEvidenceDir)
   if (!isContainedPath(canonicalEvidenceBase, canonicalEvidenceDir) || canonicalEvidenceBase === canonicalEvidenceDir) {
-    throw new Error(`[next-build-safety] Evidence directory must resolve beneath canonical .sisyphus/evidence: ${resolvedEvidenceDir}`)
+    throw new Error(`[next-build-safety] Evidence directory must resolve beneath canonical tests/artifacts/evidence: ${resolvedEvidenceDir}`)
   }
   return resolvedEvidenceDir
 }

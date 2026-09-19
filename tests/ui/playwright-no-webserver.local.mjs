@@ -2,7 +2,7 @@ import path from 'node:path'
 import { defineConfig } from '@playwright/test'
 
 const rootDir = path.resolve(import.meta.dirname, '..', '..')
-const evidenceDir = path.join(rootDir, '.sisyphus/evidence/task-16-final-gate/ui')
+const evidenceDir = path.join(rootDir, 'tests/artifacts/evidence/task-16-final-gate/ui')
 
 export default defineConfig({
   testDir: path.join(rootDir, 'tests/ui'),

@@ -37,12 +37,14 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     "**/*.mts",
-    ".sisyphus/typegen/types/**/*.ts",
-    ".sisyphus/typegen/dev/types/**/*.ts",
-    ".sisyphus/evidence/task-1-test-harness/next-playwright-safe/types/**/*.ts",
-    ".sisyphus/evidence/task-1-test-harness/next-playwright-safe/dev/types/**/*.ts"
+    "tests/artifacts/typegen/types/**/*.ts",
+    "tests/artifacts/typegen/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "tests/artifacts/runtime",
+    "tests/artifacts/evidence",
+    "build",
+    "logs"
   ]
 }

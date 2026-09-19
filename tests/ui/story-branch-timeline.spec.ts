@@ -7,8 +7,8 @@ import { storyBranchFixtureIds } from '@/tests/helpers/fixture-ids'
 import { mockNovelResourceApi } from '@/tests/helpers/novel-resource-api-mock'
 import type { StoryTimelineResponse } from '@/lib/story-branch-types'
 
-const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/task-15-branch-ux-playwright-future-map')
-const futureJumpEvidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/task-15-branch-ux-playwright-future-jump-view')
+const evidenceDirectory = path.join(process.cwd(), 'tests/artifacts/evidence/task-15-branch-ux-playwright-future-map')
+const futureJumpEvidenceDirectory = path.join(process.cwd(), 'tests/artifacts/evidence/task-15-branch-ux-playwright-future-jump-view')
 const rewritePromptPlaceholder = '例如：保留剧情走向，但把这段写得更压迫、更像命运在逼近。'
 
 function buildRecoverableRewriteJob(params: {

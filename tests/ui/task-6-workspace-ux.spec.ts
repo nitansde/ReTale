@@ -3,7 +3,7 @@ import path from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 
 const fixturePath = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
-const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/full-project-refactor')
+const evidenceDirectory = path.join(process.cwd(), 'tests/artifacts/evidence/full-project-refactor')
 
 async function importWorkspaceFixture(page: Page) {
   await page.goto('/library', { waitUntil: 'networkidle' })

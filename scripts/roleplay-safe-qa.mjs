@@ -12,11 +12,11 @@ export const SAFE_QA_HOST = '127.0.0.1'
 export const SAFE_QA_PORT = 3000
 export const SAFE_QA_BASE_URL = `http://${SAFE_QA_HOST}:${SAFE_QA_PORT}`
 export const SAFE_QA_LIBRARY_URL = `${SAFE_QA_BASE_URL}/library`
-export const SAFE_QA_EVIDENCE_ROOT = path.join(ROOT, '.sisyphus/evidence/task-1-test-harness')
+export const SAFE_QA_EVIDENCE_ROOT = path.join(ROOT, 'tests/artifacts/evidence/task-1-test-harness')
 export const SAFE_QA_UI_EVIDENCE_DIR = path.join(SAFE_QA_EVIDENCE_ROOT, 'ui')
 export const SAFE_QA_DB_DIR = path.join(SAFE_QA_EVIDENCE_ROOT, 'roleplay-safe-db')
 export const SAFE_QA_DATA_DIR = path.join(SAFE_QA_EVIDENCE_ROOT, 'roleplay-safe-data')
-export const SAFE_QA_NEXT_DIST_DIR = path.join('.sisyphus', 'evidence', 'task-1-test-harness', 'next-playwright-safe')
+export const SAFE_QA_NEXT_DIST_DIR = path.join('tests', 'artifacts', 'evidence', 'task-1-test-harness', 'next-playwright-safe')
 export const SAFE_QA_LEGACY_NEXT_DIST_PATH = path.join(ROOT, '.next-playwright-safe')
 export const SAFE_QA_MANIFEST_PATH = path.join(SAFE_QA_UI_EVIDENCE_DIR, 'roleplay-safe-qa.json')
 

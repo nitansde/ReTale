@@ -3,7 +3,7 @@ import path from 'node:path'
 import { test, expect } from '@playwright/test'
 
 const fixturePath = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
-const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/task-15-branch-ux-playwright-harness')
+const evidenceDirectory = path.join(process.cwd(), 'tests/artifacts/evidence/task-15-branch-ux-playwright-harness')
 
 test('future-jump harness smoke', async ({ page }) => {
   fs.mkdirSync(evidenceDirectory, { recursive: true })

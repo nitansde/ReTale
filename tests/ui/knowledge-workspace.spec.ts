@@ -5,7 +5,7 @@ import { createDefaultAISettings } from '@/lib/ai-settings'
 import type { AISettings } from '@/lib/types'
 
 const fixturePath = path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt')
-const evidenceDirectory = path.join(process.cwd(), '.sisyphus/evidence/task-10-knowledge-ui')
+const evidenceDirectory = path.join(process.cwd(), 'tests/artifacts/evidence/task-10-knowledge-ui')
 
 async function expandKnowledgeDetails(page: Page) {
   const summary = page.getByTestId('workspace-knowledge-status')

@@ -240,9 +240,9 @@ describe('Next output-file traces', () => {
     expect(result.unsafePaths).toContainEqual(expect.objectContaining({ pathKind: 'canonical', reason: 'database-or-sidecar' }))
   })
 
-  it('allows build files inside a marker-owned custom .sisyphus dist directory', () => {
+  it('allows build files inside a custom test artifact dist directory', () => {
     const root = fixtureRoot('custom dist trace')
-    const distDir = path.join(root, '.sisyphus', 'runtime', 'owned', 'next dist')
+    const distDir = path.join(root, 'tests', 'artifacts', 'runtime', 'owned', 'next dist')
     const manifestPath = path.join(distDir, 'server', 'page.js.nft.json')
     const buildFile = path.join(distDir, 'server', 'chunks', 'runtime.js')
     fs.mkdirSync(path.dirname(buildFile), { recursive: true })
@@ -261,8 +261,10 @@ describe('Next output-file traces', () => {
     ['sqlite journal', 'runtime/control.sqlite-journal', 'database-or-sidecar'],
     ['backup', 'backups/nightly/archive.txt', 'repository-backups'],
     ['lancedb', '.lancedb/table/file.bin', 'repository-.lancedb'],
-    ['legacy runtime evidence', '.omo/runtime/fixture/control.db', 'database-or-sidecar'],
-    ['sisyphus', '.sisyphus/evidence/report.json', 'repository-.sisyphus'],
+    ['build runtime database', 'build/runtime/fixture/control.db', 'database-or-sidecar'],
+    ['build runtime metadata', 'build/runtime/fixture/manifest.json', 'repository-build'],
+    ['debug logs', 'logs/llm-debug/report.json', 'repository-logs'],
+    ['test evidence', 'tests/artifacts/evidence/report.json', 'repository-tests'],
     ['tests', 'tests/fixtures/corpus.txt', 'repository-tests'],
     ['external corpus', 'external/corpora/book.txt', 'repository-external'],
     ['standalone corpus', 'corpora/reference/book.txt', 'repository-corpora'],
@@ -379,19 +381,19 @@ describe('Next output-file traces', () => {
 
 describe('build safety evidence path', () => {
   it('accepts a caller-specified evidence child and rejects unsafe destinations', () => {
-    expect(assertSafeEvidenceDirectory('.sisyphus/evidence/build safety run', repoRoot))
-      .toBe(path.join(repoRoot, '.sisyphus', 'evidence', 'build safety run'))
-    expect(() => assertSafeEvidenceDirectory('.sisyphus/evidence', repoRoot)).toThrow(/must be a child/)
+    expect(assertSafeEvidenceDirectory('tests/artifacts/evidence/build safety run', repoRoot))
+      .toBe(path.join(repoRoot, 'tests', 'artifacts', 'evidence', 'build safety run'))
+    expect(() => assertSafeEvidenceDirectory('tests/artifacts/evidence', repoRoot)).toThrow(/must be a child/)
     expect(() => assertSafeEvidenceDirectory('../outside', repoRoot)).toThrow(/inside the repository/)
   })
 
   it('rejects an evidence base symlink escape', () => {
     const syntheticRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-evidence-repo-'))
     const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-evidence-external-'))
-    fs.mkdirSync(path.join(syntheticRepo, '.sisyphus'), { recursive: true })
-    fs.symlinkSync(externalRoot, path.join(syntheticRepo, '.sisyphus', 'evidence'))
+    fs.mkdirSync(path.join(syntheticRepo, 'tests', 'artifacts'), { recursive: true })
+    fs.symlinkSync(externalRoot, path.join(syntheticRepo, 'tests', 'artifacts', 'evidence'))
     try {
-      expect(() => assertSafeEvidenceDirectory(path.join(syntheticRepo, '.sisyphus', 'evidence', 'run'), syntheticRepo))
+      expect(() => assertSafeEvidenceDirectory(path.join(syntheticRepo, 'tests', 'artifacts', 'evidence', 'run'), syntheticRepo))
         .toThrow(/Canonical evidence base resolves outside/)
     } finally {
       fs.rmSync(syntheticRepo, { recursive: true, force: true })
@@ -402,7 +404,7 @@ describe('build safety evidence path', () => {
   it('rejects an evidence child symlink escape', () => {
     const syntheticRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-evidence-child-repo-'))
     const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-evidence-child-external-'))
-    const evidenceBase = path.join(syntheticRepo, '.sisyphus', 'evidence')
+    const evidenceBase = path.join(syntheticRepo, 'tests', 'artifacts', 'evidence')
     fs.mkdirSync(evidenceBase, { recursive: true })
     fs.symlinkSync(externalRoot, path.join(evidenceBase, 'escaped-run'))
     try {

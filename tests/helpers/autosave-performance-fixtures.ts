@@ -10,7 +10,7 @@ export const AUTOSAVE_PERFORMANCE_NOVEL_ID = 'phase-0-autosave-novel'
 export const AUTOSAVE_PERFORMANCE_VOLUME_ID = 'phase-0-autosave-volume'
 export const AUTOSAVE_PERFORMANCE_CHAPTER_ID = 'phase-0-autosave-chapter-0001'
 
-const PERFORMANCE_FIXTURE_ROOT = path.join(process.cwd(), '.sisyphus/evidence/performance-characterization')
+const PERFORMANCE_FIXTURE_ROOT = path.join(process.cwd(), 'tests/artifacts/evidence/performance-characterization')
 
 export function buildTenThousandCharacterEditBurst() {
   const prefix = 'phase-0-autosave-edit:'
