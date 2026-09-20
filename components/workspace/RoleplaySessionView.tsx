@@ -1,7 +1,7 @@
 "use client"
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { BookOpen, GitBranch, LoaderCircle, MessageCircle, Users, RefreshCcw, SendHorizonal, SlidersHorizontal, Wand2, X } from 'lucide-react'
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
+import { ChevronDown, GitBranch, LoaderCircle, MessageCircle, RefreshCcw, SendHorizonal, SlidersHorizontal, Trash2, Wand2, X } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { useI18n } from '@/lib/i18n/provider'
 import { normalizeSavedRoleplayReply, readRoleplayReplyContent } from '@/lib/roleplay-response'
@@ -11,6 +11,8 @@ import { cn } from '@/lib/utils'
 import { RoleplayCastPicker } from './RoleplayCastPicker'
 import { RoleplayScriptBlocks } from './RoleplayScriptBlocks'
 import { RoleplayGenerationPanel } from './RoleplayGenerationPanel'
+import { RoleplayBranchSwitch } from './RoleplayBranchSwitch'
+import { buildRoleplayMessageTree, getRoleplayBranchTip, getRoleplayMessagePath as buildMessagePath } from '@/lib/roleplay-branches'
 import { defaultRoleplayGenerationOptions } from '@/lib/roleplay-generation'
 import { createWritingSkillRuntimeSeed } from '@/lib/writing-skill-selection'
 import { parseRoleplayTurn, readGeneratedRoleplayScript, roleplayScriptText, roleplayTurnText, ROLEPLAY_DEFAULT_LENGTH, type RoleplayCast, type RoleplayTurn, type RoleplayScript, type RoleplayCharacterOption } from '@/lib/roleplay-script'
@@ -89,6 +91,7 @@ async function appendRoleplayMessage(input: {
 }
 
 async function createLatestAssistantVariant(input: {
+  sourceMessageId: string
   script?: RoleplayScript
   novelId: string
   branchId: string
@@ -177,23 +180,7 @@ function normalizeMessage(message: RoleplayMessagePayload): RoleplayMessagePaylo
   }
 }
 
-function buildMessagePath(messagesById: Map<string, RoleplayMessagePayload>, messageId: string | null | undefined) {
-  if (!messageId) return [] as RoleplayMessagePayload[]
-
-  const chain: RoleplayMessagePayload[] = []
-  const visited = new Set<string>()
-  let cursor: string | null | undefined = messageId
-
-  while (cursor && !visited.has(cursor)) {
-    const message = messagesById.get(cursor)
-    if (!message) break
-    chain.push(message)
-    visited.add(cursor)
-    cursor = message.parentMessageId
-  }
-
-  return chain.reverse()
-}
+export type RoleplaySessionControls = { openCastPicker: () => void }
 
 export function RoleplaySessionView(props: {
   novelId: string
@@ -203,7 +190,7 @@ export function RoleplaySessionView(props: {
   nodeTitle?: string | null
   nodeSubtitle?: string | null
   readableLineageLabel?: string | null
-  navigationActions?: ReactNode
+  controlsRef?: Ref<RoleplaySessionControls>
   onMetricsChange?: (metrics: { currentText: string; inputTokens: number | null; outputTokens: number | null }) => void
 }) {
   const { locale, t } = useI18n()
@@ -215,11 +202,13 @@ export function RoleplaySessionView(props: {
   const [editingCast, setEditingCast] = useState(false)
   const [dialogue, setDialogue] = useState('')
   const [storyGuidance, setStoryGuidance] = useState('')
+  const [composerExpanded, setComposerExpanded] = useState(false)
   const [targetCharacters, setTargetCharacters] = useState(ROLEPLAY_DEFAULT_LENGTH)
   const [forkMessageId, setForkMessageId] = useState<string | null>(null)
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null)
   const [pendingScript, setPendingScript] = useState<RoleplayScript | null>(null)
-  const [sourceOpen, setSourceOpen] = useState(false)
   const [generationPanel, setGenerationPanel] = useState<'context' | 'skills' | null>(null)
   const [generationOptions, setGenerationOptions] = useState(() => defaultRoleplayGenerationOptions(createWritingSkillRuntimeSeed()))
   const contextSnapshotRef = useRef<string | null>(null)
@@ -232,6 +221,15 @@ export function RoleplaySessionView(props: {
   const stickToBottomRef = useRef(true)
   const controllerRef = useRef<AbortController | null>(null)
   const busyRef = useRef(false)
+  useImperativeHandle(props.controlsRef, () => ({
+    openCastPicker: () => { if (detail && cast && !busyRef.current) setEditingCast(true) },
+  }), [detail, cast])
+  const branchStorageKey = `retale:roleplay-branch:${props.novelId}:${props.branchId}:${props.sessionId}`
+  const { messagesById, childrenByParentId, leaves } = useMemo(() => buildRoleplayMessageTree(detail?.messages ?? []), [detail?.messages])
+  const latestMessage = getRoleplayBranchTip(childrenByParentId, messagesById.get(selectedMessageId ?? '') ?? detail?.messages.at(-1)) ?? null
+  const activeMessages = useMemo(() => buildMessagePath(messagesById, latestMessage?.id), [messagesById, latestMessage?.id])
+  const forkMessage = forkMessageId ? messagesById.get(forkMessageId) ?? null : null
+  const visibleMessages = useMemo(() => forkMessage ? buildMessagePath(messagesById, forkMessage.id) : activeMessages, [messagesById, forkMessage, activeMessages])
 
   const refreshDetail = useCallback(async () => {
     const next = await loadRoleplaySessionDetail({ novelId: props.novelId, branchId: props.branchId, sessionId: props.sessionId })
@@ -246,7 +244,13 @@ export function RoleplaySessionView(props: {
       if (cancelled) return
       const messages = next.messages.filter((message) => message.turn || message.script).map(normalizeMessage)
       setDetail({ ...next, messages })
-      const lastTurn = [...messages].reverse().find((message) => message.turn)?.turn
+      let savedMessageId: string | null = null
+      try { savedMessageId = window.localStorage.getItem(branchStorageKey) } catch { /* Branch selection still works without browser storage. */ }
+      const tree = buildRoleplayMessageTree(messages)
+      const selected = getRoleplayBranchTip(tree.childrenByParentId, tree.messagesById.get(savedMessageId ?? '') ?? messages.at(-1))
+      setSelectedMessageId(selected?.id ?? null)
+      setForkMessageId(null)
+      const lastTurn = buildMessagePath(tree.messagesById, selected?.id).reverse().find((message) => message.turn)?.turn
       if (lastTurn) {
         setCast(lastTurn); setTargetCharacters(lastTurn.maxCharacters)
         if (lastTurn.generationOptions) setGenerationOptions(lastTurn.generationOptions)
@@ -255,12 +259,20 @@ export function RoleplaySessionView(props: {
       if (!cancelled) setError(resolveWorkspaceUserFacingError('roleplay-session-load', reason, locale))
     }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true; controllerRef.current?.abort() }
-  }, [props.novelId, props.branchId, props.sessionId, locale])
+  }, [props.novelId, props.branchId, props.sessionId, locale, branchStorageKey])
 
   useEffect(() => {
-    const last = detail?.messages.at(-1)
+    if (loading || detail?.id !== props.sessionId) return
+    try {
+      if (latestMessage) window.localStorage.setItem(branchStorageKey, latestMessage.id)
+      else window.localStorage.removeItem(branchStorageKey)
+    } catch { /* Saving a view preference must not interrupt the conversation. */ }
+  }, [loading, detail?.id, props.sessionId, branchStorageKey, latestMessage])
+
+  useEffect(() => {
+    const last = visibleMessages.at(-1)
     onMetricsChange?.({ currentText: last?.content ?? '', inputTokens: null, outputTokens: null })
-  }, [detail, onMetricsChange])
+  }, [visibleMessages, onMetricsChange])
 
   useLayoutEffect(() => {
     const list = messageListRef.current
@@ -278,7 +290,7 @@ export function RoleplaySessionView(props: {
       return
     }
     if (stickToBottomRef.current) list.scrollTop = list.scrollHeight
-  }, [detail?.messages, busy, pendingScript])
+  }, [visibleMessages, busy, pendingScript])
 
   useEffect(() => {
     const list = messageListRef.current
@@ -288,16 +300,14 @@ export function RoleplaySessionView(props: {
     return () => observer.disconnect()
   }, [loading, detail?.id, cast, editingCast])
 
-  const messagesById = useMemo(() => new Map((detail?.messages ?? []).map((message) => [message.id, message])), [detail?.messages])
-  const latestMessage = detail?.messages.at(-1) ?? null
-  const forkMessage = forkMessageId ? messagesById.get(forkMessageId) ?? null : null
   const turnInput = { ...cast, storyGuidance, dialogue, maxCharacters: targetCharacters, generationOptions }
   const turn = parseRoleplayTurn(turnInput)
   const previewTurn = parseRoleplayTurn(turnInput, { allowEmptyInput: true })
-  const canSend = Boolean(turn && !busy)
+  const mutating = busy || deletingMessageId !== null
+  const canSend = Boolean(turn && !mutating)
   const retryUser = latestMessage?.role === 'user' && latestMessage.turn ? latestMessage : null
   const latestAssistant = latestMessage?.role === 'assistant' ? latestMessage : null
-  const resolvedTitle = props.readableLineageLabel?.trim() || detail?.title || props.nodeTitle || t('roleplay.defaultTitle', { count: props.anchorChapterNo })
+  const latestRequest = retryUser ?? (latestAssistant?.parentMessageId ? messagesById.get(latestAssistant.parentMessageId) : null)
 
   const buildGenerationRequest = (requestTurn: RoleplayTurn, history: RoleplayMessagePayload[]) => detail ? {
       novelId: props.novelId, branchId: props.branchId, chapterId: detail.sourceSnapshot.chapterId,
@@ -332,10 +342,11 @@ export function RoleplaySessionView(props: {
       forkedFromMessageId: regenerateFrom?.id ?? user.forkedFromMessageId,
     }
     const reply = regenerateFrom
-      ? await createLatestAssistantVariant(input)
+      ? await createLatestAssistantVariant({ ...input, sourceMessageId: regenerateFrom.id })
       : await appendRoleplayMessage({ ...input, role: 'assistant' })
     replyScrollTargetRef.current = { messageId: reply.id }
     await refreshDetail()
+    setSelectedMessageId(reply.id)
     setPendingScript(null)
   }
 
@@ -361,68 +372,134 @@ export function RoleplaySessionView(props: {
       parentMessageId: anchor?.id ?? null, forkedFromMessageId: forkMessage?.id ?? null,
     }))
     setDetail((current) => current ? { ...current, messages: [...current.messages, user] } : current)
-    setDialogue(''); setStoryGuidance(''); setForkMessageId(null)
+    setSelectedMessageId(user.id)
+    setDialogue(''); setStoryGuidance(''); setForkMessageId(null); setComposerExpanded(false)
     await generate(user)
   })
 
   const handleRegenerate = () => run(async () => {
-    const user = retryUser ?? (latestAssistant?.parentMessageId ? messagesById.get(latestAssistant.parentMessageId) : null)
-    if (user?.turn) await generate(user, latestAssistant ?? undefined)
+    if (latestRequest?.turn) await generate(latestRequest, latestAssistant ?? undefined)
   })
 
+  const handleDelete = async (message: RoleplayMessagePayload) => {
+    if (!detail || busyRef.current) return
+    busyRef.current = true
+    setDeletingMessageId(message.id)
+    setError('')
+    try {
+      const response = await fetch(`/api/roleplay/sessions/${detail.id}/messages`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ novelId: props.novelId, branchId: props.branchId, messageId: message.id }),
+      })
+      const data = await response.json() as { deletedMessageIds: string[]; error?: string }
+      if (!response.ok) throw new Error(data.error || 'Failed to delete roleplay request')
+      const deletedIds = new Set(data.deletedMessageIds)
+      if (latestMessage && deletedIds.has(latestMessage.id)) {
+        setSelectedMessageId([...activeMessages].reverse().find((item) => !deletedIds.has(item.id))?.id ?? null)
+      }
+      contextSnapshotRef.current = null
+      replyScrollTargetRef.current = null
+      setForkMessageId((current) => current && deletedIds.has(current) ? null : current)
+      setDetail((current) => current ? {
+        ...current,
+        messages: current.messages.filter((item) => !deletedIds.has(item.id)).map((item) => {
+          const parentMessageId = item.parentMessageId && deletedIds.has(item.parentMessageId) ? message.parentMessageId : item.parentMessageId
+          const forkedFromMessageId = item.forkedFromMessageId && deletedIds.has(item.forkedFromMessageId) ? null : item.forkedFromMessageId
+          return { ...item, parentMessageId, forkedFromMessageId, forkMetadata: { parentMessageId, forkedFromMessageId } }
+        }),
+      } : current)
+      await refreshDetail()
+    } catch (reason) {
+      setError(resolveWorkspaceUserFacingError('roleplay-delete', reason, locale))
+    } finally {
+      setDeletingMessageId(null)
+      busyRef.current = false
+    }
+  }
+
+  const selectBranch = (messageId: string, scrollToMessage = false) => {
+    if (busyRef.current) return
+    const selected = getRoleplayBranchTip(childrenByParentId, messagesById.get(messageId))
+    if (!selected) return
+    const lastTurn = buildMessagePath(messagesById, selected.id).reverse().find((message) => message.turn)?.turn
+    if (lastTurn) {
+      setCast(lastTurn)
+      setTargetCharacters(lastTurn.maxCharacters)
+      setGenerationOptions(lastTurn.generationOptions ?? defaultRoleplayGenerationOptions(createWritingSkillRuntimeSeed()))
+    }
+    contextSnapshotRef.current = null
+    replyScrollTargetRef.current = scrollToMessage ? { messageId } : null
+    stickToBottomRef.current = !scrollToMessage
+    setSelectedMessageId(selected.id)
+    setForkMessageId(null)
+    setError('')
+  }
+
   return <div className="flex min-h-0 flex-1 flex-col bg-surface" data-testid="workspace-roleplay-session-view">
-    <header className="flex shrink-0 items-center gap-2 border-b border-line/8 px-3 py-2 sm:px-5 sm:py-3">
-      {props.navigationActions}
-      <div className="min-w-0 flex-1">
-        <h2 className="truncate text-sm font-semibold text-zinc-100" title={resolvedTitle}>{resolvedTitle}</h2>
-        <p className="mt-1 truncate text-xs text-zinc-500">{cast ? `${cast.playerName} ↔ ${cast.counterpartName}` : t('roleplay.sourceChapter', { count: props.anchorChapterNo })}</p>
-      </div>
-      <button type="button" disabled={!detail || busy} onClick={() => setEditingCast(!editingCast)} aria-label={t('roleplay.chooseCast')} title={t('roleplay.chooseCast')} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-overlay/5 disabled:opacity-40"><Users className="h-4 w-4" /></button>
-      <button type="button" disabled={!detail} onClick={() => setSourceOpen(true)} aria-label={t('roleplay.advancedSettings')} title={t('roleplay.advancedSettings')} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-overlay/5 disabled:opacity-40"><BookOpen className="h-4 w-4" /></button>
-      <button type="button" data-testid="roleplay-regenerate-last" disabled={busy || !(latestAssistant || retryUser)} onClick={() => void handleRegenerate()} aria-label={t(retryUser ? 'roleplay.retry' : 'roleplay.regenerateLatest')} title={t(retryUser ? 'roleplay.retry' : 'roleplay.regenerateLatest')} className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-overlay/5 disabled:opacity-40"><RefreshCcw className="h-4 w-4" /></button>
-    </header>
     {loading ? <div className="flex flex-1 items-center justify-center gap-2 text-sm text-zinc-400" role="status"><LoaderCircle className="h-4 w-4 animate-spin" />{t('roleplay.loading')}</div> : null}
     {error ? <div role="alert" className="shrink-0 border-b border-rose-400/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-200">{error}</div> : null}
-    {!loading && detail && (!cast || editingCast) ? <div className="min-h-0 flex-1 overflow-y-auto"><RoleplayCastPicker initial={cast} options={detail.characterOptions ?? []} onStart={(next) => { setCast(next); setEditingCast(false) }} /></div> : null}
-    {!loading && detail && cast && !editingCast ? <section className="flex min-h-0 flex-1 flex-col" data-testid="roleplay-chat-core" aria-label={t('roleplay.sessionMessages')}>
+    {!loading && detail && !cast ? <div className="min-h-0 flex-1 overflow-y-auto"><RoleplayCastPicker initial={cast} options={detail.characterOptions ?? []} onStart={setCast} /></div> : null}
+    {!loading && detail && cast ? <section className="flex min-h-0 flex-1 flex-col" data-testid="roleplay-chat-core" aria-label={t('roleplay.sessionMessages')}>
       <div ref={messageListRef} data-testid="roleplay-message-list" onScroll={(event) => { const list = event.currentTarget; stickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight <= ROLEPLAY_STICKY_BOTTOM_THRESHOLD }} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-8 sm:py-8">
         <div className="mx-auto max-w-3xl space-y-8">
           {!detail.messages.length ? <div className="mx-auto max-w-xl py-5" data-testid="roleplay-empty-state">
             <MessageCircle className="mb-4 h-7 w-7 text-violet-300" /><h3 className="text-lg font-medium text-zinc-100">{t('roleplay.emptyTitle')}</h3><p className="mt-2 text-sm leading-7 text-zinc-400">{t('roleplay.emptyHint')}</p>
             {detail.sourceSnapshot.selectedText ? <blockquote className="mt-5 line-clamp-3 border-l-2 border-violet-400/40 pl-4 text-sm leading-7 text-zinc-400">{detail.sourceSnapshot.selectedText}</blockquote> : null}
           </div> : null}
-          {detail.messages.map((message, index) => <article key={message.id} ref={(element) => { if (element) messageElementsRef.current.set(message.id, element); else messageElementsRef.current.delete(message.id) }} data-testid={`roleplay-message-${index}`} data-roleplay-message-id={message.id} className={cn('min-w-0', forkMessageId === message.id && 'rounded-xl ring-1 ring-violet-400/40')}>
+          {visibleMessages.map((message, index) => <article key={message.id} ref={(element) => { if (element) messageElementsRef.current.set(message.id, element); else messageElementsRef.current.delete(message.id) }} data-testid={`roleplay-message-${message.messageIndex - 1}`} data-roleplay-message-id={message.id} className={cn('min-w-0', forkMessageId === message.id && 'rounded-xl ring-1 ring-violet-400/40')}>
+            <RoleplayBranchSwitch messageId={message.id} siblingIds={(childrenByParentId.get(message.parentMessageId) ?? []).map((sibling) => sibling.id)} replyVersions={message.role === 'assistant' && (childrenByParentId.get(message.parentMessageId) ?? []).every((sibling) => sibling.role === 'assistant')} disabled={mutating} onSelect={(id) => selectBranch(id, true)} />
             {message.script ? <RoleplayScriptBlocks script={message.script} /> : message.turn ? <div className="ml-auto max-w-[90%] space-y-3 rounded-2xl border border-violet-400/20 bg-violet-500/10 px-4 py-3">
               {message.turn.storyGuidance ? <div><p className="mb-1 text-xs text-zinc-500">{t('roleplay.storyGuidance')}</p><p className="whitespace-pre-wrap break-words text-sm leading-7 text-zinc-400">{message.turn.storyGuidance}</p></div> : null}
               {message.turn.dialogue ? <div><p className="mb-1 text-xs text-violet-300">{message.turn.playerName} · {t('roleplay.you')} → {message.turn.counterpartName}</p><p className="whitespace-pre-wrap break-words text-[15px] leading-8 text-zinc-100">{message.turn.dialogue}</p></div> : null}
             </div> : null}
-            {index < detail.messages.length - 1 && !busy ? <button type="button" aria-label={t('roleplay.forkFrom', { index: message.messageIndex })} aria-pressed={forkMessageId === message.id} onClick={() => { setForkMessageId(message.id); composerRef.current?.focus({ preventScroll: true }) }} className="mt-2 inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs text-zinc-500 hover:bg-overlay/5"><GitBranch className="h-3.5 w-3.5" />{t('roleplay.forkAction')}</button> : null}
+            {message.turn || index < visibleMessages.length - 1 ? <div className={cn('mt-1 flex flex-wrap items-center gap-1', message.turn && 'justify-end')}>
+              {index < visibleMessages.length - 1 ? <button type="button" disabled={mutating} aria-label={t('roleplay.forkFrom', { index: message.messageIndex })} aria-pressed={forkMessageId === message.id} onClick={() => { contextSnapshotRef.current = null; replyScrollTargetRef.current = null; stickToBottomRef.current = true; setForkMessageId(message.id); composerRef.current?.focus({ preventScroll: true }) }} className="inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs text-zinc-500 hover:bg-overlay/5 disabled:opacity-40"><GitBranch className="h-3.5 w-3.5" />{t('roleplay.forkAction')}</button> : null}
+              {!forkMessage && message.turn && message.id === latestRequest?.id ? <button type="button" data-testid="roleplay-regenerate-last" disabled={mutating} onClick={() => void handleRegenerate()} aria-label={t(retryUser ? 'roleplay.retry' : 'roleplay.regenerateLatest')} className="inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs text-zinc-500 hover:bg-overlay/5 hover:text-violet-300 disabled:opacity-40"><RefreshCcw className="h-3.5 w-3.5" />{t(retryUser ? 'roleplay.retry' : 'roleplay.regenerateLatest')}</button> : null}
+              {message.turn ? <button type="button" data-testid={`roleplay-delete-${message.id}`} disabled={mutating} onClick={() => void handleDelete(message)} aria-label={t('roleplay.deleteRequest', { index: message.messageIndex })} title={t('roleplay.deleteRequestHint')} className="inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 disabled:opacity-40">{deletingMessageId === message.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}{t('roleplay.delete')}</button> : null}
+            </div> : null}
           </article>)}
           {busy ? <div ref={pendingReplyRef} data-testid="roleplay-pending-reply" aria-live="polite" aria-busy="true">{pendingScript ? <RoleplayScriptBlocks script={pendingScript} /> : <p className="flex items-center gap-2 text-sm text-zinc-400"><LoaderCircle className="h-4 w-4 animate-spin text-violet-300" />{t('roleplay.pendingReply')}</p>}</div> : null}
-          {retryUser && !busy ? <button type="button" onClick={() => void handleRegenerate()} className="min-h-11 rounded-xl border border-violet-400/30 px-4 text-sm text-violet-300">{t('roleplay.retry')}</button> : null}
         </div>
       </div>
-      <form onSubmit={(event) => { event.preventDefault(); if (canSend) void handleSend() }} className="shrink-0 border-t border-line/8 bg-surface px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-6 sm:pb-4">
+      <form data-testid="roleplay-composer" data-expanded={composerExpanded} onSubmit={(event) => { event.preventDefault(); if (canSend) void handleSend() }} className="shrink-0 border-t border-line/8 bg-surface px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-6 sm:pb-3">
         <div className="mx-auto max-w-3xl">
-          <div className="mb-1 flex items-center gap-4">
-            <button type="button" disabled={busy} onClick={() => setGenerationPanel('context')} className="inline-flex min-h-8 items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-100 disabled:opacity-40"><SlidersHorizontal className="h-3.5 w-3.5" />{t('workspace.shell.advancedContext')}</button>
-            <button type="button" disabled={busy} onClick={() => setGenerationPanel('skills')} className="inline-flex min-h-8 items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-100 disabled:opacity-40"><Wand2 className="h-3.5 w-3.5" />{t('roleplay.writingSkills')}{generationOptions.writingSkillCardIds.length ? ` · ${generationOptions.writingSkillCardIds.length}` : ''}</button>
+          {forkMessage ? <div className="mb-2 flex items-center gap-2 text-xs text-violet-300" data-testid="roleplay-fork-point-visual-state"><GitBranch className="h-3.5 w-3.5" /><span data-testid="roleplay-fork-anchor">{t('roleplay.nextForkFrom', { index: forkMessage.messageIndex })}</span><button type="button" disabled={mutating} onClick={() => { contextSnapshotRef.current = null; setForkMessageId(null) }} aria-label={t('roleplay.cancelFork')} className="ml-auto inline-flex h-8 w-8 items-center justify-center"><X className="h-4 w-4" /></button></div> : null}
+          <div className={cn('rounded-2xl border border-line/10 bg-inset px-3 py-2 focus-within:border-violet-400/40', composerExpanded && 'sm:p-3')}>
+            <div className={cn(composerExpanded && 'sm:grid sm:grid-cols-2 sm:gap-3')}>
+              {composerExpanded ? <label className="block text-xs text-zinc-500">{t('roleplay.storyGuidance')}<textarea value={storyGuidance} onChange={(event) => setStoryGuidance(event.target.value)} rows={1} maxLength={10000} placeholder={t('roleplay.storyGuidancePlaceholder')} className="mt-1 block max-h-24 min-h-6 w-full resize-y bg-transparent text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-500 sm:min-h-8" /></label> : null}
+              <label className={cn('block text-xs text-violet-300', composerExpanded && 'mt-2 border-t border-line/8 pt-2 sm:mt-0 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0')}>
+                {composerExpanded ? t('roleplay.dialogueTo', { name: cast.counterpartName }) : null}
+                <textarea ref={composerRef} aria-label={t('roleplay.composerLabel')} value={dialogue} onFocus={() => setComposerExpanded(true)} onClick={() => setComposerExpanded(true)} onChange={(event) => setDialogue(event.target.value)} rows={composerExpanded ? 2 : 1} maxLength={10000} placeholder={t(composerExpanded ? 'roleplay.composerPlaceholder' : storyGuidance.trim() ? 'roleplay.composerWithGuidance' : 'roleplay.composerCollapsedPlaceholder')} onKeyDown={(event) => { if (!event.nativeEvent.isComposing && event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); if (canSend) void handleSend() } }} className={cn('block max-h-28 min-h-6 w-full bg-transparent text-sm leading-6 text-zinc-100 outline-none placeholder:text-zinc-500', composerExpanded ? 'mt-1 min-h-12 resize-y' : 'resize-none')} />
+              </label>
+            </div>
+            {composerExpanded ? <label className="mt-2 flex items-center gap-2 border-t border-line/8 pt-2 text-xs text-zinc-500">{t('roleplay.lengthTarget')}<input type="number" min={100} max={4000} step={100} aria-label={t('roleplay.lengthTarget')} value={Number.isNaN(targetCharacters) ? '' : targetCharacters} onChange={(event) => setTargetCharacters(event.target.valueAsNumber)} className="min-h-8 w-20 rounded-lg border border-line/10 bg-inset px-2 text-sm text-zinc-200" /><span>{t('roleplay.characters')}</span></label> : null}
           </div>
-          {forkMessage ? <div className="mb-2 flex items-center gap-2 text-xs text-violet-300" data-testid="roleplay-fork-point-visual-state"><GitBranch className="h-3.5 w-3.5" /><span data-testid="roleplay-fork-anchor">{t('roleplay.nextForkFrom', { index: forkMessage.messageIndex })}</span><button type="button" onClick={() => setForkMessageId(null)} aria-label={t('roleplay.backToLatestBranch')} className="ml-auto inline-flex h-8 w-8 items-center justify-center"><X className="h-4 w-4" /></button></div> : null}
-          <div className="rounded-2xl border border-line/10 bg-inset p-2 focus-within:border-violet-400/40 sm:grid sm:grid-cols-2 sm:gap-3 sm:p-3">
-            <label className="block text-xs text-zinc-500">{t('roleplay.storyGuidance')}<textarea value={storyGuidance} onChange={(event) => setStoryGuidance(event.target.value)} rows={1} maxLength={10000} placeholder={t('roleplay.storyGuidancePlaceholder')} className="mt-1 block max-h-24 min-h-6 w-full resize-y bg-transparent text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-500 sm:min-h-8" /></label>
-            <label className="mt-2 block border-t border-line/8 pt-2 text-xs text-violet-300 sm:mt-0 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">{t('roleplay.dialogueTo', { name: cast.counterpartName })}<textarea ref={composerRef} aria-label={t('roleplay.composerLabel')} value={dialogue} onChange={(event) => setDialogue(event.target.value)} rows={2} maxLength={10000} placeholder={t('roleplay.composerPlaceholder')} onKeyDown={(event) => { if (!event.nativeEvent.isComposing && event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); if (canSend) void handleSend() } }} className="mt-1 block max-h-28 min-h-12 w-full resize-y bg-transparent text-sm leading-6 text-zinc-100 outline-none placeholder:text-zinc-500" /></label>
-          </div>
-          <div className="mt-2 flex items-center justify-between gap-3">
-            <label className="flex min-w-0 items-center gap-2 text-xs text-zinc-500">{t('roleplay.lengthTarget')}<input type="number" min={100} max={4000} step={100} aria-label={t('roleplay.lengthTarget')} value={Number.isNaN(targetCharacters) ? '' : targetCharacters} onChange={(event) => setTargetCharacters(event.target.valueAsNumber)} className="min-h-10 w-20 rounded-lg border border-line/10 bg-inset px-2 text-sm text-zinc-200" /><span>{t('roleplay.characters')}</span></label>
+          <div className="mt-1 flex items-center justify-between gap-2" data-testid="roleplay-composer-actions">
+            <div className="flex min-w-0 items-center gap-1">
+              {leaves.length > 1 ? <div className={cn('relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-violet-300 hover:bg-overlay/5 focus-within:ring-2 focus-within:ring-violet-400/50', mutating && 'opacity-40')} title={t('roleplay.currentBranch')} data-testid="roleplay-branch-picker">
+                <GitBranch className="h-4 w-4" aria-hidden="true" />
+                <select aria-label={t('roleplay.currentBranch')} value={latestMessage?.id ?? ''} disabled={mutating} onChange={(event) => selectBranch(event.target.value)} className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed">
+                  {leaves.map((leaf, index) => {
+                    const path = buildMessagePath(messagesById, leaf.id)
+                    const fork = [...path].reverse().find((message) => (childrenByParentId.get(message.parentMessageId)?.length ?? 0) > 1) ?? leaf
+                    const preview = (fork.turn?.dialogue || fork.turn?.storyGuidance || fork.content).replace(/\s+/g, ' ').slice(0, 36)
+                    return <option key={leaf.id} value={leaf.id}>{t('roleplay.branchOption', { index: index + 1, text: preview })}</option>
+                  })}
+                </select>
+              </div> : null}
+              <button type="button" disabled={mutating} onClick={() => setGenerationPanel('context')} aria-label={t('workspace.shell.advancedContext')} title={t('workspace.shell.advancedContext')} className="inline-flex h-11 w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-overlay/5 hover:text-zinc-100 disabled:opacity-40"><SlidersHorizontal className="h-4 w-4" /></button>
+              <button type="button" disabled={mutating} onClick={() => setGenerationPanel('skills')} aria-label={`${t('roleplay.writingSkills')}${generationOptions.writingSkillCardIds.length ? ` · ${generationOptions.writingSkillCardIds.length}` : ''}`} title={t('roleplay.writingSkills')} className={cn('inline-flex h-11 w-11 items-center justify-center rounded-xl hover:bg-overlay/5 hover:text-zinc-100 disabled:opacity-40', generationOptions.writingSkillCardIds.length ? 'text-violet-300' : 'text-zinc-400')}><Wand2 className="h-4 w-4" /></button>
+              {composerExpanded ? <button type="button" onClick={() => setComposerExpanded(false)} aria-label={t('roleplay.collapseComposer')} title={t('roleplay.collapseComposer')} className="inline-flex h-11 w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-overlay/5 hover:text-zinc-100"><ChevronDown className="h-4 w-4" /></button> : null}
+            </div>
             <button type="submit" data-testid="roleplay-composer-send" disabled={!canSend} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-violet-500 px-4 text-sm font-medium text-white hover:bg-violet-400 disabled:opacity-40">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <SendHorizonal className="h-4 w-4" />}{t('roleplay.send')}</button>
           </div>
         </div>
       </form>
     </section> : null}
     <RoleplayGenerationPanel panel={generationPanel} request={previewTurn ? buildGenerationRequest(previewTurn, buildMessagePath(messagesById, (forkMessage ?? latestMessage)?.id)) : null} options={generationOptions} onChange={setGenerationOptions} onClose={() => setGenerationPanel(null)} onSnapshot={handleContextSnapshot} />
-    <DialogSurface open={sourceOpen} onClose={() => setSourceOpen(false)} closeLabel={t('roleplay.closeSource')} title={t('roleplay.advancedSettings')} placement="right">
-      {detail ? <div className="space-y-6 text-sm leading-7 text-zinc-300"><section><h3 className="mb-2 font-medium">{t('roleplay.sourceExcerpt')}</h3><p className="whitespace-pre-wrap break-words">{detail.sourceSnapshot.selectedText || t('roleplay.sourceExcerptEmpty')}</p></section><section><h3 className="mb-2 font-medium">{t('roleplay.sourceSnapshot')}</h3><p className="whitespace-pre-wrap break-words">{detail.sourceSnapshot.textSnapshot || t('roleplay.sourceSnapshotEmpty')}</p></section></div> : null}
+    <DialogSurface open={editingCast && Boolean(cast)} onClose={() => setEditingCast(false)} closeLabel={t('roleplay.closeCast')} title={t('roleplay.chooseCast')} description={t('roleplay.chooseCastHint')} placement="center">
+      {detail ? <RoleplayCastPicker hideHeading initial={cast} options={detail.characterOptions ?? []} onStart={(next) => { contextSnapshotRef.current = null; setCast(next); setEditingCast(false) }} /> : null}
     </DialogSurface>
   </div>
 }

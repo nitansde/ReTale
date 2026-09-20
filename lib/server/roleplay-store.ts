@@ -304,9 +304,45 @@ export async function appendRoleplayMessage(
   })
 }
 
+export async function deleteRoleplayTurn(input: { sessionId: string; messageId: string }, db: Db = defaultDb) {
+  return db.withTransaction(() => {
+    const session = findRoleplaySessionById(input.sessionId, db)
+    if (!session) throw new ResourceNotFoundError(`Roleplay session not found: ${input.sessionId}`)
+    const request = session.messages.find((message) => message.id === input.messageId)
+    if (!request) throw new ResourceNotFoundError(`Roleplay request not found: ${input.messageId}`)
+    if (request.role !== 'user') throw new InputValidationError('Only user requests can be deleted with their replies')
+
+    const deletedMessageIds = session.messages
+      .filter((message) => message.id === request.id || (message.role === 'assistant' && message.parentMessageId === request.id))
+      .map((message) => message.id)
+    const deletedIds = new Set(deletedMessageIds)
+
+    // Keep later turns and forks connected to the history before the removed request.
+    for (const message of session.messages) {
+      if (deletedIds.has(message.id)) continue
+      const parentRemoved = message.parentMessageId !== null && deletedIds.has(message.parentMessageId)
+      const forkRemoved = message.forkedFromMessageId !== null && deletedIds.has(message.forkedFromMessageId)
+      if (!parentRemoved && !forkRemoved) continue
+      db.execute(
+        `UPDATE roleplay_messages SET parent_message_id = ?, forked_from_message_id = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE session_id = ? AND id = ?`,
+        parentRemoved ? request.parentMessageId : message.parentMessageId,
+        forkRemoved ? null : message.forkedFromMessageId,
+        input.sessionId, message.id
+      )
+    }
+    for (const messageId of deletedMessageIds) {
+      db.execute('DELETE FROM roleplay_messages WHERE session_id = ? AND id = ?', input.sessionId, messageId)
+    }
+    db.execute('UPDATE roleplay_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', input.sessionId)
+    return { deletedMessageIds }
+  })
+}
+
 export async function createRoleplayLatestTurnVariant(
   input: {
     sessionId: string
+    sourceMessageId?: string
     role: RoleplayMessageRecord['role']
     content: string
     parentMessageId?: string | null
@@ -321,12 +357,18 @@ export async function createRoleplayLatestTurnVariant(
       throw new ResourceNotFoundError(`Roleplay session not found: ${input.sessionId}`)
     }
 
-    const latestMessage = session.messages.at(-1)
+    // A selected route may end before the session's most recently saved message.
+    const latestMessage = input.sourceMessageId
+      ? assertMessageBelongsToSession(input.sourceMessageId, input.sessionId, 'Variant source message', db)
+      : session.messages.at(-1)
     if (!latestMessage) {
       throw new InputValidationError(`Cannot create latest-turn variant without messages: ${input.sessionId}`)
     }
     if (input.role !== latestMessage.role) {
       throw new InputValidationError(`Latest-turn variant role must match latest message role: expected ${latestMessage.role}`)
+    }
+    if (input.sourceMessageId && input.parentMessageId !== undefined && input.parentMessageId !== latestMessage.parentMessageId) {
+      throw new InputValidationError('Variant parent must match the source message parent')
     }
 
     const variantGroupId = latestMessage.variantGroupId ?? uid('roleplay-variant-group')

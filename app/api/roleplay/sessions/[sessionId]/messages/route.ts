@@ -1,9 +1,29 @@
 import { NextResponse } from 'next/server'
 import { apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES, jsonError, readJsonObject, requireNonEmptyId, toErrorMessage } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
-import { appendRoleplayMessage, createRoleplayLatestTurnVariant, findRoleplaySessionById } from '@/lib/server/roleplay-store'
+import { appendRoleplayMessage, createRoleplayLatestTurnVariant, deleteRoleplayTurn, findRoleplaySessionById } from '@/lib/server/roleplay-store'
 import { uid } from '@/lib/utils'
 import { parseRoleplayTurn, parseRoleplayScript } from '@/lib/roleplay-script'
+
+export async function DELETE(request: Request, context: { params: Promise<{ sessionId: string }> }) {
+  try {
+    const { sessionId: rawSessionId } = await context.params
+    const sessionId = requireNonEmptyId(rawSessionId, 'sessionId')
+    const body = await readJsonObject(request)
+    const novelId = requireNonEmptyId(String(body.novelId ?? ''), 'novelId')
+    const branchId = requireNonEmptyId(String(body.branchId ?? ''), 'branchId')
+    const messageId = requireNonEmptyId(String(body.messageId ?? ''), 'messageId')
+    const db = createNovelDatabaseAccess(novelId)
+    const session = findRoleplaySessionById(sessionId, db)
+    if (!session || session.novelId !== novelId || session.branchId !== branchId) {
+      return jsonError('Roleplay session not found for the requested branch context', 404)
+    }
+    const result = await deleteRoleplayTurn({ sessionId, messageId }, db)
+    return NextResponse.json({ ok: true, ...result })
+  } catch (error) {
+    return apiRequestErrorResponse(error) ?? jsonError(toErrorMessage(error, 'Failed to delete roleplay request'), 500)
+  }
+}
 
 export async function POST(request: Request, context: { params: Promise<{ sessionId: string }> }) {
   try {
@@ -35,6 +55,7 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
     const result = mode === 'latest-turn-variant'
       ? await createRoleplayLatestTurnVariant({
         sessionId,
+        sourceMessageId: body.sourceMessageId === undefined ? undefined : requireNonEmptyId(String(body.sourceMessageId ?? ''), 'sourceMessageId'),
         role: body.role === 'assistant' ? 'assistant' : 'user',
         content,
         parentMessageId: typeof body.parentMessageId === 'string' ? body.parentMessageId : null,

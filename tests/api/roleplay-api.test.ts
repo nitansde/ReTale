@@ -308,6 +308,77 @@ afterEach(databaseFixture.wrap(async () => {
 }))
 
 describe('roleplay session API', () => {
+  it('deletes only the requested turn and its variants, reconnects later forks, and validates the session context', databaseFixture.wrap(async () => {
+    const database = createTestDatabase('retale-roleplay-turn-delete')
+    createFixture(database)
+    const { POST: createSession } = await import('@/app/api/roleplay/sessions/route')
+    const { POST: appendMessage, DELETE: deleteRequest } = await import('@/app/api/roleplay/sessions/[sessionId]/messages/route')
+    const { GET: getSession } = await import('@/app/api/roleplay/sessions/[sessionId]/route')
+    const makeSession = async () => {
+      const response = await createSession(createSessionRequest({ novelId: FIXTURE_IDS.novelId, branchId: FIXTURE_IDS.branchId, title: '删除请求', sourceChapterId: FIXTURE_IDS.chapterId, sourceChapterNo: 12, sourceSelectedText: '雨夜', sourceTextSnapshot: '雨夜正文' }))
+      expect(response.status).toBe(201)
+      return (await response.json()).sessionId as string
+    }
+    const sessionId = await makeSession()
+    const otherSessionId = await makeSession()
+    const beforeIsolation = snapshotIsolation(database)
+    const context = { params: Promise.resolve({ sessionId }) }
+    const append = async (id: string, role: string, parentMessageId: string | null, extra = {}) => {
+      const response = await appendMessage(createMessageRequest(sessionId, { id, role, parentMessageId, content: id, ...extra }), context)
+      expect(response.status).toBe(201)
+      return (await response.json()).id as string
+    }
+    const remove = (messageId: string, extra = {}, targetSession = sessionId) => deleteRequest(new Request(`http://localhost/api/roleplay/sessions/${targetSession}/messages`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ novelId: FIXTURE_IDS.novelId, branchId: FIXTURE_IDS.branchId, messageId, ...extra }),
+    }), { params: Promise.resolve({ sessionId: targetSession }) })
+    const readMessages = async () => {
+      const response = await getSession(new Request(`http://localhost/api/roleplay/sessions/${sessionId}?novelId=${FIXTURE_IDS.novelId}&branchId=${FIXTURE_IDS.branchId}`), context)
+      expect(response.status).toBe(200)
+      return (await response.json()).messages as Array<{ id: string; parentMessageId: string | null; forkedFromMessageId: string | null }>
+    }
+    await append('u1', 'user', null)
+    await append('a1', 'assistant', 'u1')
+    await append('u2', 'user', 'a1')
+    await append('a2', 'assistant', 'u2')
+    const variantId = await append('variant', 'assistant', 'u2', { mode: 'latest-turn-variant' })
+    await append('u3', 'user', variantId, { forkedFromMessageId: variantId })
+    await append('a3', 'assistant', 'u3')
+    await append('fork', 'user', 'a2', { forkedFromMessageId: 'a2' })
+    const beforeMessages = database.prepare('SELECT * FROM roleplay_messages ORDER BY id').all()
+    expect((await remove('u2', { branchId: 'wrong-branch' })).status).toBe(404)
+    expect((await remove('u2', {}, otherSessionId)).status).toBe(404)
+    expect((await remove('u2', {}, 'missing-session')).status).toBe(404)
+    expect((await remove('missing')).status).toBe(404)
+    expect((await remove('')).status).toBe(400)
+    expect((await remove('a2')).status).toBe(400)
+    expect(database.prepare('SELECT * FROM roleplay_messages ORDER BY id').all()).toEqual(beforeMessages)
+
+    // A failed delete must also roll back the preceding parent-link changes.
+    database.exec("CREATE TRIGGER fail_turn_delete BEFORE DELETE ON roleplay_messages WHEN OLD.id = 'u2' BEGIN SELECT RAISE(ABORT, 'forced delete failure'); END")
+    expect((await remove('u2')).status).toBe(500)
+    expect(database.prepare('SELECT * FROM roleplay_messages ORDER BY id').all()).toEqual(beforeMessages)
+    database.exec('DROP TRIGGER fail_turn_delete')
+
+    const deleted = await remove('u2')
+    expect(deleted.status).toBe(200)
+    expect(await deleted.json()).toEqual({ ok: true, deletedMessageIds: ['u2', 'a2', variantId] })
+    const remaining = await readMessages()
+    expect(remaining.map((message) => message.id)).toEqual(['u1', 'a1', 'u3', 'a3', 'fork'])
+    expect(remaining.find((message) => message.id === 'u3')).toMatchObject({ parentMessageId: 'a1', forkedFromMessageId: null })
+    expect(remaining.find((message) => message.id === 'fork')).toMatchObject({ parentMessageId: 'a1', forkedFromMessageId: null })
+    expect(remaining.find((message) => message.id === 'a3')).toMatchObject({ parentMessageId: 'u3' })
+    expect((await remove('fork')).status).toBe(200)
+    expect((await remove('u3')).status).toBe(200)
+    expect((await remove('u1')).status).toBe(200)
+    expect(await readMessages()).toEqual([])
+    await append('new-user', 'user', null)
+    await append('new-reply', 'assistant', 'new-user')
+    await append('new-variant', 'assistant', 'new-user', { mode: 'latest-turn-variant' })
+    expect(await readMessages()).toHaveLength(3)
+    expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    expect(snapshotIsolation(database)).toEqual(beforeIsolation)
+  }))
+
   it('persists script inputs and blocks and lists only the protagonist and present chapter characters', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-roleplay-script')
     createFixture(database)
@@ -336,6 +407,7 @@ describe('roleplay session API', () => {
     const savedScript = { ...script, blocks: [{ type: 'narration', text: '雨落在窗沿。\n\n门外响起脚步声。' }, ...script.blocks.slice(2)] }
     const assistant = await appendMessage(createMessageRequest(sessionId, { role: 'assistant', parentMessageId: user.id, script }), context)
     expect(assistant.status).toBe(201)
+    const originalReply = await assistant.json() as { id: string; turnIndex: number }
     expect(await (await read()).json()).toMatchObject({ messages: [{ turn }, { script: savedScript }] })
     const invalid = await appendMessage(createMessageRequest(sessionId, { role: 'user', turn: { ...turn, counterpartName: '林舟' } }), context)
     expect(invalid.status).toBe(400)
@@ -347,6 +419,26 @@ describe('roleplay session API', () => {
     const variant = await appendMessage(createMessageRequest(sessionId, { role: 'assistant', mode: 'latest-turn-variant', parentMessageId: user.id, script }), context)
     expect(variant.status).toBe(201)
     expect((await (await read()).json()).messages).toHaveLength(4)
+    const laterUserResponse = await appendMessage(createMessageRequest(sessionId, { role: 'user', turn, parentMessageId: originalReply.id }), context)
+    const laterUser = await laterUserResponse.json() as { id: string }
+    const laterReply = await appendMessage(createMessageRequest(sessionId, { role: 'assistant', parentMessageId: laterUser.id, script }), context)
+    expect(laterReply.status).toBe(201)
+
+    const olderBranchVariant = await appendMessage(createMessageRequest(sessionId, { role: 'assistant', mode: 'latest-turn-variant', sourceMessageId: originalReply.id, parentMessageId: user.id, script }), context)
+    expect(olderBranchVariant.status).toBe(201)
+    expect(await olderBranchVariant.json()).toMatchObject({ turnIndex: originalReply.turnIndex, variantIndex: 2, parentMessageId: user.id, forkedFromMessageId: originalReply.id })
+    const beforeInvalidVariant = (await (await read()).json()).messages
+    const wrongParent = await appendMessage(createMessageRequest(sessionId, { role: 'assistant', mode: 'latest-turn-variant', sourceMessageId: originalReply.id, parentMessageId: laterUser.id, script }), context)
+    expect(wrongParent.status).toBe(400)
+    const missingSource = await appendMessage(createMessageRequest(sessionId, { role: 'assistant', mode: 'latest-turn-variant', sourceMessageId: 'missing-source', parentMessageId: user.id, script }), context)
+    expect(missingSource.status).toBe(404)
+    const otherSessionResponse = await createSession(createSessionRequest({ novelId: FIXTURE_IDS.novelId, branchId: FIXTURE_IDS.branchId, title: '另一段对话', sourceChapterId: FIXTURE_IDS.chapterId, sourceChapterNo: 12, sourceSelectedText: '雨夜', sourceTextSnapshot: '雨夜正文' }))
+    const otherSessionId = (await otherSessionResponse.json()).sessionId as string
+    const otherMessageResponse = await appendMessage(createMessageRequest(otherSessionId, { role: 'assistant', content: '其他会话的回复' }), { params: Promise.resolve({ sessionId: otherSessionId }) })
+    const otherMessageId = (await otherMessageResponse.json()).id as string
+    const foreignSource = await appendMessage(createMessageRequest(sessionId, { role: 'assistant', mode: 'latest-turn-variant', sourceMessageId: otherMessageId, parentMessageId: user.id, script }), context)
+    expect(foreignSource.status).toBe(404)
+    expect((await (await read()).json()).messages).toEqual(beforeInvalidVariant)
     expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([])
   }))
 

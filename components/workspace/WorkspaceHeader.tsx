@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useState, type ReactNode } from 'react'
-import { BookMarked, BookOpen, Ellipsis, Globe, House, ScrollText, Search, Settings2, Trash2 } from 'lucide-react'
+import { BookMarked, BookOpen, Ellipsis, Globe, House, LibraryBig, ScrollText, Search, Settings2, Trash2, Users } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { IconButton } from '@/components/ui/IconButton'
 import { useI18n } from '@/lib/i18n/provider'
@@ -31,6 +31,7 @@ export function WorkspaceHeader({
   hideMobileToolbar = false,
   showContextButton = false,
   onOpenGraph,
+  onOpenRoleplayCast,
 }: {
   title: string
   metrics: WorkspaceMetrics
@@ -49,6 +50,7 @@ export function WorkspaceHeader({
   hideMobileToolbar?: boolean
   showContextButton?: boolean
   onOpenGraph?: () => void
+  onOpenRoleplayCast?: () => void
 }) {
   const { t } = useI18n()
   const [overflowOpen, setOverflowOpen] = useState(false)
@@ -69,7 +71,7 @@ export function WorkspaceHeader({
   return (
     <>
     <header className="sticky top-0 z-30 mb-2 shrink-0 border-b border-line/10 bg-panel/92 px-4 py-2 shadow-[0_14px_40px_rgb(0_0_0/calc(0.3*var(--shadow-strength)))] backdrop-blur-2xl sm:mb-4 sm:rounded-[24px] sm:border sm:py-3 sm:shadow-[0_20px_70px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))] lg:rounded-[28px]">
-      <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-1 lg:hidden" data-testid="workspace-mobile-header">
+      <div className="grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-1 lg:hidden" data-testid="workspace-mobile-header">
         <button
           type="button"
           onClick={onOpenChapters}
@@ -81,9 +83,15 @@ export function WorkspaceHeader({
         <h1 className="min-w-0 truncate px-2 text-base font-medium tracking-tight text-zinc-100" title={title}>
           {title}
         </h1>
-        <IconButton label={t('workspace.header.moreOptions')} onClick={() => setOverflowOpen(true)} aria-expanded={overflowOpen} className="border-transparent bg-transparent">
-          <Ellipsis className="h-4 w-4" aria-hidden="true" />
-        </IconButton>
+        <div className="flex items-center">
+          {onOpenRoleplayCast ? <>
+            <IconButton label={t('roleplay.chooseCast')} title={t('roleplay.chooseCast')} onClick={onOpenRoleplayCast} className="border-transparent bg-transparent"><Users className="h-4 w-4" aria-hidden="true" /></IconButton>
+            <IconButton label={t('workspace.header.openKnowledge')} title={t('workspace.header.openKnowledge')} onClick={onOpenKnowledge} className="border-transparent bg-transparent"><LibraryBig className="h-4 w-4" aria-hidden="true" /></IconButton>
+          </> : null}
+          <IconButton label={t('workspace.header.moreOptions')} onClick={() => setOverflowOpen(true)} aria-expanded={overflowOpen} className="border-transparent bg-transparent">
+            <Ellipsis className="h-4 w-4" aria-hidden="true" />
+          </IconButton>
+        </div>
       </div>
 
       <div className="hidden items-center justify-between gap-3 lg:flex">
@@ -105,15 +113,20 @@ export function WorkspaceHeader({
             <House className="h-4 w-4" aria-hidden="true" />
           </Link>
           <div className="min-w-0">
-            <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">{t('workspace.headerEyebrow')}</p>
-            <h1 className="mt-1 truncate text-xl font-semibold tracking-tight text-zinc-100">{title}</h1>
+            {!onOpenRoleplayCast ? <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">{t('workspace.headerEyebrow')}</p> : null}
+            <h1 className={`${onOpenRoleplayCast ? '' : 'mt-1 '}truncate text-xl font-semibold tracking-tight text-zinc-100`}>{title}</h1>
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 text-xs text-zinc-400">
           {showContextButton ? <IconButton label={t('workspace.header.openContext')} onClick={onOpenContext}><BookMarked className="h-4 w-4" aria-hidden="true" /></IconButton> : null}
+          {onOpenRoleplayCast ? <>
+            <IconButton label={t('roleplay.chooseCast')} title={t('roleplay.chooseCast')} onClick={onOpenRoleplayCast}><Users className="h-4 w-4" aria-hidden="true" /></IconButton>
+            <IconButton label={t('workspace.header.openKnowledge')} title={t('workspace.header.openKnowledge')} onClick={onOpenKnowledge}><LibraryBig className="h-4 w-4" aria-hidden="true" /></IconButton>
+          </> : <>
           <span className="rounded-full border border-line/10 bg-overlay/[0.04] px-3 py-1.5" data-testid="workspace-current-word-count">{metrics.wordCount}</span>
           <span className="rounded-full border border-line/10 bg-overlay/[0.04] px-3 py-1.5" data-testid="workspace-current-input-tokens">{metrics.inputTokens}</span>
           <span className="rounded-full border border-line/10 bg-overlay/[0.04] px-3 py-1.5" data-testid="workspace-current-output-tokens">{metrics.outputTokens}</span>
+          </>}
           <button type="button" data-testid="preset-compat-library-open" onClick={onOpenPresets} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-line/10 bg-overlay/[0.04] px-3 transition hover:bg-overlay/[0.08]">
             <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
             {t('workspace.preset')}

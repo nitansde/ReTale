@@ -14,9 +14,9 @@ export function RoleplayScriptBlocks({ script }: { script: RoleplayScript }) {
         narration ? 'mx-2 border-l-2 border-line/15 py-1 pl-4 sm:mx-6' : 'max-w-[90%] rounded-2xl border px-4 py-3 sm:max-w-[85%]',
         !narration && (player ? 'ml-auto border-violet-400/20 bg-violet-500/10' : 'mr-auto border-emerald-400/20 bg-emerald-500/[0.08]'),
       )}>
-        <p className={cn('mb-1 text-xs font-medium', narration ? 'text-zinc-500' : player ? 'text-violet-300' : 'text-emerald-300')}>
-          {narration ? t('roleplay.narration') : player ? `${script.playerName} · ${t('roleplay.you')}` : script.counterpartName}
-        </p>
+        {!narration ? <p className={cn('mb-1 text-xs font-medium', player ? 'text-violet-300' : 'text-emerald-300')}>
+          {player ? `${script.playerName} · ${t('roleplay.you')}` : script.counterpartName}
+        </p> : null}
         <p className={cn('whitespace-pre-wrap break-words text-[15px] leading-8 [overflow-wrap:anywhere]', narration ? 'text-zinc-400' : 'text-zinc-100')}>{block.text}</p>
       </div>
     })}

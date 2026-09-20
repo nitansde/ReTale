@@ -39,6 +39,7 @@ import {
 import { WorkspaceCenterPane } from '@/components/workspace/WorkspaceCenterPane'
 import { WorkspaceChapterNav } from '@/components/workspace/WorkspaceChapterNav'
 import { WorkspaceHeader } from '@/components/workspace/WorkspaceHeader'
+import type { RoleplaySessionControls } from '@/components/workspace/RoleplaySessionView'
 import { WorkspaceWorldEntriesPanel } from '@/components/workspace/WorkspaceWorldEntriesPanel'
 import { WorkspaceReferencePanel } from '@/components/workspace/WorkspaceReferencePanel'
 import { mapWorkspaceKnowledgeStatus } from '@/components/workspace/workspace-knowledge-status'
@@ -328,6 +329,7 @@ export function SelectionNovelStudio() {
   const desktop = useDesktopWorkspaceLayout()
   const [searchNovelId, setSearchNovelId] = useState<string | null>(null)
   const [settingsInitialSection, setSettingsInitialSection] = useState<'appearance' | 'models'>('appearance')
+  const roleplayControlsRef = useRef<RoleplaySessionControls | null>(null)
   const rewriteModelConfigured = isAIScenarioConfigured(resolvedAISettings.rewrite)
   const openAIModelSettings = () => {
     setSettingsInitialSection('models')
@@ -436,6 +438,7 @@ export function SelectionNovelStudio() {
           }}
           hideMobileToolbar={activeWorkspaceSelection.kind === 'roleplay_session'}
           showContextButton={isRoleplaySession}
+          onOpenRoleplayCast={isRoleplaySession ? () => roleplayControlsRef.current?.openCastPicker() : undefined}
           onOpenGraph={activeWorkspaceSelection.kind === 'chapter' ? () => setCenterPaneView('graph') : undefined}
           mobileSelectionActions={!desktop && !core.readerMode.isEditing && activeWorkspaceSelection.kind === 'chapter' && centerPaneView === 'body' && selectionText.trim() ? chapterSelectionActions : null}
           mobileReaderAction={!desktop && activeWorkspaceSelection.kind === 'chapter' ? (
@@ -605,7 +608,7 @@ export function SelectionNovelStudio() {
               activeWorkspaceSelection.kind === 'roleplay_session' ? (
                 <RoleplaySessionView
                   key={activeWorkspaceSelection.roleplaySessionId}
-                  navigationActions={selectionActions}
+                  controlsRef={roleplayControlsRef}
                   novelId={currentNovelId ?? ''}
                   branchId={storyTimelineBranchId}
                   sessionId={activeWorkspaceSelection.roleplaySessionId}

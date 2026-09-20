@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -305,6 +305,96 @@ async function rejectDeferred(deferred: Deferred) {
 
 beforeEach(() => {
   window.localStorage.clear()
+})
+
+describe('useSelectionNovelStudioCore selection events', () => {
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/workspace')
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => jsonResponse(
+      String(input).startsWith('/api/story-timeline?') ? buildStoryTimeline() : { ok: true },
+    )))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  function selectionFixture() {
+    const root = document.createElement('div')
+    root.textContent = 'Selected chapter text'
+    const selection = {
+      rangeCount: 1,
+      toString: () => root.textContent,
+      getRangeAt: () => ({
+        commonAncestorContainer: root.firstChild,
+        getBoundingClientRect: () => ({ top: 1, left: 1, width: 20 }),
+      }),
+    } as unknown as Selection
+    const readSelection = vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+    const params = buildCoreParams({ currentNovelId: 'novel-1' })
+    return { root, readSelection, params }
+  }
+
+  it('settles when toolbar layout emits scroll events, including at the viewport edge', async () => {
+    const { root, params } = selectionFixture()
+    let emitLayoutScroll = false
+    let commits = 0
+    const { result, unmount } = renderHook(() => {
+      const core = useSelectionNovelStudioCore(params)
+      useLayoutEffect(() => {
+        // Model scroll events emitted while the browser restores focus/layout.
+        // Bound the old feedback loop so its failure is an assertion, not a crash.
+        if (emitLayoutScroll && ++commits < 20) window.dispatchEvent(new Event('scroll'))
+      })
+      return core
+    })
+    await advanceTimers(100)
+    result.current.editorRef.current = root
+    result.current.toolbarRef.current = document.createElement('div')
+    emitLayoutScroll = true
+    act(() => document.dispatchEvent(new Event('selectionchange')))
+    for (let frame = 0; frame < 5; frame++) await advanceTimers(20)
+
+    expect(result.current.selectionText).toBe('Selected chapter text')
+    expect(commits).toBeLessThan(5)
+    const position = result.current.toolbarPos
+    act(() => {
+      for (let event = 0; event < 50; event++) {
+        window.dispatchEvent(new Event('scroll'))
+        window.dispatchEvent(new Event('resize'))
+        document.dispatchEvent(new Event('selectionchange'))
+      }
+    })
+    await advanceTimers(100)
+    expect(result.current.toolbarPos).toBe(position)
+    unmount()
+  })
+
+  it('cancels pending chapter selection work and ignores RP input and scroll events', async () => {
+    const { root, readSelection, params } = selectionFixture()
+    const { result, unmount } = renderHook(() => useSelectionNovelStudioCore(params))
+    await advanceTimers(100)
+    result.current.editorRef.current = root
+    act(() => document.dispatchEvent(new Event('selectionchange')))
+    act(() => result.current.handleTimelineSelection({
+      kind: 'roleplay_session', nodeId: 'roleplay-node-1',
+      roleplaySessionId: 'roleplay-session-1', anchorChapterNo: 3,
+    }))
+    readSelection.mockClear()
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      window.dispatchEvent(new Event('scroll'))
+      window.dispatchEvent(new Event('resize'))
+    })
+    await advanceTimers(100)
+    expect(readSelection).not.toHaveBeenCalled()
+    expect(result.current.selectionText).toBe('')
+    expect(result.current.toolbarPos).toBeNull()
+    unmount()
+  })
 })
 
 describe('knowledge cache overview derivations', () => {

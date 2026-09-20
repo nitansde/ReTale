@@ -163,6 +163,14 @@ type WorkspaceSelectionHistoryMode = 'push' | 'replace' | 'none'
 const MAX_NAVIGATION_SAVE_PASSES = 8
 const MAX_LIFECYCLE_SAVE_PASSES = 2
 
+function clampToolbarPosition(position: WorkspaceFloatingPosition, toolbar: HTMLElement | null) {
+  if (!toolbar) return position
+  const rect = toolbar.getBoundingClientRect()
+  const top = Math.min(Math.max(position.top, TOOLBAR_EDGE_PADDING), window.innerHeight - rect.height - TOOLBAR_EDGE_PADDING)
+  const left = Math.min(Math.max(position.left, rect.width / 2 + TOOLBAR_EDGE_PADDING), window.innerWidth - rect.width / 2 - TOOLBAR_EDGE_PADDING)
+  return top === position.top && left === position.left ? position : { top, left }
+}
+
 export function resolveSelectedKnowledgeProjectionChapterOrder(params: {
   currentChapterId: string
   localChapters: Chapter[]
@@ -1619,42 +1627,41 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   ]
 
   useEffect(() => {
-    const handler = () => {
-      if (centerPaneView !== 'body') {
-        setSelectionText('')
-        setToolbarPos(null)
-        return
-      }
+    // RP and other branch views keep the editor instance, but have no chapter
+    // selection to track. Their input/scroll events must not update this state.
+    if (!readerScope) return
+    let frame: number | null = null
+    const updateSelection = () => {
+      frame = null
       const selection = extractSelection(editorRef.current)
-      if (!selection) {
-        if (activeMode) {
-          setToolbarPos(null)
-          return
-        }
-        setSelectionText('')
-        setToolbarPos(null)
-        return
-      }
-      setSelectionText(selection.text)
-      setToolbarPos({ top: selection.rect.top - TOOLBAR_OFFSET_Y, left: selection.rect.left + selection.rect.width / 2 })
+      if (selection || !activeMode) setSelectionText(selection?.text ?? '')
+      const position = selection ? clampToolbarPosition({
+        top: selection.rect.top - TOOLBAR_OFFSET_Y,
+        left: selection.rect.left + selection.rect.width / 2,
+      }, toolbarRef.current) : null
+      setToolbarPos((current) => current?.top === position?.top && current?.left === position?.left ? current : position)
+    }
+    const handler = () => {
+      // Focus restoration and layout can emit events during a React commit.
+      // Read the final layout once per frame, outside that synchronous update.
+      if (frame === null) frame = window.requestAnimationFrame(updateSelection)
     }
     document.addEventListener('selectionchange', handler)
     window.addEventListener('resize', handler)
     window.addEventListener('scroll', handler, true)
     return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame)
       document.removeEventListener('selectionchange', handler)
       window.removeEventListener('resize', handler)
       window.removeEventListener('scroll', handler, true)
     }
-  }, [activeMode, centerPaneView])
+  }, [activeMode, readerScope])
 
   useEffect(() => {
     if (!toolbarPos || activeMode || !toolbarRef.current) return
-    const toolbarRect = toolbarRef.current.getBoundingClientRect()
-    const nextTop = Math.min(Math.max(toolbarPos.top, TOOLBAR_EDGE_PADDING), window.innerHeight - toolbarRect.height - TOOLBAR_EDGE_PADDING)
-    const nextLeft = Math.min(Math.max(toolbarPos.left, toolbarRect.width / 2 + TOOLBAR_EDGE_PADDING), window.innerWidth - toolbarRect.width / 2 - TOOLBAR_EDGE_PADDING)
-    if (nextTop !== toolbarPos.top || nextLeft !== toolbarPos.left) {
-      setToolbarPos({ top: nextTop, left: nextLeft })
+    const position = clampToolbarPosition(toolbarPos, toolbarRef.current)
+    if (position !== toolbarPos) {
+      setToolbarPos(position)
     }
   }, [activeMode, toolbarPos])
 

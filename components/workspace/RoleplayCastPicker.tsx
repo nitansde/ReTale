@@ -5,17 +5,18 @@ import { useI18n } from '@/lib/i18n/provider'
 import { parseRoleplayCast, type RoleplayCast, type RoleplayCharacterOption } from '@/lib/roleplay-script'
 import { cn } from '@/lib/utils'
 
-export function RoleplayCastPicker({ options, initial, onStart }: {
+export function RoleplayCastPicker({ options, initial, onStart, hideHeading = false }: {
   options: RoleplayCharacterOption[]
   initial: RoleplayCast | null
   onStart: (cast: RoleplayCast) => void
+  hideHeading?: boolean
 }) {
   const { t } = useI18n()
   const [playerName, setPlayerName] = useState(initial?.playerName ?? options.find((option) => option.protagonist)?.name ?? '')
   const [counterpartName, setCounterpartName] = useState(initial?.counterpartName ?? '')
   const cast = parseRoleplayCast({ playerName, counterpartName })
   return <div className="mx-auto w-full max-w-2xl space-y-6 px-4 py-6 sm:px-8 sm:py-10" data-testid="roleplay-cast-picker">
-    <div><h3 className="text-lg font-medium text-zinc-100">{t('roleplay.chooseCast')}</h3><p className="mt-2 text-sm leading-6 text-zinc-400">{t('roleplay.chooseCastHint')}</p></div>
+    {!hideHeading ? <div><h3 className="text-lg font-medium text-zinc-100">{t('roleplay.chooseCast')}</h3><p className="mt-2 text-sm leading-6 text-zinc-400">{t('roleplay.chooseCastHint')}</p></div> : null}
     {!options.length ? <p className="rounded-xl bg-overlay/5 p-3 text-sm text-zinc-400">{t('roleplay.noCharacters')}</p> : null}
     {(['player', 'counterpart'] as const).map((side) => {
       const value = side === 'player' ? playerName : counterpartName

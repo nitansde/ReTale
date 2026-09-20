@@ -280,6 +280,7 @@ const WORKSPACE_OPERATION_MESSAGE_KEYS = {
   'roleplay-session-create': 'workspace.actionError.createRoleplaySessionFailed',
   'roleplay-session-load': 'errors.roleplaySessionLoadFailed',
   'roleplay-send': 'errors.roleplayMessageAppendFailed',
+  'roleplay-delete': 'errors.roleplayRequestDeleteFailed',
   'roleplay-regenerate': 'errors.roleplayVariantCreationFailed',
   'roleplay-stream': 'errors.roleplayStreamingRequestFailed',
   'timeline-node-delete': 'workspace.actionError.deleteTimelineNodeFailed',

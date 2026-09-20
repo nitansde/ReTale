@@ -113,6 +113,8 @@ async function openMobileChapterDrawer(page: Page) {
 }
 
 test('roleplay mobile flow reopens timeline chat and keeps chapter body unchanged', async ({ page }, testInfo) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
   const initialChapterContent = '<p>第10章正文：夜色压下来之前，他们已经开始互相试探。</p>'
   const workspacePayload = buildWorkspacePayload()
   const workspaceSaves: MockNovelResourceMutation[] = []
@@ -235,6 +237,16 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   })
 
   await page.route('**/api/roleplay/sessions/roleplay-session-001/messages', async (route) => {
+    if (route.request().method() === 'DELETE') {
+      const { messageId } = route.request().postDataJSON() as { messageId: string }
+      const request = sessionDetail.messages.find((message) => message.id === messageId)!
+      const deletedMessageIds = sessionDetail.messages.filter((message) => message.id === messageId || (message.role === 'assistant' && message.parentMessageId === messageId)).map((message) => message.id)
+      sessionDetail = { ...sessionDetail, messages: sessionDetail.messages.filter((message) => !deletedMessageIds.includes(message.id)).map((message) => ({
+        ...message, parentMessageId: message.parentMessageId && deletedMessageIds.includes(message.parentMessageId) ? request.parentMessageId : message.parentMessageId,
+      })) }
+      await route.fulfill({ json: { ok: true, deletedMessageIds } })
+      return
+    }
     const payload = await route.request().postDataJSON() as {
       role: 'user' | 'assistant'
       turn?: RoleplayTurn
@@ -242,11 +254,12 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
       content: string
       parentMessageId?: string | null
     }
+    const nextMessageIndex = Math.max(0, ...sessionDetail.messages.map((message) => message.messageIndex)) + 1
 
     if (payload.role === 'user') {
       const userMessage = buildRoleplayMessage({
-        id: `message-${sessionDetail.messages.length + 1}`,
-        messageIndex: sessionDetail.messages.length + 1,
+        id: `message-${nextMessageIndex}`,
+        messageIndex: nextMessageIndex,
         role: 'user',
         content: payload.content,
         turn: payload.turn,
@@ -265,8 +278,8 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
     }
 
     const assistantMessage = buildRoleplayMessage({
-      id: `message-${sessionDetail.messages.length + 1}`,
-      messageIndex: sessionDetail.messages.length + 1,
+      id: `message-${nextMessageIndex}`,
+      messageIndex: nextMessageIndex,
       role: 'assistant',
       content: payload.content,
       script: payload.script,
@@ -322,17 +335,36 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await expect(page.getByTestId('workspace-mobile-toolbar')).toHaveCount(0)
   await page.getByRole('button', { name: '更多选项' }).click()
   await page.getByRole('button', { name: '打开故事上下文' }).click()
-  await expect(page.getByTestId('workspace-roleplay-session-actions')).toBeVisible()
+  await expect(page.getByTestId('workspace-roleplay-session-actions')).toHaveCount(0)
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('角色扮演')
   await page.getByRole('button', { name: '关闭故事上下文' }).click()
-  await expect(page.getByTestId('roleplay-regenerate-last')).toBeDisabled()
+  await expect(page.getByTestId('roleplay-regenerate-last')).toHaveCount(0)
   await expect(page.getByTestId('roleplay-cast-picker')).toBeVisible()
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-cast.png') })
   await page.getByRole('group', { name: '对方角色' }).getByRole('button', { name: '沈月', exact: true }).click()
   await page.getByRole('button', { name: '进入故事', exact: true }).click()
   await expect(page.getByTestId('roleplay-empty-state')).toBeVisible()
+  await expect(page.getByRole('button', { name: '返回章节', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '对话来源', exact: true })).toHaveCount(0)
+  await expect(page.getByTestId('workspace-roleplay-session-view').locator('header')).toHaveCount(0)
+  const mobileHeader = page.getByTestId('workspace-mobile-header')
+  await mobileHeader.getByRole('button', { name: '选择对话角色' }).click()
+  await expect(page.getByRole('dialog', { name: '选择对话角色' }).getByRole('textbox', { name: '对方角色' })).toHaveValue('沈月')
+  await page.getByRole('button', { name: '关闭人物选择' }).click()
+  await mobileHeader.getByRole('button', { name: '打开知识状态' }).click()
+  await expect(page.getByRole('button', { name: '关闭知识状态' })).toBeVisible()
+  await page.getByRole('button', { name: '关闭知识状态' }).click()
+  await expect(mobileHeader.getByRole('button', { name: '设置', exact: true })).toHaveCount(0)
+  await mobileHeader.getByRole('button', { name: '更多选项' }).click()
+  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '设置', exact: true })).toBeVisible()
+  await page.getByRole('dialog', { name: '设置', exact: true }).getByRole('button', { name: '关闭', exact: true }).click()
+  const composer = page.getByTestId('roleplay-composer')
+  await expect(composer).toHaveAttribute('data-expanded', 'false')
+  expect((await composer.boundingBox())!.height).toBeLessThan(130)
+  await expect(page.getByRole('textbox', { name: '故事引导' })).toHaveCount(0)
   const mobileMessages = await page.getByTestId('roleplay-message-list').boundingBox()
-  expect(mobileMessages?.height).toBeGreaterThan(350)
+  expect(mobileMessages?.height).toBeGreaterThan(600)
   await expect(page.getByTestId('roleplay-composer-send')).toBeInViewport()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true)
@@ -341,6 +373,12 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await page.getByRole('textbox', { name: '我的台词' }).fill('别再试探了，现在就把真相说清楚。')
   await page.getByRole('textbox', { name: '故事引导' }).fill('她站在窗边，雨声渐近。')
   await page.getByRole('spinbutton', { name: '本次目标字数' }).fill('500')
+  await expect(composer).toHaveAttribute('data-expanded', 'true')
+  await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-mobile-expanded-composer.png') })
+  await page.getByRole('button', { name: '收起输入框' }).click()
+  await expect(page.getByRole('textbox', { name: '我的台词' })).toHaveValue('别再试探了，现在就把真相说清楚。')
+  await page.getByRole('textbox', { name: '我的台词' }).click()
+  await expect(page.getByRole('textbox', { name: '故事引导' })).toHaveValue('她站在窗边，雨声渐近。')
   await page.getByRole('button', { name: '写作技巧', exact: true }).click()
   await page.getByRole('checkbox', { name: /神态与动作/ }).check()
   await page.getByRole('combobox', { name: '每张卡范文数' }).selectOption('2')
@@ -362,6 +400,7 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await expect(page.getByTestId('roleplay-message-0')).toContainText('别再试探了，现在就把真相说清楚。')
   await expect(page.getByTestId('roleplay-message-1')).toContainText('她没有躲开，只是把试探接成了更慢的一句反问。')
   await expect(page.getByTestId('roleplay-regenerate-last')).toBeEnabled()
+  await expect(composer).toHaveAttribute('data-expanded', 'false')
   await expect(page.getByTestId('roleplay-message-list')).not.toContainText('ROLEPLAY_METADATA_SENTINEL')
   expect(sessionDetail.messages.at(-1)?.script).toEqual(savedScript)
   await expect(page.locator('[data-roleplay-block=player]')).toHaveCount(1)
@@ -372,14 +411,18 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await expect(page.locator('[data-roleplay-block=player]')).toContainText('他握紧手中的伞。“我不想再等了。”')
   expect(rewritePayloads[0]?.roleplayTurn).toMatchObject({ ...cast, maxCharacters: 500, storyGuidance: '她站在窗边，雨声渐近。' })
   expect(rewritePayloads[0]).toMatchObject({ writingSkillCardIds: ['skill-expression'], writingSkillExampleCount: 2, disabledBlockIds: ['current-summary'], contextSnapshotId: 'rp-preview' })
+  await expect(page.getByTestId('roleplay-message-0').getByRole('button', { name: '重新生成' })).toBeEnabled()
+  await expect(page.getByTestId('roleplay-message-0').getByRole('button', { name: '删除请求 #1' })).toBeEnabled()
+  await page.getByTestId('roleplay-message-0').scrollIntoViewIfNeeded()
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-mobile-chat.png') })
-  await page.getByTestId('roleplay-message-0').getByRole('button').click()
+  await page.getByTestId('roleplay-message-0').getByRole('button', { name: '从 #1 分叉' }).click()
   await expect(page.getByTestId('roleplay-fork-anchor')).toContainText('下轮从 #1 分叉')
 
   await page.getByRole('button', { name: '更多选项' }).click()
   await page.getByRole('button', { name: '打开故事上下文' }).click()
   await page.getByRole('button', { name: '关闭故事上下文' }).click()
-  await page.getByRole('button', { name: '返回章节' }).click()
+  await openMobileChapterDrawer(page)
+  await page.getByTestId('timeline-chapter-10').getByRole('button').first().click()
   await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
   await expect(page.getByTestId('workspace-chapter-reader')).toContainText('第10章正文：夜色压下来之前，他们已经开始互相试探。')
 
@@ -411,18 +454,78 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await expect(page.getByTestId('roleplay-composer-send')).toBeInViewport()
   expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true)
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-desktop-chat.png') })
-  await page.getByRole('button', { name: '对话来源', exact: true }).click()
-  await expect(page.getByRole('dialog')).toContainText('夜色压下来之前')
-  await page.getByRole('button', { name: '关闭对话来源' }).click()
+  await page.getByRole('button', { name: '选择对话角色' }).click()
+  await expect(page.getByRole('dialog', { name: '选择对话角色' })).toBeVisible()
+  await page.getByRole('button', { name: '关闭人物选择' }).click()
   await page.getByRole('button', { name: '打开故事上下文' }).click()
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('角色扮演')
   await page.getByRole('button', { name: '关闭故事上下文' }).click()
 
+  await expect(page.getByRole('button', { name: /^删除请求/ })).toHaveCount(2)
+  await expect(page.getByTestId('roleplay-message-0').getByRole('button', { name: '重新生成' })).toHaveCount(0)
+  await page.getByTestId('roleplay-message-2').getByRole('button', { name: '重新生成' }).click()
+  await expect(page.getByTestId('roleplay-message-4')).toBeVisible()
+  expect(rewritePayloads[2]?.roleplayTurn).toEqual(rewritePayloads[1]?.roleplayTurn)
+  await expect(page.getByTestId('roleplay-regenerate-last')).toHaveCount(1)
+  await expect(page.getByTestId('roleplay-message-3')).toHaveCount(0)
+  await page.getByRole('button', { name: '上一个回复版本' }).click()
+  await expect(page.getByTestId('roleplay-message-3')).toBeVisible()
+  await expect(page.getByTestId('roleplay-message-4')).toHaveCount(0)
+  await page.getByRole('button', { name: '下一个回复版本' }).click()
+  await expect(page.getByTestId('roleplay-message-4')).toBeVisible()
+  await page.getByTestId('roleplay-message-2').getByRole('button', { name: '删除请求 #3' }).click()
+  await expect(page.getByTestId('roleplay-message-2')).toHaveCount(0)
+  await expect(page.getByTestId('roleplay-message-0').getByRole('button', { name: '重新生成' })).toBeEnabled()
+  await page.reload({ waitUntil: 'networkidle' })
+  await expect(page.getByRole('button', { name: /^删除请求/ })).toHaveCount(1)
+  await expect(page.getByTestId('roleplay-message-1')).toContainText('她没有躲开')
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole('textbox', { name: '我的台词' }).fill('继续走向城门。')
+  await page.getByTestId('roleplay-composer-send').click()
+  await expect(page.getByTestId('roleplay-message-3')).toBeVisible()
+  await page.getByRole('button', { name: '从 #2 分叉' }).click()
+  await expect(page.getByTestId('roleplay-message-2')).toHaveCount(0)
+  await page.getByRole('textbox', { name: '我的台词' }).fill('改走河边。')
+  await page.getByTestId('roleplay-composer-send').click()
+  await expect(page.getByTestId('roleplay-message-5')).toBeVisible()
+  const branchPicker = page.getByRole('combobox', { name: '当前分支' })
+  await expect(branchPicker).toHaveValue('message-6')
+  const branchIconBounds = await page.getByTestId('roleplay-branch-picker').boundingBox()
+  const sendBounds = await page.getByTestId('roleplay-composer-send').boundingBox()
+  expect(branchIconBounds!.width).toBeLessThanOrEqual(44)
+  expect(Math.abs(branchIconBounds!.y - sendBounds!.y)).toBeLessThan(2)
+  await expect(page.getByTestId('roleplay-message-2')).toHaveCount(0)
+  await page.getByTestId('roleplay-message-4').scrollIntoViewIfNeeded()
+  await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-mobile-branches.png') })
+  await page.getByRole('button', { name: '上一个剧情分支' }).click()
+  await expect(branchPicker).toHaveValue('message-4')
+  await expect(page.getByTestId('roleplay-message-2')).toContainText('继续走向城门。')
+  await expect(page.getByTestId('roleplay-message-4')).toHaveCount(0)
+  await page.reload({ waitUntil: 'networkidle' })
+  await expect(branchPicker).toHaveValue('message-4')
+  await expect(page.getByTestId('roleplay-message-2')).toContainText('继续走向城门。')
+  await page.getByRole('textbox', { name: '我的台词' }).fill('这条路上有什么？')
+  await page.getByTestId('roleplay-composer-send').click()
+  await expect(page.getByTestId('roleplay-message-7')).toBeVisible()
+  expect(sessionDetail.messages.at(-2)?.parentMessageId).toBe('message-4')
+  expect(JSON.stringify(rewritePayloads.at(-1)?.roleplayMessages)).toContain('继续走向城门。')
+  expect(JSON.stringify(rewritePayloads.at(-1)?.roleplayMessages)).not.toContain('改走河边。')
+  await branchPicker.selectOption('message-6')
+  await expect(page.getByTestId('roleplay-message-4')).toContainText('改走河边。')
+  await expect(page.getByTestId('roleplay-message-6')).toHaveCount(0)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.getByTestId('roleplay-message-4').scrollIntoViewIfNeeded()
+  await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-desktop-branches.png') })
+  await branchPicker.selectOption('message-8')
+
+  const historyStart = Math.max(...sessionDetail.messages.map((message) => message.messageIndex))
   sessionDetail = {
     ...sessionDetail,
     messages: [...sessionDetail.messages, ...Array.from({ length: 20 }, (_, index) => buildRoleplayMessage({
       id: `history-${index}`,
-      messageIndex: index + sessionDetail.messages.length + 1,
+      messageIndex: index + historyStart + 1,
+      parentMessageId: index === 0 ? sessionDetail.messages.at(-1)!.id : `history-${index - 1}`,
       role: index % 2 === 0 ? 'user' : 'assistant',
       turn: index % 2 === 0 ? { ...cast, dialogue: '然后呢？', storyGuidance: '', maxCharacters: 500 } : undefined,
       script: index % 2 ? script : undefined,
@@ -431,7 +534,7 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   }
   await page.reload({ waitUntil: 'networkidle' })
   const messageList = page.getByTestId('roleplay-message-list')
-  await expect(page.getByTestId(`roleplay-message-${sessionDetail.messages.length - 1}`)).toBeVisible()
+  await expect(page.getByTestId(`roleplay-message-${sessionDetail.messages.at(-1)!.messageIndex - 1}`)).toBeVisible()
   expect(await messageList.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
   await expect(page.getByTestId('roleplay-composer-send')).toBeInViewport()
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light' })
@@ -440,10 +543,16 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await page.getByRole('textbox', { name: '我的台词' }).fill('第一行\n第二行\n第三行\n第四行\n第五行')
   await expect(page.getByTestId('roleplay-composer-send')).toBeInViewport()
   await expect.poll(() => messageList.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(2)
-  expect(await messageList.evaluate((element) => element.clientHeight)).toBeGreaterThan(250)
+  expect(await messageList.evaluate((element) => element.clientHeight)).toBeGreaterThan(200)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true)
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-mobile-light-long-chat.png') })
+  await page.setViewportSize({ width: 320, height: 640 })
+  await expect(page.getByTestId('roleplay-composer-send')).toBeInViewport()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.getByRole('button', { name: '收起输入框' }).click()
+  expect((await composer.boundingBox())!.height).toBeLessThan(130)
+  await expect(page.getByTestId('roleplay-branch-picker')).toBeInViewport()
 
   generatedScript = { ...script, blocks: [
     { type: 'narration', text: '新一段故事从这里开始。\n\n' + '雨声敲打着窗沿，她慢慢讲起那天发生的事情。\n\n'.repeat(24) },
@@ -452,7 +561,7 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   for (const viewport of [{ width: 360, height: 640 }, { width: 1440, height: 900 }]) {
     await page.setViewportSize(viewport)
     for (const regenerate of [false, true]) {
-      const nextIndex = sessionDetail.messages.length + (regenerate ? 0 : 1)
+      const nextIndex = Math.max(...sessionDetail.messages.map((message) => message.messageIndex)) + (regenerate ? 0 : 1)
       if (regenerate) await page.getByTestId('roleplay-regenerate-last').click()
       else {
         await page.getByRole('textbox', { name: '我的台词' }).fill('从头慢慢讲给我听。')
@@ -523,4 +632,5 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await page.reload({ waitUntil: 'networkidle' })
   await openMobileChapterDrawer(page)
   await expect(page.getByTestId('timeline-node-roleplay-node-1')).toHaveCount(0)
+  expect(pageErrors).toEqual([])
 })

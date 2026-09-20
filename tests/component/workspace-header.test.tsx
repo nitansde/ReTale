@@ -26,7 +26,7 @@ vi.mock('@/lib/i18n/provider', () => ({
   }),
 }))
 
-function renderHeader() {
+function renderHeader(roleplay = false) {
   const actions = {
     onSearch: vi.fn(),
     onOpenChapters: vi.fn(),
@@ -36,6 +36,7 @@ function renderHeader() {
     onOpenSettings: vi.fn(),
     onDeleteNovel: vi.fn(),
     onBackToLibrary: vi.fn().mockResolvedValue(undefined),
+    onOpenRoleplayCast: vi.fn(),
   }
   render(
     <WorkspaceHeader
@@ -44,12 +45,28 @@ function renderHeader() {
       providerLabel="Local model"
       deletionPending={false}
       {...actions}
+      hideMobileToolbar={roleplay}
+      onOpenRoleplayCast={roleplay ? actions.onOpenRoleplayCast : undefined}
     />
   )
   return actions
 }
 
 describe('WorkspaceHeader', () => {
+  it('keeps roleplay characters and knowledge in the header with settings in overflow', () => {
+    const actions = renderHeader(true)
+    const header = within(screen.getByTestId('workspace-mobile-header'))
+    fireEvent.click(header.getByRole('button', { name: 'roleplay.chooseCast' }))
+    fireEvent.click(header.getByRole('button', { name: 'workspace.header.openKnowledge' }))
+    expect(header.queryByRole('button', { name: 'settings.title' })).not.toBeInTheDocument()
+    fireEvent.click(header.getByRole('button', { name: 'workspace.header.moreOptions' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'settings.title' }))
+    expect(actions.onOpenRoleplayCast).toHaveBeenCalledOnce()
+    expect(actions.onOpenKnowledge).toHaveBeenCalledOnce()
+    expect(actions.onOpenSettings).toHaveBeenCalledOnce()
+    expect(header.getByRole('button', { name: 'workspace.header.openChapters' })).toBeEnabled()
+    expect(screen.queryByTestId('workspace-mobile-toolbar')).not.toBeInTheDocument()
+  })
   it('keeps the title in the header and reading actions in the mobile toolbar', () => {
     const actions = renderHeader()
     const header = screen.getByTestId('workspace-mobile-header')
