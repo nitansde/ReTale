@@ -3,6 +3,8 @@ import type { RoleplaySessionRecord } from '@/lib/roleplay-types'
 import type { RoleplayCharacterOption } from '@/lib/roleplay-script'
 
 export function getRoleplayCharacterOptions(session: RoleplaySessionRecord, db: DatabaseAccess): RoleplayCharacterOption[] {
+  // HanLP placeholders also live in KnowledgeEntity. Every option, including the
+  // protagonist, must have a valid character profile at the source chapter.
   const rows = db.queryAll<{ name: string; protagonist: number; appeared: number }>(`
     SELECT e.canonicalName AS name, e.importanceTier = 'protagonist' AS protagonist,
       (EXISTS (SELECT 1 FROM EntityAppearance a WHERE a.entityId = e.id AND a.chapterNo = ?)
@@ -15,9 +17,17 @@ export function getRoleplayCharacterOptions(session: RoleplaySessionRecord, db: 
       AND e.importanceTier IN ('protagonist', 'important', 'arc')
       AND (e.status IS NULL OR e.status NOT IN ('rejected', 'outdated', 'potentially_stale'))
       AND (e.firstSeenChapter IS NULL OR e.firstSeenChapter <= ?)
+      AND EXISTS (
+        SELECT 1 FROM KnowledgeFact f
+        WHERE f.subjectEntityId = e.id AND f.novelId = e.novelId AND f.branchId = e.branchId
+          AND f.factType = 'character_profile'
+          AND f.status NOT IN ('rejected', 'outdated', 'potentially_stale')
+          AND f.sourceChapter <= ? AND f.validFromChapter <= ? AND f.validUntilChapter > ?
+      )
     ORDER BY protagonist DESC, e.importance DESC, e.canonicalName ASC
   `, session.sourceChapterNo, session.sourceChapterNo, session.sourceChapterNo,
   session.sourceTextSnapshot, session.sourceChapterNo, session.sourceTextSnapshot,
-  session.novelId, session.branchId, session.sourceChapterNo)
+  session.novelId, session.branchId, session.sourceChapterNo,
+  session.sourceChapterNo, session.sourceChapterNo, session.sourceChapterNo)
   return rows.filter((row) => row.protagonist || row.appeared).map((row) => ({ name: row.name, protagonist: Boolean(row.protagonist) }))
 }

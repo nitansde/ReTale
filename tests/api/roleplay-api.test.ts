@@ -379,13 +379,115 @@ describe('roleplay session API', () => {
     expect(snapshotIsolation(database)).toEqual(beforeIsolation)
   }))
 
+  it('requires a valid character profile for every option, including protagonists and promoted or confirmed entities', databaseFixture.wrap(async () => {
+    const database = createTestDatabase('retale-roleplay-character-entities')
+    createFixture(database)
+    database.prepare(`
+      INSERT INTO hanlp_bootstrap_entities (id, novel_id, branch_id, chapter_id, chapter_no, entity_text, entity_type)
+      VALUES (?, ?, ?, ?, 12, '林舟', 'person')
+    `).run('recognized-hero', FIXTURE_IDS.novelId, FIXTURE_IDS.branchId, FIXTURE_IDS.chapterId)
+    database.prepare(`
+      INSERT INTO character_candidates (
+        id, novel_id, branch_id, surface_text, display_name, normalized_name, first_seen_chapter, last_seen_chapter
+      ) VALUES (?, ?, ?, '沈月', '沈月', '沈月', 2, 12)
+    `).run('candidate-counterpart', FIXTURE_IDS.novelId, FIXTURE_IDS.branchId)
+
+    const { POST: createSession } = await import('@/app/api/roleplay/sessions/route')
+    const { GET: getSession } = await import('@/app/api/roleplay/sessions/[sessionId]/route')
+    const response = await createSession(createSessionRequest({
+      novelId: FIXTURE_IDS.novelId, branchId: FIXTURE_IDS.branchId, title: 'RP 实体角色',
+      sourceChapterId: FIXTURE_IDS.chapterId, sourceChapterNo: 12,
+      sourceSelectedText: '沈月望着窗外。', sourceTextSnapshot: '林舟和沈月望着窗外的陌生人。「灵力汇入丹田。」',
+    }))
+    expect(response.status).toBe(201)
+    const { sessionId } = await response.json() as { sessionId: string }
+    const readOptions = async () => {
+      const result = await getSession(
+        new Request(`http://localhost/api/roleplay/sessions/${sessionId}?novelId=${FIXTURE_IDS.novelId}&branchId=${FIXTURE_IDS.branchId}`),
+        { params: Promise.resolve({ sessionId }) },
+      )
+      expect(result.status).toBe(200)
+      return (await result.json()).characterOptions
+    }
+    expect(await readOptions()).toEqual([])
+
+    database.prepare(`
+      INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, importanceTier, firstSeenChapter, status)
+      VALUES (?, ?, ?, 'character', '林舟', 'protagonist', 1, 'hanlp_bootstrap')
+    `).run('hero', FIXTURE_IDS.novelId, FIXTURE_IDS.branchId)
+    for (const name of ['「', '丹田', '灵力']) {
+      database.prepare(`
+        INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, importanceTier, firstSeenChapter, status)
+        VALUES (?, ?, ?, 'character', ?, 'important', 1, 'hanlp_bootstrap')
+      `).run(`noise-${name}`, FIXTURE_IDS.novelId, FIXTURE_IDS.branchId, name)
+    }
+    expect(await readOptions()).toEqual([])
+
+    // Known-character updates can create a profile without changing the bootstrap status.
+    database.prepare(`
+      INSERT INTO KnowledgeFact (
+        id, novelId, branchId, factType, subjectEntityId, predicate, valueJson,
+        sourceChapter, validFromChapter, validUntilChapter, status
+      ) VALUES ('hero-profile', ?, ?, 'character_profile', 'hero', 'role_card', ?, 1, 1, 999999, 'ai_generated')
+    `).run(FIXTURE_IDS.novelId, FIXTURE_IDS.branchId, JSON.stringify({ profile: { identity: { content: '故事主角' } } }))
+    expect(await readOptions()).toEqual([{ name: '林舟', protagonist: true }])
+    for (const status of ['rejected', 'outdated', 'potentially_stale']) {
+      database.prepare("UPDATE KnowledgeFact SET status = ? WHERE id = 'hero-profile'").run(status)
+      expect(await readOptions()).toEqual([])
+    }
+    database.prepare("UPDATE KnowledgeFact SET status = 'ai_generated', sourceChapter = 13, validFromChapter = 13 WHERE id = 'hero-profile'").run()
+    expect(await readOptions()).toEqual([])
+    database.prepare("UPDATE KnowledgeFact SET sourceChapter = 1, validFromChapter = 1, validUntilChapter = 12 WHERE id = 'hero-profile'").run()
+    expect(await readOptions()).toEqual([])
+    database.prepare("DELETE FROM KnowledgeFact WHERE id = 'hero-profile'").run()
+    database.prepare("UPDATE KnowledgeEntity SET userConfirmed = 1 WHERE id = 'hero'").run()
+    expect(await readOptions()).toEqual([])
+    database.prepare("UPDATE KnowledgeEntity SET userConfirmed = 0, status = 'known_character_update' WHERE id = 'hero'").run()
+    expect(await readOptions()).toEqual([])
+    database.prepare(`
+      INSERT INTO KnowledgeFact (
+        id, novelId, branchId, factType, subjectEntityId, predicate, valueJson,
+        sourceChapter, validFromChapter, validUntilChapter, status
+      ) VALUES ('hero-profile', ?, ?, 'character_profile', 'hero', 'role_card', ?, 1, 1, 999999, 'user_confirmed')
+    `).run(FIXTURE_IDS.novelId, FIXTURE_IDS.branchId, JSON.stringify({ profile: { identity: { content: '故事主角' } } }))
+    expect(await readOptions()).toEqual([{ name: '林舟', protagonist: true }])
+    database.prepare("UPDATE KnowledgeEntity SET status = 'rejected' WHERE id = 'hero'").run()
+    expect(await readOptions()).toEqual([])
+    database.prepare("UPDATE KnowledgeEntity SET userConfirmed = 0, status = 'known_character_update' WHERE id = 'hero'").run()
+    expect(await readOptions()).toEqual([{ name: '林舟', protagonist: true }])
+
+    database.prepare(`
+      INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, importanceTier, firstSeenChapter, status)
+      VALUES (?, ?, ?, 'character', '沈月', 'arc', 2, 'candidate_promoted')
+    `).run('counterpart', FIXTURE_IDS.novelId, FIXTURE_IDS.branchId)
+    database.prepare("UPDATE character_candidates SET promoted_entity_id = 'counterpart', status = 'promoted_pending_summary' WHERE id = ?").run('candidate-counterpart')
+    expect(await readOptions()).toEqual([{ name: '林舟', protagonist: true }])
+    database.prepare(`
+      INSERT INTO KnowledgeFact (
+        id, novelId, branchId, factType, subjectEntityId, predicate, valueJson,
+        sourceChapter, validFromChapter, validUntilChapter
+      ) VALUES ('counterpart-profile', ?, ?, 'character_profile', 'counterpart', 'role_card', ?, 2, 2, 999999)
+    `).run(FIXTURE_IDS.novelId, FIXTURE_IDS.branchId, JSON.stringify({ profile: { identity: { content: '故事配角' } } }))
+    expect(await readOptions()).toEqual([{ name: '林舟', protagonist: true }, { name: '沈月', protagonist: false }])
+
+    database.prepare("DELETE FROM KnowledgeEntity WHERE id = 'counterpart'").run()
+    expect(await readOptions()).toEqual([{ name: '林舟', protagonist: true }])
+  }))
+
   it('persists script inputs and blocks and lists only the protagonist and present chapter characters', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-roleplay-script')
     createFixture(database)
     for (const [id, name, tier, firstSeen] of [
       ['hero', '林舟', 'protagonist', 1], ['present', '沈月', 'important', 2],
       ['absent', '赵远', 'important', 1], ['future', '未来角色', 'important', 30],
-    ] as const) database.prepare('INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, importanceTier, firstSeenChapter) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, FIXTURE_IDS.novelId, FIXTURE_IDS.branchId, 'character', name, tier, firstSeen)
+    ] as const) {
+      database.prepare('INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, importanceTier, firstSeenChapter) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, FIXTURE_IDS.novelId, FIXTURE_IDS.branchId, 'character', name, tier, firstSeen)
+      database.prepare(`
+        INSERT INTO KnowledgeFact (
+          id, novelId, branchId, factType, subjectEntityId, predicate, valueJson, sourceChapter, validFromChapter, validUntilChapter
+        ) VALUES (?, ?, ?, 'character_profile', ?, 'role_card', ?, ?, ?, 999999)
+      `).run(`${id}-profile`, FIXTURE_IDS.novelId, FIXTURE_IDS.branchId, id, JSON.stringify({ profile: { identity: { content: name } } }), firstSeen, firstSeen)
+    }
     const { POST: createSession } = await import('@/app/api/roleplay/sessions/route')
     const { POST: appendMessage } = await import('@/app/api/roleplay/sessions/[sessionId]/messages/route')
     const { GET: getSession } = await import('@/app/api/roleplay/sessions/[sessionId]/route')
