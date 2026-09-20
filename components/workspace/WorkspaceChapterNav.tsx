@@ -92,7 +92,6 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
     : navigationChapters.slice(normalizedWindowStart, normalizedWindowStart + CHAPTER_NAVIGATION_WINDOW_SIZE)
   const visibleAnchorChapterNos = new Set(visibleChapters.map((chapter) => chapter.chapterNo))
   const visibleBranchNodes = props.branchNodes.filter((node) => visibleAnchorChapterNos.has(node.anchorChapterNo))
-  const visibleNodeIds = new Set(visibleBranchNodes.map((node) => node.id))
   const visibleStartChapterNo = visibleChapters[0]?.chapterNo ?? null
   const visibleEndChapterNo = visibleChapters.at(-1)?.chapterNo ?? null
   const canShowPrevious = !searching && normalizedWindowStart > 0
@@ -241,14 +240,15 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
 
         <div
           ref={timelineScrollRef}
-          className="max-h-[calc(100dvh-17rem)] min-h-48 lg:max-h-[calc(100vh-21rem)] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]"
+          className="max-h-[calc(100dvh-17rem)] min-h-48 lg:-mx-3 lg:max-h-[calc(100vh-21rem)] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]"
           data-testid="chapter-navigation-scroll"
         >
           {visibleChapters.length ? (
             <StoryTimeline
               chapters={visibleChapters}
               branchNodes={visibleBranchNodes}
-              edges={props.edges.filter((edge) => visibleNodeIds.has(edge.fromNodeId) && visibleNodeIds.has(edge.toNodeId))}
+              allBranchNodes={props.branchNodes}
+              edges={props.edges}
               activeChapterId={props.currentChapterId}
               activeSelection={props.activeSelection}
               branchChaptersByParentId={props.branchChaptersByParentId}

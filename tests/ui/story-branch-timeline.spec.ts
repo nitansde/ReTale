@@ -2021,7 +2021,7 @@ test('continue-block continue creates a child node while regenerate updates the 
   expect(continueBlockDetailRequests.filter((id) => id === 'continue-block-1').length).toBeGreaterThanOrEqual(2)
 })
 
-test('mixed continue and future-jump trees keep continue-block navigation selectable and reload-stable', async ({ page }) => {
+test('mixed continue and future-jump trees keep continue-block navigation selectable and reload-stable', async ({ page }, testInfo) => {
   const continueBlockDetails = {
     'continue-block-1': buildContinueBlockDetail({
       continueBlockId: 'continue-block-1',
@@ -2108,6 +2108,71 @@ test('mixed continue and future-jump trees keep continue-block navigation select
   await expect(page.getByTestId('timeline-node-continue-node-1')).toHaveAttribute('data-visible-depth', '1')
   await expect(page.getByTestId(`timeline-node-${storyBranchFixtureIds.futureJumpNodeId}`)).toHaveAttribute('data-visible-depth', '1')
   await expect(page.getByTestId('timeline-node-continue-node-2')).toHaveAttribute('data-visible-depth', '1')
+
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 })
+    if (width < 1024) await page.getByRole('button', { name: '打开章节导航', exact: true }).click()
+    const directory = page.getByTestId('workspace-chapter-nav')
+    const chapterEdge = page.getByTestId(`timeline-edge-chapter:10-${storyBranchFixtureIds.whatIfNodeId}`)
+    await expect(chapterEdge).toHaveAttribute('data-active', 'true')
+    await expect(page.getByTestId(`timeline-edge-${storyBranchFixtureIds.whatIfNodeId}-continue-node-1`)).toHaveAttribute('data-active', 'true')
+    await expect(page.getByTestId(`timeline-source-${storyBranchFixtureIds.futureJumpNodeId}`)).toHaveAccessibleName('源自 第 10 章 · CONT-01')
+    await expect.poll(() => page.getByTestId('chapter-navigation-scroll').evaluate((scroll) => {
+      const bounds = scroll.getBoundingClientRect()
+      const paths = [...scroll.querySelectorAll('[data-testid^="timeline-edge-"]')]
+      return paths.length === 4 && paths.every((path) => {
+        const edge = path.getBoundingClientRect()
+        return edge.width > 0 && edge.left >= bounds.left && edge.right <= bounds.right
+      }) && scroll.scrollWidth <= scroll.clientWidth
+    })).toBe(true)
+    await page.getByTestId('chapter-navigation-scroll').evaluate((scroll) => { scroll.scrollTop = 0 })
+    await directory.screenshot({ path: testInfo.outputPath(`directory-connections-${width}.png`) })
+
+    const connectionEndpoints = [
+      { edgeId: `timeline-edge-chapter:10-${storyBranchFixtureIds.whatIfNodeId}`, from: '[data-testid="timeline-chapter-row-chapter-10"] button', to: `[data-testid="timeline-node-${storyBranchFixtureIds.whatIfNodeId}"]` },
+      ...buildMixedContinueTreeTimelinePayload().edges.map((edge) => ({
+        edgeId: `timeline-edge-${edge.fromNodeId}-${edge.toNodeId}`,
+        from: `[data-testid="timeline-node-${edge.fromNodeId}"]`,
+        to: `[data-testid="timeline-node-${edge.toNodeId}"]`,
+      })),
+    ]
+    const expectAlignedConnections = () => expect.poll(() => page.evaluate((connections) => connections.flatMap(({ edgeId, from, to }) => {
+      const path = document.querySelector<SVGPathElement>(`[data-testid="${edgeId}"]`)
+      if (!path) return [{ edgeId, selector: '', dx: Infinity, dy: Infinity }]
+      const transform = path.getScreenCTM()!
+      return [[from, 0], [to, path.getTotalLength()]].flatMap(([selector, length]) => {
+        const element = document.querySelector(String(selector))
+        if (!element) return [{ edgeId, selector, dx: Infinity, dy: Infinity }]
+        const target = element.getBoundingClientRect()
+        const point = path.getPointAtLength(Number(length)).matrixTransform(transform)
+        const dx = point.x - target.left
+        const dy = point.y - target.top - target.height / 2
+        return Math.abs(dx) < 1 && Math.abs(dy) < 1 ? [] : [{ edgeId, selector, dx, dy }]
+      })
+    }), connectionEndpoints)).toEqual([])
+    await expectAlignedConnections()
+    await page.getByTestId('chapter-navigation-scroll').evaluate((scroll) => { scroll.scrollTop = scroll.scrollHeight })
+    await expectAlignedConnections()
+
+    if (width >= 1024) {
+      await page.getByTestId('timeline-node-continue-node-1').hover()
+      await expect(page.getByTestId(`timeline-edge-continue-node-1-${storyBranchFixtureIds.futureJumpNodeId}`)).toHaveCSS('opacity', '0')
+      await directory.locator('input[type="search"]').hover()
+      await expect(page.getByTestId(`timeline-edge-continue-node-1-${storyBranchFixtureIds.futureJumpNodeId}`)).toHaveCSS('opacity', '1')
+    }
+
+    await directory.locator('input[type="search"]').fill('第100章')
+    await expect(page.getByTestId('timeline-chapter-10')).toHaveCount(0)
+    await expect(page.getByTestId(`timeline-source-${storyBranchFixtureIds.futureJumpNodeId}`)).toHaveAccessibleName('源自 第 10 章 · CONT-01')
+    await expect(chapterEdge).toHaveCount(0)
+    await directory.locator('input[type="search"]').fill('')
+    await expectAlignedConnections()
+    if (width < 1024) {
+      await page.keyboard.press('Escape')
+      await page.getByRole('button', { name: '打开章节导航', exact: true }).click()
+      await expectAlignedConnections()
+    }
+  }
 })
 
 test('future jump launched from a continue node stays attached under that current node after reload', async ({ page }) => {

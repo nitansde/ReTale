@@ -214,7 +214,7 @@ describe('StoryTimeline', () => {
         branchNodes={buildNodes()}
         edges={buildEdges()}
         activeChapterId="chapter-10"
-        activeSelection={{ kind: 'chapter', chapterId: 'chapter-10', chapterNo: 10 }}
+        activeSelection={{ kind: 'future_jump', nodeId: storyBranchFixtureIds.futureJumpNodeId, runId: 'jump-run-001', sourceChapterNo: 10, targetChapterNo: 100 }}
         branchChaptersByParentId={new Map([['chapter-10', [buildBranchChapter()]]])}
         onSelectionChange={() => undefined}
         onDeleteChapter={() => undefined}
@@ -236,6 +236,76 @@ describe('StoryTimeline', () => {
     })
 
     expect(screen.getByTestId(edgeTestId)).toHaveAttribute('d')
+    expect(screen.getByTestId(edgeTestId)).toHaveAttribute('data-active', 'true')
+    expect(screen.getByTestId(`timeline-edge-chapter:10-${storyBranchFixtureIds.whatIfNodeId}`)).toHaveAttribute('data-active', 'true')
+    expect(screen.getByTestId('timeline-chapter-10')).toHaveAttribute('data-source-highlighted', 'true')
+    expect(screen.getByTestId(`timeline-source-${storyBranchFixtureIds.whatIfNodeId}`)).toHaveAccessibleName('源自 第 10 章')
+    expect(screen.getByTestId('timeline-source-continue-node-1')).toHaveTextContent('IF-01')
+    expect(screen.getByTestId(`timeline-source-${storyBranchFixtureIds.futureJumpNodeId}`)).toHaveAccessibleName('源自 第 10 章 · IF-01')
+    fireEvent.focus(screen.getByTestId('timeline-node-continue-node-1'))
+    expect(screen.getByTestId(`timeline-edge-${storyBranchFixtureIds.whatIfNodeId}-continue-node-1`)).toHaveAttribute('data-highlighted', 'true')
+    expect(screen.getByTestId(edgeTestId)).toHaveClass('opacity-0')
+    fireEvent.pointerEnter(screen.getByTestId(`timeline-node-row-${storyBranchFixtureIds.futureJumpNodeId}`))
+    expect(screen.getByTestId(edgeTestId)).toHaveClass('opacity-100')
+    expect(screen.getByTestId(`timeline-edge-${storyBranchFixtureIds.whatIfNodeId}-continue-node-1`)).toHaveClass('opacity-0')
+    fireEvent.pointerLeave(screen.getByTestId(`timeline-node-row-${storyBranchFixtureIds.futureJumpNodeId}`))
+    expect(screen.getByTestId(edgeTestId)).toHaveClass('opacity-0')
+    expect(screen.getByTestId(`timeline-edge-${storyBranchFixtureIds.whatIfNodeId}-continue-node-1`)).toHaveClass('opacity-100')
+    fireEvent.blur(screen.getByTestId('timeline-node-continue-node-1'))
+    expect(screen.getByTestId(edgeTestId)).toHaveClass('opacity-100')
+    expect(screen.getByTestId(`timeline-edge-${storyBranchFixtureIds.whatIfNodeId}-continue-node-1`)).toHaveClass('opacity-0')
+  })
+
+  it('keeps the source label when the source chapter is outside the visible directory window', () => {
+    const nodes = buildNodes()
+    render(
+      <StoryTimeline
+        chapters={[{ type: 'chapter', chapterNo: 100, chapterId: 'chapter-100', title: '第100章 被绑走', wordCount: 1900 }]}
+        branchNodes={nodes.filter((node) => node.anchorChapterNo === 100)}
+        allBranchNodes={nodes}
+        edges={buildEdges()}
+        activeChapterId="chapter-100"
+        activeSelection={null}
+        branchChaptersByParentId={new Map()}
+        onSelectionChange={() => undefined}
+        onDeleteChapter={() => undefined}
+        onDeleteBranchChapter={() => undefined}
+        deletingBranchNodeId={null}
+        onDeleteBranchNode={() => undefined}
+      />
+    )
+    expect(screen.getByTestId(`timeline-source-${storyBranchFixtureIds.futureJumpNodeId}`)).toHaveAccessibleName('源自 第 10 章 · IF-01')
+    expect(screen.queryByTestId(edgeTestId)).not.toBeInTheDocument()
+    expect(screen.queryByTestId(`timeline-edge-chapter:100-${storyBranchFixtureIds.futureJumpNodeId}`)).not.toBeInTheDocument()
+  })
+
+  it('drops a preview removed by filtering and restores the selected source chain', () => {
+    const nodes = buildMixedNodes()
+    const timeline = (filtered: boolean) => (
+      <StoryTimeline
+        chapters={[
+          ...(!filtered ? [{ type: 'chapter' as const, chapterNo: 10, chapterId: 'chapter-10', title: '第10章 结盟', wordCount: 1200 }] : []),
+          { type: 'chapter', chapterNo: 100, chapterId: 'chapter-100', title: '第100章 被绑走', wordCount: 1900 },
+        ]}
+        branchNodes={filtered ? nodes.filter((node) => node.anchorChapterNo === 100) : nodes}
+        allBranchNodes={nodes}
+        edges={buildMixedEdges()}
+        activeChapterId="chapter-100"
+        activeSelection={{ kind: 'continue_block', nodeId: 'continue-node-2', continueBlockId: 'continue-block-002', anchorChapterNo: 100 }}
+        branchChaptersByParentId={new Map()}
+        onSelectionChange={() => undefined}
+        onDeleteChapter={() => undefined}
+        onDeleteBranchChapter={() => undefined}
+        deletingBranchNodeId={null}
+        onDeleteBranchNode={() => undefined}
+      />
+    )
+    const { rerender } = render(timeline(false))
+    const selectedEdgeId = `timeline-edge-${storyBranchFixtureIds.futureJumpNodeId}-continue-node-2`
+    fireEvent.pointerEnter(screen.getByTestId('timeline-node-row-continue-node-1'))
+    expect(screen.getByTestId(selectedEdgeId)).toHaveClass('opacity-0')
+    rerender(timeline(true))
+    expect(screen.getByTestId(selectedEdgeId)).toHaveClass('opacity-100')
   })
 
   it('emits the shared timeline selection payloads for chapter, what-if, and future-jump clicks', async () => {

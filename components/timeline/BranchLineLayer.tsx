@@ -1,5 +1,6 @@
 "use client"
 
+import { forwardRef } from 'react'
 import type { StoryTimelineEdge } from '@/lib/story-branch-types'
 import { cn } from '@/lib/utils'
 
@@ -8,28 +9,34 @@ type NodePosition = {
   y: number
 }
 
-function buildFoldedPath(from: NodePosition, to: NodePosition) {
-  const trunkX = Math.max(from.x, to.x) + 18
-  return `M ${from.x} ${from.y} H ${trunkX} V ${to.y} H ${to.x}`
+function buildFoldedPath(from: NodePosition, to: NodePosition, fromChapter: boolean) {
+  const trunkX = fromChapter ? 3 : 7
+  const direction = to.y >= from.y ? 1 : -1
+  const radius = Math.min(4, Math.abs(to.y - from.y) / 2)
+  return `M ${from.x} ${from.y} H ${trunkX + radius} Q ${trunkX} ${from.y} ${trunkX} ${from.y + radius * direction} V ${to.y - radius * direction} Q ${trunkX} ${to.y} ${trunkX + radius} ${to.y} H ${to.x}`
 }
 
-export function BranchLineLayer(props: {
+export const BranchLineLayer = forwardRef<SVGSVGElement, {
   width: number
   height: number
   edges: StoryTimelineEdge[]
   nodePositions: Record<string, NodePosition>
-  selectedNodeId: string | null
-  hoveredNodeId: string | null
-}) {
+  selectedChain: ReadonlySet<string>
+  previewChain: ReadonlySet<string>
+}>((props, ref) => {
+  const isSelected = (edge: StoryTimelineEdge) => props.selectedChain.has(edge.fromNodeId) && props.selectedChain.has(edge.toNodeId)
+  const isHovered = (edge: StoryTimelineEdge) => props.previewChain.has(edge.fromNodeId) && props.previewChain.has(edge.toNodeId)
+  const emphasis = (edge: StoryTimelineEdge) => isSelected(edge) ? 2 : isHovered(edge) ? 1 : 0
+  const edges = [...props.edges].sort((left, right) => emphasis(left) - emphasis(right))
   return (
-    <svg className="pointer-events-none absolute inset-0 z-0 overflow-visible" width={props.width} height={props.height} aria-hidden="true">
-      {props.edges.map((edge) => {
+    <svg ref={ref} className="pointer-events-none absolute inset-0 z-20 overflow-visible" width={props.width} height={props.height} aria-hidden="true">
+      {edges.map((edge) => {
         const from = props.nodePositions[edge.fromNodeId]
         const to = props.nodePositions[edge.toNodeId]
         if (!from || !to) return null
 
-        const highlighted = props.hoveredNodeId === edge.fromNodeId || props.hoveredNodeId === edge.toNodeId
-        const selected = props.selectedNodeId === edge.fromNodeId || props.selectedNodeId === edge.toNodeId
+        const highlighted = isHovered(edge)
+        const selected = isSelected(edge)
 
         return (
           <path
@@ -37,18 +44,20 @@ export function BranchLineLayer(props: {
             data-testid={`timeline-edge-${edge.fromNodeId}-${edge.toNodeId}`}
             data-active={selected ? 'true' : 'false'}
             data-highlighted={highlighted ? 'true' : 'false'}
-            d={buildFoldedPath(from, to)}
+            d={buildFoldedPath(from, to, edge.fromNodeId.startsWith('chapter:'))}
             fill="none"
             strokeLinecap="round"
             strokeLinejoin="round"
-            strokeWidth={selected ? 2.8 : highlighted ? 2.4 : 2}
+            strokeWidth={1}
             className={cn(
-              'transition-all',
-              selected ? 'stroke-sky-300' : highlighted ? 'stroke-fuchsia-300/90' : 'stroke-line/22'
+              'stroke-line/40 transition-opacity duration-150 motion-reduce:transition-none',
+              (props.previewChain.size ? highlighted : selected) ? 'opacity-100' : 'opacity-0'
             )}
           />
         )
       })}
     </svg>
   )
-}
+})
+
+BranchLineLayer.displayName = 'BranchLineLayer'

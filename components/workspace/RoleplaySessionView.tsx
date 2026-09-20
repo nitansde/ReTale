@@ -192,6 +192,7 @@ export function RoleplaySessionView(props: {
   nodeSubtitle?: string | null
   readableLineageLabel?: string | null
   controlsRef?: Ref<RoleplaySessionControls>
+  onRequestsChange?: () => void
   onMetricsChange?: (metrics: { currentText: string; inputTokens: number | null; outputTokens: number | null }) => void
 }) {
   const { locale, t } = useI18n()
@@ -380,6 +381,7 @@ export function RoleplaySessionView(props: {
       parentMessageId: anchor?.id ?? null, forkedFromMessageId: forkMessage?.id ?? null,
     }))
     setDetail((current) => current ? { ...current, messages: [...current.messages, user] } : current)
+    props.onRequestsChange?.()
     setSelectedMessageId(user.id)
     setDialogue(''); setStoryGuidance(''); setForkMessageId(null); setComposerExpanded(false)
     await generate(user)
@@ -402,6 +404,7 @@ export function RoleplaySessionView(props: {
       })
       const data = await response.json() as { deletedMessageIds: string[]; error?: string }
       if (!response.ok) throw new Error(data.error || 'Failed to delete roleplay request')
+      props.onRequestsChange?.()
       const deletedIds = new Set(data.deletedMessageIds)
       if (latestMessage && deletedIds.has(latestMessage.id)) {
         setSelectedMessageId([...activeMessages].reverse().find((item) => !deletedIds.has(item.id))?.id ?? null)
@@ -437,6 +440,7 @@ export function RoleplaySessionView(props: {
       })
       const data = await response.json() as { deletedMessageIds: string[]; error?: string }
       if (!response.ok) throw new Error(data.error || 'Failed to delete roleplay branch')
+      props.onRequestsChange?.()
       const deletedIds = new Set(data.deletedMessageIds)
       const messages = detail.messages.filter((message) => !deletedIds.has(message.id)).map((message) => {
         const forkedFromMessageId = message.forkedFromMessageId && deletedIds.has(message.forkedFromMessageId) ? null : message.forkedFromMessageId

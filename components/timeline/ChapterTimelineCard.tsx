@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils'
 
 export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
   chapter: ChapterTimelineItem
+  highlighted?: boolean
   activeChapterId: string
   navigationTargetChapterId: string | null
   branchChapters: Chapter[]
@@ -26,6 +27,7 @@ export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
     <article
       data-testid={`timeline-chapter-${props.chapter.chapterNo}`}
       data-navigation-current={chapterSelected || branchChapterSelected ? 'true' : undefined}
+      data-source-highlighted={props.highlighted ? 'true' : 'false'}
       className="relative z-10 space-y-2 border-b border-line/8 pb-1 lg:space-y-3 lg:border-0 lg:pb-0"
     >
       <div className="space-y-2">
@@ -42,7 +44,8 @@ export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
             onClick={props.onSelectChapter}
             className={cn(
               'min-h-16 min-w-0 flex-1 border-l-2 px-3 py-2.5 text-left transition lg:rounded-[22px] lg:border lg:py-3',
-              chapterSelected ? 'border-violet-400 bg-violet-500/10 lg:border-violet-400/30' : 'border-transparent hover:bg-overlay/[0.04] lg:border-line/8 lg:bg-shade/20'
+              chapterSelected ? 'border-violet-400 bg-violet-500/10 lg:border-violet-400/30' : 'border-transparent hover:bg-overlay/[0.04] lg:border-line/8 lg:bg-shade/20',
+              props.highlighted && !chapterSelected && 'border-line/30 lg:border-line/30'
             )}
           >
             <div className="flex items-center justify-between gap-2 text-xs text-zinc-400">
@@ -89,7 +92,7 @@ export const ChapterTimelineCard = forwardRef<HTMLButtonElement, {
       </div>
 
       {props.branchArtifacts ? (
-        <div className="ml-2 border-l border-line/10 pl-2">
+        <div className="ml-2">
           <div className="space-y-2">{props.branchArtifacts}</div>
         </div>
       ) : null}

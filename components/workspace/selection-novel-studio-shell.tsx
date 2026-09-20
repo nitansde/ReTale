@@ -609,6 +609,7 @@ export function SelectionNovelStudio() {
                 <RoleplaySessionView
                   key={activeWorkspaceSelection.roleplaySessionId}
                   controlsRef={roleplayControlsRef}
+                  onRequestsChange={core.loadStoryTimeline}
                   novelId={currentNovelId ?? ''}
                   branchId={storyTimelineBranchId}
                   sessionId={activeWorkspaceSelection.roleplaySessionId}

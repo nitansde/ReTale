@@ -134,9 +134,27 @@ afterEach(() => {
 })
 
 describe('roleplay timeline hydration', () => {
-  it('hydrates one timeline node per multi-message roleplay session and keeps future-jump nodes intact', async () => {
+  it.each([false, true])('hydrates the first user request for persisted=%s roleplay nodes and keeps future-jump nodes intact', async (persisted) => {
     const database = createTestDatabase('retale-roleplay-timeline', ['novel-001'])
     seedTimelineFixture(database)
+    let firstUserRequest = '你昨晚为什么没有按约定现身？'
+    const timelineNodeId = persisted ? 'roleplay-node-001' : 'roleplay-session:roleplay-session-001'
+    if (persisted) {
+      const turn = {
+        playerName: '女主', counterpartName: '男主',
+        storyGuidance: '结盟后的雨夜，她想知道他失约的原因，让两人从试探逐渐走向坦诚，同时保留他还没有说出口的顾虑。',
+        dialogue: firstUserRequest, maxCharacters: 600,
+      }
+      database.prepare('UPDATE roleplay_messages SET content = ? WHERE id = ?')
+        .run(JSON.stringify({ turn }), 'rp-msg-001')
+      firstUserRequest = `${turn.storyGuidance}\n女主对男主说：${turn.dialogue}`
+      database.prepare(
+        `INSERT INTO story_timeline_nodes (
+          id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, subtitle,
+          parent_node_id, roleplay_session_id, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(timelineNodeId, 'novel-001', 'novel-001:main', 'roleplay_session', 1, 10, '夜谈', '从章节选区开始角色扮演。', 'rewrite_fixture_001', 'roleplay-session-001', 'active')
+    }
     vi.resetModules()
 
     const [{ GET: getStoryTimeline }, { GET: getRoleplaySession }] = await Promise.all([
@@ -154,18 +172,19 @@ describe('roleplay timeline hydration', () => {
 
     expect(roleplayNodes).toHaveLength(1)
     expect(roleplayNodes[0]).toEqual(expect.objectContaining({
-      id: 'roleplay-session:roleplay-session-001',
+      id: timelineNodeId,
       nodeType: 'roleplay_session',
       roleplaySessionId: 'roleplay-session-001',
       parentNodeId: 'rewrite_fixture_001',
       anchorChapterNo: 10,
       readableLabel: 'RP-01',
       title: '夜谈',
-      subtitle: '你昨晚为什么没有按约定现身？',
+      subtitle: firstUserRequest,
+      userInstruction: firstUserRequest,
       currentText: '那你现在最好把所有真相都告诉我。',
     }))
 
-    expect(timelinePayload.edges).toContainEqual({ fromNodeId: 'rewrite_fixture_001', toNodeId: 'roleplay-session:roleplay-session-001' })
+    expect(timelinePayload.edges).toContainEqual({ fromNodeId: 'rewrite_fixture_001', toNodeId: timelineNodeId })
     expect(timelinePayload.branchNodes).toContainEqual(expect.objectContaining({
       id: 'jump_fixture_001',
       nodeType: 'future_jump',
@@ -180,7 +199,7 @@ describe('roleplay timeline hydration', () => {
 
     expect(roleplaySessionResponse.status).toBe(200)
     const roleplaySessionPayload = await roleplaySessionResponse.json()
-    expect(roleplaySessionPayload.timelineNodeId).toBeNull()
+    expect(roleplaySessionPayload.timelineNodeId).toBe(persisted ? timelineNodeId : null)
     expect(roleplaySessionPayload.messages).toHaveLength(3)
     expect(roleplaySessionPayload.messages.map((message: { messageIndex: number; role: string }) => [message.messageIndex, message.role])).toEqual([
       [1, 'user'],

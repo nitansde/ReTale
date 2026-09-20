@@ -1,4 +1,5 @@
 import type { StoryTimelineNodeType } from '@/lib/story-branch-types'
+import { parseRoleplayTurn } from '@/lib/roleplay-script'
 
 type StoryBranchLabelNode = {
   id: string
@@ -92,15 +93,24 @@ export function resolveRoleplaySessionTimelinePresentation(input: {
   sourceTextSnapshot?: string | null
 }) {
   const explicitTitle = input.title?.trim() ?? ''
-  const explicitSubtitle = input.subtitle?.trim() ?? ''
-  const firstUserSummary = summarizeStoryBranchText(input.firstUserMessage, 22)
+  let firstUserRequest = input.firstUserMessage ?? ''
+  try {
+    const storedMessage: unknown = JSON.parse(firstUserRequest)
+    const turn = storedMessage && typeof storedMessage === 'object' && 'turn' in storedMessage
+      ? parseRoleplayTurn(storedMessage.turn)
+      : null
+    if (turn) {
+      firstUserRequest = [
+        turn.storyGuidance,
+        turn.dialogue && `${turn.playerName}对${turn.counterpartName}说：${turn.dialogue}`,
+      ].filter(Boolean).join('\n')
+    }
+  } catch { /* Legacy user messages are stored as plain text. */ }
+  const firstUserSummary = summarizeStoryBranchText(firstUserRequest, 22)
   const selectedTextSummary = summarizeStoryBranchText(input.sourceSelectedText, 22)
   const sourceSnapshotSummary = summarizeStoryBranchText(input.sourceTextSnapshot, 22)
   const title = explicitTitle || firstUserSummary || selectedTextSummary || sourceSnapshotSummary || `RP · 第 ${input.anchorChapterNo} 章`
-  const subtitleSource = explicitSubtitle
-    || summarizeStoryBranchText(explicitTitle ? input.firstUserMessage : input.sourceSelectedText, 40)
-    || summarizeStoryBranchText(explicitTitle ? input.sourceSelectedText : input.sourceTextSnapshot, 40)
-  const subtitle = subtitleSource && subtitleSource !== title ? subtitleSource : null
+  const subtitle = normalizeStoryBranchInstructionText(firstUserRequest) || null
 
   return { title, subtitle }
 }
