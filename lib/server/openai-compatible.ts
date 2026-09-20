@@ -24,6 +24,7 @@ import {
 } from '@/lib/server/ollama-local'
 
 type RewriteRequest = {
+  outputFormat?: 'rewrite' | 'roleplay-script'
   sourceText: string
   mode: string
   tone: string
@@ -601,6 +602,9 @@ export async function generateRewriteWithOpenAICompatible(
         return { enabled: true, error: 'Provider returned empty content.' }
       }
 
+      // RP uses its own blocks contract, validated by the script reader just as
+      // for streaming responses; it is not a rewrite result/candidates envelope.
+      if (input.outputFormat === 'roleplay-script') return { enabled: true, content: [raw], usage }
       const parsed = safeParseJson(raw)
       if (!parsed || typeof parsed !== 'object') {
         await writeLlmDebugLog({

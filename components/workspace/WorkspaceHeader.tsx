@@ -29,6 +29,7 @@ export function WorkspaceHeader({
   mobileReaderAction,
   mobileSelectionActions,
   hideMobileToolbar = false,
+  showContextButton = false,
   onOpenGraph,
 }: {
   title: string
@@ -46,6 +47,7 @@ export function WorkspaceHeader({
   mobileReaderAction?: ReactNode
   mobileSelectionActions?: ReactNode
   hideMobileToolbar?: boolean
+  showContextButton?: boolean
   onOpenGraph?: () => void
 }) {
   const { t } = useI18n()
@@ -66,7 +68,7 @@ export function WorkspaceHeader({
 
   return (
     <>
-    <header className="sticky top-0 z-30 mb-2 border-b border-line/10 bg-panel/92 px-4 py-2 shadow-[0_14px_40px_rgb(0_0_0/calc(0.3*var(--shadow-strength)))] backdrop-blur-2xl sm:mb-4 sm:rounded-[24px] sm:border sm:py-3 sm:shadow-[0_20px_70px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))] lg:rounded-[28px]">
+    <header className="sticky top-0 z-30 mb-2 shrink-0 border-b border-line/10 bg-panel/92 px-4 py-2 shadow-[0_14px_40px_rgb(0_0_0/calc(0.3*var(--shadow-strength)))] backdrop-blur-2xl sm:mb-4 sm:rounded-[24px] sm:border sm:py-3 sm:shadow-[0_20px_70px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))] lg:rounded-[28px]">
       <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-1 lg:hidden" data-testid="workspace-mobile-header">
         <button
           type="button"
@@ -108,6 +110,7 @@ export function WorkspaceHeader({
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 text-xs text-zinc-400">
+          {showContextButton ? <IconButton label={t('workspace.header.openContext')} onClick={onOpenContext}><BookMarked className="h-4 w-4" aria-hidden="true" /></IconButton> : null}
           <span className="rounded-full border border-line/10 bg-overlay/[0.04] px-3 py-1.5" data-testid="workspace-current-word-count">{metrics.wordCount}</span>
           <span className="rounded-full border border-line/10 bg-overlay/[0.04] px-3 py-1.5" data-testid="workspace-current-input-tokens">{metrics.inputTokens}</span>
           <span className="rounded-full border border-line/10 bg-overlay/[0.04] px-3 py-1.5" data-testid="workspace-current-output-tokens">{metrics.outputTokens}</span>

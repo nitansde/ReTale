@@ -462,6 +462,70 @@ afterEach(() => {
 })
 
 describe('preset compat rewrite route runtime', () => {
+  it.each([
+    { provider: 'openai-compatible', stream: false, chapterId: 'chapter-rp' },
+    { provider: 'openai-compatible', stream: true, chapterId: 'chapter-rp' },
+    { provider: 'openai-compatible', stream: false, chapterId: null },
+    { provider: 'openai-compatible', stream: true, chapterId: null },
+    { provider: 'ollama', stream: false, chapterId: 'chapter-rp' },
+    { provider: 'ollama', stream: true, chapterId: 'chapter-rp' },
+  ] as const)('sends complete RP history through the provider transport with old presets and tight budgets (%j)', async ({ provider, stream, chapterId }) => {
+    const library = createCreativeLibrary()
+    library.builtinSystemPrompts.roleplay.content = '旧版规则：你是小说魔改模型，优先输出可替换原文的正文。'
+    library.presets['roleplay-preset'].runtimeSampler.openaiMaxContext = 20
+    vi.doMock('@/lib/server/ai-settings', () => ({ loadStoredAISettings: () => createAiSettings(provider) }))
+    vi.doMock('@/lib/server/preset-compat-library', () => ({ loadStoredPresetCompatLibrary: () => library }))
+    vi.doMock('@/lib/utils', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('@/lib/utils')>()),
+      estimateTokenCount: (text: string) => text.length,
+    }))
+    vi.doMock('@/lib/server/context-builder', () => ({ buildGenerationContext: async () => ({
+      chapterNo: 3, promptBlocks: [
+        { id: 'neighborhood', label: '原章节', enabled: true, priority: 'highest', content: '旧场景背景应当让位于当前故事'.repeat(10) },
+      ],
+    }) }))
+    const reply = JSON.stringify({ blocks: [{ type: 'counterpart', text: '她握住船桨。“到对岸去。”' }] })
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      if (String(url).endsWith('/api/tags')) return Response.json({ models: [{ model: 'ollama-model' }] })
+      if (provider === 'ollama') return stream
+        ? new Response(`${JSON.stringify({ message: { content: reply }, done: true })}\n`)
+        : Response.json({ message: { content: reply } })
+      return stream
+        ? new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: reply } }] })}\n\ndata: [DONE]\n\n`, { headers: { 'Content-Type': 'text/event-stream' } })
+        : Response.json({ choices: [{ message: { content: reply } }] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const history = Array.from({ length: 14 }, (_, index) => ({
+      role: index % 2 ? 'assistant' : 'user',
+      content: index === 13 ? '旁白：两人已登船，离开了原先的房间。\n沈月：你想去哪里？' : `历史第${index + 1}条：约好去渡口。`,
+    }))
+    const { POST } = await import('@/app/api/rewrite/route')
+    const response = await POST(createRequest('roleplay', {
+      stream, chapterId, roleplayMessages: history, disabledBlockIds: ['roleplay-history'],
+      roleplayTurn: { playerName: '林舟', counterpartName: '沈月', storyGuidance: '小船继续前进。', dialogue: '先到对岸去吧。', maxCharacters: 600 },
+    }))
+    expect(response.status).toBe(200)
+    if (stream) expect(await response.text()).toBe(reply)
+    else expect((await response.json()).candidates[0].content).toBe(reply)
+    const providerCall = fetchMock.mock.calls.find(([url]) => /\/(chat\/completions|api\/chat)$/.test(String(url)))!
+    const requestBody = JSON.parse(String((providerCall[1] as RequestInit).body)) as { messages: Array<{ role: string; content: string }>; format?: unknown }
+    if (provider === 'ollama' && !stream) expect(requestBody.format).toBe('json')
+    const system = requestBody.messages.find((message) => message.role === 'system')!.content
+    const prompt = requestBody.messages.find((message) => message.role === 'user')!.content
+    expect(system).toContain('旧版规则')
+    expect(system.indexOf('已有 RP 历史是当前故事进度')).toBeGreaterThan(system.indexOf('ROLEPLAY SYSTEM RULE'))
+    expect(prompt).toContain('这是继续对话')
+    expect(prompt).not.toContain('这是故事的第一轮')
+    for (const message of history) expect(prompt).toContain(message.content)
+    expect(prompt.match(/# 当前角色扮演对话/g)).toHaveLength(1)
+    expect(prompt.indexOf('# 当前角色扮演对话')).toBeGreaterThan(prompt.indexOf('选段 BETA'))
+    expect(prompt.lastIndexOf('先到对岸去吧。')).toBeGreaterThan(prompt.indexOf('两人已登船'))
+    expect(prompt).not.toContain('旧场景背景应当让位于当前故事')
+    const metadata = readPresetCompatHeader(response)
+    expect(metadata.contextWindow?.trimmedBlockIds).not.toContain('roleplay-history')
+    expect(metadata.fieldStatuses.find((field) => field.field === 'openai_max_context')?.status).toBe('degraded')
+  })
+
   it('uses only the current book preset override, including an explicit opt-out', async () => {
     const library = createCreativeLibrary()
     library.presets['book-preset'] = { ...library.presets['rewrite-preset'], id: 'book-preset', name: 'Book preset' }

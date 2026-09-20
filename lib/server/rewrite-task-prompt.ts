@@ -18,8 +18,8 @@ export function buildRewriteTaskPromptLines(params: {
   continuation: boolean
 }) {
   return [
-    params.continuation ? '任务类型：续写后续故事' : `操作类型：${params.operationType}`,
+    params.continuation && params.operationType !== 'roleplay' ? '任务类型：续写后续故事' : `操作类型：${params.operationType}`,
     `用户要求：${params.userInstruction || '按当前模式生成。'}`,
-    ...(params.continuation ? CONTINUATION_TASK_LINES : []),
+    ...(params.continuation && params.operationType !== 'roleplay' ? CONTINUATION_TASK_LINES : []),
   ]
 }

@@ -123,6 +123,20 @@ export function readBrowserWorkspaceSession(): BrowserWorkspaceSession {
   }
 }
 
+export function removeBrowserWorkspaceNovelSession(novelId: string) {
+  const session = readBrowserWorkspaceSession()
+  const currentChapterIds = { ...session.currentChapterIds }
+  const presetCompatSessionStates = { ...session.presetCompatSessionStates }
+  delete currentChapterIds[novelId]
+  delete presetCompatSessionStates[novelId]
+  return writeBrowserWorkspaceSession({
+    ...session,
+    currentNovelId: session.currentNovelId === novelId ? '' : session.currentNovelId,
+    currentChapterIds,
+    presetCompatSessionStates,
+  })
+}
+
 export function writeBrowserWorkspacePreferences(preferences: Omit<BrowserWorkspacePreferences, 'version'>) {
   if (typeof window === 'undefined') return false
 

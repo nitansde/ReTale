@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   WORKSPACE_SESSION_STORAGE_KEY,
+  readBrowserWorkspaceSession,
   writeBrowserWorkspaceSession,
 } from '@/lib/browser-preferences'
 import { resetClientRequestBrokerForTests } from '@/lib/client-request-broker'
@@ -41,7 +42,35 @@ function resetStore() {
     isSaving: false,
     backendLoaded: false,
     backendLoadError: '',
+    librarySummaries: [],
+    librarySummariesLoaded: false,
+    librarySummariesError: '',
   })
+}
+
+function mockLibraryAndNovelResources() {
+  const workspace = createWorkspace()
+  const fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), 'http://localhost')
+    if (url.pathname === '/api/novels') {
+      return new Response(JSON.stringify({ ok: true, novels: workspace.localNovels.map((novel) => ({
+        ...novel, updatedAt: 'now', wordCount: 2, chapterCount: 2, firstChapterId: `chapter-${novel.id.slice(-1)}-1`,
+      })) }), { status: 200 })
+    }
+    const novel = workspace.localNovels.find((item) => url.pathname === `/api/novels/${item.id}`)
+    if (novel) {
+      return new Response(JSON.stringify({
+        ...createEmptyWorkspaceState(),
+        localNovels: [novel],
+        localChapters: workspace.localChapters.filter((chapter) => chapter.novelId === novel.id),
+        workspaceRevision: 7, revisionNovelId: novel.id,
+      }), { status: 200 })
+    }
+    if (url.pathname === '/api/settings/ai') return new Response(JSON.stringify({}), { status: 200 })
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  vi.stubGlobal('fetch', fetch)
+  return fetch
 }
 
 describe('browser workspace session', () => {
@@ -122,6 +151,90 @@ describe('browser workspace session', () => {
       focusMode: true,
       persistRevision: 0,
     })
+  })
+
+  it('preserves saved chapters and preferences while a fresh homepage only loads the library', async () => {
+    mockLibraryAndNovelResources()
+    writeBrowserWorkspaceSession({
+      currentNovelId: 'novel-a',
+      currentChapterIds: { 'novel-a': 'chapter-a-2', 'novel-b': 'chapter-b-2' },
+      currentTab: 'rewrite', helperTab: 'stats', focusMode: true,
+      presetCompatSessionStates: { 'novel-a': {
+        'chapter:chapter-a-2::rewrite': { surfaceId: 'rewrite', phase: 'continue', resetPending: false },
+      } },
+    })
+    const session = readBrowserWorkspaceSession()
+
+    await useNovelStore.getState().loadLibrarySummaries()
+    expect(useNovelStore.getState().localChapters).toEqual([])
+    expect(readBrowserWorkspaceSession()).toEqual(session)
+    await useNovelStore.getState().loadFromBackend('novel-a')
+    expect(useNovelStore.getState()).toMatchObject({ currentChapterId: 'chapter-a-2', currentTab: 'rewrite', persistRevision: 0 })
+  })
+
+  it('remembers unloaded novels when loading one novel at a time', async () => {
+    const fetch = mockLibraryAndNovelResources()
+    await useNovelStore.getState().loadFromBackend('novel-a')
+    useNovelStore.getState().setCurrentChapterId('chapter-a-2')
+    await useNovelStore.getState().loadFromBackend('novel-b')
+    useNovelStore.getState().setCurrentChapterId('chapter-b-2')
+    await useNovelStore.getState().loadFromBackend('novel-a')
+    expect(useNovelStore.getState()).toMatchObject({ currentChapterId: 'chapter-a-2', persistRevision: 0 })
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/novel-a?view=workspace&chapterId=chapter-a-2'), expect.anything())
+    await useNovelStore.getState().loadFromBackend('novel-b')
+    expect(useNovelStore.getState().currentChapterId).toBe('chapter-b-2')
+    expect(readBrowserWorkspaceSession().currentChapterIds).toEqual({ 'novel-a': 'chapter-a-2', 'novel-b': 'chapter-b-2' })
+  })
+
+  it('does not associate an old chapter or preset state with a novel that has not loaded', async () => {
+    mockLibraryAndNovelResources()
+    await useNovelStore.getState().loadFromBackend('novel-a')
+    useNovelStore.getState().setCurrentChapterId('chapter-a-2')
+    const session = readBrowserWorkspaceSession()
+    writeBrowserWorkspaceSession({ ...session, currentChapterIds: { ...session.currentChapterIds, 'novel-b': 'chapter-b-2' } })
+
+    useNovelStore.setState({ currentNovelId: 'novel-b' })
+    expect(readBrowserWorkspaceSession().currentChapterIds['novel-b']).toBe('chapter-b-2')
+    expect(readBrowserWorkspaceSession().presetCompatSessionStates['novel-b']).toBeUndefined()
+  })
+
+  it('falls back from a deleted bookmark and honors an explicit chapter when opening', async () => {
+    mockLibraryAndNovelResources()
+    writeBrowserWorkspaceSession({
+      currentNovelId: 'novel-a', currentChapterIds: { 'novel-a': 'chapter-deleted' },
+      currentTab: 'editor', helperTab: 'ai', focusMode: false, presetCompatSessionStates: {},
+    })
+    await useNovelStore.getState().loadFromBackend('novel-a')
+    expect(useNovelStore.getState().currentChapterId).toBe('chapter-a-1')
+    expect(readBrowserWorkspaceSession().currentChapterIds['novel-a']).toBe('chapter-a-1')
+    useNovelStore.getState().setCurrentChapterId('chapter-a-2')
+    await useNovelStore.getState().loadFromBackend('novel-a', 'chapter-a-1')
+    expect(useNovelStore.getState().currentChapterId).toBe('chapter-a-1')
+  })
+
+  it('preserves bookmarks through an optimistic deletion rollback and only clears the deleted novel', async () => {
+    mockLibraryAndNovelResources()
+    await useNovelStore.getState().loadFromBackend('novel-b')
+    useNovelStore.getState().setCurrentChapterId('chapter-b-2')
+    await useNovelStore.getState().loadFromBackend('novel-a')
+    useNovelStore.getState().setCurrentChapterId('chapter-a-2')
+
+    const transaction = useNovelStore.getState().beginNovelDeletion('novel-a')
+    expect(transaction).not.toBeNull()
+    expect(readBrowserWorkspaceSession().currentChapterIds).toEqual({ 'novel-a': 'chapter-a-2', 'novel-b': 'chapter-b-2' })
+    useNovelStore.getState().rollbackNovelDeletion(transaction!)
+    expect(useNovelStore.getState().currentChapterId).toBe('chapter-a-2')
+
+    useNovelStore.getState().deleteNovel('novel-a')
+    expect(readBrowserWorkspaceSession().currentChapterIds).toEqual({ 'novel-b': 'chapter-b-2' })
+    expect(readBrowserWorkspaceSession().presetCompatSessionStates['novel-a']).toBeUndefined()
+  })
+
+  it('rejects a chapter belonging to another novel when writing its bookmark', () => {
+    useNovelStore.getState().restorePersistedState(createWorkspace())
+    useNovelStore.getState().setCurrentChapterId('chapter-a-2')
+    useNovelStore.getState().setCurrentChapterId('chapter-b-1')
+    expect(readBrowserWorkspaceSession().currentChapterIds['novel-a']).toBe('chapter-a-2')
   })
 
   it('keeps preset compatibility session metadata in the browser per novel', async () => {

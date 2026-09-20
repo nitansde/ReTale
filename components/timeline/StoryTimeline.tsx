@@ -185,7 +185,7 @@ export function StoryTimeline(props: {
                       onSelect={() => {
                         if (selection) props.onSelectionChange(selection)
                       }}
-                       onDelete={node.nodeType === 'roleplay_session' ? undefined : () => props.onDeleteBranchNode(node)}
+                       onDelete={() => props.onDeleteBranchNode(node)}
                        onHoverChange={(hovered) => {
                          setHoveredNodeId((current) => (hovered ? node.id : current === node.id ? null : current))
                        }}

@@ -362,6 +362,7 @@ export function SelectionNovelStudio() {
           : activeWorkspaceSelection.kind === 'roleplay_session'
             ? t('workspace.context.roleplay')
             : t('workspace.context.futureJump')
+  const isRoleplaySession = activeWorkspaceSelection.kind === 'roleplay_session'
 
   if (!backendLoaded) {
     return <LoadingScreen />
@@ -404,8 +405,8 @@ export function SelectionNovelStudio() {
   }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_var(--page-glow),_transparent_30%),var(--background)] text-zinc-100">
-      <div className="mx-auto flex min-h-screen max-w-[1720px] flex-col px-0 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-0 sm:px-5 sm:pt-3 lg:px-6 lg:pb-10">
+    <main className={cn('bg-[radial-gradient(circle_at_top,_var(--page-glow),_transparent_30%),var(--background)] text-zinc-100', isRoleplaySession ? 'h-dvh overflow-hidden' : 'min-h-screen')}>
+      <div className={cn('mx-auto flex max-w-[1720px] flex-col px-0 pt-0 sm:px-5 sm:pt-3 lg:px-6', isRoleplaySession ? 'h-full min-h-0 sm:pb-3 lg:pb-4' : 'min-h-screen pb-[calc(5rem+env(safe-area-inset-bottom))] lg:pb-10')}>
         {searchNovelId === currentNovelId ? (
           <BookSearchDialog key={currentNovelId} novelId={currentNovelId}
             onClose={() => setSearchNovelId(null)}
@@ -434,6 +435,7 @@ export function SelectionNovelStudio() {
             })
           }}
           hideMobileToolbar={activeWorkspaceSelection.kind === 'roleplay_session'}
+          showContextButton={isRoleplaySession}
           onOpenGraph={activeWorkspaceSelection.kind === 'chapter' ? () => setCenterPaneView('graph') : undefined}
           mobileSelectionActions={!desktop && !core.readerMode.isEditing && activeWorkspaceSelection.kind === 'chapter' && centerPaneView === 'body' && selectionText.trim() ? chapterSelectionActions : null}
           mobileReaderAction={!desktop && activeWorkspaceSelection.kind === 'chapter' ? (
@@ -457,7 +459,7 @@ export function SelectionNovelStudio() {
           }}
         />
 
-        <div className="grid flex-1 gap-0 sm:gap-4 lg:grid-cols-[264px_minmax(0,1.28fr)_376px] 2xl:grid-cols-[280px_minmax(0,1.32fr)_392px]">
+        <div className={cn('grid flex-1 gap-0 sm:gap-4', isRoleplaySession ? 'min-h-0 grid-rows-[minmax(0,1fr)] lg:grid-cols-[240px_minmax(0,1fr)] 2xl:grid-cols-[264px_minmax(0,1fr)]' : 'lg:grid-cols-[264px_minmax(0,1.28fr)_376px] 2xl:grid-cols-[280px_minmax(0,1.32fr)_392px]')}>
           <WorkspaceChapterNav
             leftPanelOpen={leftPanelOpen}
             onClose={() => setLeftPanelOpen(false)}
@@ -477,7 +479,7 @@ export function SelectionNovelStudio() {
             onDeleteBranchNode={handleDeleteBranchNode}
           />
 
-          <div className="min-w-0">
+          <div className={cn('min-w-0', isRoleplaySession && 'min-h-0')}>
             <WorkspaceCenterPane
             selection={activeWorkspaceSelection}
             chapterTitle={currentChapter.title}
@@ -602,6 +604,8 @@ export function SelectionNovelStudio() {
             roleplayView={
               activeWorkspaceSelection.kind === 'roleplay_session' ? (
                 <RoleplaySessionView
+                  key={activeWorkspaceSelection.roleplaySessionId}
+                  navigationActions={selectionActions}
                   novelId={currentNovelId ?? ''}
                   branchId={storyTimelineBranchId}
                   sessionId={activeWorkspaceSelection.roleplaySessionId}
@@ -616,6 +620,7 @@ export function SelectionNovelStudio() {
           </div>
 
           <WorkspaceReferencePanel
+            drawerOnly={isRoleplaySession}
             open={referencePanelOpen}
             onClose={() => setReferencePanelOpen(false)}
             knowledgeOpen={knowledgePanelOpen}

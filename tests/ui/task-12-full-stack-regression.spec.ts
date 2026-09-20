@@ -1657,7 +1657,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await expect(page.getByTestId('roleplay-message-0')).toContainText('Tell me the truth now.')
     await expect(page.getByTestId('roleplay-message-1')).toContainText('Task 12 fake stream output')
     await expect(page.getByTestId('roleplay-fork-anchor')).toContainText(/latest message|最新消息/i)
-    await page.getByTestId('roleplay-message-0').click()
+    await page.getByTestId('roleplay-message-0').getByRole('button').click()
     await expect(page.getByTestId('roleplay-fork-anchor')).toContainText(/fork(s|ing)? from|分叉/i)
     appendQaRow(qaRows, 'Roleplay session/message/fork', '[task-12-i18n-full-stack.png](./task-12-i18n-full-stack.png)', 'Created a real roleplay session from the chapter selection and persisted the assistant reply.')
 

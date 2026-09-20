@@ -1,6 +1,6 @@
 import { normalizeAISettings } from '@/lib/ai-settings'
 import { LIBRARY_KNOWLEDGE_STATUSES } from '@/lib/library-knowledge-status'
-import { readBrowserWorkspaceSession } from '@/lib/browser-preferences'
+import { readBrowserWorkspaceSession, removeBrowserWorkspaceNovelSession } from '@/lib/browser-preferences'
 import { requestClientGet } from '@/lib/client-request-broker'
 import {
   fetchPresetCompatLibrary,
@@ -1225,7 +1225,10 @@ export function createPersistenceActions(
         if (rejection) return rejection
 
         const result = validateDeleteSuccess(response.status, payload, novelId)
-        if (result) return { status: 'committed', result }
+        if (result) {
+          removeBrowserWorkspaceNovelSession(novelId)
+          return { status: 'committed', result }
+        }
 
         return { status: 'indeterminate', error: 'Workspace endpoint returned an invalid deletion response' }
       } catch (error) {

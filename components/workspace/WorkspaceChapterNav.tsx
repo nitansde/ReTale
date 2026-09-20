@@ -237,6 +237,8 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
           <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-3 py-3 text-sm text-amber-100">{props.storyTimelineError}</div>
         ) : null}
 
+        {!desktop && visibleChapters.length ? <p className="px-1 text-[11px] leading-5 text-zinc-500">{t('workspace.timeline.swipeHint')}</p> : null}
+
         <div
           ref={timelineScrollRef}
           className="max-h-[calc(100dvh-17rem)] min-h-48 lg:max-h-[calc(100vh-21rem)] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]"

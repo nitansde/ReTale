@@ -3,6 +3,7 @@ import { apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES, jsonError, rea
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { appendRoleplayMessage, createRoleplayLatestTurnVariant, findRoleplaySessionById } from '@/lib/server/roleplay-store'
 import { uid } from '@/lib/utils'
+import { parseRoleplayTurn, parseRoleplayScript } from '@/lib/roleplay-script'
 
 export async function POST(request: Request, context: { params: Promise<{ sessionId: string }> }) {
   try {
@@ -17,12 +18,25 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
       return jsonError('Roleplay session not found for the requested branch context', 404)
     }
     const mode = body.mode === 'latest-turn-variant' ? 'latest-turn-variant' : 'append'
+    const turn = body.turn === undefined ? null : parseRoleplayTurn(body.turn)
+    const script = body.script === undefined ? null : parseRoleplayScript(body.script)
+    if ((body.turn !== undefined && (!turn || body.role !== 'user')) || (body.script !== undefined && (!script || body.role !== 'assistant'))) {
+      return jsonError('Invalid roleplay script or turn', 400)
+    }
+    if (script) {
+      const parent = session.messages.find((message) => message.id === body.parentMessageId)?.turn
+      if (!parent || script.playerName !== parent.playerName || script.counterpartName !== parent.counterpartName
+        || !script.blocks.some((block) => block.type === 'counterpart')) {
+        return jsonError('Script does not match the parent turn', 400)
+      }
+    }
+    const content = turn ? JSON.stringify({ turn }) : script ? JSON.stringify({ script }) : String(body.content ?? '')
 
     const result = mode === 'latest-turn-variant'
       ? await createRoleplayLatestTurnVariant({
         sessionId,
         role: body.role === 'assistant' ? 'assistant' : 'user',
-        content: String(body.content ?? ''),
+        content,
         parentMessageId: typeof body.parentMessageId === 'string' ? body.parentMessageId : null,
         forkedFromMessageId: typeof body.forkedFromMessageId === 'string' ? body.forkedFromMessageId : null,
         status: typeof body.status === 'string' ? body.status : 'active',
@@ -31,7 +45,7 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
         id: typeof body.id === 'string' && body.id.trim() ? body.id : uid('roleplay-message'),
         sessionId,
         role: body.role === 'assistant' ? 'assistant' : 'user',
-        content: String(body.content ?? ''),
+        content,
         parentMessageId: typeof body.parentMessageId === 'string' ? body.parentMessageId : null,
         forkedFromMessageId: typeof body.forkedFromMessageId === 'string' ? body.forkedFromMessageId : null,
         variantGroupId: typeof body.variantGroupId === 'string' ? body.variantGroupId : null,

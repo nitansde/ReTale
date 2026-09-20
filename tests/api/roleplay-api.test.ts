@@ -308,6 +308,91 @@ afterEach(databaseFixture.wrap(async () => {
 }))
 
 describe('roleplay session API', () => {
+  it('persists script inputs and blocks and lists only the protagonist and present chapter characters', databaseFixture.wrap(async () => {
+    const database = createTestDatabase('retale-roleplay-script')
+    createFixture(database)
+    for (const [id, name, tier, firstSeen] of [
+      ['hero', '林舟', 'protagonist', 1], ['present', '沈月', 'important', 2],
+      ['absent', '赵远', 'important', 1], ['future', '未来角色', 'important', 30],
+    ] as const) database.prepare('INSERT INTO KnowledgeEntity (id, novelId, branchId, entityType, canonicalName, importanceTier, firstSeenChapter) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, FIXTURE_IDS.novelId, FIXTURE_IDS.branchId, 'character', name, tier, firstSeen)
+    const { POST: createSession } = await import('@/app/api/roleplay/sessions/route')
+    const { POST: appendMessage } = await import('@/app/api/roleplay/sessions/[sessionId]/messages/route')
+    const { GET: getSession } = await import('@/app/api/roleplay/sessions/[sessionId]/route')
+    const response = await createSession(createSessionRequest({
+      novelId: FIXTURE_IDS.novelId, branchId: FIXTURE_IDS.branchId, title: 'RP 剧本',
+      sourceChapterId: FIXTURE_IDS.chapterId, sourceChapterNo: 12,
+      sourceSelectedText: '沈月望着窗外。', sourceTextSnapshot: '沈月望着窗外。',
+    }))
+    expect(response.status).toBe(201)
+    const { sessionId } = await response.json() as { sessionId: string }
+    const context = { params: Promise.resolve({ sessionId }) }
+    const read = () => getSession(new Request(`http://localhost/api/roleplay/sessions/${sessionId}?novelId=${FIXTURE_IDS.novelId}&branchId=${FIXTURE_IDS.branchId}`), context)
+    expect(await (await read()).json()).toMatchObject({ characterOptions: [{ name: '林舟', protagonist: true }, { name: '沈月', protagonist: false }] })
+    const turn = { playerName: '林舟', counterpartName: '沈月', storyGuidance: '雨声渐近。', dialogue: '还在等吗？', maxCharacters: 200 }
+    const userResponse = await appendMessage(createMessageRequest(sessionId, { role: 'user', turn }), context)
+    expect(userResponse.status).toBe(201)
+    const user = await userResponse.json() as { id: string }
+    const script = { playerName: '林舟', counterpartName: '沈月', blocks: [{ type: 'narration', text: '雨落在窗沿。' }, { type: 'narration', text: '门外响起脚步声。' }, { type: 'counterpart', text: '她回过头，微微一笑。“我在等你。”' }, { type: 'player', text: '他向门外示意。“走吧。”' }] }
+    const savedScript = { ...script, blocks: [{ type: 'narration', text: '雨落在窗沿。\n\n门外响起脚步声。' }, ...script.blocks.slice(2)] }
+    const assistant = await appendMessage(createMessageRequest(sessionId, { role: 'assistant', parentMessageId: user.id, script }), context)
+    expect(assistant.status).toBe(201)
+    expect(await (await read()).json()).toMatchObject({ messages: [{ turn }, { script: savedScript }] })
+    const invalid = await appendMessage(createMessageRequest(sessionId, { role: 'user', turn: { ...turn, counterpartName: '林舟' } }), context)
+    expect(invalid.status).toBe(400)
+    const longerScript = { ...script, blocks: [{ type: 'counterpart', text: `${'她轻声讲述着窗外的往事。'.repeat(20)}她把伞递给他。“我们走吧。”` }] }
+    const beyondTarget = await appendMessage(createMessageRequest(sessionId, { role: 'assistant', parentMessageId: user.id, script: longerScript }), context)
+    expect(beyondTarget.status).toBe(201)
+    expect(await beyondTarget.json()).toMatchObject({ script: longerScript })
+    expect((await (await read()).json()).messages.at(-1)).toMatchObject({ script: longerScript })
+    const variant = await appendMessage(createMessageRequest(sessionId, { role: 'assistant', mode: 'latest-turn-variant', parentMessageId: user.id, script }), context)
+    expect(variant.status).toBe(201)
+    expect((await (await read()).json()).messages).toHaveLength(4)
+    expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+  }))
+
+  it('deletes an RP node with its messages, preserves its child session, and rejects deletion from another branch', databaseFixture.wrap(async () => {
+    const database = createTestDatabase('retale-roleplay-api-delete')
+    createFixture(database)
+    vi.resetModules()
+    const beforeIsolation = snapshotIsolation(database)
+    const { POST: createSession } = await import('@/app/api/roleplay/sessions/route')
+    const { POST: appendMessage } = await import('@/app/api/roleplay/sessions/[sessionId]/messages/route')
+    const { GET: getSession } = await import('@/app/api/roleplay/sessions/[sessionId]/route')
+    const { DELETE } = await import('@/app/api/story-timeline/route')
+    const makeSession = async (sourceTimelineNodeId: string, sourceTimelineNodeType: string) => {
+      const response = await createSession(createSessionRequest({
+        novelId: FIXTURE_IDS.novelId, branchId: FIXTURE_IDS.branchId, title: 'RP 夜谈',
+        sourceChapterId: FIXTURE_IDS.chapterId, sourceChapterNo: 12,
+        sourceTimelineNodeId, sourceTimelineNodeType,
+        sourceSelectedText: '夜谈', sourceTextSnapshot: '原来的夜谈正文。',
+      }))
+      expect(response.status).toBe(201)
+      return response.json() as Promise<{ sessionId: string; timelineNodeId: string }>
+    }
+    const parent = await makeSession(FIXTURE_IDS.rewriteTimelineNodeId, 'rewrite')
+    const child = await makeSession(parent.timelineNodeId, 'roleplay_session')
+    for (const session of [parent, child]) {
+      const message = await appendMessage(createMessageRequest(session.sessionId, { role: 'user', content: '开口吧。' }), { params: Promise.resolve({ sessionId: session.sessionId }) })
+      expect(message.status).toBe(201)
+    }
+    database.prepare('INSERT INTO StoryBranch (id, novelId, name) VALUES (?, ?, ?)').run('other-branch', FIXTURE_IDS.novelId, 'Other')
+    const deleteRequest = (branchId: string) => new Request(`http://localhost/api/story-timeline?novelId=${FIXTURE_IDS.novelId}&branchId=${branchId}`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nodeId: parent.timelineNodeId }),
+    })
+    expect((await DELETE(deleteRequest('other-branch'))).status).toBe(404)
+    expect(database.prepare('SELECT id FROM roleplay_sessions WHERE id = ?').get(parent.sessionId)).toBeDefined()
+    expect((await DELETE(deleteRequest(FIXTURE_IDS.branchId))).status).toBe(200)
+    expect(database.prepare('SELECT id FROM story_timeline_nodes WHERE id = ?').get(parent.timelineNodeId)).toBeUndefined()
+    expect(database.prepare('SELECT id FROM roleplay_sessions WHERE id = ?').get(parent.sessionId)).toBeUndefined()
+    expect(database.prepare('SELECT id FROM roleplay_messages WHERE session_id = ?').get(parent.sessionId)).toBeUndefined()
+    expect(database.prepare('SELECT parent_node_id FROM story_timeline_nodes WHERE id = ?').get(child.timelineNodeId)).toEqual({ parent_node_id: FIXTURE_IDS.rewriteTimelineNodeId })
+    expect(database.prepare('SELECT id FROM roleplay_messages WHERE session_id = ?').get(child.sessionId)).toBeDefined()
+    const deletedDetail = await getSession(new Request(`http://localhost/api/roleplay/sessions/${parent.sessionId}?novelId=${FIXTURE_IDS.novelId}&branchId=${FIXTURE_IDS.branchId}`), { params: Promise.resolve({ sessionId: parent.sessionId }) })
+    expect(deletedDetail.status).toBe(404)
+    expect(snapshotIsolation(database)).toEqual({ ...beforeIsolation, timelineRoleplayRows: expect.any(Array) })
+    expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+  }))
+
   it('creates a session, appends ordered messages, preserves variant and fork metadata, and keeps non-roleplay tables untouched', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-roleplay-api-success')
     createFixture(database)

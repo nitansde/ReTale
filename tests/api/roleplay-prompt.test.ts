@@ -9,9 +9,10 @@ function createRoleplayHistoryContent(messages: Array<{ role: 'user' | 'assistan
 
 function createRoleplayOutputConstraintsText() {
   return [
-    '- 只输出当前这一轮的角色扮演对话回复。',
+    '- 输出由 narration（旁白）、player（我方台词）、counterpart（对方台词）组成的 JSON 脚本块。',
+    '- 承接用户的开场台词，允许继续编写双方多轮对话及行动旁白；篇幅接近本次目标字数即可，以自然收尾为先。',
     '- 保持与已有角色扮演历史连续。',
-    '- 不要把回复写成小说正文、章节改写、剧情大纲或说明。',
+    '- 人物块可以包含该角色的台词、神态、语气和动作描写；连续旁白段落合并为一块，不跨过对话合并。不要输出剧情大纲或格式说明。',
     '- 不要自动应用、改写或续写 chapter 正文。',
     '- 不要输出分析。',
     '- 不要输出 Markdown 标题。',
@@ -81,7 +82,7 @@ afterEach(() => {
 })
 
 describe('roleplay prompt contract', () => {
-  it('keeps the latest bounded roleplay history in order', async () => {
+  it('keeps the full selected roleplay history in order beyond six turns', async () => {
     const { buildRoleplayContextBlock, normalizeRoleplayContextMessages } = await importContextBuilderHelpers()
 
     const normalized = normalizeRoleplayContextMessages([
@@ -104,34 +105,24 @@ describe('roleplay prompt contract', () => {
       })),
     )
 
-    expect(bounded).toHaveLength(12)
-    expect(bounded[0]).toEqual({ role: 'user', content: '消息 3' })
+    expect(bounded).toHaveLength(14)
+    expect(bounded[0]).toEqual({ role: 'user', content: '消息 1' })
     expect(bounded.at(-1)).toEqual({ role: 'assistant', content: '消息 14' })
 
-    expect(buildRoleplayContextBlock(bounded)?.content).toBe([
-      '# 当前角色扮演对话',
-      '用户：消息 3',
-      '助手：消息 4',
-      '用户：消息 5',
-      '助手：消息 6',
-      '用户：消息 7',
-      '助手：消息 8',
-      '用户：消息 9',
-      '助手：消息 10',
-      '用户：消息 11',
-      '助手：消息 12',
-      '用户：消息 13',
-      '助手：消息 14',
-    ].join('\n'))
+    const history = buildRoleplayContextBlock(bounded)!.content
+    expect(history).toContain('## 1. 用户输入\n消息 1')
+    expect(history).toContain('## 14. 已发生的故事\n消息 14')
+    expect(history.indexOf('消息 1')).toBeLessThan(history.indexOf('消息 14'))
   })
 
   it('uses roleplay-only non-mutating constraints and keeps rewrite and future-jump contracts unchanged', async () => {
     const { formatOutputConstraints } = await importContextBuilderHelpers()
 
     expect(formatOutputConstraints('roleplay')).toBe([
-      '- 只输出当前这一轮的角色扮演对话回复。',
+      '- 输出由 narration（旁白）、player（我方台词）、counterpart（对方台词）组成的 JSON 脚本块。',
+      '- 承接用户的开场台词，允许继续编写双方多轮对话及行动旁白；篇幅接近本次目标字数即可，以自然收尾为先。',
       '- 保持与已有角色扮演历史连续。',
-      '- 不要把回复写成小说正文、章节改写、剧情大纲或说明。',
+      '- 人物块可以包含该角色的台词、神态、语气和动作描写；连续旁白段落合并为一块，不跨过对话合并。不要输出剧情大纲或格式说明。',
       '- 不要自动应用、改写或续写 chapter 正文。',
       '- 不要输出分析。',
       '- 不要输出 Markdown 标题。',
@@ -282,14 +273,28 @@ describe('roleplay prompt contract', () => {
 
     const rewriteInput = generateRewriteWithOpenAICompatible.mock.calls[0]?.[0] as { userPrompt: string }
     expect(rewriteInput.userPrompt).toContain('# 当前角色扮演对话')
-    expect(rewriteInput.userPrompt).toContain('用户：你昨晚为什么没有回来？')
-    expect(rewriteInput.userPrompt).toContain('助手：我被风暴困在了渡口。')
-    expect(rewriteInput.userPrompt).toContain('用户：那你现在还想骗我吗？')
+    expect(rewriteInput.userPrompt).toContain('## 1. 用户输入\n你昨晚为什么没有回来？')
+    expect(rewriteInput.userPrompt).toContain('## 2. 已发生的故事\n我被风暴困在了渡口。')
+    expect(rewriteInput.userPrompt).toContain('## 3. 用户输入\n那你现在还想骗我吗？')
     expect(rewriteInput.userPrompt).not.toContain('这条消息不该进入 roleplay 历史。')
     expect(rewriteInput.userPrompt).toContain('# 角色扮演回复契约')
     expect(rewriteInput.userPrompt).toContain('只回复当前这一轮的聊天内容。')
     expect(rewriteInput.userPrompt).toContain('不要自动应用、改写或续写 chapter 正文。')
     expect(rewriteInput.userPrompt).not.toContain('只输出小说正文。')
+
+    const scriptTurn = { playerName: '林舟', counterpartName: '沈月', storyGuidance: '雨夜，两人在窗边。', dialogue: '你相信我吗？', maxCharacters: 300 }
+    const scriptResponse = await POST(createRoleplayRequest({ roleplayTurn: scriptTurn }))
+    expect(scriptResponse.status).toBe(200)
+    const scriptInput = generateRewriteWithOpenAICompatible.mock.calls[1]?.[0] as { userPrompt: string; systemPrompt?: string }
+    expect(scriptInput.userPrompt).toContain('# Galgame 双角色脚本契约')
+    expect(scriptInput.userPrompt).toContain('目标字数约为 300 字')
+    expect(scriptInput.userPrompt).toContain('双方多轮对话和旁白')
+    expect(scriptInput.userPrompt).toContain('林舟')
+    expect(scriptInput.userPrompt).toContain('沈月')
+    expect(scriptInput.userPrompt).not.toContain('只回复当前这一轮的聊天内容')
+    expect(scriptInput.systemPrompt).toContain('视觉小说双角色脚本生成器')
+    const invalidResponse = await POST(createRoleplayRequest({ roleplayTurn: { ...scriptTurn, maxCharacters: 0 } }))
+    expect(invalidResponse.status).toBe(400)
 
     await expect(response.json()).resolves.toMatchObject({
       provider: 'openai-compatible',

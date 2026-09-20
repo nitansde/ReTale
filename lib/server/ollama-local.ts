@@ -76,6 +76,7 @@ export type OllamaExtractionResult = {
 export type KnowledgeExtractionPromptMode = 'full' | 'focused'
 
 type OllamaRewriteRequest = {
+  outputFormat?: 'rewrite' | 'roleplay-script'
   sourceText: string
   mode: string
   tone: string
@@ -2502,7 +2503,7 @@ export async function generateRewriteWithOllama(
       model: config.model,
       timeoutMs: NON_STREAM_PROVIDER_TIMEOUT_MS,
       temperature: input.tone === 'keep' ? 0.7 : 0.9,
-      format: {
+      format: input.outputFormat === 'roleplay-script' ? 'json' : {
         type: 'object',
         properties: {
           result: { type: 'string' },
@@ -2529,6 +2530,15 @@ export async function generateRewriteWithOllama(
     const raw = response.message?.content?.trim() ?? ''
     if (!raw) {
       return { enabled: true, error: 'Provider returned empty content.' }
+    }
+
+    if (input.outputFormat === 'roleplay-script') return {
+      enabled: true,
+      content: [raw],
+      usage: {
+        inputTokens: normalizeTokenCount(response.prompt_eval_count),
+        outputTokens: normalizeTokenCount(response.eval_count),
+      },
     }
 
     let parsed: { result?: unknown; candidates?: unknown[] }

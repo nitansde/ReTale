@@ -10,6 +10,7 @@ import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/datab
 import { formatStoryBranchReadableLabel } from '@/lib/story-branch-labels'
 import type { RoleplayMessageRecord, RoleplaySessionDetail, RoleplaySessionRecord } from '@/lib/roleplay-types'
 import { uid } from '@/lib/utils'
+import { parseRoleplayScript, parseRoleplayTurn, roleplayScriptText } from '@/lib/roleplay-script'
 
 type Db = {
   execute: typeof execute
@@ -81,6 +82,14 @@ function toRoleplaySessionRecord(row: RoleplaySessionRow): RoleplaySessionRecord
 }
 
 function toRoleplayMessageRecord(row: RoleplayMessageRow): RoleplayMessageRecord {
+  let structured = {}
+  try {
+    const value = JSON.parse(row.content)
+    const turn = row.role === 'user' ? parseRoleplayTurn(value.turn) : null
+    const script = row.role === 'assistant' ? parseRoleplayScript(value.script) : null
+    if (turn) structured = { turn, content: turn.dialogue || turn.storyGuidance }
+    if (script) structured = { script, content: roleplayScriptText(script) }
+  } catch { /* Non-script messages are not rendered by the script view. */ }
   return {
     id: row.id,
     sessionId: row.session_id,
@@ -89,6 +98,7 @@ function toRoleplayMessageRecord(row: RoleplayMessageRow): RoleplayMessageRecord
     variantIndex: row.variant_index,
     role: row.role,
     content: row.content,
+    ...structured,
     parentMessageId: row.parent_message_id,
     forkedFromMessageId: row.forked_from_message_id,
     variantGroupId: row.variant_group_id,

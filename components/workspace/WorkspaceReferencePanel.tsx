@@ -9,6 +9,7 @@ import { useI18n } from '@/lib/i18n/provider'
 
 export function WorkspaceReferencePanel(props: {
   open: boolean
+  drawerOnly?: boolean
   onClose: () => void
   knowledgeOpen: boolean
   onKnowledgeOpen: () => void
@@ -24,7 +25,7 @@ export function WorkspaceReferencePanel(props: {
   const knowledgeIncomplete = props.knowledgeStatus.overall !== 'loading' && props.knowledgeStatus.overall !== 'ready'
   const knowledgeBuilding = props.knowledgeStatus.operation?.status === 'running' || props.knowledgeStatus.operation?.status === 'queued'
 
-  if (desktop) {
+  if (desktop && !props.drawerOnly) {
     return (
       <aside className="rounded-[30px] border border-line/10 bg-raised p-4 shadow-[0_28px_90px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))] sm:p-5" data-testid="workspace-reference-panel">
         <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-line/8 bg-shade/20 px-3 py-2">

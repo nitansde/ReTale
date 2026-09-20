@@ -1,81 +1,9 @@
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { noStoreJson, noStoreJsonError, requireNonEmptyId } from '@/lib/server/api-route'
-import type { RoleplayMessageRecord, RoleplaySessionDetail } from '@/lib/roleplay-types'
+import type { RoleplaySessionDetail } from '@/lib/roleplay-types'
 
-type RoleplaySessionRow = {
-  id: string
-  novel_id: string
-  branch_id: string
-  title: string
-  subtitle: string | null
-  source_chapter_id: string | null
-  source_chapter_no: number
-  source_chapter_title: string | null
-  source_timeline_node_id: string | null
-  source_timeline_node_type: RoleplaySessionDetail['sourceTimelineNodeType'] | null
-  source_selected_text: string
-  source_text_snapshot: string
-  source_selected_line_start: number | null
-  source_selected_line_end: number | null
-  status: string
-  created_at: string
-  updated_at: string
-  timeline_node_id: string | null
-}
-
-type RoleplayMessageRow = {
-  id: string
-  session_id: string
-  message_index: number
-  turn_index: number
-  variant_index: number
-  role: RoleplayMessageRecord['role']
-  content: string
-  parent_message_id: string | null
-  forked_from_message_id: string | null
-  variant_group_id: string | null
-  status: string
-  created_at: string
-  updated_at: string
-}
-
-function toRoleplaySessionDetail(row: RoleplaySessionRow, messages: RoleplayMessageRow[]): RoleplaySessionDetail {
-  return {
-    id: row.id,
-    novelId: row.novel_id,
-    branchId: row.branch_id,
-    title: row.title,
-    subtitle: row.subtitle,
-    sourceChapterId: row.source_chapter_id,
-    sourceChapterNo: row.source_chapter_no,
-    sourceChapterTitle: row.source_chapter_title,
-    sourceTimelineNodeId: row.source_timeline_node_id,
-    sourceTimelineNodeType: row.source_timeline_node_type,
-    sourceSelectedText: row.source_selected_text,
-    sourceTextSnapshot: row.source_text_snapshot,
-    sourceSelectedLineStart: row.source_selected_line_start,
-    sourceSelectedLineEnd: row.source_selected_line_end,
-    status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    timelineNodeId: row.timeline_node_id,
-    messages: messages.map((message) => ({
-      id: message.id,
-      sessionId: message.session_id,
-      messageIndex: message.message_index,
-      turnIndex: message.turn_index,
-      variantIndex: message.variant_index,
-      role: message.role,
-      content: message.content,
-      parentMessageId: message.parent_message_id,
-      forkedFromMessageId: message.forked_from_message_id,
-      variantGroupId: message.variant_group_id,
-      status: message.status,
-      createdAt: message.created_at,
-      updatedAt: message.updated_at,
-    })),
-  }
-}
+import { findRoleplaySessionById } from '@/lib/server/roleplay-store'
+import { getRoleplayCharacterOptions } from '@/lib/server/roleplay-characters'
 
 function toRoleplaySessionPayload(session: RoleplaySessionDetail) {
   return {
@@ -123,34 +51,17 @@ export async function GET(request: Request, ctx: RouteContext<'/api/roleplay/ses
 
     const db = createNovelDatabaseAccess(novelId)
 
-    const session = db.queryOne<RoleplaySessionRow>(
-      `SELECT
-         roleplay_sessions.*,
-         (
-           SELECT story_timeline_nodes.id
-           FROM story_timeline_nodes
-           WHERE story_timeline_nodes.roleplay_session_id = roleplay_sessions.id
-           LIMIT 1
-         ) AS timeline_node_id
-       FROM roleplay_sessions
-       WHERE roleplay_sessions.id = ?
-       LIMIT 1`,
-      sessionId
-    )
+    const session = findRoleplaySessionById(sessionId, db)
 
-    if (!session || session.novel_id !== novelId || session.branch_id !== branchId) {
+    if (!session || session.novelId !== novelId || session.branchId !== branchId) {
       return noStoreJson({ ok: false, error: 'Roleplay session not found for the requested branch context' }, { status: 404 })
     }
 
-    const messages = db.queryAll<RoleplayMessageRow>(
-      `SELECT *
-       FROM roleplay_messages
-       WHERE session_id = ?
-       ORDER BY message_index ASC, id ASC`,
-      sessionId
-    )
-
-    return noStoreJson(toRoleplaySessionPayload(toRoleplaySessionDetail(session, messages)))
+    return noStoreJson({
+      ...toRoleplaySessionPayload(session),
+      timelineNodeId: db.queryOne<{ id: string }>('SELECT id FROM story_timeline_nodes WHERE roleplay_session_id = ? LIMIT 1', sessionId)?.id ?? null,
+      characterOptions: getRoleplayCharacterOptions(session, db),
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load roleplay session'
     return noStoreJsonError(message, message.endsWith(' is required') ? 400 : 500)

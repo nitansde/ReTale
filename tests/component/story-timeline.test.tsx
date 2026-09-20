@@ -322,7 +322,7 @@ describe('StoryTimeline', () => {
     expect(screen.getAllByText('续写块')).toHaveLength(2)
   })
 
-  it('emits delete callbacks for rewrite, continue, what-if, and future-jump nodes', () => {
+  it('emits delete callbacks for rewrite, continue, what-if, future-jump, and roleplay nodes', () => {
     const onDeleteBranchNode = vi.fn<(node: StoryTimelineBranchNode) => void>()
     const branchNodes: StoryTimelineBranchNode[] = [
       {
@@ -346,6 +346,7 @@ describe('StoryTimeline', () => {
         status: 'active',
       },
       ...buildNodes(),
+      buildNodesWithRoleplay()[0]!,
     ]
 
     render(
@@ -376,6 +377,8 @@ describe('StoryTimeline', () => {
     expect(onDeleteBranchNode).toHaveBeenNthCalledWith(2, branchNodes[2])
     expect(onDeleteBranchNode).toHaveBeenNthCalledWith(3, branchNodes[1])
     expect(onDeleteBranchNode).toHaveBeenNthCalledWith(4, branchNodes[3])
+    fireEvent.click(screen.getByLabelText('删除 角色扮演会话 节点 RP-01'))
+    expect(onDeleteBranchNode).toHaveBeenNthCalledWith(5, branchNodes[4])
   })
 
   it('renders current readable labels and instruction previews instead of lineage-heavy branch titles', () => {
@@ -444,6 +447,6 @@ describe('StoryTimeline', () => {
       sourceChapterNo: 10,
       targetChapterNo: 100,
     })
-    expect(screen.queryByLabelText('删除 Roleplay session 节点 RP-01')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('删除 角色扮演会话 节点 RP-01')).toBeInTheDocument()
   })
 })

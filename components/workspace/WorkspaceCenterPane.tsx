@@ -25,6 +25,7 @@ export function WorkspaceCenterPane(props: {
 }) {
   const { t } = useI18n()
   const isChapter = props.selection.kind === 'chapter'
+  const isRoleplay = props.selection.kind === 'roleplay_session'
   let eyebrow = props.centerPaneView === 'body' ? t('workspace.centerPane.chapterBodyEyebrow') : t('workspace.centerPane.chapterGraphEyebrow')
   let title = props.chapterTitle
   let description = props.centerPaneView === 'body'
@@ -61,10 +62,10 @@ export function WorkspaceCenterPane(props: {
   }
 
   return (
-    <section className="min-w-0 overflow-hidden bg-transparent shadow-none sm:rounded-[30px] sm:border sm:border-line/10 sm:bg-raised sm:shadow-[0_28px_90px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))]" data-testid="workspace-center-pane">
+    <section className={cn('min-w-0 overflow-hidden bg-transparent shadow-none sm:rounded-[30px] sm:border sm:border-line/10 sm:bg-raised sm:shadow-[0_28px_90px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))]', isRoleplay && 'flex h-full min-h-0 flex-col')} data-testid="workspace-center-pane">
       <div className={cn(
         'border-y border-line/8 bg-panel/88 px-4 py-3 backdrop-blur-xl sm:border-x-0 sm:border-t-0 sm:bg-transparent sm:px-7 sm:py-4 sm:backdrop-blur-none',
-        'hidden lg:block',
+        isRoleplay ? 'hidden' : 'hidden lg:block',
       )}>
         <div className="flex flex-wrap items-center justify-between gap-3 sm:items-start">
           <div className={cn('min-w-0', isChapter && 'hidden sm:block')}>
@@ -109,7 +110,7 @@ export function WorkspaceCenterPane(props: {
         </div>
       </div>
 
-      {!isChapter && props.selectionActions ? (
+      {!isChapter && !isRoleplay && props.selectionActions ? (
         <div className="border-b border-line/8 px-3 py-3 sm:px-7 sm:py-4">
           {props.selectionActions}
         </div>

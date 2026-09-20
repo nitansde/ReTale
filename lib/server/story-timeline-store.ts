@@ -645,6 +645,9 @@ export function deleteStoryTimelineNode(nodeId: string, db: Db = defaultDb): Sto
   if (deletedNode.continueBlockId) {
     db.execute('DELETE FROM continue_blocks WHERE id = ?', deletedNode.continueBlockId)
   }
+  if (deletedNode.roleplaySessionId) {
+    db.execute('DELETE FROM roleplay_sessions WHERE id = ?', deletedNode.roleplaySessionId)
+  }
 
   db.execute('DELETE FROM story_timeline_nodes WHERE id = ?', nodeId)
 

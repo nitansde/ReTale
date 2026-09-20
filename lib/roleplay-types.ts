@@ -1,3 +1,5 @@
+import type { RoleplayScript, RoleplayTurn } from '@/lib/roleplay-script'
+
 export type RoleplaySourceNodeType = 'chapter' | 'rewrite' | 'continue_block' | 'what_if' | 'future_jump' | 'roleplay_session'
 
 export type RoleplayMessageRole = 'user' | 'assistant'
@@ -30,6 +32,8 @@ export type RoleplayMessageRecord = {
   variantIndex: number
   role: RoleplayMessageRole
   content: string
+  turn?: RoleplayTurn
+  script?: RoleplayScript
   parentMessageId: string | null
   forkedFromMessageId: string | null
   variantGroupId: string | null

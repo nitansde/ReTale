@@ -2,7 +2,7 @@
 
 import { create } from 'zustand'
 import { normalizeAISettings } from '@/lib/ai-settings'
-import { readBrowserWorkspaceSession, writeBrowserWorkspaceSession } from '@/lib/browser-preferences'
+import { readBrowserWorkspaceSession, removeBrowserWorkspaceNovelSession, writeBrowserWorkspaceSession } from '@/lib/browser-preferences'
 import {
   exportPresetCompatPresetJson,
   exportPresetCompatStandaloneRegexJson,
@@ -770,11 +770,13 @@ export const useNovelStore = create<NovelStore>((set, get) => {
     })),
   deleteChapter: (chapterId) =>
     setPersisted((state) => buildStateAfterChapterDeletion(state, chapterId)),
-  deleteNovel: (novelId) =>
+  deleteNovel: (novelId) => {
     setPersisted((state) => ({
       ...buildStateAfterNovelDeletion(state, novelId),
       librarySummaries: state.librarySummaries.filter((summary) => summary.id !== novelId),
-    })),
+    }))
+    removeBrowserWorkspaceNovelSession(novelId)
+  },
   beginNovelDeletion: (novelId) => {
     let transaction: NovelDeletionTransaction | null = null
     setPersisted((state) => {
@@ -808,7 +810,10 @@ export const useNovelStore = create<NovelStore>((set, get) => {
   reconcileNovelDeletionFromBackend: async (transaction) => {
     try {
       const status = await pollNovelDeletionStatus(transaction.novelId)
-      if (status.deletionState === 'deleted') return 'deleted'
+      if (status.deletionState === 'deleted') {
+        removeBrowserWorkspaceNovelSession(transaction.novelId)
+        return 'deleted'
+      }
 
       const authoritative = await fetchAuthoritativeWorkspace(transaction.novelId)
       let result: NovelDeletionReconciliationResult = 'present'
@@ -1342,21 +1347,21 @@ useNovelStore.subscribe((state, previous) => {
     && state.localNovels === previous.localNovels
   ) return
 
+  // Library hydration has no workspace yet. Do not replace saved preferences
+  // with defaults or pair the new novel with the previous novel's chapter.
+  const currentNovelLoaded = state.localNovels.some((novel) => novel.id === state.currentNovelId)
+    || state.localChapters.some((chapter) => chapter.novelId === state.currentNovelId)
+  if (state.currentNovelId && !currentNovelLoaded) return
+
   const stored = readBrowserWorkspaceSession()
-  const availableNovelIds = new Set([
-    ...state.localNovels.map((novel) => novel.id),
-    ...state.localChapters.map((chapter) => chapter.novelId),
-  ])
-  const currentChapterIds = Object.fromEntries(
-    Object.entries(stored.currentChapterIds).filter(([novelId]) => availableNovelIds.has(novelId))
-  )
-  if (state.currentNovelId && state.currentChapterId) {
+  // Only one novel is loaded at a time; unloaded novels still own their bookmarks.
+  // Confirmed novel deletion removes its session explicitly.
+  const currentChapterIds = { ...stored.currentChapterIds }
+  if (state.localChapters.some((chapter) => chapter.id === state.currentChapterId && chapter.novelId === state.currentNovelId)) {
     currentChapterIds[state.currentNovelId] = state.currentChapterId
   }
-  const presetCompatSessionStates = Object.fromEntries(
-    Object.entries(stored.presetCompatSessionStates).filter(([novelId]) => availableNovelIds.has(novelId))
-  )
-  if (state.currentNovelId) {
+  const presetCompatSessionStates = { ...stored.presetCompatSessionStates }
+  if (currentNovelLoaded) {
     presetCompatSessionStates[state.currentNovelId] = state.presetCompatSessionState
   }
 

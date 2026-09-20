@@ -1,494 +1,159 @@
 // @vitest-environment jsdom
-
 import React from 'react'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { RoleplaySessionView } from '@/components/workspace/RoleplaySessionView'
+import { type RoleplayTurn, type RoleplayScript, roleplayScriptText } from '@/lib/roleplay-script'
 
-function buildMessage(input: {
-  id: string
-  messageIndex: number
-  role: 'user' | 'assistant'
-  content: string
-  parentMessageId?: string | null
-  forkedFromMessageId?: string | null
-  turnIndex?: number
-  variantIndex?: number
-}) {
-  const turnIndex = input.turnIndex ?? input.messageIndex
-  const variantIndex = input.variantIndex ?? 1
-
-  return {
-    id: input.id,
-    sessionId: 'roleplay-session-001',
-    messageIndex: input.messageIndex,
-    turnIndex,
-    variantIndex,
-    variantGroupId: `variant-group-${turnIndex}`,
-    role: input.role,
-    content: input.content,
-    parentMessageId: input.parentMessageId ?? null,
-    forkedFromMessageId: input.forkedFromMessageId ?? null,
-    createdAt: `2026-05-20T12:0${input.messageIndex}:00.000Z`,
-    updatedAt: `2026-05-20T12:0${input.messageIndex}:00.000Z`,
-    variantMetadata: {
-      turnIndex,
-      variantIndex,
-      variantGroupId: `variant-group-${turnIndex}`,
-    },
-    forkMetadata: {
-      parentMessageId: input.parentMessageId ?? null,
-      forkedFromMessageId: input.forkedFromMessageId ?? null,
-    },
+const cast = { playerName: '林舟', counterpartName: '沈月' }
+const turn: RoleplayTurn = { ...cast, storyGuidance: '雨夜，他推开门。', dialogue: '你在等我？', maxCharacters: 600 }
+const script: RoleplayScript = { ...cast, blocks: [
+  { type: 'narration', text: '雨水沿着屋檐滑落。' },
+  { type: 'narration', text: '屋里的灯晃了一下。' },
+  { type: 'counterpart', text: '她抬起头，轻声道：“我一直在这里。”' },
+  { type: 'player', text: '他伸出手。“那就一起走吧。”' },
+  { type: 'counterpart', text: '好。' },
+] }
+const savedScript: RoleplayScript = { ...script, blocks: [{ type: 'narration', text: '雨水沿着屋檐滑落。\n\n屋里的灯晃了一下。' }, ...script.blocks.slice(2)] }
+function message(index: number, data: { turn: RoleplayTurn } | { script: RoleplayScript }, parentMessageId: string | null = null) {
+  return { id: `m${index}`, sessionId: 'session', messageIndex: index, turnIndex: index, variantIndex: 1, role: 'turn' in data ? 'user' : 'assistant',
+    content: 'turn' in data ? data.turn.dialogue : roleplayScriptText(data.script), parentMessageId, forkedFromMessageId: null, variantGroupId: null, ...data }
+}
+function setup(options: { messages?: ReturnType<typeof message>[]; candidates?: boolean; fail?: boolean; json?: boolean } = {}) {
+  const detail = { id: 'session', title: 'RP-01', sourceChapterNo: 3,
+    sourceSnapshot: { chapterId: 'chapter', chapterNo: 3, selectedText: '雨夜相逢', textSnapshot: '雨夜相逢正文' },
+    characterOptions: options.candidates === false ? [] : [{ name: '林舟', protagonist: true }, { name: '沈月', protagonist: false }],
+    messages: options.messages ?? [],
   }
-}
-
-function buildSessionDetail(messages: ReturnType<typeof buildMessage>[]) {
-  return {
-    id: 'roleplay-session-001',
-    novelId: 'novel-001',
-    branchId: 'novel-001:main',
-    title: 'RP · 第10章 结盟',
-    subtitle: '围绕片段展开角色扮演',
-    sourceChapterNo: 10,
-    createdAt: '2026-05-20T12:00:00.000Z',
-    updatedAt: '2026-05-20T12:00:00.000Z',
-    status: 'active',
-    sourceSnapshot: {
-      chapterId: 'chapter-10',
-      chapterNo: 10,
-      chapterTitle: '第10章 结盟',
-      timelineNodeId: null,
-      timelineNodeType: 'chapter',
-      selectedText: '“你昨晚为什么没有按约定现身？”',
-      textSnapshot: '第10章正文：夜色压下来之前，他们已经开始互相试探。',
-      selectedLineStart: 1,
-      selectedLineEnd: 2,
-    },
-    messages,
-  }
-}
-
-function createStreamResponse(chunks: string[]) {
-  const encoder = new TextEncoder()
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const chunk of chunks) {
-        controller.enqueue(encoder.encode(chunk))
-      }
-      controller.close()
-    },
-  })
-
-  return new Response(stream, {
-    status: 200,
-    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-  })
-}
-
-function createControlledStreamResponse() {
-  const encoder = new TextEncoder()
-  let controller: ReadableStreamDefaultController<Uint8Array> | null = null
-  const stream = new ReadableStream<Uint8Array>({
-    start(nextController) {
-      controller = nextController
-    },
-  })
-
-  return {
-    response: new Response(stream, {
-      status: 200,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    }),
-    enqueue(chunk: string) {
-      controller?.enqueue(encoder.encode(chunk))
-    },
-    close() {
-      controller?.close()
-    },
-  }
-}
-
-describe('RoleplaySessionView', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-    vi.unstubAllGlobals()
-  })
-
-  it('renders persisted messages, exposes regenerate state, and lets earlier messages become fork anchors', async () => {
-    const detail = buildSessionDetail([
-      buildMessage({ id: 'message-1', messageIndex: 1, role: 'user', content: '你昨晚为什么没有按约定现身？' }),
-      buildMessage({ id: 'message-2', messageIndex: 2, role: 'assistant', content: '我到了，只是先确认街角没有埋伏。', parentMessageId: 'message-1', turnIndex: 1 }),
-    ])
-
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify(detail), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    render(
-      <RoleplaySessionView
-        novelId="novel-001"
-        branchId="novel-001:main"
-        sessionId="roleplay-session-001"
-        anchorChapterNo={10}
-      />
-    )
-
-    expect(await screen.findByTestId('roleplay-chat-core')).toBeInTheDocument()
-    expect(screen.getByTestId('roleplay-message-0')).toHaveTextContent('你昨晚为什么没有按约定现身？')
-    expect(screen.getByTestId('roleplay-message-1')).toHaveTextContent('我到了，只是先确认街角没有埋伏。')
-    expect(screen.getByTestId('roleplay-composer-send')).toBeDisabled()
-    expect(screen.getByTestId('roleplay-regenerate-last')).toBeEnabled()
-    expect(screen.getByTestId('roleplay-fork-anchor')).toHaveTextContent('下轮默认接在最新消息后')
-
-    fireEvent.click(screen.getByTestId('roleplay-message-0'))
-
-    expect(screen.getByTestId('roleplay-fork-anchor')).toHaveTextContent('下轮从 #1 分叉')
-    expect(screen.getByTestId('roleplay-fork-point-visual-state')).toHaveTextContent('下轮从 #1 分叉')
-    expect(screen.getByTestId('roleplay-fork-point-visual-state')).toHaveTextContent('你昨晚为什么没有按约定现身？')
-  })
-
-  it('disables regenerate when the latest persisted message is not an assistant reply', async () => {
-    const detail = buildSessionDetail([
-      buildMessage({ id: 'message-1', messageIndex: 1, role: 'user', content: '只剩一条用户消息。' }),
-    ])
-
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify(detail), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    render(
-      <RoleplaySessionView
-        novelId="novel-001"
-        branchId="novel-001:main"
-        sessionId="roleplay-session-001"
-        anchorChapterNo={10}
-      />
-    )
-
-    expect(await screen.findByTestId('roleplay-chat-core')).toBeInTheDocument()
-    expect(screen.getByTestId('roleplay-regenerate-last')).toBeDisabled()
-  })
-
-  it('does not move the page to the composer when a mobile session opens', async () => {
-    const scrollIntoView = vi.fn()
-    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
-    const originalInnerWidth = window.innerWidth
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView })
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(Response.json(buildSessionDetail([]))))
-
-    try {
-      render(
-        <RoleplaySessionView
-          novelId="novel-001"
-          branchId="novel-001:main"
-          sessionId="roleplay-session-001"
-          anchorChapterNo={10}
-        />
-      )
-
-      expect(await screen.findByTestId('roleplay-chat-core')).toBeInTheDocument()
-      await new Promise((resolve) => window.setTimeout(resolve, 120))
-      expect(scrollIntoView).not.toHaveBeenCalled()
-    } finally {
-      Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalInnerWidth })
-      if (originalScrollIntoView) {
-        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: originalScrollIntoView })
-      } else {
-        Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
-      }
+  let fail = options.fail ?? false
+  const requests: Record<string, unknown>[] = []
+  const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (String(url).includes('/messages')) {
+      const body = JSON.parse(String(init?.body))
+      const next = message(detail.messages.length + 1, body.turn ? { turn: body.turn } : { script: body.script }, body.parentMessageId)
+      detail.messages.push(next)
+      return Response.json(next)
     }
+    if (String(url) === '/api/rewrite') {
+      requests.push(JSON.parse(String(init?.body)))
+      if (fail) { fail = false; return new Response('{broken json', { headers: { 'Content-Type': 'text/plain' } }) }
+      const content = JSON.stringify({ blocks: script.blocks })
+      return options.json ? Response.json({ provider: 'test', metadata: { debug: 'DO_NOT_RENDER' }, candidates: [{ content }] }) : new Response(content, { headers: { 'Content-Type': 'text/plain' } })
+    }
+    return Response.json(detail)
   })
+  vi.stubGlobal('fetch', fetchMock)
+  const view = render(<RoleplaySessionView novelId="novel" branchId="novel:main" sessionId="session" anchorChapterNo={3} />)
+  return { detail, requests, fetchMock, ...view }
+}
+async function chooseCast() {
+  await screen.findByTestId('roleplay-cast-picker')
+  fireEvent.click(screen.getAllByRole('button', { name: '沈月' })[1]!)
+  fireEvent.click(screen.getByRole('button', { name: '进入故事' }))
+}
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
-  it('sanitizes raw session-load diagnostics', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ error: 'SENTINEL roleplay load SQL stack' }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    ))
-
-    render(
-      <RoleplaySessionView
-        novelId="novel-001"
-        branchId="novel-001:main"
-        sessionId="roleplay-session-001"
-        anchorChapterNo={10}
-      />
-    )
-
-    expect(await screen.findByText('读取角色扮演会话失败，请稍后重试。')).toBeInTheDocument()
-    expect(screen.queryByText(/SENTINEL/)).not.toBeInTheDocument()
+describe('roleplay script view', () => {
+  it('offers the protagonist, chapter characters and custom names, and requires two distinct roles', async () => {
+    setup()
+    await screen.findByTestId('roleplay-cast-picker')
+    expect(screen.getByRole('textbox', { name: '我扮演的角色' })).toHaveValue('林舟')
+    expect(screen.getByRole('button', { name: '进入故事' })).toBeDisabled()
+    fireEvent.change(screen.getByRole('textbox', { name: '对方角色' }), { target: { value: '林舟' } })
+    expect(screen.getByRole('alert')).toHaveTextContent('请选择两个不同的角色')
+    fireEvent.change(screen.getByRole('textbox', { name: '对方角色' }), { target: { value: '自定义角色' } })
+    fireEvent.click(screen.getByRole('button', { name: '进入故事' }))
+    expect(screen.getByText('林舟 ↔ 自定义角色')).toBeInTheDocument()
   })
-
-  it('does not render a non-JSON streaming response body', async () => {
-    const detail = buildSessionDetail([
-      buildMessage({ id: 'message-1', messageIndex: 1, role: 'user', content: '你昨晚为什么没有按约定现身？' }),
-      buildMessage({ id: 'message-2', messageIndex: 2, role: 'assistant', content: '我到了。', parentMessageId: 'message-1', turnIndex: 1 }),
-    ])
-
-    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
-      const url = String(input)
-      if (url === '/api/roleplay/sessions/roleplay-session-001?novelId=novel-001&branchId=novel-001%3Amain') {
-        return new Response(JSON.stringify(detail), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }
-      if (url === '/api/roleplay/sessions/roleplay-session-001/messages' && init?.method === 'POST') {
-        return new Response(JSON.stringify(buildMessage({
-          id: 'message-3',
-          messageIndex: 3,
-          role: 'user',
-          content: '继续说。',
-          parentMessageId: 'message-2',
-          turnIndex: 2,
-        })), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }
-      if (url === '/api/rewrite' && init?.method === 'POST') {
-        return new Response('<html>SENTINEL upstream path and stack</html>', {
-          status: 502,
-          headers: { 'Content-Type': 'text/html' },
-        })
-      }
-      throw new Error(`Unhandled fetch: ${url}`)
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    render(
-      <RoleplaySessionView
-        novelId="novel-001"
-        branchId="novel-001:main"
-        sessionId="roleplay-session-001"
-        anchorChapterNo={10}
-      />
-    )
-
-    expect(await screen.findByTestId('roleplay-chat-core')).toBeInTheDocument()
-    fireEvent.change(screen.getByPlaceholderText('输入角色台词、动作，或你希望推动的剧情。⌘/Ctrl + Enter 发送'), {
-      target: { value: '继续说。' },
-    })
+  it('allows entering both names when chapter knowledge is unavailable', async () => {
+    setup({ candidates: false })
+    await screen.findByText('本章角色信息不足，请输入双方的角色姓名。')
+    fireEvent.change(screen.getByRole('textbox', { name: '我扮演的角色' }), { target: { value: '甲' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '对方角色' }), { target: { value: '乙' } })
+    fireEvent.click(screen.getByRole('button', { name: '进入故事' }))
+    expect(screen.getByTestId('roleplay-chat-core')).toBeInTheDocument()
+  })
+  it.each([false, true])('saves separate guidance and dialogue, renders all three block types and hides transport JSON (json=%s)', async (json) => {
+    const { requests, detail } = setup({ json })
+    await chooseCast()
+    fireEvent.change(screen.getByRole('textbox', { name: '故事引导' }), { target: { value: turn.storyGuidance } })
+    fireEvent.change(screen.getByRole('textbox', { name: '我的台词' }), { target: { value: turn.dialogue } })
+    fireEvent.change(screen.getByRole('spinbutton', { name: '本次目标字数' }), { target: { value: '300' } })
     fireEvent.click(screen.getByTestId('roleplay-composer-send'))
-
-    expect(await screen.findByText('角色扮演生成请求失败，请稍后重试。')).toBeInTheDocument()
-    expect(screen.queryByText(/SENTINEL/)).not.toBeInTheDocument()
-  })
-
-  it('sends through roleplay session endpoints and keeps rewrite payload chat-only', async () => {
-    const initialMessages = [
-      buildMessage({ id: 'message-1', messageIndex: 1, role: 'user', content: '你昨晚为什么没有按约定现身？' }),
-      buildMessage({ id: 'message-2', messageIndex: 2, role: 'assistant', content: '我到了，只是先确认街角没有埋伏。', parentMessageId: 'message-1', turnIndex: 1 }),
-    ]
-    let currentDetail = buildSessionDetail(initialMessages)
-    const rewritePayloads: Record<string, unknown>[] = []
-
-    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
-      const url = String(input)
-      if (url === '/api/roleplay/sessions/roleplay-session-001?novelId=novel-001&branchId=novel-001%3Amain') {
-        return new Response(JSON.stringify(currentDetail), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }
-
-      if (url === '/api/roleplay/sessions/roleplay-session-001/messages' && init?.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as {
-          novelId: string
-          branchId: string
-          role: 'user' | 'assistant'
-          content: string
-          parentMessageId?: string | null
-          forkedFromMessageId?: string | null
-        }
-
-        expect(body.novelId).toBe('novel-001')
-        expect(body.branchId).toBe('novel-001:main')
-
-        if (body.role === 'user') {
-          const userMessage = buildMessage({
-            id: 'message-3',
-            messageIndex: 3,
-            role: 'user',
-            content: body.content,
-            parentMessageId: body.parentMessageId,
-            forkedFromMessageId: body.forkedFromMessageId,
-            turnIndex: 2,
-          })
-          currentDetail = {
-            ...currentDetail,
-            messages: [...currentDetail.messages, userMessage],
-          }
-          return new Response(JSON.stringify(userMessage), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          })
-        }
-
-        const assistantMessage = buildMessage({
-          id: 'message-4',
-          messageIndex: 4,
-          role: 'assistant',
-          content: body.content,
-          parentMessageId: body.parentMessageId,
-          forkedFromMessageId: body.forkedFromMessageId,
-          turnIndex: 2,
-        })
-        currentDetail = {
-          ...currentDetail,
-          messages: [...currentDetail.messages, assistantMessage],
-        }
-        return new Response(JSON.stringify(assistantMessage), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }
-
-      if (url === '/api/rewrite' && init?.method === 'POST') {
-        rewritePayloads.push(JSON.parse(String(init.body)) as Record<string, unknown>)
-        return createStreamResponse(['她没有立刻反驳，', '只是把质问压低成一声叹息。'])
-      }
-
-      throw new Error(`Unhandled fetch: ${url}`)
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    render(
-      <RoleplaySessionView
-        novelId="novel-001"
-        branchId="novel-001:main"
-        sessionId="roleplay-session-001"
-        anchorChapterNo={10}
-      />
-    )
-
-    expect(await screen.findByTestId('roleplay-chat-core')).toBeInTheDocument()
-
-    fireEvent.change(screen.getByPlaceholderText('输入角色台词、动作，或你希望推动的剧情。⌘/Ctrl + Enter 发送'), {
-      target: { value: '别再躲了，给我一个真正的解释。' },
-    })
-    expect(screen.getByTestId('roleplay-composer-send')).toBeEnabled()
-
+    await screen.findByTestId('roleplay-script')
+    expect(requests[0]).toMatchObject({ roleplayTurn: { ...turn, maxCharacters: 300 }, presetCompatRuntimeContext: { namedTranscript: { userName: '林舟', assistantName: '沈月' } } })
+    expect(detail.messages[0]).toMatchObject({ turn: { storyGuidance: turn.storyGuidance } })
+    expect(document.querySelectorAll('[data-roleplay-block="narration"]')).toHaveLength(1)
+    expect(document.querySelectorAll('[data-roleplay-block="player"]')).toHaveLength(1)
+    expect(document.querySelectorAll('[data-roleplay-block="counterpart"]')).toHaveLength(2)
+    expect(document.querySelector('[data-roleplay-block="narration"] p:last-child')?.textContent).toBe('雨水沿着屋檐滑落。\n\n屋里的灯晃了一下。')
+    expect(screen.getByTestId('roleplay-script')).toHaveTextContent('她抬起头，轻声道：“我一直在这里。”')
+    expect(screen.getByTestId('roleplay-script')).toHaveTextContent('他伸出手。“那就一起走吧。”')
+    expect(screen.getByTestId('roleplay-message-list')).not.toHaveTextContent('DO_NOT_RENDER')
+    expect(screen.getByTestId('roleplay-message-list')).not.toHaveTextContent('"blocks"')
+    fireEvent.change(screen.getByRole('textbox', { name: '我的台词' }), { target: { value: '接下来去哪？' } })
     fireEvent.click(screen.getByTestId('roleplay-composer-send'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('roleplay-message-3')).toHaveTextContent('她没有立刻反驳，只是把质问压低成一声叹息。')
-    })
-
-    expect(screen.getByPlaceholderText('输入角色台词、动作，或你希望推动的剧情。⌘/Ctrl + Enter 发送')).toHaveValue('')
-    const rewritePayload = rewritePayloads[0]
-    if (!rewritePayload) throw new Error('Rewrite payload was not captured')
-    expect(rewritePayload).toMatchObject({
-      novelId: 'novel-001',
-      branchId: 'novel-001:main',
-      operationType: 'roleplay',
-      userInstruction: '别再躲了，给我一个真正的解释。',
-      scope: 'chapter',
-      mode: 'dialogue',
-      tone: 'dramatic',
-    })
-    expect(rewritePayload.generatedText).toBeUndefined()
-    expect(rewritePayload.continueBlockId).toBeUndefined()
-    expect(rewritePayload.targetChapterNo).toBeUndefined()
-    expect(rewritePayload.roleplayMessages).toEqual([
-      { role: 'user', content: '你昨晚为什么没有按约定现身？' },
-      { role: 'assistant', content: '我到了，只是先确认街角没有埋伏。' },
-    ])
+    await waitFor(() => expect(requests).toHaveLength(2))
+    expect(requests[1]?.roleplayMessages).toEqual([{ role: 'user', content: '故事引导：雨夜，他推开门。\n林舟对沈月说：你在等我？' }, { role: 'assistant', content: roleplayScriptText(savedScript) }])
+    await waitFor(() => expect(detail.messages).toHaveLength(4))
   })
-
-  it('stops following streamed chunks after the user scrolls away from the bottom', async () => {
-    let currentDetail = buildSessionDetail([
-      buildMessage({ id: 'message-1', messageIndex: 1, role: 'user', content: '第一问。' }),
-      buildMessage({ id: 'message-2', messageIndex: 2, role: 'assistant', content: '第一答。', parentMessageId: 'message-1', turnIndex: 1 }),
-    ])
-    const controlledStream = createControlledStreamResponse()
-
-    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
-      const url = String(input)
-      if (url === '/api/roleplay/sessions/roleplay-session-001?novelId=novel-001&branchId=novel-001%3Amain') {
-        return Response.json(currentDetail)
-      }
-      if (url === '/api/rewrite' && init?.method === 'POST') {
-        return controlledStream.response
-      }
-      if (url === '/api/roleplay/sessions/roleplay-session-001/messages' && init?.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as {
-          role: 'user' | 'assistant'
-          content: string
-          parentMessageId?: string | null
-        }
-        const message = buildMessage({
-          id: body.role === 'user' ? 'message-3' : 'message-4',
-          messageIndex: body.role === 'user' ? 3 : 4,
-          role: body.role,
-          content: body.content,
-          parentMessageId: body.parentMessageId,
-          turnIndex: 2,
-        })
-        currentDetail = { ...currentDetail, messages: [...currentDetail.messages, message] }
-        return Response.json(message)
-      }
-      throw new Error(`Unhandled fetch: ${url}`)
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    render(
-      <RoleplaySessionView
-        novelId="novel-001"
-        branchId="novel-001:main"
-        sessionId="roleplay-session-001"
-        anchorChapterNo={10}
-      />
-    )
-
-    expect(await screen.findByTestId('roleplay-chat-core')).toBeInTheDocument()
-    const messageList = screen.getByTestId('roleplay-message-list')
-    Object.defineProperties(messageList, {
-      clientHeight: { configurable: true, value: 200 },
-      scrollHeight: { configurable: true, value: 1000 },
-    })
-    messageList.scrollTop = 800
-
-    fireEvent.change(screen.getByPlaceholderText('输入角色台词、动作，或你希望推动的剧情。⌘/Ctrl + Enter 发送'), {
-      target: { value: '继续。' },
-    })
+  it('restores cast and target length and regenerates with the original guidance and opening line', async () => {
+    const { requests, detail } = setup({ messages: [message(1, turnData(), null), message(2, { script }, 'm1')] })
+    await screen.findByTestId('roleplay-script')
+    expect(screen.getByRole('spinbutton')).toHaveValue(600)
+    fireEvent.click(screen.getByTestId('roleplay-regenerate-last'))
+    await waitFor(() => expect(detail.messages).toHaveLength(3))
+    expect(requests[0]).toMatchObject({ roleplayTurn: turn, roleplayMessages: [] })
+  })
+  it('continues a reopened session using complete script blocks even when the content summary is stale', async () => {
+    const last = { ...message(2, { script }, 'm1'), content: '过时的摘要' }
+    const { requests, detail } = setup({ messages: [message(1, turnData()), last] })
+    await screen.findByTestId('roleplay-script')
+    fireEvent.change(screen.getByRole('textbox', { name: '我的台词' }), { target: { value: '我们已经出门了，接下来去哪？' } })
     fireEvent.click(screen.getByTestId('roleplay-composer-send'))
-    await waitFor(() => expect(messageList.scrollTop).toBe(1000))
-
-    messageList.scrollTop = 200
-    fireEvent.scroll(messageList)
-    await act(async () => {
-      controlledStream.enqueue('流式第一段。')
-      await Promise.resolve()
+    await waitFor(() => expect(detail.messages).toHaveLength(4))
+    expect(requests[0]).toMatchObject({
+      roleplayMessages: [
+        { role: 'user', content: '故事引导：雨夜，他推开门。\n林舟对沈月说：你在等我？' },
+        { role: 'assistant', content: roleplayScriptText(script) },
+      ],
+      presetCompatRuntimeContext: { sessionPhase: 'continue' },
     })
-    expect(await screen.findByText('流式第一段。')).toBeInTheDocument()
-    expect(messageList.scrollTop).toBe(200)
-
-    await act(async () => {
-      controlledStream.enqueue('流式第二段。')
-      await Promise.resolve()
-    })
-    expect(await screen.findByText('流式第一段。流式第二段。')).toBeInTheDocument()
-    expect(messageList.scrollTop).toBe(200)
-
-    await act(async () => {
-      controlledStream.close()
-      await Promise.resolve()
-    })
-    await waitFor(() => {
-      expect(screen.getByTestId('roleplay-message-3')).toHaveTextContent('流式第一段。流式第二段。')
-    })
-    expect(messageList.scrollTop).toBe(200)
+  })
+  it.each([false, true])('retains the earlier scene when retrying or regenerating a later turn (retry=%s)', async (retry) => {
+    const nextTurn = { ...turn, storyGuidance: '', dialogue: '接下来去哪？' }
+    const messages = [message(1, turnData()), message(2, { script }, 'm1'), message(3, { turn: nextTurn }, 'm2')]
+    if (!retry) messages.push(message(4, { script }, 'm3'))
+    const { requests, detail } = setup({ messages })
+    await screen.findByTestId('roleplay-message-2')
+    fireEvent.click(screen.getByTestId('roleplay-regenerate-last'))
+    await waitFor(() => expect(detail.messages).toHaveLength(retry ? 4 : 5))
+    expect(requests[0]).toMatchObject({ roleplayTurn: nextTurn, roleplayMessages: [
+      { role: 'user', content: '故事引导：雨夜，他推开门。\n林舟对沈月说：你在等我？' },
+      { role: 'assistant', content: roleplayScriptText(script) },
+    ] })
+  })
+  it('does not render malformed JSON and retries a saved user turn without duplicating it', async () => {
+    const { detail } = setup({ fail: true })
+    await chooseCast()
+    fireEvent.change(screen.getByRole('textbox', { name: '我的台词' }), { target: { value: turn.dialogue } })
+    fireEvent.click(screen.getByTestId('roleplay-composer-send'))
+    await screen.findByRole('alert')
+    expect(screen.getByTestId('roleplay-message-list')).not.toHaveTextContent('{broken')
+    expect(detail.messages).toHaveLength(1)
+    fireEvent.click(screen.getAllByRole('button', { name: '重试这一段' })[1]!)
+    await screen.findByTestId('roleplay-script')
+    expect(detail.messages).toHaveLength(2)
+  })
+  it('limits history to the selected fork path', async () => {
+    const { requests, detail } = setup({ messages: [message(1, turnData()), message(2, { script }, 'm1'), message(3, { turn: { ...turn, dialogue: '后来呢？' } }, 'm2'), message(4, { script }, 'm3')] })
+    await screen.findByTestId('roleplay-message-3')
+    fireEvent.click(screen.getByRole('button', { name: '从 #2 分叉' }))
+    fireEvent.change(screen.getByRole('textbox', { name: '我的台词' }), { target: { value: '换条路。' } })
+    fireEvent.click(screen.getByTestId('roleplay-composer-send'))
+    await waitFor(() => expect(detail.messages).toHaveLength(6))
+    expect(requests[0]?.roleplayMessages).toHaveLength(2)
+    expect(JSON.stringify(requests[0]?.roleplayMessages)).not.toContain('后来呢')
   })
 })
+function turnData() { return { turn } }

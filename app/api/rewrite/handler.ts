@@ -40,6 +40,8 @@ import { reconcileKnowledgeJobWatchdog } from '@/lib/server/knowledge-job-watchd
 import { uid } from '@/lib/utils'
 import type { PresetCompatPromptRuleRuntimeContext, PresetCompatRuntimeContextBlock } from '@/lib/preset-compat/types'
 import type { GenerationContextBlock, RoleplayContextMessage } from '@/lib/server/context-builder'
+import { buildRoleplayScriptPrompt, parseRoleplayTurn, roleplayTurnText, ROLEPLAY_SCRIPT_SYSTEM_PROMPT, type RoleplayTurn } from '@/lib/roleplay-script'
+import { buildRoleplayContextBlock } from '@/lib/roleplay-context'
 import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
 import { createWritingSkillRandomSeed } from '@/lib/server/writing-skill-distillation-agent'
 import { resolveWritingSkillRuntimes } from '@/lib/server/writing-skill-runtime'
@@ -584,6 +586,7 @@ function normalizeBranchContextInclusion(value: unknown) {
 }
 
 export function buildUserPrompt(params: {
+  roleplayTurn?: RoleplayTurn | null
   operationType: string
   userInstruction: string
   chapterNo?: number
@@ -592,10 +595,11 @@ export function buildUserPrompt(params: {
   sourceText: string
   selectedText: string
   assembledContext: string
+  roleplayHistory?: string
   writingSkillPrompt?: string
   hasBranchLineageContext?: boolean
 }) {
-  const roleplayContract = params.operationType === 'roleplay'
+  const roleplayContract = params.roleplayTurn ? buildRoleplayScriptPrompt(params.roleplayTurn, Boolean(params.roleplayHistory)) : params.operationType === 'roleplay'
     ? [
         '',
         '# 角色扮演回复契约',
@@ -609,12 +613,12 @@ export function buildUserPrompt(params: {
 
   const sourceText = params.sourceText.trim()
   const selectedText = params.selectedText.trim()
-  const isContinuationBody = isContinuationRewriteTask({
+  const isContinuationBody = params.operationType !== 'roleplay' && isContinuationRewriteTask({
     selectedText,
     hasContinuationSource: Boolean(sourceText),
   })
   const sourceBlock = selectedText
-    ? ['# 选中文本', selectedText, '']
+    ? [params.roleplayTurn ? '# 原章节起始片段（仅作背景，当前进度见对话历史）' : '# 选中文本', selectedText, '']
     : sourceText && !params.hasBranchLineageContext
       ? [`# ${CONTINUATION_SOURCE_BLOCK_LABEL}`, sourceText, '']
       : []
@@ -653,6 +657,7 @@ export function buildUserPrompt(params: {
     params.assembledContext,
     selectedLineText,
     ...sourceBlock,
+    ...(params.roleplayHistory ? [params.roleplayHistory, ''] : []),
     '# 任务',
     ...buildRewriteTaskPromptLines({
       operationType: params.operationType,
@@ -1061,6 +1066,10 @@ async function handleRewriteBody(
   if (!operationType) {
     return NextResponse.json({ ok: false, error: INVALID_OPERATION_TYPE_ERROR }, { status: 400 })
   }
+  const roleplayTurn = operationType === 'roleplay' && body.roleplayTurn !== undefined ? parseRoleplayTurn(body.roleplayTurn) : null
+  if (operationType === 'roleplay' && body.roleplayTurn !== undefined && !roleplayTurn) {
+    return NextResponse.json({ ok: false, error: 'Invalid roleplay characters, input or target length' }, { status: 400 })
+  }
   const runtimeSurfaceId = resolveRewriteRouteSurfaceId(operationType)
   const writingSkillCardIds = operationType === 'rewrite'
     ? normalizeWritingSkillCardIds(body)
@@ -1096,7 +1105,9 @@ async function handleRewriteBody(
         selectedText,
         sourceText,
         operationType: runtimeSurfaceId,
-        userInstruction,
+        userInstruction: roleplayTurn
+          ? `扮演角色：${roleplayTurn.playerName}\n互动对象：${roleplayTurn.counterpartName}\n${roleplayTurnText(roleplayTurn)}`
+          : userInstruction,
         roleplayMessages,
         excludedGraphEdgeIds,
         excludedEvidenceIds,
@@ -1121,8 +1132,14 @@ async function handleRewriteBody(
         writingSkillCardIds: enabledWritingSkillCardIds,
       }, { cachedRagArtifacts })
     : null
-  const activePromptBlocks = context
-    ? context.promptBlocks.filter((block) => !disabledBlockIds.includes(block.id))
+  // History is required even when the session has no source chapter. Build it
+  // independently of RAG so chapter context cannot silently drop a conversation.
+  const roleplayHistoryBlock = operationType === 'roleplay' ? buildRoleplayContextBlock(roleplayMessages) : null
+  const activePromptBlocks = context || roleplayHistoryBlock
+    ? [
+        ...(context?.promptBlocks ?? []).filter((block) => block.id !== 'roleplay-history' && !disabledBlockIds.includes(block.id)),
+        ...(roleplayHistoryBlock ? [roleplayHistoryBlock] : []),
+      ]
     : null
   const orderedActivePromptBlocks = activePromptBlocks
     ? orderPromptBlocksForLlmRequest(activePromptBlocks)
@@ -1135,52 +1152,61 @@ async function handleRewriteBody(
       return {
         assembledContext: fallbackContext,
         writingSkillPrompt: writingSkillBundle?.prompt ?? '',
+        roleplayHistory: '',
       }
     }
 
-    const contextBlocks = promptBlocks.filter((block) => !isWritingSkillPromptBlockId(block.id))
+    const contextBlocks = promptBlocks.filter((block) => !isWritingSkillPromptBlockId(block.id) && block.id !== 'roleplay-history')
     const writingSkillBlocks = promptBlocks.filter((block) => isWritingSkillPromptBlockId(block.id))
     return {
       assembledContext: assemblePromptBlockContents(contextBlocks) ?? '',
       writingSkillPrompt: assemblePromptBlockContents(writingSkillBlocks) ?? '',
+      roleplayHistory: promptBlocks.find((block) => block.id === 'roleplay-history')?.content ?? '',
     }
   }
   const buildRuntime = (
-    promptParts: { assembledContext: string; writingSkillPrompt: string },
+    promptParts: { assembledContext: string; writingSkillPrompt: string; roleplayHistory: string },
     promptBlocks: readonly GenerationContextBlock[] | null,
-  ) => applyPresetCompatCreativeRuntime({
-    surfaceId: runtimeSurfaceId,
-    novelId: typeof body.novelId === 'string' ? body.novelId : null,
-    providerDefaults: {
-      provider: rewriteProvider,
-      openAICompatible: {
-        config: rewriteSettings.openAICompatible,
-        request: { temperature: body.tone === 'keep' ? 0.7 : 0.9 },
+  ) => {
+    const runtime = applyPresetCompatCreativeRuntime({
+      surfaceId: runtimeSurfaceId,
+      novelId: typeof body.novelId === 'string' ? body.novelId : null,
+      providerDefaults: {
+        provider: rewriteProvider,
+        openAICompatible: {
+          config: rewriteSettings.openAICompatible,
+          request: { temperature: body.tone === 'keep' ? 0.7 : 0.9 },
+        },
+        ollama: {
+          config: rewriteSettings.ollama,
+          request: { temperature: body.tone === 'keep' ? 0.7 : 0.9 },
+        },
       },
-      ollama: {
-        config: rewriteSettings.ollama,
-        request: { temperature: body.tone === 'keep' ? 0.7 : 0.9 },
-      },
-    },
-    systemPrompt: '',
-    userPrompt: buildUserPrompt({
-      operationType: runtimeSurfaceId,
-      userInstruction,
-      chapterNo: context?.chapterNo,
-      selectedLineStart: context?.selectedLineStart,
-      selectedLineEnd: context?.selectedLineEnd,
-      sourceText,
-      selectedText,
-      assembledContext: promptParts.assembledContext,
-      writingSkillPrompt: promptParts.writingSkillPrompt,
-      hasBranchLineageContext: Boolean(promptBlocks?.some((block) => block.id === 'branch-lineage-full-text')),
-    }),
-    promptRuleRuntimeContext: normalizePresetCompatRuntimeContext(
-      body as Record<string, unknown>,
-      runtimeSurfaceId,
-      promptBlocks,
-    ),
-  })
+      systemPrompt: '',
+      userPrompt: buildUserPrompt({
+        roleplayTurn,
+        operationType: runtimeSurfaceId,
+        userInstruction: roleplayTurn ? roleplayTurnText(roleplayTurn) : userInstruction,
+        chapterNo: context?.chapterNo,
+        selectedLineStart: context?.selectedLineStart,
+        selectedLineEnd: context?.selectedLineEnd,
+        sourceText,
+        selectedText,
+        assembledContext: promptParts.assembledContext,
+        roleplayHistory: promptParts.roleplayHistory,
+        writingSkillPrompt: promptParts.writingSkillPrompt,
+        hasBranchLineageContext: Boolean(promptBlocks?.some((block) => block.id === 'branch-lineage-full-text')),
+      }),
+      promptRuleRuntimeContext: normalizePresetCompatRuntimeContext(
+        body as Record<string, unknown>,
+        runtimeSurfaceId,
+        promptBlocks,
+      ),
+    })
+    // Saved presets can still contain the old rewrite-only RP instructions.
+    // Keep the current mode contract after those instructions in the final request.
+    return roleplayTurn ? { ...runtime, systemPrompt: [runtime.systemPrompt, ROLEPLAY_SCRIPT_SYSTEM_PROMPT].filter(Boolean).join('\n\n') } : runtime
+  }
   const fallbackContext = String(body.prompt ?? '')
   const initialPromptParts = resolvePromptParts(orderedActivePromptBlocks, fallbackContext)
   const initialRuntime = buildRuntime(initialPromptParts, orderedActivePromptBlocks)
@@ -1284,7 +1310,7 @@ async function handleRewriteBody(
     })
   }
 
-  const rewriteInput = { sourceText, mode: String(body.mode ?? ''), tone: String(body.tone ?? ''), scope: String(body.scope ?? ''), prompt: context ? [String(body.prompt ?? ''), assembledContext].filter(Boolean).join('\n\n') : String(body.prompt ?? ''), keepCanon: Boolean(body.keepCanon), autoContinue: Boolean(body.autoContinue), thoughtLevel: String(body.thoughtLevel ?? ''), systemPrompt: runtime.systemPrompt, userPrompt: runtime.userPrompt, requestOptions: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible' ? runtime.resolvedRuntime.providerRuntime.request : runtime.resolvedRuntime.providerRuntime.request.options, presetCompat: presetCompatMetadata, signal: options.signal }
+  const rewriteInput = { outputFormat: roleplayTurn ? 'roleplay-script' as const : 'rewrite' as const, sourceText, mode: String(body.mode ?? ''), tone: String(body.tone ?? ''), scope: String(body.scope ?? ''), prompt: context ? [String(body.prompt ?? ''), assembledContext].filter(Boolean).join('\n\n') : String(body.prompt ?? ''), keepCanon: Boolean(body.keepCanon), autoContinue: Boolean(body.autoContinue), thoughtLevel: String(body.thoughtLevel ?? ''), systemPrompt: runtime.systemPrompt, userPrompt: runtime.userPrompt, requestOptions: runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible' ? runtime.resolvedRuntime.providerRuntime.request : runtime.resolvedRuntime.providerRuntime.request.options, presetCompat: presetCompatMetadata, signal: options.signal }
   const result = runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
     ? await generateRewriteWithOpenAICompatible(rewriteInput, runtime.resolvedRuntime.providerRuntime.config)
     : await generateRewriteWithOllama(rewriteInput, runtime.resolvedRuntime.providerRuntime.config)

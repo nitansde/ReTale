@@ -22,6 +22,8 @@ import {
 import type { StoryTimelineNodeRecord } from '@/lib/story-branch-types'
 import type { ProductSurfaceId } from '@/lib/types'
 import { estimateTokenCount, uniqueStrings } from '@/lib/utils'
+import { buildRoleplayContextBlock, type RoleplayContextMessage } from '@/lib/roleplay-context'
+export { buildRoleplayContextBlock, normalizeRoleplayContextMessages, type RoleplayContextMessage } from '@/lib/roleplay-context'
 
 type BranchLineageInclusion = 'ancestors_only' | 'include_selected'
 
@@ -56,13 +58,6 @@ export type GenerationContextBlock = {
   priority: 'highest' | 'high' | 'medium'
   content: string
 }
-
-export type RoleplayContextMessage = {
-  role: 'user' | 'assistant'
-  content: string
-}
-
-const MAX_ROLEPLAY_CONTEXT_MESSAGES = 12
 
 export type GenerationContextPreview = {
   novelId: string
@@ -234,9 +229,10 @@ type KnowledgeExtractionStoryStateDb = Pick<DatabaseAccess, 'queryAll'>
 export function formatOutputConstraints(operationType: GenerationContextRequest['operationType']) {
   if (operationType === 'roleplay') {
     return [
-      '- 只输出当前这一轮的角色扮演对话回复。',
+      '- 输出由 narration（旁白）、player（我方台词）、counterpart（对方台词）组成的 JSON 脚本块。',
+      '- 承接用户的开场台词，允许继续编写双方多轮对话及行动旁白；篇幅接近本次目标字数即可，以自然收尾为先。',
       '- 保持与已有角色扮演历史连续。',
-      '- 不要把回复写成小说正文、章节改写、剧情大纲或说明。',
+      '- 人物块可以包含该角色的台词、神态、语气和动作描写；连续旁白段落合并为一块，不跨过对话合并。不要输出剧情大纲或格式说明。',
       '- 不要自动应用、改写或续写 chapter 正文。',
       '- 不要输出分析。',
       '- 不要输出 Markdown 标题。',
@@ -259,49 +255,6 @@ export function formatOutputConstraints(operationType: GenerationContextRequest[
     '- 不要使用当前章节之后的事实。',
     modeSpecific,
   ].join('\n')
-}
-
-export function normalizeRoleplayContextMessages(
-  messages: readonly RoleplayContextMessage[] | null | undefined,
-  maxMessages = MAX_ROLEPLAY_CONTEXT_MESSAGES,
-) {
-  if (!messages?.length) {
-    return [] as RoleplayContextMessage[]
-  }
-
-  const normalized = messages.flatMap((message) => {
-    const role = message?.role
-    const content = typeof message?.content === 'string' ? message.content.trim() : ''
-    if ((role !== 'user' && role !== 'assistant') || !content) {
-      return []
-    }
-
-    return [{ role, content } satisfies RoleplayContextMessage]
-  })
-
-  if (!normalized.length) {
-    return [] as RoleplayContextMessage[]
-  }
-
-  return normalized.slice(-Math.max(1, maxMessages))
-}
-
-export function buildRoleplayContextBlock(messages: readonly RoleplayContextMessage[] | null | undefined): GenerationContextBlock | null {
-  const normalizedMessages = normalizeRoleplayContextMessages(messages)
-  if (!normalizedMessages.length) {
-    return null
-  }
-
-  return {
-    id: 'roleplay-history',
-    label: '当前角色扮演对话',
-    enabled: true,
-    priority: 'highest',
-    content: renderBlock(
-      '当前角色扮演对话',
-      normalizedMessages.map((message) => `${message.role === 'user' ? '用户' : '助手'}：${message.content}`),
-    ),
-  }
 }
 
 function selectWindow<T>(items: T[], start: number, end: number) {
