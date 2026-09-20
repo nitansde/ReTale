@@ -305,7 +305,7 @@ async function createRetrievalIndexHarness(
   const aiSettings = createMockAISettings(options.embeddingProvider)
   const mockLanceDb = createMockLanceDb()
   const ivfFlat = vi.fn((config: Record<string, unknown>) => ({ kind: 'ivfFlat', config, callIndex: ivfFlat.mock.calls.length }))
-  const embedTextsWithOllama = vi.fn(async (input: string | string[]): Promise<OllamaEmbeddingResult> => {
+  const embedTextsWithOllama = vi.fn<(input: string | string[], config?: unknown, options?: { signal?: AbortSignal }) => Promise<OllamaEmbeddingResult>>(async (input) => {
     const values = Array.isArray(input) ? input : [input]
     return {
       enabled: true,
@@ -431,6 +431,7 @@ async function cacheRetrievalDocsExcept(harness: RetrievalIndexHarness, excluded
 }
 
 afterEach(() => {
+  vi.restoreAllMocks()
   disposeNovelDatabaseOverride?.()
   disposeNovelDatabaseOverride = undefined
   resetResolvedDatabasesForTests()
@@ -452,6 +453,40 @@ afterEach(() => {
 })
 
 describe('retrieval-index cache reuse helpers', () => {
+  it.each([true, false])('keeps full-text evidence when a stalled query embedding reaches its deadline (honors abort=%s)', async (honorsAbort) => {
+    const { database, mockLanceDb, retrievalIndex, embedTextsWithOllama } = await createRetrievalIndexHarness('retale-context-embedding-timeout')
+    await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
+    const table = getActiveMockTable(database, mockLanceDb)!
+    const textSearch = vi.fn()
+    const vectorSearch = vi.fn()
+    table.query = () => {
+      const query = {
+        where: () => query, fullTextSearch: () => { textSearch(); return query }, withRowId: () => query,
+        nearestTo: () => { vectorSearch(); return query }, nprobes: () => query, column: () => query,
+        limit: () => query, toArray: async () => table.rows.map((row) => ({ ...row, _score: 1 })),
+      }
+      return query
+    }
+    const deadline = new AbortController()
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal)
+    let started!: () => void
+    const embeddingStarted = new Promise<void>((resolve) => { started = resolve })
+    embedTextsWithOllama.mockImplementation(async (_input, _config, options) => {
+      expect(options?.signal).toBe(deadline.signal)
+      started()
+      return new Promise((_resolve, reject) => { if (honorsAbort) options!.signal!.addEventListener('abort', () => reject(new Error('timeout')), { once: true }) })
+    })
+    const pending = retrievalIndex.searchLanceEvidence({ novelId: 'novel-001', branchId: 'novel-001:main', maxChapterNo: 1, query: '原文内容' })
+    await embeddingStarted
+    expect(textSearch).toHaveBeenCalledOnce()
+    expect(timeout).toHaveBeenCalledWith(15_000)
+    deadline.abort()
+    const result = await pending
+    expect(result.warning).toContain('已使用全文检索证据')
+    expect(result.matches.some((match) => match.text.includes('第一段原文内容'))).toBe(true)
+    expect(vectorSearch).not.toHaveBeenCalled()
+  })
+
   it('routes LanceDB writes into the per-novel data directory instead of the global .lancedb root', async () => {
     const { mockLanceDb, retrievalIndex, tempDataDir } = await createRetrievalIndexHarness('retale-retrieval-index-per-novel-lancedb-path')
 

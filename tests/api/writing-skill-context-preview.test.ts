@@ -6,7 +6,7 @@ afterEach(() => {
 })
 
 describe('writing skill advanced-context preview', () => {
-  it('returns one prompt block per selected skill card with the concrete selected examples', async () => {
+  it.each(['rewrite', 'roleplay'] as const)('returns one prompt block per selected skill card with the concrete selected examples for %s', async (operationType) => {
     const resolveWritingSkillRuntimes = vi.fn(() => ({
       runtimes: [],
       records: [],
@@ -98,7 +98,7 @@ describe('writing skill advanced-context preview', () => {
       branchId: 'novel-1:main',
       chapterId: 'chapter-1',
       selectedText: '待改写原文',
-      operationType: 'rewrite',
+      operationType,
       userInstruction: '增强人物和雨夜描写',
       writingSkillCardIds: ['skill-facial-features', 'skill-rainy-night'],
       writingSkillExampleCount: 1,

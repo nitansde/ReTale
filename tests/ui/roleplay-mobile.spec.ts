@@ -119,6 +119,8 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   const touchedNonRoleplayMutationRoutes: string[] = []
   let createPayload: Record<string, unknown> | null = null
   const rewritePayloads: Record<string, unknown>[] = []
+  const previewPayloads: Record<string, unknown>[] = []
+  let generatedScript = script
   let timelineState = buildTimelineState()
   let sessionDetail = buildSessionDetail([])
 
@@ -131,6 +133,17 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
     apiKeyConfigured: true,
   }
   await page.route('**/api/settings/ai', (route) => route.fulfill({ json: aiSettings }))
+  await page.route('**/api/writing-skills?*', (route) => route.fulfill({ json: { cards: [{ id: 'skill-expression', title: '神态与动作', summary: '通过细小动作推动对话。' }] } }))
+  await page.route('**/api/roleplay/preview', async (route) => {
+    const body = route.request().postDataJSON()
+    previewPayloads.push(body)
+    const options = body.roleplayTurn.generationOptions
+    const blocks = [
+      { id: 'current-summary', label: '当前章节摘要', content: '两人在雨夜交谈。', required: false, priority: 'high', enabled: !options.disabledBlockIds.includes('current-summary'), trimmed: false },
+      ...(options.writingSkillCardIds.includes('skill-expression') ? [{ id: 'writing-skill:skill-expression', label: '写作技巧：神态与动作', content: '写作方法：用动作表现迟疑。\n范文：她垂下眼，指尖停在杯沿。', required: false, priority: 'highest', enabled: true, trimmed: false }] : []),
+    ]
+    await route.fulfill({ json: { ok: true, contextSnapshotId: 'rp-preview', promptBlocks: blocks, writingSkillRecords: [], systemPrompt: 'Galgame 脚本', userPrompt: blocks.filter((block) => block.enabled).map((block) => block.content).join('\n') } })
+  })
 
   await mockNovelResourceApi(page, () => workspacePayload, {
     onMutation: (mutation) => {
@@ -275,7 +288,7 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ provider: 'openai-compatible', result: { content: JSON.stringify({ blocks: script.blocks }) }, metadata: { internal: 'ROLEPLAY_METADATA_SENTINEL' }, presetCompat: { streamPolicy: { effective: false } } }),
+      body: JSON.stringify({ provider: 'openai-compatible', result: { content: JSON.stringify({ blocks: generatedScript.blocks }) }, metadata: { internal: 'ROLEPLAY_METADATA_SENTINEL' }, presetCompat: { streamPolicy: { effective: false } } }),
     })
   })
 
@@ -328,6 +341,22 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await page.getByRole('textbox', { name: '我的台词' }).fill('别再试探了，现在就把真相说清楚。')
   await page.getByRole('textbox', { name: '故事引导' }).fill('她站在窗边，雨声渐近。')
   await page.getByRole('spinbutton', { name: '本次目标字数' }).fill('500')
+  await page.getByRole('button', { name: '写作技巧', exact: true }).click()
+  await page.getByRole('checkbox', { name: /神态与动作/ }).check()
+  await page.getByRole('combobox', { name: '每张卡范文数' }).selectOption('2')
+  await expect(page.getByTestId('roleplay-context-block-writing-skill:skill-expression')).toBeVisible()
+  await page.getByTestId('roleplay-context-block-writing-skill:skill-expression').getByText('展开内容', { exact: true }).click()
+  await expect(page.getByRole('dialog')).toContainText('她垂下眼，指尖停在杯沿。')
+  await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-writing-skills.png') })
+  await page.getByRole('button', { name: '关闭写作技巧' }).click()
+  await page.getByRole('button', { name: '高级上下文' }).click()
+  await page.getByRole('checkbox', { name: '当前章节摘要' }).uncheck()
+  await expect.poll(() => previewPayloads.at(-1)?.disabledBlockIds).toEqual(['current-summary'])
+  await page.getByTestId('roleplay-final-prompt').getByText('查看最终 Prompt').click()
+  await expect(page.getByTestId('roleplay-final-prompt')).toContainText('用动作表现迟疑')
+  await expect(page.getByTestId('roleplay-final-prompt')).not.toContainText('两人在雨夜交谈')
+  await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-advanced-context.png') })
+  await page.getByRole('button', { name: '关闭高级上下文' }).click()
   await page.getByTestId('roleplay-composer-send').click()
 
   await expect(page.getByTestId('roleplay-message-0')).toContainText('别再试探了，现在就把真相说清楚。')
@@ -342,6 +371,7 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await expect(page.locator('[data-roleplay-block=counterpart]').first()).toContainText('她抬起眼，语气放轻。“你真的准备好了吗？”')
   await expect(page.locator('[data-roleplay-block=player]')).toContainText('他握紧手中的伞。“我不想再等了。”')
   expect(rewritePayloads[0]?.roleplayTurn).toMatchObject({ ...cast, maxCharacters: 500, storyGuidance: '她站在窗边，雨声渐近。' })
+  expect(rewritePayloads[0]).toMatchObject({ writingSkillCardIds: ['skill-expression'], writingSkillExampleCount: 2, disabledBlockIds: ['current-summary'], contextSnapshotId: 'rp-preview' })
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-mobile-chat.png') })
   await page.getByTestId('roleplay-message-0').getByRole('button').click()
   await expect(page.getByTestId('roleplay-fork-anchor')).toContainText('下轮从 #1 分叉')
@@ -360,6 +390,7 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await expect(page.getByTestId('roleplay-message-1')).toContainText('她没有躲开，只是把试探接成了更慢的一句反问。')
 
   await page.reload({ waitUntil: 'networkidle' })
+  await expect(page.getByRole('button', { name: '写作技巧 · 1' })).toBeVisible()
   await page.getByRole('textbox', { name: '我的台词' }).fill('我坐下了，你接着说吧。')
   await page.getByTestId('roleplay-composer-send').click()
   await expect(page.getByTestId('roleplay-message-3')).toBeVisible()
@@ -369,6 +400,7 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
       { role: 'assistant', content: roleplayScriptText(savedScript) },
     ],
     presetCompatRuntimeContext: { sessionPhase: 'continue' },
+    writingSkillCardIds: ['skill-expression'], writingSkillExampleCount: 2, disabledBlockIds: ['current-summary'],
   })
 
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -412,6 +444,33 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true)
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-mobile-light-long-chat.png') })
+
+  generatedScript = { ...script, blocks: [
+    { type: 'narration', text: '新一段故事从这里开始。\n\n' + '雨声敲打着窗沿，她慢慢讲起那天发生的事情。\n\n'.repeat(24) },
+    { type: 'counterpart', text: '她终于停下来。“这就是全部经过。”' },
+  ] }
+  for (const viewport of [{ width: 360, height: 640 }, { width: 1440, height: 900 }]) {
+    await page.setViewportSize(viewport)
+    for (const regenerate of [false, true]) {
+      const nextIndex = sessionDetail.messages.length + (regenerate ? 0 : 1)
+      if (regenerate) await page.getByTestId('roleplay-regenerate-last').click()
+      else {
+        await page.getByRole('textbox', { name: '我的台词' }).fill('从头慢慢讲给我听。')
+        await page.getByTestId('roleplay-composer-send').click()
+      }
+      const reply = page.getByTestId(`roleplay-message-${nextIndex}`)
+      await expect(reply).toContainText('新一段故事从这里开始。')
+      await expect(page.getByTestId('roleplay-pending-reply')).toHaveCount(0)
+      await expect.poll(() => reply.evaluate((element) => {
+        const list = element.closest('[data-testid="roleplay-message-list"]')!
+        return Math.abs(element.getBoundingClientRect().top - list.getBoundingClientRect().top - parseFloat(getComputedStyle(list).paddingTop))
+      })).toBeLessThan(2)
+      expect(await messageList.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeGreaterThan(300)
+      await expect(page.getByTestId('roleplay-composer-send')).toBeInViewport()
+    }
+    await page.screenshot({ animations: 'disabled', path: testInfo.outputPath(`roleplay-new-reply-start-${viewport.width}.png`) })
+  }
+  await page.setViewportSize({ width: 360, height: 640 })
 
   await page.waitForTimeout(900)
 

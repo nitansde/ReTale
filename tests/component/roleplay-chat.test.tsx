@@ -27,7 +27,17 @@ function setup(options: { messages?: ReturnType<typeof message>[]; candidates?: 
   }
   let fail = options.fail ?? false
   const requests: Record<string, unknown>[] = []
+  const previews: Record<string, unknown>[] = []
   const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (String(url).startsWith('/api/writing-skills')) return Response.json({ cards: [{ id: 'skill', title: '神态描写', summary: '通过眼神和动作推进对话。' }] })
+    if (String(url) === '/api/roleplay/preview') {
+      const body = JSON.parse(String(init?.body)); previews.push(body)
+      const options = body.roleplayTurn.generationOptions
+      return Response.json({ ok: true, contextSnapshotId: 'snapshot', systemPrompt: 'RP script', userPrompt: options.writingSkillCardIds.includes('skill') ? '神态方法与范文已加入' : '当前故事', writingSkillRecords: [], promptBlocks: [
+        { id: 'current-summary', label: '当前章节摘要', content: '前情内容', priority: 'high', enabled: !options.disabledBlockIds.includes('current-summary'), required: false, trimmed: false },
+        { id: 'roleplay-history', label: '当前角色扮演对话', content: '已发生的对话', priority: 'highest', enabled: true, required: true, trimmed: false },
+      ] })
+    }
     if (String(url).includes('/messages')) {
       const body = JSON.parse(String(init?.body))
       const next = message(detail.messages.length + 1, body.turn ? { turn: body.turn } : { script: body.script }, body.parentMessageId)
@@ -44,7 +54,7 @@ function setup(options: { messages?: ReturnType<typeof message>[]; candidates?: 
   })
   vi.stubGlobal('fetch', fetchMock)
   const view = render(<RoleplaySessionView novelId="novel" branchId="novel:main" sessionId="session" anchorChapterNo={3} />)
-  return { detail, requests, fetchMock, ...view }
+  return { detail, requests, previews, fetchMock, ...view }
 }
 async function chooseCast() {
   await screen.findByTestId('roleplay-cast-picker')
@@ -54,6 +64,39 @@ async function chooseCast() {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('roleplay script view', () => {
+  it('selects skills, previews and disables context, persists the settings and reuses them after reopening', async () => {
+    const first = setup()
+    await chooseCast()
+    fireEvent.click(screen.getByRole('button', { name: '写作技巧' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: /神态描写/ }))
+    fireEvent.change(screen.getByRole('combobox', { name: '每张卡范文数' }), { target: { value: '2' } })
+    await waitFor(() => expect(first.previews.at(-1)?.roleplayTurn).toMatchObject({ generationOptions: { writingSkillCardIds: ['skill'], writingSkillExampleCount: 2 } }))
+    fireEvent.click(screen.getByRole('button', { name: '关闭写作技巧' }))
+    fireEvent.click(screen.getByRole('button', { name: '高级上下文' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: '当前章节摘要' }))
+    expect(screen.getByRole('checkbox', { name: '当前角色扮演对话' })).toBeDisabled()
+    await waitFor(() => expect(first.previews.at(-1)?.roleplayTurn).toMatchObject({ generationOptions: { disabledBlockIds: ['current-summary'] } }))
+    await screen.findByTestId('roleplay-final-prompt')
+    fireEvent.click(screen.getByRole('button', { name: '关闭高级上下文' }))
+    fireEvent.change(screen.getByRole('textbox', { name: '我的台词' }), { target: { value: '继续吧。' } })
+    fireEvent.click(screen.getByTestId('roleplay-composer-send'))
+    await waitFor(() => expect(first.detail.messages).toHaveLength(2))
+    const firstMessage = first.detail.messages[0]
+    if (!('turn' in firstMessage)) throw new Error('Expected a saved user turn')
+    const savedOptions = firstMessage.turn.generationOptions
+    expect(first.requests[0]).toMatchObject({ contextSnapshotId: 'snapshot', roleplayTurn: { generationOptions: savedOptions }, writingSkillCardIds: ['skill'], writingSkillExampleCount: 2, disabledBlockIds: ['current-summary'] })
+    first.unmount()
+    const reopened = setup({ messages: first.detail.messages })
+    await screen.findByTestId('roleplay-script')
+    fireEvent.click(screen.getByRole('button', { name: '写作技巧 · 1' }))
+    expect(await screen.findByRole('checkbox', { name: /神态描写/ })).toBeChecked()
+    expect(screen.getByRole('combobox', { name: '每张卡范文数' })).toHaveValue('2')
+    fireEvent.click(screen.getByRole('button', { name: '关闭写作技巧' }))
+    fireEvent.click(screen.getByTestId('roleplay-regenerate-last'))
+    await waitFor(() => expect(reopened.requests).toHaveLength(1))
+    expect(reopened.requests[0]).toMatchObject({ roleplayTurn: { generationOptions: savedOptions }, writingSkillCardIds: ['skill'], disabledBlockIds: ['current-summary'] })
+    await waitFor(() => expect(reopened.detail.messages).toHaveLength(3))
+  })
   it('offers the protagonist, chapter characters and custom names, and requires two distinct roles', async () => {
     setup()
     await screen.findByTestId('roleplay-cast-picker')

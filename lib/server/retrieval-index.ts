@@ -2863,9 +2863,33 @@ export async function searchLanceEvidence(params: {
       }
 
       const predicate = buildLancePredicate(params.maxChapterNo)
-      const queryVector = await embedRetrievalQuery(query)
-
-      const [ftsRows, vectorRows] = await Promise.all([
+      // The optional semantic search must not hold the context panel hostage
+      // when the embedding provider is slow or unavailable. Keep text evidence.
+      const vectorSearch = async () => {
+        const signal = AbortSignal.timeout(15_000)
+        let onTimeout: () => void = () => undefined
+        const deadline = new Promise<never>((_resolve, reject) => {
+          onTimeout = () => reject(signal.reason)
+          signal.addEventListener('abort', onTimeout, { once: true })
+        })
+        try {
+          const search = async () => {
+            const queryVector = await embedRetrievalQuery(query, signal)
+            signal.throwIfAborted()
+            return await table.query().where(predicate).nearestTo(queryVector)
+              .nprobes(LANCEDB_VECTOR_INDEX_NPROBES).column('vector').withRowId().limit(searchLimit)
+              .toArray() as RetrievalDocSearchRow[]
+          }
+          // Local model startup and native vector queries may not honor abort.
+          const rows = await Promise.race([search(), deadline])
+          return { rows, warning: undefined }
+        } catch {
+          return { rows: [] as RetrievalDocSearchRow[], warning: '语义检索暂不可用，已使用全文检索证据。' }
+        } finally {
+          signal.removeEventListener('abort', onTimeout)
+        }
+      }
+      const [ftsRows, vectorResult] = await Promise.all([
         table
           .query()
           .where(predicate)
@@ -2873,18 +2897,10 @@ export async function searchLanceEvidence(params: {
           .withRowId()
           .limit(searchLimit)
           .toArray() as Promise<RetrievalDocSearchRow[]>,
-        table
-          .query()
-          .where(predicate)
-          .nearestTo(queryVector)
-          .nprobes(LANCEDB_VECTOR_INDEX_NPROBES)
-          .column('vector')
-          .withRowId()
-          .limit(searchLimit)
-          .toArray() as Promise<RetrievalDocSearchRow[]>,
+        vectorSearch(),
       ])
 
-      return { ftsRows, vectorRows }
+      return { ftsRows, vectorRows: vectorResult.rows, warning: vectorResult.warning }
     }
 
     let searchRows: { ftsRows: RetrievalDocSearchRow[]; vectorRows: RetrievalDocSearchRow[]; warning?: string }
@@ -2901,7 +2917,7 @@ export async function searchLanceEvidence(params: {
       }
     }
 
-    if (searchRows.warning) {
+    if (searchRows.warning && !searchRows.ftsRows.length && !searchRows.vectorRows.length) {
       return {
         matches: pickDiverseEvidenceRows(explicitAuthoredMatches, params.limit ?? 10),
         warning: searchRows.warning,
@@ -2957,6 +2973,7 @@ export async function searchLanceEvidence(params: {
       )
 
     return {
+      ...(searchRows.warning ? { warning: searchRows.warning } : {}),
       matches: pickDiverseEvidenceRows(
         [...reranked, ...explicitAuthoredMatches].sort(
           (left, right) => right.score - left.score

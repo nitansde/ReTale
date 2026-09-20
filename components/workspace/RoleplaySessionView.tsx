@@ -1,7 +1,7 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { BookOpen, GitBranch, LoaderCircle, MessageCircle, Users, RefreshCcw, SendHorizonal, X } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { BookOpen, GitBranch, LoaderCircle, MessageCircle, Users, RefreshCcw, SendHorizonal, SlidersHorizontal, Wand2, X } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { useI18n } from '@/lib/i18n/provider'
 import { normalizeSavedRoleplayReply, readRoleplayReplyContent } from '@/lib/roleplay-response'
@@ -10,6 +10,9 @@ import { resolveWorkspaceUserFacingError } from '@/lib/workspace-user-facing-err
 import { cn } from '@/lib/utils'
 import { RoleplayCastPicker } from './RoleplayCastPicker'
 import { RoleplayScriptBlocks } from './RoleplayScriptBlocks'
+import { RoleplayGenerationPanel } from './RoleplayGenerationPanel'
+import { defaultRoleplayGenerationOptions } from '@/lib/roleplay-generation'
+import { createWritingSkillRuntimeSeed } from '@/lib/writing-skill-selection'
 import { parseRoleplayTurn, readGeneratedRoleplayScript, roleplayScriptText, roleplayTurnText, ROLEPLAY_DEFAULT_LENGTH, type RoleplayCast, type RoleplayTurn, type RoleplayScript, type RoleplayCharacterOption } from '@/lib/roleplay-script'
 
 type RoleplayMessagePayload = RoleplayMessageRecord & {
@@ -217,7 +220,14 @@ export function RoleplaySessionView(props: {
   const [busy, setBusy] = useState(false)
   const [pendingScript, setPendingScript] = useState<RoleplayScript | null>(null)
   const [sourceOpen, setSourceOpen] = useState(false)
+  const [generationPanel, setGenerationPanel] = useState<'context' | 'skills' | null>(null)
+  const [generationOptions, setGenerationOptions] = useState(() => defaultRoleplayGenerationOptions(createWritingSkillRuntimeSeed()))
+  const contextSnapshotRef = useRef<string | null>(null)
+  const handleContextSnapshot = useCallback((id: string | null) => { contextSnapshotRef.current = id }, [])
   const messageListRef = useRef<HTMLDivElement | null>(null)
+  const messageElementsRef = useRef(new Map<string, HTMLElement>())
+  const pendingReplyRef = useRef<HTMLDivElement | null>(null)
+  const replyScrollTargetRef = useRef<{ messageId: string | null } | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const stickToBottomRef = useRef(true)
   const controllerRef = useRef<AbortController | null>(null)
@@ -237,7 +247,10 @@ export function RoleplaySessionView(props: {
       const messages = next.messages.filter((message) => message.turn || message.script).map(normalizeMessage)
       setDetail({ ...next, messages })
       const lastTurn = [...messages].reverse().find((message) => message.turn)?.turn
-      if (lastTurn) { setCast(lastTurn); setTargetCharacters(lastTurn.maxCharacters) }
+      if (lastTurn) {
+        setCast(lastTurn); setTargetCharacters(lastTurn.maxCharacters)
+        if (lastTurn.generationOptions) setGenerationOptions(lastTurn.generationOptions)
+      }
     }).catch((reason) => {
       if (!cancelled) setError(resolveWorkspaceUserFacingError('roleplay-session-load', reason, locale))
     }).finally(() => { if (!cancelled) setLoading(false) })
@@ -249,9 +262,22 @@ export function RoleplaySessionView(props: {
     onMetricsChange?.({ currentText: last?.content ?? '', inputTokens: null, outputTokens: null })
   }, [detail, onMetricsChange])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const list = messageListRef.current
-    if (list && stickToBottomRef.current) list.scrollTop = list.scrollHeight
+    if (!list) return
+    const target = replyScrollTargetRef.current
+    if (target) {
+      const reply = target.messageId ? messageElementsRef.current.get(target.messageId) : pendingReplyRef.current
+      if (reply) {
+        stickToBottomRef.current = false
+        list.scrollTop += reply.getBoundingClientRect().top - list.getBoundingClientRect().top - parseFloat(getComputedStyle(list).paddingTop || '0')
+        // Saving replaces the pending reply; leaving the busy state also restores
+        // branch controls above it. Align once more after that final layout.
+        if (!busy && target.messageId) replyScrollTargetRef.current = null
+      }
+      return
+    }
+    if (stickToBottomRef.current) list.scrollTop = list.scrollHeight
   }, [detail?.messages, busy, pendingScript])
 
   useEffect(() => {
@@ -265,11 +291,27 @@ export function RoleplaySessionView(props: {
   const messagesById = useMemo(() => new Map((detail?.messages ?? []).map((message) => [message.id, message])), [detail?.messages])
   const latestMessage = detail?.messages.at(-1) ?? null
   const forkMessage = forkMessageId ? messagesById.get(forkMessageId) ?? null : null
-  const turn = parseRoleplayTurn({ ...cast, storyGuidance, dialogue, maxCharacters: targetCharacters })
+  const turnInput = { ...cast, storyGuidance, dialogue, maxCharacters: targetCharacters, generationOptions }
+  const turn = parseRoleplayTurn(turnInput)
+  const previewTurn = parseRoleplayTurn(turnInput, { allowEmptyInput: true })
   const canSend = Boolean(turn && !busy)
   const retryUser = latestMessage?.role === 'user' && latestMessage.turn ? latestMessage : null
   const latestAssistant = latestMessage?.role === 'assistant' ? latestMessage : null
   const resolvedTitle = props.readableLineageLabel?.trim() || detail?.title || props.nodeTitle || t('roleplay.defaultTitle', { count: props.anchorChapterNo })
+
+  const buildGenerationRequest = (requestTurn: RoleplayTurn, history: RoleplayMessagePayload[]) => detail ? {
+      novelId: props.novelId, branchId: props.branchId, chapterId: detail.sourceSnapshot.chapterId,
+      selectedText: detail.sourceSnapshot.selectedText || detail.sourceSnapshot.textSnapshot,
+      sourceText: detail.sourceSnapshot.textSnapshot || detail.sourceSnapshot.selectedText,
+      operationType: 'roleplay', roleplayTurn: requestTurn, userInstruction: roleplayTurnText(requestTurn),
+      ...requestTurn.generationOptions,
+      roleplayMessages: history.map((message) => ({ role: message.role, content: message.turn ? roleplayTurnText(message.turn) : message.script ? roleplayScriptText(message.script) : message.content })),
+      scope: 'chapter', mode: 'dialogue', tone: 'dramatic',
+      presetCompatRuntimeContext: {
+        sessionPhase: history.length ? 'continue' : 'new_chat', hasImpersonationContext: true,
+        namedTranscript: { kind: 'roleplay', userName: requestTurn.playerName, assistantName: requestTurn.counterpartName },
+      },
+    } : null
 
   const generate = async (user: RoleplayMessagePayload, regenerateFrom?: RoleplayMessagePayload) => {
     if (!detail || !user.turn) return
@@ -277,29 +319,22 @@ export function RoleplaySessionView(props: {
     const controller = new AbortController()
     controllerRef.current = controller
     let content = ''
-    await streamRoleplayReply({
-      novelId: props.novelId, branchId: props.branchId, chapterId: detail.sourceSnapshot.chapterId,
-      selectedText: detail.sourceSnapshot.selectedText || detail.sourceSnapshot.textSnapshot,
-      sourceText: detail.sourceSnapshot.textSnapshot || detail.sourceSnapshot.selectedText,
-      operationType: 'roleplay', roleplayTurn: user.turn, userInstruction: roleplayTurnText(user.turn),
-      roleplayMessages: history.map((message) => ({ role: message.role, content: message.turn ? roleplayTurnText(message.turn) : message.script ? roleplayScriptText(message.script) : message.content })),
-      scope: 'chapter', mode: 'dialogue', tone: 'dramatic',
-      presetCompatRuntimeContext: {
-        sessionPhase: history.length ? 'continue' : 'new_chat', hasImpersonationContext: true,
-        namedTranscript: { kind: 'roleplay', userName: user.turn.playerName, assistantName: user.turn.counterpartName },
-      },
-    }, (chunk) => { content += chunk }, controller.signal)
+    await streamRoleplayReply({ ...buildGenerationRequest(user.turn, history), contextSnapshotId: contextSnapshotRef.current }, (chunk) => { content += chunk }, controller.signal)
     if (controller.signal.aborted) return
     const script = readGeneratedRoleplayScript(content, user.turn)
     if (!script) throw new Error(t('roleplay.invalidScript'))
+    stickToBottomRef.current = false
+    replyScrollTargetRef.current = { messageId: null }
     setPendingScript(script)
     const input = {
       novelId: props.novelId, branchId: props.branchId, sessionId: detail.id,
       content: roleplayScriptText(script), script, parentMessageId: user.id,
       forkedFromMessageId: regenerateFrom?.id ?? user.forkedFromMessageId,
     }
-    if (regenerateFrom) await createLatestAssistantVariant(input)
-    else await appendRoleplayMessage({ ...input, role: 'assistant' })
+    const reply = regenerateFrom
+      ? await createLatestAssistantVariant(input)
+      : await appendRoleplayMessage({ ...input, role: 'assistant' })
+    replyScrollTargetRef.current = { messageId: reply.id }
     await refreshDetail()
     setPendingScript(null)
   }
@@ -307,9 +342,10 @@ export function RoleplaySessionView(props: {
   const run = async (action: () => Promise<void>) => {
     if (busyRef.current) return
     busyRef.current = true
-    setBusy(true); setError(''); stickToBottomRef.current = true
+    setBusy(true); setError(''); stickToBottomRef.current = true; replyScrollTargetRef.current = null
     try { await action() }
     catch (reason) {
+      replyScrollTargetRef.current = null
       if (controllerRef.current?.signal.aborted) return
       setError(reason instanceof Error && reason.message === t('roleplay.invalidScript') ? reason.message : resolveWorkspaceUserFacingError('roleplay-stream', reason, locale))
       await refreshDetail().catch(() => undefined)
@@ -355,22 +391,26 @@ export function RoleplaySessionView(props: {
             <MessageCircle className="mb-4 h-7 w-7 text-violet-300" /><h3 className="text-lg font-medium text-zinc-100">{t('roleplay.emptyTitle')}</h3><p className="mt-2 text-sm leading-7 text-zinc-400">{t('roleplay.emptyHint')}</p>
             {detail.sourceSnapshot.selectedText ? <blockquote className="mt-5 line-clamp-3 border-l-2 border-violet-400/40 pl-4 text-sm leading-7 text-zinc-400">{detail.sourceSnapshot.selectedText}</blockquote> : null}
           </div> : null}
-          {detail.messages.map((message, index) => <article key={message.id} data-testid={`roleplay-message-${index}`} data-roleplay-message-id={message.id} className={cn('min-w-0', forkMessageId === message.id && 'rounded-xl ring-1 ring-violet-400/40')}>
+          {detail.messages.map((message, index) => <article key={message.id} ref={(element) => { if (element) messageElementsRef.current.set(message.id, element); else messageElementsRef.current.delete(message.id) }} data-testid={`roleplay-message-${index}`} data-roleplay-message-id={message.id} className={cn('min-w-0', forkMessageId === message.id && 'rounded-xl ring-1 ring-violet-400/40')}>
             {message.script ? <RoleplayScriptBlocks script={message.script} /> : message.turn ? <div className="ml-auto max-w-[90%] space-y-3 rounded-2xl border border-violet-400/20 bg-violet-500/10 px-4 py-3">
               {message.turn.storyGuidance ? <div><p className="mb-1 text-xs text-zinc-500">{t('roleplay.storyGuidance')}</p><p className="whitespace-pre-wrap break-words text-sm leading-7 text-zinc-400">{message.turn.storyGuidance}</p></div> : null}
               {message.turn.dialogue ? <div><p className="mb-1 text-xs text-violet-300">{message.turn.playerName} · {t('roleplay.you')} → {message.turn.counterpartName}</p><p className="whitespace-pre-wrap break-words text-[15px] leading-8 text-zinc-100">{message.turn.dialogue}</p></div> : null}
             </div> : null}
             {index < detail.messages.length - 1 && !busy ? <button type="button" aria-label={t('roleplay.forkFrom', { index: message.messageIndex })} aria-pressed={forkMessageId === message.id} onClick={() => { setForkMessageId(message.id); composerRef.current?.focus({ preventScroll: true }) }} className="mt-2 inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs text-zinc-500 hover:bg-overlay/5"><GitBranch className="h-3.5 w-3.5" />{t('roleplay.forkAction')}</button> : null}
           </article>)}
-          {busy ? <div data-testid="roleplay-pending-reply" aria-live="polite" aria-busy="true">{pendingScript ? <RoleplayScriptBlocks script={pendingScript} /> : <p className="flex items-center gap-2 text-sm text-zinc-400"><LoaderCircle className="h-4 w-4 animate-spin text-violet-300" />{t('roleplay.pendingReply')}</p>}</div> : null}
+          {busy ? <div ref={pendingReplyRef} data-testid="roleplay-pending-reply" aria-live="polite" aria-busy="true">{pendingScript ? <RoleplayScriptBlocks script={pendingScript} /> : <p className="flex items-center gap-2 text-sm text-zinc-400"><LoaderCircle className="h-4 w-4 animate-spin text-violet-300" />{t('roleplay.pendingReply')}</p>}</div> : null}
           {retryUser && !busy ? <button type="button" onClick={() => void handleRegenerate()} className="min-h-11 rounded-xl border border-violet-400/30 px-4 text-sm text-violet-300">{t('roleplay.retry')}</button> : null}
         </div>
       </div>
       <form onSubmit={(event) => { event.preventDefault(); if (canSend) void handleSend() }} className="shrink-0 border-t border-line/8 bg-surface px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-6 sm:pb-4">
         <div className="mx-auto max-w-3xl">
+          <div className="mb-1 flex items-center gap-4">
+            <button type="button" disabled={busy} onClick={() => setGenerationPanel('context')} className="inline-flex min-h-8 items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-100 disabled:opacity-40"><SlidersHorizontal className="h-3.5 w-3.5" />{t('workspace.shell.advancedContext')}</button>
+            <button type="button" disabled={busy} onClick={() => setGenerationPanel('skills')} className="inline-flex min-h-8 items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-100 disabled:opacity-40"><Wand2 className="h-3.5 w-3.5" />{t('roleplay.writingSkills')}{generationOptions.writingSkillCardIds.length ? ` · ${generationOptions.writingSkillCardIds.length}` : ''}</button>
+          </div>
           {forkMessage ? <div className="mb-2 flex items-center gap-2 text-xs text-violet-300" data-testid="roleplay-fork-point-visual-state"><GitBranch className="h-3.5 w-3.5" /><span data-testid="roleplay-fork-anchor">{t('roleplay.nextForkFrom', { index: forkMessage.messageIndex })}</span><button type="button" onClick={() => setForkMessageId(null)} aria-label={t('roleplay.backToLatestBranch')} className="ml-auto inline-flex h-8 w-8 items-center justify-center"><X className="h-4 w-4" /></button></div> : null}
-          <div className="rounded-2xl border border-line/10 bg-inset p-3 focus-within:border-violet-400/40 sm:grid sm:grid-cols-2 sm:gap-3">
-            <label className="block text-xs text-zinc-500">{t('roleplay.storyGuidance')}<textarea value={storyGuidance} onChange={(event) => setStoryGuidance(event.target.value)} rows={1} maxLength={10000} placeholder={t('roleplay.storyGuidancePlaceholder')} className="mt-1 block max-h-24 min-h-8 w-full resize-y bg-transparent text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-500" /></label>
+          <div className="rounded-2xl border border-line/10 bg-inset p-2 focus-within:border-violet-400/40 sm:grid sm:grid-cols-2 sm:gap-3 sm:p-3">
+            <label className="block text-xs text-zinc-500">{t('roleplay.storyGuidance')}<textarea value={storyGuidance} onChange={(event) => setStoryGuidance(event.target.value)} rows={1} maxLength={10000} placeholder={t('roleplay.storyGuidancePlaceholder')} className="mt-1 block max-h-24 min-h-6 w-full resize-y bg-transparent text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-500 sm:min-h-8" /></label>
             <label className="mt-2 block border-t border-line/8 pt-2 text-xs text-violet-300 sm:mt-0 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">{t('roleplay.dialogueTo', { name: cast.counterpartName })}<textarea ref={composerRef} aria-label={t('roleplay.composerLabel')} value={dialogue} onChange={(event) => setDialogue(event.target.value)} rows={2} maxLength={10000} placeholder={t('roleplay.composerPlaceholder')} onKeyDown={(event) => { if (!event.nativeEvent.isComposing && event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); if (canSend) void handleSend() } }} className="mt-1 block max-h-28 min-h-12 w-full resize-y bg-transparent text-sm leading-6 text-zinc-100 outline-none placeholder:text-zinc-500" /></label>
           </div>
           <div className="mt-2 flex items-center justify-between gap-3">
@@ -380,6 +420,7 @@ export function RoleplaySessionView(props: {
         </div>
       </form>
     </section> : null}
+    <RoleplayGenerationPanel panel={generationPanel} request={previewTurn ? buildGenerationRequest(previewTurn, buildMessagePath(messagesById, (forkMessage ?? latestMessage)?.id)) : null} options={generationOptions} onChange={setGenerationOptions} onClose={() => setGenerationPanel(null)} onSnapshot={handleContextSnapshot} />
     <DialogSurface open={sourceOpen} onClose={() => setSourceOpen(false)} closeLabel={t('roleplay.closeSource')} title={t('roleplay.advancedSettings')} placement="right">
       {detail ? <div className="space-y-6 text-sm leading-7 text-zinc-300"><section><h3 className="mb-2 font-medium">{t('roleplay.sourceExcerpt')}</h3><p className="whitespace-pre-wrap break-words">{detail.sourceSnapshot.selectedText || t('roleplay.sourceExcerptEmpty')}</p></section><section><h3 className="mb-2 font-medium">{t('roleplay.sourceSnapshot')}</h3><p className="whitespace-pre-wrap break-words">{detail.sourceSnapshot.textSnapshot || t('roleplay.sourceSnapshotEmpty')}</p></section></div> : null}
     </DialogSurface>

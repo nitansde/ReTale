@@ -54,9 +54,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: INVALID_OPERATION_TYPE_ERROR }, { status: 400 })
     }
     const effectiveOperationType = resolveGenerationRouteOperationType(operationType)
-    const writingSkillCardIds = effectiveOperationType === 'rewrite'
-      ? normalizeWritingSkillCardIds(body)
-      : []
+    const writingSkillCardIds = normalizeWritingSkillCardIds(body)
     const rawWritingSkillSeed = body.writingSkillSeed
     const writingSkillSeed = typeof rawWritingSkillSeed === 'number' && Number.isFinite(rawWritingSkillSeed)
       ? Math.floor(rawWritingSkillSeed) & 0x7fffffff

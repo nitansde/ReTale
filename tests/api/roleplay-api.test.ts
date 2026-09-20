@@ -328,7 +328,7 @@ describe('roleplay session API', () => {
     const context = { params: Promise.resolve({ sessionId }) }
     const read = () => getSession(new Request(`http://localhost/api/roleplay/sessions/${sessionId}?novelId=${FIXTURE_IDS.novelId}&branchId=${FIXTURE_IDS.branchId}`), context)
     expect(await (await read()).json()).toMatchObject({ characterOptions: [{ name: '林舟', protagonist: true }, { name: '沈月', protagonist: false }] })
-    const turn = { playerName: '林舟', counterpartName: '沈月', storyGuidance: '雨声渐近。', dialogue: '还在等吗？', maxCharacters: 200 }
+    const turn = { playerName: '林舟', counterpartName: '沈月', storyGuidance: '雨声渐近。', dialogue: '还在等吗？', maxCharacters: 200, generationOptions: { writingSkillCardIds: ['skill'], writingSkillExampleCount: 2, writingSkillSeed: 73, disabledBlockIds: ['current-summary'] } }
     const userResponse = await appendMessage(createMessageRequest(sessionId, { role: 'user', turn }), context)
     expect(userResponse.status).toBe(201)
     const user = await userResponse.json() as { id: string }

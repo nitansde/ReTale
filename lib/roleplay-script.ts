@@ -1,6 +1,6 @@
 export type RoleplayCast = { playerName: string; counterpartName: string }
 // maxCharacters is the stored field name; it is an advisory target, not an output cap.
-export type RoleplayTurn = RoleplayCast & { storyGuidance: string; dialogue: string; maxCharacters: number }
+export type RoleplayTurn = RoleplayCast & { storyGuidance: string; dialogue: string; maxCharacters: number; generationOptions?: RoleplayGenerationOptions }
 export type RoleplayScriptBlock = { type: 'narration' | 'player' | 'counterpart'; text: string }
 export type RoleplayScript = RoleplayCast & { blocks: RoleplayScriptBlock[] }
 export type RoleplayCharacterOption = { name: string; protagonist: boolean }
@@ -20,16 +20,18 @@ export function parseRoleplayCast(value: unknown): RoleplayCast | null {
   return { playerName, counterpartName }
 }
 
-export function parseRoleplayTurn(value: unknown): RoleplayTurn | null {
+export function parseRoleplayTurn(value: unknown, options: { allowEmptyInput?: boolean } = {}): RoleplayTurn | null {
   const input = record(value)
   const cast = parseRoleplayCast(value)
   if (!input || !cast || typeof input.storyGuidance !== 'string' || typeof input.dialogue !== 'string') return null
   const storyGuidance = input.storyGuidance.trim()
   const dialogue = input.dialogue.trim()
-  if ((!storyGuidance && !dialogue) || storyGuidance.length > 10000 || dialogue.length > 10000) return null
+  if ((!options.allowEmptyInput && !storyGuidance && !dialogue) || storyGuidance.length > 10000 || dialogue.length > 10000) return null
   const maxCharacters = input.maxCharacters
   if (typeof maxCharacters !== 'number' || !Number.isInteger(maxCharacters) || maxCharacters < 100 || maxCharacters > 4000) return null
-  return { ...cast, storyGuidance, dialogue, maxCharacters }
+  const generationOptions = input.generationOptions === undefined ? undefined : parseRoleplayGenerationOptions(input.generationOptions)
+  if (generationOptions === null) return null
+  return { ...cast, storyGuidance, dialogue, maxCharacters, ...(generationOptions ? { generationOptions } : {}) }
 }
 
 function parseBlocks(value: unknown): RoleplayScriptBlock[] | null {
@@ -106,3 +108,4 @@ export function buildRoleplayScriptPrompt(turn: RoleplayTurn, hasHistory = false
     JSON.stringify({ storyGuidance: turn.storyGuidance, openingDialogue: turn.dialogue }),
   ].join('\n')
 }
+import { parseRoleplayGenerationOptions, type RoleplayGenerationOptions } from '@/lib/roleplay-generation'

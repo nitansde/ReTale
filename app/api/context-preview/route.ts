@@ -35,9 +35,7 @@ export async function POST(request: Request) {
     if (!novelId) {
       return NextResponse.json({ ok: false, error: 'novelId is required' }, { status: 400 })
     }
-    const writingSkillCardIds = operationType !== 'roleplay'
-      ? normalizeWritingSkillCardIds(body)
-      : []
+    const writingSkillCardIds = normalizeWritingSkillCardIds(body)
     const rawWritingSkillSeed = body.writingSkillSeed
     const writingSkillSeed = typeof rawWritingSkillSeed === 'number' && Number.isFinite(rawWritingSkillSeed)
       ? Math.floor(rawWritingSkillSeed) & 0x7fffffff

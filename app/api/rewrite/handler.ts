@@ -1,8 +1,8 @@
 import { progressMessage } from '@/lib/i18n/progress-message'
 import { after, NextResponse } from 'next/server'
 import { apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES, noStoreJson, readJsonObject } from '@/lib/server/api-route'
-import { buildGenerationContext } from '@/lib/server/context-builder'
-import { loadGenerationContextSnapshot } from '@/lib/server/generation-context-snapshot'
+import { buildGenerationContext, type GenerationContextRagArtifacts } from '@/lib/server/context-builder'
+import { createGenerationContextSnapshot, loadGenerationContextSnapshot } from '@/lib/server/generation-context-snapshot'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { createNovelDatabaseAccess, runWithNovelDatabaseAccess } from '@/lib/server/database-access'
 import { applyPresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runtime'
@@ -42,6 +42,7 @@ import type { PresetCompatPromptRuleRuntimeContext, PresetCompatRuntimeContextBl
 import type { GenerationContextBlock, RoleplayContextMessage } from '@/lib/server/context-builder'
 import { buildRoleplayScriptPrompt, parseRoleplayTurn, roleplayTurnText, ROLEPLAY_SCRIPT_SYSTEM_PROMPT, type RoleplayTurn } from '@/lib/roleplay-script'
 import { buildRoleplayContextBlock } from '@/lib/roleplay-context'
+import { isRequiredRoleplayContextBlock } from '@/lib/roleplay-generation'
 import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
 import { createWritingSkillRandomSeed } from '@/lib/server/writing-skill-distillation-agent'
 import { resolveWritingSkillRuntimes } from '@/lib/server/writing-skill-runtime'
@@ -626,7 +627,7 @@ export function buildUserPrompt(params: {
     ? `选中行：${params.selectedLineStart} - ${params.selectedLineEnd}`
     : '选中行：未知'
 
-  if (params.writingSkillPrompt?.trim()) {
+  if (params.writingSkillPrompt?.trim() && params.operationType !== 'roleplay') {
     return [
       '# 当前章节',
       params.chapterNo ? `当前章节：第 ${params.chapterNo} 章` : '当前章节：未知',
@@ -657,6 +658,7 @@ export function buildUserPrompt(params: {
     params.assembledContext,
     selectedLineText,
     ...sourceBlock,
+    ...(params.writingSkillPrompt?.trim() ? [params.writingSkillPrompt.trim(), '技巧与范文仅用于表达方式，保持 RP 历史和 Galgame 脚本格式。', ''] : []),
     ...(params.roleplayHistory ? [params.roleplayHistory, ''] : []),
     '# 任务',
     ...buildRewriteTaskPromptLines({
@@ -1020,7 +1022,11 @@ export async function POST(request: Request) {
   return handleRewritePost(request, { allowRecoverable: true })
 }
 
-async function handleRewritePost(request: Request, options: { allowRecoverable: boolean; signal?: AbortSignal }) {
+export async function previewRoleplayPrompt(request: Request) {
+  return handleRewritePost(request, { allowRecoverable: false, previewOnly: true })
+}
+
+async function handleRewritePost(request: Request, options: { allowRecoverable: boolean; signal?: AbortSignal; previewOnly?: boolean }) {
   let body: Record<string, unknown>
   try {
     body = await readJsonObject(request, MAX_GENERATION_JSON_BODY_BYTES)
@@ -1047,7 +1053,7 @@ async function handleRewritePost(request: Request, options: { allowRecoverable: 
 async function handleRewriteBody(
   request: Request,
   body: Record<string, unknown>,
-  options: { allowRecoverable: boolean; signal?: AbortSignal },
+  options: { allowRecoverable: boolean; signal?: AbortSignal; previewOnly?: boolean },
 ) {
   if (
     options.allowRecoverable
@@ -1066,28 +1072,34 @@ async function handleRewriteBody(
   if (!operationType) {
     return NextResponse.json({ ok: false, error: INVALID_OPERATION_TYPE_ERROR }, { status: 400 })
   }
-  const roleplayTurn = operationType === 'roleplay' && body.roleplayTurn !== undefined ? parseRoleplayTurn(body.roleplayTurn) : null
+  const roleplayTurn = operationType === 'roleplay' && body.roleplayTurn !== undefined ? parseRoleplayTurn(body.roleplayTurn, { allowEmptyInput: options.previewOnly }) : null
+  if (options.previewOnly && (operationType !== 'roleplay' || !roleplayTurn)) {
+    return NextResponse.json({ ok: false, error: 'A roleplay turn is required for prompt preview' }, { status: 400 })
+  }
   if (operationType === 'roleplay' && body.roleplayTurn !== undefined && !roleplayTurn) {
     return NextResponse.json({ ok: false, error: 'Invalid roleplay characters, input or target length' }, { status: 400 })
   }
   const runtimeSurfaceId = resolveRewriteRouteSurfaceId(operationType)
-  const writingSkillCardIds = operationType === 'rewrite'
-    ? normalizeWritingSkillCardIds(body)
+  const generationOptions = roleplayTurn?.generationOptions ?? body
+  const writingSkillCardIds = operationType === 'rewrite' || operationType === 'roleplay'
+    ? normalizeWritingSkillCardIds(generationOptions)
     : []
-  const rawWritingSkillSeed = body.writingSkillSeed
+  const rawWritingSkillSeed = generationOptions.writingSkillSeed
   const writingSkillSeed = typeof rawWritingSkillSeed === 'number' && Number.isFinite(rawWritingSkillSeed)
     ? Math.floor(rawWritingSkillSeed) & 0x7fffffff
     : createWritingSkillRandomSeed()
-  const rawWritingSkillExampleCount = body.writingSkillExampleCount
+  const rawWritingSkillExampleCount = generationOptions.writingSkillExampleCount
   const writingSkillExampleCount = typeof rawWritingSkillExampleCount === 'number' && Number.isFinite(rawWritingSkillExampleCount)
     ? Math.floor(rawWritingSkillExampleCount)
     : undefined
-  const disabledBlockIds = Array.isArray(body.disabledBlockIds) ? body.disabledBlockIds.map((item: unknown) => String(item)) : []
+  const disabledBlockIds = (Array.isArray(generationOptions.disabledBlockIds) ? generationOptions.disabledBlockIds.map((item: unknown) => String(item)) : [])
+    .filter((id) => operationType !== 'roleplay' || !isRequiredRoleplayContextBlock(id))
   const disabledBlockIdSet = new Set(disabledBlockIds)
   const enabledWritingSkillCardIds = writingSkillCardIds.filter((cardId) => !disabledBlockIdSet.has(`writing-skill:${cardId}`))
-  const writingSkillBundle = enabledWritingSkillCardIds.length
+  const resolvedWritingSkillCardIds = options.previewOnly ? writingSkillCardIds : enabledWritingSkillCardIds
+  const writingSkillBundle = resolvedWritingSkillCardIds.length
     ? resolveWritingSkillRuntimes({
-        cardIds: enabledWritingSkillCardIds,
+        cardIds: resolvedWritingSkillCardIds,
         count: writingSkillExampleCount,
         seed: writingSkillSeed,
       })
@@ -1126,20 +1138,22 @@ async function handleRewriteBody(
         request: contextRequest,
       })
     : null
+  let previewRagArtifacts: GenerationContextRagArtifacts | null = null
   const context = contextRequest
     ? await buildGenerationContext({
         ...contextRequest,
-        writingSkillCardIds: enabledWritingSkillCardIds,
-      }, { cachedRagArtifacts })
+        writingSkillCardIds: resolvedWritingSkillCardIds,
+      }, { cachedRagArtifacts, ...(options.previewOnly ? { onRagArtifacts: (artifacts: GenerationContextRagArtifacts) => { previewRagArtifacts = artifacts } } : {}) })
     : null
   // History is required even when the session has no source chapter. Build it
   // independently of RAG so chapter context cannot silently drop a conversation.
   const roleplayHistoryBlock = operationType === 'roleplay' ? buildRoleplayContextBlock(roleplayMessages) : null
-  const activePromptBlocks = context || roleplayHistoryBlock
-    ? [
-        ...(context?.promptBlocks ?? []).filter((block) => block.id !== 'roleplay-history' && !disabledBlockIds.includes(block.id)),
-        ...(roleplayHistoryBlock ? [roleplayHistoryBlock] : []),
-      ]
+  const availablePromptBlocks = [
+    ...(context?.promptBlocks ?? writingSkillBundle?.blocks ?? []).filter((block) => block.id !== 'roleplay-history'),
+    ...(roleplayHistoryBlock ? [roleplayHistoryBlock] : []),
+  ]
+  const activePromptBlocks = context || availablePromptBlocks.length
+    ? availablePromptBlocks.filter((block) => block.enabled && !disabledBlockIds.includes(block.id))
     : null
   const orderedActivePromptBlocks = activePromptBlocks
     ? orderPromptBlocksForLlmRequest(activePromptBlocks)
@@ -1246,6 +1260,23 @@ async function handleRewriteBody(
   )
   const writingSkillRecords = writingSkillBundle?.records.filter((record) => activeWritingSkillCardIds.has(record.skillCardId)) ?? []
   const writingSkillMetadata = buildWritingSkillMetadata(writingSkillRecords)
+
+  if (options.previewOnly) {
+    return noStoreJson({
+      ok: true,
+      systemPrompt: runtime.systemPrompt,
+      userPrompt: runtime.userPrompt,
+      warnings: context?.warnings ?? [],
+      contextSnapshotId: contextRequest && previewRagArtifacts ? createGenerationContextSnapshot({ request: contextRequest, artifacts: previewRagArtifacts }) : null,
+      promptBlocks: availablePromptBlocks.map((block) => ({
+        ...block,
+        enabled: block.enabled && !disabledBlockIds.includes(block.id),
+        required: isRequiredRoleplayContextBlock(block.id),
+        trimmed: initialRouteMetadata.contextWindow?.trimmedBlockIds.includes(block.id) ?? false,
+      })),
+      writingSkillRecords,
+    })
+  }
 
   if (routeMetadata.streamPolicy?.effective) {
     const promptPayload = {

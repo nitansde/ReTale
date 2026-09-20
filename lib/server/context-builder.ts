@@ -1152,7 +1152,7 @@ export async function buildGenerationContext(
   const roleplayContextBlock = effectiveOperationType === 'roleplay'
     ? buildRoleplayContextBlock(request.roleplayMessages)
     : null
-  const writingSkillBundle = effectiveOperationType === 'rewrite' && request.writingSkillCardIds?.length
+  const writingSkillBundle = request.writingSkillCardIds?.length
     ? resolveWritingSkillRuntimes({
         cardIds: request.writingSkillCardIds,
         count: request.writingSkillExampleCount,
