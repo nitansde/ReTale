@@ -37,6 +37,7 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
   const { t } = useI18n()
   const desktop = useDesktopWorkspaceLayout()
   const timelineScrollRef = useRef<HTMLDivElement | null>(null)
+  const scrollRequestRef = useRef<{ key: string; completed: boolean } | null>(null)
   const mainlineChapters = useMemo(
     () => props.sortedChapters.filter((chapter) => !chapter.parentChapterId),
     [props.sortedChapters],
@@ -103,16 +104,36 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
     : props.activeSelection
       ? `${props.activeSelection.kind}:${props.activeSelection.nodeId}`
       : `chapter:${props.currentChapterId}`
+  const scrollRequestKey = JSON.stringify([
+    navigationScopeKey,
+    activeNavigationKey,
+    desktop,
+    normalizedWindowStart,
+    searchQuery,
+  ])
 
   useLayoutEffect(() => {
-    if (!desktop && !props.leftPanelOpen) return
+    if (!desktop && !props.leftPanelOpen) {
+      scrollRequestRef.current = null
+      return
+    }
     const container = timelineScrollRef.current
     if (!container) return
+    // Data refreshes may recreate the maps/arrays below without a navigation
+    // request. Keep the user's position once that request has been handled.
+    const request = scrollRequestRef.current?.key === scrollRequestKey
+      ? scrollRequestRef.current
+      : { key: scrollRequestKey, completed: false }
+    scrollRequestRef.current = request
+    if (request.completed) return
 
     const centerActiveItem = () => {
       const activeItem = container.querySelector<HTMLElement>('[data-navigation-target="true"]')
       if (!activeItem) {
-        if (searchQuery.trim()) container.scrollTop = 0
+        if (searchQuery.trim()) {
+          container.scrollTop = 0
+          request.completed = true
+        }
         return
       }
 
@@ -120,19 +141,42 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
       const itemBounds = activeItem.getBoundingClientRect()
       const centeredOffset = itemBounds.top - containerBounds.top - (container.clientHeight - itemBounds.height) / 2
       container.scrollTop = Math.max(0, container.scrollTop + centeredOffset)
+      request.completed = true
     }
 
     centerActiveItem()
-    const frameId = window.requestAnimationFrame(centerActiveItem)
-    return () => window.cancelAnimationFrame(frameId)
+    let expectedScrollTop = container.scrollTop
+    const frameId = window.requestAnimationFrame(() => {
+      if (container.scrollTop !== expectedScrollTop) {
+        request.completed = true
+        return
+      }
+      centerActiveItem()
+      expectedScrollTop = container.scrollTop
+    })
+    const stopCentering = () => {
+      // Also abandon pending positioning when the selected item loads later.
+      request.completed = true
+      window.cancelAnimationFrame(frameId)
+    }
+    const onScroll = () => {
+      if (container.scrollTop !== expectedScrollTop) stopCentering()
+    }
+    const interactionEvents = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const
+    interactionEvents.forEach((event) => container.addEventListener(event, stopCentering, { passive: true }))
+    container.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      window.cancelAnimationFrame(frameId)
+      interactionEvents.forEach((event) => container.removeEventListener(event, stopCentering))
+      container.removeEventListener('scroll', onScroll)
+    }
   }, [
-    activeNavigationKey,
     desktop,
-    normalizedWindowStart,
     props.branchChaptersByParentId,
     props.branchNodes,
     props.leftPanelOpen,
     props.timelineChapterById,
+    scrollRequestKey,
     searchQuery,
   ])
 
