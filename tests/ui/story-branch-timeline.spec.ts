@@ -902,7 +902,7 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
   await expect(page.getByTestId('workspace-action-overlay')).toBeHidden()
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('续写内容')
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
-  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
+  await expect(page.getByRole('combobox', { name: '切换版本' })).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
   expect(continueBlockDetailRequestCount).toBeGreaterThanOrEqual(1)
   await expect(page.getByTestId('workspace-current-input-tokens')).toContainText('输入 41 tokens')
@@ -921,7 +921,7 @@ test('saving a rewrite candidate lands on a persisted continue-block reader and 
 
   await expect(page).toHaveURL(/selectionKind=continue_block/)
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
-  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
+  await expect(page.getByRole('combobox', { name: '切换版本' })).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
   expect(continueBlockDetailRequestCount).toBeGreaterThanOrEqual(2)
 })
@@ -1707,7 +1707,7 @@ test('continue-block selection restores on reload and exposes the reader action 
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('续写内容')
   await expect(page.getByTestId('workspace-continue-block-actions')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
-  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
+  await expect(page.getByRole('combobox', { name: '切换版本' })).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
   expect(continueBlockDetailRequestCount).toBeGreaterThanOrEqual(1)
   await expect(page.getByTestId('workspace-continue-block-continue-entry')).toBeEnabled()
@@ -1720,9 +1720,87 @@ test('continue-block selection restores on reload and exposes the reader action 
   await expect(page.getByTestId('workspace-reference-selection-kind')).toHaveText('续写内容')
   await expect(page.getByTestId('workspace-continue-block-actions')).toBeVisible()
   await expect(page.getByTestId('workspace-continue-block-view')).toBeVisible()
-  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
+  await expect(page.getByRole('combobox', { name: '切换版本' })).toBeVisible()
   expect(continueBlockDetailRequestCount).toBeGreaterThanOrEqual(2)
 })
+
+for (const mode of ['rewrite', 'continue_block'] as const) {
+  test(`${mode} version selector switches the reader on desktop and mobile`, async ({ page }, testInfo) => {
+    const pageErrors: string[] = []
+    page.on('pageerror', (error) => pageErrors.push(error.message))
+    const label = mode === 'rewrite' ? 'RE-01' : 'CONT-01'
+    const revisions = [1, 2].map((revisionNo) => ({
+      revisionNo,
+      revisionKind: revisionNo === 1 ? 'initial' as const : 'regenerate' as const,
+      userInstruction: `第${revisionNo}版的创作方向`,
+      selectedText: '第10章正文',
+      originalText: '第10章正文',
+      generatedText: `第${revisionNo}版正文：她在门后听见誓言改变了方向。`,
+      inputTokens: 40 + revisionNo,
+      outputTokens: 60 + revisionNo,
+      title: `${label} 第${revisionNo}版`,
+      subtitle: `第${revisionNo}版的简介`,
+      createdAt: `2026-05-15T01:2${revisionNo}:45.000Z`,
+    }))
+    const latest = revisions[1]
+    const detail = buildContinueBlockDetail({
+      ...latest,
+      continueBlockId: 'continue-block-1',
+      timelineNodeId: 'continue-node-1',
+      parentTimelineNodeId: null,
+      sourceChapterNo: 10,
+      latestText: latest.generatedText,
+      latestRevisionNo: 2,
+      revisions,
+    })
+    const timeline = buildContinueBlockTimelinePayload()
+    timeline.branchNodes[0] = {
+      ...timeline.branchNodes[0],
+      nodeType: mode,
+      readableLabel: label,
+      readableLineageLabel: label,
+      title: detail.title,
+      subtitle: detail.subtitle,
+      latestText: detail.latestText,
+      currentText: detail.latestText,
+      latestRevisionNo: 2,
+      userInstruction: detail.userInstruction,
+    }
+    await mockNovelResourceApi(page, buildWorkspacePayload)
+    await page.route('**/api/story-timeline*', (route) => route.fulfill({ json: timeline }))
+    await page.route('**/api/continue-blocks/*', (route) => route.fulfill({ json: detail }))
+    await page.route('**/api/rewrite*', (route) => route.fulfill({ json: { ok: true, job: null } }))
+
+    await page.goto(`/workspace?selectionKind=${mode}&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10`, { waitUntil: 'networkidle' })
+    const actions = page.getByTestId('workspace-continue-block-actions')
+    const selector = actions.getByRole('combobox', { name: '切换版本' })
+    const view = page.getByTestId('workspace-continue-block-view')
+    await expect(view.getByRole('heading')).toHaveCount(0)
+    await expect(view.getByText(label, { exact: true })).toHaveCount(0)
+    await expect(view.getByText(/已保存续写块|最新保存版本|最新已保存版本/)).toHaveCount(0)
+    const body = page.getByTestId('workspace-continue-block-reader-body')
+    for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport)
+      await expect(selector).toBeEnabled()
+      await expect(selector).toHaveValue('2')
+      await selector.scrollIntoViewIfNeeded()
+      await expect(actions.getByRole('button', { name: '返回章节' })).toHaveCount(0)
+      const futureBounds = await actions.getByRole('button', { name: '跳到未来' }).boundingBox()
+      const selectorBounds = await selector.boundingBox()
+      expect(selectorBounds?.y).toBe(futureBounds?.y)
+      expect(selectorBounds?.x).toBeGreaterThan(futureBounds?.x ?? 0)
+      await selector.selectOption('1')
+      await expect(body).toHaveText(revisions[0].generatedText)
+      await expect(page.getByTestId('continue-block-user-request')).toContainText(revisions[0].userInstruction)
+      await expect(page.getByText('最新已保存版本', { exact: true })).toHaveCount(0)
+      await page.screenshot({ path: testInfo.outputPath(`version-1-${viewport.width}.png`) })
+      await selector.selectOption('2')
+      await expect(body).toHaveText(revisions[1].generatedText)
+      await expect(page.getByTestId('continue-block-user-request')).toContainText(revisions[1].userInstruction)
+    }
+    expect(pageErrors).toEqual([])
+  })
+}
 
 test('continue-block continue creates a child node while regenerate updates the same node in place', async ({ page }) => {
   let timelineState = buildContinueBlockTimelinePayload()
@@ -1988,10 +2066,10 @@ test('continue-block continue creates a child node while regenerate updates the 
     branchContextInclusion: 'include_selected',
   })
   await expect(page).toHaveURL(/selectionNodeId=continue-node-2/)
-  await expect(page.getByTestId('workspace-continue-block-view').getByRole('heading', { name: 'CONT-02' })).toBeVisible()
+  await expect(page.getByTestId('workspace-center-pane').getByRole('heading', { name: 'CONT-02' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'CONT-01, CONT-02 子续写块' })).toHaveCount(0)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('子续写块正文：誓言之后，她选择独自离开。')
-  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
+  await expect(page.getByRole('combobox', { name: '切换版本' })).toBeVisible()
   expect(continueBlockDetailRequests).toContain('continue-block-2')
 
   await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
@@ -2015,9 +2093,14 @@ test('continue-block continue creates a child node while regenerate updates the 
   await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
   await expect(page).toHaveURL(/selectionNodeId=continue-node-1/)
   await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText('重生后的续写块正文：誓言之后，她选择独自离开。')
-  await expect(page.getByTestId('workspace-continue-block-reader-mode')).toContainText(/Read mode|阅读模式/i)
-  await expect(page.getByTestId('continue-block-revision-history')).toContainText('已保存的续写块正文：她在门后听见誓言改变了方向。')
-  await expect(page.getByTestId('continue-block-history-item-1')).toContainText('第 1 版 · initial')
+  await expect(page.getByRole('combobox', { name: '切换版本' })).toBeVisible()
+  const revisionSelector = page.getByRole('combobox', { name: '切换版本' })
+  await expect(revisionSelector).toHaveValue('2')
+  await revisionSelector.selectOption('1')
+  await expect(page.getByTestId('workspace-continue-block-reader-body')).toHaveText('已保存的续写块正文：她在门后听见誓言改变了方向。')
+  await expect(page.getByTestId('continue-block-user-request')).toContainText('把誓言后的情绪变化压进同一场景。')
+  await revisionSelector.selectOption('2')
+  await expect(page.getByTestId('workspace-continue-block-reader-body')).toHaveText('重生后的续写块正文：誓言之后，她选择独自离开。')
   expect(continueBlockDetailRequests.filter((id) => id === 'continue-block-1').length).toBeGreaterThanOrEqual(2)
 })
 

@@ -1,6 +1,7 @@
 "use client"
 
 import { X } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useDesktopWorkspaceLayout } from '@/components/workspace/use-desktop-workspace-layout'
 import { ACTION_META, CHAPTER_ACTION_ENTRY_TEST_IDS, CONTINUE_BLOCK_ACTION_TEST_IDS } from '@/components/workspace/selection-novel-studio-helpers'
 import { useI18n } from '@/lib/i18n/provider'
@@ -17,6 +18,7 @@ type WorkspaceSelectionActionsProps = {
   activeMode: WorkspaceActionMode | null
   roleplaySessionStarting: boolean
   hasFutureMapLaunch: boolean
+  revisionSelector?: ReactNode
   onClearSelection: () => void
   onOpenActionMode: (mode: WorkspaceActionMode) => void
   onReopenContinueBlockRewriteFlow: (variant: 'continue' | 'regenerate') => void
@@ -86,11 +88,11 @@ export function WorkspaceSelectionActions(props: WorkspaceSelectionActionsProps)
   if (props.selection.kind === 'rewrite' || props.selection.kind === 'continue_block') {
     return (
       <div className="mb-0" data-testid="workspace-continue-block-actions">
-        <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:flex-wrap">
+        <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <button type="button" onClick={() => props.onReopenContinueBlockRewriteFlow('continue')} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.continue} className="min-h-11 shrink-0 rounded-2xl bg-fuchsia-500 px-4 text-sm font-medium text-white transition hover:bg-fuchsia-400">{t('workspace.continueWriting')}</button>
           <button type="button" onClick={() => props.onReopenContinueBlockRewriteFlow('regenerate')} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.regenerate} className="min-h-11 shrink-0 rounded-2xl border border-fuchsia-300/25 bg-fuchsia-500/10 px-4 text-sm text-fuchsia-50 transition hover:bg-fuchsia-500/20">{t('workspace.regenerateCurrentNode')}</button>
-          <button type="button" disabled={!props.hasFutureMapLaunch} onClick={props.onOpenContinueBlockFutureJump} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.futureJump} className="min-h-11 shrink-0 rounded-2xl border border-line/10 bg-shade/20 px-4 text-sm text-zinc-200 transition hover:bg-overlay/[0.08] disabled:opacity-50">{t('workspace.futureJumpRun')}</button>
-          <button type="button" onClick={props.onOpenAnchorChapter} className="min-h-11 shrink-0 rounded-2xl border border-line/10 bg-shade/20 px-4 text-sm text-zinc-200 transition hover:bg-overlay/[0.08]">{t('workspace.backToAnchorChapter')}</button>
+          <button type="button" disabled={!props.hasFutureMapLaunch} onClick={props.onOpenContinueBlockFutureJump} data-testid={CONTINUE_BLOCK_ACTION_TEST_IDS.futureJump} className="min-h-11 shrink-0 rounded-2xl border border-fuchsia-300/25 bg-fuchsia-500/10 px-4 text-sm text-fuchsia-50 transition hover:bg-fuchsia-500/20 disabled:opacity-50">{t('workspace.futureJumpRun')}</button>
+          {props.revisionSelector}
         </div>
       </div>
     )

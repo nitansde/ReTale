@@ -322,7 +322,7 @@ export function SelectionNovelStudio() {
     loadOpenAICompatibleModels, handleDeleteNovel, handleDeleteChapter, handleTimelineDeleteChapter,
     handleDeleteBranchNode, handleRewritePromptChange, handleWritingSkillSelectionChange, handleWritingSkillExampleCountChange, handleRewrite, handleAbortRewriteGeneration, handleSaveContinueBlock,
     handleCreateWhatIf, launchFutureMapFromWhatIf, handleFutureJumpCreated, reopenWhatIfRewriteFlow,
-    reopenFutureJumpRewriteFlow, selectionActions, knowledgeControls,
+    reopenFutureJumpRewriteFlow, selectionActions, renderSelectionActions, knowledgeControls,
   } = actions
   const isContinueBlockContinuation = rewriteLaunchSource === 'continue_block'
     && activeContinueBlockRewriteContext?.variant === 'continue'
@@ -490,7 +490,7 @@ export function SelectionNovelStudio() {
             onCenterPaneViewChange={setCenterPaneView}
             chapterSelectionSummary={chapterSelectionSummary}
             chapterGraphSummary={chapterGraphSummary}
-            selectionActions={activeWorkspaceSelection.kind === 'chapter' ? null : selectionActions}
+            selectionActions={activeWorkspaceSelection.kind === 'chapter' || ((activeWorkspaceSelection.kind === 'rewrite' || activeWorkspaceSelection.kind === 'continue_block') && selectedContinueBlockNode?.continueBlockId) ? null : selectionActions}
             branchReadableLabel={selectedTimelineDisplayLabel || null}
             branchInstructionText={selectedTimelineInstructionText || null}
             chapterBodyView={
@@ -553,8 +553,6 @@ export function SelectionNovelStudio() {
                     branchId={storyTimelineBranchId}
                     continueBlockId={selectedContinueBlockNode.continueBlockId}
                     latestRevisionNo={selectedContinueBlockNode.latestRevisionNo ?? null}
-                    anchorChapterNo={activeWorkspaceSelection.anchorChapterNo}
-                    nodeTitle={selectedContinueBlockNode.title}
                     nodeSubtitle={selectedContinueBlockNode.subtitle ?? null}
                     fallbackDetail={{
                       latestText: selectedContinueBlockNode.latestText?.trim() || '',
@@ -565,7 +563,7 @@ export function SelectionNovelStudio() {
                       inputTokens: selectedContinueBlockNode.inputTokens ?? null,
                       outputTokens: selectedContinueBlockNode.outputTokens ?? null,
                     }}
-                    readableLineageLabel={selectedTimelineDisplayLabel || null}
+                    renderActions={renderSelectionActions}
                     onMetricsChange={handleContinueBlockMetricsChange}
                   />
                 ) : null

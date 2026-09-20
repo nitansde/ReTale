@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ContinueBlockDetailView } from '@/components/workspace/ContinueBlockDetailView'
 import type { ContinueBlockDetail } from '@/lib/story-branch-types'
@@ -132,7 +132,8 @@ describe('ContinueBlockDetailView', () => {
     vi.restoreAllMocks()
   })
 
-  it('loads persisted detail and keeps older revisions visible after regenerate', async () => {
+  it('switches between saved versions with matching instructions and metrics', async () => {
+    const onMetricsChange = vi.fn()
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue({
       ok: true,
       json: async () => continueBlockDetail,
@@ -145,8 +146,7 @@ describe('ContinueBlockDetailView', () => {
         branchId="novel-001:main"
         continueBlockId="continue-block-001"
         latestRevisionNo={2}
-        anchorChapterNo={10}
-        readableLineageLabel="RE-01"
+        onMetricsChange={onMetricsChange}
       />
     )
 
@@ -160,8 +160,22 @@ describe('ContinueBlockDetailView', () => {
 
     expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('第二版续写正文')
     expect(screen.getByTestId('continue-block-user-request')).toHaveTextContent('把誓言后的情绪变化压进同一场景。')
-    expect(screen.getByTestId('continue-block-revision-history')).toHaveTextContent('第一版续写正文')
-    expect(screen.getByTestId('continue-block-history-item-1')).toHaveTextContent('第 1 版 · initial')
+    expect(screen.queryByText('第一版续写正文')).not.toBeInTheDocument()
+    const selector = screen.getByRole('combobox', { name: '切换版本' })
+    expect(selector).toHaveValue('2')
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['版本 2（最新）', '版本 1'])
+
+    fireEvent.change(selector, { target: { value: '1' } })
+    expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('第一版续写正文')
+    expect(screen.queryByText('第二版续写正文')).not.toBeInTheDocument()
+    expect(screen.getByTestId('continue-block-user-request')).toHaveTextContent('先写第一版。')
+    expect(onMetricsChange).toHaveBeenLastCalledWith({ currentText: '第一版续写正文', inputTokens: 100, outputTokens: 200 })
+
+    fireEvent.change(selector, { target: { value: '2' } })
+    expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('第二版续写正文')
+    expect(screen.getByTestId('continue-block-user-request')).toHaveTextContent('把誓言后的情绪变化压进同一场景。')
+    expect(onMetricsChange).toHaveBeenLastCalledWith({ currentText: '第二版续写正文', inputTokens: 120, outputTokens: 240 })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('shows the complete multi-line user request instead of a shortened prompt preview', async () => {
@@ -178,8 +192,6 @@ describe('ContinueBlockDetailView', () => {
         branchId="novel-001:main"
         continueBlockId="continue-block-001"
         latestRevisionNo={2}
-        anchorChapterNo={10}
-        readableLineageLabel="RE-01"
       />
     )
 
@@ -206,8 +218,6 @@ describe('ContinueBlockDetailView', () => {
         branchId="novel-001:main"
         continueBlockId="continue-block-001"
         latestRevisionNo={2}
-        anchorChapterNo={10}
-        readableLineageLabel="RE-01"
       />
     )
 
@@ -215,7 +225,8 @@ describe('ContinueBlockDetailView', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1)
     })
     expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('第二版续写正文')
-    expect(screen.getByTestId('continue-block-revision-history')).toHaveTextContent('第一版续写正文')
+    fireEvent.change(screen.getByRole('combobox', { name: '切换版本' }), { target: { value: '1' } })
+    expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('第一版续写正文')
 
     rerender(
       <ContinueBlockDetailView
@@ -223,8 +234,6 @@ describe('ContinueBlockDetailView', () => {
         branchId="novel-001:main"
         continueBlockId="continue-block-001"
         latestRevisionNo={3}
-        anchorChapterNo={10}
-        readableLineageLabel="RE-01"
       />
     )
 
@@ -236,9 +245,10 @@ describe('ContinueBlockDetailView', () => {
       { cache: 'no-store' }
     )
     expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('第三版续写正文')
-    expect(screen.getByText('版本 3')).toBeInTheDocument()
-    expect(screen.getByTestId('continue-block-revision-history')).toHaveTextContent('第二版续写正文')
-    expect(screen.getByTestId('continue-block-revision-history')).toHaveTextContent('第一版续写正文')
+    expect(screen.getByRole('combobox', { name: '切换版本' })).toHaveValue('3')
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['版本 3（最新）', '版本 2', '版本 1'])
+    fireEvent.change(screen.getByRole('combobox', { name: '切换版本' }), { target: { value: '2' } })
+    expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('第二版续写正文')
   })
 
   it('renders fallback reader body immediately before persisted detail finishes loading', async () => {
@@ -254,7 +264,6 @@ describe('ContinueBlockDetailView', () => {
         branchId="novel-001:main"
         continueBlockId="continue-block-001"
         latestRevisionNo={2}
-        anchorChapterNo={10}
         fallbackDetail={{
           latestText: '时间线回退正文',
           latestRevisionNo: 2,
@@ -269,6 +278,7 @@ describe('ContinueBlockDetailView', () => {
 
     expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('时间线回退正文')
     expect(screen.getByText('正在读取续写块详情…')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: '切换版本' })).toBeDisabled()
 
     ;(resolveFetch as ((value: Response) => void) | null)?.({
       ok: true,
@@ -293,7 +303,6 @@ describe('ContinueBlockDetailView', () => {
         branchId="novel-001:main"
         continueBlockId="continue-block-001"
         latestRevisionNo={2}
-        anchorChapterNo={10}
         fallbackDetail={{
           latestText: '时间线回退正文',
           latestRevisionNo: 2,
@@ -308,5 +317,44 @@ describe('ContinueBlockDetailView', () => {
 
     expect(await screen.findByTestId('workspace-continue-block-reader-body')).toHaveTextContent('时间线回退正文')
     expect(await screen.findByText('读取续写块详情失败，请稍后重试。')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: '切换版本' })).toBeDisabled()
+  })
+
+  it('does not leak the selected version into another node while its detail is loading', async () => {
+    let resolveFetch!: (value: Response) => void
+    const nextDetail = {
+      ...continueBlockDetail,
+      id: 'continue-block-002',
+      latestRevisionNo: 1,
+      latestText: '另一个节点的正文',
+      userInstruction: '另一个节点的创作方向',
+      revisions: [],
+    }
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>()
+      .mockResolvedValueOnce({ ok: true, json: async () => continueBlockDetail } as Response)
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveFetch = resolve })))
+    const props = {
+      novelId: 'novel-001',
+      branchId: 'novel-001:main',
+      continueBlockId: 'continue-block-001',
+      latestRevisionNo: 2,
+      anchorChapterNo: 10,
+    }
+    const { rerender } = render(<ContinueBlockDetailView {...props} />)
+    await screen.findByText('第二版续写正文')
+    fireEvent.change(screen.getByRole('combobox', { name: '切换版本' }), { target: { value: '1' } })
+
+    rerender(<ContinueBlockDetailView {...props} continueBlockId={nextDetail.id} latestRevisionNo={1} fallbackDetail={nextDetail} />)
+    expect(screen.getByTestId('workspace-continue-block-reader-body')).toHaveTextContent('另一个节点的正文')
+    expect(screen.queryByText('第一版续写正文')).not.toBeInTheDocument()
+    expect(screen.getByTestId('continue-block-user-request')).toHaveTextContent('另一个节点的创作方向')
+    expect(screen.getByRole('combobox', { name: '切换版本' })).toHaveValue('1')
+    expect(screen.getByRole('combobox', { name: '切换版本' })).toBeDisabled()
+
+    resolveFetch({ ok: true, json: async () => nextDetail } as Response)
+    await waitFor(() => expect(screen.queryByText('正在读取续写块详情…')).not.toBeInTheDocument())
+    expect(screen.getByRole('combobox', { name: '切换版本' })).toBeEnabled()
+    expect(screen.getAllByRole('option')).toHaveLength(1)
+    expect(screen.getByRole('option', { name: '版本 1（最新）' })).toBeInTheDocument()
   })
 })
