@@ -281,6 +281,7 @@ const WORKSPACE_OPERATION_MESSAGE_KEYS = {
   'roleplay-session-load': 'errors.roleplaySessionLoadFailed',
   'roleplay-send': 'errors.roleplayMessageAppendFailed',
   'roleplay-delete': 'errors.roleplayRequestDeleteFailed',
+  'roleplay-branch-delete': 'errors.roleplayBranchDeleteFailed',
   'roleplay-regenerate': 'errors.roleplayVariantCreationFailed',
   'roleplay-stream': 'errors.roleplayStreamingRequestFailed',
   'timeline-node-delete': 'workspace.actionError.deleteTimelineNodeFailed',

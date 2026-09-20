@@ -308,6 +308,67 @@ afterEach(databaseFixture.wrap(async () => {
 }))
 
 describe('roleplay session API', () => {
+  it('deletes a route transactionally while retaining shared ancestors, nested siblings and fork metadata', databaseFixture.wrap(async () => {
+    const database = createTestDatabase('retale-roleplay-branch-delete')
+    createFixture(database)
+    const { POST: createSession } = await import('@/app/api/roleplay/sessions/route')
+    const { POST: appendMessage, DELETE: removeMessages } = await import('@/app/api/roleplay/sessions/[sessionId]/messages/route')
+    const response = await createSession(createSessionRequest({ novelId: FIXTURE_IDS.novelId, branchId: FIXTURE_IDS.branchId, title: '删除分支', sourceChapterId: FIXTURE_IDS.chapterId, sourceChapterNo: 12, sourceSelectedText: '雨夜', sourceTextSnapshot: '雨夜正文' }))
+    const { sessionId } = await response.json() as { sessionId: string }
+    const context = { params: Promise.resolve({ sessionId }) }
+    const append = async (id: string, role: string, parentMessageId: string | null, forkedFromMessageId: string | null = null) => {
+      expect((await appendMessage(createMessageRequest(sessionId, { id, role, parentMessageId, forkedFromMessageId, content: id }), context)).status).toBe(201)
+    }
+    const remove = (messageId: string, extra = {}, targetSession = sessionId) => removeMessages(new Request(`http://localhost/api/roleplay/sessions/${targetSession}/messages`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ novelId: FIXTURE_IDS.novelId, branchId: FIXTURE_IDS.branchId, messageId, mode: 'branch', ...extra }),
+    }), { params: Promise.resolve({ sessionId: targetSession }) })
+    const read = () => database.prepare('SELECT id, parent_message_id, forked_from_message_id FROM roleplay_messages ORDER BY message_index').all()
+    await append('u1', 'user', null)
+    await append('a1', 'assistant', 'u1')
+    await append('u2', 'user', 'a1')
+    await append('a2', 'assistant', 'u2')
+    await append('a2-alt', 'assistant', 'u2', 'a2')
+    await append('u3', 'user', 'a2')
+    await append('a3', 'assistant', 'u3')
+    await append('other-root', 'user', null)
+    const before = read()
+    expect((await remove('a3', { branchId: 'wrong' })).status).toBe(404)
+    expect((await remove('a3', {}, 'missing-session')).status).toBe(404)
+    const otherResponse = await createSession(createSessionRequest({ novelId: FIXTURE_IDS.novelId, branchId: FIXTURE_IDS.branchId, title: '其他会话', sourceChapterId: FIXTURE_IDS.chapterId, sourceChapterNo: 12, sourceSelectedText: '雨夜', sourceTextSnapshot: '雨夜正文' }))
+    const otherSessionId = (await otherResponse.json()).sessionId as string
+    const beforeIsolation = snapshotIsolation(database)
+    expect((await remove('a3', {}, otherSessionId)).status).toBe(404)
+    expect((await remove('missing')).status).toBe(404)
+    expect((await remove('u2')).status).toBe(400)
+    expect((await remove('a3', { mode: 'unknown' })).status).toBe(400)
+    expect(read()).toEqual(before)
+
+    database.exec("CREATE TRIGGER fail_branch_delete BEFORE DELETE ON roleplay_messages WHEN OLD.id = 'a2' BEGIN SELECT RAISE(ABORT, 'forced branch delete failure'); END")
+    expect((await remove('a3')).status).toBe(500)
+    expect(read()).toEqual(before)
+    database.exec('DROP TRIGGER fail_branch_delete')
+
+    const deleted = await remove('a3')
+    expect(deleted.status).toBe(200)
+    expect(await deleted.json()).toEqual({ ok: true, deletedMessageIds: ['a3', 'u3', 'a2'] })
+    expect(read()).toEqual([
+      { id: 'u1', parent_message_id: null, forked_from_message_id: null },
+      { id: 'a1', parent_message_id: 'u1', forked_from_message_id: null },
+      { id: 'u2', parent_message_id: 'a1', forked_from_message_id: null },
+      { id: 'a2-alt', parent_message_id: 'u2', forked_from_message_id: null },
+      { id: 'other-root', parent_message_id: null, forked_from_message_id: null },
+    ])
+    expect((await remove('a3')).status).toBe(404)
+    expect((await remove('other-root')).status).toBe(200)
+    expect((await remove('a2-alt')).status).toBe(200)
+    expect(read()).toEqual([])
+    expect(database.prepare('SELECT id FROM roleplay_sessions WHERE id = ?').get(sessionId)).toBeTruthy()
+    await append('fresh', 'user', null)
+    expect(read()).toHaveLength(1)
+    expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    expect(snapshotIsolation(database)).toEqual(beforeIsolation)
+  }))
+
   it('deletes only the requested turn and its variants, reconnects later forks, and validates the session context', databaseFixture.wrap(async () => {
     const database = createTestDatabase('retale-roleplay-turn-delete')
     createFixture(database)

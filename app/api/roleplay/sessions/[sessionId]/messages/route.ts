@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES, jsonError, readJsonObject, requireNonEmptyId, toErrorMessage } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
-import { appendRoleplayMessage, createRoleplayLatestTurnVariant, deleteRoleplayTurn, findRoleplaySessionById } from '@/lib/server/roleplay-store'
+import { appendRoleplayMessage, createRoleplayLatestTurnVariant, deleteRoleplayBranch, deleteRoleplayTurn, findRoleplaySessionById } from '@/lib/server/roleplay-store'
 import { uid } from '@/lib/utils'
 import { parseRoleplayTurn, parseRoleplayScript } from '@/lib/roleplay-script'
 
@@ -18,7 +18,8 @@ export async function DELETE(request: Request, context: { params: Promise<{ sess
     if (!session || session.novelId !== novelId || session.branchId !== branchId) {
       return jsonError('Roleplay session not found for the requested branch context', 404)
     }
-    const result = await deleteRoleplayTurn({ sessionId, messageId }, db)
+    if (body.mode !== undefined && body.mode !== 'branch') return jsonError('Invalid deletion mode', 400)
+    const result = await (body.mode === 'branch' ? deleteRoleplayBranch : deleteRoleplayTurn)({ sessionId, messageId }, db)
     return NextResponse.json({ ok: true, ...result })
   } catch (error) {
     return apiRequestErrorResponse(error) ?? jsonError(toErrorMessage(error, 'Failed to delete roleplay request'), 500)

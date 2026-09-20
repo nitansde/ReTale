@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { type RoleplayTurn, type RoleplayScript, roleplayScriptText } from '@/lib/roleplay-script'
 import { createDefaultAISettings } from '@/lib/ai-settings'
+import { getRoleplayBranchDeletionIds } from '@/lib/roleplay-branches'
 import type { StoryTimelineResponse } from '@/lib/story-branch-types'
 import { mockNovelResourceApi, type MockNovelResourceMutation } from '@/tests/helpers/novel-resource-api-mock'
 
@@ -238,9 +239,9 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
 
   await page.route('**/api/roleplay/sessions/roleplay-session-001/messages', async (route) => {
     if (route.request().method() === 'DELETE') {
-      const { messageId } = route.request().postDataJSON() as { messageId: string }
+      const { messageId, mode } = route.request().postDataJSON() as { messageId: string; mode?: string }
       const request = sessionDetail.messages.find((message) => message.id === messageId)!
-      const deletedMessageIds = sessionDetail.messages.filter((message) => message.id === messageId || (message.role === 'assistant' && message.parentMessageId === messageId)).map((message) => message.id)
+      const deletedMessageIds = mode === 'branch' ? getRoleplayBranchDeletionIds(sessionDetail.messages, messageId) : sessionDetail.messages.filter((message) => message.id === messageId || (message.role === 'assistant' && message.parentMessageId === messageId)).map((message) => message.id)
       sessionDetail = { ...sessionDetail, messages: sessionDetail.messages.filter((message) => !deletedMessageIds.includes(message.id)).map((message) => ({
         ...message, parentMessageId: message.parentMessageId && deletedMessageIds.includes(message.parentMessageId) ? request.parentMessageId : message.parentMessageId,
       })) }
@@ -499,8 +500,8 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await page.getByRole('textbox', { name: '我的台词' }).fill('改走河边。')
   await page.getByTestId('roleplay-composer-send').click()
   await expect(page.getByTestId('roleplay-message-5')).toBeVisible()
-  const branchPicker = page.getByRole('combobox', { name: '当前分支' })
-  await expect(branchPicker).toHaveValue('message-6')
+  const branchPicker = page.getByRole('button', { name: '当前分支', exact: true })
+  await expect(branchPicker).toHaveAttribute('data-selected-branch', 'message-6')
   const branchIconBounds = await page.getByTestId('roleplay-branch-picker').boundingBox()
   const sendBounds = await page.getByTestId('roleplay-composer-send').boundingBox()
   expect(branchIconBounds!.width).toBeLessThanOrEqual(44)
@@ -509,11 +510,11 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await page.getByTestId('roleplay-message-4').scrollIntoViewIfNeeded()
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-mobile-branches.png') })
   await page.getByRole('button', { name: '上一个剧情分支' }).click()
-  await expect(branchPicker).toHaveValue('message-4')
+  await expect(branchPicker).toHaveAttribute('data-selected-branch', 'message-4')
   await expect(page.getByTestId('roleplay-message-2')).toContainText('继续走向城门。')
   await expect(page.getByTestId('roleplay-message-4')).toHaveCount(0)
   await page.reload({ waitUntil: 'networkidle' })
-  await expect(branchPicker).toHaveValue('message-4')
+  await expect(branchPicker).toHaveAttribute('data-selected-branch', 'message-4')
   await expect(page.getByTestId('roleplay-message-2')).toContainText('继续走向城门。')
   await page.getByRole('textbox', { name: '我的台词' }).fill('这条路上有什么？')
   await page.getByTestId('roleplay-composer-send').click()
@@ -521,13 +522,38 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   expect(sessionDetail.messages.at(-2)?.parentMessageId).toBe('message-4')
   expect(JSON.stringify(rewritePayloads.at(-1)?.roleplayMessages)).toContain('继续走向城门。')
   expect(JSON.stringify(rewritePayloads.at(-1)?.roleplayMessages)).not.toContain('改走河边。')
-  await branchPicker.selectOption('message-6')
+  await branchPicker.click()
+  await page.getByTestId('roleplay-select-branch-message-6').click()
   await expect(page.getByTestId('roleplay-message-4')).toContainText('改走河边。')
   await expect(page.getByTestId('roleplay-message-6')).toHaveCount(0)
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.getByTestId('roleplay-message-4').scrollIntoViewIfNeeded()
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-desktop-branches.png') })
-  await branchPicker.selectOption('message-8')
+  await branchPicker.click()
+  await page.getByTestId('roleplay-select-branch-message-8').click()
+  // Delete the inactive route from the menu, retaining the selected route and shared opening.
+  await page.setViewportSize({ width: 390, height: 844 })
+  await branchPicker.click()
+  await expect(page.getByTestId('roleplay-select-branch-message-8')).toHaveAttribute('aria-pressed', 'true')
+  await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-branch-menu.png') })
+  await page.getByRole('button', { name: '删除分支 2', exact: true }).click()
+  await expect(page.getByRole('dialog')).toContainText('独有的 2 条消息')
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page.getByTestId('roleplay-select-branch-message-6')).toBeVisible()
+  await page.getByRole('button', { name: '删除分支 2', exact: true }).click()
+  await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-branch-delete-confirm.png') })
+  await page.getByRole('button', { name: '确认删除分支', exact: true }).click()
+  await expect(page.getByTestId('roleplay-select-branch-message-6')).toHaveCount(0)
+  await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click()
+  await expect(branchPicker).toHaveAttribute('data-selected-branch', 'message-8')
+  await expect(page.getByTestId('roleplay-message-0')).toHaveCount(1)
+  await expect(page.getByTestId('roleplay-message-6')).toContainText('这条路上有什么？')
+  await page.reload({ waitUntil: 'networkidle' })
+  await branchPicker.click()
+  await expect(page.getByTestId('roleplay-select-branch-message-6')).toHaveCount(0)
+  await expect(page.getByTestId('roleplay-select-branch-message-8')).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click()
+  await page.setViewportSize({ width: 1440, height: 900 })
 
   const historyStart = Math.max(...sessionDetail.messages.map((message) => message.messageIndex))
   sessionDetail = {

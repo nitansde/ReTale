@@ -12,7 +12,8 @@ import { RoleplayCastPicker } from './RoleplayCastPicker'
 import { RoleplayScriptBlocks } from './RoleplayScriptBlocks'
 import { RoleplayGenerationPanel } from './RoleplayGenerationPanel'
 import { RoleplayBranchSwitch } from './RoleplayBranchSwitch'
-import { buildRoleplayMessageTree, getRoleplayBranchTip, getRoleplayMessagePath as buildMessagePath } from '@/lib/roleplay-branches'
+import { RoleplayBranchMenu } from './RoleplayBranchMenu'
+import { buildRoleplayMessageTree, getRoleplayBranchDeletionIds, getRoleplayBranchTip, getRoleplayMessagePath as buildMessagePath } from '@/lib/roleplay-branches'
 import { defaultRoleplayGenerationOptions } from '@/lib/roleplay-generation'
 import { createWritingSkillRuntimeSeed } from '@/lib/writing-skill-selection'
 import { parseRoleplayTurn, readGeneratedRoleplayScript, roleplayScriptText, roleplayTurnText, ROLEPLAY_DEFAULT_LENGTH, type RoleplayCast, type RoleplayTurn, type RoleplayScript, type RoleplayCharacterOption } from '@/lib/roleplay-script'
@@ -208,6 +209,7 @@ export function RoleplaySessionView(props: {
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null)
+  const [deletingBranchId, setDeletingBranchId] = useState<string | null>(null)
   const [pendingScript, setPendingScript] = useState<RoleplayScript | null>(null)
   const [generationPanel, setGenerationPanel] = useState<'context' | 'skills' | null>(null)
   const [generationOptions, setGenerationOptions] = useState(() => defaultRoleplayGenerationOptions(createWritingSkillRuntimeSeed()))
@@ -230,6 +232,12 @@ export function RoleplaySessionView(props: {
   const activeMessages = useMemo(() => buildMessagePath(messagesById, latestMessage?.id), [messagesById, latestMessage?.id])
   const forkMessage = forkMessageId ? messagesById.get(forkMessageId) ?? null : null
   const visibleMessages = useMemo(() => forkMessage ? buildMessagePath(messagesById, forkMessage.id) : activeMessages, [messagesById, forkMessage, activeMessages])
+  const branchOptions = useMemo(() => leaves.map((leaf, index) => {
+    const path = buildMessagePath(messagesById, leaf.id)
+    const fork = [...path].reverse().find((message) => (childrenByParentId.get(message.parentMessageId)?.length ?? 0) > 1) ?? leaf
+    const preview = (fork.turn?.dialogue || fork.turn?.storyGuidance || fork.content).replace(/\s+/g, ' ').slice(0, 36)
+    return { id: leaf.id, label: t('roleplay.branchOption', { index: index + 1, text: preview }), deleteCount: getRoleplayBranchDeletionIds(detail?.messages ?? [], leaf.id).length }
+  }), [leaves, messagesById, childrenByParentId, detail?.messages, t])
 
   const refreshDetail = useCallback(async () => {
     const next = await loadRoleplaySessionDetail({ novelId: props.novelId, branchId: props.branchId, sessionId: props.sessionId })
@@ -303,7 +311,7 @@ export function RoleplaySessionView(props: {
   const turnInput = { ...cast, storyGuidance, dialogue, maxCharacters: targetCharacters, generationOptions }
   const turn = parseRoleplayTurn(turnInput)
   const previewTurn = parseRoleplayTurn(turnInput, { allowEmptyInput: true })
-  const mutating = busy || deletingMessageId !== null
+  const mutating = busy || deletingMessageId !== null || deletingBranchId !== null
   const canSend = Boolean(turn && !mutating)
   const retryUser = latestMessage?.role === 'user' && latestMessage.turn ? latestMessage : null
   const latestAssistant = latestMessage?.role === 'assistant' ? latestMessage : null
@@ -418,6 +426,44 @@ export function RoleplaySessionView(props: {
     }
   }
 
+  const handleDeleteBranch = async (messageId: string) => {
+    if (!detail || busyRef.current) return
+    busyRef.current = true
+    setDeletingBranchId(messageId)
+    try {
+      const response = await fetch(`/api/roleplay/sessions/${detail.id}/messages`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ novelId: props.novelId, branchId: props.branchId, messageId, mode: 'branch' }),
+      })
+      const data = await response.json() as { deletedMessageIds: string[]; error?: string }
+      if (!response.ok) throw new Error(data.error || 'Failed to delete roleplay branch')
+      const deletedIds = new Set(data.deletedMessageIds)
+      const messages = detail.messages.filter((message) => !deletedIds.has(message.id)).map((message) => {
+        const forkedFromMessageId = message.forkedFromMessageId && deletedIds.has(message.forkedFromMessageId) ? null : message.forkedFromMessageId
+        return { ...message, forkedFromMessageId, forkMetadata: { ...message.forkMetadata, forkedFromMessageId } }
+      })
+      const tree = buildRoleplayMessageTree(messages)
+      const selected = latestMessage && !deletedIds.has(latestMessage.id) ? tree.messagesById.get(latestMessage.id) : tree.leaves.at(-1)
+      if (selected?.id !== latestMessage?.id) {
+        const lastTurn = buildMessagePath(tree.messagesById, selected?.id).reverse().find((message) => message.turn)?.turn
+        if (lastTurn) {
+          setCast(lastTurn); setTargetCharacters(lastTurn.maxCharacters)
+          setGenerationOptions(lastTurn.generationOptions ?? defaultRoleplayGenerationOptions(createWritingSkillRuntimeSeed()))
+        }
+        stickToBottomRef.current = true
+      }
+      setDetail({ ...detail, messages })
+      setSelectedMessageId(selected?.id ?? null)
+      setForkMessageId((current) => current && deletedIds.has(current) ? null : current)
+      contextSnapshotRef.current = null
+      replyScrollTargetRef.current = null
+      setError('')
+    } finally {
+      setDeletingBranchId(null)
+      busyRef.current = false
+    }
+  }
+
   const selectBranch = (messageId: string, scrollToMessage = false) => {
     if (busyRef.current) return
     const selected = getRoleplayBranchTip(childrenByParentId, messagesById.get(messageId))
@@ -477,17 +523,7 @@ export function RoleplaySessionView(props: {
           </div>
           <div className="mt-1 flex items-center justify-between gap-2" data-testid="roleplay-composer-actions">
             <div className="flex min-w-0 items-center gap-1">
-              {leaves.length > 1 ? <div className={cn('relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-violet-300 hover:bg-overlay/5 focus-within:ring-2 focus-within:ring-violet-400/50', mutating && 'opacity-40')} title={t('roleplay.currentBranch')} data-testid="roleplay-branch-picker">
-                <GitBranch className="h-4 w-4" aria-hidden="true" />
-                <select aria-label={t('roleplay.currentBranch')} value={latestMessage?.id ?? ''} disabled={mutating} onChange={(event) => selectBranch(event.target.value)} className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed">
-                  {leaves.map((leaf, index) => {
-                    const path = buildMessagePath(messagesById, leaf.id)
-                    const fork = [...path].reverse().find((message) => (childrenByParentId.get(message.parentMessageId)?.length ?? 0) > 1) ?? leaf
-                    const preview = (fork.turn?.dialogue || fork.turn?.storyGuidance || fork.content).replace(/\s+/g, ' ').slice(0, 36)
-                    return <option key={leaf.id} value={leaf.id}>{t('roleplay.branchOption', { index: index + 1, text: preview })}</option>
-                  })}
-                </select>
-              </div> : null}
+              {leaves.length ? <RoleplayBranchMenu branches={branchOptions} selectedId={latestMessage?.id ?? null} disabled={mutating} onSelect={selectBranch} onDelete={handleDeleteBranch} /> : null}
               <button type="button" disabled={mutating} onClick={() => setGenerationPanel('context')} aria-label={t('workspace.shell.advancedContext')} title={t('workspace.shell.advancedContext')} className="inline-flex h-11 w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-overlay/5 hover:text-zinc-100 disabled:opacity-40"><SlidersHorizontal className="h-4 w-4" /></button>
               <button type="button" disabled={mutating} onClick={() => setGenerationPanel('skills')} aria-label={`${t('roleplay.writingSkills')}${generationOptions.writingSkillCardIds.length ? ` · ${generationOptions.writingSkillCardIds.length}` : ''}`} title={t('roleplay.writingSkills')} className={cn('inline-flex h-11 w-11 items-center justify-center rounded-xl hover:bg-overlay/5 hover:text-zinc-100 disabled:opacity-40', generationOptions.writingSkillCardIds.length ? 'text-violet-300' : 'text-zinc-400')}><Wand2 className="h-4 w-4" /></button>
               {composerExpanded ? <button type="button" onClick={() => setComposerExpanded(false)} aria-label={t('roleplay.collapseComposer')} title={t('roleplay.collapseComposer')} className="inline-flex h-11 w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-overlay/5 hover:text-zinc-100"><ChevronDown className="h-4 w-4" /></button> : null}

@@ -49,3 +49,20 @@ export function getRoleplayBranchTip<T extends MessageLink>(childrenByParentId: 
   }
   return message
 }
+
+// Walk from a leaf to its nearest shared ancestor, which must be preserved.
+export function getRoleplayBranchDeletionIds<T extends MessageLink>(messages: T[], tipId: string): string[] {
+  const { messagesById, childrenByParentId } = buildRoleplayMessageTree(messages)
+  let message = messagesById.get(tipId)
+  if (!message || childrenByParentId.has(tipId)) return []
+  const ids: string[] = []
+  const visited = new Set<string>()
+  while (message && !visited.has(message.id)) {
+    ids.push(message.id)
+    visited.add(message.id)
+    const parentId = message.parentMessageId
+    if (!parentId || (childrenByParentId.get(parentId)?.length ?? 0) > 1) break
+    message = messagesById.get(parentId)
+  }
+  return ids
+}

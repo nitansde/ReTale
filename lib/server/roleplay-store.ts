@@ -11,6 +11,7 @@ import { formatStoryBranchReadableLabel } from '@/lib/story-branch-labels'
 import type { RoleplayMessageRecord, RoleplaySessionDetail, RoleplaySessionRecord } from '@/lib/roleplay-types'
 import { uid } from '@/lib/utils'
 import { parseRoleplayScript, parseRoleplayTurn, roleplayScriptText } from '@/lib/roleplay-script'
+import { getRoleplayBranchDeletionIds } from '@/lib/roleplay-branches'
 
 type Db = {
   execute: typeof execute
@@ -301,6 +302,28 @@ export async function appendRoleplayMessage(
       throw new Error(`Failed to append roleplay message: ${input.id}`)
     }
     return message
+  })
+}
+
+export async function deleteRoleplayBranch(input: { sessionId: string; messageId: string }, db: Db = defaultDb) {
+  return db.withTransaction(() => {
+    const session = findRoleplaySessionById(input.sessionId, db)
+    if (!session) throw new ResourceNotFoundError(`Roleplay session not found: ${input.sessionId}`)
+    if (!session.messages.some((message) => message.id === input.messageId)) {
+      throw new ResourceNotFoundError(`Roleplay branch not found: ${input.messageId}`)
+    }
+    const deletedMessageIds = getRoleplayBranchDeletionIds(session.messages, input.messageId)
+    if (!deletedMessageIds.length) throw new InputValidationError('The branch has changed. Reload it before deleting.')
+    // Other reply variants may reference a deleted message as their fork source.
+    for (const messageId of deletedMessageIds) {
+      db.execute('UPDATE roleplay_messages SET forked_from_message_id = NULL WHERE session_id = ? AND forked_from_message_id = ?', input.sessionId, messageId)
+    }
+    // Delete children before parents; no surviving path depends on these messages.
+    for (const messageId of deletedMessageIds) {
+      db.execute('DELETE FROM roleplay_messages WHERE session_id = ? AND id = ?', input.sessionId, messageId)
+    }
+    db.execute('UPDATE roleplay_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', input.sessionId)
+    return { deletedMessageIds }
   })
 }
 

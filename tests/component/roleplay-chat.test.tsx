@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { RoleplaySessionView, type RoleplaySessionControls } from '@/components/workspace/RoleplaySessionView'
 import { type RoleplayTurn, type RoleplayScript, roleplayScriptText } from '@/lib/roleplay-script'
+import { getRoleplayBranchDeletionIds } from '@/lib/roleplay-branches'
 
 const cast = { playerName: '林舟', counterpartName: '沈月' }
 const turn: RoleplayTurn = { ...cast, storyGuidance: '雨夜，他推开门。', dialogue: '你在等我？', maxCharacters: 600 }
@@ -44,7 +45,7 @@ function setup(options: { messages?: ReturnType<typeof message>[]; candidates?: 
         await options.deleteWait
         if (options.deleteFail) return Response.json({ error: 'Delete failed' }, { status: 500 })
         const request = detail.messages.find((item) => item.id === body.messageId)!
-        const deletedMessageIds = detail.messages.filter((item) => item.id === request.id || (item.role === 'assistant' && item.parentMessageId === request.id)).map((item) => item.id)
+        const deletedMessageIds = body.mode === 'branch' ? getRoleplayBranchDeletionIds(detail.messages, body.messageId) : detail.messages.filter((item) => item.id === request.id || (item.role === 'assistant' && item.parentMessageId === request.id)).map((item) => item.id)
         detail.messages = detail.messages.filter((item) => !deletedMessageIds.includes(item.id)).map((item) => ({
           ...item, parentMessageId: item.parentMessageId && deletedMessageIds.includes(item.parentMessageId) ? request.parentMessageId : item.parentMessageId,
         }))
@@ -309,12 +310,12 @@ describe('roleplay script view', () => {
     fireEvent.click(screen.getByTestId('roleplay-composer-send'))
     await screen.findByTestId('roleplay-message-5')
     expect(screen.queryByText('原路继续。')).not.toBeInTheDocument()
-    expect(screen.getByRole('combobox', { name: '当前分支' })).toHaveValue('m6')
+    expect(screen.getByTestId('roleplay-branch-picker')).toHaveAttribute('data-selected-branch', 'm6')
     expect(view.detail.messages).toHaveLength(6)
     fireEvent.click(within(screen.getByTestId('roleplay-branch-switch-m5')).getByRole('button', { name: '上一个剧情分支' }))
     expect(screen.getByText('原路继续。')).toBeInTheDocument()
     expect(screen.queryByText('换一条路。')).not.toBeInTheDocument()
-    expect(screen.getByRole('combobox', { name: '当前分支' })).toHaveValue('m4')
+    expect(screen.getByTestId('roleplay-branch-picker')).toHaveAttribute('data-selected-branch', 'm4')
     expect(view.requests).toHaveLength(1)
     view.unmount()
 
@@ -327,7 +328,8 @@ describe('roleplay script view', () => {
     expect(reopened.detail.messages.at(-2)).toMatchObject({ parentMessageId: 'm4' })
     expect(JSON.stringify(reopened.requests[0]?.roleplayMessages)).toContain('原路继续。')
     expect(JSON.stringify(reopened.requests[0]?.roleplayMessages)).not.toContain('换一条路。')
-    fireEvent.change(screen.getByRole('combobox', { name: '当前分支' }), { target: { value: 'm6' } })
+    fireEvent.click(screen.getByRole('button', { name: '当前分支' }))
+    fireEvent.click(screen.getByTestId('roleplay-select-branch-m6'))
     expect(screen.getByText('换一条路。')).toBeInTheDocument()
     expect(screen.queryByText('沿原路再走一段。')).not.toBeInTheDocument()
   })
@@ -355,9 +357,70 @@ describe('roleplay script view', () => {
     fireEvent.click(screen.getByRole('button', { name: '删除请求 #3' }))
     await screen.findByTestId('roleplay-message-1')
     expect(screen.queryByText('分叉内容。')).not.toBeInTheDocument()
-    expect(screen.queryByRole('combobox', { name: '当前分支' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('roleplay-branch-picker')).toHaveAttribute('data-selected-branch', 'm2')
     expect(view.detail.messages.map((item) => item.id)).toEqual(['m1', 'm2'])
     expect(screen.getByTestId('roleplay-regenerate-last')).toBeEnabled()
   })
 })
+describe('roleplay branch deletion', () => {
+  const branchedMessages = () => [message(1, turnData()), message(2, { script }, 'm1'), message(3, { turn: { ...turn, dialogue: '独有的分支内容' } }, 'm2'), message(4, { script }, 'm3'), message(5, { script }, 'm1')]
+
+  it.each([false, true])('preserves shared history and selects a surviving branch (delete current=%s)', async (deleteCurrent) => {
+    const view = setup({ messages: branchedMessages() })
+    await screen.findByTestId('roleplay-message-4')
+    fireEvent.click(screen.getByRole('button', { name: '当前分支' }))
+    fireEvent.click(screen.getByRole('button', { name: `删除分支 ${deleteCurrent ? 2 : 1}` }))
+    expect(screen.getByRole('dialog')).toHaveTextContent(`独有的 ${deleteCurrent ? 1 : 3} 条消息`)
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(view.fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: `删除分支 ${deleteCurrent ? 2 : 1}` }))
+    fireEvent.click(screen.getByRole('button', { name: '确认删除分支' }))
+    await waitFor(() => expect(view.detail.messages.map((item) => item.id)).toEqual(deleteCurrent ? ['m1', 'm2', 'm3', 'm4'] : ['m1', 'm5']))
+    const survivingTip = deleteCurrent ? 'm4' : 'm5'
+    await waitFor(() => expect(screen.getByTestId('roleplay-branch-picker')).toHaveAttribute('data-selected-branch', survivingTip))
+    expect(window.localStorage.getItem('retale:roleplay-branch:novel:novel:main:session')).toBe(survivingTip)
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    fireEvent.change(screen.getByRole('textbox', { name: '我的台词' }), { target: { value: '继续剩下的故事' } })
+    fireEvent.click(screen.getByTestId('roleplay-composer-send'))
+    await waitFor(() => expect(view.requests).toHaveLength(1))
+    expect(JSON.stringify(view.requests[0]?.roleplayMessages).includes('独有的分支内容')).toBe(deleteCurrent)
+    await waitFor(() => expect(view.detail.messages.at(-1)?.role).toBe('assistant'))
+  })
+
+  it('clears the last route without deleting the session and can start a new conversation', async () => {
+    const view = setup({ messages: [message(1, turnData()), message(2, { script }, 'm1')] })
+    await screen.findByTestId('roleplay-script')
+    fireEvent.click(screen.getByRole('button', { name: '当前分支' }))
+    fireEvent.click(screen.getByRole('button', { name: '删除分支 1' }))
+    fireEvent.click(screen.getByRole('button', { name: '确认删除分支' }))
+    await screen.findByTestId('roleplay-empty-state')
+    expect(view.detail.messages).toEqual([])
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(window.localStorage.getItem('retale:roleplay-branch:novel:novel:main:session')).toBeNull()
+    fireEvent.change(screen.getByRole('textbox', { name: '我的台词' }), { target: { value: '重新开始' } })
+    fireEvent.click(screen.getByTestId('roleplay-composer-send'))
+    await screen.findByTestId('roleplay-script')
+    expect(view.requests[0]?.roleplayMessages).toEqual([])
+    expect(view.detail.messages[0].parentMessageId).toBeNull()
+  })
+
+  it('blocks duplicate deletion and keeps the route and retry action on failure', async () => {
+    let finish!: () => void
+    const view = setup({ messages: branchedMessages(), deleteFail: true, deleteWait: new Promise<void>((resolve) => { finish = resolve }) })
+    await screen.findByTestId('roleplay-message-4')
+    fireEvent.click(screen.getByRole('button', { name: '当前分支' }))
+    fireEvent.click(screen.getByRole('button', { name: '删除分支 2' }))
+    const confirm = screen.getByRole('button', { name: '确认删除分支' })
+    fireEvent.click(confirm)
+    expect(confirm).toBeDisabled()
+    expect(screen.getByRole('button', { name: '关闭' })).toBeDisabled()
+    fireEvent.click(confirm)
+    await act(async () => finish())
+    expect(await screen.findByRole('alert')).toHaveTextContent('删除分支失败')
+    expect(confirm).toBeEnabled()
+    expect(view.detail.messages).toHaveLength(5)
+    expect(view.fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE')).toHaveLength(1)
+  })
+})
+
 function turnData() { return { turn } }
