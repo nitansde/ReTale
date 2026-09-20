@@ -576,8 +576,9 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     })
   })
 
-  it('inherits the parent continue-block skill selection with a fresh task seed', async () => {
+  it.each(['continue', 'regenerate'] as const)('previews and submits the current branch source and inherited skills on %s', async (variant) => {
     const previewBodies: Array<Record<string, unknown>> = []
+    const rewriteBodies: Array<Record<string, unknown>> = []
     vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation((values) => {
       ;(values as Uint32Array)[0] = 424242
       return values
@@ -631,6 +632,10 @@ describe('useSelectionNovelStudioActions model discovery', () => {
       if (url.startsWith('/api/rewrite?') && method === 'GET') {
         return jsonResponse({ ok: true, job: null })
       }
+      if (url === '/api/rewrite' && method === 'POST') {
+        rewriteBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+        return jsonResponse({ ok: true, job: buildRecoverableRewriteJob('succeeded') })
+      }
       if (url === '/api/rag/build-generation-context' && method === 'POST') {
         previewBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
         return jsonResponse({
@@ -661,7 +666,7 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     await waitFor(() => expect(result.current.core.writingSkillCards).toHaveLength(2))
     act(() => {
       result.current.core.setWritingSkillSeed(12345)
-      result.current.actions.reopenContinueBlockRewriteFlow('continue')
+      result.current.actions.reopenContinueBlockRewriteFlow(variant)
     })
 
     await waitFor(() => {
@@ -670,10 +675,25 @@ describe('useSelectionNovelStudioActions model discovery', () => {
       expect(result.current.core.writingSkillSeed).toBe(424242)
     })
     await waitFor(() => expect(previewBodies).toHaveLength(1))
-    expect(previewBodies[0]).toMatchObject({
+    const expectedContext = {
+      branchContextNodeId: 'continue-node-1',
+      branchContextInclusion: 'include_selected',
       writingSkillCardIds: ['writing-skill-card-1', 'writing-skill-card-2'],
       writingSkillExampleCount: 8,
       writingSkillSeed: 424242,
+    }
+    expect(previewBodies[0]).toMatchObject(expectedContext)
+
+    const userInstruction = result.current.core.rewritePrompt
+    await act(async () => { await result.current.actions.handleRewrite() })
+
+    expect(rewriteBodies).toHaveLength(1)
+    expect(rewriteBodies[0]).toMatchObject({
+      ...expectedContext,
+      sourceText: 'Parent generated text',
+      selectedText: variant === 'continue' ? '' : 'Parent selection',
+      userInstruction,
+      continueBlockId: 'continue-1',
     })
   })
 
