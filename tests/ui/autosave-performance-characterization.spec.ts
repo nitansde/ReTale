@@ -101,9 +101,9 @@ test('large-novel edit burst keeps autosaves ordered and chapter-scoped', async 
 
   const baselineSaveCount = resourceSaves.length
   await editor.click()
-  await page.keyboard.press('Meta+A')
+  await page.keyboard.press('ControlOrMeta+A')
   await page.keyboard.insertText(fixtures.editBurst)
-  await expect(page.getByTestId('workspace-chapter-body-view')).toContainText(fixtures.editBurst.slice(-64))
+  await expect(editor).toHaveText(fixtures.editBurst)
 
   await waitForObservedCountToStabilize(() => resourceSaves.length, baselineSaveCount + 1)
   const editSaves = resourceSaves.slice(baselineSaveCount)
@@ -120,5 +120,5 @@ test('large-novel edit burst keeps autosaves ordered and chapter-scoped', async 
   expect(persistedWorkspace.localChapters.find((chapter) => chapter.id === persistedWorkspace.currentChapterId)?.content).toBe(`<p>${fixtures.editBurst}</p>`)
 
   await page.reload({ waitUntil: 'networkidle' })
-  await expect(page.getByTestId('workspace-chapter-body-view')).toContainText(fixtures.editBurst.slice(-64))
+  await expect(editor).toHaveText(fixtures.editBurst)
 })

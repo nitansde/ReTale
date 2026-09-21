@@ -28,9 +28,9 @@ async function replaceEditorText(page: Page, text: string) {
   const editor = page.getByTestId('workspace-chapter-reader').first()
   if (await editor.getAttribute('contenteditable') !== 'true') await page.getByTestId('workspace-reader-edit-toggle').click()
   await editor.click()
-  await page.keyboard.press('Meta+A')
+  await page.keyboard.press('ControlOrMeta+A')
   await page.keyboard.type(text)
-  await expect(page.getByTestId('workspace-chapter-body-view')).toContainText(text)
+  await expect(editor).toHaveText(text)
 }
 
 async function saveWorkspaceEdit(page: Page, text: string) {
@@ -66,7 +66,7 @@ test('rapid workspace saves persist the latest chapter content after reload', as
   expect(saveMethods).toEqual(versions.map(() => 'PATCH'))
 
   await page.reload({ waitUntil: 'networkidle' })
-  await expect(page.getByTestId('workspace-chapter-body-view')).toContainText('最终保存版本-3')
+  await expect(page.getByTestId('workspace-chapter-reader').first()).toHaveText('最终保存版本-3')
 
   await page.screenshot({
     path: path.join(evidenceDirectory, 'task-11-rapid-save.png'),
