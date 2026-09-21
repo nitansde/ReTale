@@ -20,6 +20,7 @@ import {
   Building2,
   Check,
   ChevronDown,
+  GitBranch,
   Globe,
   LoaderCircle,
   MapPin,
@@ -34,7 +35,6 @@ import {
 } from 'lucide-react'
 import type { FutureJumpContinueContext } from '@/components/future-jump/FutureJumpView'
 import {
-  getVisibleAdvancedContextPromptBlocks,
   resolveActiveGenerationContextTokenEstimate,
 } from '@/components/graph/context-prompt-block-visibility'
 import { WorkspaceCenterPane } from '@/components/workspace/WorkspaceCenterPane'
@@ -284,8 +284,8 @@ export function SelectionNovelStudio() {
     writingSkillCards, writingSkillCardsLoading, writingSkillCardsError, selectedWritingSkillCardIds,
     writingSkillExampleCount,
     graphContext, contextPreviewLoading, contextPreviewError, graphReviewLoading, graphReviewControls, contextPanelOpen,
-    setContextPanelOpen, graphSelection, setGraphSelection, evidenceDrawerOpen, setEvidenceDrawerOpen, disabledContextBlockIds, setDisabledContextBlockIds, excludedGraphEdgeIds, excludedEvidenceIds, graphMutationPendingId, graphMutationError, chapterGraphData,
-    chapterGraphLoading, chapterGraphError, chapterGraphControls, chapterGraphSelection, setChapterGraphSelection, copied, setCopied, toast, toastVariant,
+    setContextPanelOpen, graphSelection, setGraphSelection, disabledContextBlockIds, setDisabledContextBlockIds, excludedGraphEdgeIds, excludedEvidenceIds, graphMutationPendingId, graphMutationError, chapterGraphData,
+    chapterGraphLoading, chapterGraphError, chapterGraphControls, chapterGraphSelection, setChapterGraphSelection, toast, toastVariant,
     saveContinueBlockPending, saveContinueBlockError, roleplaySessionStarting, rewriteLaunchSource, activeContinueBlockRewriteContext, futureMapLaunch, setFutureMapLaunch,
     presetCompatLibraryOpen, setPresetCompatLibraryOpen, ollamaModelsByScenario, ollamaModelsLoading, ollamaModelsError,
     openAICompatibleModelsByScenario, openAICompatibleModelsLoading, editState, setEditState, knowledgePanelReadOnly,
@@ -319,7 +319,7 @@ export function SelectionNovelStudio() {
   const actions = useSelectionNovelStudioActions({ core, viewModel: { activeWorkspaceSelection, selectedTimelineNode, selectedContinueBlockNode, selectedContinueBlockFutureMapLaunch, selectedTimelineDisplayLabel, selectedTimelineInstructionText }, loadFromBackend, saveToBackend, deleteNovelFromBackend, reconcileNovelDeletionFromBackend, isNovelDeletionPending, beginNovelDeletion, rollbackNovelDeletion, setNovelDeletionPending, reconcileNovelDeletion, localChapters, deleteChapter, deleteNovel, saveAISettings, savePresetCompatLibrary, rebuildStoryKnowledge, rebuildStoryRetrievalIndex, pauseStoryKnowledgeRebuild, abortStoryKnowledgeRebuild, deleteStoryKnowledgeGraph, deleteStoryHanlpCache, deleteStoryExtractionCache, deleteStoryEmbeddingCache, setPresetCompatSessionPhase, setCurrentChapterId, updateChapterContent })
   const {
     openActionMode, handleRefreshContextReview, handleExcludedGenerationContextChange, handleConfirmGraphEdge, handleRejectGraphEdge,
-    handleSaveGraphEdgeEdit, handleGraphControlChange, copyText, applyFullChapter, saveSettings, loadOllamaModels,
+    handleSaveGraphEdgeEdit, handleGraphControlChange, saveSettings, loadOllamaModels,
     loadOpenAICompatibleModels, handleDeleteNovel, handleDeleteChapter, handleTimelineDeleteChapter,
     handleDeleteBranchNode, handleRewritePromptChange, handleWritingSkillSelectionChange, handleWritingSkillExampleCountChange, handleRewrite, handleAbortRewriteGeneration, handleSaveContinueBlock,
     handleCreateWhatIf, launchFutureMapFromWhatIf, handleFutureJumpCreated, reopenWhatIfRewriteFlow,
@@ -1023,15 +1023,10 @@ export function SelectionNovelStudio() {
                 <button onClick={handleSaveContinueBlock} disabled={saveContinueBlockPending} className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-fuchsia-500/15 px-4 text-sm text-fuchsia-100 disabled:opacity-40">
                   {saveContinueBlockPending ? <><LoaderCircle className="h-4 w-4 animate-spin" />{t('workspace.shell.savePending')}</> : t('workspace.shell.saveAsContinueBlock')}
                 </button>
-                <details className="w-full" open={desktop}>
-                  <summary className="min-h-11 cursor-pointer py-3 text-sm text-zinc-300 lg:hidden">{t('workspace.mobile.resultActions')}</summary>
-                  <div className="flex flex-wrap gap-1">
-                    <button onClick={handleCreateWhatIf} disabled={saveContinueBlockPending} className="min-h-11 rounded-xl px-3 text-sm text-violet-200 disabled:opacity-40">{t('workspace.shell.createWhatIf')}</button>
-                    {rewriteLaunchSource !== 'future_jump' ? <button onClick={() => applyFullChapter(selectedRewriteCandidate.content)} className="min-h-11 rounded-xl px-3 text-sm text-zinc-300">{t('workspace.shell.replaceBody')}</button> : null}
-                    <button onClick={() => copyText('rewrite', selectedRewriteCandidate.content)} className="min-h-11 rounded-xl px-3 text-sm text-zinc-300">{t(copied === 'rewrite' ? 'workspace.shell.copied' : 'workspace.shell.copyResult')}</button>
-                    <button onClick={() => handleRewritePromptChange((current) => `${current}\n\n${t('workspace.shell.continueRewritePromptAppend')}`)} className="min-h-11 rounded-xl px-3 text-sm text-zinc-300">{t('workspace.shell.continueRewrite')}</button>
-                  </div>
-                </details>
+                {!isContinueBlockContinuation ? <button onClick={handleCreateWhatIf} disabled={saveContinueBlockPending} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm text-violet-200 transition hover:bg-violet-500/10 disabled:opacity-40">
+                  <GitBranch aria-hidden="true" className="h-4 w-4 shrink-0" />
+                  {t('workspace.shell.createWhatIf')}
+                </button> : null}
               </> : null}
             </div>
           ) : undefined}
@@ -1041,14 +1036,6 @@ export function SelectionNovelStudio() {
                 <p className="mb-2 text-xs uppercase tracking-[0.16em] text-zinc-500">{t('workspace.shell.selectedExcerpt')}</p>
                 <p className="line-clamp-3 whitespace-pre-wrap text-sm leading-6 text-zinc-400">{lockedSelectionText || selectionText}</p>
               </div>
-            ) : null}
-
-            {contextPreviewLoading && !generationContext ? (
-              <div className="mb-4 rounded-[24px] border border-line/8 bg-shade/20 p-4 text-sm text-zinc-400">{t('workspace.shell.loadingContextEvidence')}</div>
-            ) : null}
-
-            {!contextPreviewLoading && !generationContext && contextPreviewError ? (
-              <div className="mb-4 rounded-[24px] border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-200">{contextPreviewError}</div>
             ) : null}
 
             {activeMode === 'rewrite' ? (
@@ -1149,14 +1136,16 @@ export function SelectionNovelStudio() {
                   </div>
                 </details>
 
-                {generationContext && activeGraphContext ? (
                   <div className="border-b border-line/10 py-3">
                     <div className="flex items-start gap-1">
                       <button
                         type="button"
                         data-testid="workspace-context-panel-toggle"
                         aria-expanded={contextPanelOpen}
-                        onClick={() => setContextPanelOpen((current) => !current)}
+                        onClick={() => {
+                          setContextPanelOpen((current) => !current)
+                          if (!contextPanelOpen && !generationContext && !contextPreviewLoading) void handleRefreshContextReview()
+                        }}
                         className="flex min-h-11 min-w-0 flex-1 items-center justify-between gap-3 text-left transition hover:text-heading"
                       >
                         <div>
@@ -1166,19 +1155,19 @@ export function SelectionNovelStudio() {
                               ? 'workspace.shell.advancedContinuationContextDescription'
                               : 'workspace.shell.advancedContextDescription')}
                           </p>
-                          <div className="mt-2 hidden flex-wrap gap-2 text-[11px] text-zinc-400 lg:flex">
+                          {generationContext ? <div className="mt-2 hidden flex-wrap gap-2 text-[11px] text-zinc-400 lg:flex">
                             <span className="rounded-full border border-line/10 bg-shade/30 px-2.5 py-1">{t('workspace.shell.seedEntitiesCount', { count: activeSeedEntityCount })}</span>
                             <span className="rounded-full border border-line/10 bg-shade/30 px-2.5 py-1">{t('workspace.shell.relationsCount', { count: activeGraphEdgeCount })}</span>
                             <span className="rounded-full border border-line/10 bg-shade/30 px-2.5 py-1">{t('workspace.shell.evidenceCount', { count: activeEvidenceCount })}</span>
                             <span className="rounded-full border border-line/10 bg-shade/30 px-2.5 py-1">{t('workspace.shell.promptBlocksCount', { count: activePromptBlockCount })}</span>
-                          </div>
+                          </div> : null}
                         </div>
                         <span className="inline-flex items-center gap-2 py-1.5 text-xs text-zinc-400">
                           {contextPanelOpen ? t('workspace.shell.collapse') : t('workspace.shell.expand')}
                           <ChevronDown className={cn('h-4 w-4 transition', contextPanelOpen && 'rotate-180')} />
                         </span>
                       </button>
-                      <ContextWarningButton warnings={[...generationContext.warnings, ...activeGraphContext.warnings]} overview={knowledgeStatusOverview} />
+                      <ContextWarningButton warnings={[...(generationContext?.warnings ?? []), ...(activeGraphContext?.warnings ?? [])]} overview={knowledgeStatusOverview} />
                     </div>
 
                     {contextPanelOpen ? (
@@ -1187,7 +1176,8 @@ export function SelectionNovelStudio() {
                           <ContextCompressionControl preview={generationContext?.compression} disabled={rewriteFlow.loading || contextPreviewLoading} onBusyChange={setContextCompressing} onContextChanged={async () => { core.setGenerationContext(null); await handleRefreshContextReview({ preserveDisabledBlocks: true }) }} />
                         </div>
                         {currentNovelId ? <WorkspaceContextPresetSelect key={currentNovelId} novelId={currentNovelId} disabled={rewriteFlow.loading || saveContinueBlockPending} onOpenLibrary={() => setPresetCompatLibraryOpen(true)} /> : null}
-                        <GraphReviewPanel
+                        {generationContext && activeGraphContext ? <GraphReviewPanel
+                          showSelectedLines={rewriteLaunchSource !== 'continue_block'}
                           context={{
                             ...generationContext,
                             tokenEstimate: activeContextTokenEstimate ?? generationContext.tokenEstimate,
@@ -1199,7 +1189,6 @@ export function SelectionNovelStudio() {
                           loading={contextPreviewLoading || graphReviewLoading}
                           error={contextPreviewError}
                           selection={graphSelection}
-                          evidenceDrawerOpen={evidenceDrawerOpen}
                           disabledBlockIds={disabledContextBlockIds}
                           excludedEdgeIds={excludedGraphEdgeIds}
                           excludedEvidenceIds={excludedEvidenceIds}
@@ -1208,13 +1197,9 @@ export function SelectionNovelStudio() {
                           onTogglePromptBlock={(blockId, enabled) => {
                             setDisabledContextBlockIds((current) => (enabled ? current.filter((item) => item !== blockId) : [...current, blockId]))
                           }}
-                          onToggleEvidenceDrawer={() => setEvidenceDrawerOpen((current) => !current)}
                           onSelectNode={(node) => setGraphSelection({ type: 'node', node })}
                           onSelectEdge={(edge) => {
                             setGraphSelection({ type: 'edge', edge })
-                            if (edge.evidenceQuote || edge.evidenceLocation) {
-                              setEvidenceDrawerOpen(true)
-                            }
                           }}
                           onClearSelection={() => setGraphSelection(null)}
                           onConfirmEdge={(edge) => {
@@ -1271,11 +1256,21 @@ export function SelectionNovelStudio() {
                           onRefresh={() => {
                             void handleRefreshContextReview()
                           }}
-                        />
+                        /> : <div className="space-y-3 py-3" aria-busy={contextPreviewLoading}>
+                          {contextPreviewLoading ? (
+                            <p role="status" className="text-sm text-zinc-400">{t('workspace.shell.loadingContextEvidence')}</p>
+                          ) : (
+                            <>
+                              {contextPreviewError ? <p role="alert" className="text-sm text-rose-300">{contextPreviewError}</p> : null}
+                              <button type="button" onClick={() => { void handleRefreshContextReview() }} className="min-h-11 rounded-xl border border-line/10 px-3 text-sm text-zinc-300 hover:bg-overlay/[0.06]">
+                                {t('graph.refreshContext')}
+                              </button>
+                            </>
+                          )}
+                        </div>}
                       </div>
                     ) : null}
                   </div>
-                ) : null}
 
                 {saveContinueBlockError ? <p data-testid="continue-block-save-error" className="text-sm text-rose-300">{saveContinueBlockError}</p> : null}
                 {rewriteFlow.error ? <p role="alert" data-testid="rewrite-flow-error" className="whitespace-pre-wrap break-words text-sm text-rose-300">{rewriteFlow.error}</p> : null}

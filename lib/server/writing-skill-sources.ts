@@ -6,6 +6,7 @@ import { listReadyWorkspaceNovelRegistry } from '@/lib/server/persistence'
 import {
   formatMaterialParagraphRef,
   loadMaterialLibrary,
+  readMaterialLibraryVersion,
   type MaterialLibrary,
 } from '@/lib/server/writing-skill-material'
 import { splitPlainTextParagraphs, uid } from '@/lib/utils'
@@ -273,6 +274,42 @@ function loadSourceLibrary(
     : loadUploadedMaterialLibrary(source.sourceId, options.db)
 }
 
+function materialCollectionVersion(sources: Array<{ source: WritingSkillSourceRef; version: string }>) {
+  return createHash('sha256')
+    .update('writing-skill-collection:v1')
+    .update(sources.map(({ source, version }) => `${sourceKey(source)}:${version}`).join('|'))
+    .digest('hex')
+}
+
+// Listing cards only needs source versions, not every anonymized paragraph.
+// The cache belongs to this read operation so edits/deletions are seen next time.
+export function readWritingSkillMaterialCollectionVersion(
+  sourceRefs: WritingSkillSourceRef[],
+  options: {
+    db?: DatabaseAccess
+    sourceVersions?: Map<string, string | null>
+  } = {},
+) {
+  const refs = normalizeWritingSkillSourceRefs(sourceRefs)
+  if (!refs.length) return null
+  const versions = options.sourceVersions ?? new Map<string, string | null>()
+  const sources: Array<{ source: WritingSkillSourceRef; version: string }> = []
+  for (const source of refs) {
+    const key = sourceKey(source)
+    if (!versions.has(key)) {
+      versions.set(key, source.sourceType === 'LIBRARY'
+        ? readMaterialLibraryVersion(source.sourceId)
+        : (options.db ?? defaultDb()).queryOne<{ contentHash: string }>(
+            'SELECT contentHash FROM WritingSkillMaterialBook WHERE id = ?', source.sourceId,
+          )?.contentHash ?? null)
+    }
+    const version = versions.get(key)
+    if (!version) return null
+    sources.push({ source, version })
+  }
+  return materialCollectionVersion(sources)
+}
+
 export function loadWritingSkillMaterialCollection(
   sourceRefs: WritingSkillSourceRef[],
   options: {
@@ -286,10 +323,7 @@ export function loadWritingSkillMaterialCollection(
   const collectionId = `writing-skill-collection:${createHash('sha256')
     .update(loaded.map(({ source }) => sourceKey(source)).join('|'))
     .digest('hex').slice(0, 24)}`
-  const collectionVersion = createHash('sha256')
-    .update('writing-skill-collection:v1')
-    .update(loaded.map(({ source, library }) => `${sourceKey(source)}:${library.version}`).join('|'))
-    .digest('hex')
+  const collectionVersion = materialCollectionVersion(loaded.map(({ source, library }) => ({ source, version: library.version })))
   const sources: WritingSkillCardSource[] = loaded.map(({ source, library }, sourceOrder) => ({
     ...source,
     sourceVersion: library.version,

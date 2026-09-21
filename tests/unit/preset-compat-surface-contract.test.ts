@@ -9,6 +9,7 @@ import {
   createDefaultPresetCompatSurfaceBindings,
 } from '@/lib/preset-compat/surface-contract'
 import { PRESET_COMPAT_OBSOLETE_SURFACE_IDS } from '@/lib/preset-compat/types'
+import { RETALE_DEFAULT_PRESET_ID } from '@/lib/preset-compat/default-preset'
 
 describe('preset compat surface contract', () => {
   it('keeps the opted-in creative surfaces explicit', () => {
@@ -71,7 +72,7 @@ describe('preset compat surface contract', () => {
 
     expect(bindings.rewrite).toEqual({
       surfaceId: 'rewrite',
-      presetId: null,
+      presetId: RETALE_DEFAULT_PRESET_ID,
       enabled: true,
       failClosed: false,
     })
@@ -85,12 +86,13 @@ describe('preset compat surface contract', () => {
     expect(library).toMatchObject({
       schemaVersion: 1,
       revision: 0,
-      presets: {},
+      bundledDefaultsVersion: 1,
       standaloneRegexes: {},
       lastImportedAt: null,
       lastExportedAt: null,
     })
     expect(Object.keys(library.surfaceBindings)).toEqual(Object.keys(PRESET_COMPAT_SURFACE_REGISTRY))
+    expect(Object.keys(library.presets)).toEqual([RETALE_DEFAULT_PRESET_ID])
     expect(Object.keys(library.builtinSystemPrompts)).toEqual(PRESET_COMPAT_OPTED_IN_SURFACE_IDS)
     expect(library.builtinSystemPrompts.rewrite).toMatchObject({
       surfaceId: 'rewrite',

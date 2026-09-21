@@ -46,7 +46,6 @@ type ChapterResetControls = {
   setContextPreviewError: Dispatch<SetStateAction<string>>
   setGraphReviewControls: Dispatch<SetStateAction<GraphReviewControls>>
   setGraphSelection: Dispatch<SetStateAction<GraphSelection>>
-  setEvidenceDrawerOpen: Dispatch<SetStateAction<boolean>>
   setDisabledContextBlockIds: Dispatch<SetStateAction<string[]>>
   setExcludedGraphEdgeIds: Dispatch<SetStateAction<string[]>>
   setExcludedEvidenceIds: Dispatch<SetStateAction<string[]>>
@@ -130,7 +129,6 @@ export function useWorkspaceChapterSelection(options: UseWorkspaceChapterSelecti
     resetControls.setContextPreviewError('')
     resetControls.setGraphReviewControls(resetControls.defaultGraphReviewControls)
     resetControls.setGraphSelection(null)
-    resetControls.setEvidenceDrawerOpen(false)
     resetControls.setDisabledContextBlockIds([])
     resetControls.setExcludedGraphEdgeIds([])
     resetControls.setExcludedEvidenceIds([])

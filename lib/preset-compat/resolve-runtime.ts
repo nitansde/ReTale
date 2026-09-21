@@ -981,7 +981,11 @@ function resolvePromptRules(
     const hasSupportedRole = PRESET_COMPAT_PROMPT_RULE_SUPPORTED_ROLES.includes(rule.role as PresetCompatRuntimePromptRuleRole)
 
     if (!trimmedContent) {
-      warnings.push(`Prompt rule \`${rule.name}\` was active but skipped because its content was empty.`)
+      // SillyTavern's context markers intentionally contain no text. ReTale
+      // supplies that context through its native route rather than these slots.
+      if (!rule.marker) {
+        warnings.push(`Prompt rule \`${rule.name}\` was active but skipped because its content was empty.`)
+      }
       return [] as PresetCompatResolvedPromptRuleCandidate[]
     }
 

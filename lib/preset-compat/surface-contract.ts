@@ -1,3 +1,4 @@
+import { createChineseDefaultPreset, PRESET_COMPAT_BUNDLED_DEFAULTS_VERSION, RETALE_DEFAULT_PRESET_ID } from '@/lib/preset-compat/default-preset'
 import {
   PRESET_COMPAT_CREATIVE_SURFACE_IDS,
   PRESET_COMPAT_EDITABLE_SURFACE_IDS,
@@ -119,7 +120,7 @@ export function createDefaultPresetCompatSurfaceBindings(): Record<PresetCompatS
       surface.surfaceId,
       {
         surfaceId: surface.surfaceId,
-        presetId: null,
+        presetId: surface.channel === 'creative' ? RETALE_DEFAULT_PRESET_ID : null,
         enabled: surface.enabledByDefault,
         failClosed: surface.failClosed,
       },
@@ -156,7 +157,8 @@ export function createDefaultPresetCompatLibrary(): PresetCompatLibrary {
   return {
     schemaVersion: PRESET_COMPAT_LIBRARY_SCHEMA_VERSION,
     revision: PRESET_COMPAT_LIBRARY_INITIAL_REVISION,
-    presets: {},
+    bundledDefaultsVersion: PRESET_COMPAT_BUNDLED_DEFAULTS_VERSION,
+    presets: { [RETALE_DEFAULT_PRESET_ID]: createChineseDefaultPreset() },
     standaloneRegexes: {},
     surfaceBindings: createDefaultPresetCompatSurfaceBindings(),
     builtinSystemPrompts: createDefaultPresetCompatBuiltinSystemPrompts(),

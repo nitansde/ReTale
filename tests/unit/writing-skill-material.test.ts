@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_WRITING_SKILL_CONTEXT_WINDOW,
   calculateWritingSkillScanChunkBudget,
@@ -27,6 +27,7 @@ import {
   deleteUploadedWritingSkillMaterial,
   listUploadedWritingSkillMaterials,
   loadWritingSkillMaterialCollection,
+  readWritingSkillMaterialCollectionVersion,
 } from '@/lib/server/writing-skill-sources'
 import {
   buildMaterialScanRuntimeSchema,
@@ -45,6 +46,7 @@ import {
   chooseWritingSkillExamples,
   compileWritingSkillPrompt,
   resolveWritingSkillRuntimes,
+  refreshWritingSkillCardStaleness,
 } from '@/lib/server/writing-skill-runtime'
 import type {
   MaterialParagraph,
@@ -459,6 +461,52 @@ describe('writing skill material references and budgets', () => {
 })
 
 describe('writing skill runtime example selection', () => {
+  it('checks collection versions without loading full books, shares material across cards, and sees later edits and deletions', async () => {
+    const database = initializeDatabase(new DatabaseSync(':memory:'), { mode: 'control', schemaSql: CONTROL_SCHEMA_SQL })
+    try {
+      const db = createDatabaseAccess(database)
+      const material = createUploadedWritingSkillMaterial({ title: '素材', rawText: '第1章 起点\n\n雨水从檐角滴落。', byteSize: 60 }, db)
+      const refs = [{ sourceType: 'UPLOAD' as const, sourceId: material.sourceId }]
+      const { library, sources } = loadWritingSkillMaterialCollection(refs, { db })
+      const paragraph = library.paragraphs[0]
+      const cards = []
+      for (const title of ['环境', '动作']) {
+        cards.push(await saveWritingSkillCard({
+          libraryId: library.id, libraryVersion: library.version, libraryName: library.name,
+          userInstruction: title, modelConfigId: 'fixture', sourceJobId: `job-${title}`, sources,
+          result: { title, summary: title, rules: [], applicationScope: '场景', avoid: [] },
+          examples: [{ rangeRef: {
+            libraryId: library.id, libraryVersion: library.version, workId: paragraph.workId,
+            chapterId: paragraph.chapterId, startParagraphId: paragraph.id, endParagraphId: paragraph.id,
+          }, displayRef: paragraph.displayRef, score: 1 }],
+        }, db))
+      }
+      expect(readWritingSkillMaterialCollectionVersion(refs, { db })).toBe(library.version)
+      const reads = vi.spyOn(db, 'queryOne')
+      refreshWritingSkillCardStaleness(db)
+      const sourceReads = () => reads.mock.calls.filter(([sql]) => sql.includes('FROM WritingSkillMaterialBook'))
+      expect(sourceReads()).toHaveLength(1)
+      expect(sourceReads()[0][0]).not.toContain('rawText')
+      expect(listWritingSkillCards({ status: 'ACTIVE' }, db)).toHaveLength(2)
+
+      reads.mockClear()
+      const input = { cardIds: cards.map((card) => card.id), count: 1, seed: 42, db }
+      const shared = resolveWritingSkillRuntimes(input)
+      expect(sourceReads()).toHaveLength(1)
+      expect(shared).toEqual(resolveWritingSkillRuntimes({ ...input, library }))
+      expect(shared.runtimes.every((runtime) => runtime.examples[0]?.anonymizedText === paragraph.anonymizedText)).toBe(true)
+
+      db.execute('UPDATE WritingSkillMaterialBook SET contentHash = ? WHERE id = ?', 'changed-source-version', material.sourceId)
+      expect(() => resolveWritingSkillRuntimes(input)).toThrow('过期')
+      refreshWritingSkillCardStaleness(db)
+      expect(listWritingSkillCards({ status: 'STALE' }, db)).toHaveLength(2)
+      deleteUploadedWritingSkillMaterial(material.sourceId, db)
+      expect(readWritingSkillMaterialCollectionVersion(refs, { db })).toBeNull()
+    } finally {
+      database.close()
+    }
+  })
+
   it('is seeded, reproducible, diverse by chapter, and falls back to all available examples', () => {
     const examples = Array.from({ length: 8 }, (_, index) => createExample({
       id: `example-${index + 1}`,

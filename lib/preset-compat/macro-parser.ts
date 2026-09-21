@@ -83,6 +83,12 @@ type ParseOptions = {
   terminatorName: string | null
 }
 
+type ParseContext = {
+  tags: Map<number, ParsedTag>
+  lastClosingTagStarts: Map<string, number>
+  blocks: Map<number, PresetCompatParsedMacroNode | null>
+}
+
 function isEscaped(source: string, index: number) {
   let backslashCount = 0
 
@@ -94,25 +100,7 @@ function isEscaped(source: string, index: number) {
 }
 
 function decodeEscapedDelimiters(raw: string) {
-  let decoded = ''
-
-  for (let index = 0; index < raw.length; index += 1) {
-    if (raw.startsWith('\\{\\{', index)) {
-      decoded += '{{'
-      index += 3
-      continue
-    }
-
-    if (raw.startsWith('\\}\\}', index)) {
-      decoded += '}}'
-      index += 3
-      continue
-    }
-
-    decoded += raw[index]
-  }
-
-  return decoded
+  return raw.replaceAll('\\{\\{', '{{').replaceAll('\\}\\}', '}}')
 }
 
 function createRange(start: number, end: number, baseOffset: number): PresetCompatMacroSourceRange {
@@ -398,20 +386,52 @@ function parseTag(source: string, startIndex: number, endIndex: number, baseOffs
   }
 }
 
+function createParseContext(source: string, baseOffset: number): ParseContext {
+  const context: ParseContext = {
+    tags: new Map(),
+    lastClosingTagStarts: new Map(),
+    blocks: new Map(),
+  }
+  let index = source.indexOf('{{')
+  while (index !== -1) {
+    if (isEscaped(source, index)) {
+      index = source.indexOf('{{', index + 1)
+      continue
+    }
+    const end = findTagEnd(source, index)
+    if (end === null) break
+    const tag = parseTag(source, index, end, baseOffset)
+    context.tags.set(tag.range.start, tag)
+    if (tag.type === 'close' && tag.normalizedName) {
+      context.lastClosingTagStarts.set(tag.normalizedName, tag.range.start)
+    }
+    index = source.indexOf('{{', end)
+  }
+  return context
+}
+
 function tryParseBlock(
   source: string,
   tag: ParsedTag,
   afterOpenIndex: number,
-  baseOffset: number
+  baseOffset: number,
+  context: ParseContext,
 ): PresetCompatParsedMacroNode | null {
   if (!tag.normalizedName || tag.type !== 'open') {
+    return null
+  }
+
+  // Inline macros cannot form a block without a later closing tag. Previously
+  // each one recursively parsed the entire remaining prompt, then discarded it.
+  // Adjacent inline macros therefore caused exponential work on long RP prompts.
+  if ((context.lastClosingTagStarts.get(tag.normalizedName) ?? -1) < tag.range.end) {
     return null
   }
 
   const firstPass = parseSequence(source.slice(afterOpenIndex), afterOpenIndex + baseOffset, {
     allowElse: true,
     terminatorName: tag.normalizedName,
-  })
+  }, context)
 
   if (firstPass.stop === 'eof') {
     return null
@@ -425,7 +445,7 @@ function tryParseBlock(
     const secondPass = parseSequence(source.slice(firstPass.nextIndex - baseOffset), firstPass.nextIndex, {
       allowElse: false,
       terminatorName: tag.normalizedName,
-    })
+    }, context)
 
     if (secondPass.stop !== 'close' || !secondPass.stopTag) {
       return null
@@ -459,7 +479,12 @@ function tryParseBlock(
   }
 }
 
-function parseSequence(source: string, baseOffset: number, options: ParseOptions): ParseSequenceResult {
+function parseSequence(
+  source: string,
+  baseOffset: number,
+  options: ParseOptions,
+  context: ParseContext = createParseContext(source, baseOffset),
+): ParseSequenceResult {
   const nodes: PresetCompatMacroNode[] = []
   const diagnostics: PresetCompatMacroDiagnostic[] = []
   let textStart = 0
@@ -471,8 +496,8 @@ function parseSequence(source: string, baseOffset: number, options: ParseOptions
       continue
     }
 
-    const tagEnd = findTagEnd(source, index)
-    if (tagEnd === null) {
+    const tag = context.tags.get(baseOffset + index)
+    if (!tag) {
       const trailingTextNode = createTextNode(source.slice(textStart), textStart, source.length, baseOffset)
       if (trailingTextNode) {
         nodes.push(trailingTextNode)
@@ -492,7 +517,7 @@ function parseSequence(source: string, baseOffset: number, options: ParseOptions
       nodes.push(textNode)
     }
 
-    const tag = parseTag(source, index, tagEnd, baseOffset)
+    const tagEnd = tag.range.end - baseOffset
 
     if (tag.type === 'else') {
       if (options.allowElse) {
@@ -535,7 +560,12 @@ function parseSequence(source: string, baseOffset: number, options: ParseOptions
       continue
     }
 
-    const blockNode = tryParseBlock(source, tag, tagEnd, baseOffset)
+    // Failed outer blocks can revisit inner tags. Reuse their parse results,
+    // including failures, while keeping each argument's parse context separate.
+    if (!context.blocks.has(tag.range.start)) {
+      context.blocks.set(tag.range.start, tryParseBlock(source, tag, tagEnd, baseOffset, context))
+    }
+    const blockNode = context.blocks.get(tag.range.start)
     if (blockNode) {
       nodes.push(blockNode)
       index = blockNode.range.end - baseOffset

@@ -101,7 +101,7 @@ describe('FutureMapOverlay', () => {
       />
     )
 
-    const dialog = screen.getByRole('dialog', { name: 'Future map · IF-01 决裂线' })
+    const dialog = screen.getByRole('dialog', { name: '跳到未来' })
     expect(dialog).toHaveAttribute('aria-modal', 'true')
     expect(dialog).toHaveClass('max-w-[1680px]', 'w-[calc(100%-2rem)]')
     expect(document.body.style.overflow).toBe('hidden')
@@ -156,14 +156,14 @@ describe('FutureMapOverlay', () => {
 
     opener.focus()
     fireEvent.click(opener)
-    expect(await screen.findByRole('dialog', { name: 'Future map · IF-01 决裂线' })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: '跳到未来' })).toBeInTheDocument()
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(opener).toHaveFocus()
 
     opener.focus()
     fireEvent.click(opener)
-    const backdropDialog = await screen.findByRole('dialog', { name: 'Future map · IF-01 决裂线' })
+    const backdropDialog = await screen.findByRole('dialog', { name: '跳到未来' })
     const backdrop = backdropDialog.parentElement!
     fireEvent.mouseDown(backdrop)
     expect(backdropDialog).toBeInTheDocument()
@@ -177,8 +177,8 @@ describe('FutureMapOverlay', () => {
 
     opener.focus()
     fireEvent.click(opener)
-    await screen.findByRole('dialog', { name: 'Future map · IF-01 决裂线' })
-    fireEvent.click(screen.getByRole('button', { name: '关闭 Future Map' }))
+    await screen.findByRole('dialog', { name: '跳到未来' })
+    fireEvent.click(screen.getByRole('button', { name: '关闭跳到未来' }))
     expect(onClose).toHaveBeenCalledTimes(3)
     expect(opener).toHaveFocus()
     expect(document.body.style.overflow).toBe('')
@@ -220,8 +220,8 @@ describe('FutureMapOverlay', () => {
     const confirmButton = screen.getByTestId('future-map-confirm')
     fireEvent.click(confirmButton)
 
-    const dialog = screen.getByRole('dialog', { name: 'Future map · IF-01 决裂线' })
-    const closeButton = screen.getByRole('button', { name: '关闭 Future Map' })
+    const dialog = screen.getByRole('dialog', { name: '跳到未来' })
+    const closeButton = screen.getByRole('button', { name: '关闭跳到未来' })
     await waitFor(() => {
       expect(dialog).toHaveAttribute('aria-busy', 'true')
       expect(closeButton).toBeDisabled()

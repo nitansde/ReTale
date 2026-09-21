@@ -166,7 +166,7 @@ function EventCard(props: {
 
 export function FutureMapOverlay(props: FutureMapOverlayProps) {
   const { locale, t } = useI18n()
-  const { branchId, novelId, onClose, onCreated, parentTimelineNodeId, sourceContext, title } = props
+  const { branchId, novelId, onClose, onCreated, parentTimelineNodeId, sourceContext } = props
   const [data, setData] = useState<FutureMapResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -313,7 +313,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
     <DialogSurface
       open
       onClose={onClose}
-      title={`Future map · ${title}`}
+      title={t('futureMap.title')}
       busy={creating}
       closeDisabled={creating}
       backdropClassName="bg-shade/72"
@@ -324,13 +324,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
       <div className="flex flex-1 flex-col" data-testid="future-map-overlay">
             <div className="border-b border-line/8 px-5 py-5 sm:px-7 sm:py-6">
               <div className="flex items-start justify-between gap-4">
-                <div className="max-w-4xl">
-                  <p className="text-[11px] uppercase tracking-[0.22em] text-sky-200/70">Future map</p>
-                  <h3 className="mt-2 text-2xl font-semibold text-zinc-100">{title}</h3>
-                  <p className="mt-3 text-sm leading-7 text-zinc-300">
-                    {t('futureMap.description')}
-                  </p>
-                </div>
+                <h3 className="self-center text-xl font-semibold text-zinc-100">{t('futureMap.title')}</h3>
                 <button
                   type="button"
                   data-testid="future-map-close"
@@ -343,11 +337,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                 </button>
               </div>
 
-              <div className="mt-4 flex flex-wrap gap-2 text-xs text-zinc-300">
-                <span className="rounded-full border border-sky-300/20 bg-shade/20 px-3 py-1.5">source {sourceContext.nodeType}</span>
-                <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1.5">{t('futureMap.currentBranch')}</span>
-                <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1.5">{t('futureJump.sourceChapter', { count: sourceContext.chapterNo })}</span>
-              </div>
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-400">{t('futureMap.description')}</p>
               <div className="mt-5 flex flex-wrap gap-2">
                 <button
                   type="button"

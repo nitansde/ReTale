@@ -1,30 +1,28 @@
 import type { GraphEdgeEditDraft, GenerationContextBuildData, GenerationContextEvidence, GraphReviewControls, GraphSelection } from '@/components/graph/types'
 import { RefreshCcw } from 'lucide-react'
-import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/context-prompt-block-visibility'
-import { ContextPromptBlocks } from '@/components/graph/context-prompt-blocks'
-import { GraphEvidenceDrawer } from '@/components/graph/graph-evidence-drawer'
-import { GraphFlowCanvas } from '@/components/graph/graph-flow-canvas'
+import { AdvancedContextPromptPanel } from '@/components/graph/advanced-context-prompt-panel'
+import { GraphSelectionEvidence } from '@/components/graph/graph-selection-evidence'
+import { GraphExplorer } from '@/components/graph/graph-explorer'
 import { GraphInspector } from '@/components/graph/graph-inspector'
 import { useI18n } from '@/lib/i18n/provider'
-import { formatContextWarning } from '@/lib/context-warnings'
+import { formatContextWarning, isUserFacingContextWarning } from '@/lib/context-warnings'
 import type { GraphEdge, GraphNode } from '@/lib/server/graph-types'
 
 export function GraphReviewPanel(props: {
   context: GenerationContextBuildData
+  showSelectedLines?: boolean
   graphNodes: GraphNode[]
   graphEdges: GraphEdge[]
   controls: GraphReviewControls
   loading: boolean
   error: string
   selection: GraphSelection
-  evidenceDrawerOpen: boolean
   disabledBlockIds: string[]
   excludedEdgeIds: string[]
   excludedEvidenceIds: string[]
   edgeMutationPending: boolean
   edgeMutationError: string
   onTogglePromptBlock: (blockId: string, enabled: boolean) => void
-  onToggleEvidenceDrawer: () => void
   onSelectNode: (node: GraphNode) => void
   onSelectEdge: (edge: GraphEdge) => void
   onClearSelection: () => void
@@ -43,11 +41,11 @@ export function GraphReviewPanel(props: {
 }) {
   const { locale, t } = useI18n()
   const nodeById = new Map(props.graphNodes.map((node) => [node.id, node] as const))
-  const selectedEdge = props.selection?.type === 'edge' ? props.selection.edge : null
-  const visiblePromptBlocks = getVisibleAdvancedContextPromptBlocks(props.context.promptBlocks)
+  const visiblePromptBlocks = props.context.promptBlocks
+  const visibleWarnings = props.context.warnings.filter(isUserFacingContextWarning)
 
   return (
-    <section className="mb-4 rounded-[24px] border border-amber-400/20 bg-amber-500/10 p-4">
+    <section className="mb-4 min-w-0 rounded-2xl border border-line/10 bg-surface p-3 sm:rounded-3xl sm:p-4">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.18em] text-amber-200/70">{t('graph.reviewEyebrow')}</p>
@@ -56,7 +54,8 @@ export function GraphReviewPanel(props: {
         <button
           type="button"
           onClick={props.onRefresh}
-          className="inline-flex items-center gap-2 rounded-2xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06]"
+          disabled={props.loading}
+          className="inline-flex min-h-11 items-center gap-2 rounded-2xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06]"
         >
           <RefreshCcw className="h-4 w-4" />
           {t('graph.refreshContext')}
@@ -70,13 +69,15 @@ export function GraphReviewPanel(props: {
             {t('graph.inheritedFromMainline', { chapterNo: props.context.sourceMeta.chapterNo })}
           </span>
         ) : null}
-        <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1">{t('graph.selectedLines', { start: props.context.selectedLineStart ?? '?', end: props.context.selectedLineEnd ?? '?' })}</span>
+        {props.showSelectedLines !== false && props.context.selectedLineStart != null && props.context.selectedLineEnd != null ? (
+          <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1">{t('graph.selectedLines', { start: props.context.selectedLineStart, end: props.context.selectedLineEnd })}</span>
+        ) : null}
         <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1">{t('graph.promptApproxTokens', { count: props.context.tokenEstimate })}</span>
       </div>
 
-      {props.context.warnings.length ? (
+      {visibleWarnings.length ? (
         <div className="mb-4 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
-          {props.context.warnings.map((warning) => (
+          {visibleWarnings.map((warning) => (
             <p key={warning}>{formatContextWarning(warning, locale)}</p>
           ))}
         </div>
@@ -84,8 +85,7 @@ export function GraphReviewPanel(props: {
 
       {props.error ? <p className="mb-4 text-sm text-rose-300">{props.error}</p> : null}
 
-      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.9fr)_minmax(340px,0.74fr)]">
-        <GraphFlowCanvas
+      <GraphExplorer
           nodes={props.graphNodes}
           edges={props.graphEdges}
           seedNodeIds={props.context.graphContext.seedEntities.map((node) => node.id)}
@@ -95,14 +95,14 @@ export function GraphReviewPanel(props: {
           onSelectEdge={props.onSelectEdge}
           onClearSelection={props.onClearSelection}
           onChangeControls={props.onChangeControls}
-          onRefresh={props.onRefresh}
-        />
+          selection={props.selection}
+        >
         <GraphInspector
           selection={props.selection}
           nodeById={nodeById}
           nodeCount={props.graphNodes.length}
           edgeCount={props.graphEdges.length}
-          warningCount={props.context.warnings.length}
+          warningCount={visibleWarnings.length}
           graphEdges={props.graphEdges}
           mode="selection"
           modeLabel={t('graph.selectionReviewMode')}
@@ -114,25 +114,19 @@ export function GraphReviewPanel(props: {
           onSaveEdgeEdit={props.onSaveEdgeEdit}
           onToggleEdgeExcluded={props.onToggleEdgeExcluded}
           onToggleNodeExcluded={props.onToggleNodeExcluded}
-        />
-      </div>
+        >
+          <GraphSelectionEvidence selection={props.selection} edges={props.graphEdges} nodeById={nodeById} evidence={props.context.lanceEvidence}
+            excludedEvidenceIds={props.excludedEvidenceIds} onToggleEvidenceExcluded={(item, excluded) => props.onToggleEvidenceExcluded(item.id, excluded)}
+            canJumpToEdgeSource={props.canJumpToEdgeSource} onJumpToEdgeSource={props.onJumpToEdgeSource}
+            canJumpToEvidenceSource={props.canJumpToEvidenceSource} onJumpToEvidenceSource={props.onJumpToEvidenceSource} />
+        </GraphInspector>
+      </GraphExplorer>
 
       <div className="mt-4 space-y-4">
-        <GraphEvidenceDrawer
-          open={props.evidenceDrawerOpen}
-          onToggle={props.onToggleEvidenceDrawer}
-          selectedEdge={selectedEdge}
-          evidence={props.context.lanceEvidence}
-          interactive
-          excludedEvidenceIds={props.excludedEvidenceIds}
-          onToggleEvidenceExcluded={(item, excluded) => props.onToggleEvidenceExcluded(item.id, excluded)}
-          canJumpToEdgeSource={Boolean(selectedEdge && props.canJumpToEdgeSource(selectedEdge))}
-          onJumpToEdgeSource={props.onJumpToEdgeSource}
-          canJumpToEvidenceSource={props.canJumpToEvidenceSource}
-          onJumpToEvidenceSource={props.onJumpToEvidenceSource}
-        />
-        <ContextPromptBlocks
+        <AdvancedContextPromptPanel
           blocks={visiblePromptBlocks}
+          requestMessages={props.context.requestMessages}
+          loading={props.loading}
           disabledBlockIds={props.disabledBlockIds}
           onToggle={props.onTogglePromptBlock}
         />

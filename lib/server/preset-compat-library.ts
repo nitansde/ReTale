@@ -1,3 +1,4 @@
+import { createChineseDefaultPreset, PRESET_COMPAT_BUNDLED_DEFAULTS_VERSION, RETALE_DEFAULT_PRESET_ID } from '@/lib/preset-compat/default-preset'
 import {
   createDefaultPresetCompatBuiltinSystemPrompts,
   createDefaultPresetCompatLibrary,
@@ -407,10 +408,18 @@ function normalizePresetCompatLibrary(value: unknown): PresetCompatLibrary {
     return defaults
   }
 
+  const presets = normalizePresets(value.presets)
+  const bundledDefaultsVersion = normalizeInteger(value.bundledDefaultsVersion)
+  const needsBundledDefaults = bundledDefaultsVersion < PRESET_COMPAT_BUNDLED_DEFAULTS_VERSION
+  if (needsBundledDefaults && !presets[RETALE_DEFAULT_PRESET_ID]) {
+    presets[RETALE_DEFAULT_PRESET_ID] = createChineseDefaultPreset()
+  }
+
   return {
     schemaVersion: defaults.schemaVersion,
     revision: normalizeInteger(value.revision, defaults.revision),
-    presets: normalizePresets(value.presets),
+    bundledDefaultsVersion: Math.max(bundledDefaultsVersion, PRESET_COMPAT_BUNDLED_DEFAULTS_VERSION),
+    presets,
     standaloneRegexes: normalizeStandaloneRegexes(value.standaloneRegexes),
     surfaceBindings: normalizeSurfaceBindings(value.surfaceBindings),
     novelRewritePresetIds: isRecord(value.novelRewritePresetIds)
@@ -426,7 +435,13 @@ export function loadStoredPresetCompatLibrary(): PresetCompatLibrary {
   const entries = findAppSettings([PRESET_COMPAT_LIBRARY_V1_KEY])
   const map = Object.fromEntries(entries.map((item) => [item.key, item.value])) as Partial<Record<typeof PRESET_COMPAT_LIBRARY_V1_KEY, string>>
   const parsed = parseStoredLibraryBlob(map.PRESET_COMPAT_LIBRARY_V1)
-  return normalizePresetCompatLibrary(parsed)
+  const library = normalizePresetCompatLibrary(parsed)
+  // Invalidate pre-upgrade ETags and stale saves without counting migration as
+  // an extra write when a legacy-shaped payload is submitted to the save route.
+  if (isRecord(parsed) && normalizeInteger(parsed.bundledDefaultsVersion) < PRESET_COMPAT_BUNDLED_DEFAULTS_VERSION) {
+    library.revision += 1
+  }
+  return library
 }
 
 export function bumpPresetCompatLibraryRevision(library: PresetCompatLibrary): PresetCompatLibrary {

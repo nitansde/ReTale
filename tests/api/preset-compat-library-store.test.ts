@@ -2,6 +2,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
+import { createChineseDefaultPreset, RETALE_DEFAULT_PRESET_ID } from '@/lib/preset-compat/default-preset'
 import { createTempDatabaseCopy } from '@/tests/helpers/temp-db'
 
 const cleanups: Array<() => void> = []
@@ -59,7 +60,45 @@ afterEach(async () => {
 })
 
 describe('preset compat library app-setting store', () => {
-  it('loads deterministic empty defaults when the stored blob is missing or corrupt', async () => {
+  it('adds the bundled preset once while preserving choices, edits, deletions and revision checks', async () => {
+    const database = await createTestDatabase('retale-preset-compat-bundled-migration')
+    const legacy = createDefaultPresetCompatLibrary()
+    delete legacy.bundledDefaultsVersion
+    legacy.revision = 8
+    const custom = { ...createChineseDefaultPreset(), id: 'custom-preset', name: '我的预设' }
+    legacy.presets = { [custom.id]: custom }
+    legacy.surfaceBindings.rewrite.presetId = custom.id
+    legacy.surfaceBindings.roleplay.presetId = null
+    legacy.surfaceBindings.roleplay.enabled = false
+    legacy.novelRewritePresetIds = { bookA: custom.id, bookB: null }
+    legacy.builtinSystemPrompts.rewrite.content = '自定义系统提示。'
+    writeAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1', JSON.stringify(legacy))
+
+    const { loadStoredPresetCompatLibrary, saveStoredPresetCompatLibrary } = await import('@/lib/server/preset-compat-library')
+    const migrated = loadStoredPresetCompatLibrary()
+    expect(migrated.revision).toBe(9)
+    expect(migrated.bundledDefaultsVersion).toBe(1)
+    expect(migrated.presets[RETALE_DEFAULT_PRESET_ID].name).toBe('ReTale 默认 · 中文')
+    expect(migrated.presets[custom.id]).toEqual(custom)
+    expect(migrated.surfaceBindings).toEqual(legacy.surfaceBindings)
+    expect(migrated.novelRewritePresetIds).toEqual(legacy.novelRewritePresetIds)
+    expect(migrated.builtinSystemPrompts).toEqual(legacy.builtinSystemPrompts)
+    expect(loadStoredPresetCompatLibrary()).toEqual(migrated)
+
+    migrated.presets[RETALE_DEFAULT_PRESET_ID].promptRules[0].content = '用户编辑的默认规则。'
+    const saved = await saveStoredPresetCompatLibrary(migrated)
+    expect(saved.revision).toBe(10)
+    expect(loadStoredPresetCompatLibrary().presets[RETALE_DEFAULT_PRESET_ID].promptRules[0].content)
+      .toBe('用户编辑的默认规则。')
+
+    delete saved.presets[RETALE_DEFAULT_PRESET_ID]
+    saved.surfaceBindings.future_jump.presetId = null
+    await saveStoredPresetCompatLibrary(saved)
+    expect(loadStoredPresetCompatLibrary().presets).toEqual({ [custom.id]: custom })
+    expect(loadStoredPresetCompatLibrary().surfaceBindings.future_jump.presetId).toBeNull()
+  })
+
+  it('loads deterministic bundled defaults when the stored blob is missing or corrupt', async () => {
     const database = await createTestDatabase('retale-preset-compat-library-defaults')
     deleteAppSetting(database, 'PRESET_COMPAT_LIBRARY_V1')
     vi.resetModules()

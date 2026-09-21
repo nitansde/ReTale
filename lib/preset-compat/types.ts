@@ -299,6 +299,8 @@ export type PresetCompatPresetRecord = {
 export type PresetCompatLibrary = {
   schemaVersion: number
   revision: number
+  /** Tracks one-time bundled additions so deleting a default preset persists. */
+  bundledDefaultsVersion?: number
   presets: Record<string, PresetCompatPresetRecord>
   standaloneRegexes: Record<string, PresetCompatRegexRecord>
   surfaceBindings: Record<PresetCompatSurfaceId, PresetCompatSurfaceBinding>

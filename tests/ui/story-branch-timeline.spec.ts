@@ -1724,6 +1724,66 @@ test('continue-block selection restores on reload and exposes the reader action 
   expect(continueBlockDetailRequestCount).toBeGreaterThanOrEqual(2)
 })
 
+for (const variant of ['continue', 'regenerate'] as const) {
+  test(`continue-block advanced context stays available through loading and failure (${variant})`, async ({ page }) => {
+    const timeline = buildContinueBlockTimelinePayload()
+    const detail = buildContinueBlockDetail({
+      continueBlockId: 'continue-block-1', timelineNodeId: 'continue-node-1', parentTimelineNodeId: null,
+      sourceChapterNo: 10, title: 'CONT-01 续写块', subtitle: '沿着当前节点继续写',
+      userInstruction: '让她继续走进雨里。', selectedText: '第10章正文', originalText: '第10章正文',
+      latestText: '她在门后停住脚步。', inputTokens: 41, outputTokens: 59, latestRevisionNo: 1,
+    })
+    timeline.branchNodes[0] = { ...timeline.branchNodes[0], latestText: detail.latestText, userInstruction: detail.userInstruction }
+    await mockNovelResourceApi(page, buildWorkspacePayload)
+    await page.route('**/api/story-timeline*', (route) => route.fulfill({ json: timeline }))
+    await page.route('**/api/knowledge-view*', (route) => route.fulfill({ json: { ok: true, knowledgeRebuildStatus: null } }))
+    await page.route('**/api/continue-blocks/continue-block-1?*', (route) => route.fulfill({ json: detail }))
+    await page.route('**/api/rewrite*', (route) => route.fulfill({ json: { ok: true, job: null } }))
+    let releasePreview!: () => void
+    const pending = new Promise<void>((resolve) => { releasePreview = resolve })
+    const requests: Record<string, unknown>[] = []
+    await page.route('**/api/rag/build-generation-context', async (route) => {
+      requests.push(route.request().postDataJSON())
+      if (requests.length === 1) {
+        await pending
+        await route.fulfill({ status: 503, json: { ok: false, error: '上下文暂时不可用，请重试。' } })
+      } else {
+        await route.fulfill({ json: buildGenerationContextPayload() })
+      }
+    })
+    await page.goto('/workspace?selectionKind=continue_block&selectionNodeId=continue-node-1&selectionContinueBlockId=continue-block-1&selectionAnchorChapterNo=10', { waitUntil: 'networkidle' })
+    await expect(page.getByTestId('workspace-continue-block-reader-body')).toContainText(detail.latestText)
+    await page.getByTestId(`workspace-continue-block-${variant}-entry`).click()
+    await expect.poll(() => requests.length).toBe(1)
+    const createWhatIf = page.getByTestId('workspace-action-overlay').getByRole('button', { name: '创建 What-if 分支' })
+    if (variant === 'continue') await expect(createWhatIf).toHaveCount(0)
+    else await expect(createWhatIf).toBeVisible()
+    const toggle = page.getByTestId('workspace-context-panel-toggle')
+    await expect(toggle).toBeVisible()
+    await toggle.click()
+    const panel = page.getByTestId('workspace-context-panel')
+    await expect(panel.getByRole('status')).toContainText('正在装配')
+    expect(requests).toHaveLength(1)
+    releasePreview()
+    await expect(panel.getByRole('alert')).toBeVisible()
+    await expect(toggle).toBeVisible()
+    await panel.getByRole('button', { name: '刷新上下文' }).click()
+    await expect(panel.getByTestId('advanced-context-prompt-panel')).toBeVisible()
+    await expect(panel).toContainText('Latest speculative future branch context')
+    await expect(panel.getByRole('alert')).toHaveCount(0)
+    expect(requests).toHaveLength(2)
+    expect(requests[1]).toMatchObject({
+      sourceText: detail.latestText, selectedText: variant === 'continue' ? '' : detail.selectedText,
+      branchContextNodeId: 'continue-node-1', branchContextInclusion: 'include_selected',
+    })
+    await toggle.click()
+    await expect(panel).toHaveCount(0)
+    await toggle.click()
+    await expect(panel.getByTestId('advanced-context-prompt-panel')).toBeVisible()
+    expect(requests).toHaveLength(2)
+  })
+}
+
 for (const mode of ['rewrite', 'continue_block'] as const) {
   test(`${mode} version selector switches the reader on desktop and mobile`, async ({ page }, testInfo) => {
     const pageErrors: string[] = []
@@ -2504,10 +2564,10 @@ test('focused Future Map overlay is single-column without mobile overflow and pr
   const opener = page.getByTestId('what-if-jump-button')
   await opener.click()
 
-  const dialog = page.getByRole('dialog', { name: 'Future map · IF-01 决裂线' })
+  const dialog = page.getByRole('dialog', { name: '跳到未来' })
   await expect(dialog).toBeVisible()
   await expect(page.getByTestId('future-map-layout')).toBeVisible()
-  const closeButton = page.getByRole('button', { name: '关闭 Future Map' })
+  const closeButton = page.getByRole('button', { name: '关闭跳到未来' })
   await expect(closeButton).toBeFocused()
   const closeBox = await closeButton.boundingBox()
   expect(closeBox).not.toBeNull()

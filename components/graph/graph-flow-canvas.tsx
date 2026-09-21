@@ -6,19 +6,20 @@ import {
   Background,
   Controls,
   MiniMap,
-  Panel,
+  Position,
   ReactFlow,
   ReactFlowProvider,
   type Edge,
   type Node,
   useEdgesState,
   useNodesState,
+  useReactFlow,
 } from '@xyflow/react'
 import { useI18n } from '@/lib/i18n/provider'
 import { useThemePreferences } from '@/components/ThemePreferencesProvider'
-import { cn } from '@/lib/utils'
+import { graphEdgeLabel } from '@/components/graph/graph-presentation'
 import type { GraphEdge, GraphNode } from '@/lib/server/graph-types'
-import type { GraphReviewControls } from '@/components/graph/types'
+import type { GraphSelection } from '@/components/graph/types'
 
 const LOW_CONFIDENCE_THRESHOLD = 0.5
 const NODE_WIDTH = 252
@@ -58,7 +59,7 @@ function getNodeTone(node: GraphNode, seedIds: Set<string>) {
   }
 }
 
-function buildFlowNodes(nodes: GraphNode[], edges: GraphEdge[], seedIds: Set<string>): Node[] {
+function buildFlowNodes(nodes: GraphNode[], edges: GraphEdge[], seedIds: Set<string>, t: ReturnType<typeof useI18n>['t']): Node[] {
   const buckets = new Map<number, GraphNode[]>()
 
   for (const node of nodes) {
@@ -81,11 +82,14 @@ function buildFlowNodes(nodes: GraphNode[], edges: GraphEdge[], seedIds: Set<str
 
     return {
       id: node.id,
+      ariaLabel: `${node.label} · ${t(`graph.entity.${node.entityType}`)}`,
       position: {
         x: COLUMN_X[Math.min(hop, COLUMN_X.length - 1)] ?? COLUMN_X[COLUMN_X.length - 1],
         y,
       },
       draggable: true,
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
       data: {
         label: (
           <div className="w-full rounded-[inherit] px-4 py-3.5">
@@ -93,16 +97,16 @@ function buildFlowNodes(nodes: GraphNode[], edges: GraphEdge[], seedIds: Set<str
               <div className="min-w-0 flex-1 space-y-2">
                 <p className="line-clamp-3 break-words text-[15px] font-medium leading-5 text-pretty">{node.label}</p>
                 <div className="flex flex-wrap gap-1.5 text-[10px] uppercase tracking-[0.14em] text-zinc-400">
-                  <span>{node.entityType}</span>
+                  <span>{t(`graph.entity.${node.entityType}`)}</span>
                   <span>·</span>
                   <span>{Math.round(node.confidence * 100)}%</span>
                   <span>·</span>
-                  <span>score {node.score.toFixed(1)}</span>
+                  <span>{t('graph.score', { score: node.score.toFixed(1) })}</span>
                 </div>
               </div>
               {seedIds.has(node.id) ? (
                 <span className="shrink-0 rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-amber-100">
-                  Seed
+                  {t('graph.seed')}
                 </span>
               ) : null}
             </div>
@@ -125,12 +129,14 @@ function buildFlowNodes(nodes: GraphNode[], edges: GraphEdge[], seedIds: Set<str
   })
 }
 
-function buildFlowEdges(edges: GraphEdge[]): Edge[] {
+function buildFlowEdges(edges: GraphEdge[], t: ReturnType<typeof useI18n>['t']): Edge[] {
   return edges.map((edge) => ({
     id: edge.id,
     source: edge.source,
     target: edge.target,
-    label: edge.label?.trim() || edge.linkType,
+    label: graphEdgeLabel(edge, t),
+    ariaLabel: graphEdgeLabel(edge, t),
+    interactionWidth: 28,
     type: 'smoothstep',
     animated: edge.status === 'potentially_stale',
     style: {
@@ -150,65 +156,38 @@ function buildFlowEdges(edges: GraphEdge[]): Edge[] {
   }))
 }
 
-function GraphFlowInner(props: {
+type GraphFlowProps = {
   nodes: GraphNode[]
   edges: GraphEdge[]
   seedNodeIds: string[]
-  controls: GraphReviewControls
-  loading: boolean
+  selection: GraphSelection
   onSelectNode: (node: GraphNode) => void
   onSelectEdge: (edge: GraphEdge) => void
   onClearSelection: () => void
-  onChangeControls: (controls: GraphReviewControls) => void
-  onRefresh: () => void
-}) {
+}
+
+function GraphFlowInner(props: GraphFlowProps) {
   const { t } = useI18n()
   const { theme } = useThemePreferences()
+  const { fitView } = useReactFlow()
   const seedIds = useMemo(() => new Set(props.seedNodeIds), [props.seedNodeIds])
-  const visibleEdges = useMemo(() => {
-    return props.edges.filter((edge) => {
-      if (edge.hop > props.controls.maxHops) return false
-      if (props.controls.hideLowConfidence && edge.confidence < LOW_CONFIDENCE_THRESHOLD) return false
-      if (props.controls.confirmedOnly && edge.status !== 'user_confirmed') return false
-      if (!props.controls.showPotentiallyStale && edge.status === 'potentially_stale') return false
-      return true
-    })
-  }, [props.controls.confirmedOnly, props.controls.hideLowConfidence, props.controls.maxHops, props.controls.showPotentiallyStale, props.edges])
-
-  const visibleNodeIds = useMemo(() => {
-    const ids = new Set<string>(Array.from(seedIds))
-    for (const edge of visibleEdges) {
-      ids.add(edge.source)
-      ids.add(edge.target)
-    }
-    return ids
-  }, [seedIds, visibleEdges])
-
-  const visibleNodes = useMemo(() => {
-    return props.nodes.filter((node) => {
-      if (!visibleNodeIds.has(node.id)) return false
-      if (!props.controls.confirmedOnly) return true
-      return seedIds.has(node.id) || node.userConfirmed
-    })
-  }, [props.controls.confirmedOnly, props.nodes, seedIds, visibleNodeIds])
-  const flowNodes = useMemo(() => buildFlowNodes(visibleNodes, visibleEdges, seedIds), [seedIds, visibleEdges, visibleNodes])
-  const flowEdges = useMemo(() => buildFlowEdges(visibleEdges), [visibleEdges])
+  const flowNodes = useMemo(() => buildFlowNodes(props.nodes, props.edges, seedIds, t), [props.nodes, props.edges, seedIds, t])
+  const flowEdges = useMemo(() => buildFlowEdges(props.edges, t), [props.edges, t])
   const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges)
 
+  useEffect(() => { setNodes(flowNodes) }, [flowNodes, setNodes])
+  useEffect(() => { setEdges(flowEdges) }, [flowEdges, setEdges])
   useEffect(() => {
-    setNodes(flowNodes)
-  }, [flowNodes, setNodes])
-
-  useEffect(() => {
-    setEdges(flowEdges)
-  }, [flowEdges, setEdges])
+    const frame = requestAnimationFrame(() => { void fitView({ padding: 0.2, duration: 0 }) })
+    return () => cancelAnimationFrame(frame)
+  }, [flowNodes, fitView])
 
   return (
-    <div className="h-[500px] overflow-hidden rounded-[24px] border border-line/8 bg-canvas sm:h-[580px] xl:h-[660px]">
+    <div data-testid="graph-map" className="h-[52svh] min-h-[320px] overflow-hidden bg-canvas lg:h-[540px]">
       <ReactFlow
-        nodes={nodes}
-        edges={edges}
+        nodes={nodes.map((node) => ({ ...node, selected: props.selection?.type === 'node' && props.selection.node.id === node.id }))}
+        edges={edges.map((edge) => ({ ...edge, selected: props.selection?.type === 'edge' && props.selection.edge.id === edge.id }))}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={(_, node) => {
@@ -221,104 +200,43 @@ function GraphFlowInner(props: {
         }}
         onPaneClick={props.onClearSelection}
         fitView
-        fitViewOptions={{ padding: 0.32 }}
-        minZoom={0.4}
-        maxZoom={1.45}
+        fitViewOptions={{ padding: 0.2 }}
+        minZoom={0.15}
+        maxZoom={1.6}
+        nodesConnectable={false}
+        deleteKeyCode={null}
+        zoomOnScroll={false}
         defaultEdgeOptions={{ zIndex: 1 }}
         proOptions={{ hideAttribution: true }}
         colorMode={theme === 'dark' ? 'dark' : 'light'}
+        style={{ background: 'transparent' }}
+        ariaLabelConfig={{
+          'node.a11yDescription.default': t('graph.nodeA11y'),
+          'node.a11yDescription.keyboardDisabled': t('graph.nodeA11y'),
+          'node.a11yDescription.ariaLiveMessage': ({ x, y }) => t('graph.nodeMoved', { x, y }),
+          'edge.a11yDescription.default': t('graph.edgeA11y'),
+          'controls.zoomIn.ariaLabel': t('graph.zoomIn'),
+          'controls.zoomOut.ariaLabel': t('graph.zoomOut'),
+          'controls.fitView.ariaLabel': t('graph.fitView'),
+          'minimap.ariaLabel': t('graph.minimap'),
+          'handle.ariaLabel': t('graph.handle'),
+          'controls.ariaLabel': t('graph.view.map'),
+        }}
       >
         <Background color="color-mix(in srgb, var(--line) 8%, transparent)" gap={20} size={1} />
         <MiniMap
-          pannable
-          zoomable
+          className="max-lg:hidden!"
+          pannable zoomable
           nodeColor={(node) => (seedIds.has(node.id) ? 'var(--color-amber-400)' : 'var(--color-zinc-400)')}
           maskColor="var(--graph-mask)"
           style={{ backgroundColor: 'var(--background)', border: '1px solid color-mix(in srgb, var(--line) 8%, transparent)' }}
         />
-        <Controls style={{ background: 'var(--background)', border: '1px solid color-mix(in srgb, var(--line) 8%, transparent)' }} />
-        <Panel position="top-left" className="m-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => props.onChangeControls({ ...props.controls, maxHops: 1 })}
-            className={cn(
-              'rounded-full border px-3 py-1.5 text-xs transition',
-              props.controls.maxHops === 1 ? 'border-amber-300/30 bg-amber-500/14 text-amber-100' : 'border-line/10 bg-shade/40 text-zinc-400'
-            )}
-          >
-            1-hop
-          </button>
-          <button
-            type="button"
-            onClick={() => props.onChangeControls({ ...props.controls, maxHops: 2 })}
-            className={cn(
-              'rounded-full border px-3 py-1.5 text-xs transition',
-              props.controls.maxHops === 2 ? 'border-amber-300/30 bg-amber-500/14 text-amber-100' : 'border-line/10 bg-shade/40 text-zinc-400'
-            )}
-          >
-            2-hop
-          </button>
-          <button
-            type="button"
-            onClick={() => props.onChangeControls({ ...props.controls, hideLowConfidence: !props.controls.hideLowConfidence })}
-            className={cn(
-              'rounded-full border px-3 py-1.5 text-xs transition',
-              props.controls.hideLowConfidence ? 'border-sky-300/30 bg-sky-500/14 text-sky-100' : 'border-line/10 bg-shade/40 text-zinc-400'
-            )}
-          >
-            {t('graph.controls.hideLowConfidence')}
-          </button>
-          <button
-            type="button"
-            onClick={() => props.onChangeControls({ ...props.controls, confirmedOnly: !props.controls.confirmedOnly })}
-            className={cn(
-              'rounded-full border px-3 py-1.5 text-xs transition',
-              props.controls.confirmedOnly ? 'border-emerald-300/30 bg-emerald-500/14 text-emerald-100' : 'border-line/10 bg-shade/40 text-zinc-400'
-            )}
-          >
-            {t('graph.controls.confirmedOnly')}
-          </button>
-          <button
-            type="button"
-            onClick={() => props.onChangeControls({ ...props.controls, showPotentiallyStale: !props.controls.showPotentiallyStale })}
-            className={cn(
-              'rounded-full border px-3 py-1.5 text-xs transition',
-              props.controls.showPotentiallyStale ? 'border-orange-300/30 bg-orange-500/14 text-orange-100' : 'border-line/10 bg-shade/40 text-zinc-400'
-            )}
-          >
-            {t('graph.controls.showPotentiallyStale')}
-          </button>
-          <button
-            type="button"
-            onClick={props.onRefresh}
-            className="rounded-full border border-line/10 bg-shade/40 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-overlay/[0.06]"
-          >
-            {t('graph.controls.refresh')}
-          </button>
-        </Panel>
-        <Panel position="bottom-left" className="m-3 rounded-full border border-line/10 bg-shade/55 px-3 py-1.5 text-[11px] text-zinc-400">
-          {props.loading ? t('graph.refreshing') : t('graph.statusCounts', { nodes: visibleNodes.length, edges: visibleEdges.length })}
-        </Panel>
+        <Controls className="[&>button]:h-11! [&>button]:w-11!" showInteractive={false} style={{ background: 'var(--background)', border: '1px solid color-mix(in srgb, var(--line) 8%, transparent)' }} />
       </ReactFlow>
     </div>
   )
 }
 
-export function GraphFlowCanvas(props: {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-  seedNodeIds: string[]
-  controls: GraphReviewControls
-  loading: boolean
-  onSelectNode: (node: GraphNode) => void
-  onSelectEdge: (edge: GraphEdge) => void
-  onClearSelection: () => void
-  onChangeControls: (controls: GraphReviewControls) => void
-  onRefresh: () => void
-}) {
-  return (
-    <ReactFlowProvider>
-      <GraphFlowInner {...props} />
-    </ReactFlowProvider>
-  )
+export function GraphFlowCanvas(props: GraphFlowProps) {
+  return <ReactFlowProvider><GraphFlowInner {...props} /></ReactFlowProvider>
 }

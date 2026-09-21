@@ -210,7 +210,6 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
       core.setGenerationContext(nextContext)
       core.setGraphContext(nextContext.graphContext)
       core.setGraphSelection((current) => resolveGraphSelection(nextContext.graphContext, current))
-      core.setEvidenceDrawerOpen(Boolean(nextContext.lanceEvidence.length))
       core.setDisabledContextBlockIds((current) => options?.preserveDisabledBlocks ? current : [])
       core.setGraphMutationError('')
       return nextContext
@@ -219,7 +218,6 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
       core.setGenerationContext(null)
       core.setGraphContext(null)
       core.setGraphSelection(null)
-    core.setEvidenceDrawerOpen(false)
       core.setContextPreviewError(resolveWorkspaceUserFacingError('context-preview', error, locale))
       return null
     } finally {
@@ -251,7 +249,7 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
       ?? (activeWorkspaceSelection.kind === 'what_if' && activeWorkspaceSelection.sessionId === detail.id ? activeWorkspaceSelection.nodeId : null)
     authoredHistoryContextRef.current = historyNodeId ? { branchContextNodeId: historyNodeId, branchContextInclusion: variant === 'continue' ? 'include_selected' : 'ancestors_only', omitSelectedText: variant === 'continue' } : {}
     const rewritePrompt = variant === 'regenerate' ? detail.premise.trim() : DEFAULT_REWRITE_PROMPT
-    core.setSelectionText(detail.selectedText); core.setLockedSelectionText(detail.selectedText); core.setToolbarPos(null); core.setGenerationContext(null); core.setGraphContext(null); core.setContextPreviewError(''); core.setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS); core.setContextPanelOpen(false); core.setGraphSelection(null); core.setEvidenceDrawerOpen(false); core.setDisabledContextBlockIds([]); core.setExcludedGraphEdgeIds([]); core.setExcludedEvidenceIds([]); core.setGraphMutationPendingId(null); core.setGraphMutationError(''); core.setRewritePrompt(rewritePrompt); core.setRewriteLaunchSource('what_if'); core.setRewriteSourceTextOverride(detail.generatedText); core.setRewriteState({ loading: false, result: detail.generatedText, error: '' }); core.setRewriteFlow({ loading: false, error: '', provider: 'what-if-session', candidates: [{ title: variant === 'continue' ? t('workspace.action.currentBranchVersion') : t('workspace.action.currentWhatIfVersion'), summary: variant === 'continue' ? t('workspace.action.whatIfContinueSummary') : t('workspace.action.whatIfRegenerateSummary'), content: detail.generatedText, inputTokens: detail.inputTokens ?? null, outputTokens: detail.outputTokens ?? null }], selectedIndex: 0, jobId: null, jobStatus: null, jobCurrentStep: null }); core.setActiveMode('rewrite'); core.setPendingWhatIfRewriteLaunch(null)
+    core.setSelectionText(detail.selectedText); core.setLockedSelectionText(detail.selectedText); core.setToolbarPos(null); core.setGenerationContext(null); core.setGraphContext(null); core.setContextPreviewError(''); core.setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS); core.setContextPanelOpen(false); core.setGraphSelection(null); core.setDisabledContextBlockIds([]); core.setExcludedGraphEdgeIds([]); core.setExcludedEvidenceIds([]); core.setGraphMutationPendingId(null); core.setGraphMutationError(''); core.setRewritePrompt(rewritePrompt); core.setRewriteLaunchSource('what_if'); core.setRewriteSourceTextOverride(detail.generatedText); core.setRewriteState({ loading: false, result: detail.generatedText, error: '' }); core.setRewriteFlow({ loading: false, error: '', provider: 'what-if-session', candidates: [{ title: variant === 'continue' ? t('workspace.action.currentBranchVersion') : t('workspace.action.currentWhatIfVersion'), summary: variant === 'continue' ? t('workspace.action.whatIfContinueSummary') : t('workspace.action.whatIfRegenerateSummary'), content: detail.generatedText, inputTokens: detail.inputTokens ?? null, outputTokens: detail.outputTokens ?? null }], selectedIndex: 0, jobId: null, jobStatus: null, jobCurrentStep: null }); core.setActiveMode('rewrite'); core.setPendingWhatIfRewriteLaunch(null)
     core.setActiveContinueBlockRewriteContext(null)
     core.setActiveFutureJumpRewriteContext(null)
     window.setTimeout(previewReopenedRewrite, 0)
@@ -262,7 +260,7 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     const { detail, selectedText, originalText } = core.pendingFutureJumpRewriteLaunch
     const historyNodeId = detail.timelineNodeId ?? core.resolvedStoryTimeline.branchNodes.find((node) => node.futureJumpRunId === detail.id)?.id
     authoredHistoryContextRef.current = historyNodeId ? { branchContextNodeId: historyNodeId, branchContextInclusion: 'include_selected', omitSelectedText: true } : {}
-    core.setSelectionText(selectedText); core.setLockedSelectionText(selectedText); core.setToolbarPos(null); core.setGenerationContext(null); core.setGraphContext(null); core.setContextPreviewError(''); core.setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS); core.setContextPanelOpen(false); core.setGraphSelection(null); core.setEvidenceDrawerOpen(false); core.setDisabledContextBlockIds([]); core.setExcludedGraphEdgeIds([]); core.setExcludedEvidenceIds([]); core.setGraphMutationPendingId(null); core.setGraphMutationError(''); core.setRewritePrompt(DEFAULT_REWRITE_PROMPT); core.setRewriteLaunchSource('future_jump'); core.setRewriteSourceTextOverride(originalText); core.setRewriteState({ loading: false, result: originalText, error: '' }); core.setRewriteFlow({ loading: false, error: '', provider: 'future-jump-run', candidates: [{ title: t('workspace.action.currentFutureVersion'), summary: t('workspace.action.currentFutureSummary'), content: originalText, inputTokens: detail.inputTokens ?? null, outputTokens: detail.outputTokens ?? null }], selectedIndex: 0, jobId: null, jobStatus: null, jobCurrentStep: null }); core.setActiveFutureJumpRewriteContext(core.pendingFutureJumpRewriteLaunch); core.setActiveContinueBlockRewriteContext(null); core.setActiveMode('rewrite'); core.setPendingFutureJumpRewriteLaunch(null)
+    core.setSelectionText(selectedText); core.setLockedSelectionText(selectedText); core.setToolbarPos(null); core.setGenerationContext(null); core.setGraphContext(null); core.setContextPreviewError(''); core.setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS); core.setContextPanelOpen(false); core.setGraphSelection(null); core.setDisabledContextBlockIds([]); core.setExcludedGraphEdgeIds([]); core.setExcludedEvidenceIds([]); core.setGraphMutationPendingId(null); core.setGraphMutationError(''); core.setRewritePrompt(DEFAULT_REWRITE_PROMPT); core.setRewriteLaunchSource('future_jump'); core.setRewriteSourceTextOverride(originalText); core.setRewriteState({ loading: false, result: originalText, error: '' }); core.setRewriteFlow({ loading: false, error: '', provider: 'future-jump-run', candidates: [{ title: t('workspace.action.currentFutureVersion'), summary: t('workspace.action.currentFutureSummary'), content: originalText, inputTokens: detail.inputTokens ?? null, outputTokens: detail.outputTokens ?? null }], selectedIndex: 0, jobId: null, jobStatus: null, jobCurrentStep: null }); core.setActiveFutureJumpRewriteContext(core.pendingFutureJumpRewriteLaunch); core.setActiveContinueBlockRewriteContext(null); core.setActiveMode('rewrite'); core.setPendingFutureJumpRewriteLaunch(null)
     window.setTimeout(previewReopenedRewrite, 0)
   }, [core.pendingFutureJumpRewriteLaunch, core.currentChapter])
 
@@ -281,7 +279,6 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     core.setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
     core.setContextPanelOpen(false)
     core.setGraphSelection(null)
-    core.setEvidenceDrawerOpen(false)
     core.setDisabledContextBlockIds([])
     core.setExcludedGraphEdgeIds([])
     core.setExcludedEvidenceIds([])
@@ -360,7 +357,7 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     }
     core.invalidateRecoverableRewriteOwnership()
     setPresetCompatSessionPhase(core.workspaceSelection ?? toChapterTimelineSelection(core.currentChapter), toPresetCompatSessionSurfaceId(mode), 'new_chat')
-    core.setLockedSelectionText(nextSelection); core.setToolbarPos(null); core.setGenerationContext(null); core.setGraphContext(null); core.setContextPreviewError(''); core.setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS); core.setGraphSelection(null); core.setEvidenceDrawerOpen(false); core.setDisabledContextBlockIds([]); core.setExcludedGraphEdgeIds([]); core.setExcludedEvidenceIds([]); core.setGraphMutationPendingId(null); core.setGraphMutationError('')
+    core.setLockedSelectionText(nextSelection); core.setToolbarPos(null); core.setGenerationContext(null); core.setGraphContext(null); core.setContextPreviewError(''); core.setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS); core.setGraphSelection(null); core.setDisabledContextBlockIds([]); core.setExcludedGraphEdgeIds([]); core.setExcludedEvidenceIds([]); core.setGraphMutationPendingId(null); core.setGraphMutationError('')
     if (mode === 'rewrite') { core.setRewriteLaunchSource('chapter'); core.setRewriteSourceTextOverride(''); core.setRewriteFlow({ loading: false, error: '', provider: '', candidates: [], selectedIndex: 0, jobId: null, jobStatus: null, jobCurrentStep: null }) }
     core.setActiveMode(mode)
     window.setTimeout(() => { void loadContextPreview(mode) }, 0)

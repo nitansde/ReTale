@@ -1,26 +1,18 @@
 "use client"
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Ban, Check, Pencil, Save, X } from 'lucide-react'
 import type { GraphEdge, GraphNode } from '@/lib/server/graph-types'
 import type { GraphEdgeEditDraft, GraphNodeGenerationState, GraphSelection } from '@/components/graph/types'
+import { graphEdgeLabel, graphStatusLabel } from '@/components/graph/graph-presentation'
 import { useI18n } from '@/lib/i18n/provider'
 import { INF_CHAPTER } from '@/lib/server/chapter-interval'
-
-const STATUS_LABEL_KEYS = {
-  ai_generated: 'graph.status.aiGenerated',
-  user_confirmed: 'graph.status.userConfirmed',
-  rejected: 'graph.status.rejected',
-  outdated: 'graph.status.outdated',
-  conflicted: 'graph.status.conflicted',
-  potentially_stale: 'graph.status.potentiallyStale',
-} as const
 
 function Metric(props: { label: string; value: string }) {
   return (
     <div className="rounded-[18px] border border-line/8 bg-shade/20 px-3 py-2">
       <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">{props.label}</p>
-      <p className="mt-1 text-sm text-zinc-200">{props.value}</p>
+      <p className="mt-1 break-words text-sm text-zinc-200">{props.value}</p>
     </div>
   )
 }
@@ -60,8 +52,8 @@ function NodeInspector(props: {
       <h4 className="mt-2 text-lg font-semibold text-zinc-100">{node.label}</h4>
       <p className="mt-1 text-sm text-zinc-400">{node.description?.trim() || t('graph.nodeNoDescription')} </p>
       <div className="mt-4 grid grid-cols-2 gap-2">
-        <Metric label={t('graph.metric.type')} value={node.entityType} />
-        <Metric label={t('graph.metric.status')} value={node.status?.trim() || 'active'} />
+        <Metric label={t('graph.metric.type')} value={t(`graph.entity.${node.entityType}`)} />
+        <Metric label={t('graph.metric.status')} value={graphStatusLabel(node.status?.trim() || 'active', t)} />
         <Metric label={t('graph.metric.confidence')} value={`${Math.round(node.confidence * 100)}%`} />
         <Metric label={t('graph.metric.importance')} value={String(node.importance)} />
         <Metric label={t('graph.metric.score')} value={node.score.toFixed(1)} />
@@ -77,7 +69,7 @@ function NodeInspector(props: {
               type="button"
               disabled={props.generationState.inclusionState === 'included' || props.generationState.inclusionState === 'unavailable'}
               onClick={() => props.onToggleNodeExcluded?.(node, false)}
-              className="inline-flex items-center gap-2 rounded-xl border border-emerald-300/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100 transition hover:bg-emerald-500/16 disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-emerald-300/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100 transition hover:bg-emerald-500/16 disabled:opacity-50"
             >
               <Check className="h-3.5 w-3.5" />
                {t('graph.nodeReincludeEdges')}
@@ -86,7 +78,7 @@ function NodeInspector(props: {
               type="button"
               disabled={props.generationState.inclusionState === 'excluded' || props.generationState.inclusionState === 'unavailable'}
               onClick={() => props.onToggleNodeExcluded?.(node, true)}
-              className="inline-flex items-center gap-2 rounded-xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:opacity-50"
             >
               <Ban className="h-3.5 w-3.5" />
                {t('graph.nodeExcludeEdges')}
@@ -122,14 +114,14 @@ function EdgeInspector(props: {
   return (
     <>
       <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{t('graph.selectedEdge')}</p>
-      <h4 className="mt-2 text-lg font-semibold text-zinc-100">{edge.label?.trim() || edge.linkType}</h4>
+      <h4 className="mt-2 text-lg font-semibold text-zinc-100">{graphEdgeLabel(edge, t)}</h4>
       <p className="mt-1 text-sm text-zinc-400">
         {source?.label ?? edge.source} → {target?.label ?? edge.target}
       </p>
       <p className="mt-3 text-sm leading-6 text-zinc-300">{edge.description?.trim() || t('graph.edgeNoDescription')}</p>
       <div className="mt-4 grid grid-cols-2 gap-2">
-        <Metric label={t('graph.metric.status')} value={edge.status in STATUS_LABEL_KEYS ? t(STATUS_LABEL_KEYS[edge.status as keyof typeof STATUS_LABEL_KEYS]) : edge.status} />
-        <Metric label={t('graph.metric.hop')} value={`${edge.hop}-hop`} />
+        <Metric label={t('graph.metric.status')} value={graphStatusLabel(edge.status, t)} />
+        <Metric label={t('graph.metric.hop')} value={t('graph.hopCount', { count: edge.hop })} />
         <Metric label={t('graph.metric.confidence')} value={`${Math.round(edge.confidence * 100)}%`} />
         <Metric label={t('graph.metric.strength')} value={edge.strength.toFixed(1)} />
         <Metric label={t('graph.metric.validFrom')} value={t('graph.chapterOnly', { chapterNo: edge.validFromChapter })} />
@@ -138,7 +130,7 @@ function EdgeInspector(props: {
           value={edge.validUntilChapter >= INF_CHAPTER ? t('graph.stillValid') : t('graph.validUntilChapter', { chapterNo: edge.validUntilChapter })}
         />
         <Metric label={t('graph.metric.prompt')} value={edge.includeInPrompt ? t('graph.promptIncluded') : t('graph.promptExcluded')} />
-        <Metric label={t('graph.metric.generation')} value={props.excluded ? t('graph.generationExcluded') : t('graph.generationIncluded')} />
+        {props.mode === 'selection' ? <Metric label={t('graph.metric.generation')} value={props.excluded ? t('graph.generationExcluded') : t('graph.generationIncluded')} /> : null}
       </div>
 
       {props.mode === 'selection' ? (
@@ -148,7 +140,7 @@ function EdgeInspector(props: {
               type="button"
               disabled={props.mutationPending}
               onClick={() => props.onConfirmEdge?.(edge)}
-              className="inline-flex items-center gap-2 rounded-xl border border-emerald-300/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100 transition hover:bg-emerald-500/16 disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-emerald-300/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100 transition hover:bg-emerald-500/16 disabled:opacity-50"
             >
               <Check className="h-3.5 w-3.5" />
                {t('graph.confirmEdge')}
@@ -157,7 +149,7 @@ function EdgeInspector(props: {
               type="button"
               disabled={props.mutationPending}
               onClick={() => props.onRejectEdge?.(edge)}
-              className="inline-flex items-center gap-2 rounded-xl border border-rose-300/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100 transition hover:bg-rose-500/16 disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-rose-300/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100 transition hover:bg-rose-500/16 disabled:opacity-50"
             >
               <X className="h-3.5 w-3.5" />
                {t('graph.rejectEdge')}
@@ -166,7 +158,7 @@ function EdgeInspector(props: {
               type="button"
               disabled={props.mutationPending}
               onClick={() => props.onToggleEdgeExcluded?.(edge, !props.excluded)}
-              className="inline-flex items-center gap-2 rounded-xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:opacity-50"
             >
               <Ban className="h-3.5 w-3.5" />
                {props.excluded ? t('graph.includeThisRun') : t('graph.excludeThisRun')}
@@ -175,7 +167,7 @@ function EdgeInspector(props: {
               type="button"
               disabled={props.mutationPending}
               onClick={() => setEditing((current) => !current)}
-              className="inline-flex items-center gap-2 rounded-xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:opacity-50"
             >
               <Pencil className="h-3.5 w-3.5" />
                {editing ? t('graph.collapseEdgeEdit') : t('graph.expandEdgeEdit')}
@@ -225,10 +217,10 @@ function EdgeInspector(props: {
                     className="w-full rounded-xl border border-line/10 bg-surface px-3 py-2 text-sm text-zinc-100 outline-none"
                   >
                       <option value="">{t('graph.edgeEdit.unset')}</option>
-                    <option value="positive">positive</option>
-                    <option value="negative">negative</option>
-                    <option value="neutral">neutral</option>
-                    <option value="mixed">mixed</option>
+                    <option value="positive">{t('graph.polarity.positive')}</option>
+                    <option value="negative">{t('graph.polarity.negative')}</option>
+                    <option value="neutral">{t('graph.polarity.neutral')}</option>
+                    <option value="mixed">{t('graph.polarity.mixed')}</option>
                   </select>
                 </label>
                 <label className="block">
@@ -280,7 +272,7 @@ function EdgeInspector(props: {
                   type="button"
                   disabled={props.mutationPending || !draft.linkType.trim()}
                   onClick={() => props.onSaveEdgeEdit?.(edge, draft)}
-                  className="inline-flex items-center gap-2 rounded-xl border border-sky-300/20 bg-sky-500/10 px-3 py-2 text-xs text-sky-100 transition hover:bg-sky-500/16 disabled:opacity-50"
+                  className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-sky-300/20 bg-sky-500/10 px-3 py-2 text-xs text-sky-100 transition hover:bg-sky-500/16 disabled:opacity-50"
                 >
                   <Save className="h-3.5 w-3.5" />
                    {t('graph.edgeEdit.save')}
@@ -292,7 +284,7 @@ function EdgeInspector(props: {
                     setDraft(buildEdgeEditDraft(edge))
                     setEditing(false)
                   }}
-                  className="inline-flex items-center gap-2 rounded-xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:opacity-50"
+                  className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-line/10 bg-shade/20 px-3 py-2 text-xs text-zinc-300 transition hover:bg-overlay/[0.06] disabled:opacity-50"
                 >
                   <X className="h-3.5 w-3.5" />
                    {t('graph.edgeEdit.cancel')}
@@ -307,6 +299,7 @@ function EdgeInspector(props: {
 }
 
 export function GraphInspector(props: {
+  children?: ReactNode
   selection: GraphSelection
   nodeById: Map<string, GraphNode>
   nodeCount: number
@@ -333,7 +326,7 @@ export function GraphInspector(props: {
   const edge = props.selection?.type === 'edge' ? props.selection.edge : null
   const node = props.selection?.type === 'node' ? props.selection.node : null
   const mode = props.mode ?? 'browse-only'
-  const nodeGenerationState = node
+  const nodeGenerationState = node && mode === 'selection'
     ? (() => {
         const connectedEdgeIds = (props.graphEdges ?? [])
           .filter((graphEdge) => graphEdge.source === node.id || graphEdge.target === node.id)
@@ -365,7 +358,7 @@ export function GraphInspector(props: {
   }
 
   return (
-    <aside className="rounded-[24px] border border-line/8 bg-shade/20 p-4">
+    <aside className="min-w-0 break-words rounded-[24px] border border-line/8 bg-shade/20 p-4">
       {node ? <NodeInspector node={node} mode={mode} generationState={nodeGenerationState} onToggleNodeExcluded={props.onToggleNodeExcluded} /> : null}
       {edge ? (
         <EdgeInspector
@@ -396,6 +389,7 @@ export function GraphInspector(props: {
           </div>
         </>
       ) : null}
+      {props.selection ? props.children : null}
     </aside>
   )
 }

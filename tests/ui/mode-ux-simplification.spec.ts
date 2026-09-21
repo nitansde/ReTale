@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { buildRequestPromptMessages } from '@/lib/generation-prompt-preview'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import { ensureEvidenceDir, writeEvidenceFile } from '@/tests/helpers/evidence'
@@ -615,14 +616,23 @@ function expectTypographyToMatch(actual: Awaited<ReturnType<typeof readTypograph
 }
 
 for (const width of [360, 390, 430]) {
-  test(`mobile rewrite keeps generation reachable and reveals result actions after completion at ${width}px`, async ({ page }) => {
+  test(`mobile rewrite keeps generation reachable and reveals result actions after completion at ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 800 })
     await mockNovelResourceApi(page, () => buildWorkspacePayload())
     await page.route('**/api/settings/ai', (route) => route.fulfill({ json: buildWorkspacePayload().aiSettings }))
     await page.route('**/api/settings/preset-compat', (route) => route.fulfill({ json: createDefaultPresetCompatLibrary() }))
     await page.route('**/api/story-timeline*', (route) => route.fulfill({ json: buildBaseTimeline() }))
     await page.route('**/api/knowledge-view*', (route) => route.fulfill({ json: buildKnowledgeViewPayload() }))
-    await page.route('**/api/rag/build-generation-context', (route) => route.fulfill({ json: buildGenerationContextPayload() }))
+    await page.route('**/api/rag/build-generation-context', (route) => {
+      const body = route.request().postDataJSON()
+      const context = buildGenerationContextPayload()
+      const systemPrompt = '魔改系统指令：保留人物设定。'
+      const userPrompt = [
+        ...context.promptBlocks.filter((block) => !body.disabledBlockIds?.includes(block.id)).map((block) => `# ${block.label}\n${block.content}`),
+        `# 任务\n${body.userInstruction || '改写当前章节'}`,
+      ].join('\n')
+      return route.fulfill({ json: { ...context, systemPrompt, userPrompt, requestMessages: buildRequestPromptMessages(systemPrompt, userPrompt), warnings: ['Preset field `top_k` was preserved for export but not applied to openai-compatible.'] } })
+    })
     await page.route('**/api/rewrite*', (route) => {
       if (route.request().method() === 'GET' && !new URL(route.request().url()).searchParams.has('jobId')) {
         return route.fulfill({ json: { ok: true, job: null } })
@@ -645,13 +655,31 @@ for (const width of [360, 390, 430]) {
     await expect(dialog.getByTestId('rewrite-result')).toHaveCount(0)
     await expect.poll(() => dialog.boundingBox()).toEqual({ x: 0, y: 0, width, height: 800 })
     await page.getByTestId('workspace-context-panel-toggle').click()
-    await expect(page.getByTestId('workspace-context-panel')).toBeVisible()
+    const contextPanel = page.getByTestId('workspace-context-panel')
+    await expect(contextPanel).toBeVisible()
+    await expect(contextPanel.getByRole('tab')).toHaveCount(0)
+    await expect(contextPanel.getByTestId('prompt-block-content-request-preset')).toBeHidden()
+    await contextPanel.getByRole('button', { name: '展开全文：预设' }).click()
+    await expect(contextPanel.getByTestId('prompt-block-content-request-preset')).toContainText('魔改系统指令：保留人物设定。')
+    await contextPanel.getByRole('button', { name: '收起全文：预设' }).click()
+    await expect(contextPanel).not.toContainText('preserved for export')
+    await dialog.getByPlaceholder(rewritePromptPlaceholder).fill('改成紧张的对峙。')
+    await expect(contextPanel).toContainText('改成紧张的对峙。')
+    await contextPanel.getByRole('checkbox', { name: 'Future jump context' }).uncheck()
+    await expect(contextPanel.getByRole('checkbox', { name: 'Future jump context' })).not.toBeChecked()
+    await expect(contextPanel).toContainText('改成紧张的对峙。')
+    await expect(contextPanel.getByText(/Latest speculative future branch context/)).toHaveCount(1)
+    if (width === 390) {
+      await contextPanel.getByTestId('advanced-context-prompt-panel').scrollIntoViewIfNeeded()
+      await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('rewrite-advanced-context.png') })
+    }
     await expect(generate).toBeInViewport({ ratio: 1 })
     await generate.click()
     await expect(dialog.getByRole('button', { name: '保存为续写块' })).toBeEnabled()
     await expect(dialog.getByTestId('rewrite-result')).toContainText('移动端改写结果')
-    await dialog.getByText('结果操作', { exact: true }).click()
-    await expect(dialog.getByRole('button', { name: '创建 What-if' })).toBeVisible()
+    await expect(dialog.getByText('结果操作', { exact: true })).toHaveCount(0)
+    await expect(dialog.getByRole('button', { name: /^(替换正文|复制结果|继续魔改)$/ })).toHaveCount(0)
+    await expect(dialog.getByRole('button', { name: '创建 What-if 分支', exact: true })).toBeVisible()
     await dialog.getByRole('button', { name: '关闭', exact: true }).click()
     expect(await reader.innerHTML()).toBe(original)
   })

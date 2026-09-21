@@ -14,7 +14,7 @@ import {
   readWritingSkillCardDetail,
   type WritingSkillStoreDb,
 } from '@/lib/server/writing-skill-store'
-import { loadWritingSkillMaterialCollection } from '@/lib/server/writing-skill-sources'
+import { loadWritingSkillMaterialCollection, readWritingSkillMaterialCollectionVersion } from '@/lib/server/writing-skill-sources'
 import type {
   ResolvedSkillExample,
   WritingSkillCard,
@@ -247,13 +247,17 @@ export function resolveWritingSkillRuntimes(input: {
   library?: MaterialLibrary
 }) {
   const cardIds = normalizeWritingSkillCardIds({ writingSkillCardIds: input.cardIds })
-  const runtimes = cardIds.map((cardId) => resolveWritingSkillRuntime({
-    cardId,
-    count: input.count,
-    seed: input.seed,
-    db: input.db,
-    library: input.library,
-  }))
+  const libraries = new Map<string, MaterialLibrary>()
+  const runtimes = cardIds.map((cardId) => {
+    const card = readWritingSkillCardDetail(cardId, input.db)
+    if (!card) throw new Error('写作技巧卡不存在')
+    let library = input.library ?? libraries.get(card.libraryId)
+    if (!library) {
+      library = loadWritingSkillCardLibrary(card, input.db)
+      libraries.set(card.libraryId, library)
+    }
+    return resolveWritingSkillRuntime({ cardId, count: input.count, seed: input.seed, db: input.db, library })
+  })
 
   return {
     runtimes,
@@ -272,16 +276,21 @@ export function resolveWritingSkillRuntimes(input: {
 export function refreshWritingSkillCardStaleness(db?: WritingSkillStoreDb) {
   const cards = listWritingSkillCards({}, db)
   const versions = new Map<string, string | null>()
+  const sourceVersions = new Map<string, string | null>()
   for (const card of cards) {
     if (!card.libraryId.startsWith('writing-skill-collection:')) {
+      if (versions.has(card.libraryId)) continue
       const version = readMaterialLibraryVersion(card.libraryId)
       versions.set(card.libraryId, version)
       markWritingSkillCardsStaleForLibraryVersion(card.libraryId, version, db)
       continue
     }
     try {
-      const version = loadWritingSkillCardLibrary(card, db).version
-      versions.set(card.libraryId, version)
+      if (!versions.has(card.libraryId)) {
+        const sourceRefs = listWritingSkillCardSources(card.id, db)
+        versions.set(card.libraryId, readWritingSkillMaterialCollectionVersion(sourceRefs, { db, sourceVersions }))
+      }
+      const version = versions.get(card.libraryId)
       if (version !== card.libraryVersion) markWritingSkillCardStale(card.id, db)
     } catch {
       versions.set(card.libraryId, null)

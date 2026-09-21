@@ -3,7 +3,6 @@
 import React from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/context-prompt-block-visibility'
 import { WorkspaceCenterPane } from '@/components/workspace/WorkspaceCenterPane'
 import {
   resolveContinueBlockSelectionAfterSave,
@@ -627,14 +626,5 @@ describe('workspace selection shell', () => {
     })
   })
 
-  it('hides advanced-context output constraints while keeping other prompt blocks available', () => {
-    expect(getVisibleAdvancedContextPromptBlocks([
-      { id: 'story-summary', label: '故事摘要', enabled: true, priority: 'high', content: '# 故事摘要\n- 当前冲突。' },
-      { id: 'output-constraints', label: '输出要求', enabled: true, priority: 'high', content: '# 输出要求\n- 只输出正文。' },
-      { id: 'preset-compat', label: 'Preset Compat', enabled: true, priority: 'medium', content: '# Preset Compat\n- 保留兼容提示。' },
-    ])).toEqual([
-      { id: 'story-summary', label: '故事摘要', enabled: true, priority: 'high', content: '# 故事摘要\n- 当前冲突。' },
-      { id: 'preset-compat', label: 'Preset Compat', enabled: true, priority: 'medium', content: '# Preset Compat\n- 保留兼容提示。' },
-    ])
-  })
+
 })

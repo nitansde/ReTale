@@ -52,7 +52,6 @@ function createResetControls() {
     setContextPreviewError: createStateSetterMock<string>(),
     setGraphReviewControls: createStateSetterMock<GraphReviewControls>(),
     setGraphSelection: createStateSetterMock<GraphSelection>(),
-    setEvidenceDrawerOpen: createStateSetterMock<boolean>(),
     setDisabledContextBlockIds: createStateSetterMock<string[]>(),
     setExcludedGraphEdgeIds: createStateSetterMock<string[]>(),
     setExcludedEvidenceIds: createStateSetterMock<string[]>(),
@@ -107,7 +106,6 @@ describe('useWorkspaceChapterSelection', () => {
     expect(resetControls.setContextPreviewError).toHaveBeenCalledWith('')
     expect(resetControls.setGraphReviewControls).toHaveBeenCalledWith(DEFAULT_GRAPH_REVIEW_CONTROLS)
     expect(resetControls.setGraphSelection).toHaveBeenCalledWith(null)
-    expect(resetControls.setEvidenceDrawerOpen).toHaveBeenCalledWith(false)
     expect(resetControls.setDisabledContextBlockIds).toHaveBeenCalledWith([])
     expect(resetControls.setExcludedGraphEdgeIds).toHaveBeenCalledWith([])
     expect(resetControls.setExcludedEvidenceIds).toHaveBeenCalledWith([])

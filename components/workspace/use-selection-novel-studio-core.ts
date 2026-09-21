@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { getVisibleAdvancedContextPromptBlocks } from '@/components/graph/context-prompt-block-visibility'
 import type { NoticeVariant } from '@/components/ui/Notice'
 import { createChapterEditorBuffer } from '@/components/workspace/chapter-editor-buffer'
 import { useChapterReaderMode } from '@/components/workspace/use-chapter-reader-mode'
@@ -335,7 +334,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const [graphReviewControls, setGraphReviewControls] = useState<GraphReviewControls>(DEFAULT_GRAPH_REVIEW_CONTROLS)
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [graphSelection, setGraphSelection] = useState<GraphSelection>(null)
-  const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false)
   const [disabledContextBlockIds, setDisabledContextBlockIds] = useState<string[]>([])
   const [excludedGraphEdgeIds, setExcludedGraphEdgeIds] = useState<string[]>([])
   const [excludedEvidenceIds, setExcludedEvidenceIds] = useState<string[]>([])
@@ -452,6 +450,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   const lastActiveKnowledgeJobIdRef = useRef<string | null>(null)
   const openAICompatibleModelsRequestRef = useRef<Record<AIScenarioKey, number>>({ rewrite: 0, knowledgeExtraction: 0, embeddings: 0 })
   const chapterGraphRequestRef = useRef(0)
+  const chapterGraphScopeRef = useRef('')
   const storyTimelineRequestRef = useRef(0)
   const storyTimelineAbortControllerRef = useRef<AbortController | null>(null)
   const fullKnowledgeProjectionAbortControllerRef = useRef<AbortController | null>(null)
@@ -788,7 +787,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
       setContextPreviewError,
       setGraphReviewControls,
       setGraphSelection,
-      setEvidenceDrawerOpen,
       setDisabledContextBlockIds,
       setExcludedGraphEdgeIds,
       setExcludedEvidenceIds,
@@ -1581,7 +1579,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
     setContextPanelOpen(false)
     setGraphSelection(null)
-    setEvidenceDrawerOpen(false)
     setDisabledContextBlockIds([])
     setExcludedGraphEdgeIds([])
     setExcludedEvidenceIds([])
@@ -1703,8 +1700,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
           : { mode: 'direct', chapterId: sourceChapter.id, chapterNo: sourceChapter.order, chapterTitle: sourceChapter.title },
       } satisfies ChapterGraphContextData
       setChapterGraphData(nextData)
-      const defaultNode = nextData.graphContext.seedEntities[0] ?? nextData.graphContext.nodes[0] ?? null
-      setChapterGraphSelection(defaultNode ? { type: 'node', node: defaultNode } : null)
+      setChapterGraphSelection((current) => resolveGraphSelection(nextData.graphContext, preserveData ? current : null))
     } catch (error) {
       if (chapterGraphRequestRef.current !== requestId) return
       setChapterGraphError(resolveWorkspaceUserFacingError('chapter-graph-load', error, locale))
@@ -1717,12 +1713,13 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
         setChapterGraphLoading(false)
       }
     }
-  }, [chapterGraphControls, locale, params.currentNovelId, parentChapter])
+  }, [chapterGraphControls, locale, params.currentNovelId, parentChapter, t])
 
   useEffect(() => {
     if (centerPaneView !== 'graph' || !currentChapter) return
     if (currentChapter.parentChapterId && !parentChapter) {
       chapterGraphRequestRef.current += 1
+      chapterGraphScopeRef.current = ''
       const timer = window.setTimeout(() => {
         setChapterGraphData(null)
         setChapterGraphSelection(null)
@@ -1733,25 +1730,26 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
         window.clearTimeout(timer)
       }
     }
+    const scope = `${params.currentNovelId}:${currentChapter.id}:${parentChapter?.id ?? ''}`
     const timer = window.setTimeout(() => {
-      void loadChapterGraph(currentChapter, chapterGraphControls)
+      const preserveData = chapterGraphScopeRef.current === scope
+      chapterGraphScopeRef.current = scope
+      void loadChapterGraph(currentChapter, chapterGraphControls, preserveData)
     }, 0)
     return () => {
       window.clearTimeout(timer)
     }
-  }, [centerPaneView, chapterGraphControls, currentChapter, loadChapterGraph, parentChapter])
+  }, [centerPaneView, chapterGraphControls, currentChapter, loadChapterGraph, parentChapter, params.currentNovelId, t])
 
-  const handleChapterGraphControlChange = async (nextControls: GraphReviewControls) => {
-    const requiresReload = nextControls.maxHops !== chapterGraphControls.maxHops || nextControls.hideLowConfidence !== chapterGraphControls.hideLowConfidence || nextControls.confirmedOnly !== chapterGraphControls.confirmedOnly
+  const handleChapterGraphControlChange = (nextControls: GraphReviewControls) => {
+    // The effect owns fetching so a control change cannot trigger a second, clearing request.
     setChapterGraphControls(nextControls)
-    if (!requiresReload || centerPaneView !== 'graph' || !currentChapter) return
-    await loadChapterGraph(currentChapter, nextControls, true)
   }
 
   const selectedRewriteCandidate = rewriteFlow.candidates[rewriteFlow.selectedIndex] ?? rewriteFlow.candidates[0]
   const previewRewriteContent = selectedRewriteCandidate?.content || rewriteState.result
   const activeGraphContext = graphContext ?? generationContext?.graphContext ?? null
-  const activePromptBlockCount = generationContext ? getVisibleAdvancedContextPromptBlocks(generationContext.promptBlocks).length : 0
+  const activePromptBlockCount = generationContext?.promptBlocks.length ?? 0
   const activeSeedEntityCount = activeGraphContext?.seedEntities.length ?? 0
   const activeGraphEdgeCount = activeGraphContext?.edges.length ?? 0
   const activeEvidenceCount = generationContext?.lanceEvidence.length ?? 0
@@ -1882,8 +1880,6 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     setContextPanelOpen,
     graphSelection,
     setGraphSelection,
-    evidenceDrawerOpen,
-    setEvidenceDrawerOpen,
     disabledContextBlockIds,
     setDisabledContextBlockIds,
     excludedGraphEdgeIds,
