@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { buildRequestPromptMessages } from '@/lib/generation-prompt-preview'
 import { type RoleplayTurn, type RoleplayScript, roleplayScriptText } from '@/lib/roleplay-script'
 import { createDefaultAISettings } from '@/lib/ai-settings'
 import { getRoleplayBranchDeletionIds } from '@/lib/roleplay-branches'
@@ -145,7 +146,9 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
       { id: 'current-summary', label: '当前章节摘要', content: '两人在雨夜交谈。', required: false, priority: 'high', enabled: !options.disabledBlockIds.includes('current-summary'), trimmed: false },
       ...(options.writingSkillCardIds.includes('skill-expression') ? [{ id: 'writing-skill:skill-expression', label: '写作技巧：神态与动作', content: '写作方法：用动作表现迟疑。\n范文：她垂下眼，指尖停在杯沿。', required: false, priority: 'highest', enabled: true, trimmed: false }] : []),
     ]
-    await route.fulfill({ json: { ok: true, contextSnapshotId: 'rp-preview', promptBlocks: blocks, writingSkillRecords: [], systemPrompt: 'Galgame 脚本', userPrompt: blocks.filter((block) => block.enabled).map((block) => block.content).join('\n') } })
+    const systemPrompt = '角色互动系统指令'
+    const userPrompt = blocks.filter((block) => block.enabled).map((block) => `# ${block.label}\n${block.content}`).join('\n') + '\n# 任务\n推进当前对话。'
+    await route.fulfill({ json: { ok: true, contextSnapshotId: 'rp-preview', promptBlocks: blocks, writingSkillRecords: [], systemPrompt, userPrompt, requestMessages: buildRequestPromptMessages(systemPrompt, userPrompt), warnings: ['Preset field `top_k` was preserved for export but not applied to openai-compatible.'] } })
   })
 
   await mockNovelResourceApi(page, () => workspacePayload, {
@@ -393,17 +396,27 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await expect(page.getByTestId('roleplay-skill-picker-trigger')).toContainText('神态与动作')
   await expect(skillPicker).not.toHaveAttribute('open', '')
   await page.getByRole('combobox', { name: '每张卡范文数' }).selectOption('2')
-  await expect(page.getByTestId('roleplay-context-block-writing-skill:skill-expression')).toBeVisible()
-  await page.getByTestId('roleplay-context-block-writing-skill:skill-expression').getByText('展开内容', { exact: true }).click()
+  await expect(page.getByTestId('prompt-block-content-writing-skill:skill-expression')).toBeVisible()
   await expect(page.getByRole('dialog')).toContainText('她垂下眼，指尖停在杯沿。')
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-writing-skills.png') })
   await page.getByRole('button', { name: '关闭写作技巧' }).click()
   await page.getByRole('button', { name: '高级上下文' }).click()
+  const advancedContext = page.getByTestId('advanced-context-prompt-panel')
+  await expect(advancedContext.getByRole('tab')).toHaveCount(0)
+  await expect(advancedContext.getByTestId('context-prompt-blocks')).toHaveCount(1)
+  await expect(advancedContext.getByTestId('prompt-block-content-request-preset')).toBeHidden()
+  await advancedContext.getByRole('button', { name: '展开全文：预设' }).click()
+  await expect(advancedContext.getByTestId('prompt-block-content-request-preset')).toContainText('角色互动系统指令')
+  await advancedContext.getByRole('button', { name: '收起全文：预设' }).click()
+  await expect(page.getByRole('dialog')).not.toContainText('preserved for export')
   await page.getByRole('checkbox', { name: '当前章节摘要' }).uncheck()
   await expect.poll(() => previewPayloads.at(-1)?.disabledBlockIds).toEqual(['current-summary'])
-  await page.getByTestId('roleplay-final-prompt').getByText('查看最终 Prompt').click()
-  await expect(page.getByTestId('roleplay-final-prompt')).toContainText('用动作表现迟疑')
-  await expect(page.getByTestId('roleplay-final-prompt')).not.toContainText('两人在雨夜交谈')
+  await expect(page.getByRole('checkbox', { name: '当前章节摘要' })).not.toBeChecked()
+  await expect(advancedContext).toContainText('推进当前对话')
+  await expect(advancedContext.getByText(/用动作表现迟疑/)).toHaveCount(1)
+  await expect(advancedContext.getByText(/两人在雨夜交谈/)).toHaveCount(1)
+  await expect(page.getByTestId('roleplay-final-prompt')).toHaveCount(0)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-advanced-context.png') })
   await page.getByRole('button', { name: '关闭高级上下文' }).click()
   await page.getByTestId('roleplay-composer-send').click()

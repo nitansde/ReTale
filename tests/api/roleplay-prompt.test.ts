@@ -267,7 +267,7 @@ describe('roleplay prompt contract', () => {
     expect(buildGenerationContext).toHaveBeenCalledWith(expect.objectContaining({
       operationType: 'roleplay',
       roleplayMessages: normalizedRoleplayMessages,
-    }), { cachedRagArtifacts: null })
+    }), { cachedRagArtifacts: null, writingSkillBundle: null })
     expect(generateRewriteWithOpenAICompatible).toHaveBeenCalledTimes(1)
     expect(workspaceWriteSpy).not.toHaveBeenCalled()
 
@@ -280,19 +280,22 @@ describe('roleplay prompt contract', () => {
     expect(rewriteInput.userPrompt).toContain('# 角色扮演回复契约')
     expect(rewriteInput.userPrompt).toContain('只回复当前这一轮的聊天内容。')
     expect(rewriteInput.userPrompt).toContain('不要自动应用、改写或续写 chapter 正文。')
+    expect(rewriteInput.userPrompt).toMatch(/^# 输出要求$/m)
     expect(rewriteInput.userPrompt).not.toContain('只输出小说正文。')
 
     const scriptTurn = { playerName: '林舟', counterpartName: '沈月', storyGuidance: '雨夜，两人在窗边。', dialogue: '你相信我吗？', maxCharacters: 300 }
     const scriptResponse = await POST(createRoleplayRequest({ roleplayTurn: scriptTurn }))
     expect(scriptResponse.status).toBe(200)
     const scriptInput = generateRewriteWithOpenAICompatible.mock.calls[1]?.[0] as { userPrompt: string; systemPrompt?: string }
-    expect(scriptInput.userPrompt).toContain('# Galgame 双角色脚本契约')
+    expect(scriptInput.userPrompt).toContain('# 双角色互动输出要求')
+    expect(scriptInput.userPrompt).not.toMatch(/^# 输出要求$/m)
+    expect(scriptInput.userPrompt).toContain('不要输出剧情大纲或格式说明。不要自动应用、改写或续写原章节正文。')
     expect(scriptInput.userPrompt).toContain('目标字数约为 300 字')
     expect(scriptInput.userPrompt).toContain('双方多轮对话和旁白')
     expect(scriptInput.userPrompt).toContain('林舟')
     expect(scriptInput.userPrompt).toContain('沈月')
     expect(scriptInput.userPrompt).not.toContain('只回复当前这一轮的聊天内容')
-    expect(scriptInput.systemPrompt).toContain('视觉小说双角色脚本生成器')
+    expect(scriptInput.systemPrompt).toContain('你负责生成双角色互动内容')
     const invalidResponse = await POST(createRoleplayRequest({ roleplayTurn: { ...scriptTurn, maxCharacters: 0 } }))
     expect(invalidResponse.status).toBe(400)
 

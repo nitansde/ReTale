@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { RoleplayPromptPreview } from '@/lib/roleplay-generation'
 import { deserializePresetCompatResponseMetadata } from '@/lib/preset-compat/runtime-integration'
 import { createDefaultPresetCompatLibrary } from '@/lib/preset-compat/surface-contract'
 import type { PresetCompatMacroDiagnostic } from '@/lib/preset-compat/macro-context'
@@ -500,15 +501,22 @@ describe('preset compat rewrite route runtime', () => {
       content: index === 13 ? '旁白：两人已登船，离开了原先的房间。\n沈月：你想去哪里？' : `历史第${index + 1}条：约好去渡口。`,
     }))
     const { POST } = await import('@/app/api/rewrite/route')
-    const response = await POST(createRequest('roleplay', {
+    const input = {
       stream, chapterId, roleplayMessages: history, disabledBlockIds: ['roleplay-history'],
       roleplayTurn: { playerName: '林舟', counterpartName: '沈月', storyGuidance: '小船继续前进。', dialogue: '先到对岸去吧。', maxCharacters: 600 },
-    }))
+    }
+    const { POST: preview } = await import('@/app/api/roleplay/preview/route')
+    const previewResponse = await preview(createRequest('roleplay', input))
+    expect(previewResponse.status).toBe(200)
+    const shown = await previewResponse.json() as RoleplayPromptPreview
+    expect(fetchMock).not.toHaveBeenCalled()
+    const response = await POST(createRequest('roleplay', input))
     expect(response.status).toBe(200)
     if (stream) expect(await response.text()).toBe(reply)
     else expect((await response.json()).candidates[0].content).toBe(reply)
     const providerCall = fetchMock.mock.calls.find(([url]) => /\/(chat\/completions|api\/chat)$/.test(String(url)))!
     const requestBody = JSON.parse(String((providerCall[1] as RequestInit).body)) as { messages: Array<{ role: string; content: string }>; format?: unknown }
+    expect(shown.requestMessages?.map((message) => ({ role: message.role, content: message.blocks.map((block) => block.content).join('') }))).toEqual(requestBody.messages)
     if (provider === 'ollama' && !stream) expect(requestBody.format).toBe('json')
     const system = requestBody.messages.find((message) => message.role === 'system')!.content
     const prompt = requestBody.messages.find((message) => message.role === 'user')!.content
@@ -700,9 +708,7 @@ describe('preset compat rewrite route runtime', () => {
     expect(requestBody.messages[1]?.content).toContain('任务要求：接着上下文中给出的已有正文，继续根据用户指令写接下来的故事。')
     expect(requestBody.messages[1]?.content).toContain('输出要求：只输出后续新正文，不要复述、解释或重新输出已有正文。')
     expect(requestBody.messages[1]?.content).toContain('# 已有正文（从这里之后继续写）\n上一个 block 的最新正文 BETA')
-    expect(requestBody.messages[1]?.content.indexOf('选中行：未知')).toBeLessThan(
-      requestBody.messages[1]?.content.indexOf('# 已有正文（从这里之后继续写）')
-    )
+    expect(requestBody.messages[1]?.content).not.toContain('选中行：')
     expect(requestBody.messages[1]?.content.indexOf('# 已有正文（从这里之后继续写）')).toBeLessThan(
       requestBody.messages[1]?.content.lastIndexOf('# 任务')
     )
@@ -1317,6 +1323,9 @@ describe('preset compat rewrite route runtime', () => {
     }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
+    const { POST: preview } = await import('@/app/api/rag/build-generation-context/route')
+    const shown = await (await preview(createRequest('rewrite', { stream: false, novelId: 'novel-1', chapterId: 'chapter-1' }))).json() as RoleplayPromptPreview
+    expect(shown.promptBlocks.find((block) => block.id === 'worldbuilding')?.trimmed).toBe(true)
     const { POST } = await import('@/app/api/rewrite/route')
     const response = await POST(createRequest('rewrite', {
       stream: false,
@@ -1352,6 +1361,7 @@ describe('preset compat rewrite route runtime', () => {
       expect.objectContaining({ field: 'openai_max_context', status: 'applied', reason: 'SUPPORTED_RUNTIME' }),
       expect.objectContaining({ field: 'max_context_unlocked', status: 'preserved', reason: 'PRESERVED_EXPORT_ONLY' }),
     ]))
+    expect(shown.requestMessages?.map((message) => ({ role: message.role, content: message.blocks.map((block) => block.content).join('') }))).toEqual(requestBody.messages)
     expect(requestBody.messages[1]?.content).toContain('summary keep keep keep keep')
     expect(requestBody.messages[1]?.content).not.toContain('world trim trim trim')
   })
@@ -1811,11 +1821,11 @@ describe('preset compat rewrite route runtime', () => {
     expect(buildGenerationContext).toHaveBeenNthCalledWith(1, expect.objectContaining({
       writingSkillCardIds: ['writing-skill-card-1', 'writing-skill-card-2'],
       writingSkillSeed: 13579,
-    }), { cachedRagArtifacts: null })
+    }), expect.objectContaining({ cachedRagArtifacts: null }))
     expect(buildGenerationContext).toHaveBeenNthCalledWith(2, expect.objectContaining({
       writingSkillCardIds: ['writing-skill-card-1'],
       writingSkillSeed: 13579,
-    }), { cachedRagArtifacts: null })
+    }), expect.objectContaining({ cachedRagArtifacts: null }))
   })
 
   it('forwards branch lineage selectors into buildGenerationContext for rewrite requests', async () => {
@@ -1864,7 +1874,7 @@ describe('preset compat rewrite route runtime', () => {
     expect(buildGenerationContext).toHaveBeenCalledWith(expect.objectContaining({
       branchContextNodeId: 'continue-node-7',
       branchContextInclusion: 'include_selected',
-    }), { cachedRagArtifacts: null })
+    }), expect.objectContaining({ cachedRagArtifacts: null }))
 
     const requestBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
       messages: Array<{ content: string }>
@@ -1876,8 +1886,7 @@ describe('preset compat rewrite route runtime', () => {
     expect(content.indexOf('# 当前章节摘要\n稳定摘要')).toBeLessThan(content.indexOf('# 当前分支谱系全文'))
     expect(content.match(/^# 选中文本$/gm)?.length ?? 0).toBe(1)
     expect(content.indexOf('# 当前分支谱系全文')).toBeLessThan(content.indexOf('# 选中文本'))
-    expect(content.indexOf('选中行：1 - 2')).toBeGreaterThan(content.indexOf('# 当前分支谱系全文'))
-    expect(content.indexOf('选中行：1 - 2')).toBeLessThan(content.indexOf('# 选中文本'))
+    expect(content).not.toContain('选中行：')
     expect(content.indexOf('# 选中文本')).toBeLessThan(content.lastIndexOf('# 任务'))
     expect(content.trim().endsWith([
       '# 任务',

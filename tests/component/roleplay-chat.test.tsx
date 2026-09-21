@@ -20,7 +20,7 @@ function message(index: number, data: { turn: RoleplayTurn } | { script: Rolepla
   return { id: `m${index}`, sessionId: 'session', messageIndex: index, turnIndex: index, variantIndex: 1, role: 'turn' in data ? 'user' : 'assistant',
     content: 'turn' in data ? data.turn.dialogue : roleplayScriptText(data.script), parentMessageId, forkedFromMessageId: null, variantGroupId: null, ...data }
 }
-function setup(options: { messages?: ReturnType<typeof message>[]; candidates?: boolean; fail?: boolean; json?: boolean; deleteFail?: boolean; deleteWait?: Promise<void> } = {}) {
+function setup(options: { messages?: ReturnType<typeof message>[]; candidates?: boolean; fail?: boolean; json?: boolean; providerError?: 'http' | 'stream'; deleteFail?: boolean; deleteWait?: Promise<void> } = {}) {
   const detail = { id: 'session', title: 'RP-01', sourceChapterNo: 3,
     sourceSnapshot: { chapterId: 'chapter', chapterNo: 3, selectedText: '雨夜相逢', textSnapshot: '雨夜相逢正文' },
     characterOptions: options.candidates === false ? [] : [{ name: '林舟', protagonist: true }, { name: '沈月', protagonist: false }],
@@ -57,6 +57,9 @@ function setup(options: { messages?: ReturnType<typeof message>[]; candidates?: 
     }
     if (String(url) === '/api/rewrite') {
       requests.push(JSON.parse(String(init?.body)))
+      const error = 'HTTP 400: maximum context length is 200000 tokens, requested 235000 tokens'
+      if (options.providerError === 'http') return Response.json({ error }, { status: 502 })
+      if (options.providerError === 'stream') return new Response(`${JSON.stringify({ type: 'text', text: '{"blocks":[' })}\n${JSON.stringify({ type: 'error', error })}\n`, { headers: { 'Content-Type': 'application/x-ndjson' } })
       if (fail) { fail = false; return new Response('{broken json', { headers: { 'Content-Type': 'text/plain' } }) }
       const content = JSON.stringify({ blocks: script.blocks })
       return options.json ? Response.json({ provider: 'test', metadata: { debug: 'DO_NOT_RENDER' }, candidates: [{ content }] }) : new Response(content, { headers: { 'Content-Type': 'text/plain' } })
@@ -77,6 +80,20 @@ beforeEach(() => { window.localStorage.clear() })
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('roleplay script view', () => {
+  it.each(['http', 'stream'] as const)('shows model errors and compression guidance without saving a partial reply (%s)', async (providerError) => {
+    const { detail } = setup({ providerError, messages: [message(1, turnData()), message(2, { script }, 'm1')] })
+    await screen.findByTestId('roleplay-script')
+    fireEvent.click(screen.getByTestId('roleplay-regenerate-last'))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('maximum context length is 200000 tokens, requested 235000 tokens')
+    expect(alert).toHaveTextContent('高级上下文')
+    expect(alert).toHaveTextContent('压缩上下文')
+    expect(detail.messages).toHaveLength(2)
+    await waitFor(() => expect(screen.getByTestId('roleplay-regenerate-last')).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: '高级上下文' }))
+    expect(screen.getByRole('dialog', { name: '高级上下文' })).toBeInTheDocument()
+  })
+
   it('expands the compact composer on focus, keeps drafts when collapsed, and collapses after sending', async () => {
     const { requests } = setup({ messages: [message(1, turnData()), message(2, { script }, 'm1')] })
     await screen.findByTestId('roleplay-script')
@@ -171,7 +188,7 @@ describe('roleplay script view', () => {
     fireEvent.click(await screen.findByRole('checkbox', { name: '当前章节摘要' }))
     expect(screen.getByRole('checkbox', { name: '当前角色扮演对话' })).toBeDisabled()
     await waitFor(() => expect(first.previews.at(-1)?.roleplayTurn).toMatchObject({ generationOptions: { disabledBlockIds: ['current-summary'] } }))
-    await screen.findByTestId('roleplay-final-prompt')
+    await screen.findByTestId('context-prompt-blocks')
     fireEvent.click(screen.getByRole('button', { name: '关闭高级上下文' }))
     fireEvent.change(screen.getByRole('textbox', { name: '我的台词' }), { target: { value: '继续吧。' } })
     fireEvent.click(screen.getByTestId('roleplay-composer-send'))

@@ -307,7 +307,7 @@ function installRecoverableRewriteFetchMock(options: {
       return Promise.resolve(jsonResponse({ ok: true, cards: options.writingSkillCards ?? [] }))
     }
     if (url === '/api/rag/build-generation-context' && method === 'POST') {
-      return Promise.resolve(options.contextPreviewResponse ?? jsonResponse({ ok: false, error: 'Context preview omitted by test' }, 400))
+      return Promise.resolve(options.contextPreviewResponse?.clone() ?? jsonResponse({ ok: false, error: 'Context preview omitted by test' }, 400))
     }
     if (url.startsWith('/api/rewrite?') && method === 'GET') {
       if (url.includes('jobId=')) {
@@ -676,6 +676,9 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     })
     await waitFor(() => expect(previewBodies).toHaveLength(1))
     const expectedContext = {
+      sourceText: 'Parent generated text',
+      selectedText: variant === 'continue' ? '' : 'Parent selection',
+      userInstruction: result.current.core.rewritePrompt,
       branchContextNodeId: 'continue-node-1',
       branchContextInclusion: 'include_selected',
       writingSkillCardIds: ['writing-skill-card-1', 'writing-skill-card-2'],
@@ -684,17 +687,85 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     }
     expect(previewBodies[0]).toMatchObject(expectedContext)
 
-    const userInstruction = result.current.core.rewritePrompt
     await act(async () => { await result.current.actions.handleRewrite() })
 
     expect(rewriteBodies).toHaveLength(1)
     expect(rewriteBodies[0]).toMatchObject({
       ...expectedContext,
-      sourceText: 'Parent generated text',
-      selectedText: variant === 'continue' ? '' : 'Parent selection',
-      userInstruction,
       continueBlockId: 'continue-1',
     })
+  })
+
+  it.each((['what-if-continue', 'what-if-regenerate', 'future-jump'] as const).flatMap((mode) => [false, true].map((hasHistory) => ({ mode, hasHistory }))))('previews the same source and task after reopening $mode (history: $hasHistory)', async ({ mode, hasHistory }) => {
+    const restoreResponse = createDeferred<Response>()
+    const createResponse = createDeferred<Response>()
+    const fetchMock = installRecoverableRewriteFetchMock({
+      restoreResponse, createResponse,
+      contextPreviewResponse: jsonResponse({ ok: true, promptBlocks: [], graphContext: { seedEntities: [], nodes: [], edges: [] }, lanceEvidence: [] }),
+    })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: null }))
+    act(() => {
+      result.current.core.setRewritePrompt('Previous request')
+      result.current.core.setRewriteSourceTextOverride('Previous source')
+      result.current.core.setExcludedGraphEdgeIds(['previous-edge'])
+      result.current.core.setExcludedEvidenceIds(['previous-evidence'])
+      result.current.core.setActiveContinueBlockRewriteContext({
+        continueBlockId: 'old-block', nodeId: 'old-node', anchorChapterNo: 1, latestText: 'Previous source',
+        userInstruction: 'Previous request', selectedText: 'Previous selection', originalText: 'Original previous source',
+        title: 'Previous branch', subtitle: null, writingSkillCardIds: [], writingSkillExampleCount: 1,
+        writingSkillSeed: 42, targetChapterId: chapter.id, variant: 'continue',
+      })
+    })
+    act(() => {
+      if (hasHistory) {
+        result.current.core.setStoryTimelineData({ novelId: 'novel-1', branchId: 'novel-1:main', chapters: [], edges: [], branchNodes: [{
+          type: 'branch_node', id: 'authored-node', nodeType: mode === 'future-jump' ? 'future_jump' : 'what_if',
+          anchorChapterNo: 1, parentNodeId: null, title: 'Authored history', subtitle: null, laneIndex: 0, colorToken: null,
+          sourceChapterNo: 1, targetChapterNo: mode === 'future-jump' ? 2 : null, continueBlockId: null,
+          whatIfSessionId: mode === 'future-jump' ? null : 'if-1', futureJumpRunId: mode === 'future-jump' ? 'jump-1' : null, status: 'active',
+        }] })
+      }
+      if (mode === 'future-jump') {
+        result.current.core.setPendingFutureJumpRewriteLaunch({
+          targetChapterId: chapter.id, targetTitle: 'Future scene', parentTimelineNodeId: null,
+          selectedText: 'Future selection', originalText: 'Future saved source', userInstruction: 'Original future direction',
+          detail: {
+            id: 'jump-1', sourceTextSnapshot: 'Source chapter', baseBranchId: 'novel-1:main', parentTimelineNodeId: null,
+            sourceContext: { nodeId: null, nodeType: 'chapter', chapterId: chapter.id, chapterNo: 1, whatIfSessionId: null },
+            targetOutlineNodeId: 'outline-1', targetOutlineChapterId: 'outline-chapter-1', sourceChapterNo: 1, targetChapterNo: 2,
+            userDirection: 'Original future direction', bridgeSummary: 'Bridge', generatedTargetText: 'Future saved source',
+            latestRevisionNo: 1, errorMessage: null, status: 'generated', createdAt: '', updatedAt: '',
+            timelineNodeId: null, latestRevision: null, revisionHistory: [], revisions: [],
+          },
+        })
+      } else {
+        result.current.core.setPendingWhatIfRewriteLaunch({
+          targetChapterId: chapter.id, variant: mode === 'what-if-continue' ? 'continue' : 'regenerate',
+          detail: {
+            id: 'if-1', novelId: 'novel-1', baseBranchId: 'novel-1:main', sourceChapterNo: 1,
+            title: 'What if', premise: 'Original premise', selectedText: 'What-if selection', originalText: 'Original source',
+            generatedText: 'What-if saved source', status: 'active', createdAt: '', updatedAt: '', deltas: [],
+          },
+        })
+      }
+    })
+    const previewBodies = () => fetchMock.mock.calls.filter(([url]) => url === '/api/rag/build-generation-context').map(([, init]) => JSON.parse(String(init?.body)))
+    await waitFor(() => expect(previewBodies()).toHaveLength(1))
+    const preview = previewBodies()[0]
+    expect(preview).toMatchObject({
+      sourceText: mode === 'future-jump' ? 'Future saved source' : 'What-if saved source',
+      selectedText: hasHistory && mode !== 'what-if-regenerate' ? '' : mode === 'future-jump' ? 'Future selection' : 'What-if selection',
+      userInstruction: result.current.core.rewritePrompt,
+      excludedGraphEdgeIds: [], excludedEvidenceIds: [],
+    })
+    if (hasHistory) expect(preview).toMatchObject({ branchContextNodeId: 'authored-node', branchContextInclusion: mode === 'what-if-regenerate' ? 'ancestors_only' : 'include_selected' })
+    else expect(preview.branchContextNodeId).toBeUndefined()
+    act(() => { void result.current.actions.handleRewrite() })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/rewrite', expect.objectContaining({ method: 'POST' })))
+    const [, request] = fetchMock.mock.calls.find(([url, init]) => url === '/api/rewrite' && init?.method === 'POST')!
+    expect(JSON.parse(String(request?.body))).toMatchObject({ sourceText: preview.sourceText, selectedText: preview.selectedText, userInstruction: preview.userInstruction, ...(hasHistory ? { branchContextNodeId: preview.branchContextNodeId, branchContextInclusion: preview.branchContextInclusion } : {}) })
+    await resolveDeferredResponse(createResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('queued') }))
   })
 
   it('ignores a delayed initial restore after an explicit same-current-chapter selection before URL hydration', async () => {
@@ -922,6 +993,31 @@ describe('useSelectionNovelStudioActions model discovery', () => {
     const requestBody = JSON.parse(String(rewriteCall?.[1]?.body)) as { contextSnapshotId?: string }
     expect(requestBody.contextSnapshotId).toBe('generation-context-1')
     await resolveDeferredResponse(createResponse, jsonResponse({ ok: true, job: buildRecoverableRewriteJob('queued') }))
+  })
+
+  it('refreshes final prompt inputs after editing instructions, toggling blocks and saving presets', async () => {
+    const restoreResponse = createDeferred<Response>()
+    const fetchMock = installRecoverableRewriteFetchMock({
+      restoreResponse,
+      contextPreviewResponse: jsonResponse({ ok: true, promptBlocks: [], graphContext: { seedEntities: [], nodes: [], edges: [], warnings: [] }, lanceEvidence: [], warnings: [], contextSnapshotId: 'snapshot' }),
+    })
+    const { result } = renderActionsHook({ currentNovelId: 'novel-1' })
+    await resolveDeferredResponse(restoreResponse, jsonResponse({ ok: true, job: null }))
+    act(() => result.current.core.setSelectionText('Fresh selection'))
+    await act(async () => { await result.current.actions.openActionMode('rewrite') })
+    await waitFor(() => expect(result.current.core.generationContext).not.toBeNull())
+    act(() => result.current.core.setContextPanelOpen(true))
+    const previewBodies = () => fetchMock.mock.calls.filter(([url]) => url === '/api/rag/build-generation-context').map(([, init]) => JSON.parse(String(init?.body)))
+    act(() => result.current.actions.handleRewritePromptChange('改成最新指令'))
+    await waitFor(() => expect(previewBodies().at(-1)?.userInstruction).toBe('改成最新指令'))
+    act(() => result.current.core.setDisabledContextBlockIds(['current-summary']))
+    await waitFor(() => expect(previewBodies().at(-1)?.disabledBlockIds).toEqual(['current-summary']))
+    const previousRevision = useNovelStore.getState().presetCompatLibrary.revision
+    const count = previewBodies().length
+    act(() => useNovelStore.setState((state) => ({ presetCompatLibrary: { ...state.presetCompatLibrary, revision: previousRevision + 1 } })))
+    await waitFor(() => expect(previewBodies()).toHaveLength(count + 1))
+    expect(previewBodies().at(-1)).toMatchObject({ mode: 'heavy', tone: 'dramatic', scope: 'chapter', disabledBlockIds: ['current-summary'], presetCompatRuntimeContext: result.current.core.buildPresetCompatRuntimeContext('rewrite') })
+    act(() => useNovelStore.setState((state) => ({ presetCompatLibrary: { ...state.presetCompatLibrary, revision: previousRevision } })))
   })
 
   it('ignores a delayed create after close and reopen', async () => {

@@ -24,6 +24,19 @@ function SwitchLanguage() {
 afterEach(cleanup)
 
 describe('context warnings', () => {
+  it('hides compatibility diagnostics but retains actionable context warnings', () => {
+    const diagnostics = [
+      'Preset field `top_k` was preserved for export but not applied to openai-compatible.',
+      'Preset image field `inline_image_quality` was preserved for export but not applied to openai-compatible.',
+      'Preset extension `SPreset` was preserved for export but not applied to openai-compatible.',
+      'Prompt formatting field `names_behavior` was preserved but not applied because runtime reason `NO_CHAT_HISTORY` blocked it on surface `roleplay`.',
+      'Prompt rule `Chat History` was active but skipped because its content was empty.',
+    ]
+    expect(buildContextWarnings({ warnings: [...diagnostics, indexWarning] }, 'zh')).toEqual([formatContextWarning(indexWarning, 'zh')])
+    render(<ContextWarningButton warnings={diagnostics} />)
+    expect(screen.queryByTestId('workspace-context-warning-toggle')).not.toBeInTheDocument()
+  })
+
   it('translates existing English and Chinese backend warnings in both directions', () => {
     expect(formatContextWarning(indexWarning, 'zh')).toContain('检索索引尚未建立或已过期')
     expect(formatContextWarning(indexWarning, 'en')).toContain('missing or outdated')

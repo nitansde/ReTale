@@ -1,4 +1,6 @@
+import type { ContextCompressionPreview } from '@/lib/context-compression'
 import { WRITING_SKILL_DEFAULTS } from '@/lib/writing-skill-defaults'
+import type { RequestPromptMessage } from '@/lib/generation-prompt-preview'
 
 export type RoleplayGenerationOptions = {
   disabledBlockIds: string[]
@@ -30,6 +32,9 @@ export function parseRoleplayGenerationOptions(value: unknown): RoleplayGenerati
 }
 
 export type RoleplayPromptPreview = {
+  compression?: ContextCompressionPreview | null
+  tokenEstimate?: number
+  requestMessages?: RequestPromptMessage[]
   ok: true
   systemPrompt: string
   userPrompt: string

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRoleplayScriptPrompt, mergeRoleplayNarrationBlocks, parseRoleplayTurn, readGeneratedRoleplayScript, type RoleplayScriptBlock } from '@/lib/roleplay-script'
+import { buildRoleplayScriptPrompt, buildRoleplayTurnPrompt, mergeRoleplayNarrationBlocks, parseRoleplayTurn, readGeneratedRoleplayScript, type RoleplayScriptBlock } from '@/lib/roleplay-script'
 const turn = { playerName: '甲', counterpartName: '乙', storyGuidance: '雨夜。', dialogue: '走吗？', maxCharacters: 100 }
 describe('roleplay scripts', () => {
   it('validates characters, input and target length settings', () => {
@@ -34,14 +34,19 @@ describe('roleplay scripts', () => {
   })
   it('guides approximate length and descriptive dialogue with a valid JSON example', () => {
     const prompt = buildRoleplayScriptPrompt(turn)
+    const task = buildRoleplayTurnPrompt(turn)
     expect(prompt).toContain('双方多轮对话和旁白')
-    expect(prompt).toContain('目标字数约为 100 字')
-    expect(prompt).toContain('允许适当超出或不足')
-    expect(prompt).toContain('自然收尾')
+    expect(task).toContain('目标字数约为 100 字')
+    expect(task).toContain('允许适当超出或不足')
+    expect(task).toContain('自然收尾')
     expect(prompt).toContain('不要跨过人物对话合并旁白')
     expect(prompt).toContain('神态、语气、心理反应或伴随的动作描写')
-    expect(prompt).toContain('"openingDialogue":"走吗？"')
-    expect(prompt).toContain('"storyGuidance":"雨夜。"')
+    expect(task).toContain('"openingDialogue":"走吗？"')
+    expect(task).toContain('"storyGuidance":"雨夜。"')
+    expect(prompt).not.toContain('目标字数')
+    expect(prompt).not.toContain('走吗？')
+    expect(task).toContain('这是故事的第一轮')
+    expect(buildRoleplayTurnPrompt(turn, true)).toContain('这是继续对话')
     const example = prompt.split('\n').find((line) => line.startsWith('只返回 JSON 对象 '))!.slice('只返回 JSON 对象 '.length, -1)
     expect(readGeneratedRoleplayScript(example, turn)?.blocks).toHaveLength(3)
   })

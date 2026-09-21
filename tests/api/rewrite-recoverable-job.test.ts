@@ -175,6 +175,19 @@ afterEach(async () => {
 })
 
 describe('recoverable rewrite jobs', () => {
+  it.each([false, true])('persists provider context errors for recovery instead of accepting incomplete output (stream=%s)', async (stream) => {
+    await createTestDatabase('retale-rewrite-provider-error')
+    vi.stubGlobal('fetch', vi.fn(async () => stream
+      ? new Response('data: {"choices":[{"delta":{"content":"partial"}}]}\n\ndata: {"error":{"message":"context_length_exceeded"}}\n\n')
+      : Response.json({ error: { message: 'context_length_exceeded' } }, { status: 400 })))
+    const { GET, POST, runRecoverableRewriteJobForTesting } = await importRewriteRoute()
+    const created = await (await POST(createRewriteRequest({ recoverableRewriteJob: true, stream }))).json()
+    await runRecoverableRewriteJobForTesting(created.job.jobId, 'novel-rewrite')
+    const restored = await (await GET(new Request(`http://localhost/api/rewrite?jobId=${created.job.jobId}&novelId=novel-rewrite`))).json()
+    expect(restored.job.status).toBe('failed')
+    expect(restored.job.errorMessage).toContain('context_length_exceeded')
+  })
+
   it.each([
     { chunks: ['{"res', 'ult":"完成。"}'], expected: '完成。', status: 'succeeded' },
     { chunks: [' ', '\n', '\t'], expected: undefined, status: 'failed' },

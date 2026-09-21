@@ -4,6 +4,7 @@ import { safeParseJson } from '@/lib/server/json-parse'
 import {
   NON_STREAM_PROVIDER_TIMEOUT_MS,
   ProviderRequestError,
+  extractProviderErrorDetail,
   parseProviderJsonResponse,
   requestProviderEndpoint,
 } from '@/lib/server/provider-request'
@@ -59,28 +60,9 @@ function normalizeToken(value: unknown) {
     : 0
 }
 
-function extractProviderErrorDetail(responseBody: string | undefined) {
-  const trimmed = responseBody?.trim()
-  if (!trimmed) return ''
-  const parsed = safeParseJson(trimmed)
-  const record = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-    ? parsed as Record<string, unknown>
-    : null
-  const nestedError = record?.error && typeof record.error === 'object' && !Array.isArray(record.error)
-    ? record.error as Record<string, unknown>
-    : null
-  const detail = [nestedError?.message, record?.message, record?.detail, record?.error]
-    .find((value): value is string => typeof value === 'string' && Boolean(value.trim()))
-  const candidate = (detail ?? (/^[^<{]{1,500}$/.test(trimmed) ? trimmed : ''))
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!candidate || /authorization\s*:|bearer\s+|api[_-]?key\s*[=:]|token\s*=/i.test(candidate)) return ''
-  return candidate.slice(0, 500)
-}
-
 function enrichProviderRequestError(error: unknown, model: string) {
   if (!(error instanceof ProviderRequestError)) return error
-  const detail = extractProviderErrorDetail(error.responseBody)
+  const detail = extractProviderErrorDetail(error.responseBody) || error.message
   const status = error.status ? `HTTP ${error.status}` : error.code
   error.message = `模型 ${model} 请求失败（${status}）${detail ? `：${detail}` : ''}`
   return error

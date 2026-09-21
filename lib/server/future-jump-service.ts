@@ -1,9 +1,11 @@
+import { getGeneratedHistory } from '@/lib/server/generated-history'
 import { InputValidationError, ResourceNotFoundError } from '@/lib/server/domain-errors'
 import { parseRequestInput } from '@/lib/server/request-validation'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { loadExplicitAuthoredContext } from '@/lib/server/authored-context'
 import { buildKnowledgeExtractionStoryState } from '@/lib/server/context-builder'
 import { writeLlmDebugLog } from '@/lib/server/llm-debug-log'
+import { extractProviderErrorDetail, throwIfProviderError } from '@/lib/server/provider-request'
 import {
   appendFutureJumpRevision,
   createFutureJumpRun as createFutureJumpRunRecord,
@@ -53,7 +55,7 @@ import type {
   WhatIfSessionDetail,
 } from '@/lib/story-branch-types'
 import type { PresetCompatPromptRuleRuntimeContext } from '@/lib/preset-compat/types'
-import { uid } from '@/lib/utils'
+import { estimateTokenCount, uid } from '@/lib/utils'
 
 const BRIDGE_SUMMARY_MIN_LENGTH = 300
 const BRIDGE_SUMMARY_MAX_LENGTH = 600
@@ -91,6 +93,7 @@ type FutureJumpMutationResult = {
 }
 
 type LoadedFutureJumpGenerationContext = {
+  generatedHistory?: ReturnType<typeof getGeneratedHistory> | null
   session: WhatIfSessionDetail | null
   sourceContext: FutureJumpSourceContext
   sourceNodeContext: {
@@ -532,6 +535,9 @@ async function requestStructuredResponse(params: {
     }
 
     if (!response.ok) {
+      const rawText = await response.text().catch(() => '')
+      const detail = extractProviderErrorDetail(rawText)
+      const message = `OpenAI-compatible HTTP ${response.status}${detail ? `: ${detail}` : ''}`
       await writeLlmDebugLog({
         folder: `future-jump/${params.stage}`,
         provider: 'openai-compatible',
@@ -539,12 +545,13 @@ async function requestStructuredResponse(params: {
         streamed: false,
         stage: params.stage,
         request: { url, body: requestBody, messages },
-        response: { status: response.status, error: `OpenAI-compatible HTTP ${response.status}` },
+        response: { status: response.status, rawText, error: message },
       })
-      throw new Error(`OpenAI-compatible HTTP ${response.status}`)
+      throw new Error(message)
     }
 
     const data = await response.json() as OpenAICompatibleChatCompletionResponse
+    throwIfProviderError(data)
     const raw = extractOpenAICompatibleText(data.choices?.[0]?.message?.content)
     if (!raw) {
       await writeLlmDebugLog({
@@ -649,7 +656,8 @@ async function requestStructuredResponse(params: {
   }
 
   if (!response.ok) {
-    const text = await response.text()
+    const text = await response.text().catch(() => '')
+    const detail = extractProviderErrorDetail(text)
     await writeLlmDebugLog({
       folder: `future-jump/${params.stage}`,
       provider: 'ollama',
@@ -659,10 +667,11 @@ async function requestStructuredResponse(params: {
       request: { url, body: requestBody, messages },
       response: { status: response.status, rawText: text, error: `Ollama HTTP ${response.status}` },
     })
-    throw new Error(`Ollama HTTP ${response.status}: ${text.slice(0, 200)}`)
+    throw new Error(`Ollama HTTP ${response.status}${detail ? `: ${detail}` : ''}`)
   }
 
   const data = await response.json() as OllamaChatResponse
+  throwIfProviderError(data)
   const raw = data.message?.content?.trim() || ''
   if (!raw) {
     await writeLlmDebugLog({
@@ -834,7 +843,7 @@ function buildBridgeUserPrompt(params: {
           '',
           '# 当前源节点已保存正文',
           `当前源节点：${params.context.sourceNodeContext.nodeTitle ?? params.context.sourceNodeContext.nodeType}`,
-          buildSourceNodeAuthoredExcerpt(params.context.sourceNodeContext),
+          params.context.generatedHistory?.content || buildSourceNodeAuthoredExcerpt(params.context.sourceNodeContext),
         ]
       : []),
     '',
@@ -873,7 +882,7 @@ function buildRewriteUserPrompt(params: {
           '',
           '# 当前源节点已保存正文',
           `当前源节点：${params.context.sourceNodeContext.nodeTitle ?? params.context.sourceNodeContext.nodeType}`,
-          buildSourceNodeAuthoredExcerpt(params.context.sourceNodeContext),
+          params.context.generatedHistory?.content || buildSourceNodeAuthoredExcerpt(params.context.sourceNodeContext),
         ]
       : []),
     '',
@@ -1010,8 +1019,12 @@ async function loadGenerationContext(params: {
     : null
 
   const latestRevision = explicitContext?.futureJumpRun?.revisions.at(-1) ?? null
+  const generatedHistory = sourceNode ? getGeneratedHistory({
+    novelId: params.novelId, branchId: params.branchId, branchContextNodeId: sourceNode.id, branchContextInclusion: 'include_selected',
+  }, params.db) : null
 
   return {
+    generatedHistory,
     session,
     sourceContext: {
       ...params.sourceContext,
@@ -1128,6 +1141,32 @@ export async function generateTargetNodeRewrite(params: {
     ...rewrite.value,
     usage: rewrite.usage,
     presetCompat,
+  }
+}
+
+export async function previewFutureJumpContext(input: {
+  novelId: string; branchId: string; sourceContext: FutureJumpSourceContext;
+  targetOutlineNodeId: string; targetOutlineChapterId: string; userDirection?: string;
+}) {
+  const db = createNovelDatabaseAccess(input.novelId)
+  const context = await loadGenerationContext({ ...input, whatIfSessionId: resolveFutureJumpWhatIfSource({ ...input, db }), db })
+  const rewriteSettings = loadStoredAISettings().rewrite
+  const runtime = applyPresetCompatCreativeRuntime({
+    surfaceId: FUTURE_JUMP_RUNTIME_SURFACE_ID,
+    providerDefaults: {
+      provider: rewriteSettings.provider,
+      openAICompatible: { config: rewriteSettings.openAICompatible, request: { temperature: 0.7 } },
+      ollama: { config: rewriteSettings.ollama, request: { temperature: 0.7 } },
+    },
+    systemPrompt: '',
+    userPrompt: buildRewriteUserPrompt({ context, bridgeSummary: '', userDirection: input.userDirection ?? '' }),
+  })
+  return {
+    compression: context.generatedHistory?.preview ?? null,
+    tokenEstimate: Math.max(
+      estimateTokenCount(`${runtime.systemPrompt}\n${runtime.userPrompt}`) + 500,
+      estimateTokenCount(buildBridgeSystemPrompt() + buildBridgeUserPrompt({ context, userDirection: input.userDirection ?? '' })),
+    ),
   }
 }
 

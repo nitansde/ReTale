@@ -378,6 +378,35 @@ describe('user-facing diagnostic redaction', () => {
 })
 
 describe('workspace user-facing errors', () => {
+  it.each(locales)('preserves safe model failures across all writing operations in %s', (locale) => {
+    const operations: WorkspaceErrorOperation[] = ['context-preview', 'rewrite-create', 'rewrite-job-failed', 'what-if-create', 'roleplay-send', 'roleplay-regenerate', 'roleplay-stream', 'future-jump-create', 'future-jump-revise']
+    for (const operation of operations) {
+      const message = resolveWorkspaceUserFacingError(operation, new Error('HTTP 400: maximum context length is 200000 tokens, requested 235000 tokens. api_key=sk-secret-value'), locale)
+      expect(message).toContain('HTTP 400')
+      expect(message).toContain('maximum context length is 200000 tokens, requested 235000 tokens')
+      expect(message).toContain(getMessage(locale, 'errors.contextWindowExceeded'))
+      expect(message).not.toContain('sk-secret-value')
+    }
+  })
+
+  it.each(['context_length_exceeded', 'prompt is too long: 210000 tokens > 200000 maximum', '输入长度超过模型上限', '上下文过长'])('recognizes context overflow: %s', (detail) => {
+    expect(resolveWorkspaceUserFacingError('rewrite-job-failed', detail)).toContain('高级上下文')
+  })
+
+  it.each(['HTTP 401: Invalid API key', 'HTTP 429: tokens per minute limit exceeded', 'Provider request timed out after 300000ms', 'fetch failed'])('keeps other failures without a misleading compression instruction: %s', (detail) => {
+    const message = resolveWorkspaceUserFacingError('roleplay-stream', detail)
+    expect(message).toContain(detail)
+    expect(message).not.toContain('高级上下文')
+  })
+
+  it('preserves token counts without revealing authentication tokens', () => {
+    const message = redactUserFacingDiagnostic('max_tokens: 200000, input_tokens: 235000, access_token: secret-value')
+    expect(message).toContain('max_tokens: 200000')
+    expect(message).toContain('input_tokens: 235000')
+    expect(message).not.toContain('secret-value')
+    expect(redactUserFacingDiagnostic('tokens: ["secret-value"]')).not.toContain('secret-value')
+  })
+
   it.each(locales)('uses the operation fallback for unknown diagnostics in %s', (locale) => {
     const operation: WorkspaceErrorOperation = 'chapter-graph-load'
     const fallback = getMessage(locale, 'workspace.chapterGraph.loadFailed')

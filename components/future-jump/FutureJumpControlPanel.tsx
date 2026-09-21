@@ -64,7 +64,7 @@ export function FutureJumpControlPanel(props: {
       </div>
 
       {props.actionError ? (
-        <div data-testid="future-jump-action-error" className="mt-4 rounded-[18px] border border-rose-400/20 bg-rose-500/10 p-3 text-sm leading-6 text-rose-100">
+        <div role="alert" data-testid="future-jump-action-error" className="mt-4 whitespace-pre-wrap break-words rounded-[18px] border border-rose-400/20 bg-rose-500/10 p-3 text-sm leading-6 text-rose-100">
           {props.actionError}
         </div>
       ) : null}

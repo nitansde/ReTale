@@ -467,7 +467,7 @@ describe('FutureMapOverlay', () => {
     const fetchMock = vi.fn<typeof fetch>()
     fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify(futureMapPayload), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: '生成失败' }), { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'HTTP 400: context_length_exceeded, requested 235000 tokens' }), { status: 500 }))
     vi.stubGlobal('fetch', fetchMock)
 
     render(
@@ -495,7 +495,8 @@ describe('FutureMapOverlay', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert')).toBe(screen.getByTestId('future-map-create-error'))
       expect(screen.getByTestId('future-map-create-error')).toHaveTextContent('创建 Future Jump 失败，请稍后重试。')
-      expect(screen.getByTestId('future-map-create-error')).not.toHaveTextContent('生成失败')
+      expect(screen.getByTestId('future-map-create-error')).toHaveTextContent('HTTP 400: context_length_exceeded, requested 235000 tokens')
+      expect(screen.getByTestId('future-map-create-error')).toHaveTextContent('高级上下文')
     })
   })
 

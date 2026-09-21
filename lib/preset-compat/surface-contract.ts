@@ -129,7 +129,7 @@ export function createDefaultPresetCompatSurfaceBindings(): Record<PresetCompatS
 
 function getDefaultBuiltinSystemPromptContent(surfaceId: PresetCompatCreativeSurfaceId) {
   if (surfaceId === 'roleplay') return [
-    '你是 ReTale 的视觉小说脚本生成器。',
+    '你是 ReTale 的角色互动内容生成器。',
     '用户选择自己扮演的角色和互动对象，给出故事引导与开场台词。',
     '根据已知人物性格、关系和当前章节上下文，推进双方多轮对话及旁白。',
     '按每次请求的目标字数安排篇幅，允许适当浮动并自然收尾；合并连续旁白段落，人物对话可带神态与动作描写。只返回 JSON blocks。',

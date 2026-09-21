@@ -8,6 +8,13 @@ const LEGACY_WARNING_KEYS: Record<string, TranslationKey> = {
   'Graph subgraph 请求缺少 entityIds。': 'contextWarning.noEntitySelection',
 }
 
+// Compatibility/export diagnostics belong in runtime metadata, not the writing UI.
+export function isUserFacingContextWarning(warning: string) {
+  return !/^Preset (?:field|image field|extension) `[^`]+` was preserved for export but not applied to /.test(warning)
+    && !/^Prompt formatting field `[^`]+` was preserved but not applied because runtime reason /.test(warning)
+    && !/^Prompt rule `[^`]+` was active but skipped because its content was empty\./.test(warning)
+}
+
 // Translate at render time so cached context also follows the current UI language.
 export function formatContextWarning(warning: string, locale: Locale): string {
   const key = LEGACY_WARNING_KEYS[warning.trim()]
@@ -47,7 +54,7 @@ export function buildContextWarnings({ warnings, overview }: {
   if (retrieval?.status !== 'full' && retrieval?.task?.status === 'paused') add('contextWarning.retrievalPaused')
 
   for (const warning of warnings) {
-    if (!warning.trim()) continue
+    if (!warning.trim() || !isUserFacingContextWarning(warning)) continue
     // Prefer the more specific live status over a generic cached index warning.
     if (LEGACY_WARNING_KEYS[warning.trim()] === 'contextWarning.retrievalUnavailable'
       && (retrieval?.status === 'pending' || retrieval?.status === 'partial')) continue

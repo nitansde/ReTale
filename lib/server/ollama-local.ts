@@ -1,3 +1,4 @@
+import { resolveRewriteProviderPrompts } from '@/lib/rewrite-provider-prompt'
 import {
   buildCharacterDescriptionDelta,
   normalizeCharacterRoleCardProfile,
@@ -2482,20 +2483,7 @@ export async function generateRewriteWithOllama(
     return { enabled: false, error: config.reason ?? 'Ollama rewrite config not set' }
   }
 
-  const user = {
-    task: 'rewrite',
-    mode: input.mode,
-    tone: input.tone,
-    scope: input.scope,
-    keepCanon: input.keepCanon,
-    autoContinue: input.autoContinue,
-    thoughtLevel: input.thoughtLevel,
-    prompt: input.prompt,
-    sourceText: input.sourceText,
-    outputSchema: {
-      result: 'rewritten text',
-    },
-  }
+  const prompts = resolveRewriteProviderPrompts(input)
 
   try {
     const response = await requestOllamaChat({
@@ -2513,14 +2501,9 @@ export async function generateRewriteWithOllama(
       messages: [
         {
           role: 'system',
-          content: input.systemPrompt?.trim() || [
-            'You are a novel rewriting assistant.',
-            'Return JSON only.',
-            'Produce one rewrite result in Chinese.',
-            'The result should be a coherent prose passage.',
-          ].join(' '),
+          content: prompts.systemPrompt,
         },
-        { role: 'user', content: input.userPrompt?.trim() || JSON.stringify(user) },
+        { role: 'user', content: prompts.userPrompt },
       ],
       requestOptions: input.requestOptions,
       debug: { folder: 'rewrite', stage: 'rewrite' },

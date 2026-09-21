@@ -11,6 +11,7 @@ import { WorkspaceReaderToolbar } from '@/components/workspace/WorkspaceReaderTo
 import { WorkspaceRewriteGuide } from '@/components/workspace/WorkspaceRewriteGuide'
 import { WorkspaceAISetupPrompt } from '@/components/workspace/WorkspaceAISetupPrompt'
 import { WorkspaceContextPresetSelect } from '@/components/workspace/WorkspaceContextPresetSelect'
+import { ContextCompressionControl, ContextCompressionWarning } from './ContextCompressionControl'
 import { ContextWarningButton } from '@/components/graph/context-warning-button'
 import { BookSearchDialog } from '@/components/workspace/BookSearchDialog'
 import StarterKit from '@tiptap/starter-kit'
@@ -326,6 +327,7 @@ export function SelectionNovelStudio() {
   } = actions
   const isContinueBlockContinuation = rewriteLaunchSource === 'continue_block'
     && activeContinueBlockRewriteContext?.variant === 'continue'
+  const [contextCompressing, setContextCompressing] = useState(false)
   const desktop = useDesktopWorkspaceLayout()
   const [searchNovelId, setSearchNovelId] = useState<string | null>(null)
   const [settingsInitialSection, setSettingsInitialSection] = useState<'appearance' | 'models'>('appearance')
@@ -1013,7 +1015,7 @@ export function SelectionNovelStudio() {
           className="mx-auto max-w-3xl sm:mb-6 sm:rounded-[24px]"
           footer={activeMode === 'rewrite' ? (
             <div className="flex flex-wrap items-center gap-2" data-testid="rewrite-actions">
-              <button onClick={handleRewrite} disabled={rewriteFlow.loading || saveContinueBlockPending || presetCompatLibraryLoading} className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-violet-500 px-4 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60">
+              <button onClick={handleRewrite} disabled={contextCompressing || rewriteFlow.loading || saveContinueBlockPending || presetCompatLibraryLoading} className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-violet-500 px-4 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60">
                 {rewriteFlow.loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {t('workspace.shell.generateVersion')}
               </button>
               {rewriteFlow.loading && rewriteFlow.jobId ? <button onClick={handleAbortRewriteGeneration} className="min-h-11 rounded-xl px-3 text-sm text-rose-200">{t('workspace.action.rewriteAbortedToast')}</button> : null}
@@ -1073,6 +1075,8 @@ export function SelectionNovelStudio() {
                     </div>
                   </div>
                 </div>
+
+                <ContextCompressionWarning preview={generationContext?.compression} tokenEstimate={generationContext?.tokenEstimate ?? activeContextTokenEstimate} />
 
                 {rewriteLaunchSource === 'future_jump' ? (
                   <div className="rounded-[22px] border border-amber-300/18 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100">
@@ -1179,6 +1183,9 @@ export function SelectionNovelStudio() {
 
                     {contextPanelOpen ? (
                       <div className="pt-3" data-testid="workspace-context-panel">
+                        <div className="mb-3">
+                          <ContextCompressionControl preview={generationContext?.compression} disabled={rewriteFlow.loading || contextPreviewLoading} onBusyChange={setContextCompressing} onContextChanged={async () => { core.setGenerationContext(null); await handleRefreshContextReview({ preserveDisabledBlocks: true }) }} />
+                        </div>
                         {currentNovelId ? <WorkspaceContextPresetSelect key={currentNovelId} novelId={currentNovelId} disabled={rewriteFlow.loading || saveContinueBlockPending} onOpenLibrary={() => setPresetCompatLibraryOpen(true)} /> : null}
                         <GraphReviewPanel
                           context={{
@@ -1271,7 +1278,7 @@ export function SelectionNovelStudio() {
                 ) : null}
 
                 {saveContinueBlockError ? <p data-testid="continue-block-save-error" className="text-sm text-rose-300">{saveContinueBlockError}</p> : null}
-                {rewriteFlow.error ? <p data-testid="rewrite-flow-error" className="text-sm text-rose-300">{rewriteFlow.error}</p> : null}
+                {rewriteFlow.error ? <p role="alert" data-testid="rewrite-flow-error" className="whitespace-pre-wrap break-words text-sm text-rose-300">{rewriteFlow.error}</p> : null}
 
                 {rewriteFlow.loading || selectedRewriteCandidate || previewRewriteContent ? <div className="grid gap-3 lg:grid-cols-[0.9fr_1.4fr]" data-testid="rewrite-result">
                   <div className="hidden space-y-3 lg:block">

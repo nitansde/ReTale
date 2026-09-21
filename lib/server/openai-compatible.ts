@@ -1,3 +1,4 @@
+import { resolveRewriteProviderPrompts } from '@/lib/rewrite-provider-prompt'
 import type { AIScenarioKey, OpenAICompatibleProviderSettings } from '@/lib/types'
 import type { ChapterKnowledgeExtraction } from '@/lib/story-knowledge'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
@@ -14,6 +15,7 @@ import {
   parseProviderJsonResponse,
   requestProviderEndpoint,
   STREAM_PROVIDER_IDLE_TIMEOUT_MS,
+  throwIfProviderError,
 } from '@/lib/server/provider-request'
 import {
   buildKnowledgeExtractionPrompt,
@@ -333,6 +335,7 @@ function extractStreamPayloadText(payload: string) {
 
   const parsed = safeParseJson(trimmed)
   if (parsed !== null) {
+    throwIfProviderError(parsed)
     return extractChatCompletionResponseText(parsed)
   }
 
@@ -513,34 +516,16 @@ export async function generateRewriteWithOpenAICompatible(
     return { enabled: false, error: 'OpenAI-compatible config not set' }
   }
 
-  const user = {
-    task: 'rewrite',
-    mode: input.mode,
-    tone: input.tone,
-    scope: input.scope,
-    keepCanon: input.keepCanon,
-    autoContinue: input.autoContinue,
-    thoughtLevel: input.thoughtLevel,
-    prompt: input.prompt,
-    sourceText: input.sourceText,
-    outputSchema: {
-      result: 'rewritten text',
-    },
-  }
+  const prompts = resolveRewriteProviderPrompts(input)
 
   const timeoutMs = NON_STREAM_PROVIDER_TIMEOUT_MS
   const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`
   const messages: OpenAICompatibleChatMessage[] = [
     {
       role: 'system',
-      content: input.systemPrompt?.trim() || [
-        'You are a novel rewriting assistant.',
-        'Return JSON only.',
-        'Produce one rewrite result in Chinese.',
-        'The result should be a coherent prose passage.',
-      ].join(' '),
+      content: prompts.systemPrompt,
     },
-    { role: 'user', content: input.userPrompt?.trim() || JSON.stringify(user) },
+    { role: 'user', content: prompts.userPrompt },
   ]
   const requestBody = {
     model: config.model,
@@ -729,6 +714,7 @@ export async function streamRewriteWithOpenAICompatible(
         const consumeLine = (rawLine: string) => {
           const line = rawLine.trim()
           if (!line) return
+          if (/^(?:event:|id:|retry:|:)/.test(line)) return
 
           if (line.startsWith('data:')) {
             consumePayload(line.slice(5).trim())
@@ -753,6 +739,13 @@ export async function streamRewriteWithOpenAICompatible(
               consumeLine(rawLine)
             }
           }
+
+          const finalDecoderChunk = decoder.decode()
+          upstreamText += finalDecoderChunk
+          buffer += finalDecoderChunk
+          if (buffer.trim()) consumeLine(buffer)
+          if (!rawText && upstreamText.trim().startsWith('{')) consumePayload(upstreamText)
+          if (!rawText) throw new Error('Provider returned empty content.')
         } catch (error) {
           await writeLlmDebugLog({
             folder: 'rewrite',
@@ -773,21 +766,9 @@ export async function streamRewriteWithOpenAICompatible(
           controller.error(error)
           return
         } finally {
+          await reader.cancel().catch(() => undefined)
+          reader.releaseLock()
           cleanup()
-        }
-
-        const finalDecoderChunk = decoder.decode()
-        if (finalDecoderChunk) {
-          upstreamText += finalDecoderChunk
-          buffer += finalDecoderChunk
-        }
-
-        if (buffer.trim()) {
-          consumeLine(buffer)
-        }
-
-        if (!rawText) {
-          consumePayload(upstreamText)
         }
 
         await writeLlmDebugLog({

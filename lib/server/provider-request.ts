@@ -1,4 +1,5 @@
 import { writeLlmDebugLog, type LlmDebugLogParams } from '@/lib/server/llm-debug-log'
+import { redactUserFacingDiagnostic } from '@/lib/workspace-user-facing-errors'
 
 type ProviderName = 'openai-compatible' | 'ollama'
 
@@ -38,6 +39,31 @@ export class ProviderRequestError extends Error {
 export const STREAM_PROVIDER_IDLE_TIMEOUT_MS = 180000
 export const NON_STREAM_PROVIDER_TIMEOUT_MS = 300000
 
+/** Keep the provider's explanation without returning its entire response or credentials. */
+export function extractProviderErrorDetail(responseBody: string | undefined) {
+  const body = responseBody?.trim()
+  if (!body) return ''
+  let detail = ''
+  try {
+    const parsed = JSON.parse(body)
+    detail = [parsed?.error?.message, parsed?.error?.detail, parsed?.message, parsed?.detail, parsed?.error, parsed?.error?.code, parsed?.error?.type]
+      .find((value): value is string => typeof value === 'string' && Boolean(value.trim())) ?? ''
+    const code = parsed?.error?.code
+    if (typeof code === 'string' && code.trim() && !detail.includes(code)) detail += ` (${code})`
+  } catch {
+    // Gateways may return plain text. Do not dump an HTML error page or broken JSON.
+    if (!/^(?:<|\{|\[)/.test(body)) detail = body
+  }
+  return redactUserFacingDiagnostic(detail).replace(/\s+/g, ' ').trim()
+}
+
+export function throwIfProviderError(payload: unknown) {
+  if (!payload || typeof payload !== 'object' || !('error' in payload) || !payload.error) return
+  const responseBody = JSON.stringify(payload)
+  const detail = extractProviderErrorDetail(responseBody)
+  throw new ProviderRequestError('http', `Provider request failed${detail ? `: ${detail}` : ''}`, undefined, responseBody)
+}
+
 function isAbortError(error: unknown) {
   return error instanceof Error && error.name === 'AbortError'
 }
@@ -75,7 +101,8 @@ function buildRequestError(params: {
     return new ProviderRequestError('timeout', `${params.action} timed out after ${params.timeoutMs}ms`)
   }
 
-  return new ProviderRequestError('network', `${params.action} failed`)
+  const detail = params.error instanceof Error ? redactUserFacingDiagnostic(params.error.message) : ''
+  return new ProviderRequestError('network', `${params.action} failed${detail ? `: ${detail}` : ''}`)
 }
 
 export async function requestProviderEndpoint(params: {
@@ -138,9 +165,10 @@ export async function requestProviderEndpoint(params: {
 
     if (!response.ok) {
       const rawText = await response.text().catch(() => '')
+      const detail = extractProviderErrorDetail(rawText)
       const error = new ProviderRequestError(
         'http',
-        `${params.action} failed with HTTP ${response.status}`,
+        `${params.action} failed with HTTP ${response.status}${detail ? `: ${detail}` : ''}`,
         response.status,
         rawText,
       )
@@ -264,7 +292,7 @@ export async function parseProviderJsonResponse<T>(params: {
   invalidJsonMessage: string
   emptyBodyMessage?: string
 }) {
-  const rawText = await params.response.text().catch(() => '')
+  const rawText = await params.response.text()
   if (!rawText.trim()) {
     const error = new ProviderRequestError('empty', params.emptyBodyMessage ?? 'Provider returned an empty response body')
     await writeLlmDebugLog({
@@ -283,6 +311,7 @@ export async function parseProviderJsonResponse<T>(params: {
 
   try {
     const data = JSON.parse(rawText) as T
+    throwIfProviderError(data)
     await writeLlmDebugLog({
       folder: params.debug?.folder ?? params.provider,
       provider: params.provider,
@@ -298,7 +327,8 @@ export async function parseProviderJsonResponse<T>(params: {
       data,
       rawText,
     }
-  } catch {
+  } catch (cause) {
+    if (cause instanceof ProviderRequestError) throw cause
     const error = new ProviderRequestError('invalid_json', params.invalidJsonMessage)
     await writeLlmDebugLog({
       folder: params.debug?.folder ?? params.provider,

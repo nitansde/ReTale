@@ -230,9 +230,9 @@ function trimContextBlocksToBudget(blocks: readonly RouteContextBlock[], budget:
     let removeWeight = Number.POSITIVE_INFINITY
 
     for (let index = remaining.length - 1; index >= 0; index -= 1) {
-      // RP history is the current scene, not optional chapter background. If it
-      // alone exceeds the budget, report degradation instead of resetting the story.
-      if (remaining[index].id === 'roleplay-history') continue
+      // Generated history carries the current story. Keep it available for
+      // explicit compression instead of silently dropping it at the budget.
+      if (['roleplay-history', 'branch-lineage-full-text'].includes(remaining[index].id)) continue
       const weight = weightByPriority[remaining[index].priority]
       if (weight <= removeWeight) {
         removeWeight = weight

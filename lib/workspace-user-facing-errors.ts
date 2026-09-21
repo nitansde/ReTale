@@ -74,6 +74,12 @@ function isSensitiveDiagnosticKey(key: string) {
     || normalizedKey.includes('session')
 }
 
+function isNumericTokenCount(key: string, value: string) {
+  const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, '')
+  return /^(?:(?:max|maximum|input|output|prompt|completion|requested|total|context|allowed)?tokens|tokenlimit|tokencount|maxtokencount|numtokens)$/.test(normalizedKey)
+    && /^\d+(?:\.\d+)?(?=[,;\s}\]]|$)/.test(value)
+}
+
 function redactSensitiveValues(value: string) {
   const keyPattern = /(?:(?:[A-Za-z_$][A-Za-z0-9_$]*\s*)?\[\s*(["'`])([A-Za-z][A-Za-z0-9_. -]*)\1\s*\]|\\(["'`])([A-Za-z][A-Za-z0-9_. -]*)\\\3|(["'`])([A-Za-z][A-Za-z0-9_. -]*)\5|([A-Za-z][A-Za-z0-9_. -]*?))(\s*(?:=>|[:=])\s*|\s*,\s*)/g
   let redacted = ''
@@ -84,7 +90,8 @@ function redactSensitiveValues(value: string) {
     const key = match[2] ?? match[4] ?? match[6] ?? match[7]
     const tupleEntry = match[8].includes(',')
     const quotedKey = Boolean(match[1] || match[3] || match[5])
-    if (!isSensitiveDiagnosticKey(key) || (tupleEntry && !quotedKey)) {
+    // Preserve numeric model limits, while still redacting credentials named "tokens".
+    if (isNumericTokenCount(key, value.slice(keyPattern.lastIndex)) || !isSensitiveDiagnosticKey(key) || (tupleEntry && !quotedKey)) {
       match = keyPattern.exec(value)
       continue
     }
@@ -310,6 +317,23 @@ const WORKSPACE_OPERATION_MESSAGE_KEYS = {
 
 export type WorkspaceErrorOperation = keyof typeof WORKSPACE_OPERATION_MESSAGE_KEYS
 
+const WRITING_ERROR_OPERATIONS = new Set<WorkspaceErrorOperation>([
+  'context-preview', 'rewrite-create', 'rewrite-job-failed', 'what-if-create',
+  'roleplay-send', 'roleplay-regenerate', 'roleplay-stream',
+  'future-jump-create', 'future-jump-revise',
+])
+
+function isContextWindowError(message: string) {
+  return [
+    /context[_\s-]*(?:length|window)?[^\n]{0,100}(?:exceed|limit|maximum|too (?:large|long)|overflow)/i,
+    /(?:exceed|maximum|too (?:large|long)|overflow)[^\n]{0,100}context/i,
+    /(?:prompt|input|sequence)(?: length)?(?: is)? too (?:large|long)/i,
+    /(?:prompt|input|sequence)[^\n]{0,60}(?:length|tokens)[^\n]{0,60}(?:exceed|maximum|limit)/i,
+    /(?:超出|超过)[^\n]{0,60}(?:上下文|输入长度|提示词长度)/,
+    /(?:上下文|输入|提示词)[^\n]{0,60}(?:过长|过大|超限|上限|超出|超过)/,
+  ].some((pattern) => pattern.test(message))
+}
+
 function trimMessage(message: string) {
   return message.trim()
 }
@@ -353,8 +377,13 @@ export function resolveWorkspaceUserFacingError(
   error: unknown,
   locale: Locale = 'zh'
 ) {
-  const key = ERROR_MESSAGE_KEYS[extractErrorMessage(error)] ?? WORKSPACE_OPERATION_MESSAGE_KEYS[operation]
-  return getMessage(locale, key)
+  const message = extractErrorMessage(error)
+  const knownKey = ERROR_MESSAGE_KEYS[message]
+  const fallback = getMessage(locale, knownKey ?? WORKSPACE_OPERATION_MESSAGE_KEYS[operation])
+  if (knownKey || !WRITING_ERROR_OPERATIONS.has(operation)) return fallback
+  const diagnostic = redactUserFacingDiagnostic(message)
+  if (!diagnostic) return fallback
+  return `${fallback}\n${diagnostic}${isContextWindowError(message) ? `\n${getMessage(locale, 'errors.contextWindowExceeded')}` : ''}`
 }
 
 export function toUserFacingWorkspaceError(error: unknown, locale: Locale = 'zh') {

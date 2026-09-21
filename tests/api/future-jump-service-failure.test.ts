@@ -85,6 +85,31 @@ afterEach(databaseFixture.wrap(() => {
 }))
 
 describe('future-jump-service failure', () => {
+  it.each(['openai-compatible', 'ollama'] as const)('preserves %s context-overflow details in both the failure and saved run', databaseFixture.wrap(async (provider) => {
+    vi.doMock('@/lib/server/ai-settings', () => ({ loadStoredAISettings: () => ({ rewrite: {
+      provider,
+      openAICompatible: { baseUrl: 'https://example.test/v1', apiKey: 'test-key', model: 'test-model' },
+      ollama: { baseUrl: 'http://127.0.0.1:11434', model: 'test-model' },
+    } }) }))
+    const tempDatabase = createTempDatabaseCopy('retale-future-jump-context-failure')
+    cleanups.push(tempDatabase.cleanup)
+    const database = initializeDatabase(new DatabaseSync(tempDatabase.dbPath))
+    databaseFixture.database = database
+    seedFailureFixture(database)
+    novelDatabaseDisposers.push(registerNovelDatabaseFixture(database, ['novel-001']))
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: { message: 'maximum context length is 200000 tokens, requested 235000 tokens' } }, { status: 400 })))
+    const service = await import('@/lib/server/future-jump-service')
+    await expect(service.generateFutureJump({
+      novelId: 'novel-001', branchId: 'novel-001:main',
+      sourceContext: { nodeId: 'if_fixture_001', nodeType: 'what_if', chapterId: 'chapter-10', chapterNo: 10, whatIfSessionId: 'what-if-001' },
+      targetOutlineNodeId: 'outline-100', targetOutlineChapterId: 'outline-anchor-100',
+    })).rejects.toThrow('maximum context length is 200000 tokens, requested 235000 tokens')
+    const failed = database.prepare('SELECT status, error_message FROM future_jump_runs LIMIT 1').get() as { status: string; error_message: string }
+    expect(failed.status).toBe('failed')
+    expect(failed.error_message).toContain('HTTP 400')
+    expect(failed.error_message).toContain('requested 235000 tokens')
+  }))
+
   it('retries exactly once on bridge validation failure then marks the run failed without creating timeline nodes', databaseFixture.wrap(async () => {
     vi.doMock('@/lib/server/ai-settings', () => ({
       loadStoredAISettings: () => ({

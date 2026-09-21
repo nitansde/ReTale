@@ -1,9 +1,10 @@
+import type { ContextCompressionPreview } from '@/lib/context-compression'
 import { createHash } from 'node:crypto'
 import { findSelectionSpan, inferSelectionRange, splitContextLines } from '@/lib/selection-range'
 import { buildChapterScopedGraphContext, buildGraphAwareContext } from '@/lib/server/graph-context'
 import { loadExplicitAuthoredContext, type ExplicitAuthoredContext } from '@/lib/server/authored-context'
 import { loadEntityStatesByEntityIds } from '@/lib/server/graph-store'
-import { findStoryTimelineNodeById } from '@/lib/server/story-timeline-store'
+import { getGeneratedHistory } from '@/lib/server/generated-history'
 import type { GraphAwareResult } from '@/lib/server/graph-types'
 import { normalizeBranchId } from '@/lib/server/knowledge-store'
 import { searchLanceEvidence, type RetrievalDocSourceType } from '@/lib/server/retrieval-index'
@@ -19,7 +20,6 @@ import {
   normalizeCharacterRoleCardProfile,
   type CharacterRoleCardProfile,
 } from '@/lib/story-knowledge'
-import type { StoryTimelineNodeRecord } from '@/lib/story-branch-types'
 import type { ProductSurfaceId } from '@/lib/types'
 import { estimateTokenCount, uniqueStrings } from '@/lib/utils'
 import { buildRoleplayContextBlock, type RoleplayContextMessage } from '@/lib/roleplay-context'
@@ -86,6 +86,7 @@ export type GenerationContextEvidence = {
 }
 
 export type GenerationContextBuildResult = {
+  compression?: ContextCompressionPreview | null
   novelId: string
   branchId: string
   chapterId: string
@@ -121,6 +122,7 @@ export type GenerationContextRagCacheUsage = {
 }
 
 export type GenerationContextBuildOptions = {
+  writingSkillBundle?: ReturnType<typeof resolveWritingSkillRuntimes> | null
   cachedRagArtifacts?: GenerationContextRagArtifacts | null
   onRagArtifacts?: (
     artifacts: GenerationContextRagArtifacts,
@@ -503,55 +505,29 @@ function buildNeighborhoodExcerpt(text: string, maxLines = 10) {
     .join(' ')
 }
 
-function collectBranchLineageNodes(nodeId: string, inclusion: BranchLineageInclusion) {
-  const lineage: StoryTimelineNodeRecord[] = []
-  const visited = new Set<string>()
-  let current = findStoryTimelineNodeById(nodeId)
-
-  while (current && !visited.has(current.id)) {
-    visited.add(current.id)
-    lineage.push(current)
-    current = current.parentNodeId ? findStoryTimelineNodeById(current.parentNodeId) : null
-  }
-
-  return lineage
-    .reverse()
-    .filter((node) => node.nodeType === 'rewrite' || node.nodeType === 'continue_block')
-    .filter((node) => inclusion === 'include_selected' || node.id !== nodeId)
-}
-
 function buildBranchLineageContextBlock(params: {
+  novelId: string
+  branchId: string
   chapterText: string
   branchContextNodeId?: string
   branchContextInclusion?: BranchLineageInclusion
 }) {
-  const nodeId = params.branchContextNodeId?.trim()
-  if (!nodeId) return null
-
-  const chapterText = params.chapterText.trim()
-  if (!chapterText) return null
-
-  const lineageNodes = collectBranchLineageNodes(nodeId, params.branchContextInclusion ?? 'ancestors_only')
-  if (!lineageNodes.length) return null
-
-  const lines: string[] = ['原始章节正文：', chapterText]
-
-  for (const node of lineageNodes) {
-    const nodeText = node.latestText?.trim() || node.currentText?.trim() || node.originalText?.trim() || ''
-    if (!nodeText) continue
-    const sectionLabel = node.nodeType === 'rewrite' ? 'Rewrite 根节点全文' : 'Continue 祖先全文'
-    const nodeLabel = node.readableLabel?.trim() || node.title.trim() || node.id
-    lines.push('', `${sectionLabel}（${nodeLabel}）：`, nodeText)
-  }
-
-  if (lines.length <= 2) return null
-
+  if (!params.branchContextNodeId) return null
+  const history = getGeneratedHistory({
+    novelId: params.novelId, branchId: params.branchId,
+    branchContextNodeId: params.branchContextNodeId,
+    branchContextInclusion: params.branchContextInclusion,
+  })
+  if (!history.content) return null
   return {
-    id: 'branch-lineage-full-text',
-    label: '当前分支谱系全文',
-    enabled: true,
-    priority: 'highest' as const,
-    content: renderBlock('当前分支谱系全文', lines),
+    compression: history.preview,
+    block: {
+      id: 'branch-lineage-full-text',
+      label: '当前分支生成历史',
+      enabled: true,
+      priority: 'highest' as const,
+      content: renderBlock('当前分支谱系全文', ['原始章节正文：', params.chapterText.trim(), '', history.content]),
+    },
   }
 }
 
@@ -1152,7 +1128,9 @@ export async function buildGenerationContext(
   const roleplayContextBlock = effectiveOperationType === 'roleplay'
     ? buildRoleplayContextBlock(request.roleplayMessages)
     : null
-  const writingSkillBundle = request.writingSkillCardIds?.length
+  const writingSkillBundle = options.writingSkillBundle !== undefined
+    ? options.writingSkillBundle
+    : request.writingSkillCardIds?.length
     ? resolveWritingSkillRuntimes({
         cardIds: request.writingSkillCardIds,
         count: request.writingSkillExampleCount,
@@ -1260,11 +1238,13 @@ export async function buildGenerationContext(
     request.selectedText,
     selectionRange.lineEnd,
   )
-  const branchLineageContextBlock = buildBranchLineageContextBlock({
+  const branchLineage = buildBranchLineageContextBlock({
+    novelId: request.novelId, branchId,
     chapterText: storedChapterText,
     branchContextNodeId: request.branchContextNodeId,
     branchContextInclusion: request.branchContextInclusion,
   })
+  const branchLineageContextBlock = branchLineage?.block ?? null
   const isContinuationTask = isContinuationRewriteTask({
     selectedText: request.selectedText,
     hasContinuationSource: Boolean(request.branchContextNodeId),
@@ -1673,6 +1653,7 @@ export async function buildGenerationContext(
     graphContext,
     lanceEvidence,
     tokenEstimate: estimateTokenCount(assembledContext),
+    compression: branchLineage?.compression ?? null,
   }
 }
 

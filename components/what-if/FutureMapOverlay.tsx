@@ -1,7 +1,9 @@
 "use client"
 
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowRight, Check, GitBranch, LoaderCircle, Sparkles, X } from 'lucide-react'
+import { ArrowRight, Check, ChevronDown, GitBranch, LoaderCircle, Sparkles, X } from 'lucide-react'
+import { ContextCompressionControl, ContextCompressionWarning } from '@/components/workspace/ContextCompressionControl'
+import type { ContextCompressionPreview } from '@/lib/context-compression'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { useI18n } from '@/lib/i18n/provider'
 import { cn } from '@/lib/utils'
@@ -175,6 +177,9 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
   const [userDirection, setUserDirection] = useState('')
   const [createError, setCreateError] = useState('')
   const [creating, setCreating] = useState(false)
+  const [compressing, setCompressing] = useState(false)
+  const [contextRevision, setContextRevision] = useState(0)
+  const [contextPreview, setContextPreview] = useState<{ key: string; compression: ContextCompressionPreview | null; tokenEstimate: number } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -239,7 +244,21 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
     return directChapterOptions.filter((option) => option.event.trackKey === selectedTrackKey)
   }, [directChapterOptions, selectedTrackKey])
   const selectedChapter = chapterOptions.find((chapter) => chapter.id === selectedChapterId) ?? null
-  const canConfirm = Boolean(selectedEvent && selectedChapter) && !creating
+  const canConfirm = Boolean(selectedEvent && selectedChapter) && !creating && !compressing
+  const contextRequest = JSON.stringify({ novelId, branchId, sourceContext, targetOutlineNodeId: selectedEventId, targetOutlineChapterId: selectedChapterId, userDirection })
+  const contextKey = `${contextRevision}:${contextRequest}`
+  useEffect(() => {
+    if (!selectedEventId || !selectedChapterId) return
+    const controller = new AbortController()
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch('/api/future-jump/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: contextRequest, signal: controller.signal })
+        const preview = await response.json()
+        if (response.ok && preview.ok && !controller.signal.aborted) setContextPreview({ ...preview, key: contextKey })
+      } catch { /* Generation still reports actionable source/model errors. */ }
+    }, 250)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [contextRequest, contextKey, selectedEventId, selectedChapterId])
 
   const handleTrackSelect = (trackKey: string) => {
     setSelectedTrackKey(trackKey)
@@ -542,6 +561,13 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                     </div>
                   </div>
 
+                  <ContextCompressionWarning preview={contextPreview?.key === contextKey ? contextPreview.compression : null} tokenEstimate={contextPreview?.key === contextKey ? contextPreview.tokenEstimate : null} />
+                  {contextPreview?.key === contextKey && contextPreview.compression?.totalChapters ? <details className="group mt-4 border-b border-line/10 pb-3">
+                    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm text-zinc-300 outline-none focus-visible:ring-2 focus-visible:ring-violet-400 [&::-webkit-details-marker]:hidden">
+                      {t('workspace.shell.advancedContext')}<ChevronDown aria-hidden="true" className="h-4 w-4 transition-transform group-open:rotate-180" />
+                    </summary>
+                    <ContextCompressionControl preview={contextPreview.compression} disabled={creating} onBusyChange={setCompressing} onContextChanged={() => setContextRevision((value) => value + 1)} />
+                  </details> : null}
                   <label className="mt-4 block">
                     <span className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">Optional direction</span>
                     <textarea
@@ -554,7 +580,7 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
                   </label>
 
                   {createError ? (
-                    <div role="alert" data-testid="future-map-create-error" className="mt-4 rounded-[20px] border border-rose-400/20 bg-rose-500/10 p-3 text-sm leading-6 text-rose-100">{createError}</div>
+                    <div role="alert" data-testid="future-map-create-error" className="mt-4 whitespace-pre-wrap break-words rounded-[20px] border border-rose-400/20 bg-rose-500/10 p-3 text-sm leading-6 text-rose-100">{createError}</div>
                   ) : null}
 
                   <button

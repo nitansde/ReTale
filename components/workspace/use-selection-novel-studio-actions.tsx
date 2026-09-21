@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useRef, type ReactNode, type SetStateAction } from 'react'
+import { useEffect, useEffectEvent, useRef, type ReactNode, type SetStateAction } from 'react'
+import { useNovelStore } from '@/store/novel-store'
 import type { GraphEdgeEditDraft, GenerationContextBuildData, GraphReviewControls } from '@/components/graph/types'
 import { WorkspaceKnowledgeControls } from '@/components/workspace/WorkspaceKnowledgeControls'
 import { WorkspaceSelectionActions } from '@/components/workspace/WorkspaceSelectionActions'
@@ -105,7 +106,9 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
   const openAICompatibleModelRequestControllersRef = useRef<Record<AIScenarioKey, AbortController | null>>({ rewrite: null, knowledgeExtraction: null, embeddings: null })
   const novelDeletionInFlightRef = useRef(false)
   const whatIfCreateInFlightRef = useRef(false)
+  const authoredHistoryContextRef = useRef<ReturnType<typeof buildContinueBlockLineageRequestContext>>({})
   const rewriteCreateRequestSequenceRef = useRef(0)
+  const contextPreviewInputsKeyRef = useRef<string | null>(null)
   const contextPreviewRequestSequenceRef = useRef(0)
   const contextPreviewPromiseRef = useRef<Promise<GenerationContextBuildData | null> | null>(null)
   const rewritePollInFlightRef = useRef<Promise<void> | null>(null)
@@ -149,6 +152,12 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     ))
   }
 
+  const getWritingHistoryContext = () => {
+    const context = buildContinueBlockLineageRequestContext(core.activeContinueBlockRewriteContext)
+    if (context.branchContextNodeId || core.rewriteLaunchSource === 'chapter') return context
+    return authoredHistoryContextRef.current
+  }
+
   const performContextPreview = async (
     mode: WorkspaceActionMode,
     instructionOverride?: string,
@@ -173,10 +182,13 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     if (!targetSelection) return null
     const requestSequence = contextPreviewRequestSequenceRef.current + 1
     contextPreviewRequestSequenceRef.current = requestSequence
+    contextPreviewInputsKeyRef.current = promptInputsKey
     core.setContextPreviewLoading(true)
     core.setContextPreviewError('')
     try {
-      const branchContext = mode === 'rewrite' ? { branchContextNodeId: options?.branchContextNodeId ?? buildContinueBlockLineageRequestContext(core.activeContinueBlockRewriteContext).branchContextNodeId, branchContextInclusion: options?.branchContextInclusion ?? buildContinueBlockLineageRequestContext(core.activeContinueBlockRewriteContext).branchContextInclusion } : {}
+      const lineageContext = getWritingHistoryContext()
+      const omitSelectedText = options?.omitSelectedText ?? (mode === 'rewrite' && lineageContext.omitSelectedText)
+      const branchContext = mode === 'rewrite' ? { branchContextNodeId: options?.branchContextNodeId ?? lineageContext.branchContextNodeId, branchContextInclusion: options?.branchContextInclusion ?? lineageContext.branchContextInclusion } : {}
       const writingSkillCardIds = mode === 'rewrite'
         ? options?.writingSkillCardIds ?? core.selectedWritingSkillCardIds
         : []
@@ -191,7 +203,7 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
       const sourceText = mode === 'rewrite'
         ? options?.sourceText ?? (core.rewriteSourceTextOverride.trim() || core.chapterText)
         : core.chapterText
-      const data = await callGenerationContextApi({ novelId: core.currentNovelId, branchId: core.storyTimelineBranchId, chapterId: sourceChapter.id, selectedText: options?.omitSelectedText ? '' : targetSelection, sourceText, contextSnapshotId: core.generationContext?.contextSnapshotId ?? undefined, operationType: toGenerationContextOperationType(mode), userInstruction: instructionOverride ?? core.getInstructionForMode(mode), excludedGraphEdgeIds: options?.excludedGraphEdgeIds ?? core.excludedGraphEdgeIds, excludedEvidenceIds: options?.excludedEvidenceIds ?? core.excludedEvidenceIds, ...branchContext, ...writingSkillContext })
+      const data = await callGenerationContextApi({ novelId: core.currentNovelId, branchId: core.storyTimelineBranchId, chapterId: sourceChapter.id, selectedText: omitSelectedText ? '' : targetSelection, sourceText, contextSnapshotId: core.generationContext?.contextSnapshotId ?? undefined, disabledBlockIds: options?.preserveDisabledBlocks ? core.disabledContextBlockIds : [], presetCompatRuntimeContext: core.buildPresetCompatRuntimeContext('rewrite'), scope: 'chapter', mode: 'heavy', tone: 'dramatic', operationType: toGenerationContextOperationType(mode), userInstruction: instructionOverride ?? core.getInstructionForMode(mode), excludedGraphEdgeIds: options?.excludedGraphEdgeIds ?? core.excludedGraphEdgeIds, excludedEvidenceIds: options?.excludedEvidenceIds ?? core.excludedEvidenceIds, ...branchContext, ...writingSkillContext })
       if (contextPreviewRequestSequenceRef.current !== requestSequence) return null
       if (!data.ok || !data.graphContext || !data.promptBlocks || !data.lanceEvidence) throw new Error(data.error || t('workspace.action.contextPreviewFailed'))
       const nextContext = { ...(data as GenerationContextBuildData), sourceMeta: core.currentChapter.parentChapterId ? { mode: 'inherited-parent', chapterId: sourceChapter.id, chapterNo: sourceChapter.order, chapterTitle: sourceChapter.title } : { mode: 'direct', chapterId: sourceChapter.id, chapterNo: sourceChapter.order, chapterTitle: sourceChapter.title } } satisfies GenerationContextBuildData
@@ -207,6 +219,7 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
       core.setGenerationContext(null)
       core.setGraphContext(null)
       core.setGraphSelection(null)
+    core.setEvidenceDrawerOpen(false)
       core.setContextPreviewError(resolveWorkspaceUserFacingError('context-preview', error, locale))
       return null
     } finally {
@@ -225,22 +238,32 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     return promise
   }
 
+  // Launch effects replace the task state before previewing it. Read the
+  // committed state in the deferred callback, not the previous task's closure.
+  const previewReopenedRewrite = useEffectEvent(() => {
+    if (core.activeMode === 'rewrite') void loadContextPreview('rewrite')
+  })
+
   useEffect(() => {
     if (!core.pendingWhatIfRewriteLaunch || !core.currentChapter || core.currentChapter.id !== core.pendingWhatIfRewriteLaunch.targetChapterId) return
     const { detail, variant } = core.pendingWhatIfRewriteLaunch
-    const instruction = variant === 'continue'
-      ? `${detail.premise.trim() || t('workspace.action.whatIfContinueFallback')}\n\n${t('workspace.action.whatIfContinueInstruction')}`
-      : detail.premise.trim() || t('workspace.action.whatIfRegenerateFallback')
+    const historyNodeId = core.resolvedStoryTimeline.branchNodes.find((node) => node.whatIfSessionId === detail.id)?.id
+      ?? (activeWorkspaceSelection.kind === 'what_if' && activeWorkspaceSelection.sessionId === detail.id ? activeWorkspaceSelection.nodeId : null)
+    authoredHistoryContextRef.current = historyNodeId ? { branchContextNodeId: historyNodeId, branchContextInclusion: variant === 'continue' ? 'include_selected' : 'ancestors_only', omitSelectedText: variant === 'continue' } : {}
     const rewritePrompt = variant === 'regenerate' ? detail.premise.trim() : DEFAULT_REWRITE_PROMPT
     core.setSelectionText(detail.selectedText); core.setLockedSelectionText(detail.selectedText); core.setToolbarPos(null); core.setGenerationContext(null); core.setGraphContext(null); core.setContextPreviewError(''); core.setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS); core.setContextPanelOpen(false); core.setGraphSelection(null); core.setEvidenceDrawerOpen(false); core.setDisabledContextBlockIds([]); core.setExcludedGraphEdgeIds([]); core.setExcludedEvidenceIds([]); core.setGraphMutationPendingId(null); core.setGraphMutationError(''); core.setRewritePrompt(rewritePrompt); core.setRewriteLaunchSource('what_if'); core.setRewriteSourceTextOverride(detail.generatedText); core.setRewriteState({ loading: false, result: detail.generatedText, error: '' }); core.setRewriteFlow({ loading: false, error: '', provider: 'what-if-session', candidates: [{ title: variant === 'continue' ? t('workspace.action.currentBranchVersion') : t('workspace.action.currentWhatIfVersion'), summary: variant === 'continue' ? t('workspace.action.whatIfContinueSummary') : t('workspace.action.whatIfRegenerateSummary'), content: detail.generatedText, inputTokens: detail.inputTokens ?? null, outputTokens: detail.outputTokens ?? null }], selectedIndex: 0, jobId: null, jobStatus: null, jobCurrentStep: null }); core.setActiveMode('rewrite'); core.setPendingWhatIfRewriteLaunch(null)
-    window.setTimeout(() => { void loadContextPreview('rewrite', instruction, detail.selectedText) }, 0)
+    core.setActiveContinueBlockRewriteContext(null)
+    core.setActiveFutureJumpRewriteContext(null)
+    window.setTimeout(previewReopenedRewrite, 0)
   }, [core.pendingWhatIfRewriteLaunch, core.currentChapter])
 
   useEffect(() => {
     if (!core.pendingFutureJumpRewriteLaunch || !core.currentChapter || core.currentChapter.id !== core.pendingFutureJumpRewriteLaunch.targetChapterId) return
-    const { detail, selectedText, originalText, userInstruction } = core.pendingFutureJumpRewriteLaunch
+    const { detail, selectedText, originalText } = core.pendingFutureJumpRewriteLaunch
+    const historyNodeId = detail.timelineNodeId ?? core.resolvedStoryTimeline.branchNodes.find((node) => node.futureJumpRunId === detail.id)?.id
+    authoredHistoryContextRef.current = historyNodeId ? { branchContextNodeId: historyNodeId, branchContextInclusion: 'include_selected', omitSelectedText: true } : {}
     core.setSelectionText(selectedText); core.setLockedSelectionText(selectedText); core.setToolbarPos(null); core.setGenerationContext(null); core.setGraphContext(null); core.setContextPreviewError(''); core.setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS); core.setContextPanelOpen(false); core.setGraphSelection(null); core.setEvidenceDrawerOpen(false); core.setDisabledContextBlockIds([]); core.setExcludedGraphEdgeIds([]); core.setExcludedEvidenceIds([]); core.setGraphMutationPendingId(null); core.setGraphMutationError(''); core.setRewritePrompt(DEFAULT_REWRITE_PROMPT); core.setRewriteLaunchSource('future_jump'); core.setRewriteSourceTextOverride(originalText); core.setRewriteState({ loading: false, result: originalText, error: '' }); core.setRewriteFlow({ loading: false, error: '', provider: 'future-jump-run', candidates: [{ title: t('workspace.action.currentFutureVersion'), summary: t('workspace.action.currentFutureSummary'), content: originalText, inputTokens: detail.inputTokens ?? null, outputTokens: detail.outputTokens ?? null }], selectedIndex: 0, jobId: null, jobStatus: null, jobCurrentStep: null }); core.setActiveFutureJumpRewriteContext(core.pendingFutureJumpRewriteLaunch); core.setActiveContinueBlockRewriteContext(null); core.setActiveMode('rewrite'); core.setPendingFutureJumpRewriteLaunch(null)
-    window.setTimeout(() => { void loadContextPreview('rewrite', userInstruction, selectedText) }, 0)
+    window.setTimeout(previewReopenedRewrite, 0)
   }, [core.pendingFutureJumpRewriteLaunch, core.currentChapter])
 
   useEffect(() => {
@@ -291,14 +314,7 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     core.setActiveContinueBlockRewriteContext(launch)
     core.setActiveMode('rewrite')
     core.setPendingContinueBlockRewriteLaunch(null)
-    window.setTimeout(() => {
-      void loadContextPreview('rewrite', instruction, targetText, {
-        ...buildContinueBlockLineageRequestContext(launch),
-        writingSkillCardIds: launch.writingSkillCardIds,
-        writingSkillExampleCount: launch.writingSkillExampleCount,
-        writingSkillSeed: launch.writingSkillSeed,
-      })
-    }, 0)
+    window.setTimeout(previewReopenedRewrite, 0)
   }, [core.pendingContinueBlockRewriteLaunch, core.currentChapter])
 
   const syncGraphReview = async (nextControls: GraphReviewControls, fallbackContext?: GenerationContextBuildData | null) => {
@@ -495,7 +511,7 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
     try {
       await savePresetCompatLibrary()
       if (!ownsRequest()) return
-      const continueBlockRequestContext = buildContinueBlockLineageRequestContext(core.activeContinueBlockRewriteContext)
+      const continueBlockRequestContext = getWritingHistoryContext()
       const sourceText = core.rewriteSourceTextOverride.trim() || flushedEditor?.plainText || core.chapterText
       let contextForGeneration = core.generationContext
       if (!contextForGeneration && !contextPreviewPromiseRef.current) {
@@ -652,6 +668,17 @@ export function useSelectionNovelStudioActions({ core, viewModel, loadFromBacken
       if (timeoutId !== null) window.clearTimeout(timeoutId)
     }
   }, [core.activeMode, core.rewriteFlow.jobId, core.rewriteFlow.jobStatus, core.syncRewriteJobFromRecoverableJob, currentBranchId, currentChapterId, currentNovelId, locale])
+  const presetRevision = useNovelStore((state) => state.presetCompatLibrary.revision)
+  const promptInputsKey = JSON.stringify([core.rewritePrompt, core.disabledContextBlockIds, presetRevision, core.buildPresetCompatRuntimeContext('rewrite')])
+  const refreshPromptForChangedInputs = useEffectEvent(() => {
+    if (core.activeMode !== 'rewrite' || !core.contextPanelOpen || !core.generationContext || contextPreviewInputsKeyRef.current === promptInputsKey) return
+    void loadContextPreview('rewrite', undefined, undefined, { preserveDisabledBlocks: true })
+  })
+  useEffect(() => {
+    const timer = setTimeout(refreshPromptForChangedInputs, 250)
+    return () => clearTimeout(timer)
+  }, [promptInputsKey, core.contextPanelOpen, core.generationContext])
+
   const handleRewritePromptChange = (value: SetStateAction<string>) => {
     core.invalidateRecoverablePanelHydration()
     core.setRewritePrompt(value)

@@ -7,6 +7,7 @@ import { useI18n } from '@/lib/i18n/provider'
 import { normalizeSavedRoleplayReply, readRoleplayReplyContent } from '@/lib/roleplay-response'
 import type { RoleplayMessageRecord, RoleplaySessionDetail } from '@/lib/story-branch-types'
 import { resolveWorkspaceUserFacingError } from '@/lib/workspace-user-facing-errors'
+import { readRewriteStream, REWRITE_STREAM_CONTENT_TYPE } from '@/lib/rewrite-stream'
 import { cn } from '@/lib/utils'
 import { RoleplayCastPicker } from './RoleplayCastPicker'
 import { RoleplayScriptBlocks } from './RoleplayScriptBlocks'
@@ -121,7 +122,7 @@ async function createLatestAssistantVariant(input: {
 async function streamRoleplayReply(payload: Record<string, unknown>, onChunk: (chunk: string) => void, signal: AbortSignal) {
   const response = await fetch('/api/rewrite', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Accept: REWRITE_STREAM_CONTENT_TYPE },
     body: JSON.stringify({ ...payload, stream: true }),
     signal,
   })
@@ -144,25 +145,7 @@ async function streamRoleplayReply(payload: Record<string, unknown>, onChunk: (c
     return
   }
 
-  if (!response.body) {
-    throw new Error('Roleplay streaming response body is empty')
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      const chunk = decoder.decode(value, { stream: true })
-      if (chunk) onChunk(chunk)
-    }
-    const tail = decoder.decode()
-    if (tail) onChunk(tail)
-  } finally {
-    reader.releaseLock()
-  }
+  await readRewriteStream(response, onChunk)
 }
 
 function normalizeMessage(message: RoleplayMessagePayload): RoleplayMessagePayload {
@@ -212,6 +195,7 @@ export function RoleplaySessionView(props: {
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null)
   const [deletingBranchId, setDeletingBranchId] = useState<string | null>(null)
   const [pendingScript, setPendingScript] = useState<RoleplayScript | null>(null)
+  const [contextCompressing, setContextCompressing] = useState(false)
   const [generationPanel, setGenerationPanel] = useState<'context' | 'skills' | null>(null)
   const [generationOptions, setGenerationOptions] = useState(() => defaultRoleplayGenerationOptions(createWritingSkillRuntimeSeed()))
   const contextSnapshotRef = useRef<string | null>(null)
@@ -312,7 +296,7 @@ export function RoleplaySessionView(props: {
   const turnInput = { ...cast, storyGuidance, dialogue, maxCharacters: targetCharacters, generationOptions }
   const turn = parseRoleplayTurn(turnInput)
   const previewTurn = parseRoleplayTurn(turnInput, { allowEmptyInput: true })
-  const mutating = busy || deletingMessageId !== null || deletingBranchId !== null
+  const mutating = contextCompressing || busy || deletingMessageId !== null || deletingBranchId !== null
   const canSend = Boolean(turn && !mutating)
   const retryUser = latestMessage?.role === 'user' && latestMessage.turn ? latestMessage : null
   const latestAssistant = latestMessage?.role === 'assistant' ? latestMessage : null
@@ -322,6 +306,7 @@ export function RoleplaySessionView(props: {
       novelId: props.novelId, branchId: props.branchId, chapterId: detail.sourceSnapshot.chapterId,
       selectedText: detail.sourceSnapshot.selectedText || detail.sourceSnapshot.textSnapshot,
       sourceText: detail.sourceSnapshot.textSnapshot || detail.sourceSnapshot.selectedText,
+      roleplaySessionId: detail.id, roleplayLeafMessageId: history.at(-1)?.id ?? null,
       operationType: 'roleplay', roleplayTurn: requestTurn, userInstruction: roleplayTurnText(requestTurn),
       ...requestTurn.generationOptions,
       roleplayMessages: history.map((message) => ({ role: message.role, content: message.turn ? roleplayTurnText(message.turn) : message.script ? roleplayScriptText(message.script) : message.content })),
@@ -488,7 +473,7 @@ export function RoleplaySessionView(props: {
 
   return <div className="flex min-h-0 flex-1 flex-col bg-surface" data-testid="workspace-roleplay-session-view">
     {loading ? <div className="flex flex-1 items-center justify-center gap-2 text-sm text-zinc-400" role="status"><LoaderCircle className="h-4 w-4 animate-spin" />{t('roleplay.loading')}</div> : null}
-    {error ? <div role="alert" className="shrink-0 border-b border-rose-400/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-200">{error}</div> : null}
+    {error ? <div role="alert" className="shrink-0 whitespace-pre-wrap break-words border-b border-rose-400/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-200">{error}</div> : null}
     {!loading && detail && !cast ? <div className="min-h-0 flex-1 overflow-y-auto"><RoleplayCastPicker initial={cast} options={detail.characterOptions ?? []} onStart={setCast} /></div> : null}
     {!loading && detail && cast ? <section className="flex min-h-0 flex-1 flex-col" data-testid="roleplay-chat-core" aria-label={t('roleplay.sessionMessages')}>
       <div ref={messageListRef} data-testid="roleplay-message-list" onScroll={(event) => { const list = event.currentTarget; stickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight <= ROLEPLAY_STICKY_BOTTOM_THRESHOLD }} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-8 sm:py-8">
@@ -537,7 +522,7 @@ export function RoleplaySessionView(props: {
         </div>
       </form>
     </section> : null}
-    <RoleplayGenerationPanel panel={generationPanel} request={previewTurn ? buildGenerationRequest(previewTurn, buildMessagePath(messagesById, (forkMessage ?? latestMessage)?.id)) : null} options={generationOptions} onChange={setGenerationOptions} onClose={() => setGenerationPanel(null)} onSnapshot={handleContextSnapshot} />
+    <RoleplayGenerationPanel disabled={mutating} onBusyChange={setContextCompressing} panel={generationPanel} request={previewTurn ? buildGenerationRequest(previewTurn, buildMessagePath(messagesById, (forkMessage ?? latestMessage)?.id)) : null} options={generationOptions} onChange={setGenerationOptions} onClose={() => setGenerationPanel(null)} onSnapshot={handleContextSnapshot} />
     <DialogSurface open={editingCast && Boolean(cast)} onClose={() => setEditingCast(false)} closeLabel={t('roleplay.closeCast')} title={t('roleplay.chooseCast')} description={t('roleplay.chooseCastHint')} placement="center">
       {detail ? <RoleplayCastPicker hideHeading initial={cast} options={detail.characterOptions ?? []} onStart={(next) => { contextSnapshotRef.current = null; setCast(next); setEditingCast(false) }} /> : null}
     </DialogSurface>

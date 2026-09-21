@@ -2,12 +2,17 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, LoaderCircle, RefreshCcw } from 'lucide-react'
+import { ContextCompressionControl, ContextCompressionWarning } from './ContextCompressionControl'
 import { DialogSurface } from '@/components/ui/DialogSurface'
+import { ContextPromptBlocks } from '@/components/graph/context-prompt-blocks'
+import { AdvancedContextPromptPanel } from '@/components/graph/advanced-context-prompt-panel'
+import { isUserFacingContextWarning } from '@/lib/context-warnings'
+import { useNovelStore } from '@/store/novel-store'
 import { useI18n } from '@/lib/i18n/provider'
 import type { RoleplayGenerationOptions, RoleplayPromptPreview } from '@/lib/roleplay-generation'
 import { WRITING_SKILL_RUNTIME_EXAMPLE_COUNTS } from '@/lib/writing-skill-defaults'
+import { CONTEXT_WARNING_TOKENS } from '@/lib/context-compression'
 import type { WritingSkillCard } from '@/lib/writing-skill-types'
-import { cn } from '@/lib/utils'
 
 export function RoleplayGenerationPanel(props: {
   panel: 'context' | 'skills' | null
@@ -16,8 +21,10 @@ export function RoleplayGenerationPanel(props: {
   onChange: (options: RoleplayGenerationOptions) => void
   onClose: () => void
   onSnapshot: (id: string | null) => void
+  disabled?: boolean
+  onBusyChange?: (busy: boolean) => void
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [cards, setCards] = useState<WritingSkillCard[]>([])
   const [cardsLoading, setCardsLoading] = useState(false)
   const [cardsError, setCardsError] = useState('')
@@ -26,10 +33,14 @@ export function RoleplayGenerationPanel(props: {
   const [revision, setRevision] = useState(0)
   const contextSnapshotRef = useRef<string | null>(null)
   const requestJson = JSON.stringify(props.request)
-  const previewKey = `${revision}:${requestJson}`
+  const presetRevision = useNovelStore((state) => state.presetCompatLibrary.revision)
+  const previewKey = `${revision}:${presetRevision}:${requestJson}`
   const { panel, onSnapshot } = props
   const currentPreview = preview?.key === previewKey ? preview.data : null
   const currentError = error?.key === previewKey ? error.message : ''
+  const tokenEstimate = typeof currentPreview?.tokenEstimate === 'number' && Number.isFinite(currentPreview.tokenEstimate) ? currentPreview.tokenEstimate : null
+  const visibleBlocks = ((currentPreview ?? preview?.data)?.promptBlocks ?? [])
+    .filter((block) => panel !== 'skills' || block.id.startsWith('writing-skill:'))
   const selectedSkillTitles = cards.filter((card) => props.options.writingSkillCardIds.includes(card.id)).map((card) => card.title).join(' · ')
 
   useEffect(() => {
@@ -86,18 +97,18 @@ export function RoleplayGenerationPanel(props: {
   }
 
   const toggleBlock = (id: string, enabled: boolean) => props.onChange({ ...props.options, disabledBlockIds: enabled ? props.options.disabledBlockIds.filter((item) => item !== id) : [...new Set([...props.options.disabledBlockIds, id])] })
-  const blockDetails = (block: RoleplayPromptPreview['promptBlocks'][number]) => <article key={block.id} className="rounded-2xl border border-line/10 bg-inset p-3" data-testid={`roleplay-context-block-${block.id}`}>
-    <label className="flex min-h-9 items-center justify-between gap-3 text-sm text-zinc-200">
-      <span>{block.label}</span>
-      <input type="checkbox" aria-label={block.label} checked={block.required || !props.options.disabledBlockIds.includes(block.id)} disabled={block.required} onChange={(event) => toggleBlock(block.id, event.target.checked)} className="h-4 w-4 shrink-0 accent-violet-500" />
-    </label>
-    <p className={cn('mb-2 text-xs', block.trimmed ? 'text-amber-300' : 'text-zinc-500')}>
-      {t(block.required ? 'roleplay.contextRequired' : block.trimmed ? 'roleplay.contextTrimmed' : block.enabled ? 'roleplay.contextEnabled' : 'roleplay.contextDisabled')}
-    </p>
-    <details><summary className="cursor-pointer text-xs text-zinc-400">{t('roleplay.viewContent')}</summary><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-zinc-300 [overflow-wrap:anywhere]">{block.content}</p></details>
-  </article>
 
-  return <DialogSurface open={Boolean(panel)} onClose={props.onClose} closeLabel={t(panel === 'skills' ? 'roleplay.closeSkills' : 'roleplay.closeContext')} title={t(panel === 'skills' ? 'roleplay.writingSkills' : 'workspace.shell.advancedContext')} description={t(panel === 'skills' ? 'roleplay.skillsHint' : 'roleplay.contextHint')} placement="right" className="sm:w-[min(42rem,90vw)] sm:max-w-2xl" mobileFullscreen>
+  return <>
+    <ContextCompressionWarning preview={currentPreview?.compression} tokenEstimate={currentPreview?.tokenEstimate} />
+    <DialogSurface open={Boolean(panel)} onClose={props.onClose} closeLabel={t(panel === 'skills' ? 'roleplay.closeSkills' : 'roleplay.closeContext')} title={t(panel === 'skills' ? 'roleplay.writingSkills' : 'workspace.shell.advancedContext')} description={t(panel === 'skills' ? 'roleplay.skillsHint' : 'roleplay.contextHint')} placement="right" className="sm:w-[min(42rem,90vw)] sm:max-w-2xl" mobileFullscreen>
+    {panel === 'context' ? <div className="mb-4 space-y-4">
+      <div data-testid="roleplay-context-token-estimate" aria-live="polite" aria-busy={!currentPreview && !currentError && Boolean(props.request)} className="rounded-xl border border-line/10 bg-inset p-3">
+        <p className="text-xs text-zinc-400">{t('roleplay.contextTokenEstimate')}</p>
+        <p className={`mt-1 text-lg font-medium tabular-nums ${(tokenEstimate ?? 0) > CONTEXT_WARNING_TOKENS ? 'text-amber-200' : 'text-zinc-100'}`}>{tokenEstimate !== null ? `${Math.round(tokenEstimate).toLocaleString(locale)} tokens` : '—'}</p>
+        <p className="mt-1 text-xs leading-5 text-zinc-400">{tokenEstimate !== null ? t('roleplay.contextTokenEstimateHint') : t(!currentPreview && !currentError && props.request ? 'roleplay.contextTokenCalculating' : 'roleplay.contextTokenUnavailable')}</p>
+      </div>
+      <ContextCompressionControl preview={currentPreview?.compression} disabled={props.disabled} onBusyChange={props.onBusyChange} onContextChanged={refresh} />
+    </div> : null}
     {panel === 'skills' ? <div className="mb-5 space-y-4">
       <div className="flex items-center justify-between gap-3"><p className="text-sm text-zinc-400">{t('workspace.shell.writingSkillLabel')}</p><a href="/writing-skills" target="_blank" rel="noreferrer" className="text-xs text-violet-300 underline">{t('roleplay.manageSkills')}</a></div>
       {cardsLoading ? <p role="status" className="text-sm text-zinc-400">{t('workspace.shell.writingSkillLoading')}</p> : cardsError ? <p role="alert" className="text-sm text-rose-300">{cardsError}</p> : cards.length ? <details className="group rounded-xl border border-line/10 bg-inset" data-testid="roleplay-skill-picker">
@@ -116,8 +127,8 @@ export function RoleplayGenerationPanel(props: {
     <div className="mb-3 flex items-center justify-between gap-3"><p className="text-sm font-medium text-zinc-200">{t('roleplay.nextTurnContext')}</p><button type="button" onClick={refresh} className="inline-flex min-h-10 items-center gap-2 text-xs text-zinc-400"><RefreshCcw className="h-3.5 w-3.5" />{t('graph.refreshContext')}</button></div>
     {!props.request ? <p role="alert" className="text-sm text-zinc-400">{t('roleplay.previewInvalidInput')}</p> : !currentPreview && !currentError ? <p role="status" className="mb-3 flex items-center gap-2 text-sm text-zinc-400"><LoaderCircle className="h-4 w-4 animate-spin" />{t('workspace.shell.loadingContextEvidence')}</p> : null}
     {currentError ? <p role="alert" className="mb-3 text-sm text-rose-300">{currentError}</p> : null}
-    {currentPreview?.warnings?.map((warning) => <p key={warning} role="status" className="mb-3 text-xs leading-6 text-amber-400">{warning}</p>)}
-    <div className="space-y-3">{(currentPreview ?? preview?.data)?.promptBlocks.filter((block) => panel !== 'skills' || block.id.startsWith('writing-skill:')).map(blockDetails)}</div>
-    {currentPreview ? <details className="mt-5 rounded-2xl border border-violet-400/20 bg-violet-500/5 p-3" data-testid="roleplay-final-prompt"><summary className="min-h-8 cursor-pointer text-sm font-medium text-violet-300">{t('roleplay.finalPrompt')}</summary><p className="mt-3 whitespace-pre-wrap break-words text-xs leading-6 text-zinc-300 [overflow-wrap:anywhere]">{currentPreview.systemPrompt}{'\n\n'}{currentPreview.userPrompt}</p></details> : null}
+    {currentPreview?.warnings?.filter(isUserFacingContextWarning).map((warning) => <p key={warning} role="status" className="mb-3 text-xs leading-6 text-amber-400">{warning}</p>)}
+    {preview ? panel === 'skills' ? <ContextPromptBlocks blocks={visibleBlocks} disabledBlockIds={props.options.disabledBlockIds} onToggle={toggleBlock} /> : <AdvancedContextPromptPanel blocks={visibleBlocks} requestMessages={(currentPreview ?? preview.data).requestMessages} disabledBlockIds={props.options.disabledBlockIds} onToggle={toggleBlock} loading={!currentPreview} /> : null}
   </DialogSurface>
+  </>
 }

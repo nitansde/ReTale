@@ -1,5 +1,7 @@
+import type { ContextCompressionPreview } from '@/lib/context-compression'
 import type { GraphAwareResult, GraphEdge, GraphNode } from '@/lib/server/graph-types'
 import type { RetrievalDocSourceType } from '@/lib/server/retrieval-index'
+import type { RequestPromptMessage } from '@/lib/generation-prompt-preview'
 
 export type GenerationContextPromptBlock = {
   id: string
@@ -7,6 +9,8 @@ export type GenerationContextPromptBlock = {
   enabled: boolean
   priority: 'highest' | 'high' | 'medium'
   content: string
+  required?: boolean
+  trimmed?: boolean
 }
 
 export type GenerationContextEvidence = {
@@ -36,6 +40,8 @@ export type GraphNodeGenerationState = {
 }
 
 export type GenerationContextBuildData = {
+  compression?: ContextCompressionPreview | null
+  requestMessages?: RequestPromptMessage[]
   contextSnapshotId?: string | null
   novelId: string
   branchId: string

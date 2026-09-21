@@ -83,6 +83,38 @@ afterEach(() => {
 })
 
 describe('/api/rewrite provider error contract', () => {
+  it.each(['openai-compatible', 'ollama'] as const)('returns %s context-window details on both normal and streaming HTTP failures', async (provider) => {
+    const message = 'maximum context length is 200000 tokens, requested 235000 tokens'
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/api/tags')
+      ? Response.json({ models: [{ model: 'ollama-model' }] })
+      : Response.json({ error: provider === 'ollama' ? message : { message } }, { status: 400 })))
+    const { POST } = await importRouteWithProvider(provider)
+    for (const stream of [false, true]) {
+      const response = await POST(createRequest({ stream }))
+      expect(response.status).toBe(502)
+      expect(await response.json()).toMatchObject({ ok: false, code: 'provider_request_failed', error: `Provider request failed with HTTP 400: ${message}` })
+    }
+  })
+
+  it('returns provider error payloads even when the upstream status is 200', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: { message: 'context_length_exceeded' } })))
+    const { POST } = await importRouteWithProvider('openai-compatible')
+    const response = await POST(createRequest())
+    expect(response.status).toBe(502)
+    expect(await response.json()).toMatchObject({ error: 'Provider request failed: context_length_exceeded' })
+  })
+
+  it.each(['\n\n', ''])('transmits errors inside a streamed response, including an unterminated final event (%j)', async (ending) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(`event: error\ndata: {"error":{"message":"context_length_exceeded"}}${ending}`, { headers: { 'Content-Type': 'text/event-stream' } })))
+    const { POST } = await importRouteWithProvider('openai-compatible')
+    const request = createRequest({ stream: true })
+    request.headers.set('Accept', 'application/x-ndjson')
+    const response = await POST(request)
+    expect(response.headers.get('content-type')).toContain('application/x-ndjson')
+    const events = (await response.text()).trim().split('\n').map((line) => JSON.parse(line))
+    expect(events).toEqual([{ type: 'error', error: 'Provider request failed: context_length_exceeded' }])
+  })
+
   it('reuses preview RAG artifacts while rebuilding the generation prompt', async () => {
     const cachedContext = {
       novelId: 'novel-rewrite-provider-contract',
@@ -151,7 +183,7 @@ describe('/api/rewrite provider error contract', () => {
         selectedText: '选段',
         userInstruction: '指令',
       }),
-      { cachedRagArtifacts },
+      expect.objectContaining({ cachedRagArtifacts }),
     )
     const providerBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
       messages: Array<{ content: string }>
@@ -266,7 +298,7 @@ describe('/api/rewrite provider error contract', () => {
       ok: false,
       code: 'provider_request_failed',
       provider: 'openai-compatible',
-      error: 'Provider request failed',
+      error: 'Provider request failed: fetch failed',
     })
   })
 })
