@@ -1,7 +1,8 @@
 "use client"
 
+import Link from 'next/link'
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, LocateFixed, Search, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, House, LocateFixed, Search, X } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { StoryTimeline } from '@/components/timeline/StoryTimeline'
 import { useDesktopWorkspaceLayout } from '@/components/workspace/use-desktop-workspace-layout'
@@ -187,6 +188,15 @@ export function WorkspaceChapterNav(props: WorkspaceChapterNavProps) {
 
   const content = (
     <>
+      <Link
+        href="/library"
+        aria-label={t('workspace.header.backToLibrary')}
+        className="mb-3 flex min-h-11 items-center gap-2 rounded-2xl border border-line/10 bg-overlay/[0.04] px-3 text-sm text-zinc-200 transition hover:bg-overlay/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70"
+        data-testid="workspace-chapter-nav-home"
+      >
+        <House className="h-4 w-4 text-violet-200" aria-hidden="true" />
+        {t('workspace.header.home')}
+      </Link>
       <section className="space-y-3 lg:rounded-[24px] lg:border lg:border-line/8 lg:bg-overlay/[0.03] lg:p-3">
         <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-1 lg:grid-cols-[minmax(0,1fr)_auto]">
           <p className="text-xs text-zinc-500">{t('chapterNav.chapterCount', { count: mainlineChapters.length })}</p>

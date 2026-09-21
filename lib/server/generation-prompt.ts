@@ -10,7 +10,7 @@ import { applyPresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runt
 import { resolveCreativeRoutePresetCompatMetadata } from '@/lib/preset-compat/runtime-integration'
 import type { PresetCompatPromptRuleRuntimeContext, PresetCompatRuntimeContextBlock } from '@/lib/preset-compat/types'
 import { buildRewriteTaskPromptLines, CONTINUATION_SOURCE_BLOCK_LABEL, isContinuationRewriteTask } from '@/lib/server/rewrite-task-prompt'
-import { buildRoleplayScriptPrompt, buildRoleplayTurnPrompt, parseRoleplayTurn, roleplayTurnText, ROLEPLAY_SCRIPT_SYSTEM_PROMPT, type RoleplayTurn } from '@/lib/roleplay-script'
+import { buildRoleplayScriptPrompt, buildRoleplaySystemPrompt, buildRoleplayTurnPrompt, parseRoleplayTurn, roleplayTurnText, type RoleplayTurn } from '@/lib/roleplay-script'
 import { buildRoleplayContextBlock } from '@/lib/roleplay-context'
 import { isRequiredRoleplayContextBlock } from '@/lib/roleplay-generation'
 import { PRODUCT_SURFACE_IDS, type ProductSurfaceId } from '@/lib/types'
@@ -466,7 +466,7 @@ export async function prepareGenerationPrompt(body: Record<string, unknown>, opt
     })
     // Saved presets can still contain the old rewrite-only RP instructions.
     // Keep the current mode contract after those instructions in the final request.
-    return roleplayTurn ? { ...runtime, systemPrompt: [runtime.systemPrompt, ROLEPLAY_SCRIPT_SYSTEM_PROMPT].filter(Boolean).join('\n\n') } : runtime
+    return roleplayTurn ? { ...runtime, systemPrompt: [runtime.systemPrompt, buildRoleplaySystemPrompt(roleplayTurn)].filter(Boolean).join('\n\n') } : runtime
   }
   const fallbackContext = String(body.prompt ?? '')
   const initialPromptParts = resolvePromptParts(orderedActivePromptBlocks, fallbackContext)
@@ -542,7 +542,7 @@ export function buildGenerationPromptPreview(prepared: Awaited<ReturnType<typeof
     userPrompt: requestPrompts.userPrompt,
     requestMessages: buildRequestPromptMessages(requestPrompts.systemPrompt, requestPrompts.userPrompt, {
       contextBlocks: promptBlocks,
-      modeSystemPrompt: prepared.roleplayTurn ? ROLEPLAY_SCRIPT_SYSTEM_PROMPT : undefined,
+      modeSystemPrompt: prepared.roleplayTurn ? buildRoleplaySystemPrompt(prepared.roleplayTurn) : undefined,
       baseUserPrompt: runtime.promptAssembly.user.segments.find((segment) => segment.stage === 'base_prompt')?.text,
       presetUserParts: runtime.promptAssembly.user.segments.filter((segment) => segment.stage !== 'base_prompt').map((segment) => segment.text),
     }),

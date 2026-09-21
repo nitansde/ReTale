@@ -50,6 +50,9 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
         || !script.blocks.some((block) => block.type === 'counterpart')) {
         return jsonError('Script does not match the parent turn', 400)
       }
+      if (parent.dialogueOnly && (script.blocks.length !== 1 || script.blocks[0]?.type !== 'counterpart')) {
+        return jsonError('Dialogue-only scripts must contain exactly one counterpart reply', 400)
+      }
     }
     const content = turn ? JSON.stringify({ turn }) : script ? JSON.stringify({ script }) : String(body.content ?? '')
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRoleplayScriptPrompt, buildRoleplayTurnPrompt, mergeRoleplayNarrationBlocks, parseRoleplayTurn, readGeneratedRoleplayScript, type RoleplayScriptBlock } from '@/lib/roleplay-script'
+import { buildRoleplayScriptPrompt, buildRoleplaySystemPrompt, buildRoleplayTurnPrompt, mergeRoleplayNarrationBlocks, parseRoleplayTurn, readGeneratedRoleplayScript, type RoleplayScriptBlock } from '@/lib/roleplay-script'
 const turn = { playerName: '甲', counterpartName: '乙', storyGuidance: '雨夜。', dialogue: '走吗？', maxCharacters: 100 }
 describe('roleplay scripts', () => {
   it('validates characters, input and target length settings', () => {
@@ -31,6 +31,23 @@ describe('roleplay scripts', () => {
   })
   it('rejects incomplete JSON, unknown types, empty text and replies without the other character', () => {
     for (const content of ['{"blocks":[', '{"blocks":[{"type":"system","text":"x"}]}', '{"blocks":[{"type":"counterpart","text":""}]}', '{"blocks":[{"type":"player","text":"x"}]}', 'raw prose']) expect(readGeneratedRoleplayScript(content, turn)).toBeNull()
+  })
+  it('supports dialogue-only turns as one extended counterpart reply with optional inline thought', () => {
+    const dialogueOnlyTurn = { ...turn, dialogueOnly: true }
+    expect(parseRoleplayTurn(dialogueOnlyTurn)).toEqual(dialogueOnlyTurn)
+    const result = readGeneratedRoleplayScript(JSON.stringify({ blocks: [
+      { type: 'counterpart', text: '我刚走到门口，就听见里面有人叫我。（我其实有点紧张。）所以我先停下来听了一会儿。' },
+    ] }), dialogueOnlyTurn)
+    expect(result?.blocks).toHaveLength(1)
+    expect(result?.blocks[0]?.type).toBe('counterpart')
+    expect(result?.dialogueOnly).toBe(true)
+    expect(result?.blocks[0]?.text).toContain('（我其实有点紧张。）')
+    expect(buildRoleplayScriptPrompt(dialogueOnlyTurn)).toContain('恰好只有一个 counterpart')
+    expect(buildRoleplayScriptPrompt(dialogueOnlyTurn)).toContain('第一人称口述')
+    expect(buildRoleplayScriptPrompt(dialogueOnlyTurn)).toContain('大段、完整、连贯')
+    expect(buildRoleplaySystemPrompt(dialogueOnlyTurn)).toContain('仅对话')
+    expect(buildRoleplaySystemPrompt(dialogueOnlyTurn)).toContain('一个 counterpart JSON block')
+    expect(readGeneratedRoleplayScript(JSON.stringify({ blocks: [{ type: 'counterpart_thought', text: '单独心声' }, { type: 'counterpart', text: '不应通过' }] }), dialogueOnlyTurn)).toBeNull()
   })
   it('guides approximate length and descriptive dialogue with a valid JSON example', () => {
     const prompt = buildRoleplayScriptPrompt(turn)

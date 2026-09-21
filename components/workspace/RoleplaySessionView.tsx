@@ -17,7 +17,7 @@ import { RoleplayBranchMenu } from './RoleplayBranchMenu'
 import { buildRoleplayMessageTree, getRoleplayBranchDeletionIds, getRoleplayBranchTip, getRoleplayMessagePath as buildMessagePath } from '@/lib/roleplay-branches'
 import { defaultRoleplayGenerationOptions } from '@/lib/roleplay-generation'
 import { createWritingSkillRuntimeSeed } from '@/lib/writing-skill-selection'
-import { parseRoleplayTurn, readGeneratedRoleplayScript, roleplayScriptText, roleplayTurnText, ROLEPLAY_DEFAULT_LENGTH, type RoleplayCast, type RoleplayTurn, type RoleplayScript, type RoleplayCharacterOption } from '@/lib/roleplay-script'
+import { parseRoleplayTurn, readGeneratedRoleplayScript, roleplayScriptText, roleplayTurnText, ROLEPLAY_DEFAULT_LENGTH, ROLEPLAY_DIALOGUE_ONLY_DEFAULT_LENGTH, type RoleplayCast, type RoleplayTurn, type RoleplayScript, type RoleplayCharacterOption } from '@/lib/roleplay-script'
 
 type RoleplayMessagePayload = RoleplayMessageRecord & {
   variantMetadata: {
@@ -188,7 +188,9 @@ export function RoleplaySessionView(props: {
   const [dialogue, setDialogue] = useState('')
   const [storyGuidance, setStoryGuidance] = useState('')
   const [composerExpanded, setComposerExpanded] = useState(false)
-  const [targetCharacters, setTargetCharacters] = useState(ROLEPLAY_DEFAULT_LENGTH)
+  const [storyTargetCharacters, setStoryTargetCharacters] = useState(ROLEPLAY_DEFAULT_LENGTH)
+  const [dialogueOnlyTargetCharacters, setDialogueOnlyTargetCharacters] = useState(ROLEPLAY_DIALOGUE_ONLY_DEFAULT_LENGTH)
+  const [dialogueOnly, setDialogueOnly] = useState(false)
   const [forkMessageId, setForkMessageId] = useState<string | null>(null)
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -212,6 +214,7 @@ export function RoleplaySessionView(props: {
     openCastPicker: () => { if (detail && cast && !busyRef.current) setEditingCast(true) },
   }), [detail, cast])
   const branchStorageKey = `retale:roleplay-branch:${props.novelId}:${props.branchId}:${props.sessionId}`
+  const lengthStorageKey = `retale:roleplay-length:${props.novelId}:${props.branchId}:${props.sessionId}`
   const { messagesById, childrenByParentId, leaves } = useMemo(() => buildRoleplayMessageTree(detail?.messages ?? []), [detail?.messages])
   const latestMessage = getRoleplayBranchTip(childrenByParentId, messagesById.get(selectedMessageId ?? '') ?? detail?.messages.at(-1)) ?? null
   const activeMessages = useMemo(() => buildMessagePath(messagesById, latestMessage?.id), [messagesById, latestMessage?.id])
@@ -238,21 +241,38 @@ export function RoleplaySessionView(props: {
       const messages = next.messages.filter((message) => message.turn || message.script).map(normalizeMessage)
       setDetail({ ...next, messages })
       let savedMessageId: string | null = null
-      try { savedMessageId = window.localStorage.getItem(branchStorageKey) } catch { /* Branch selection still works without browser storage. */ }
+      let savedLengths: { story?: number; dialogueOnly?: number } = {}
+      try {
+        savedMessageId = window.localStorage.getItem(branchStorageKey)
+        const parsed = JSON.parse(window.localStorage.getItem(lengthStorageKey) ?? '{}') as unknown
+        if (parsed && typeof parsed === 'object') {
+          const values = parsed as Record<string, unknown>
+          if (typeof values.story === 'number' && Number.isInteger(values.story) && values.story >= 100 && values.story <= 4000) savedLengths.story = values.story
+          if (typeof values.dialogueOnly === 'number' && Number.isInteger(values.dialogueOnly) && values.dialogueOnly >= 100 && values.dialogueOnly <= 4000) savedLengths.dialogueOnly = values.dialogueOnly
+        }
+      } catch { /* Branch and length preferences still work without browser storage. */ }
+      if (savedLengths.story !== undefined) setStoryTargetCharacters(savedLengths.story)
+      if (savedLengths.dialogueOnly !== undefined) setDialogueOnlyTargetCharacters(savedLengths.dialogueOnly)
       const tree = buildRoleplayMessageTree(messages)
       const selected = getRoleplayBranchTip(tree.childrenByParentId, tree.messagesById.get(savedMessageId ?? '') ?? messages.at(-1))
       setSelectedMessageId(selected?.id ?? null)
       setForkMessageId(null)
       const lastTurn = buildMessagePath(tree.messagesById, selected?.id).reverse().find((message) => message.turn)?.turn
+      setDialogueOnly(lastTurn?.dialogueOnly ?? false)
       if (lastTurn) {
-        setCast(lastTurn); setTargetCharacters(lastTurn.maxCharacters)
+        setCast(lastTurn)
+        if (lastTurn.dialogueOnly) {
+          if (savedLengths.dialogueOnly === undefined) setDialogueOnlyTargetCharacters(lastTurn.maxCharacters)
+        } else if (savedLengths.story === undefined) {
+          setStoryTargetCharacters(lastTurn.maxCharacters)
+        }
         if (lastTurn.generationOptions) setGenerationOptions(lastTurn.generationOptions)
       }
     }).catch((reason) => {
       if (!cancelled) setError(resolveWorkspaceUserFacingError('roleplay-session-load', reason, locale))
     }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true; controllerRef.current?.abort() }
-  }, [props.novelId, props.branchId, props.sessionId, locale, branchStorageKey])
+  }, [props.novelId, props.branchId, props.sessionId, locale, branchStorageKey, lengthStorageKey])
 
   useEffect(() => {
     if (loading || detail?.id !== props.sessionId) return
@@ -261,6 +281,13 @@ export function RoleplaySessionView(props: {
       else window.localStorage.removeItem(branchStorageKey)
     } catch { /* Saving a view preference must not interrupt the conversation. */ }
   }, [loading, detail?.id, props.sessionId, branchStorageKey, latestMessage])
+
+  useEffect(() => {
+    if (loading || detail?.id !== props.sessionId) return
+    try {
+      window.localStorage.setItem(lengthStorageKey, JSON.stringify({ story: storyTargetCharacters, dialogueOnly: dialogueOnlyTargetCharacters }))
+    } catch { /* Saving a preference must not interrupt the conversation. */ }
+  }, [loading, detail?.id, props.sessionId, lengthStorageKey, storyTargetCharacters, dialogueOnlyTargetCharacters])
 
   useEffect(() => {
     const last = visibleMessages.at(-1)
@@ -293,7 +320,8 @@ export function RoleplaySessionView(props: {
     return () => observer.disconnect()
   }, [loading, detail?.id, cast, editingCast])
 
-  const turnInput = { ...cast, storyGuidance, dialogue, maxCharacters: targetCharacters, generationOptions }
+  const targetCharacters = dialogueOnly ? dialogueOnlyTargetCharacters : storyTargetCharacters
+  const turnInput = { ...cast, storyGuidance, dialogue, maxCharacters: targetCharacters, dialogueOnly, generationOptions }
   const turn = parseRoleplayTurn(turnInput)
   const previewTurn = parseRoleplayTurn(turnInput, { allowEmptyInput: true })
   const mutating = contextCompressing || busy || deletingMessageId !== null || deletingBranchId !== null
@@ -405,7 +433,11 @@ export function RoleplaySessionView(props: {
           return { ...item, parentMessageId, forkedFromMessageId, forkMetadata: { parentMessageId, forkedFromMessageId } }
         }),
       } : current)
-      await refreshDetail()
+      const refreshed = await refreshDetail()
+      const refreshedTree = buildRoleplayMessageTree(refreshed.messages)
+      const refreshedSelected = getRoleplayBranchTip(refreshedTree.childrenByParentId, refreshedTree.messagesById.get(selectedMessageId ?? '') ?? refreshed.messages.at(-1))
+      const refreshedTurn = buildMessagePath(refreshedTree.messagesById, refreshedSelected?.id).reverse().find((item) => item.turn)?.turn
+      setDialogueOnly(refreshedTurn?.dialogueOnly ?? false)
     } catch (reason) {
       setError(resolveWorkspaceUserFacingError('roleplay-delete', reason, locale))
     } finally {
@@ -435,8 +467,11 @@ export function RoleplaySessionView(props: {
       const selected = latestMessage && !deletedIds.has(latestMessage.id) ? tree.messagesById.get(latestMessage.id) : tree.leaves.at(-1)
       if (selected?.id !== latestMessage?.id) {
         const lastTurn = buildMessagePath(tree.messagesById, selected?.id).reverse().find((message) => message.turn)?.turn
+        setDialogueOnly(lastTurn?.dialogueOnly ?? false)
         if (lastTurn) {
-          setCast(lastTurn); setTargetCharacters(lastTurn.maxCharacters)
+          setCast(lastTurn)
+          if (lastTurn.dialogueOnly) setDialogueOnlyTargetCharacters(lastTurn.maxCharacters)
+          else setStoryTargetCharacters(lastTurn.maxCharacters)
           setGenerationOptions(lastTurn.generationOptions ?? defaultRoleplayGenerationOptions(createWritingSkillRuntimeSeed()))
         }
         stickToBottomRef.current = true
@@ -458,9 +493,11 @@ export function RoleplaySessionView(props: {
     const selected = getRoleplayBranchTip(childrenByParentId, messagesById.get(messageId))
     if (!selected) return
     const lastTurn = buildMessagePath(messagesById, selected.id).reverse().find((message) => message.turn)?.turn
+    setDialogueOnly(lastTurn?.dialogueOnly ?? false)
     if (lastTurn) {
       setCast(lastTurn)
-      setTargetCharacters(lastTurn.maxCharacters)
+      if (lastTurn.dialogueOnly) setDialogueOnlyTargetCharacters(lastTurn.maxCharacters)
+      else setStoryTargetCharacters(lastTurn.maxCharacters)
       setGenerationOptions(lastTurn.generationOptions ?? defaultRoleplayGenerationOptions(createWritingSkillRuntimeSeed()))
     }
     contextSnapshotRef.current = null
@@ -471,6 +508,11 @@ export function RoleplaySessionView(props: {
     setError('')
   }
 
+  const dialogueOnlyToggle = <label title={t('roleplay.dialogueOnlyHint')} className={cn('flex min-h-8 shrink-0 cursor-pointer items-center gap-2 text-xs', dialogueOnly ? 'text-violet-300' : 'text-zinc-400', mutating && 'cursor-default opacity-40')}>
+    <input type="checkbox" checked={dialogueOnly} disabled={mutating} onChange={(event) => { contextSnapshotRef.current = null; setDialogueOnly(event.target.checked) }} className="h-4 w-4 accent-violet-500" />
+    {t('roleplay.dialogueOnly')}
+  </label>
+
   return <div className="flex min-h-0 flex-1 flex-col bg-surface" data-testid="workspace-roleplay-session-view">
     {loading ? <div className="flex flex-1 items-center justify-center gap-2 text-sm text-zinc-400" role="status"><LoaderCircle className="h-4 w-4 animate-spin" />{t('roleplay.loading')}</div> : null}
     {error ? <div role="alert" className="shrink-0 whitespace-pre-wrap break-words border-b border-rose-400/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-200">{error}</div> : null}
@@ -479,7 +521,7 @@ export function RoleplaySessionView(props: {
       <div ref={messageListRef} data-testid="roleplay-message-list" onScroll={(event) => { const list = event.currentTarget; stickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight <= ROLEPLAY_STICKY_BOTTOM_THRESHOLD }} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-8 sm:py-8">
         <div className="mx-auto max-w-3xl space-y-8">
           {!detail.messages.length ? <div className="mx-auto max-w-xl py-5" data-testid="roleplay-empty-state">
-            <MessageCircle className="mb-4 h-7 w-7 text-violet-300" /><h3 className="text-lg font-medium text-zinc-100">{t('roleplay.emptyTitle')}</h3><p className="mt-2 text-sm leading-7 text-zinc-400">{t('roleplay.emptyHint')}</p>
+            <MessageCircle className="mb-4 h-7 w-7 text-violet-300" /><h3 className="text-lg font-medium text-zinc-100">{t('roleplay.emptyTitle')}</h3><p className="mt-2 text-sm leading-7 text-zinc-400">{t(dialogueOnly ? 'roleplay.dialogueOnlyEmptyHint' : 'roleplay.emptyHint')}</p>
             {detail.sourceSnapshot.selectedText ? <blockquote className="mt-5 line-clamp-3 border-l-2 border-violet-400/40 pl-4 text-sm leading-7 text-zinc-400">{detail.sourceSnapshot.selectedText}</blockquote> : null}
           </div> : null}
           {visibleMessages.map((message, index) => <article key={message.id} ref={(element) => { if (element) messageElementsRef.current.set(message.id, element); else messageElementsRef.current.delete(message.id) }} data-testid={`roleplay-message-${message.messageIndex - 1}`} data-roleplay-message-id={message.id} className={cn('min-w-0', forkMessageId === message.id && 'rounded-xl ring-1 ring-violet-400/40')}>
@@ -501,14 +543,18 @@ export function RoleplaySessionView(props: {
         <div className="mx-auto max-w-3xl">
           {forkMessage ? <div className="mb-2 flex items-center gap-2 text-xs text-violet-300" data-testid="roleplay-fork-point-visual-state"><GitBranch className="h-3.5 w-3.5" /><span data-testid="roleplay-fork-anchor">{t('roleplay.nextForkFrom', { index: forkMessage.messageIndex })}</span><button type="button" disabled={mutating} onClick={() => { contextSnapshotRef.current = null; setForkMessageId(null) }} aria-label={t('roleplay.cancelFork')} className="ml-auto inline-flex h-8 w-8 items-center justify-center"><X className="h-4 w-4" /></button></div> : null}
           <div className={cn('rounded-2xl border border-line/10 bg-inset px-3 py-2 focus-within:border-violet-400/40', composerExpanded && 'sm:p-3')}>
-            <div className={cn(composerExpanded && 'sm:grid sm:grid-cols-2 sm:gap-3')}>
+            <div className={cn(composerExpanded ? 'sm:grid sm:grid-cols-2 sm:gap-3' : 'flex items-center gap-3')}>
               {composerExpanded ? <label className="block text-xs text-zinc-500">{t('roleplay.storyGuidance')}<textarea value={storyGuidance} onChange={(event) => setStoryGuidance(event.target.value)} rows={1} maxLength={10000} placeholder={t('roleplay.storyGuidancePlaceholder')} className="mt-1 block max-h-24 min-h-6 w-full resize-y bg-transparent text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-500 sm:min-h-8" /></label> : null}
-              <label className={cn('block text-xs text-violet-300', composerExpanded && 'mt-2 border-t border-line/8 pt-2 sm:mt-0 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0')}>
+              <label className={cn('block min-w-0 flex-1 text-xs text-violet-300', composerExpanded && 'mt-2 border-t border-line/8 pt-2 sm:mt-0 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0')}>
                 {composerExpanded ? t('roleplay.dialogueTo', { name: cast.counterpartName }) : null}
                 <textarea ref={composerRef} aria-label={t('roleplay.composerLabel')} value={dialogue} onFocus={() => setComposerExpanded(true)} onClick={() => setComposerExpanded(true)} onChange={(event) => setDialogue(event.target.value)} rows={composerExpanded ? 2 : 1} maxLength={10000} placeholder={t(composerExpanded ? 'roleplay.composerPlaceholder' : storyGuidance.trim() ? 'roleplay.composerWithGuidance' : 'roleplay.composerCollapsedPlaceholder')} onKeyDown={(event) => { if (!event.nativeEvent.isComposing && event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); if (canSend) void handleSend() } }} className={cn('block max-h-28 min-h-6 w-full bg-transparent text-sm leading-6 text-zinc-100 outline-none placeholder:text-zinc-500', composerExpanded ? 'mt-1 min-h-12 resize-y' : 'resize-none')} />
               </label>
+              {!composerExpanded ? dialogueOnlyToggle : null}
             </div>
-            {composerExpanded ? <label className="mt-2 flex items-center gap-2 border-t border-line/8 pt-2 text-xs text-zinc-500">{t('roleplay.lengthTarget')}<input type="number" min={100} max={4000} step={100} aria-label={t('roleplay.lengthTarget')} value={Number.isNaN(targetCharacters) ? '' : targetCharacters} onChange={(event) => setTargetCharacters(event.target.valueAsNumber)} className="min-h-8 w-20 rounded-lg border border-line/10 bg-inset px-2 text-sm text-zinc-200" /><span>{t('roleplay.characters')}</span></label> : null}
+            {composerExpanded ? <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-line/8 pt-2">
+              {dialogueOnlyToggle}
+              <label className="flex items-center gap-2 text-xs text-zinc-500">{t('roleplay.lengthTarget')}<input type="number" min={100} max={4000} step={100} aria-label={t('roleplay.lengthTarget')} value={Number.isNaN(targetCharacters) ? '' : targetCharacters} onChange={(event) => { const value = event.target.valueAsNumber; if (dialogueOnly) setDialogueOnlyTargetCharacters(value); else setStoryTargetCharacters(value) }} className="min-h-8 w-20 rounded-lg border border-line/10 bg-inset px-2 text-sm text-zinc-200" /><span>{t('roleplay.characters')}</span></label>
+            </div> : null}
           </div>
           <div className="mt-1 flex items-center justify-between gap-2" data-testid="roleplay-composer-actions">
             <div className="flex min-w-0 items-center gap-1">
@@ -517,7 +563,7 @@ export function RoleplaySessionView(props: {
               <button type="button" disabled={mutating} onClick={() => setGenerationPanel('skills')} aria-label={`${t('roleplay.writingSkills')}${generationOptions.writingSkillCardIds.length ? ` · ${generationOptions.writingSkillCardIds.length}` : ''}`} title={t('roleplay.writingSkills')} className={cn('inline-flex h-11 w-11 items-center justify-center rounded-xl hover:bg-overlay/5 hover:text-zinc-100 disabled:opacity-40', generationOptions.writingSkillCardIds.length ? 'text-violet-300' : 'text-zinc-400')}><Wand2 className="h-4 w-4" /></button>
               {composerExpanded ? <button type="button" onClick={() => setComposerExpanded(false)} aria-label={t('roleplay.collapseComposer')} title={t('roleplay.collapseComposer')} className="inline-flex h-11 w-11 items-center justify-center rounded-xl text-zinc-400 hover:bg-overlay/5 hover:text-zinc-100"><ChevronDown className="h-4 w-4" /></button> : null}
             </div>
-            <button type="submit" data-testid="roleplay-composer-send" disabled={!canSend} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-violet-500 px-4 text-sm font-medium text-white hover:bg-violet-400 disabled:opacity-40">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <SendHorizonal className="h-4 w-4" />}{t('roleplay.send')}</button>
+            <button type="submit" data-testid="roleplay-composer-send" disabled={!canSend} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-violet-500 px-4 text-sm font-medium text-white hover:bg-violet-400 disabled:opacity-40">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <SendHorizonal className="h-4 w-4" />}{t(dialogueOnly ? 'roleplay.sendDialogue' : 'roleplay.send')}</button>
           </div>
         </div>
       </form>
