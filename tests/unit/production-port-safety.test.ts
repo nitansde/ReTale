@@ -222,12 +222,18 @@ describe('production build provenance', () => {
     })).toThrow(/Run npm run build/)
   })
 
-  it('fingerprints this repository including dirty production sources', () => {
+  it('fingerprints this repository including available dirty production sources', () => {
     const source = computeNextProductionSourceFingerprint(repoRoot)
     expect(source.inputs).toContain('package.json')
     expect(source.inputs).toContain('scripts/knowledge-worker.mjs')
     expect(source.inputs).toContain('scripts/next-production-build.mjs')
-    expect(source.inputs).toContain('.env.local')
+    // `.env.local` is intentionally ignored and may only exist on a developer
+    // machine; provenance must include it when present without requiring it in CI.
+    if (fs.existsSync(path.join(repoRoot, '.env.local'))) {
+      expect(source.inputs).toContain('.env.local')
+    } else {
+      expect(source.inputs).not.toContain('.env.local')
+    }
     expect(source.inputs).toContain('app/workspace/page.tsx')
     expect(source.fingerprint).toMatch(/^[a-f0-9]{64}$/)
   })
