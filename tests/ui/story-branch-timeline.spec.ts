@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
+import { normalizeAISettings } from '@/lib/ai-settings'
 import { formatStoryBranchInstructionPreview } from '@/lib/story-branch-labels'
 import { DEFAULT_REWRITE_PROMPT } from '@/components/workspace/selection-novel-studio'
 import { storyBranchFixtureIds } from '@/tests/helpers/fixture-ids'
@@ -10,6 +11,18 @@ import type { StoryTimelineResponse } from '@/lib/story-branch-types'
 const evidenceDirectory = path.join(process.cwd(), 'tests/artifacts/evidence/task-15-branch-ux-playwright-future-map')
 const futureJumpEvidenceDirectory = path.join(process.cwd(), 'tests/artifacts/evidence/task-15-branch-ux-playwright-future-jump-view')
 const rewritePromptPlaceholder = '例如：保留剧情走向，但把这段写得更压迫、更像命运在逼近。'
+
+test.beforeEach(async ({ page }) => {
+  // AI settings are loaded independently from the per-novel resource payload.
+  await page.route('**/api/settings/ai', (route) => route.fulfill({
+    json: normalizeAISettings({
+      rewrite: {
+        provider: 'openai-compatible',
+        openAICompatible: { baseUrl: 'https://example.com/v1', apiKey: 'test-key', model: 'test-model' },
+      },
+    }),
+  }))
+})
 
 function buildRecoverableRewriteJob(params: {
   jobId: string
@@ -1628,7 +1641,7 @@ test('future jump view renders latest revision, revises in place, and reopens re
   await expect(page.getByTestId('future-jump-continue')).toBeVisible()
   await page.getByTestId('future-jump-continue').click()
   await expect(page.getByTestId('workspace-action-overlay')).toBeVisible()
-  await expect(page.getByText('默认不替换正文')).toBeVisible()
+  await expect(page.getByTestId('workspace-action-overlay').getByRole('button', { name: '替换正文', exact: true })).toHaveCount(0)
   await expect(page.getByPlaceholder(rewritePromptPlaceholder)).toHaveValue(DEFAULT_REWRITE_PROMPT)
   await expect(page.getByTestId('workspace-action-overlay').getByText('第三版未来正文：她被带走后，所有误会都在更慢地发酵。').first()).toBeVisible()
   await page.getByRole('button', { name: '生成版本' }).click()
@@ -1636,8 +1649,11 @@ test('future jump view renders latest revision, revises in place, and reopens re
 
   expect(rewritePayload).toMatchObject({
     operationType: 'rewrite',
-    selectedText: '第三版未来正文：她被带走后，所有误会都在更慢地发酵。',
+    // Saved Future Jump text is included through history, not duplicated as a selection.
+    selectedText: '',
     sourceText: '第三版未来正文：她被带走后，所有误会都在更慢地发酵。',
+    branchContextNodeId: storyBranchFixtureIds.futureJumpNodeId,
+    branchContextInclusion: 'include_selected',
   })
   expect(continueBlockPayload).toMatchObject({
     branchId: 'novel-001:main',

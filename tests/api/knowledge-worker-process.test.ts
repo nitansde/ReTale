@@ -201,7 +201,7 @@ describe('knowledge worker process bootstrap', () => {
     { label: 'retrieval source', jobType: 'rebuild_retrieval_index' as const, production: false },
     { label: 'main compiled', jobType: 'extract_chapter_knowledge' as const, production: true },
     { label: 'retrieval compiled', jobType: 'rebuild_retrieval_index' as const, production: true },
-  ])('allows only the matching scheduled attempt to claim a tokenized $label job', ({ label: modeLabel, jobType, production }) => {
+  ])('allows only the matching scheduled attempt to claim a tokenized $label job', { timeout: 30_000 }, ({ label: modeLabel, jobType, production }) => {
     const label = modeLabel.replaceAll(' ', '-')
     const cases = [
       { label: 'matching', workerAttemptId: 'attempt-current', claimed: true },

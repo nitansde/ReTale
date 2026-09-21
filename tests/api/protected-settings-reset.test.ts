@@ -74,6 +74,7 @@ function seedBusinessData(database: DatabaseSync) {
 
 function seedProtectedSettings(database: DatabaseSync) {
   const library = createDefaultPresetCompatLibrary()
+  library.novelRewritePresetIds = { novel_reset: 'reset-protected-preset' }
   library.revision = 7
   library.lastImportedAt = '2026-05-18T00:00:00.000Z'
   library.lastExportedAt = '2026-05-18T00:00:01.000Z'

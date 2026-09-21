@@ -27,6 +27,18 @@ function createFixture() {
       id, novelId, branchId, chapterNo, title, rawText, summary, sourceHash, knowledgeStatus
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run('chapter-1', 'novel-1', 'novel-1:main', 1, 'Chapter 1', 'Chapter body', 'Chapter summary', 'source-hash-1', 'ready')
+  database.prepare(
+    `INSERT INTO continue_blocks (
+      id, novel_id, branch_id, source_chapter_no, title,
+      user_instruction, selected_text, original_text, latest_text
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('continue-block-1', 'novel-1', 'novel-1:main', 1, 'Continue 1', 'Continue', '', 'Chapter body', 'Saved continuation')
+  database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no,
+      title, source_chapter_no, chapter_id, continue_block_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('continue-node-1', 'novel-1', 'novel-1:main', 'continue_block', 1, 1, 'Continue 1', 1, 'chapter-1', 'continue-block-1')
   return { database, db }
 }
 
@@ -199,6 +211,7 @@ describe('chapter-scoped GraphRAG seeds', () => {
     )
     const charactersBlock = result.promptBlocks.find((block) => block.id === 'characters')
     expect(charactersBlock?.content.match(/^- Character /gm)).toHaveLength(10)
+    expect(result.promptBlocks.find((block) => block.id === 'branch-lineage-full-text')?.content).toContain('Saved continuation')
   })
 })
 

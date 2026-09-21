@@ -83,7 +83,14 @@ function classifyUnsafePath(resolvedPath, repoRoot) {
   const normalizedPath = toPosixPath(relativePath)
   if (DATABASE_PATTERN.test(normalizedPath) || DATABASE_SIDECAR_PATTERN.test(normalizedPath)) return 'database-or-sidecar'
   const segments = normalizedPath.split('/').filter(Boolean)
-  const unsafeSegment = segments.find((segment) => UNSAFE_SEGMENTS.has(segment.toLowerCase()))
+  const unsafeSegment = segments.find((segment) => {
+    const normalizedSegment = segment.toLowerCase()
+    // Dependencies such as Next ship runtime modules in their own build folders.
+    // Canonical targets are checked separately, so symlinks to project build/data
+    // directories still fail the scan.
+    if (segments[0] === 'node_modules' && normalizedSegment === 'build') return false
+    return UNSAFE_SEGMENTS.has(normalizedSegment)
+  })
   if (unsafeSegment) return `repository-${unsafeSegment}`
   if (QA_IMAGE_PATTERN.test(normalizedPath)) return 'qa-image'
   return null

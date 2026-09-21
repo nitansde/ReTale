@@ -158,6 +158,31 @@ describe('Next build route bundle budgets', () => {
 })
 
 describe('Next output-file traces', () => {
+  it('allows dependency build modules while rejecting links into repository build data', () => {
+    const root = fixtureRoot('dependency build trace')
+    const distDir = path.join(root, '.next')
+    const manifestPath = path.join(distDir, 'server', 'page.js.nft.json')
+    const dependencyBuild = path.join(root, 'node_modules', 'next', 'dist', 'build')
+    const runtimePath = path.join(dependencyBuild, 'adapter', 'setup-node-env.external.js')
+    fs.mkdirSync(path.dirname(runtimePath), { recursive: true })
+    fs.writeFileSync(runtimePath, 'runtime module')
+    writeJson(manifestPath, { version: 1, files: [path.relative(path.dirname(manifestPath), runtimePath)] })
+
+    expect(scanOutputFileTraces({ distDir, repoRoot: root }).passed).toBe(true)
+
+    const privateBuild = path.join(root, 'build', 'runtime')
+    fs.mkdirSync(privateBuild, { recursive: true })
+    fs.writeFileSync(path.join(privateBuild, 'manifest.json'), 'private runtime metadata')
+    fs.symlinkSync(privateBuild, path.join(dependencyBuild, 'linked-runtime'))
+    writeJson(manifestPath, {
+      version: 1,
+      files: [path.relative(path.dirname(manifestPath), path.join(dependencyBuild, 'linked-runtime', 'manifest.json'))],
+    })
+    expect(scanOutputFileTraces({ distDir, repoRoot: root }).unsafePaths).toContainEqual(
+      expect.objectContaining({ pathKind: 'canonical', reason: 'repository-build' }),
+    )
+  })
+
   it('resolves entries relative to each manifest and verifies required runtime assets', () => {
     const root = fixtureRoot('trace fixture with spaces')
     const distDir = path.join(root, '.next')
@@ -263,6 +288,8 @@ describe('Next output-file traces', () => {
     ['lancedb', '.lancedb/table/file.bin', 'repository-.lancedb'],
     ['build runtime database', 'build/runtime/fixture/control.db', 'database-or-sidecar'],
     ['build runtime metadata', 'build/runtime/fixture/manifest.json', 'repository-build'],
+    ['dependency database', 'node_modules/example/build/control.db', 'database-or-sidecar'],
+    ['dependency logs', 'node_modules/example/build/logs/report.json', 'repository-logs'],
     ['debug logs', 'logs/llm-debug/report.json', 'repository-logs'],
     ['test evidence', 'tests/artifacts/evidence/report.json', 'repository-tests'],
     ['tests', 'tests/fixtures/corpus.txt', 'repository-tests'],

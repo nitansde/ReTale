@@ -1,9 +1,19 @@
 import path from 'node:path'
 import { expect, test } from '@playwright/test'
+import { normalizeAISettings } from '@/lib/ai-settings'
 
 for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
   test(`main reader requires explicit edit mode at ${viewport.width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport)
+    // Selection actions require a configured writing model even in read-only mode.
+    await page.route('**/api/settings/ai', (route) => route.fulfill({
+      json: normalizeAISettings({
+        rewrite: {
+          provider: 'openai-compatible',
+          openAICompatible: { baseUrl: 'https://example.com/v1', apiKey: 'test-key', model: 'test-model' },
+        },
+      }),
+    }))
     await page.goto('/library', { waitUntil: 'networkidle' })
     await page.getByTestId('app-language-option-en').click()
     await page.locator('input[type=file]').setInputFiles(path.join(process.cwd(), 'scripts/fixtures/workspace-import-smoke.txt'))

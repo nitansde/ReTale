@@ -465,6 +465,18 @@ async function startFakeProviderServer() {
         return
       }
 
+      if (body.includes('本次输出必须遵守角色互动输出格式')) {
+        response.writeHead(200, { 'Content-Type': 'application/json' })
+        response.end(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({ blocks: [
+            { type: 'narration', text: 'Task 12 fake roleplay output: the door opens.' },
+            { type: 'counterpart', text: 'I will tell you the truth.' },
+          ] }) } }],
+          usage: { prompt_tokens: 123, completion_tokens: 45 },
+        }))
+        return
+      }
+
       const isStream = body.includes('"stream":true')
       if (isStream) {
         response.writeHead(200, {
@@ -619,10 +631,11 @@ async function importWorkspaceFixture(page: Page, novelTitle: string) {
   const importResponse = await importResponsePromise
   expect(importResponse.ok()).toBeTruthy()
   const imported = await importResponse.json() as { novelId: string; chapterId: string }
+  // Let import finish loading the new novel before the app navigates. A manual
+  // navigation here aborts that request and restores the previous novel instead.
+  await page.waitForURL(/\/workspace/)
   await page.waitForLoadState('networkidle')
-  if (!/\/workspace/.test(page.url())) {
-    await page.goto('/workspace', { waitUntil: 'networkidle' })
-  }
+  await expect.poll(async () => (await readBrowserWorkspaceSession(page)).currentNovelId).toBe(imported.novelId)
   return { status: importResponse.status(), ...imported }
 }
 
@@ -1535,7 +1548,9 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     appendQaRow(qaRows, 'Rewrite provider error and structured product guidance', '[performance-before-after.md](./performance-before-after.md)', 'Verified the real `/api/rewrite` provider failure contract and setup guidance without any fake fallback content.')
 
     await dismissWorkspaceActionOverlayIfVisible(page)
-    await page.getByRole('button', { name: 'Back to chapter' }).click()
+    const sourceChapter = page.getByTestId(`timeline-chapter-${identity.chapterNo}`)
+    if (!await sourceChapter.isVisible()) await page.getByRole('button', { name: 'Open chapter navigation', exact: true }).click()
+    await sourceChapter.getByRole('button').first().click()
     await expect(page.getByTestId('workspace-chapter-body-view')).toBeVisible()
 
     await selectEntireChapter(page)
@@ -1636,7 +1651,7 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     const deleteWhatIfResponsePromise = page.waitForResponse(
       (response) => response.url().includes('/api/story-timeline?') && response.request().method() === 'DELETE' && response.ok()
     )
-    await page.getByTestId(`timeline-node-${whatIfResult.timelineNodeId}`).locator('xpath=following-sibling::button[1]').click()
+    await page.getByTestId(`timeline-node-row-${whatIfResult.timelineNodeId}`).getByRole('button', { name: /^Delete / }).click()
     const deleteWhatIfResponse = await deleteWhatIfResponsePromise
     expect(deleteWhatIfResponse.ok()).toBeTruthy()
     await expect.poll(() => readStoryTimelineNodeCount(identity.novelId, whatIfResult.timelineNodeId), { timeout: 10_000 }).toBe(0)
@@ -1649,15 +1664,17 @@ test('task 12 exhaustive full-stack regression and evidence', async ({ page }) =
     await page.getByTestId('workspace-chapter-roleplay-entry').click()
     const roleplayView = page.getByTestId('workspace-roleplay-session-view')
     await expect(roleplayView).toBeVisible()
-    await roleplayView.getByRole('textbox').fill('Tell me the truth now.')
+    await roleplayView.getByRole('textbox', { name: 'My character', exact: true }).fill('Task 12 Hero')
+    await roleplayView.getByRole('textbox', { name: 'Other character', exact: true }).fill('Task 12 Rival')
+    await roleplayView.getByRole('button', { name: 'Enter the scene', exact: true }).click()
+    await roleplayView.getByRole('textbox', { name: 'My dialogue', exact: true }).fill('Tell me the truth now.')
     const roleplayMessageResponsePromise = page.waitForResponse((response) => response.url().includes('/api/roleplay/sessions/') && response.url().includes('/messages') && response.request().method() === 'POST')
     await page.getByTestId('roleplay-composer-send').click()
     const roleplayMessageResponse = await roleplayMessageResponsePromise
     apiTimings.push({ label: 'roleplay-message', ms: 0, status: roleplayMessageResponse.status() })
     await expect(page.getByTestId('roleplay-message-0')).toContainText('Tell me the truth now.')
-    await expect(page.getByTestId('roleplay-message-1')).toContainText('Task 12 fake stream output')
-    await expect(page.getByTestId('roleplay-fork-anchor')).toContainText(/latest message|最新消息/i)
-    await page.getByTestId('roleplay-message-0').getByRole('button').click()
+    await expect(page.getByTestId('roleplay-message-1')).toContainText('Task 12 fake roleplay output')
+    await page.getByTestId('roleplay-message-0').getByRole('button', { name: 'fork from #1', exact: true }).click()
     await expect(page.getByTestId('roleplay-fork-anchor')).toContainText(/fork(s|ing)? from|分叉/i)
     appendQaRow(qaRows, 'Roleplay session/message/fork', '[task-12-i18n-full-stack.png](./task-12-i18n-full-stack.png)', 'Created a real roleplay session from the chapter selection and persisted the assistant reply.')
 

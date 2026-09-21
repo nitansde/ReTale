@@ -870,10 +870,16 @@ export const useNovelStore = create<NovelStore>((set, get) => {
       nextNovelId
     )
 
-    return {
-      currentNovelId: nextChapter?.novelId ?? '',
+    const nextState = {
+      currentNovelId: nextChapter?.novelId ?? nextNovelId,
       currentChapterId: nextChapter?.id ?? '',
     }
+    // The library may reconcile to a survivor that is not loaded in the
+    // single-novel workspace store. Persist that explicit selection so the
+    // next workspace restore opens the survivor instead of losing it.
+    const session = readBrowserWorkspaceSession()
+    writeBrowserWorkspaceSession({ ...session, currentNovelId: nextState.currentNovelId })
+    return nextState
   }),
   ...createKnowledgeActions(set, setPersisted, get),
   ...createAISettingsActions(set, get),

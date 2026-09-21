@@ -78,6 +78,8 @@ describe('writing skill advanced-context preview', () => {
       searchLanceEvidence: vi.fn(async () => ({ matches: [], warning: null })),
     }))
     vi.doMock('@/lib/server/database-access', () => ({
+      execute: vi.fn(),
+      withTransaction: vi.fn((callback: () => unknown) => callback()),
       queryOne: vi.fn(() => ({
         id: 'chapter-1',
         chapterNo: 1,

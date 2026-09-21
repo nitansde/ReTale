@@ -598,15 +598,18 @@ describe('useSelectionNovelStudioCore user-facing errors', () => {
     expect(result.current.storyTimelineError).not.toContain('SENTINEL')
   })
 
-  it('sanitizes persisted recoverable rewrite job diagnostics', () => {
+  it('preserves readable persisted rewrite diagnostics while redacting credentials and stacks', () => {
     const params = buildCoreParams()
     const { result } = renderHook(() => useSelectionNovelStudioCore(params))
 
     act(() => {
-      result.current.syncRewriteJobFromRecoverableJob(buildFailedRecoverableRewriteJob('SENTINEL persisted provider stack'))
+      result.current.syncRewriteJobFromRecoverableJob(buildFailedRecoverableRewriteJob(
+        'Provider HTTP 429: rate limit exceeded\napiKey=SENTINEL-persisted-secret\n    at generate (/tmp/SENTINEL-rewrite.ts:1:1)',
+      ))
     })
 
-    expect(result.current.rewriteFlow.error).toBe('Rewrite failed.')
+    expect(result.current.rewriteFlow.error).toBe('Rewrite failed.\nProvider HTTP 429: rate limit exceeded\napiKey=[REDACTED]')
+    expect(result.current.rewriteState.error).toBe(result.current.rewriteFlow.error)
     expect(result.current.rewriteState.error).not.toContain('SENTINEL')
   })
 })

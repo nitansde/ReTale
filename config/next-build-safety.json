@@ -1,13 +1,21 @@
 {
   "schemaVersion": 1,
+  "baseline": {
+    "description": "Graph browsing, generated-history compression and Chinese writing defaults with Next.js 16.3.5 / Tiptap 3.31.3; route budgets allow approximately 5% growth over this measured webpack build.",
+    "measuredAt": "2026-09-20",
+    "routes": {
+      "/workspace": { "rawBytes": 1530042, "gzipBytes": 438441 },
+      "/library": { "rawBytes": 851155, "gzipBytes": 249551 }
+    }
+  },
   "routes": {
     "/workspace": {
-      "rawBytes": 1450000,
-      "gzipBytes": 410000
+      "rawBytes": 1610000,
+      "gzipBytes": 461000
     },
     "/library": {
-      "rawBytes": 800000,
-      "gzipBytes": 230000
+      "rawBytes": 894000,
+      "gzipBytes": 263000
     }
   },
   "requiredTraceAssets": [
