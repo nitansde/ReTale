@@ -1,3 +1,5 @@
+import { exerciseVoiceCall, installVoiceBrowserFixture } from '@/tests/helpers/voice-browser-fixture'
+import { DEFAULT_VOICE_SETTINGS } from '@/lib/voice-chat'
 import { expect, test, type Page } from '@playwright/test'
 import { buildRequestPromptMessages } from '@/lib/generation-prompt-preview'
 import { type RoleplayTurn, type RoleplayScript, roleplayScriptText } from '@/lib/roleplay-script'
@@ -115,6 +117,7 @@ async function openMobileChapterDrawer(page: Page) {
 }
 
 test('roleplay mobile flow reopens timeline chat and keeps chapter body unchanged', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
   const initialChapterContent = '<p>第10章正文：夜色压下来之前，他们已经开始互相试探。</p>'
@@ -660,6 +663,41 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
       : []
     return localChapters.every((chapter) => chapter.content === initialChapterContent)
   })).toBe(true)
+
+  // Voice is optional and shares the current branch. Use actual browser audio
+  // primitives with synthetic input and streaming provider fixtures.
+  await page.route('**/api/settings/voice', (route) => route.fulfill({ json: {
+    ...DEFAULT_VOICE_SETTINGS, sonioxConfigured: true, qwenConfigured: false, fishConfigured: true, voiceId: 'fixture-voice',
+  } }))
+  await installVoiceBrowserFixture(page)
+  await page.getByRole('button', { name: '语音聊天', exact: true }).click()
+  await expect(page.getByTestId('roleplay-voice-panel')).toBeVisible()
+  await expect(page.getByRole('button', { name: '开始通话' })).toBeEnabled()
+  await page.getByRole('button', { name: '语音设置', exact: true }).click()
+  await expect(page.getByTestId('roleplay-voice-settings')).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-voice-settings-mobile.png') })
+  await page.getByRole('button', { name: '语音设置', exact: true }).click()
+  const voiceStartMessageCount = sessionDetail.messages.length
+  await exerciseVoiceCall(page)
+  await expect.poll(() => sessionDetail.messages.length).toBe(voiceStartMessageCount + 2)
+  expect(sessionDetail.messages.at(-1)?.script).toMatchObject({ voiceInterrupted: true, blocks: [{ type: 'counterpart', text: '我在这里。' }] })
+  await expect(page.getByRole('button', { name: '文字聊天' })).toBeDisabled()
+  await page.getByRole('button', { name: '静音麦克风' }).click()
+  await expect(page.getByRole('button', { name: '打开麦克风' })).toHaveAttribute('aria-pressed', 'true')
+  await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-voice-call-mobile.png') })
+  await page.getByRole('button', { name: '结束通话' }).click()
+  await expect(page.getByRole('button', { name: '开始通话' })).toBeEnabled()
+  const capture = await page.evaluate(() => {
+    const fixture = (window as unknown as { voiceFixture: { audioPackets: number; audioBytes: number; tracks: MediaStreamTrack[]; traces: { event: string; reason?: string }[] } }).voiceFixture
+    return { packets: fixture.audioPackets, bytes: fixture.audioBytes, tracksEnded: fixture.tracks.every((track) => track.readyState === 'ended'), traces: fixture.traces }
+  })
+  expect(capture.packets).toBeGreaterThan(0); expect(capture.bytes).toBeGreaterThanOrEqual(3200); expect(capture.tracksEnded).toBe(true)
+  // The debug tracker records the phone side of the call for logs/voice-debug.
+  expect(capture.traces.map((trace) => trace.event)).toEqual(expect.arrayContaining(['start', 'asr-ready', 'asr-final', 'heard', 'reply-result']))
+  expect(capture.traces).toContainEqual(expect.objectContaining({ event: 'interrupt', reason: 'manual' }))
+  await page.getByRole('button', { name: '文字聊天' }).click()
+  await expect(page.getByRole('textbox', { name: '我的台词' })).toBeVisible()
 
   await openMobileChapterDrawer(page)
   const card = page.getByTestId('timeline-node-roleplay-node-1')

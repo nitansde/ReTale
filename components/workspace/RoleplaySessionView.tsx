@@ -14,6 +14,8 @@ import { RoleplayScriptBlocks } from './RoleplayScriptBlocks'
 import { RoleplayGenerationPanel } from './RoleplayGenerationPanel'
 import { RoleplayBranchSwitch } from './RoleplayBranchSwitch'
 import { RoleplayBranchMenu } from './RoleplayBranchMenu'
+import { RoleplayVoicePanel } from './RoleplayVoicePanel'
+import type { VoiceReplyRunner } from '@/lib/voice-call'
 import { buildRoleplayMessageTree, getRoleplayBranchDeletionIds, getRoleplayBranchTip, getRoleplayMessagePath as buildMessagePath } from '@/lib/roleplay-branches'
 import { defaultRoleplayGenerationOptions } from '@/lib/roleplay-generation'
 import { createWritingSkillRuntimeSeed } from '@/lib/writing-skill-selection'
@@ -191,6 +193,11 @@ export function RoleplaySessionView(props: {
   const [storyTargetCharacters, setStoryTargetCharacters] = useState(ROLEPLAY_DEFAULT_LENGTH)
   const [dialogueOnlyTargetCharacters, setDialogueOnlyTargetCharacters] = useState(ROLEPLAY_DIALOGUE_ONLY_DEFAULT_LENGTH)
   const [dialogueOnly, setDialogueOnly] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
+  const [voiceActive, setVoiceActive] = useState(false)
+  const [voiceDraft, setVoiceDraft] = useState('')
+  const voiceActiveRef = useRef(false)
+  const voicePathRef = useRef<RoleplayMessagePayload[] | null>(null)
   const [forkMessageId, setForkMessageId] = useState<string | null>(null)
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -211,7 +218,7 @@ export function RoleplaySessionView(props: {
   const controllerRef = useRef<AbortController | null>(null)
   const busyRef = useRef(false)
   useImperativeHandle(props.controlsRef, () => ({
-    openCastPicker: () => { if (detail && cast && !busyRef.current) setEditingCast(true) },
+    openCastPicker: () => { if (detail && cast && !busyRef.current && !voiceActiveRef.current) setEditingCast(true) },
   }), [detail, cast])
   const branchStorageKey = `retale:roleplay-branch:${props.novelId}:${props.branchId}:${props.sessionId}`
   const lengthStorageKey = `retale:roleplay-length:${props.novelId}:${props.branchId}:${props.sessionId}`
@@ -310,7 +317,7 @@ export function RoleplaySessionView(props: {
       return
     }
     if (stickToBottomRef.current) list.scrollTop = list.scrollHeight
-  }, [visibleMessages, busy, pendingScript])
+  }, [visibleMessages, busy, pendingScript, voiceDraft])
 
   useEffect(() => {
     const list = messageListRef.current
@@ -323,8 +330,10 @@ export function RoleplaySessionView(props: {
   const targetCharacters = dialogueOnly ? dialogueOnlyTargetCharacters : storyTargetCharacters
   const turnInput = { ...cast, storyGuidance, dialogue, maxCharacters: targetCharacters, dialogueOnly, generationOptions }
   const turn = parseRoleplayTurn(turnInput)
-  const previewTurn = parseRoleplayTurn(turnInput, { allowEmptyInput: true })
-  const mutating = contextCompressing || busy || deletingMessageId !== null || deletingBranchId !== null
+  const buildVoiceTurn = (text: string): RoleplayTurn | null => cast ? { ...cast, dialogue: text, storyGuidance: '', maxCharacters: 50, dialogueOnly: true, generationOptions } : null
+  // Voice mode previews the exact turn shape a spoken line sends, not the hidden text composer.
+  const previewTurn = voiceMode ? buildVoiceTurn('') : parseRoleplayTurn(turnInput, { allowEmptyInput: true })
+  const mutating = voiceActive || contextCompressing || busy || deletingMessageId !== null || deletingBranchId !== null
   const canSend = Boolean(turn && !mutating)
   const retryUser = latestMessage?.role === 'user' && latestMessage.turn ? latestMessage : null
   const latestAssistant = latestMessage?.role === 'assistant' ? latestMessage : null
@@ -344,6 +353,43 @@ export function RoleplaySessionView(props: {
         namedTranscript: { kind: 'roleplay', userName: requestTurn.playerName, assistantName: requestTurn.counterpartName },
       },
     } : null
+
+  const handleVoiceActive = (active: boolean) => {
+    voiceActiveRef.current = active
+    setVoiceActive(active)
+    if (active) { voicePathRef.current = [...visibleMessages]; setError('') }
+    else { voicePathRef.current = null; setVoiceDraft('') }
+  }
+
+  const handleVoiceTurn = async (text: string, runReply: VoiceReplyRunner) => {
+    const voiceTurn = buildVoiceTurn(text)
+    if (!detail || !cast || !voiceTurn) return
+    const history = [...(voicePathRef.current ?? visibleMessages)]
+    const user = normalizeMessage(await appendRoleplayMessage({
+      novelId: props.novelId, branchId: props.branchId, sessionId: detail.id, role: 'user', turn: voiceTurn,
+      content: text, parentMessageId: history.at(-1)?.id ?? null,
+      forkedFromMessageId: forkMessage?.id ?? null,
+    }))
+    voicePathRef.current = [...history, user]
+    setDetail((current) => current ? { ...current, messages: [...current.messages, user] } : current)
+    setSelectedMessageId(user.id); setForkMessageId(null); stickToBottomRef.current = true
+    props.onRequestsChange?.()
+    try {
+      // Same reviewed context snapshot as text replies, so both modes see identical RAG context.
+      const result = await runReply({ ...buildGenerationRequest(voiceTurn, history), contextSnapshotId: contextSnapshotRef.current })
+      if (result.text.trim()) {
+        const script: RoleplayScript = { ...cast, dialogueOnly: true, blocks: [{ type: 'counterpart', text: result.text }], ...(result.interrupted ? { voiceInterrupted: true } : {}) }
+        const reply = normalizeMessage(await appendRoleplayMessage({
+          novelId: props.novelId, branchId: props.branchId, sessionId: detail.id, role: 'assistant',
+          content: roleplayScriptText(script), script, parentMessageId: user.id,
+        }))
+        voicePathRef.current = [...history, user, reply]
+        setDetail((current) => current ? { ...current, messages: [...current.messages, reply] } : current)
+        setSelectedMessageId(reply.id); props.onRequestsChange?.()
+      }
+      if (result.error) throw new Error(result.error)
+    } finally { setVoiceDraft('') }
+  }
 
   const generate = async (user: RoleplayMessagePayload, regenerateFrom?: RoleplayMessagePayload) => {
     if (!detail || !user.turn) return
@@ -518,6 +564,10 @@ export function RoleplaySessionView(props: {
     {error ? <div role="alert" className="shrink-0 whitespace-pre-wrap break-words border-b border-rose-400/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-200">{error}</div> : null}
     {!loading && detail && !cast ? <div className="min-h-0 flex-1 overflow-y-auto"><RoleplayCastPicker initial={cast} options={detail.characterOptions ?? []} onStart={setCast} /></div> : null}
     {!loading && detail && cast ? <section className="flex min-h-0 flex-1 flex-col" data-testid="roleplay-chat-core" aria-label={t('roleplay.sessionMessages')}>
+      <div className="flex shrink-0 items-center gap-1 border-b border-line/8 px-4 py-2" role="group" aria-label={t('voice.mode')}>
+        <button type="button" disabled={mutating} aria-pressed={!voiceMode} onClick={() => setVoiceMode(false)} className={cn('min-h-9 rounded-lg px-3 text-xs disabled:opacity-40', !voiceMode ? 'bg-overlay/5 text-zinc-100' : 'text-zinc-500')}>{t('voice.textMode')}</button>
+        <button type="button" disabled={mutating} aria-pressed={voiceMode} onClick={() => setVoiceMode(true)} className={cn('min-h-9 rounded-lg px-3 text-xs disabled:opacity-40', voiceMode ? 'bg-violet-500/15 text-violet-200' : 'text-zinc-500')}>{t('voice.mode')}</button>
+      </div>
       <div ref={messageListRef} data-testid="roleplay-message-list" onScroll={(event) => { const list = event.currentTarget; stickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight <= ROLEPLAY_STICKY_BOTTOM_THRESHOLD }} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-8 sm:py-8">
         <div className="mx-auto max-w-3xl space-y-8">
           {!detail.messages.length ? <div className="mx-auto max-w-xl py-5" data-testid="roleplay-empty-state">
@@ -536,10 +586,16 @@ export function RoleplaySessionView(props: {
               {message.turn ? <button type="button" data-testid={`roleplay-delete-${message.id}`} disabled={mutating} onClick={() => void handleDelete(message)} aria-label={t('roleplay.deleteRequest', { index: message.messageIndex })} title={t('roleplay.deleteRequestHint')} className="inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400 disabled:opacity-40">{deletingMessageId === message.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}{t('roleplay.delete')}</button> : null}
             </div> : null}
           </article>)}
+          {voiceActive && voiceDraft ? <RoleplayScriptBlocks script={{ ...cast, dialogueOnly: true, blocks: [{ type: 'counterpart', text: voiceDraft }] }} /> : null}
           {busy ? <div ref={pendingReplyRef} data-testid="roleplay-pending-reply" aria-live="polite" aria-busy="true">{pendingScript ? <RoleplayScriptBlocks script={pendingScript} /> : <p className="flex items-center gap-2 text-sm text-zinc-400"><LoaderCircle className="h-4 w-4 animate-spin text-violet-300" />{t('roleplay.pendingReply')}</p>}</div> : null}
         </div>
       </div>
-      <form data-testid="roleplay-composer" data-expanded={composerExpanded} onSubmit={(event) => { event.preventDefault(); if (canSend) void handleSend() }} className="shrink-0 border-t border-line/8 bg-surface px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-6 sm:pb-3">
+      {voiceMode ? <div className="shrink-0 border-t border-line/8 bg-surface px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-6">
+        <div className="mx-auto max-w-3xl">
+          <RoleplayVoicePanel key={props.sessionId} names={[cast.playerName, cast.counterpartName]} disabled={busy || contextCompressing} onActiveChange={handleVoiceActive} onReply={setVoiceDraft} onTurn={handleVoiceTurn} />
+          <button type="button" disabled={mutating} onClick={() => setGenerationPanel('context')} className="mt-1 inline-flex min-h-9 items-center gap-2 rounded-lg px-2 text-xs text-zinc-400 disabled:opacity-40"><SlidersHorizontal className="h-4 w-4" />{t('workspace.shell.advancedContext')}</button>
+        </div>
+      </div> : <form data-testid="roleplay-composer" data-expanded={composerExpanded} onSubmit={(event) => { event.preventDefault(); if (canSend) void handleSend() }} className="shrink-0 border-t border-line/8 bg-surface px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-6 sm:pb-3">
         <div className="mx-auto max-w-3xl">
           {forkMessage ? <div className="mb-2 flex items-center gap-2 text-xs text-violet-300" data-testid="roleplay-fork-point-visual-state"><GitBranch className="h-3.5 w-3.5" /><span data-testid="roleplay-fork-anchor">{t('roleplay.nextForkFrom', { index: forkMessage.messageIndex })}</span><button type="button" disabled={mutating} onClick={() => { contextSnapshotRef.current = null; setForkMessageId(null) }} aria-label={t('roleplay.cancelFork')} className="ml-auto inline-flex h-8 w-8 items-center justify-center"><X className="h-4 w-4" /></button></div> : null}
           <div className={cn('rounded-2xl border border-line/10 bg-inset px-3 py-2 focus-within:border-violet-400/40', composerExpanded && 'sm:p-3')}>
@@ -566,9 +622,9 @@ export function RoleplaySessionView(props: {
             <button type="submit" data-testid="roleplay-composer-send" disabled={!canSend} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-violet-500 px-4 text-sm font-medium text-white hover:bg-violet-400 disabled:opacity-40">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <SendHorizonal className="h-4 w-4" />}{t(dialogueOnly ? 'roleplay.sendDialogue' : 'roleplay.send')}</button>
           </div>
         </div>
-      </form>
+      </form>}
     </section> : null}
-    <RoleplayGenerationPanel disabled={mutating} onBusyChange={setContextCompressing} panel={generationPanel} request={previewTurn ? buildGenerationRequest(previewTurn, buildMessagePath(messagesById, (forkMessage ?? latestMessage)?.id)) : null} options={generationOptions} onChange={setGenerationOptions} onClose={() => setGenerationPanel(null)} onSnapshot={handleContextSnapshot} />
+    <RoleplayGenerationPanel disabled={mutating} onBusyChange={setContextCompressing} panel={generationPanel} request={previewTurn ? { ...buildGenerationRequest(previewTurn, buildMessagePath(messagesById, (forkMessage ?? latestMessage)?.id)) } : null} options={generationOptions} onChange={setGenerationOptions} onClose={() => setGenerationPanel(null)} onSnapshot={handleContextSnapshot} />
     <DialogSurface open={editingCast && Boolean(cast)} onClose={() => setEditingCast(false)} closeLabel={t('roleplay.closeCast')} title={t('roleplay.chooseCast')} description={t('roleplay.chooseCastHint')} placement="center">
       {detail ? <RoleplayCastPicker hideHeading initial={cast} options={detail.characterOptions ?? []} onStart={(next) => { contextSnapshotRef.current = null; setCast(next); setEditingCast(false) }} /> : null}
     </DialogSurface>

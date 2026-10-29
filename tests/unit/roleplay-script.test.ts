@@ -4,7 +4,8 @@ const turn = { playerName: '甲', counterpartName: '乙', storyGuidance: '雨夜
 describe('roleplay scripts', () => {
   it('validates characters, input and target length settings', () => {
     expect(parseRoleplayTurn(turn)).toEqual(turn)
-    for (const change of [{ counterpartName: '甲' }, { playerName: '' }, { maxCharacters: 0 }, { maxCharacters: 4001 }, { maxCharacters: 100.5 }, { storyGuidance: '', dialogue: '' }]) expect(parseRoleplayTurn({ ...turn, ...change })).toBeNull()
+    expect(parseRoleplayTurn({ ...turn, maxCharacters: 50 })?.maxCharacters).toBe(50)
+    for (const change of [{ counterpartName: '甲' }, { playerName: '' }, { maxCharacters: 49 }, { maxCharacters: 4001 }, { maxCharacters: 100.5 }, { storyGuidance: '', dialogue: '' }]) expect(parseRoleplayTurn({ ...turn, ...change })).toBeNull()
   })
   it('preserves a complete scene even when the counterpart and ending come after the target length', () => {
     const blocks = [{ type: 'narration', text: '雨落在窗沿。'.repeat(20) }, { type: 'player', text: '他握住伞柄，低声问：“走吗？”' }, { type: 'counterpart', text: '她笑着点头。“好。”' }, { type: 'narration', text: '两人并肩走进雨里。🌧' }]
@@ -44,7 +45,7 @@ describe('roleplay scripts', () => {
     expect(result?.blocks[0]?.text).toContain('（我其实有点紧张。）')
     expect(buildRoleplayScriptPrompt(dialogueOnlyTurn)).toContain('恰好只有一个 counterpart')
     expect(buildRoleplayScriptPrompt(dialogueOnlyTurn)).toContain('第一人称口述')
-    expect(buildRoleplayScriptPrompt(dialogueOnlyTurn)).toContain('大段、完整、连贯')
+    expect(buildRoleplayScriptPrompt(dialogueOnlyTurn)).toContain('一至两句话')
     expect(buildRoleplaySystemPrompt(dialogueOnlyTurn)).toContain('仅对话')
     expect(buildRoleplaySystemPrompt(dialogueOnlyTurn)).toContain('一个 counterpart JSON block')
     expect(readGeneratedRoleplayScript(JSON.stringify({ blocks: [{ type: 'counterpart_thought', text: '单独心声' }, { type: 'counterpart', text: '不应通过' }] }), dialogueOnlyTurn)).toBeNull()
