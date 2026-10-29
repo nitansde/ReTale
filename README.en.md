@@ -80,6 +80,17 @@ Search exact phrases, or describe a scene in your own words, such as “the firs
 
 **Also:** comfortable on a phone (text first, actions at the bottom, dark / light / soft-green themes) · separate models for writing, story analysis, and retrieval · imports compatible SillyTavern presets and regex rules.
 
+## Under the hood
+
+- **Spoiler-free graph-aware RAG:** local HanLP handles Chinese word segmentation and entity recognition first. An LLM then extracts characters, relationships, events, and world rules into a SQLite knowledge graph. Every fact carries a chapter validity range and source evidence, so writing chapter N only uses what is known by chapter N.
+- **Hybrid retrieval:** each book gets a LanceDB index for semantic plus full-text recall over passages, character cards, events, and world details, merged with the graph facts. SQLite is the single source of truth; the index can always be rebuilt from it.
+- **Reviewable, cost-aware context:** the selection, earlier chapters, characters, relationships, and evidence are assembled by priority and trimmed to a context budget. You can inspect and toggle each block in **Advanced context** before generating. Stable background comes first and new history is appended last, so provider prefix caches (DeepSeek and others) hit more often and requests cost less.
+- **Branching story tree:** rewrites, continuation blocks, What-ifs, Future Jumps, and roleplay sessions are nodes in one tree, and context follows each node’s ancestry. Long histories can be compressed into summaries so you can keep writing.
+- **Real-time voice pipeline:** streaming speech recognition (Soniox / Qwen) plus local voice detection in a browser AudioWorklet lets you interrupt just by speaking. Replies are split into sentences and synthesized while they are still being written (Fish Audio), and only sentences that finished playing are saved.
+- **Lightweight local stack:** Next.js 16, React, and TypeScript on Node’s built-in SQLite, with a separate database per book. Knowledge building runs in a background worker that can pause and resume. No Neo4j, hosted vector database, or GPU required.
+
+Design details: [Knowledge graph design](docs/knowledge-graph-design.md).
+
 ## Get started
 
 ### 1. Install and run
