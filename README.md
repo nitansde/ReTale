@@ -95,6 +95,49 @@ ReTale 以这段情节为切入点，结合章节上下文生成整章新版本�
 
 ### 1. 安装并启动
 
+下面三种方式任选其一，启动后都在 **[http://localhost:14500](http://localhost:14500)** 打开。每个版本都会同时发布 Docker 镜像和 npm 包。
+
+#### 方式 A：Docker（推荐）
+
+不需要安装 Node.js 或 Python，镜像里已经带好故事分析（HanLP）。支持 amd64 和 arm64。
+
+```bash
+docker run -d --name retale --restart unless-stopped \
+  -p 14500:14500 \
+  -v retale-data:/app/data \
+  nitansde/retale:latest
+```
+
+> [!WARNING]
+> **一定要把数据卷挂载到 `/app/data`。** 这个文件夹存着整个书库：`control.db`，以及每本书的 `novel.db` 和检索索引。不挂载数据卷（上面的 `-v` 那一行），删除、重建或升级容器时数据会全部丢失。
+
+- **换成你自己指定的文件夹**（更方便查找和备份）：把 `-v` 那一行换成 `-v /你的路径/retale-data:/app/data`。容器以 `node` 用户（UID 1000）运行；在 Linux 上请先让这个文件夹可写：`sudo mkdir -p /你的路径/retale-data && sudo chown 1000:1000 /你的路径/retale-data`。
+- **只允许本机访问：** `-p 14500:14500` 会让同一网络里的设备也能打开 ReTale；改用 `-p 127.0.0.1:14500:14500` 则只限本机。
+- **升级：** 拉取新镜像、删除旧容器，再用**相同的 `-v` 挂载**重新运行上面的 `docker run` 命令。书库保存在数据卷里，不受影响：
+
+  ```bash
+  docker pull nitansde/retale:latest
+  docker rm -f retale
+  ```
+
+- **备份：** 先停止容器（`docker stop retale`），再复制挂载到 `/app/data` 的文件夹或数据卷。
+
+#### 方式 B：npm
+
+需要 [Node.js](https://nodejs.org/) **22.15.0+** 和 [Python 3](https://www.python.org/downloads/)（建议 3.11–3.13）。首次启动时会用 Python 准备故事分析（HanLP）环境，需要联网，可能要等一会儿。没有 Python 也能启动，只是无法构建知识库。
+
+```bash
+npx retale
+```
+
+也可以用 `npm install -g retale` 安装 `retale` 命令，之后直接运行 `retale`。
+
+- 书库保存在 `~/.retale/data`。想放到别处，设置 `RETALE_DATA_DIR`，例如 `RETALE_DATA_DIR=/你的路径/retale-data npx retale`。
+- 默认只有本机能打开。想用手机访问，运行 `npx retale --hostname 0.0.0.0`；用 `--port 8080` 可以换端口。
+- 升级：运行 `npx retale@latest`，或 `npm install -g retale@latest`。`~/.retale/data` 里的书库会保留。
+
+#### 方式 C：从源码运行
+
 准备 [Node.js](https://nodejs.org/) **22.15.0+** 和 [Python 3](https://www.python.org/downloads/)（故事分析会用到，建议 3.11–3.13），下载本项目，在项目文件夹中运行：
 
 ```bash
@@ -102,7 +145,7 @@ npm install
 npm run dev:prod
 ```
 
-首次安装会自动准备故事分析用的 Python 环境，需要联网，可能要等一会儿。启动后在浏览器打开 **[http://localhost:14500](http://localhost:14500)**，保持终端运行。
+首次安装会自动准备故事分析用的 Python 环境，需要联网，可能要等一会儿。启动后在浏览器打开 **[http://localhost:14500](http://localhost:14500)**，保持终端运行。书库保存在项目的 `data/` 文件夹。
 
 ### 2. 填入你自己的 AI 密钥
 
@@ -155,7 +198,7 @@ npm run dev:prod
 
 **不接 AI 能用吗？** 可以导入、阅读、手动编辑和精确搜索。魔改、角色扮演、故事分析和技巧提炼需要 AI；按含义搜索另需 Embedding 模型；语音通话另需语音服务的密钥。
 
-**我的书和密钥存在哪里？** 都在运行 ReTale 的设备上，默认是 `data/` 文件夹。手机只是访问这份书库。使用在线 AI 时，本次请求需要的文本会发给你选择的服务商。备份方式见[备份说明](docs/development.md#backups)。
+**我的书和密钥存在哪里？** 都在运行 ReTale 的设备上：Docker 在挂载到 `/app/data` 的数据卷里，npm 在 `~/.retale/data`，源码运行在项目的 `data/` 文件夹。手机只是访问这份书库。使用在线 AI 时，本次请求需要的文本会发给你选择的服务商。备份方式见[备份说明](docs/development.md#backups)。
 
 **支持英文吗？** 界面可切换中英文。TXT 自动分章和内置故事分析目前更偏向中文小说。
 

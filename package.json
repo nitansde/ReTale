@@ -1,7 +1,32 @@
 {
   "name": "retale",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
+  "description": "Self-hosted novel reader for rewriting, branching, and roleplaying stories with your own AI keys.",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nitansde/ReTale.git"
+  },
+  "homepage": "https://github.com/nitansde/ReTale#readme",
+  "bin": {
+    "retale": "scripts/retale.mjs"
+  },
+  "files": [
+    ".next",
+    "!.next/cache",
+    "!.next/dev",
+    "!.next/types",
+    "!.next/diagnostics",
+    "!.next/trace*",
+    "!.next/_events*",
+    ".retale-worker",
+    "public",
+    "scripts",
+    "!scripts/fixtures",
+    "!**/__pycache__",
+    "hanlp_bootstrap.py",
+    "next.config.ts"
+  ],
   "imports": {
     "#html-entity-decoder": {
       "browser": "./lib/html-entity-decoder.browser.ts",
@@ -25,6 +50,7 @@
     "server:prod": "npm run build && node scripts/next-production-start.mjs",
     "server:test": "node scripts/next-test-server.mjs",
     "build": "node scripts/next-production-build.mjs",
+    "prepack": "npm run build",
     "start": "node scripts/next-production-start.mjs",
     "audit:production": "npm audit --omit=dev --audit-level=high",
     "typecheck": "RETALE_NEXT_DIST_DIR=tests/artifacts/typegen next typegen && tsc --noEmit -p tsconfig.json",

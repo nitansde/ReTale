@@ -136,6 +136,24 @@ npm run start
 
 Run `npm run verify:production-freshness` to exercise an isolated real `next build` / `next start` lifecycle through the installed Next CLI. The harness uses marker-owned database, data, and Next dist paths under `tests/artifacts/runtime/production-smoke-runs/`, so its build neither replaces `.next` nor scans or mutates production `data/` or root `dev.db`. It starts on `127.0.0.1:3000`, checks `/library`, `/workspace`, and `/task`, then inserts an active task after the build and verifies `/task` reflects it without rebuilding. Port `3000` must be free; the harness refuses to kill an unknown listener and stops its own server on success, failure, or termination.
 
+## Releases
+
+Each release is published as the `nitansde/retale` Docker image and the `retale` npm package. To release, bump the version and push its tag:
+
+```bash
+npm version 1.2.3 -m "chore: release %s"
+git push origin main --follow-tags
+```
+
+The `vX.Y.Z` tag starts `.github/workflows/release.yml`. It builds the `Dockerfile` for `linux/amd64` and `linux/arm64` and pushes the `X.Y.Z`, `X.Y`, `X`, and `latest` tags. It runs `npm publish` (whose `prepack` step runs `npm run build`) unless that version is already on npm. When both succeed, it creates the GitHub release with generated notes. The tag must match `package.json`. Publishing a release with a new tag in the GitHub UI also starts the workflow.
+
+One-time setup:
+
+- **Docker Hub:** create an access token with *Read & Write* scope under Docker Hub → Account settings → Personal access tokens. Save it as the `DOCKERHUB_TOKEN` repository secret under GitHub → Settings → Secrets and variables → Actions.
+- **npm:** on npmjs.com, open the `retale` package → Settings → Trusted publishing, and add GitHub Actions with owner `nitansde`, repository `ReTale`, and workflow `release.yml`. The workflow publishes through OIDC with provenance, so no npm token is stored.
+
+The image runs plain `next start` on `0.0.0.0:14500` as user `node`, keeps the library in the `/app/data` volume, and includes a CPU-only HanLP runtime and model. The npm `retale` command (`scripts/retale.mjs`) runs the packed production build from the package directory. It keeps the library in `~/.retale/data` unless `RETALE_DATA_DIR` is set, defaults to `127.0.0.1:14500`, and prepares or reuses the HanLP runtime on each start, since npm may block install scripts.
+
 ## Per-novel storage
 
 Runtime data lives under `RETALE_DATA_DIR` (default: `data/`) with this layout:

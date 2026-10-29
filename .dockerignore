@@ -1,0 +1,21 @@
+# Allowlist: only build inputs enter the image. Keeps .env*, data/, dev.db and node_modules out.
+*
+!app
+!components
+!config
+!lib
+!public
+!store
+!types
+!scripts
+!hanlp_bootstrap.py
+!next.config.ts
+!package.json
+!package-lock.json
+!postcss.config.mjs
+!proxy.ts
+!tsconfig.json
+!tsconfig.build.json
+!LICENSE
+**/__pycache__
+scripts/archive

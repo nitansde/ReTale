@@ -95,6 +95,49 @@ Design details: [Knowledge graph design](docs/knowledge-graph-design.md).
 
 ### 1. Install and run
 
+Choose one of the options below. Each one serves ReTale at **[http://localhost:14500](http://localhost:14500)**. Every release is published both as a Docker image and as an npm package.
+
+#### Option A: Docker (recommended)
+
+You don't need Node.js or Python: the image already includes story analysis (HanLP). It runs on amd64 and arm64.
+
+```bash
+docker run -d --name retale --restart unless-stopped \
+  -p 14500:14500 \
+  -v retale-data:/app/data \
+  nitansde/retale:latest
+```
+
+> [!WARNING]
+> **Always mount a volume at `/app/data`.** That folder holds your whole library: `control.db` plus every book's `novel.db` and search index. Without a volume (the `-v` line above), everything is lost when the container is removed, recreated, or upgraded.
+
+- **Use a folder you choose instead** (easier to find and back up): replace the `-v` line with `-v /path/to/retale-data:/app/data`. The container runs as user `node` (UID 1000). On Linux, make the folder writable first with `sudo mkdir -p /path/to/retale-data && sudo chown 1000:1000 /path/to/retale-data`.
+- **Only this computer:** `-p 14500:14500` also opens ReTale to your network. Use `-p 127.0.0.1:14500:14500` to keep it local.
+- **Upgrade:** pull the new image, remove the old container, then run the same `docker run` command with the **same `-v` mapping**. Your library stays in the volume:
+
+  ```bash
+  docker pull nitansde/retale:latest
+  docker rm -f retale
+  ```
+
+- **Back up:** stop the container (`docker stop retale`), then copy the folder or volume mounted at `/app/data`.
+
+#### Option B: npm
+
+You need [Node.js](https://nodejs.org/) **22.15.0+** and [Python 3](https://www.python.org/downloads/) (3.11–3.13 recommended). On first start, ReTale uses Python to set up story analysis (HanLP); this needs an internet connection and may take a while. Without Python, ReTale still starts, but building the knowledge base is unavailable.
+
+```bash
+npx retale
+```
+
+Or install the `retale` command with `npm install -g retale`, then run `retale`.
+
+- Your library is stored in `~/.retale/data`. Set `RETALE_DATA_DIR` to put it somewhere else, for example `RETALE_DATA_DIR=/path/to/retale-data npx retale`.
+- By default only this computer can open it. Use `npx retale --hostname 0.0.0.0` to reach it from your phone, and `--port 8080` to change the port.
+- Upgrade with `npx retale@latest`, or `npm install -g retale@latest`. The library in `~/.retale/data` is kept.
+
+#### Option C: from source
+
 Install [Node.js](https://nodejs.org/) **22.15.0+** and [Python 3](https://www.python.org/downloads/) for story analysis (3.11–3.13 recommended), download this project, and run in its folder:
 
 ```bash
@@ -102,7 +145,7 @@ npm install
 npm run dev:prod
 ```
 
-The first install prepares the Python environment for story analysis; it needs an internet connection and may take a while. Then open **[http://localhost:14500](http://localhost:14500)** and keep the terminal running.
+The first install prepares the Python environment for story analysis; it needs an internet connection and may take a while. Then open **[http://localhost:14500](http://localhost:14500)** and keep the terminal running. The library is stored in the project's `data/` folder.
 
 ### 2. Add your own AI key
 
@@ -155,7 +198,7 @@ For detailed configuration, production deployment, backups, and development comm
 
 **Can I use it without AI?** Yes: import, read, edit by hand, and search exact phrases. Rewriting, roleplay, story analysis, and writing skills need AI; searching by meaning needs an embedding model; voice calls need speech keys.
 
-**Where are my books and keys stored?** On the device running ReTale, in the `data/` folder by default. Your phone only accesses that library. With an online AI service, the text a request needs is sent to the provider you chose. See the [backup instructions](docs/development.md#backups).
+**Where are my books and keys stored?** On the device running ReTale: in the volume mounted at `/app/data` (Docker), in `~/.retale/data` (npm), or in the project's `data/` folder (source). Your phone only accesses that library. With an online AI service, the text a request needs is sent to the provider you chose. See the [backup instructions](docs/development.md#backups).
 
 **Does it support English?** The interface supports Chinese and English. TXT chapter detection and the built-in story analysis currently favor Chinese novels.
 
