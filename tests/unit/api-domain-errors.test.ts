@@ -24,6 +24,6 @@ describe('typed API errors', () => {
   it('keeps nested field context without serializing all validation issues', () => {
     expect(() => parseRequestInput(z.object({ source: z.object({ chapterNo: z.number().positive() }) }), {
       source: { chapterNo: -1 },
-    })).toThrow('source.chapterNo: Number must be greater than 0')
+    })).toThrow('source.chapterNo: Too small: expected number to be >0')
   })
 })
