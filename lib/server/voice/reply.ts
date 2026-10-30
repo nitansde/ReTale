@@ -2,12 +2,14 @@ import type { VoiceEvent, VoiceSettings } from '@/lib/voice-chat'
 import { speakableText, splitVoicePhrases, usesDialogueQuotes, type SpeechState } from '@/lib/voice-chat'
 import type { VoiceTrace } from '@/lib/server/voice/debug'
 
-async function requestFishPhrase(text: string, settings: VoiceSettings, signal: AbortSignal) {
+export async function requestFishPhrase(text: string, settings: VoiceSettings, signal: AbortSignal, format: 'pcm' | 'mp3' = 'pcm') {
   const started = Date.now()
   const response = await fetch('https://api.fish.audio/v1/tts', {
     method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
     headers: { Authorization: `Bearer ${settings.fishApiKey}`, 'Content-Type': 'application/json', model: settings.fishModel },
-    body: JSON.stringify({ text, reference_id: settings.voiceId, format: 'pcm', sample_rate: 24000, latency: 'balanced' }),
+    // Fish accepts 24 kHz PCM, while its MPEG encoder only supports 32/44.1 kHz.
+    // Sending 24 kHz with mp3 returns a 400 and leaves the reply button silent.
+    body: JSON.stringify({ text, reference_id: settings.voiceId, format, sample_rate: format === 'mp3' ? 44100 : 24000, latency: 'balanced' }),
   })
   if (!response.ok || !response.body) {
     const detail = (await response.text().catch(() => '')).trim().slice(0, 200)

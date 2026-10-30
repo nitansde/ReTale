@@ -1,9 +1,17 @@
+/** Safari's audio session. Without leaving play-and-record, iOS stays quiet after the mic stops. */
+export function setAudioSession(type: 'playback' | 'play-and-record') {
+  const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession
+  if (session) session.type = type
+}
+
 export class VoicePcmPlayer {
-  private nextTime = 0
+  private nextFrame = 0
   private sources = new Set<AudioBufferSourceNode>()
   private segments = new Map<number, { remaining: number; finished: boolean; carry?: number }>()
   private stopped = false
   private waiters: (() => void)[] = []
+  private lastSample = 0
+  private phase = 0
   constructor(private context: AudioContext, private completed: (segment: number) => void) {}
   push(base64: string, sampleRate: number, segment: number) {
     if (this.stopped) return
@@ -11,7 +19,8 @@ export class VoicePcmPlayer {
     // iOS suspends/interrupts contexts (mic start, lock screen); a stalled
     // clock never ends sources, so playback would stay silent and never drain.
     if (this.context.state !== 'running') void this.context.resume().catch(() => undefined)
-    if (this.nextTime - this.context.currentTime > 60) throw new Error('Voice playback is falling behind')
+    const rate = this.context.sampleRate
+    if (this.nextFrame / rate - this.context.currentTime > 60) throw new Error('Voice playback is falling behind')
     let entry = this.segments.get(segment)
     if (!entry) { entry = { remaining: 0, finished: false }; this.segments.set(segment, entry) }
     const raw = atob(base64)
@@ -22,10 +31,27 @@ export class VoicePcmPlayer {
     entry.carry = bytes.length % 2 ? bytes[bytes.length - 1] : undefined
     const count = Math.floor(bytes.length / 2)
     if (!count) return
-    const buffer = this.context.createBuffer(1, count, sampleRate)
-    const floats = buffer.getChannelData(0)
     const view = new DataView(bytes.buffer)
-    for (let i = 0; i < count; i++) floats[i] = view.getInt16(i * 2, true) / 32768
+    const input = new Float32Array(count + 1)
+    input[0] = this.lastSample
+    for (let i = 0; i < count; i++) input[i + 1] = view.getInt16(i * 2, true) / 32768
+    // Fish's PCM is continuous across chunks, which arrive about every 54 ms. A
+    // 24 kHz AudioBuffer makes the browser resample each chunk alone, breaking
+    // the waveform at every edge: a continuous crackle. iPhones report 16, 44.1
+    // or 48 kHz, so resample across chunks here and play frame-aligned sources.
+    // phase is the read position past lastSample in 1/rate input samples, an
+    // integer so that long calls cannot drift.
+    const phase = this.phase
+    const frames = Math.ceil((count * rate - phase) / sampleRate)
+    this.phase += frames * sampleRate - count * rate; this.lastSample = input[count]
+    if (frames <= 0) return
+    const buffer = this.context.createBuffer(1, frames, rate)
+    const floats = buffer.getChannelData(0)
+    for (let frame = 0; frame < frames; frame++) {
+      const at = phase + frame * sampleRate
+      const index = Math.floor(at / rate); const mix = at % rate / rate
+      floats[frame] = input[index] * (1 - mix) + input[index + 1] * mix
+    }
     const source = this.context.createBufferSource()
     source.buffer = buffer; source.connect(this.context.destination)
     entry.remaining++; this.sources.add(source)
@@ -36,8 +62,8 @@ export class VoicePcmPlayer {
     }
     // Start (or restart after an underrun) with a jitter buffer; a 30 ms lead
     // let every network hiccup cut a gap into the word being spoken.
-    if (this.nextTime <= this.context.currentTime) this.nextTime = this.context.currentTime + 0.15
-    source.start(this.nextTime); this.nextTime += buffer.duration
+    if (this.nextFrame / rate <= this.context.currentTime) this.nextFrame = Math.ceil((this.context.currentTime + 0.15) * rate)
+    source.start(this.nextFrame / rate); this.nextFrame += frames
   }
   endSegment(segment: number) {
     const entry = this.segments.get(segment)

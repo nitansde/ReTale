@@ -15,6 +15,10 @@ const schema = z.object({
   }, 'Use an official Alibaba Cloud WSS endpoint'),
   fishApiKey: z.string().trim().max(2000), fishModel: z.string().trim().min(1).max(100),
   voiceId: z.string().trim().max(200), language: z.enum(['zh', 'en', 'auto']),
+  voices: z.array(z.object({
+    id: z.string().trim().min(1).max(200), name: z.string().trim().min(1).max(80),
+    gender: z.enum(['female', 'male']), language: z.enum(['zh', 'en']),
+  })).max(100).refine((voices) => new Set(voices.map((voice) => voice.id)).size === voices.length, 'Voice IDs must be unique'),
   silenceMs: z.number().int().min(300).max(2000), thinking: z.enum(['default', 'off', 'low']),
 })
 
@@ -23,10 +27,17 @@ export function loadVoiceSettings(): VoiceSettings {
   const fallback = {
     ...DEFAULT_VOICE_SETTINGS,
     sonioxApiKey: process.env.SONIOX_API_KEY || '', qwenApiKey: process.env.DASHSCOPE_API_KEY || '',
-    fishApiKey: process.env.FISH_API_KEY || '', voiceId: process.env.FISH_VOICE_ID || '',
+    fishApiKey: process.env.FISH_API_KEY || '', voiceId: process.env.FISH_VOICE_ID || DEFAULT_VOICE_SETTINGS.voiceId,
   }
   if (!stored) return fallback
-  try { return schema.parse({ ...fallback, ...JSON.parse(stored) }) } catch { return fallback }
+  try {
+    const saved = JSON.parse(stored)
+    // Upgrade old installations without replacing their selected voice or keys.
+    const legacyVoiceId = !saved.voices && !saved.voiceId
+      ? saved.language === 'en' ? DEFAULT_VOICE_SETTINGS.voices[1].id : fallback.voiceId
+      : saved.voiceId ?? fallback.voiceId
+    return schema.parse({ ...fallback, ...saved, voiceId: legacyVoiceId })
+  } catch { return fallback }
 }
 
 export function publicVoiceSettings(settings: VoiceSettings): PublicVoiceSettings {

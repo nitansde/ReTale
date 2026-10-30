@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { RoleplaySessionView, type RoleplaySessionControls } from '@/components/workspace/RoleplaySessionView'
 import { type RoleplayTurn, type RoleplayScript, roleplayScriptText } from '@/lib/roleplay-script'
 import { getRoleplayBranchDeletionIds } from '@/lib/roleplay-branches'
+import { DEFAULT_VOICE_SETTINGS } from '@/lib/voice-chat'
 
 const cast = { playerName: '林舟', counterpartName: '沈月' }
 const turn: RoleplayTurn = { ...cast, storyGuidance: '雨夜，他推开门。', dialogue: '你在等我？', maxCharacters: 600 }
@@ -30,6 +31,7 @@ function setup(options: { messages?: ReturnType<typeof message>[]; candidates?: 
   const requests: Record<string, unknown>[] = []
   const previews: Record<string, unknown>[] = []
   const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (String(url) === '/api/settings/voice') return Response.json({ ...DEFAULT_VOICE_SETTINGS, sonioxConfigured: false, qwenConfigured: false, fishConfigured: false })
     if (String(url).startsWith('/api/writing-skills')) return Response.json({ cards: [{ id: 'skill', title: '神态描写', summary: '通过眼神和动作推进对话。' }] })
     if (String(url) === '/api/roleplay/preview') {
       const body = JSON.parse(String(init?.body)); previews.push(body)

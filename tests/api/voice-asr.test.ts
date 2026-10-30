@@ -20,7 +20,7 @@ afterEach(() => { sockets.splice(0); vi.restoreAllMocks() })
 describe('persistent voice recognition relay', () => {
   it('keeps Soniox credentials server-side, forwards ordered PCM and cleans up on abort', async () => {
     const events: VoiceEvent[] = []; const abort = new AbortController()
-    const operation = transcribeVoice({ ...DEFAULT_VOICE_SETTINGS, sonioxApiKey: 'secret-soniox' }, ['林舟'], (event) => events.push(event), abort.signal)
+    const operation = transcribeVoice({ ...DEFAULT_VOICE_SETTINGS, asrProvider: 'soniox', sonioxApiKey: 'secret-soniox' }, ['林舟'], (event) => events.push(event), abort.signal)
     const socket = sockets[0]; socket.emit('open')
     expect(JSON.parse(socket.send.mock.calls[0][0])).toMatchObject({ api_key: 'secret-soniox', sample_rate: 16000, context: { terms: ['林舟'] }, enable_endpoint_detection: true })
     const ready = events.find((event) => event.type === 'ready')!
@@ -49,7 +49,7 @@ describe('persistent voice recognition relay', () => {
   })
   it('rejects provider failures without returning raw messages that could contain credentials', async () => {
     const abort = new AbortController()
-    const operation = transcribeVoice({ ...DEFAULT_VOICE_SETTINGS, sonioxApiKey: 'secret' }, [], () => {}, abort.signal)
+    const operation = transcribeVoice({ ...DEFAULT_VOICE_SETTINGS, asrProvider: 'soniox', sonioxApiKey: 'secret' }, [], () => {}, abort.signal)
     const rejected = expect(operation).rejects.toThrow('rejected the voice stream')
     sockets[0].emit('message', Buffer.from(JSON.stringify({ error_code: 401, error_message: 'secret' })))
     await rejected

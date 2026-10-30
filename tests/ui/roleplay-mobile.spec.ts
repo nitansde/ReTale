@@ -130,6 +130,11 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   let generatedScript = script
   let timelineState = buildTimelineState()
   let sessionDetail = buildSessionDetail([])
+  let voiceSettings = { ...DEFAULT_VOICE_SETTINGS, sonioxConfigured: true, qwenConfigured: true, fishConfigured: true, voiceId: DEFAULT_VOICE_SETTINGS.voiceId }
+  await page.route('**/api/settings/voice', async (route) => {
+    if (route.request().method() === 'POST') voiceSettings = { ...voiceSettings, ...route.request().postDataJSON() }
+    await route.fulfill({ json: voiceSettings })
+  })
 
   const aiSettings = createDefaultAISettings()
   aiSettings.rewrite.openAICompatible = {
@@ -666,23 +671,28 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
 
   // Voice is optional and shares the current branch. Use actual browser audio
   // primitives with synthetic input and streaming provider fixtures.
-  await page.route('**/api/settings/voice', (route) => route.fulfill({ json: {
-    ...DEFAULT_VOICE_SETTINGS, sonioxConfigured: true, qwenConfigured: false, fishConfigured: true, voiceId: 'fixture-voice',
-  } }))
   await installVoiceBrowserFixture(page)
   await page.getByRole('button', { name: '语音聊天', exact: true }).click()
   await expect(page.getByTestId('roleplay-voice-panel')).toBeVisible()
   await expect(page.getByRole('button', { name: '开始通话' })).toBeEnabled()
+  await expect(page.getByRole('group', { name: '语音聊天' }).getByRole('combobox')).toHaveCount(0)
+  await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-voice-panel-mobile.png') })
   await page.getByRole('button', { name: '语音设置', exact: true }).click()
   await expect(page.getByTestId('roleplay-voice-settings')).toBeVisible()
+  // Settings is a sub-view: Save is its only primary action, and Back stays reachable.
+  await expect(page.getByRole('button', { name: '开始通话' })).toHaveCount(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-voice-settings-mobile.png') })
-  await page.getByRole('button', { name: '语音设置', exact: true }).click()
+  await page.getByTestId('roleplay-voice-panel').getByRole('button', { name: '返回', exact: true }).click()
+  await expect(page.getByTestId('roleplay-voice-settings')).toHaveCount(0)
   const voiceStartMessageCount = sessionDetail.messages.length
   await exerciseVoiceCall(page)
   await expect.poll(() => sessionDetail.messages.length).toBe(voiceStartMessageCount + 2)
   expect(sessionDetail.messages.at(-1)?.script).toMatchObject({ voiceInterrupted: true, blocks: [{ type: 'counterpart', text: '我在这里。' }] })
   await expect(page.getByRole('button', { name: '文字聊天' })).toBeDisabled()
+  // The mic released for the reply comes back for the next turn.
+  await expect.poll(() => page.evaluate(() => (window as unknown as { voiceFixture: { tracks: MediaStreamTrack[] } }).voiceFixture.tracks.at(-1)?.readyState)).toBe('live')
+  await page.getByText('正在聆听', { exact: true }).waitFor()
   await page.getByRole('button', { name: '静音麦克风' }).click()
   await expect(page.getByRole('button', { name: '打开麦克风' })).toHaveAttribute('aria-pressed', 'true')
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-voice-call-mobile.png') })
@@ -690,14 +700,28 @@ test('roleplay mobile flow reopens timeline chat and keeps chapter body unchange
   await expect(page.getByRole('button', { name: '开始通话' })).toBeEnabled()
   const capture = await page.evaluate(() => {
     const fixture = (window as unknown as { voiceFixture: { audioPackets: number; audioBytes: number; tracks: MediaStreamTrack[]; traces: { event: string; reason?: string }[] } }).voiceFixture
-    return { packets: fixture.audioPackets, bytes: fixture.audioBytes, tracksEnded: fixture.tracks.every((track) => track.readyState === 'ended'), traces: fixture.traces }
+    return { packets: fixture.audioPackets, bytes: fixture.audioBytes, micOpens: fixture.tracks.length, tracksEnded: fixture.tracks.every((track) => track.readyState === 'ended'), traces: fixture.traces, session: (navigator as unknown as { audioSession: { type: string } }).audioSession.type }
   })
   expect(capture.packets).toBeGreaterThan(0); expect(capture.bytes).toBeGreaterThanOrEqual(3200); expect(capture.tracksEnded).toBe(true)
+  expect(capture.micOpens).toBeGreaterThan(1); expect(capture.session).toBe('playback')
   // The debug tracker records the phone side of the call for logs/voice-debug.
   expect(capture.traces.map((trace) => trace.event)).toEqual(expect.arrayContaining(['start', 'asr-ready', 'asr-final', 'heard', 'reply-result']))
-  expect(capture.traces).toContainEqual(expect.objectContaining({ event: 'interrupt', reason: 'manual' }))
+  expect(capture.traces).toContainEqual(expect.objectContaining({ event: 'stop-playback' }))
   await page.getByRole('button', { name: '文字聊天' }).click()
   await expect(page.getByRole('textbox', { name: '我的台词' })).toBeVisible()
+  // Existing dialogue replies can be read without an active call. The same
+  // decoded audio must resume after a pause, without a second TTS request.
+  await page.getByRole('button', { name: '播放语音', exact: true }).last().click()
+  await expect(page.getByRole('button', { name: '暂停语音', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '暂停语音', exact: true }).click()
+  await expect(page.getByRole('button', { name: '继续播放', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '继续播放', exact: true }).click()
+  await expect(page.getByRole('button', { name: '暂停语音', exact: true })).toBeVisible()
+  expect(await page.evaluate(() => (window as unknown as { voiceFixture: { speechRequests: number } }).voiceFixture.speechRequests)).toBe(1)
+  await page.getByRole('combobox', { name: '音色', exact: true }).selectOption('bf322df2096a46f18c579d0baa36f41d')
+  await expect(page.getByRole('button', { name: '暂停语音', exact: true })).toHaveCount(0)
+  expect(voiceSettings.voiceId).toBe('bf322df2096a46f18c579d0baa36f41d')
+  await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('roleplay-reply-audio-mobile.png') })
 
   await openMobileChapterDrawer(page)
   const card = page.getByTestId('timeline-node-roleplay-node-1')

@@ -1,5 +1,5 @@
 import { readVoiceEvents, type VoiceEvent } from '@/lib/voice-chat'
-import { captureVoice, VoicePcmPlayer } from '@/lib/voice-audio'
+import { captureVoice, setAudioSession, VoicePcmPlayer } from '@/lib/voice-audio'
 
 export type VoiceCallState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'ending'
 export type VoiceReplyResult = { text: string; interrupted: boolean; error?: string }
@@ -23,10 +23,10 @@ export class VoiceCall {
   private queue: Uint8Array[] = []
   private uploading = false
   private muted = false
-  private speechFrames = 0
   private turnChain = Promise.resolve()
   private ending?: Promise<void>
   private stopCapture?: () => void
+  private silence?: ReturnType<typeof setInterval>
   private current: VoiceCallState = 'idle'
   // Correlates phone and server events in logs/voice-debug (see /api/roleplay/voice/debug).
   private callId = globalThis.crypto?.randomUUID?.() ?? `call-${Date.now()}`
@@ -67,19 +67,43 @@ export class VoiceCall {
       }).catch((error: unknown) => { readyReject(error); if (!this.abort.signal.aborted) this.fail(error) })
       await ready
       this.abort.signal.throwIfAborted()
-      this.stopCapture = await captureVoice(this.context, (pcm, rms) => {
-        if (this.abort.signal.aborted) return
-        // Local activity detection stops playback without waiting for ASR roundtrip.
-        if (!this.muted && rms > 0.025) this.speechFrames++
-        else this.speechFrames = 0
-        if (this.speechFrames === 2) this.interrupt('local-vad', { rms })
-        this.queue.push(this.muted ? new Uint8Array(pcm.byteLength) : new Uint8Array(pcm))
-        // 8 s of PCM16 at 16 kHz, matching the upload timeout; 1.5 s ended calls on a single mobile stall.
-        if (this.queue.reduce((sum, item) => sum + item.length, 0) > 256_000) { this.fail(new Error('音频上传过慢，请检查网络后重试 / Audio upload is too slow')); return }
-        void this.upload()
-      }, this.abort.signal)
+      await this.openMic()
       this.setState('listening')
     } catch (error) { if (!this.abort.signal.aborted) this.fail(error); await this.end(); throw error }
+  }
+
+  private enqueue(packet: Uint8Array) {
+    this.queue.push(packet)
+    // 8 s of PCM16 at 16 kHz, matching the upload timeout; 1.5 s ended calls on a single mobile stall.
+    if (this.queue.reduce((sum, item) => sum + item.length, 0) > 256_000) { this.fail(new Error('音频上传过慢，请检查网络后重试 / Audio upload is too slow')); return }
+    void this.upload()
+  }
+
+  private async openMic() {
+    const started = Date.now()
+    clearInterval(this.silence)
+    setAudioSession('play-and-record')
+    this.stopCapture = await captureVoice(this.context!, (pcm) => {
+      if (this.abort.signal.aborted) return
+      // Half-duplex capture prevents echo and speech during replies from
+      // interrupting playback or creating an unintended next turn.
+      const listening = this.current === 'listening' && !this.muted
+      this.enqueue(listening ? new Uint8Array(pcm) : new Uint8Array(pcm.byteLength))
+    }, this.abort.signal)
+    // Starting the mic can interrupt the context on iOS, which starves capture.
+    if (this.context!.state !== 'running') void this.context!.resume().catch(() => undefined)
+    this.trace('mic-open', { ms: Date.now() - started })
+  }
+
+  // iOS 27 crackles all page audio while the mic captures with echo cancellation,
+  // and without it moves playback to the earpiece (WebKit bug 326286). Calls are
+  // half-duplex, so give the mic up until the reply has played. Silence at the
+  // capture rate keeps the ASR session inside its 20 s watchdog.
+  private releaseMic() {
+    if (!('audioSession' in navigator)) return
+    this.stopCapture?.(); this.stopCapture = undefined
+    setAudioSession('playback')
+    this.silence = setInterval(() => this.enqueue(new Uint8Array(3200)), 100)
   }
 
   private async upload() {
@@ -102,13 +126,13 @@ export class VoiceCall {
   }
 
   private onAsr(event: VoiceEvent) {
-    if (this.abort.signal.aborted || this.muted) return
-    if (event.type === 'speech') this.interrupt('asr-speech')
+    if (this.abort.signal.aborted || this.muted || this.current !== 'listening') return
     if (event.type !== 'transcript') return
     this.callbacks.transcript(event.text)
     if (!event.final || !event.text.trim()) return
     this.trace('asr-final', { text: event.text })
-    this.interrupt('new-turn')
+    this.setState('thinking')
+    this.releaseMic()
     this.turnChain = this.turnChain.then(async () => {
       if (this.abort.signal.aborted) return
       const controller = new AbortController()
@@ -117,6 +141,7 @@ export class VoiceCall {
       try { await this.callbacks.turn(event.text, (payload) => this.respond(payload, controller.signal)) }
       finally {
         if (this.turnAbort === controller) this.turnAbort = undefined
+        if (!this.abort.signal.aborted && !this.stopCapture) await this.openMic().catch((error: unknown) => { if (!this.abort.signal.aborted) this.fail(error) })
         if (!this.abort.signal.aborted) this.setState('listening')
       }
     // One failed reply (TTS hiccup, rate limit, save error) must not hang up the
@@ -166,11 +191,11 @@ export class VoiceCall {
     return { text: [...texts].filter(([id]) => heard.has(id) || (silent.has(id) && id < cut)).map(([, text]) => text).join(''), interrupted: signal.aborted || !complete || Boolean(errorMessage), error: errorMessage }
   }
 
-  interrupt(reason = 'manual', data: Record<string, unknown> = {}) {
-    if (this.turnAbort || this.player) this.trace('interrupt', { reason, ...data })
+  stopPlayback() {
+    if (this.turnAbort || this.player) this.trace('stop-playback')
     this.turnAbort?.abort(); this.player?.stop()
   }
-  setMuted(muted: boolean) { this.muted = muted; this.speechFrames = 0; if (muted) this.callbacks.transcript('') }
+  setMuted(muted: boolean) { this.muted = muted; if (muted) this.callbacks.transcript('') }
   private fail(error: unknown) {
     const message = error instanceof Error ? error.message : 'Voice connection failed'
     this.trace('call-error', { message }); this.callbacks.error(message)
@@ -180,7 +205,8 @@ export class VoiceCall {
   end(): Promise<void> {
     if (this.ending) return this.ending
     this.setState('ending')
-    this.abort.abort(); this.interrupt('end'); this.stopCapture?.(); this.queue = []
+    this.abort.abort(); this.stopPlayback(); this.stopCapture?.(); clearInterval(this.silence); this.queue = []
+    setAudioSession('playback')
     if (this.sessionId) void fetch(`/api/roleplay/voice/transcribe/${this.sessionId}`, { method: 'DELETE', keepalive: true }).catch(() => undefined)
     this.ending = (async () => {
       // Browsers may close an AudioContext while stopping the input track

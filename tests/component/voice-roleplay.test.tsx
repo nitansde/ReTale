@@ -8,7 +8,7 @@ vi.mock('@/lib/voice-call', () => ({ VoiceCall: class {
   constructor(callbacks: VoiceCallCallbacks) { fixture.callbacks = callbacks }
   async start() { fixture.callbacks!.state('listening') }
   async end() { fixture.callbacks!.state('idle') }
-  interrupt() {}
+  stopPlayback() {}
   setMuted() {}
 } }))
 import { RoleplaySessionView } from '@/components/workspace/RoleplaySessionView'
@@ -17,12 +17,16 @@ import { DEFAULT_VOICE_SETTINGS } from '@/lib/voice-chat'
 beforeEach(() => { window.localStorage.clear(); Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true }); Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: vi.fn() } }) })
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); fixture.callbacks = null })
 
-function setup() {
+function setup(options: { fishConfigured?: boolean; withReplies?: boolean } = {}) {
   const cast = { playerName: '林舟', counterpartName: '沈月' }
   const messages: Record<string, unknown>[] = [{ id: 'u1', role: 'user', parentMessageId: null, messageIndex: 1, content: '你好', turn: { ...cast, storyGuidance: '', dialogue: '你好', maxCharacters: 300, dialogueOnly: true } }]
+  if (options.withReplies) messages.push(
+    { id: 'a1', role: 'assistant', parentMessageId: 'u1', messageIndex: 2, content: '我在。', script: { ...cast, dialogueOnly: true, blocks: [{ type: 'counterpart', text: '我在。' }] } },
+    { id: 'a2', role: 'assistant', parentMessageId: 'a1', messageIndex: 3, content: '她笑了。', script: { ...cast, blocks: [{ type: 'counterpart', text: '她笑了。' }] } },
+  )
   const payloads: Record<string, unknown>[] = []
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
-    if (url === '/api/settings/voice') return Response.json({ ...DEFAULT_VOICE_SETTINGS, sonioxConfigured: true, fishConfigured: true, qwenConfigured: false, voiceId: 'voice' })
+    if (url === '/api/settings/voice') return Response.json({ ...DEFAULT_VOICE_SETTINGS, sonioxConfigured: true, fishConfigured: options.fishConfigured ?? true, qwenConfigured: true, voiceId: 'voice' })
     if (url.includes('/messages')) {
       const body = JSON.parse(String(init?.body)); payloads.push(body)
       const message = { ...body, id: `m${messages.length + 1}`, messageIndex: messages.length + 1 }
@@ -35,6 +39,19 @@ function setup() {
 }
 
 describe('optional voice mode in roleplay', () => {
+  it('shows a compact playback button only below dialogue-only replies, even in text mode', async () => {
+    setup({ withReplies: true })
+    await screen.findByText('我在。')
+    expect(screen.getAllByRole('button', { name: '播放语音' })).toHaveLength(1)
+    expect(screen.getByRole('textbox', { name: '我的台词' })).toBeInTheDocument()
+    // The picker is transparent, so the entry shows no voice name.
+    expect(screen.getByRole('combobox', { name: '音色' })).toHaveClass('opacity-0')
+  })
+  it('hides reply playback when Fish is not configured', async () => {
+    setup({ withReplies: true, fishConfigured: false })
+    await screen.findByText('我在。')
+    expect(screen.queryByRole('button', { name: '播放语音' })).not.toBeInTheDocument()
+  })
   it('keeps the text composer as default, locks branch controls in calls and saves only heard speech', async () => {
     const { payloads } = setup()
     await screen.findByRole('textbox', { name: '我的台词' })
@@ -50,7 +67,7 @@ describe('optional voice mode in roleplay', () => {
     expect(payloads[0]).toMatchObject({ role: 'user', parentMessageId: 'u1', turn: { dialogue: '你在哪里？', dialogueOnly: true } })
     expect(payloads[1]).toMatchObject({ role: 'assistant', parentMessageId: 'm2', script: { voiceInterrupted: true, blocks: [{ type: 'counterpart', text: '我在这里。' }] } })
     expect(runReply.mock.calls[0][0]).toMatchObject({ roleplayLeafMessageId: 'u1', roleplaySessionId: 'session' })
-    expect(screen.getByText('语音已打断')).toBeInTheDocument()
+    expect(screen.getByText('播放已停止')).toBeInTheDocument()
     // The next round must continue from the newly saved assistant, without stale React state.
     await act(async () => fixture.callbacks!.turn('我来了。', vi.fn().mockResolvedValue({ text: '', interrupted: true })))
     expect(payloads[2]).toMatchObject({ role: 'user', parentMessageId: 'm3' })

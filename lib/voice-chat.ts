@@ -1,3 +1,17 @@
+export type SavedVoice = {
+  id: string
+  name: string
+  gender: 'female' | 'male'
+  language: 'zh' | 'en'
+}
+
+export const DEFAULT_VOICES: SavedVoice[] = [
+  { id: '7f92f8afb8ec43bf81429cc1c9199cb1', name: '学姐', gender: 'female', language: 'zh' },
+  { id: '933563129e564b19a115bedd57b7406a', name: 'Sarah', gender: 'female', language: 'en' },
+  { id: '5d29a99739c14d4ca3e4fe42193105b2', name: '梓轩', gender: 'male', language: 'zh' },
+  { id: 'bf322df2096a46f18c579d0baa36f41d', name: 'Adrin', gender: 'male', language: 'en' },
+]
+
 export type VoiceSettings = {
   asrProvider: 'soniox' | 'qwen'
   sonioxApiKey: string
@@ -8,6 +22,7 @@ export type VoiceSettings = {
   fishApiKey: string
   fishModel: string
   voiceId: string
+  voices: SavedVoice[]
   language: 'zh' | 'en' | 'auto'
   silenceMs: number
   thinking: 'default' | 'off' | 'low'
@@ -20,9 +35,9 @@ export type PublicVoiceSettings = Omit<VoiceSettings, 'sonioxApiKey' | 'qwenApiK
 }
 
 export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
-  asrProvider: 'soniox', sonioxApiKey: '', sonioxModel: 'stt-rt-v5',
+  asrProvider: 'qwen', sonioxApiKey: '', sonioxModel: 'stt-rt-v5',
   qwenApiKey: '', qwenUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime', qwenModel: 'qwen3-asr-flash-realtime',
-  fishApiKey: '', fishModel: 's2-pro', voiceId: '', language: 'zh', silenceMs: 500, thinking: 'low',
+  fishApiKey: '', fishModel: 's2.1-pro-free', voiceId: DEFAULT_VOICES[0].id, voices: DEFAULT_VOICES, language: 'zh', silenceMs: 500, thinking: 'low',
 }
 
 export type VoiceEvent =

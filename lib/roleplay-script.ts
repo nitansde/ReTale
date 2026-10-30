@@ -86,7 +86,7 @@ export function roleplayScriptText(script: RoleplayScript) {
     const name = block.type === 'narration' ? '旁白' : block.type === 'player' || block.type === 'player_thought' ? script.playerName : script.counterpartName
     const thought = block.type === 'player_thought' || block.type === 'counterpart_thought'
     return `${name}${thought ? '（心声，未说出口）' : ''}：${block.text}`
-  }).join('\n\n') + (script.voiceInterrupted ? '\n（此轮语音被打断；以上仅包含已完整播放的句子。）' : '')
+  }).join('\n\n') + (script.voiceInterrupted ? '\n（此轮语音播放已停止；以上仅包含已完整播放的句子。）' : '')
 }
 
 export function roleplayTurnText(turn: RoleplayTurn) {
@@ -98,11 +98,14 @@ export const ROLEPLAY_SCRIPT_SYSTEM_PROMPT = [
   '已有 RP 历史是当前故事进度，优先承接其中最新的场景、人物状态和对话。原章节仅提供初始背景；即使预设要求魔改原文，也不要将本轮当作重新开场或重写原章节。只生成接下来发生的新内容。',
 ].join('\n')
 
+const ROLEPLAY_DIALOGUE_PROGRESS = '先回应用户当下的话，再根据角色性格和当前情境适度主动推进：自然地透露一点新信息、表达一个具体打算，或提出可落实的下一步，让对话有小幅进展。避免反复试探、索要确认、空泛反问和换句话重复已说过的感受；用户的问题能回答就直接回答。无需每轮制造事件或强行转折，用户想停留交流时尊重其节奏；不替用户决定行动、感受或结局，不跳过关键选择，也不使用当前章节之后的事实。'
+
 export function buildRoleplaySystemPrompt(turn: Pick<RoleplayTurn, 'dialogueOnly'>) {
   if (!turn.dialogueOnly) return ROLEPLAY_SCRIPT_SYSTEM_PROMPT
   return [
     '你负责生成双角色的纯对话。本次为「仅对话」模式：只返回对方角色的一个 counterpart JSON block，不要返回 player、narration 或任何其他 block。',
     '对方每次只说一至两句话，像真实对话一样简短自然；不要写成大段或多段独白，给用户接话的机会。',
+    ROLEPLAY_DIALOGUE_PROGRESS,
     '禁止旁白、场景说明、第三人称动作和格式说明。对方可以用第一人称把自己正在做的事、注意到的变化、打算和感受自然地说给用户听，用说出口的内容推进情节，保持单方口述感。不要替用户写回复。',
     '心声完全可选，偶尔需要时直接写在同一个 text 的括号内，例如（我其实有点紧张）；不要另起段落、不要另建 block、不要每次都写。',
     '已有 RP 历史是当前进度，承接最新对话与关系；原章节仅提供初始背景。即使历史、预设或写作技巧含旁白或要求描写，本轮仍遵守仅对话格式，不重新开场或重写章节。',
@@ -119,6 +122,7 @@ export function buildRoleplayScriptPrompt(cast: RoleplayCast & Pick<RoleplayTurn
     '只输出对方说出口的内容，禁止旁白、环境说明、动作、神态、第三人称心理描写、括号动作和舞台指示。可以用对方第一人称口述刚刚发生的事来推进情节，但这些内容必须是对方正在说的话。不要生成用户角色的台词。',
     '心声完全可选，偶尔才写，并且必须和对话留在同一个 counterpart text 中，用括号包住，例如（我其实有点紧张）；不要单独成段或单独输出。',
     '回复只有一至两句话，简短自然，不写大段或多段独白，也不要替用户生成下一轮回复。',
+    ROLEPLAY_DIALOGUE_PROGRESS,
     '故事引导只作为理解情境和推进对话的背景，不原样输出为台词，不转写为旁白；历史、预设或写作技巧中的叙述风格不得覆盖仅对话要求。',
     '不要输出剧情大纲或格式说明。不要自动应用、改写或续写原章节正文。',
     '只返回 JSON 对象 {"blocks":[{"type":"counterpart","text":"门下面有一封信，封口上的印记我见过。你还记得那间旧书房吗？"}]}。',

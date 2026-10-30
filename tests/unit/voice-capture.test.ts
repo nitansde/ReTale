@@ -24,7 +24,7 @@ describe('voice playback', () => {
   it('starts behind a jitter buffer and marks a segment heard the moment its audio ends', async () => {
     const { VoicePcmPlayer } = await import('@/lib/voice-audio')
     const sources: { start: ReturnType<typeof vi.fn>; onended: (() => void) | null }[] = []
-    const context = { state: 'running', currentTime: 1, destination: {},
+    const context = { state: 'running', currentTime: 1, sampleRate: 24000, destination: {},
       createBuffer: (_channels: number, length: number, rate: number) => ({ duration: length / rate, getChannelData: () => new Float32Array(length) }),
       createBufferSource: () => { const source = { buffer: null, onended: null, connect() {}, disconnect() {}, stop() {}, start: vi.fn() }; sources.push(source); return source },
     } as unknown as AudioContext
@@ -37,5 +37,27 @@ describe('voice playback', () => {
     // drain() is followed by stop() in a call; the last sentence must already count as heard.
     await drained; player.stop()
     expect(heard).toEqual([0])
+  })
+
+  it.each([16000, 44100, 48000])('plays the same %i Hz waveform however the PCM stream is chunked', async (rate) => {
+    const { VoicePcmPlayer } = await import('@/lib/voice-audio')
+    const pcm = Int16Array.from({ length: 4000 }, (_, i) => Math.round(20000 * Math.sin(i / 3) + 8000 * Math.sin(i * 1.7)))
+    const encode = (samples: Int16Array) => btoa(String.fromCharCode(...new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength)))
+    const render = (sizes: number[]) => {
+      const played: { at: number; data: Float32Array }[] = []
+      const context = { state: 'running', currentTime: 0, sampleRate: rate, destination: {},
+        createBuffer: (_channels: number, length: number, bufferRate: number) => { const data = new Float32Array(length); return { duration: length / bufferRate, getChannelData: () => data } },
+        createBufferSource: () => { const source = { buffer: null as unknown as AudioBuffer, connect() {}, start(at: number) { played.push({ at, data: source.buffer.getChannelData(0) }) } }; return source },
+      } as unknown as AudioContext
+      const player = new VoicePcmPlayer(context, () => {})
+      let offset = 0
+      for (const size of sizes) { player.push(encode(pcm.subarray(offset, offset + size)), 24000, 0); offset += size }
+      return played
+    }
+    const whole = render([pcm.length])
+    const chunks = render([1, 1, 3, 700, 1, 1295, 2, 1997])
+    let frame = chunks[0].at * rate
+    for (const { at, data } of chunks) { expect(at * rate).toBeCloseTo(frame, 6); frame += data.length }
+    expect(chunks.flatMap(({ data }) => [...data])).toEqual([...whole[0].data])
   })
 })
