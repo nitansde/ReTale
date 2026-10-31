@@ -27,6 +27,7 @@ import {
   formatNowLabel,
   getParagraphsFromHtml,
   htmlToPlainText,
+  jsonValuesEqual as valuesEqual,
   plainTextToHtml,
   uid,
 } from '@/lib/utils'
@@ -210,10 +211,6 @@ function buildStateAfterChapterDeletion(state: PersistedNovelState, chapterId: s
     selectedParagraphIndex: currentChapterRemoved ? null : state.selectedParagraphIndex,
     presetCompatSessionState: nextPresetCompatSessionState,
   }
-}
-
-function valuesEqual(left: unknown, right: unknown) {
-  return JSON.stringify(left) === JSON.stringify(right)
 }
 
 function restoreRemovedRecords<T extends { id: string }>(

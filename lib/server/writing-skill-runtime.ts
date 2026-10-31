@@ -1,3 +1,4 @@
+import { InputValidationError, ResourceNotFoundError } from '@/lib/server/domain-errors'
 import { WRITING_SKILL_DEFAULTS } from '@/lib/writing-skill-defaults'
 import {
   createSeededRandom,
@@ -94,12 +95,12 @@ export function selectSkillExamples(input: {
   library?: MaterialLibrary
 }) {
   const card = readWritingSkillCardDetail(input.cardId, input.db)
-  if (!card) throw new Error('写作技巧卡不存在')
-  if (card.status !== 'ACTIVE') throw new Error('这张写作技巧卡当前不可用')
+  if (!card) throw new ResourceNotFoundError('写作技巧卡不存在')
+  if (card.status !== 'ACTIVE') throw new InputValidationError('这张写作技巧卡当前不可用')
   const library = input.library ?? loadWritingSkillCardLibrary(card, input.db)
   if (library.version !== card.libraryVersion) {
     markWritingSkillCardsStaleForLibraryVersion(card.libraryId, library.version, input.db)
-    throw new Error('这张写作技巧卡引用的素材库版本已经过期，请重新提炼')
+    throw new InputValidationError('这张写作技巧卡引用的素材库版本已经过期，请重新提炼')
   }
 
   const valid = card.examples.filter((example) => (
@@ -120,7 +121,7 @@ export function resolveWritingSkillExamples(input: {
   library?: MaterialLibrary
 }) {
   const card = readWritingSkillCardDetail(input.cardId, input.db)
-  if (!card) throw new Error('写作技巧卡不存在')
+  if (!card) throw new ResourceNotFoundError('写作技巧卡不存在')
   const library = input.library ?? loadWritingSkillCardLibrary(card, input.db)
   const examples = selectSkillExamples({ ...input, library })
   const resolved = examples.flatMap((example) => {
@@ -213,7 +214,7 @@ export function resolveWritingSkillRuntime(input: {
   library?: MaterialLibrary
 }) {
   const detail = readWritingSkillCardDetail(input.cardId, input.db)
-  if (!detail) throw new Error('写作技巧卡不存在')
+  if (!detail) throw new ResourceNotFoundError('写作技巧卡不存在')
   const count = Math.min(
     Math.max(1, Math.floor(input.count ?? detail.defaultExampleCount)),
     WRITING_SKILL_DEFAULTS.maxRuntimeExampleCount,
@@ -250,7 +251,7 @@ export function resolveWritingSkillRuntimes(input: {
   const libraries = new Map<string, MaterialLibrary>()
   const runtimes = cardIds.map((cardId) => {
     const card = readWritingSkillCardDetail(cardId, input.db)
-    if (!card) throw new Error('写作技巧卡不存在')
+    if (!card) throw new ResourceNotFoundError('写作技巧卡不存在')
     let library = input.library ?? libraries.get(card.libraryId)
     if (!library) {
       library = loadWritingSkillCardLibrary(card, input.db)

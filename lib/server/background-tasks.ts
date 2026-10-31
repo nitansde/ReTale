@@ -1,8 +1,11 @@
 import type { KnowledgeJobType } from '@/lib/server/knowledge-rebuild'
 import type { DatabaseAccess } from '@/lib/server/database-access'
 import { reconcileKnowledgeJobWatchdog } from '@/lib/server/knowledge-job-watchdog'
+import { getMainBranchId } from '@/lib/server/knowledge-store'
+import { scheduleKnowledgeWorkerProcess } from '@/lib/server/knowledge-worker-scheduler'
 import { abortRecoverableRewriteJob, RECOVERABLE_REWRITE_JOB_TYPE } from '@/lib/server/recoverable-rewrite-jobs'
 import { execute, queryAll, queryOne } from '@/lib/server/database-access'
+import { createTaskWatchdogAttemptId, mergeTaskWatchdogState, parseTaskWatchdogPayload } from '@/lib/server/task-watchdog-attempt'
 
 const ACTIVE_BACKGROUND_TASK_STATUSES = ['queued', 'running', 'paused'] as const
 const ACTIVE_BACKGROUND_TASK_JOB_TYPES = [
@@ -55,12 +58,21 @@ function isSupportedBackgroundTaskJobType(jobType: string): jobType is Backgroun
 }
 
 function persistAbortedBackgroundTask(jobId: string, db: BackgroundTaskDb = defaultDb) {
+  // Rotate the attempt token like abortKnowledgeJob does, so a worker still
+  // running this job can no longer write progress onto the aborted row.
+  const row = db.queryOne<{ payloadJson: string | null }>('SELECT payloadJson FROM KnowledgeJob WHERE id = ?', jobId)
+  const payload = mergeTaskWatchdogState(parseTaskWatchdogPayload(row?.payloadJson ?? null), {
+    attemptId: createTaskWatchdogAttemptId(),
+    lastAction: 'aborted',
+    lastActionAt: new Date().toISOString(),
+  })
   const result = db.execute(
     `UPDATE KnowledgeJob
-     SET status = 'aborted', progress = 0, currentStep = ?, errorMessage = ?, updatedAt = CURRENT_TIMESTAMP
+     SET status = 'aborted', progress = 0, currentStep = ?, errorMessage = ?, payloadJson = ?, updatedAt = CURRENT_TIMESTAMP
      WHERE id = ? AND status IN (?, ?, ?)`,
     '已中止',
     '已中止',
+    JSON.stringify(payload),
     jobId,
     ...ACTIVE_BACKGROUND_TASK_STATUSES,
   )
@@ -88,7 +100,17 @@ function resolveAbortAfterConcurrentChange(jobId: string, db: BackgroundTaskDb =
 
 export function listActiveBackgroundTasks(params: { novelId: string; db?: BackgroundTaskDb }) {
   const db = params.db ?? defaultDb
-  reconcileKnowledgeJobWatchdog({ novelId: params.novelId, db })
+  // A job the watchdog just re-queued has no worker; without this only the
+  // knowledge view would spawn one, and the task panel is where stale jobs are watched.
+  for (const action of reconcileKnowledgeJobWatchdog({ novelId: params.novelId, db })) {
+    if (action.action !== 'retried' || action.jobType === RECOVERABLE_REWRITE_JOB_TYPE) continue
+    scheduleKnowledgeWorkerProcess({
+      novelId: action.novelId,
+      branchId: action.branchId ?? getMainBranchId(action.novelId),
+      jobId: action.jobId,
+      jobType: action.jobType,
+    })
+  }
 
   const jobTypePlaceholders = ACTIVE_BACKGROUND_TASK_JOB_TYPES.map(() => '?').join(', ')
   const statusPlaceholders = ACTIVE_BACKGROUND_TASK_STATUSES.map(() => '?').join(', ')

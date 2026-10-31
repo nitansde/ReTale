@@ -1,3 +1,4 @@
+import { InputValidationError } from '@/lib/server/domain-errors'
 import type { z } from 'zod'
 import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { safeParseJson } from '@/lib/server/json-parse'
@@ -74,7 +75,7 @@ function resolveScenario(modelConfigId: string): 'knowledgeExtraction' | 'rewrit
     return 'knowledgeExtraction'
   }
   if (normalized === 'rewrite' || normalized.startsWith('rewrite:')) return 'rewrite'
-  throw new Error('modelConfigId 必须引用 knowledgeExtraction 或 rewrite 模型配置')
+  throw new InputValidationError('modelConfigId 必须引用 knowledgeExtraction 或 rewrite 模型配置')
 }
 
 export function resolveWritingSkillModelConfig(modelConfigId: string): ResolvedModelConfig {
@@ -85,7 +86,7 @@ export function resolveWritingSkillModelConfig(modelConfigId: string): ResolvedM
     ? settings.openAICompatible
     : settings.ollama
   if (!providerSettings.configured || !providerSettings.baseUrl || !providerSettings.model) {
-    throw new Error('当前写作技巧蒸馏模型尚未配置，请先在 AI 设置中配置对应模型')
+    throw new InputValidationError('当前写作技巧蒸馏模型尚未配置，请先在 AI 设置中配置对应模型')
   }
   return {
     scenario,

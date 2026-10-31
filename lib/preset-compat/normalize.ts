@@ -43,6 +43,7 @@ export type NormalizePresetCompatPresetOptions = {
   existingNames?: Iterable<string>
   now?: string
   idFactory?: () => string
+  presetId?: string
   conflictPolicy?: NameConflictPolicy
 }
 
@@ -546,7 +547,9 @@ export function normalizePresetCompatPresetImport(
   const rawPreset = isRecord(payload) ? payload : {}
   const warnings: string[] = []
   const now = options.now ?? new Date().toISOString()
-  const presetId = makeId(options.idFactory)
+  // Separate from idFactory, which also names id-less prompts and regexes: a fixed
+  // value there would give every one of them the same id.
+  const presetId = options.presetId ?? makeId(options.idFactory)
   const promptOrderEntries = normalizePromptOrderEntries(rawPreset.prompt_order)
   const activeEntry = getActivePromptOrderEntry(promptOrderEntries)
   const { enabledById, orderedIds } = getActivePromptOrderState(activeEntry)

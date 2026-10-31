@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { jsonError, noStoreJson, noStoreJsonError, requireNonEmptyId } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, jsonError, noStoreJson, noStoreJsonError, requireNonEmptyId } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { deleteFutureJumpRun, findFutureJumpRunById } from '@/lib/server/future-jump-store'
 
@@ -38,8 +38,7 @@ export async function GET(request: Request, ctx: RouteContext<'/api/future-jump/
 
     return noStoreJson(run)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to load future jump run'
-    return noStoreJsonError(message, message.endsWith(' is required') ? 400 : 500)
+    return apiRequestErrorResponse(error) ?? noStoreJsonError('Failed to load future jump run', 500)
   }
 }
 
@@ -69,7 +68,6 @@ export async function DELETE(request: Request, ctx: RouteContext<'/api/future-ju
     await deleteFutureJumpRun(runId, db)
     return NextResponse.json({ ok: true, runId })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to delete future jump run'
-    return jsonError(message, message.endsWith(' is required') ? 400 : 500)
+    return apiRequestErrorResponse(error) ?? jsonError('Failed to delete future jump run', 500)
   }
 }

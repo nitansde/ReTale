@@ -595,16 +595,33 @@ export function listStoryTimelineDescendantNodeIds(rootNodeId: string, nodes: St
   return ordered
 }
 
+type StoryTimelineNodeResourceRow = {
+  continue_block_id: string | null
+  roleplay_session_id: string | null
+  what_if_session_id: string | null
+  future_jump_run_id: string | null
+}
+
+/** Remove the resource a node wraps. Every FK from these tables to the node is
+ * ON DELETE SET NULL, so leaving them behind makes orphans: a roleplay session
+ * without a node is re-listed as a virtual root, and an orphan what-if session
+ * can still be fed into prompts by id. */
+function deleteStoryTimelineNodeResources(row: StoryTimelineNodeResourceRow, db: Db) {
+  if (row.continue_block_id) db.execute('DELETE FROM continue_blocks WHERE id = ?', row.continue_block_id)
+  if (row.roleplay_session_id) db.execute('DELETE FROM roleplay_sessions WHERE id = ?', row.roleplay_session_id)
+  if (row.future_jump_run_id) db.execute('DELETE FROM future_jump_runs WHERE id = ?', row.future_jump_run_id)
+  if (row.what_if_session_id) db.execute('DELETE FROM what_if_sessions WHERE id = ?', row.what_if_session_id)
+}
+
 export function deleteStoryTimelineNodesByIds(nodeIds: string[], db: Db = defaultDb) {
   for (const nodeId of nodeIds) {
-    const row = db.queryOne<{ continue_block_id: string | null }>(
-      'SELECT continue_block_id FROM story_timeline_nodes WHERE id = ?',
+    const row = db.queryOne<StoryTimelineNodeResourceRow>(
+      'SELECT continue_block_id, roleplay_session_id, what_if_session_id, future_jump_run_id FROM story_timeline_nodes WHERE id = ?',
       nodeId
     )
-    if (row?.continue_block_id) {
-      db.execute('DELETE FROM continue_blocks WHERE id = ?', row.continue_block_id)
-    }
+    if (!row) continue
     db.execute('DELETE FROM story_timeline_nodes WHERE id = ?', nodeId)
+    deleteStoryTimelineNodeResources(row, db)
   }
 }
 
@@ -643,14 +660,13 @@ export function deleteStoryTimelineNode(nodeId: string, db: Db = defaultDb): Sto
     }
   }
 
-  if (deletedNode.continueBlockId) {
-    db.execute('DELETE FROM continue_blocks WHERE id = ?', deletedNode.continueBlockId)
-  }
-  if (deletedNode.roleplaySessionId) {
-    db.execute('DELETE FROM roleplay_sessions WHERE id = ?', deletedNode.roleplaySessionId)
-  }
-
   db.execute('DELETE FROM story_timeline_nodes WHERE id = ?', nodeId)
+  deleteStoryTimelineNodeResources({
+    continue_block_id: deletedNode.continueBlockId,
+    roleplay_session_id: deletedNode.roleplaySessionId ?? null,
+    what_if_session_id: deletedNode.whatIfSessionId ?? null,
+    future_jump_run_id: deletedNode.futureJumpRunId ?? null,
+  }, db)
 
   return {
     deletedNode,
@@ -746,6 +762,9 @@ function toStoryTimelineBranchNode(node: StoryTimelineNodeRecord): StoryTimeline
 
 function compareStoryTimelineNodeChronology(left: StoryTimelineNodeRecord, right: StoryTimelineNodeRecord): number {
   if (left.createdAt !== right.createdAt) return left.createdAt.localeCompare(right.createdAt)
+  // created_at has second resolution and ids start with a random segment, so
+  // two quick creates would otherwise sort randomly. labelIndex is monotonic.
+  if (left.labelIndex !== right.labelIndex) return left.labelIndex - right.labelIndex
   return left.id.localeCompare(right.id)
 }
 

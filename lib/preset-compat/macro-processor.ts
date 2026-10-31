@@ -1,4 +1,4 @@
-import type { PresetCompatMacroContext, PresetCompatMacroNodeLike } from '@/lib/preset-compat/macro-context'
+import { PRESET_COMPAT_INLINE_TRIM_MARKER, type PresetCompatMacroContext, type PresetCompatMacroNodeLike } from '@/lib/preset-compat/macro-context'
 import { normalizePresetCompatVariableInvocation } from '@/lib/preset-compat/macro-builtins-variables'
 import { evaluatePresetCompatMacroInvocation } from '@/lib/preset-compat/macro-evaluator'
 import type {
@@ -10,6 +10,8 @@ import type { PresetCompatMacroRegistry } from '@/lib/preset-compat/macro-regist
 export type ProcessPresetCompatMacroOptions = {
   context: PresetCompatMacroContext
   registry: PresetCompatMacroRegistry
+  /** Applied to each top-level macro result, never to the surrounding literal text. */
+  transformValue?: (value: string) => string
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -91,7 +93,14 @@ export function processPresetCompatMacroString(source: string, options: ProcessP
     })
   }
 
-  return parsed.nodes.map((node) => resolveMacroNodeLike(node, options)).join('')
+  const { transformValue, ...nestedOptions } = options
+  return parsed.nodes
+    .map((node) => {
+      const value = resolveMacroNodeLike(node, nestedOptions)
+      return transformValue && node.type === 'macro' ? transformValue(value) : value
+    })
+    .join('')
+    .replace(new RegExp(`(?:\\r?\\n)*${PRESET_COMPAT_INLINE_TRIM_MARKER}(?:\\r?\\n)*`, 'gu'), '')
 }
 
 export function processPresetCompatMacroJson<T>(value: T, options: ProcessPresetCompatMacroOptions): T {

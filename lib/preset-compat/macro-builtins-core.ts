@@ -1,5 +1,6 @@
 import { createPresetCompatRegisteredMacro } from '@/lib/preset-compat/macro-registry'
 import { resolveNodeLike } from '@/lib/preset-compat/macro-builtins-variables'
+import { PRESET_COMPAT_INLINE_TRIM_MARKER } from '@/lib/preset-compat/macro-context'
 
 function isTruthy(value: string) {
   const normalized = value.trim().toLowerCase()
@@ -98,6 +99,8 @@ export function registerPresetCompatCoreMacroBuiltins() {
       name: 'trim',
       branchEvaluation: 'deferred',
       evaluate(params) {
+        // Inline {{trim}} eats the newlines around it once the whole string is resolved.
+        if (!params.rawBranches[0] && params.resolvedArguments?.[0] === undefined) return PRESET_COMPAT_INLINE_TRIM_MARKER
         const scopedValue = params.rawBranches[0]
           ? resolveNodeLike(params.rawBranches[0], params.context, params.registry)
           : params.resolvedArguments?.[0] ?? ''

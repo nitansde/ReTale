@@ -1,5 +1,5 @@
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
-import { noStoreJson, noStoreJsonError, requireNonEmptyId } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, noStoreJson, noStoreJsonError, requireNonEmptyId } from '@/lib/server/api-route'
 import type { RoleplaySessionDetail } from '@/lib/roleplay-types'
 
 import { findRoleplaySessionById } from '@/lib/server/roleplay-store'
@@ -63,7 +63,6 @@ export async function GET(request: Request, ctx: RouteContext<'/api/roleplay/ses
       characterOptions: getRoleplayCharacterOptions(session, db),
     })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to load roleplay session'
-    return noStoreJsonError(message, message.endsWith(' is required') ? 400 : 500)
+    return apiRequestErrorResponse(error) ?? noStoreJsonError('Failed to load roleplay session', 500)
   }
 }

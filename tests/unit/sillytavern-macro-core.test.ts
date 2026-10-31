@@ -13,6 +13,7 @@ import {
 } from '@/lib/preset-compat/macro-parser'
 import { createPresetCompatMacroRegistry, type PresetCompatMacroRegistry } from '@/lib/preset-compat/macro-registry'
 import { registerPresetCompatCoreMacroBuiltins } from '@/lib/preset-compat/macro-builtins-core'
+import { processPresetCompatMacroString } from '@/lib/preset-compat/macro-processor'
 import {
   normalizePresetCompatVariableInvocation,
   registerPresetCompatVariableMacroBuiltins,
@@ -84,6 +85,11 @@ describe('sillytavern core/control built-ins', () => {
       'A B\nCDEdesserts'
     )
     expect(context.diagnostics).toEqual([])
+  })
+
+  it('removes inline {{trim}} together with the newlines around it', () => {
+    const context = createPresetCompatMacroContext({ surfaceId: 'rewrite', phase: 'prompt-rule' })
+    expect(processPresetCompatMacroString('Line A\n\n{{trim}}\n\nLine B', { context, registry: createRegistry() })).toBe('Line ALine B')
   })
 
   it('trims and dedents block content while preserving #trim outer scoped whitespace', () => {

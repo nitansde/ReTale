@@ -77,7 +77,7 @@ describe('sillytavern macro env/time/random built-ins', () => {
     const context = createPresetCompatMacroContext({
       surfaceId: 'rewrite',
       phase: 'prompt-rule',
-      now: new Date('2026-05-16T12:34:56.000Z'),
+      now: new Date(2026, 4, 16, 12, 34, 56),
     })
     const registry = createRegistry()
 
@@ -88,6 +88,36 @@ describe('sillytavern macro env/time/random built-ins', () => {
     expect(evaluateMacro(registry, 'isodate', context)).toBe('2026-05-16')
     expect(evaluateMacro(registry, 'datetimeformat', context, ['YYYY/MM/DD HH:mm:ss'])).toBe('2026/05/16 12:34:56')
     expect(context.diagnostics).toEqual([])
+  })
+
+  it('follows SillyTavern list, dice, and stable-pick semantics', () => {
+    const context = createPresetCompatMacroContext({ surfaceId: 'rewrite', phase: 'prompt-rule', seed: 7 })
+    const registry = createRegistry()
+    const pick = (seed: number) => evaluateMacro(
+      registry, 'pick', createPresetCompatMacroContext({ surfaceId: 'rewrite', phase: 'prompt-rule', seed }), ['red', 'green', 'blue'],
+    )
+
+    expect(['a', 'b']).toContain(evaluateMacro(registry, 'random', context, ['a', 'b']))
+    expect(['1', '2, 3']).toContain(evaluateMacro(registry, 'random', context, ['1,2\\, 3']))
+    expect(pick(1)).toBe(pick(2))
+    for (const [formula, min, max] of [['1d6', 1, 6], ['d20', 1, 20], ['3d6+4', 7, 22], ['20', 1, 20]] as const) {
+      const total = Number(evaluateMacro(registry, 'roll', context, [formula]))
+      expect(total).toBeGreaterThanOrEqual(min)
+      expect(total).toBeLessThanOrEqual(max)
+    }
+    expect(context.diagnostics).toEqual([])
+
+    expect(evaluateMacro(registry, 'roll', context, ['1d6x'])).toBe('')
+    expect(evaluateMacro(registry, 'roll', context, ['-3'])).toBe('')
+    expect(context.diagnostics).toHaveLength(2)
+  })
+
+  it('rolls differently per request when no seed is configured', () => {
+    const registry = createRegistry()
+    const rolls = new Set(Array.from({ length: 16 }, () => evaluateMacro(
+      registry, 'roll', createPresetCompatMacroContext({ surfaceId: 'rewrite', phase: 'prompt-rule' }), ['1000000'],
+    )))
+    expect(rolls.size).toBeGreaterThan(1)
   })
 
   it('uses the seeded rng deterministically for roll, random, and pick', () => {

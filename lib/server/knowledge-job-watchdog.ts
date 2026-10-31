@@ -56,12 +56,12 @@ export type ReconcileKnowledgeJobWatchdogParams = {
 
 const defaultDb: Pick<DatabaseAccess, 'execute' | 'queryAll' | 'queryOne'> = { execute, queryAll, queryOne }
 
-function parsePositiveIntegerEnv(name: string, fallback: number) {
+function parseIntegerEnv(name: string, fallback: number, minimum: number) {
   const raw = process.env[name]?.trim()
   if (!raw) return fallback
 
   const parsed = Number.parseInt(raw, 10)
-  return Number.isFinite(parsed) && parsed > 0
+  return Number.isFinite(parsed) && parsed >= minimum
     ? parsed
     : fallback
 }
@@ -153,8 +153,9 @@ function isStaleRow(updatedAt: string, staleTimeoutMs: number, nowMs: number) {
 
 export function getKnowledgeJobWatchdogConfig() {
   return {
-    staleTimeoutMs: parsePositiveIntegerEnv('RETALE_TASK_STALE_TIMEOUT_MS', DEFAULT_TASK_STALE_TIMEOUT_MS),
-    maxRetries: parsePositiveIntegerEnv('RETALE_TASK_MAX_RETRIES', DEFAULT_TASK_MAX_RETRIES),
+    staleTimeoutMs: parseIntegerEnv('RETALE_TASK_STALE_TIMEOUT_MS', DEFAULT_TASK_STALE_TIMEOUT_MS, 1),
+    // 0 is meaningful: it disables automatic retries.
+    maxRetries: parseIntegerEnv('RETALE_TASK_MAX_RETRIES', DEFAULT_TASK_MAX_RETRIES, 0),
   }
 }
 

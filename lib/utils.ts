@@ -193,3 +193,15 @@ export function shuffleWithSeed<T>(items: T[], random: () => number) {
 export function estimateTokenCount(text: string) {
   return Math.max(1, Math.ceil(text.replace(/\s+/g, '').length / 1.6))
 }
+
+function stableJson(value: unknown) {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    item && typeof item === 'object' && !Array.isArray(item)
+      ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, (item as Record<string, unknown>)[key]]))
+      : item)
+}
+
+/** Structural JSON equality that ignores object key order (server and client build the same record in different orders). */
+export function jsonValuesEqual(left: unknown, right: unknown) {
+  return stableJson(left) === stableJson(right)
+}

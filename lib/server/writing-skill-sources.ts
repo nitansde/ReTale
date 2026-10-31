@@ -1,3 +1,4 @@
+import { InputValidationError, ResourceNotFoundError } from '@/lib/server/domain-errors'
 import { createHash } from 'node:crypto'
 import type { DatabaseAccess } from '@/lib/server/database-access'
 import { createControlDatabaseAccess, createNovelDatabaseAccess } from '@/lib/server/database-access'
@@ -127,8 +128,8 @@ export function createUploadedWritingSkillMaterial(input: {
 }, db: DatabaseAccess = defaultDb()) {
   const title = input.title.trim().slice(0, 200)
   const rawText = input.rawText.replace(/\r\n?/g, '\n').trim()
-  if (!title) throw new Error('素材书名称不能为空')
-  if (!rawText) throw new Error('上传的素材书没有可读取的正文')
+  if (!title) throw new InputValidationError('素材书名称不能为空')
+  if (!rawText) throw new InputValidationError('上传的素材书没有可读取的正文')
   const chapters = splitUploadedBookChapters(rawText)
   const id = uid('writing-skill-material')
   const contentHash = createHash('sha256').update(rawText).digest('hex')
@@ -168,7 +169,7 @@ export function deleteUploadedWritingSkillMaterial(id: string, db: DatabaseAcces
 
 function loadUploadedMaterialLibrary(id: string, db: DatabaseAccess = defaultDb()): MaterialLibrary {
   const row = readUploadedWritingSkillMaterialRow(id, db)
-  if (!row) throw new Error('仅蒸馏素材不存在或已被删除')
+  if (!row) throw new ResourceNotFoundError('仅蒸馏素材不存在或已被删除')
   const chapters = splitUploadedBookChapters(row.rawText)
   const paragraphs = chapters.flatMap((chapter, chapterOffset) => {
     const chapterIndex = chapterOffset + 1
@@ -188,7 +189,7 @@ function loadUploadedMaterialLibrary(id: string, db: DatabaseAccess = defaultDb(
       } satisfies MaterialParagraph
     })
   })
-  if (!paragraphs.length) throw new Error('仅蒸馏素材中没有可读取的段落')
+  if (!paragraphs.length) throw new InputValidationError('仅蒸馏素材中没有可读取的段落')
   return {
     id: row.id,
     version: row.contentHash,
@@ -318,7 +319,7 @@ export function loadWritingSkillMaterialCollection(
   } = {},
 ) {
   const refs = normalizeWritingSkillSourceRefs(sourceRefs)
-  if (!refs.length) throw new Error('请至少选择一本蒸馏素材')
+  if (!refs.length) throw new InputValidationError('请至少选择一本蒸馏素材')
   const loaded = refs.map((source) => ({ source, library: loadSourceLibrary(source, options) }))
   const collectionId = `writing-skill-collection:${createHash('sha256')
     .update(loaded.map(({ source }) => sourceKey(source)).join('|'))

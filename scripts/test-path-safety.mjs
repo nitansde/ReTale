@@ -68,6 +68,11 @@ export function markOwnedTestRoot(ownedRoot, options = {}) {
   const repoRoot = options.repoRoot ?? process.cwd()
   const resolvedRoot = path.resolve(ownedRoot)
   assertNotRepositoryRuntimePath(resolvedRoot, repoRoot, 'test root')
+  // Checked only here, where ownership is granted: a symlink under tests/artifacts must
+  // not turn a real library elsewhere (such as ~/.retale) into a "test root".
+  if (!isContainedPath(canonicalizePotentialPath(repoRoot), canonicalizePotentialPath(resolvedRoot))) {
+    throw new Error(`[retale-test-path] test root must stay inside the repository: ${ownedRoot}`)
+  }
   fs.mkdirSync(resolvedRoot, { recursive: true })
 
   const markerPath = path.join(resolvedRoot, TEST_OWNERSHIP_MARKER)

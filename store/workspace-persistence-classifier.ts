@@ -1,13 +1,10 @@
 import type { Chapter, PersistedNovelState } from '@/lib/types'
+import { jsonValuesEqual as valuesEqual } from '@/lib/utils'
 
 export type WorkspacePersistenceClassification =
   | { kind: 'none' }
   | { kind: 'patch'; chapter: Chapter }
   | { kind: 'post' }
-
-function valuesEqual(left: unknown, right: unknown) {
-  return JSON.stringify(left) === JSON.stringify(right)
-}
 
 function withoutSeparatelyPersistedSettings(state: PersistedNovelState) {
   const {

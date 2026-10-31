@@ -104,4 +104,30 @@ describe('hanlp_bootstrap.py batching', () => {
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
+
+  it('reports mention offsets in UTF-16 code units so astral characters do not shift them', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-fake-hanlp-'))
+
+    try {
+      writeFakeHanlpPackage(tempDir)
+      const chapterText = '😀𠀋阿离走来。'
+      const result = spawnSync(process.env.RETALE_TEST_PYTHON_BIN || 'python3', [path.join(process.cwd(), 'hanlp_bootstrap.py')], {
+        cwd: process.cwd(),
+        input: `${JSON.stringify({ novelId: 'novel-astral', branchId: 'novel-astral:main', chapterId: 'chapter-1', chapterNo: 1, chapterText, outputSchemaVersion: 'v1' })}\n`,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HANLP_BOOTSTRAP_BATCH_SIZE: '8',
+          EXPECTED_HANLP_BATCH_SIZE: '8',
+          PYTHONPATH: [tempDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+        },
+      })
+
+      expect(result.status, result.stderr).toBe(0)
+      const [mention] = (JSON.parse(result.stdout) as { people: Array<{ chapters: Array<{ mentions: Array<{ startOffset: number; endOffset: number }> }> }> }).people[0].chapters[0].mentions
+      expect(chapterText.slice(mention.startOffset, mention.endOffset)).toBe('阿离')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
 })

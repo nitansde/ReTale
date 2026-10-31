@@ -105,7 +105,7 @@ import type {
   GraphSelection,
 } from '@/components/graph/types'
 import type { GraphEdge } from '@/lib/server/graph-types'
-import { countChineseFriendlyWords, htmlToPlainText } from '@/lib/utils'
+import { countChineseFriendlyWords, htmlToPlainText, jsonValuesEqual } from '@/lib/utils'
 import type {
   ChapterTimelineItem,
   StoryTimelineResponse,
@@ -758,6 +758,30 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
 
   const currentNovelMeta = useMemo(() => params.localNovels.find((novel) => novel.id === params.currentNovelId) ?? null, [params.localNovels, params.currentNovelId])
 
+  // Stable identity: this feeds useCallback deps all the way to the popstate listener,
+  // which would otherwise be removed and re-added on every render.
+  const { resetPresetCompatSessionStateForSelection } = params
+  const chapterResetControls = useMemo(() => ({
+    defaultGraphReviewControls: DEFAULT_GRAPH_REVIEW_CONTROLS,
+    resetPresetCompatSessionStateForChapter: (chapter: Chapter) => {
+      resetPresetCompatSessionStateForSelection(toChapterTimelineSelection(chapter), ['rewrite', 'future_jump', 'roleplay'])
+    },
+    setSelectionText,
+    setLockedSelectionText,
+    setGenerationContext,
+    setGraphContext,
+    setContextPreviewError,
+    setGraphReviewControls,
+    setGraphSelection,
+    setDisabledContextBlockIds,
+    setExcludedGraphEdgeIds,
+    setExcludedEvidenceIds,
+    setGraphMutationPendingId,
+    setGraphMutationError,
+    setToolbarPos,
+    setActiveMode,
+  }), [resetPresetCompatSessionStateForSelection])
+
   const {
     sortedChapters,
     currentChapter,
@@ -775,26 +799,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     setCenterPaneView,
     setPendingSourceJump,
     setLeftPanelOpen,
-    resetControls: {
-      defaultGraphReviewControls: DEFAULT_GRAPH_REVIEW_CONTROLS,
-      resetPresetCompatSessionStateForChapter: (chapter) => {
-        params.resetPresetCompatSessionStateForSelection(toChapterTimelineSelection(chapter), ['rewrite', 'future_jump', 'roleplay'])
-      },
-      setSelectionText,
-      setLockedSelectionText,
-      setGenerationContext,
-      setGraphContext,
-      setContextPreviewError,
-      setGraphReviewControls,
-      setGraphSelection,
-      setDisabledContextBlockIds,
-      setExcludedGraphEdgeIds,
-      setExcludedEvidenceIds,
-      setGraphMutationPendingId,
-      setGraphMutationError,
-      setToolbarPos,
-      setActiveMode,
-    },
+    resetControls: chapterResetControls,
   })
   const hasWorkspaceContent = params.localChapters.length > 0
   const pendingChapterDraftRef = useRef<{
@@ -985,6 +990,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     let cancelled = false
     let pollTimerId: number | null = null
     let pollAbortController: AbortController | null = null
+    let consecutiveFailures = 0
 
     const scheduleNextPoll = (delay: number | null) => {
       if (cancelled || delay === null) return
@@ -997,7 +1003,10 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
       const latestStatus = latestKnowledgeRebuildStatusRef.current?.novelId === params.currentNovelId
         ? latestKnowledgeRebuildStatusRef.current
         : null
-      scheduleNextPoll(getKnowledgePollDelay(latestStatus, knowledgeActionLoading) ?? 1_500)
+      const baseDelay = getKnowledgePollDelay(latestStatus, knowledgeActionLoading) ?? 1_500
+      // A persistently failing endpoint must not be hit every 1.5s by every open tab.
+      scheduleNextPoll(Math.min(baseDelay * 2 ** consecutiveFailures, 30_000))
+      consecutiveFailures += 1
     }
 
     const syncRebuildStatus = async () => {
@@ -1037,6 +1046,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
             return
           }
 
+          consecutiveFailures = 0
           const nextStatus = data.payload.knowledgeRebuildStatus ?? null
           setHanlpCacheSnapshot(data.payload.hanlpCacheSnapshot ?? null)
           setKnowledgeStatusOverview((current) => mergeKnowledgeStatusOverview(current, data.payload.knowledgeStatusOverview))
@@ -1258,7 +1268,11 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   useEffect(() => {
     if (!workspaceSelectionRef.current) return
     workspaceSelectionHistoryModeRef.current = 'replace'
-    setWorkspaceSelection((current) => resolveWorkspaceSelection({ currentSelection: current, currentChapter, branchNodes: resolvedStoryTimeline.branchNodes }))
+    setWorkspaceSelection((current) => {
+      const next = resolveWorkspaceSelection({ currentSelection: current, currentChapter, branchNodes: resolvedStoryTimeline.branchNodes })
+      // Keep the identity when nothing changed: this effect runs on every editor commit.
+      return jsonValuesEqual(current, next) ? current : next
+    })
   }, [currentChapter, resolvedStoryTimeline.branchNodes])
 
   const loadStoryTimeline = useCallback(async () => {
@@ -1314,7 +1328,9 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     }
     return CHAPTER_PAGE_SIZE
   }, [chapterIndex, chapterListLimit, sortedChapters.length])
-  const chapterText = currentChapter ? htmlToPlainText(currentChapter.content) : ''
+  const currentChapterContent = currentChapter?.content
+  // Five regex passes over the whole chapter; this hook re-renders per frame while scrolling.
+  const chapterText = useMemo(() => currentChapterContent ? htmlToPlainText(currentChapterContent) : '', [currentChapterContent])
   const resolveEdgeSourceJumpTarget = (edge: GraphEdge) => {
     const location = edge.evidenceLocation
     if (!location) return null
@@ -1606,12 +1622,12 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     }
   }, [editor])
 
-  const currentNovelCharacters = params.localCharacters.filter((item) => item.novelId === params.currentNovelId)
+  const currentNovelCharacters = useMemo(() => params.localCharacters.filter((item) => item.novelId === params.currentNovelId), [params.currentNovelId, params.localCharacters])
   const currentNovelVisibleCharacters = useMemo(() => filterWorkspaceVisibleCharacters(currentNovelCharacters), [currentNovelCharacters])
   const currentNovelVisibleCharacterCount = currentNovelVisibleCharacters.length
-  const currentNovelWorldEntries = params.localWorldEntries.filter((item) => item.novelId === params.currentNovelId)
-  const currentNovelOutlines = params.localOutlines.filter((item) => item.novelId === params.currentNovelId)
-  const currentNovelTimelineEvents = params.localTimelineEvents.filter((item) => item.novelId === params.currentNovelId).slice().sort((a, b) => a.order - b.order)
+  const currentNovelWorldEntries = useMemo(() => params.localWorldEntries.filter((item) => item.novelId === params.currentNovelId), [params.currentNovelId, params.localWorldEntries])
+  const currentNovelOutlines = useMemo(() => params.localOutlines.filter((item) => item.novelId === params.currentNovelId), [params.currentNovelId, params.localOutlines])
+  const currentNovelTimelineEvents = useMemo(() => params.localTimelineEvents.filter((item) => item.novelId === params.currentNovelId).slice().sort((a, b) => a.order - b.order), [params.currentNovelId, params.localTimelineEvents])
   const currentNovelCharactersSorted = useMemo(() => sortCharactersForWorkspaceRail(currentNovelVisibleCharacters), [currentNovelVisibleCharacters])
   const currentNovelWorldEntryGroups = useMemo(() => groupWorldEntriesForWorkspaceRail(currentNovelWorldEntries), [currentNovelWorldEntries])
   const workspaceKnowledgeTabs: Array<{ tab: WorkspaceRefTab; label: string; icon: typeof Users }> = [

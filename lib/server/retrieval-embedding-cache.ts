@@ -304,7 +304,9 @@ export async function garbageCollectRawTextEmbeddingCacheEntries(params: {
   const hashes = uniqueNonEmptyHashes(params.reachableEmbeddingInputHashes)
 
   if (!hashes.length) {
-    const result = execute(
+    // Same table as the batched branch below; a plain autocommit write is
+    // rejected while another caller owns a transaction on this database.
+    return await withTransaction(() => Number(execute(
       `
         DELETE FROM RawTextEmbeddingCache
         WHERE branchId = ?
@@ -314,8 +316,7 @@ export async function garbageCollectRawTextEmbeddingCacheEntries(params: {
       scope.branchId,
       scope.provider,
       scope.model,
-    )
-    return Number(result.changes ?? 0)
+    ).changes ?? 0))
   }
 
   const reachableHashes = new Set(hashes)

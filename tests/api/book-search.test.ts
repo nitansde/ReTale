@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -166,5 +167,13 @@ describe('book search', () => {
     expect((await request('  ')).status).toBe(400)
     expect((await request('a'.repeat(201))).status).toBe(400)
     expect((await request('hello', 'does-not-exist')).status).toBe(404)
+    const { GET } = await import('@/app/api/novels/[novelId]/route')
+    const staleSessionRead = await GET(
+      new Request('http://localhost/api/novels/does-not-exist'),
+      { params: Promise.resolve({ novelId: 'does-not-exist' }) },
+    )
+    expect(staleSessionRead.status).toBe(404)
+    // A stale browser session must not leave an empty database behind.
+    expect(fs.existsSync(path.join(process.env.RETALE_DATA_DIR!, 'novels', 'does-not-exist'))).toBe(false)
   })
 })

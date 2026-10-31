@@ -64,6 +64,17 @@ describe('sillytavern macro parser', () => {
     ])
   })
 
+  it('splits arguments only at the outer level when a nested macro carries its own separators', () => {
+    const result = parsePresetCompatMacroSource('{{getvar::{{getvar::key}}}}{{random::{{getvar::a}}::b}}{{if {{getvar::flag}}}}yes{{/if}}')
+
+    expect(result.diagnostics).toEqual([])
+    expect(result.nodes).toMatchObject([
+      { normalizedName: 'getvar', args: [{ separator: 'double-colon', segments: [{ normalizedName: 'getvar', args: [{ raw: 'key' }] }] }] },
+      { normalizedName: 'random', args: [{ segments: [{ normalizedName: 'getvar' }] }, { raw: 'b' }] },
+      { normalizedName: 'if', form: 'block', args: [{ separator: 'space', segments: [{ normalizedName: 'getvar', args: [{ raw: 'flag' }] }] }] },
+    ])
+  })
+
   it('parses whitespace, double-colon, single-colon, and nested macro arguments into evaluator-ready segments', () => {
     const result = parsePresetCompatMacroSource(
       '{{name arg}}{{name::arg1::arg2}}{{name:arg1:arg2}}{{getvar::{{char}}_mood}}'

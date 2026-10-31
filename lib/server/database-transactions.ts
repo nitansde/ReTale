@@ -4,8 +4,10 @@ import { isSqliteLockError } from '@/lib/server/sqlite-busy'
 
 type ExecuteLike = (sql: string) => unknown
 
-/** Retry lock acquisition asynchronously, without replaying the transaction callback. */
-export async function beginSqliteTransaction(database: DatabaseSync) {
+/** Retry lock acquisition asynchronously, without replaying the transaction callback.
+ * `onOpen` runs synchronously after BEGIN: the caller's fence must already be up
+ * before this async function yields, or a queued microtask could join the transaction. */
+export async function beginSqliteTransaction(database: DatabaseSync, onOpen?: () => void) {
   const row = database.prepare('PRAGMA busy_timeout').get() as { timeout: number }
   const timeout = row.timeout
   const deadline = performance.now() + timeout
@@ -15,6 +17,7 @@ export async function beginSqliteTransaction(database: DatabaseSync) {
       // Restore before yielding: this connection may serve other synchronous work.
       database.exec('PRAGMA busy_timeout = 0')
       database.exec('BEGIN IMMEDIATE')
+      onOpen?.()
       return
     } catch (error) {
       if (!isSqliteLockError(error) || performance.now() >= deadline) throw error
@@ -95,7 +98,7 @@ export async function runSerializedDatabaseTransaction<T>(
   transactionKey: DatabaseTransactionKey,
   execute: ExecuteLike,
   callback: () => T | Promise<T>,
-  begin: () => void | Promise<void>,
+  begin: (onOpen: () => void) => void | Promise<void>,
 ) {
   const inheritedScope = serializedDatabaseTransactionState.scope.getStore()
   if (inheritedScope?.active && inheritedScope.transactionKey === transactionKey) {
@@ -134,10 +137,15 @@ export async function runSerializedDatabaseTransaction<T>(
       transactionScope,
       async () => {
         let began = false
-        try {
-          serializedDatabaseTransactionState.ownerByKey.set(transactionKey, transactionScope)
-          await begin()
+        // Fence only once a transaction is actually open: while BEGIN IMMEDIATE
+        // waits on another process's lock, plain reads must keep working.
+        const markOpen = () => {
           began = true
+          serializedDatabaseTransactionState.ownerByKey.set(transactionKey, transactionScope)
+        }
+        try {
+          await begin(markOpen)
+          markOpen()
           let callbackResult!: T
           let callbackFailure: { error: unknown } | null = null
           try {

@@ -12,7 +12,7 @@ import { loadStoredAISettings } from '@/lib/server/ai-settings'
 import { safeParseJson } from '@/lib/server/json-parse'
 import { writeLlmDebugLog, type LlmDebugLogParams } from '@/lib/server/llm-debug-log'
 import { findAppSettings } from '@/lib/server/persistence'
-import { withProviderModelDiscoveryDeadline } from '@/lib/server/provider-model-discovery'
+import { PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS, withProviderModelDiscoveryDeadline } from '@/lib/server/provider-model-discovery'
 import {
   NON_STREAM_PROVIDER_TIMEOUT_MS,
   parseProviderJsonResponse,
@@ -1261,9 +1261,11 @@ function isAbortOrTimeoutError(error: unknown) {
 }
 
 async function fetchOllamaTags(baseUrl: string, signal?: AbortSignal) {
+  // Callers without a signal (the rewrite-time config probe) still need a bound:
+  // an unreachable host must not stall a rewrite for the OS TCP timeout.
   const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/tags`, {
     cache: 'no-store',
-    signal,
+    signal: signal ?? AbortSignal.timeout(PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS),
   })
   if (!response.ok) {
     const text = await response.text()
@@ -1460,11 +1462,18 @@ async function getOllamaEmbeddingConfig(configOverride?: Partial<OllamaProviderS
   const stored = getStoredOllamaSettings('embeddings')
   const baseUrl = configOverride?.baseUrl?.trim() || stored.baseUrl
   const timeoutMs = stored.timeoutMs
+  const configuredModel = (configOverride?.model ?? stored.model).trim()
 
   let detectedModels: OllamaModelOption[] = []
   try {
-    const available = await listAvailableOllamaModels(baseUrl, 'embedding', signal)
-    detectedModels = available.models
+    if (configuredModel) {
+      // A configured model only needs a reachability check; probing every
+      // installed model's capabilities per embedding batch is wasted traffic.
+      await fetchOllamaTags(baseUrl, signal)
+    } else {
+      const available = await listAvailableOllamaModels(baseUrl, 'embedding', signal)
+      detectedModels = available.models
+    }
   } catch {
     return {
       baseUrl,
@@ -1475,7 +1484,6 @@ async function getOllamaEmbeddingConfig(configOverride?: Partial<OllamaProviderS
     }
   }
 
-  const configuredModel = (configOverride?.model ?? stored.model).trim()
   const preferredModel = configuredModel || detectedModels[0]?.id || null
   if (!preferredModel) {
     return {
@@ -2489,7 +2497,7 @@ export async function generateRewriteWithOllama(
     const response = await requestOllamaChat({
       baseUrl: config.baseUrl,
       model: config.model,
-      timeoutMs: NON_STREAM_PROVIDER_TIMEOUT_MS,
+      timeoutMs: Math.max(config.timeoutMs, NON_STREAM_PROVIDER_TIMEOUT_MS),
       temperature: input.tone === 'keep' ? 0.7 : 0.9,
       format: input.outputFormat === 'roleplay-script' ? 'json' : {
         type: 'object',

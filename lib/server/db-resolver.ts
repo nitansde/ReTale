@@ -159,11 +159,14 @@ export function validateNovelId(novelId: string) {
 
 function getCanonicalCacheKey(filePath: string) {
   const absolutePath = path.resolve(filePath)
-  if (!fs.existsSync(absolutePath)) {
+  const directory = path.dirname(absolutePath)
+  if (!fs.existsSync(directory)) {
     return absolutePath
   }
 
-  return fs.realpathSync.native(absolutePath)
+  // Canonicalize the directory, not the file: the key must not change once the
+  // file exists, or a symlinked data root gets two handles to one database.
+  return path.join(fs.realpathSync.native(directory), path.basename(absolutePath))
 }
 
 export function getNovelRegistryMigrationStatus(novelId: string) {
@@ -315,6 +318,17 @@ export function getNovelLanceDbPath(novelId: string) {
   const stableNovelId = validateNovelId(novelId)
   assertNovelRegistryReadyOrMissing(stableNovelId)
   return getNovelStoragePaths(stableNovelId).lanceDbPath
+}
+
+/** getNovelDb opens on demand, so reads driven by a client-held id check this first:
+ * a stale browser session must get a 404, not an empty database created for it. */
+export function hasNovelStorage(novelId: string) {
+  const stableNovelId = validateNovelId(novelId)
+  return Boolean(
+    globalForDbResolver.__retaleNovelDatabaseOverrides?.has(stableNovelId)
+    || getNovelRegistryMigrationStatus(stableNovelId)
+    || fs.existsSync(getNovelStoragePaths(stableNovelId).databasePath),
+  )
 }
 
 export function getNovelDb(novelId: string) {

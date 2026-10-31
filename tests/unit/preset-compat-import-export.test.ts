@@ -131,6 +131,27 @@ describe('preset compat import/export compatibility', () => {
     expect(exportedExtensions.tavern_helper).toEqual(fixtureExtensions.tavern_helper)
   })
 
+  it('keeps id-less prompts distinct when an import replaces an existing preset id', () => {
+    const { preset } = normalizePresetCompatPresetImport({
+      prompts: [{ name: 'First', content: 'a' }, { name: 'Second', content: 'b' }],
+    }, { presetId: 'existing-preset' })
+
+    expect(preset.id).toBe('existing-preset')
+    expect(new Set(preset.promptRules.map((rule) => rule.id)).size).toBe(2)
+    expect(preset.promptRules.map((rule) => rule.id)).not.toContain('existing-preset')
+  })
+
+  it('carries regex flags through export as a SillyTavern /pattern/flags literal', () => {
+    const { preset } = normalizePresetCompatPresetImport({
+      prompts: [],
+      extensions: { regex_scripts: [{ id: 'flagged', scriptName: 'Flagged', findRegex: 'a/b', replaceString: 'c', placement: [1] }] },
+    })
+    preset.embeddedRegexes[0].flags = 'i'
+
+    const exported = exportPresetCompatPreset(preset).extensions as { regex_scripts: Array<{ findRegex: string }> }
+    expect(exported.regex_scripts[0].findRegex).toBe('/a\\/b/i')
+  })
+
   it('preserves legacy flat prompt fields without migrating away from structured prompts', () => {
     const fixture = {
       main_prompt: 'legacy main',

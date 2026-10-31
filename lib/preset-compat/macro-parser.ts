@@ -99,6 +99,36 @@ function isEscaped(source: string, index: number) {
   return backslashCount % 2 === 1
 }
 
+/** Index of `separator` at brace depth 0, so `{{getvar::{{getvar::key}}}}` keeps its nested `::`. */
+function indexOutsideMacros(source: string, separator: string, fromIndex = 0) {
+  let depth = 0
+  for (let index = fromIndex; index < source.length; index += 1) {
+    if (source.startsWith('{{', index) && !isEscaped(source, index)) {
+      depth += 1
+      index += 1
+      continue
+    }
+    if (source.startsWith('}}', index) && !isEscaped(source, index)) {
+      depth = Math.max(0, depth - 1)
+      index += 1
+      continue
+    }
+    if (depth === 0 && source.startsWith(separator, index)) return index
+  }
+  return -1
+}
+
+function splitOutsideMacros(source: string, separator: string) {
+  const parts: string[] = []
+  let start = 0
+  for (let index = indexOutsideMacros(source, separator); index !== -1; index = indexOutsideMacros(source, separator, start)) {
+    parts.push(source.slice(start, index))
+    start = index + separator.length
+  }
+  parts.push(source.slice(start))
+  return parts
+}
+
 function decodeEscapedDelimiters(raw: string) {
   return raw.replaceAll('\\{\\{', '{{').replaceAll('\\}\\}', '}}')
 }
@@ -239,10 +269,10 @@ function parseArguments(content: string, baseOffset: number) {
     }
   }
 
-  if (remainder.includes('::')) {
-    const firstSeparatorIndex = content.indexOf('::', rawName.length)
+  const firstSeparatorIndex = indexOutsideMacros(content, '::', rawName.length)
+  if (firstSeparatorIndex !== -1) {
     const argsSource = content.slice(firstSeparatorIndex + 2)
-    const rawArgs = argsSource.split('::')
+    const rawArgs = splitOutsideMacros(argsSource, '::')
     let cursor = firstSeparatorIndex + 2
     const args = rawArgs.map((rawArg, index) => {
       if (index > 0) {
@@ -261,8 +291,8 @@ function parseArguments(content: string, baseOffset: number) {
     }
   }
 
-  if (content.includes(':')) {
-    const parts = content.split(':')
+  if (indexOutsideMacros(content, ':') !== -1) {
+    const parts = splitOutsideMacros(content, ':')
     if (parts.length > 1 && !parts.some((part) => /\s/.test(part))) {
       let cursor = rawName.length + 1
       const args = parts.slice(1).map((rawArg, index) => {
@@ -399,7 +429,12 @@ function createParseContext(source: string, baseOffset: number): ParseContext {
       continue
     }
     const end = findTagEnd(source, index)
-    if (end === null) break
+    if (end === null) {
+      // A stray `{{` is plain text; keep scanning so later macros still expand.
+      // ponytail: O(stray openers × length), a linear brace stack if templates ever hit it.
+      index = source.indexOf('{{', index + 2)
+      continue
+    }
     const tag = parseTag(source, index, end, baseOffset)
     context.tags.set(tag.range.start, tag)
     if (tag.type === 'close' && tag.normalizedName) {

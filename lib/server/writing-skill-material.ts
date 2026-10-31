@@ -1,3 +1,4 @@
+import { InputValidationError, ResourceNotFoundError } from '@/lib/server/domain-errors'
 import { createHash } from 'node:crypto'
 import type { DatabaseAccess } from '@/lib/server/database-access'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
@@ -137,7 +138,7 @@ function readOriginalSourceChapters(input: {
     input.libraryId,
     input.branchId,
   )
-  if (!chapters.length) throw new Error('素材库中没有可读取的章节')
+  if (!chapters.length) throw new InputValidationError('素材库中没有可读取的章节')
 
   const snapshots = input.db.queryAll<OriginalChapterSnapshotRow>(
     `SELECT id, originalContentHtml
@@ -148,7 +149,7 @@ function readOriginalSourceChapters(input: {
   )
   if (!snapshots.length) {
     if (input.sourceType === 'workspace') {
-      throw new Error('素材库缺少原文快照，无法安全提炼写作技巧')
+      throw new InputValidationError('素材库缺少原文快照，无法安全提炼写作技巧')
     }
     return chapters.map((chapter) => ({
       id: chapter.id,
@@ -162,7 +163,7 @@ function readOriginalSourceChapters(input: {
   return chapters.map((chapter) => {
     const snapshot = snapshotByChapterId.get(chapter.id)
     if (!snapshot || snapshot.originalContentHtml === null) {
-      throw new Error(`第 ${chapter.chapterNo} 章缺少原文快照，无法安全提炼写作技巧`)
+      throw new InputValidationError(`第 ${chapter.chapterNo} 章缺少原文快照，无法安全提炼写作技巧`)
     }
     return {
       id: chapter.id,
@@ -277,7 +278,7 @@ export function loadMaterialLibrary(libraryId: string, db: DatabaseAccess = crea
     'SELECT id, title, author, sourceType FROM NovelRecord WHERE id = ?',
     libraryId,
   )
-  if (!novel) throw new Error('素材库不存在或尚未完成导入')
+  if (!novel) throw new ResourceNotFoundError('素材库不存在或尚未完成导入')
 
   const chapters = readOriginalSourceChapters({
     db,
@@ -306,7 +307,7 @@ export function loadMaterialLibrary(libraryId: string, db: DatabaseAccess = crea
       } satisfies MaterialParagraph
     })
   ))
-  if (!paragraphs.length) throw new Error('素材库原文中没有可读取的段落')
+  if (!paragraphs.length) throw new InputValidationError('素材库原文中没有可读取的段落')
 
   return {
     id: libraryId,

@@ -1208,7 +1208,8 @@ export function createPersistenceActions(
       const timeoutId = globalThis.setTimeout(() => controller.abort(), NOVEL_DELETE_TIMEOUT_MS)
 
       try {
-        const suffix = query.size ? `?${query.toString()}` : ''
+        const queryString = query.toString()
+        const suffix = queryString ? `?${queryString}` : ''
         const response = await fetch(`/api/novels/${encodeURIComponent(novelId)}${suffix}`, {
           method: 'DELETE',
           signal: controller.signal,

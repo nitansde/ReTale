@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { normalizeAISettings, sanitizeAISettingsForClient } from '@/lib/ai-settings'
-import { apiRequestErrorResponse, jsonError, noStoreJson, readJsonObject } from '@/lib/server/api-route'
+import { apiErrorResponse, apiRequestErrorResponse, jsonError, noStoreJson, readJsonObject } from '@/lib/server/api-route'
 import type { AISettings, AIScenarioKey } from '@/lib/types'
 import { loadStoredAISettings, saveStoredAISettings } from '@/lib/server/ai-settings'
 import { normalizeOpenAICompatibleBaseUrl } from '@/lib/server/openai-compatible'
@@ -68,13 +68,20 @@ function normalizeScenarioPayload<K extends AIScenarioKey>(
     ? record.ollama as Record<string, unknown>
     : {}
 
+  // An omitted field keeps its stored value; an empty string clears it.
   const rawOpenAIBaseUrl = normalizeOptionalText(openAIRecord.baseUrl, `${scenario} OpenAI Base URL`, 2000)
-  const openAIBaseUrl = rawOpenAIBaseUrl ? normalizeOpenAICompatibleBaseUrl(rawOpenAIBaseUrl) : ''
+  const openAIBaseUrl = openAIRecord.baseUrl === undefined
+    ? fallback.openAICompatible.baseUrl
+    : rawOpenAIBaseUrl ? normalizeOpenAICompatibleBaseUrl(rawOpenAIBaseUrl) : ''
   const submittedApiKey = normalizeOptionalText(openAIRecord.apiKey, `${scenario} OpenAI API key`, 2000)
   const openAIApiKey = submittedApiKey || fallback.openAICompatible.apiKey
-  const openAIModel = normalizeOptionalText(openAIRecord.model, `${scenario} OpenAI model`, 300)
+  const openAIModel = openAIRecord.model === undefined
+    ? fallback.openAICompatible.model
+    : normalizeOptionalText(openAIRecord.model, `${scenario} OpenAI model`, 300)
   const ollamaBaseUrl = normalizeOptionalText(ollamaRecord.baseUrl, `${scenario} Ollama Base URL`, 2000) || fallback.ollama.baseUrl
-  const ollamaModel = normalizeOptionalText(ollamaRecord.model, `${scenario} Ollama model`, 300)
+  const ollamaModel = ollamaRecord.model === undefined
+    ? fallback.ollama.model
+    : normalizeOptionalText(ollamaRecord.model, `${scenario} Ollama model`, 300)
   const provider = record.provider === 'openai-compatible' || record.provider === 'ollama'
     ? record.provider
     : fallback.provider
@@ -121,21 +128,23 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  let next: AISettings
   try {
     const body = await readJsonObject(request)
     const current = loadStoredAISettings()
-    const next = normalizeAISettings({
+    next = normalizeAISettings({
       rewrite: normalizeScenarioPayload('rewrite', body.rewrite, current),
       knowledgeExtraction: normalizeScenarioPayload('knowledgeExtraction', body.knowledgeExtraction, current),
       embeddings: normalizeScenarioPayload('embeddings', body.embeddings, current),
     })
+  } catch (error) {
+    return apiRequestErrorResponse(error) ?? jsonError(error instanceof Error ? error.message : 'Invalid AI settings', 400)
+  }
 
+  try {
     await saveStoredAISettings(next)
-
     return NextResponse.json({ ok: true })
   } catch (error) {
-    const requestError = apiRequestErrorResponse(error)
-    if (requestError) return requestError
-    return jsonError(error instanceof Error ? error.message : 'Failed to save AI settings', 400)
+    return apiErrorResponse(error, 'Failed to save AI settings')
   }
 }

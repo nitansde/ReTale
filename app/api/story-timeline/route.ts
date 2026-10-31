@@ -75,7 +75,8 @@ export async function DELETE(request: Request) {
       continueBlockId: node.continueBlockId,
       db,
     })
-    deleteStoryTimelineNode(nodeId, db)
+    // Promotion rewrites several child rows; a mid-way failure must not leave half of them re-parented.
+    await db.withTransaction(() => deleteStoryTimelineNode(nodeId, db))
     return NextResponse.json({ ok: true, nodeId })
   } catch (error) {
     const requestError = apiRequestErrorResponse(error)

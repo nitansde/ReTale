@@ -469,9 +469,10 @@ export function RoleplaySessionView(props: {
       if (!response.ok) throw new Error(data.error || 'Failed to delete roleplay request')
       props.onRequestsChange?.()
       const deletedIds = new Set(data.deletedMessageIds)
-      if (latestMessage && deletedIds.has(latestMessage.id)) {
-        setSelectedMessageId([...activeMessages].reverse().find((item) => !deletedIds.has(item.id))?.id ?? null)
-      }
+      const nextSelectedId = latestMessage && deletedIds.has(latestMessage.id)
+        ? [...activeMessages].reverse().find((item) => !deletedIds.has(item.id))?.id ?? null
+        : selectedMessageId
+      if (nextSelectedId !== selectedMessageId) setSelectedMessageId(nextSelectedId)
       contextSnapshotRef.current = null
       replyScrollTargetRef.current = null
       setForkMessageId((current) => current && deletedIds.has(current) ? null : current)
@@ -485,7 +486,7 @@ export function RoleplaySessionView(props: {
       } : current)
       const refreshed = await refreshDetail()
       const refreshedTree = buildRoleplayMessageTree(refreshed.messages)
-      const refreshedSelected = getRoleplayBranchTip(refreshedTree.childrenByParentId, refreshedTree.messagesById.get(selectedMessageId ?? '') ?? refreshed.messages.at(-1))
+      const refreshedSelected = getRoleplayBranchTip(refreshedTree.childrenByParentId, refreshedTree.messagesById.get(nextSelectedId ?? '') ?? refreshed.messages.at(-1))
       const refreshedTurn = buildMessagePath(refreshedTree.messagesById, refreshedSelected?.id).reverse().find((item) => item.turn)?.turn
       setDialogueOnly(refreshedTurn?.dialogueOnly ?? false)
     } catch (reason) {

@@ -29,12 +29,10 @@ describe('Ollama embedding error formatting', () => {
       }),
     }))
 
+    // A configured model only probes /api/tags for reachability, then embeds.
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
         models: [{ model: 'unit-test-embedding-model' }],
-      }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        capabilities: ['embedding'],
       }), { status: 200 }))
       .mockRejectedValueOnce(Object.assign(new TypeError('fetch failed'), {
         cause: {

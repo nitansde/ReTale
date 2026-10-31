@@ -908,11 +908,6 @@ function getOrCreateEmbeddingSettingsSnapshot(payload: KnowledgeRebuildJobPayloa
   return payload.embeddingSettingsSnapshot ?? buildEmbeddingSettingsSnapshot()
 }
 
-function isKnowledgeJobActivelyRunning(jobId: string) {
-  const status = getKnowledgeJobRow(jobId)?.status
-  return status === 'queued' || status === 'running'
-}
-
 function buildRawTextEmbeddingTelemetryUpdate(result: RawTextEmbeddingPrecomputeResult): KnowledgeRebuildTelemetryUpdate {
   const hasDocs = result.totalDocs > 0
   return {
@@ -944,7 +939,15 @@ function ensureRawTextEmbeddingPrecomputeStarted(params: {
     settingsSnapshot: params.embeddingSettingsSnapshot,
     chapterRange: params.chapterRange,
     maxConcurrentBatches: 2,
-    shouldContinue: () => isKnowledgeJobActivelyRunning(params.jobId),
+    shouldContinue: () => {
+      // Includes the attempt fence, so a superseded worker stops embedding too.
+      try {
+        assertKnowledgeRebuildContinues(params.jobId)
+        return true
+      } catch {
+        return false
+      }
+    },
     onProgress: async (progress) => {
       updateKnowledgeRebuildJobTelemetry(params.jobId, {
         rawTextEmbeddingProgress: progress.totalDocs > 0 ? progress.completedDocs / progress.totalDocs : 1,
@@ -5928,7 +5931,9 @@ export async function runStartedKnowledgeRebuildForNovel(params: { novelId: stri
       activeKnowledgeRebuildRuns.delete(params.jobId)
     }
 
-    if (result?.outcome !== 'completed') {
+    // 'completed' also covers a job this worker never ran (claim lost, already
+    // terminal); only a job that actually succeeded may chain the retrieval rebuild.
+    if (result?.outcome !== 'completed' || getKnowledgeJobRow(params.jobId)?.status !== 'succeeded') {
       return
     }
 
@@ -6261,6 +6266,9 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
                   throw error
                 }
 
+                // Fence first: a stale worker's late failure must not overwrite
+                // the candidate a retried attempt has already persisted.
+                assertKnowledgeRebuildContinues(job.id)
                 upsertChapterExtractionCandidate({
                   novelId: params.novelId,
                   branchId,
@@ -6277,7 +6285,6 @@ export async function rebuildKnowledgeForNovel(params: RebuildKnowledgeForNovelP
                     status: 'failed',
                     errorMessage: error instanceof Error ? error.message : `Chapter ${chapter.chapterNo} candidate extraction failed`,
                 })
-                assertKnowledgeRebuildContinues(job.id)
                 completePendingChapterInKnowledgeJob(job.id, chapter.id)
               }
 

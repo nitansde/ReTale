@@ -220,6 +220,14 @@ function normalizeOpenAICompatibleModelItem(item: unknown): OpenAICompatibleMode
   }
 }
 
+function safeOrigin(url: string) {
+  try {
+    return new URL(url).origin
+  } catch {
+    return null
+  }
+}
+
 export async function listAvailableOpenAICompatibleModels(
   baseUrlOverride?: string,
   apiKeyOverride?: string,
@@ -234,7 +242,10 @@ export async function listAvailableOpenAICompatibleModels(
     }
 
     const baseUrl = normalizeOpenAICompatibleBaseUrl(rawBaseUrl)
-    const apiKey = apiKeyOverride?.trim() || stored.apiKey
+    // Only send the stored key to the origin it was saved for; a URL typed into
+    // the settings form must not receive another provider's credential.
+    const sameOriginAsStored = !baseUrlOverride?.trim() || safeOrigin(baseUrl) === safeOrigin(stored.baseUrl)
+    const apiKey = apiKeyOverride?.trim() || (sameOriginAsStored ? stored.apiKey : '')
 
     const headers: HeadersInit = {}
     if (apiKey) {

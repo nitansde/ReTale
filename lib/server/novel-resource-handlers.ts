@@ -19,6 +19,7 @@ import {
   WorkspaceNovelDeletionError,
 } from '@/lib/server/persistence'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
+import { hasNovelStorage } from '@/lib/server/db-resolver'
 import {
   hasWorkspaceRuntimeState,
   isExplicitWorkspaceResetRequest,
@@ -231,7 +232,8 @@ export async function updateNovelLibraryMetadata(request: Request, novelId: stri
       MAX_NOVEL_METADATA_BODY_BYTES,
       'Novel metadata body exceeds the allowed size',
     )
-    const formData = await limitedRequest.formData().catch(() => {
+    const formData = await limitedRequest.formData().catch((error: unknown) => {
+      if (error instanceof ApiRequestError) throw error
       throw new ApiRequestError(400, 'Invalid multipart form data')
     })
     const rawTitle = formData.get('title')
@@ -334,6 +336,7 @@ export async function getNovelResource(request: Request, novelId: string) {
   schedulePendingWorkspaceNovelCleanupScan()
 
   try {
+    if (!hasNovelStorage(novelId)) return noStoreJson({ ok: false, error: 'Novel not found' }, { status: 404 })
     const view = searchParams.get('view')
     if (view === 'chapter' || view === 'chapters') {
       const chapterIds = searchParams.getAll('chapterId')

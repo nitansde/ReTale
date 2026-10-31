@@ -53,6 +53,9 @@ export function createWorkerDiagnostics(directory) {
 export function captureWorkerStderr(directory) {
   const diagnostics = createWorkerDiagnostics(directory)
   const originalWrite = process.stderr.write.bind(process.stderr)
+  // This detached worker outlives the server whose stderr it inherited. A closed
+  // pipe must not kill it mid-job; the log file still receives every line.
+  process.stderr.on('error', () => undefined)
   process.stderr.write = function (chunk, encoding, callback) {
     try {
       diagnostics.write(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk))

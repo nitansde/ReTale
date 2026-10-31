@@ -389,6 +389,33 @@ describe('canonical workspace mutation coordinator', () => {
     })
   })
 
+  it('does not replace a patch committed while journal recovery waits for the write gate', async () => {
+    const fixture = await createMutationFixture('retale-workspace-mutation-recovery-race')
+    const mutation = await import('@/lib/server/workspace-mutation')
+    const resilience = await import('@/lib/server/workspace-resilience')
+    const { createNovelDatabaseAccess } = await import('@/lib/server/database-access')
+    const db = createNovelDatabaseAccess(fixture.novelId)
+    await mutation.runWorkspaceMutation(fullSnapshotRequest(fixture.novelId))
+    await mutation.runWorkspaceMutation(chapterPatchRequest(fixture.novelId, 1, 'race-patch', '<p>journal patch</p>'))
+    const snapshot = await resilience.loadWorkspaceSnapshotFromRuntimeOrRecovery('singleton', db)
+    const newerPayload = {
+      ...snapshot.payload,
+      localChapters: snapshot.payload.localChapters.map((chapter, index) => index === 0 ? { ...chapter, content: '<p>newer patch</p>' } : chapter),
+    }
+    fixture.database.prepare('DELETE FROM WorkspaceRuntimeState WHERE id = ?').run('singleton')
+
+    const recovered = await resilience.loadWorkspaceSnapshotFromRuntimeOrRecovery('singleton', {
+      ...db,
+      withTransaction: async <T,>(callback: () => T | Promise<T>) => {
+        resilience.replaceWorkspaceRuntimeStateInDb(db, newerPayload, snapshot.revision + 1)
+        return db.withTransaction(callback)
+      },
+    })
+
+    expect(recovered.revision).toBe(snapshot.revision + 1)
+    expect(recovered.payload.localChapters[0]).toMatchObject({ content: '<p>newer patch</p>' })
+  })
+
   it('restores the checkpoint revision when runtime rows are lost after the patch journal is cleared', async () => {
     const fixture = await createMutationFixture('retale-workspace-mutation-checkpoint-revision-recovery')
     const mutation = await import('@/lib/server/workspace-mutation')

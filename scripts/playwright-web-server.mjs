@@ -77,6 +77,6 @@ const stop = (signal = 'SIGTERM') => {
 
 process.on('SIGINT', () => stop('SIGINT'))
 process.on('SIGTERM', () => stop('SIGTERM'))
-child.on('exit', (code) => {
-  process.exit(code ?? 0)
+child.on('exit', (code, signal) => {
+  process.exit(code ?? (signal ? 1 : 0))
 })

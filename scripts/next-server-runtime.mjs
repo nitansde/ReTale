@@ -55,7 +55,8 @@ function getModeConfig(mode) {
 }
 
 function hasOption(longName, shortName) {
-  return args.some((arg) => arg === longName || arg.startsWith(`${longName}=`) || (shortName && arg === shortName))
+  // Next's commander CLI also accepts the attached short form (`-p3000`).
+  return args.some((arg) => arg === longName || arg.startsWith(`${longName}=`) || (shortName && arg.startsWith(shortName)))
 }
 
 function findForbiddenOption() {
@@ -143,7 +144,7 @@ function ensurePortAvailable(host, port) {
     }
 
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-      return
+      throw new Error(`[retale-server] Cannot verify that ${host}:${port} is free because lsof is unavailable`, { cause: error })
     }
 
     throw error

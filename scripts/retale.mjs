@@ -15,6 +15,8 @@ const env = {
   ...process.env,
   NODE_ENV: 'production',
   RETALE_DATA_DIR: dataDir,
+  // Same reason: the setup script's default would put the venv inside the npx cache.
+  RETALE_HANLP_VENV_DIR: process.env.RETALE_HANLP_VENV_DIR?.trim() || path.join(os.homedir(), '.retale', 'hanlp-venv'),
   PORT: process.env.PORT?.trim() || '14500',
 }
 

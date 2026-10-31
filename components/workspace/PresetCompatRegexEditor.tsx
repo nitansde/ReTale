@@ -1,6 +1,7 @@
 "use client"
 
 import type { ChangeEvent } from 'react'
+import { getEffectiveSubstituteRegex, isSupportedSubstituteRegexMode } from '@/lib/preset-compat/regex-runtime'
 import type { PresetCompatRegexRecord } from '@/lib/preset-compat/types'
 import { cn } from '@/lib/utils'
 
@@ -20,13 +21,11 @@ const SUPPORTED_RUNTIME_REGEX_PLACEMENTS = new Set(['user_input', 'assistant_out
 function buildRegexWarnings(regexRecord: PresetCompatRegexRecord) {
   const warnings: string[] = []
   const unsupportedPlacements = regexRecord.placements.filter((placement) => !SUPPORTED_RUNTIME_REGEX_PLACEMENTS.has(placement))
-  const substituteRegexValue = typeof regexRecord.substituteRegex === 'string'
-    ? Number(regexRecord.substituteRegex)
-    : regexRecord.substituteRegex
+  const substituteRegexMode = getEffectiveSubstituteRegex(regexRecord)
 
   if (unsupportedPlacements.length) warnings.push(`Preserved-only placements: ${unsupportedPlacements.join(', ')}`)
-  if (typeof substituteRegexValue === 'number' && Number.isFinite(substituteRegexValue) && substituteRegexValue !== 0) {
-    warnings.push(`substituteRegex=${substituteRegexValue} is outside the MVP runtime subset.`)
+  if (!isSupportedSubstituteRegexMode(substituteRegexMode)) {
+    warnings.push(`substituteRegex=${substituteRegexMode} is outside the MVP runtime subset.`)
   }
 
   return warnings

@@ -571,7 +571,17 @@ async function persistWorkspaceRuntimeStateWithRevision(
   if (!targetDb) {
     throw new Error('Cannot persist recovered workspace runtime state without a target novel database')
   }
-  const save = () => replaceWorkspaceRuntimeStateInDb(targetDb as DatabaseAccess, normalized, revision, id)
+  const save = () => {
+    // The caller read this payload before reaching the write gate. A chapter patch
+    // committed in between is newer, so recovery must not replace it.
+    const current = queryOneFromDb<{ revision: number; updatedAt: string }>(
+      targetDb,
+      'SELECT revision, updatedAt FROM WorkspaceRuntimeState WHERE id = ?',
+      id,
+    )
+    if (current && Number(current.revision) >= revision) return { updatedAt: current.updatedAt }
+    return replaceWorkspaceRuntimeStateInDb(targetDb as DatabaseAccess, normalized, revision, id)
+  }
   if (hasTransactionWrapper(targetDb)) return targetDb.withTransaction(save)
 
   executeOnDb(targetDb, 'BEGIN IMMEDIATE')

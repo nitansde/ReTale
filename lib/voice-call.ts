@@ -186,6 +186,9 @@ export class VoiceCall {
       if (this.player === player) this.player = undefined
     }
     this.trace('reply-result', { ms: Date.now() - started, segments: texts.size, heard: [...heard], complete, aborted: signal.aborted, error: errorMessage })
+    // A finished, uninterrupted reply is saved whole: Fish returns no audio for
+    // some speakable sentences (never marked heard), which must not drop text.
+    if (complete && !signal.aborted && !errorMessage) return { text: [...texts.values()].join(''), interrupted: false }
     // Unvoiced descriptions count as heard up to the first sentence that was not.
     const cut = Math.min(...[...texts.keys()].filter((id) => !silent.has(id) && !heard.has(id)))
     return { text: [...texts].filter(([id]) => heard.has(id) || (silent.has(id) && id < cut)).map(([, text]) => text).join(''), interrupted: signal.aborted || !complete || Boolean(errorMessage), error: errorMessage }
@@ -216,7 +219,8 @@ export class VoiceCall {
       if (context && context.state !== 'closed') {
         try { await context.close() } catch { /* Audio resources are already released. */ }
       }
-      await this.turnChain
+      // The turn's save requests are not abortable; never leave the UI stuck in "ending".
+      await Promise.race([this.turnChain, new Promise((resolve) => setTimeout(resolve, 10_000))])
       this.setState('idle')
     })()
     return this.ending

@@ -854,7 +854,7 @@ function loadEntitiesWithAliases(
       SELECT entityId, alias
       FROM EntityAlias
       WHERE entityId IN (${entityIds.map(() => '?').join(', ')})
-        AND sourceChapter <= ?
+        AND (sourceChapter IS NULL OR sourceChapter <= ?)
     `,
     ...entityIds,
     chapterNo
@@ -918,7 +918,7 @@ function loadEntitiesWithAliasesByIds(params: {
       SELECT entityId, alias
       FROM EntityAlias
       WHERE entityId IN (${resolvedEntityIds.map(() => '?').join(', ')})
-        AND sourceChapter <= ?
+        AND (sourceChapter IS NULL OR sourceChapter <= ?)
     `,
     ...resolvedEntityIds,
     params.chapterNo,

@@ -166,7 +166,10 @@ function exportRegexRecord(regexRecord: PresetCompatRegexRecord) {
   const exported: Record<string, unknown> = {
     id: regexRecord.id,
     scriptName: regexRecord.name,
-    findRegex: regexRecord.pattern,
+    // SillyTavern has no flags field; carry them in its `/pattern/flags` literal form.
+    findRegex: regexRecord.flags && !regexRecord.pattern.startsWith('/')
+      ? `/${regexRecord.pattern.replaceAll('/', '\\/')}/${regexRecord.flags}`
+      : regexRecord.pattern,
     replaceString: regexRecord.replacement,
     trimStrings: cloneValue(regexRecord.trimStrings),
     placement: nextPlacement,

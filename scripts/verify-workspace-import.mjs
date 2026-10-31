@@ -274,7 +274,7 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } })
 
     await page.goto(`${SERVER_URL}/library`, { waitUntil: 'networkidle' })
-    await page.getByText('导入 TXT 小说').waitFor({ state: 'visible' })
+    await page.getByText('导入小说').waitFor({ state: 'visible' })
 
     const importResponsePromise = page.waitForResponse(
       (response) => response.url().includes('/api/import-txt') && response.request().method() === 'POST',

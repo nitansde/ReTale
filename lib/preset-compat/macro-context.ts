@@ -79,6 +79,9 @@ function createNowGetter(value: CreatePresetCompatMacroContextOptions['now']) {
   return () => new Date()
 }
 
+/** Survives until processPresetCompatMacroString's final pass removes it with the adjacent newlines. */
+export const PRESET_COMPAT_INLINE_TRIM_MARKER = '\u0000trim\u0000'
+
 export function createPresetCompatMacroContext(
   options: CreatePresetCompatMacroContextOptions,
 ): PresetCompatMacroContext {
@@ -87,7 +90,9 @@ export function createPresetCompatMacroContext(
   const localVariables = new Map(Object.entries(options.localVariables ?? {}))
   const globalVariables = new Map(Object.entries(options.globalVariables ?? {}))
   const getNow = createNowGetter(options.now)
-  const random = createSeededRandom(options.seed ?? 0)
+  // Without a configured seed {{roll}}/{{random}} must differ per request; a fixed
+  // default would make them return the same value forever.
+  const random = createSeededRandom(options.seed ?? Math.floor(Math.random() * 0x1_0000_0000))
 
   return {
     surfaceId: options.surfaceId,

@@ -377,16 +377,19 @@ export async function createWhatIfSessionFromRewrite(rawInput: WhatIfCreateReque
   const input = parseRequestInput(whatIfCreateRequestSchema, rawInput)
   const db = createNovelDatabaseAccess(input.novelId)
   const deltas = await extractWhatIfDeltas(input)
-  const labelIndex = getNextStoryTimelineLabelIndex(input.novelId, input.branchId, 'what_if', db)
-  const readableLabel = formatStoryBranchReadableLabel('what_if', labelIndex)
-  const readableLineageLabel = readableLabel
   const topDelta = deltas[0] ?? buildFallbackDelta(input)
-  const title = prefixStoryBranchTitle(readableLineageLabel, buildLineTitle(input, topDelta))
   const subtitle = buildSubtitle(input, topDelta)
   const sessionId = uid('what-if-session')
   const timelineNodeId = uid('timeline-node')
 
-  await db.withTransaction(async () => {
+  const title = await db.withTransaction(async () => {
+    // Allocated inside the transaction: two concurrent creates that read the
+    // same index would otherwise collide on the node's unique label.
+    const labelIndex = getNextStoryTimelineLabelIndex(input.novelId, input.branchId, 'what_if', db)
+    const readableLabel = formatStoryBranchReadableLabel('what_if', labelIndex)
+    const readableLineageLabel = readableLabel
+    const title = prefixStoryBranchTitle(readableLineageLabel, buildLineTitle(input, topDelta))
+
     createWhatIfSession({
       id: sessionId,
       novelId: input.novelId,
@@ -442,6 +445,8 @@ export async function createWhatIfSessionFromRewrite(rawInput: WhatIfCreateReque
       colorToken: 'violet',
       status: 'active',
     }, db)
+
+    return title
   })
 
   const persistedSession = findWhatIfSessionById(sessionId, db)

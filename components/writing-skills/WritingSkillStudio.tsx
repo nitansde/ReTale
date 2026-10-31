@@ -139,9 +139,12 @@ export function WritingSkillStudio() {
     void hydrate()
     return () => {
       cancelled = true
-      pollingJobIdRef.current = null
     }
   }, [loadCards, loadSources, t])
+
+  // Stop polling only on unmount: `t` changes on a locale switch and must not
+  // silently abandon a running job.
+  useEffect(() => () => { pollingJobIdRef.current = null }, [])
 
   const pollJob = useCallback(async (jobId: string) => {
     pollingJobIdRef.current = jobId

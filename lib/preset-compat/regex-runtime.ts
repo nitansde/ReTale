@@ -136,7 +136,7 @@ function isDepthAllowed(rule: PresetCompatRegexRecord, depth: number | null) {
   return true
 }
 
-function getEffectiveSubstituteRegex(rule: PresetCompatRegexRecord) {
+export function getEffectiveSubstituteRegex(rule: PresetCompatRegexRecord) {
   const preservedValue = getRegexExportMeta(rule).substituteRegex
   if (typeof preservedValue === 'number' && Number.isFinite(preservedValue)) {
     return preservedValue
@@ -172,6 +172,24 @@ function getUnsupportedPlacementNames(rule: PresetCompatRegexRecord) {
 
 function getOrderedRules(options: Pick<PresetCompatRegexRuntimeOptions, 'standalone' | 'embedded'>) {
   return [...options.standalone, ...options.embedded]
+}
+
+/** 0 = literal pattern, 1 = macros inserted raw, 2 = macros inserted regex-escaped. */
+export function isSupportedSubstituteRegexMode(mode: number) {
+  return mode === 0 || mode === 1 || mode === 2
+}
+
+const REGEX_ESCAPED_CONTROL_CHARACTERS: Record<string, string> = {
+  '\n': '\\n',
+  '\r': '\\r',
+  '\t': '\\t',
+  '\v': '\\v',
+  '\f': '\\f',
+  '\0': '\\0',
+}
+
+function escapeRegexMacroValue(value: string) {
+  return value.replace(/[\n\r\t\v\f\0.^$*+?{}[\]\\/|()]/gu, (character) => REGEX_ESCAPED_CONTROL_CHARACTERS[character] ?? `\\${character}`)
 }
 
 function formatReplacementMacroDiagnostic(ruleId: string, diagnostic: PresetCompatMacroDiagnostic) {
@@ -242,6 +260,11 @@ export function runPresetCompatRegexRuntime(options: PresetCompatRegexRuntimeOpt
     }
 
     if (!shouldRunPromptMode(rule, isPrompt, isMarkdown)) {
+      if (isPrompt && options.phase === 'user_input' && !rule.promptOnly && !rule.markdownOnly) {
+        warnings.push(
+          `Skipped rule ${rule.id}: SillyTavern runs rules without Prompt Only when a message is sent, and ReTale has no such step. Enable Prompt Only to run it on the assembled prompt.`
+        )
+      }
       skippedRuleIds.push(rule.id)
       continue
     }
@@ -257,25 +280,35 @@ export function runPresetCompatRegexRuntime(options: PresetCompatRegexRuntimeOpt
     }
 
     const substituteRegex = getEffectiveSubstituteRegex(rule)
+    const macroProcessor = options.macroProcessor
     if (substituteRegex !== 0) {
-      if (substituteRegex === 1 && options.macroProcessor) {
-        // Supported below via replacement-time macro evaluation.
-      } else if (options.macroProcessor) {
+      if (!macroProcessor) {
+        warnings.push(
+          `Skipped rule ${rule.id} because substituteRegex=${substituteRegex} is outside the MVP runtime subset.`
+        )
+        skippedRuleIds.push(rule.id)
+        continue
+      }
+      if (!isSupportedSubstituteRegexMode(substituteRegex)) {
         warnings.push(formatUnsupportedRegexMacroModeWarning(rule.id, substituteRegex))
         skippedRuleIds.push(rule.id)
         continue
-      } else {
-      warnings.push(
-        `Skipped rule ${rule.id} because substituteRegex=${substituteRegex} is outside the MVP runtime subset.`
-      )
-      skippedRuleIds.push(rule.id)
-      continue
       }
     }
 
     let compiledRegex: RegExp
     try {
-      compiledRegex = compileRuleRegex(rule)
+      compiledRegex = compileRuleRegex(substituteRegex !== 0 && macroProcessor
+        ? {
+            ...rule,
+            pattern: resolveReplacementMacros(
+              rule,
+              rule.pattern,
+              substituteRegex === 2 ? { ...macroProcessor, transformValue: escapeRegexMacroValue } : macroProcessor,
+              warnings,
+            ),
+          }
+        : rule)
     } catch {
       warnings.push(`Skipped rule ${rule.id} because its regex source could not be compiled.`)
       skippedRuleIds.push(rule.id)
@@ -296,11 +329,9 @@ export function runPresetCompatRegexRuntime(options: PresetCompatRegexRuntimeOpt
         rule.trimStrings,
       )
 
-      if (substituteRegex === 1 && options.macroProcessor) {
-        return resolveReplacementMacros(rule, resolvedReplacement, options.macroProcessor, warnings)
-      }
-
-      return resolvedReplacement
+      return macroProcessor
+        ? resolveReplacementMacros(rule, resolvedReplacement, macroProcessor, warnings)
+        : resolvedReplacement
     })
     appliedRuleIds.push(rule.id)
   }

@@ -26,13 +26,13 @@ export async function withPerNovelWriteTransaction<T>(params: {
   execute: ExecuteLike
   callback: () => T | Promise<T>
   transactionKey?: DatabaseTransactionKey
-  begin?: () => Promise<void>
+  begin?: (onOpen: () => void) => Promise<void>
 }) {
   return runWithPerNovelWriteGate(params.novelId, () => runSerializedDatabaseTransaction(
     params.transactionKey ?? getDatabaseTransactionKey(getNovelDb(params.novelId)),
     params.execute,
     params.callback,
-    params.begin ?? (() => beginSqliteTransaction(getNovelDb(params.novelId))),
+    params.begin ?? ((onOpen) => beginSqliteTransaction(getNovelDb(params.novelId), onOpen)),
   ))
 }
 
@@ -64,14 +64,14 @@ export function createDatabaseAccess(database: DatabaseSync, options?: {
         execute,
         callback,
         transactionKey,
-        begin: () => beginSqliteTransaction(database),
+        begin: (onOpen) => beginSqliteTransaction(database, onOpen),
       }))
     }
 
     const transactionKey = options?.transactionKey ?? getDatabaseTransactionKey(database)
     return observeOutwardNestedTransaction(
       transactionKey,
-      runSerializedDatabaseTransaction(transactionKey, execute, callback, () => beginSqliteTransaction(database)),
+      runSerializedDatabaseTransaction(transactionKey, execute, callback, (onOpen) => beginSqliteTransaction(database, onOpen)),
     )
   }
 

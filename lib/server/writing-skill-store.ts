@@ -1,3 +1,4 @@
+import { InputValidationError, ResourceNotFoundError } from '@/lib/server/domain-errors'
 import type { DatabaseAccess } from '@/lib/server/database-access'
 import { createControlDatabaseAccess } from '@/lib/server/database-access'
 import { safeParseJson } from '@/lib/server/json-parse'
@@ -381,7 +382,7 @@ export async function saveWritingSkillCard(input: {
   await db.withTransaction(() => {
     const existing = input.replaceCardId ? readWritingSkillCard(input.replaceCardId, db) : null
     if (input.replaceCardId && !existing) {
-      throw new Error('Writing skill card not found')
+      throw new ResourceNotFoundError('Writing skill card not found')
     }
 
     if (existing) {
@@ -475,26 +476,26 @@ export async function updateWritingSkillCard(cardId: string, updates: {
 }, db: WritingSkillStoreDb = defaultDb()) {
   await db.withTransaction(() => {
     const card = readWritingSkillCard(cardId, db)
-    if (!card) throw new Error('Writing skill card not found')
+    if (!card) throw new ResourceNotFoundError('Writing skill card not found')
 
     const fields: string[] = []
     const values: Array<string | number> = []
     if (updates.title !== undefined) {
       const title = updates.title.trim()
-      if (!title || title.length > 120) throw new Error('Title must be between 1 and 120 characters')
+      if (!title || title.length > 120) throw new InputValidationError('Title must be between 1 and 120 characters')
       fields.push('title = ?')
       values.push(title)
     }
     if (updates.defaultExampleCount !== undefined) {
       const count = Math.floor(updates.defaultExampleCount)
       if (count < 1 || count > WRITING_SKILL_DEFAULTS.maxRuntimeExampleCount) {
-        throw new Error(`Example count must be between 1 and ${WRITING_SKILL_DEFAULTS.maxRuntimeExampleCount}`)
+        throw new InputValidationError(`Example count must be between 1 and ${WRITING_SKILL_DEFAULTS.maxRuntimeExampleCount}`)
       }
       fields.push('defaultExampleCount = ?')
       values.push(count)
     }
     if (updates.status !== undefined) {
-      if (!WRITING_SKILL_CARD_STATUSES.includes(updates.status)) throw new Error('Invalid writing skill status')
+      if (!WRITING_SKILL_CARD_STATUSES.includes(updates.status)) throw new InputValidationError('Invalid writing skill status')
       fields.push('status = ?')
       values.push(updates.status)
     }

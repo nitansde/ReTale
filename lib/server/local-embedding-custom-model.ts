@@ -1,3 +1,4 @@
+import { InputValidationError } from '@/lib/server/domain-errors'
 import { randomBytes } from 'node:crypto'
 
 export const CUSTOM_LOCAL_EMBEDDING_MODEL_MAX_BYTES = 8_000_000_000
@@ -37,7 +38,7 @@ export function normalizeHuggingFaceCustomModelReference(
     || repositorySegments.length !== 2
     || repositorySegments.some((segment) => !REPOSITORY_SEGMENT_PATTERN.test(segment))
   ) {
-    throw new Error('repository must use the Hugging Face owner/model format')
+    throw new InputValidationError('repository must use the Hugging Face owner/model format')
   }
   if (
     !fileName
@@ -48,14 +49,14 @@ export function normalizeHuggingFaceCustomModelReference(
     || fileName.includes('#')
     || /[\u0000-\u001f\u007f]/u.test(fileName)
   ) {
-    throw new Error('fileName must be a safe .gguf path inside the selected repository')
+    throw new InputValidationError('fileName must be a safe .gguf path inside the selected repository')
   }
 
   const fileSegments = fileName.split('/')
   if (
     fileSegments.some((segment) => !segment || segment === '.' || segment === '..' || segment.length > 255)
   ) {
-    throw new Error('fileName must be a safe .gguf path inside the selected repository')
+    throw new InputValidationError('fileName must be a safe .gguf path inside the selected repository')
   }
 
   return { repository, fileName }
@@ -75,7 +76,7 @@ export function assertAllowedHuggingFaceDownloadUrl(downloadUrl: string) {
   try {
     parsed = new URL(downloadUrl)
   } catch {
-    throw new Error('Custom model download source is invalid')
+    throw new InputValidationError('Custom model download source is invalid')
   }
   if (
     parsed.protocol !== 'https:'
@@ -84,7 +85,7 @@ export function assertAllowedHuggingFaceDownloadUrl(downloadUrl: string) {
     || parsed.port
     || !HUGGING_FACE_DOWNLOAD_HOSTS.has(parsed.hostname)
   ) {
-    throw new Error('Custom models may only be downloaded from huggingface.co or hf-mirror.com')
+    throw new InputValidationError('Custom models may only be downloaded from huggingface.co or hf-mirror.com')
   }
   return downloadUrl
 }
@@ -97,7 +98,7 @@ function buildCustomLocalEmbeddingModel(
   modelId: string,
   reference: HuggingFaceCustomModelReference,
 ): CustomLocalEmbeddingModelDefinition {
-  if (!isCustomLocalEmbeddingModelId(modelId)) throw new Error('Invalid custom local embedding model ID')
+  if (!isCustomLocalEmbeddingModelId(modelId)) throw new InputValidationError('Invalid custom local embedding model ID')
   const normalized = normalizeHuggingFaceCustomModelReference(reference)
   return {
     ...normalized,

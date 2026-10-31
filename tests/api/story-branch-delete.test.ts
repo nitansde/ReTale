@@ -119,6 +119,20 @@ function seedDeleteFixture(database: DatabaseSync) {
       future_jump_run_id, lane_index, color_token, status
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run('if-node-002', 'novel-001', 'novel-001:main', 'what_if', 2, 10, 'IF-02 保留线', '未删除分支', null, 10, null, 'chapter-10', 'what-if-002', null, 0, 'sky', 'active')
+
+  // A roleplay started from IF-01; without a cascade its session would resurface as a virtual root node.
+  database.prepare(
+    `INSERT INTO roleplay_sessions (
+      id, novel_id, branch_id, title, source_chapter_id, source_chapter_no, source_timeline_node_id, source_timeline_node_type,
+      source_selected_text, source_text_snapshot, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('rp-001', 'novel-001', 'novel-001:main', 'RP-01 对话', 'chapter-10', 10, 'if-node-001', 'what_if', '原文', '原文正文', 'active')
+
+  database.prepare(
+    `INSERT INTO story_timeline_nodes (
+      id, novel_id, branch_id, node_type, label_index, anchor_chapter_no, title, parent_node_id, source_chapter_no, chapter_id, roleplay_session_id, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run('rp-node-001', 'novel-001', 'novel-001:main', 'roleplay_session', 1, 10, 'RP-01 对话', 'if-node-001', 10, 'chapter-10', 'rp-001', 'active')
 }
 
 function seedPromoteFixture(database: DatabaseSync) {
@@ -379,6 +393,8 @@ describe('story branch delete APIs', () => {
     expect(database.prepare('SELECT id FROM future_jump_revisions WHERE run_id = ?').get('jump-run-001')).toBeUndefined()
     expect(database.prepare('SELECT id FROM story_timeline_nodes WHERE id = ?').get('if-node-001')).toBeUndefined()
     expect(database.prepare('SELECT id FROM story_timeline_nodes WHERE id = ?').get('jump-node-001')).toBeUndefined()
+    expect(database.prepare('SELECT id FROM story_timeline_nodes WHERE id = ?').get('rp-node-001')).toBeUndefined()
+    expect(database.prepare('SELECT id FROM roleplay_sessions WHERE id = ?').get('rp-001')).toBeUndefined()
     expect(database.prepare('SELECT id FROM what_if_sessions WHERE id = ?').get('what-if-002')).toEqual({ id: 'what-if-002' })
     expect(database.prepare('SELECT id FROM story_timeline_nodes WHERE id = ?').get('if-node-002')).toEqual({ id: 'if-node-002' })
   }))

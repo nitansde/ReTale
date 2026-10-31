@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
@@ -30,6 +31,9 @@ export async function runNextProductionBuild(args = [], options = {}) {
       || 'tsconfig.build.json',
   }
   const source = computeNextProductionSourceFingerprint(repoRoot)
+  const tsconfigPath = path.resolve(repoRoot, environment.RETALE_NEXT_TSCONFIG_PATH)
+  const readTsconfig = () => (fs.existsSync(tsconfigPath) ? fs.readFileSync(tsconfigPath, 'utf8') : null)
+  const tsconfigBeforeBuild = readTsconfig()
   await (options.buildWorker ?? buildKnowledgeWorker)({ repoRoot })
   const spawnProcess = options.spawn ?? spawn
   const child = spawnProcess(process.execPath, [nextCli, ...buildNextProductionBuildArgs(args)], {
@@ -64,6 +68,10 @@ export async function runNextProductionBuild(args = [], options = {}) {
   }
   const sourceAfterBuild = computeNextProductionSourceFingerprint(repoRoot)
   if (sourceAfterBuild.fingerprint !== source.fingerprint) {
+    // next build adds compiler options it requires, usually after a Next upgrade.
+    if (readTsconfig() !== tsconfigBeforeBuild) {
+      throw new Error(`[retale-production-build] next build updated ${path.relative(repoRoot, tsconfigPath)}. Keep that change and run npm run build again.`)
+    }
     throw new Error('[retale-production-build] Production sources changed while next build was running. Run npm run build again.')
   }
   return writeNextProductionBuildProvenance({ repoRoot, environment, source })

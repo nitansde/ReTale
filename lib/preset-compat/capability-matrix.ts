@@ -708,7 +708,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     category: 'regex',
     fieldPaths: ['extensions.regex_scripts[].trimStrings'],
     creativeResetPromptFamily: false,
-    surfaceClassifications: createSurfaceClassificationMap({ creative: preserved() }),
+    surfaceClassifications: createSurfaceClassificationMap({ creative: applied() }),
   },
   {
     id: 'regex_script.placement',
@@ -750,7 +750,7 @@ const PRESET_COMPAT_FIELD_FAMILY_ENTRIES = [
     category: 'regex',
     fieldPaths: ['extensions.regex_scripts[].substituteRegex'],
     creativeResetPromptFamily: false,
-    surfaceClassifications: createSurfaceClassificationMap({ creative: degraded('REGEX_SUBSTITUTE_MODE_UNSUPPORTED') }),
+    surfaceClassifications: createSurfaceClassificationMap({ creative: applied() }),
   },
   {
     id: 'regex_script.minDepth',

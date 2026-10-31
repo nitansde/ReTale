@@ -7,7 +7,7 @@ import {
   assemblePresetCompatRuntimePrompts,
   type PresetCompatPromptAssemblyMetadata,
 } from '@/lib/preset-compat/prompt-assembly'
-import { runPresetCompatRegexRuntime } from '@/lib/preset-compat/regex-runtime'
+import { getEffectiveSubstituteRegex, isSupportedSubstituteRegexMode, runPresetCompatRegexRuntime } from '@/lib/preset-compat/regex-runtime'
 import {
   resolvePresetCompatRuntime,
   type PresetCompatResolvedRuntime,
@@ -46,8 +46,7 @@ function hasActiveAssistantOutputRegex(rules: readonly PresetCompatRegexRecord[]
       return false
     }
 
-    const substituteRegex = String(rule.substituteRegex ?? '').trim()
-    return !substituteRegex || substituteRegex === '0'
+    return isSupportedSubstituteRegexMode(getEffectiveSubstituteRegex(rule))
   })
 }
 
@@ -125,6 +124,7 @@ export function applyPresetCompatCreativeRuntime(params: {
         phase: 'assistant_output',
         standalone,
         embedded,
+        macroProcessor: macroProcessing,
       })
     },
   }

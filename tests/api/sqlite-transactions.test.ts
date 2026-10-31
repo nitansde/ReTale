@@ -71,6 +71,24 @@ describe('shared SQLite transaction runner', () => {
     } finally { raw.close() }
   })
 
+  it('fences plain statements from the moment BEGIN succeeds', async () => {
+    const raw = new DatabaseSync(':memory:')
+    try {
+      const db = createDatabaseAccess(raw)
+      const begun = deferred()
+      // Registered out here so it runs outside the transaction's async context, in
+      // the microtask gap between BEGIN and beginSqliteTransaction's caller resuming.
+      const racingRead = begun.promise.then(() => db.queryOne('SELECT 1 AS value'))
+      const exec = raw.exec.bind(raw)
+      vi.spyOn(raw, 'exec').mockImplementation((sql) => {
+        exec(sql)
+        if (sql === 'BEGIN IMMEDIATE') begun.resolve()
+      })
+      await db.withTransaction(() => undefined)
+      await expect(racingRead).rejects.toThrow(/in use by another transaction/)
+    } finally { raw.close() }
+  })
+
   it('allows timers and a WAL reader to progress while another process holds a writer lock', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'retale-sqlite-contention-'))
     const file = path.join(directory, 'probe.db')
@@ -87,16 +105,19 @@ describe('shared SQLite transaction runner', () => {
     const exited = once(child, 'exit')
     try {
       await once(child.stdout!, 'data')
+      const db = createDatabaseAccess(raw)
       let acquired = false
       let timerRanWhileWaiting = false
       const start = performance.now()
       const timer = new Promise<void>((resolve) => setTimeout(() => {
         timerRanWhileWaiting = !acquired
         expect(reader.prepare('SELECT COUNT(*) AS count FROM probe').get()).toEqual({ count: 0 })
+        // No transaction is open yet, so the waiting connection itself still serves reads.
+        expect(db.queryOne('SELECT COUNT(*) AS count FROM probe')).toEqual({ count: 0 })
         resolve()
       }, 10))
       let callbacks = 0
-      await createDatabaseAccess(raw).withTransaction(() => {
+      await db.withTransaction(() => {
         callbacks += 1
         acquired = true
         raw.exec('INSERT INTO probe VALUES (1)')

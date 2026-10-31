@@ -67,6 +67,45 @@ describe('settings AI route validation', () => {
     expect(listAvailableOllamaTextModels).not.toHaveBeenCalled()
   })
 
+  it('keeps stored fields a partial save omits and reports a failed save as a 500', async () => {
+    const { normalizeAISettings } = await import('@/lib/ai-settings')
+    const stored = normalizeAISettings({
+      rewrite: {
+        provider: 'openai-compatible',
+        openAICompatible: { baseUrl: 'https://stored.example/v1', apiKey: 'stored-key', model: 'stored-model' },
+        ollama: { baseUrl: 'http://127.0.0.1:11434', model: 'stored-ollama' },
+      },
+      embeddings: {
+        provider: 'openai-compatible',
+        openAICompatible: { baseUrl: 'https://embed.example/v1', apiKey: 'embed-key', model: 'embed-model' },
+        ollama: { baseUrl: 'http://127.0.0.1:11434', model: '' },
+      },
+    })
+    const saveStoredAISettings = vi.fn().mockResolvedValue(undefined)
+    vi.doMock('@/lib/server/ai-settings', () => ({ loadStoredAISettings: () => stored, saveStoredAISettings }))
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    const { POST } = await import('@/app/api/settings/ai/route')
+    const post = () => POST(new Request('http://localhost/api/settings/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rewrite: { provider: 'ollama' } }),
+    }))
+
+    expect((await post()).status).toBe(200)
+    const saved = saveStoredAISettings.mock.calls[0][0] as typeof stored
+    expect(saved.rewrite.provider).toBe('ollama')
+    expect(saved.rewrite.openAICompatible).toMatchObject({ baseUrl: 'https://stored.example/v1', model: 'stored-model' })
+    expect(saved.rewrite.ollama.model).toBe('stored-ollama')
+    expect(saved.embeddings.openAICompatible).toMatchObject({ baseUrl: 'https://embed.example/v1', model: 'embed-model' })
+
+    saveStoredAISettings.mockRejectedValueOnce(new Error('disk full'))
+    const failed = await post()
+    expect(failed.status).toBe(500)
+    await expect(failed.json()).resolves.toMatchObject({ error: 'Failed to save AI settings' })
+    vi.doUnmock('@/lib/server/ai-settings')
+  })
+
   it('forwards the OpenAI discovery request signal', async () => {
     const listAvailableOpenAICompatibleModels = vi.fn().mockResolvedValue({
       baseUrl: 'https://example.test/v1',

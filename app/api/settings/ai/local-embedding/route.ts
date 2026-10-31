@@ -6,6 +6,7 @@ import {
   getLocalEmbeddingRuntimeStatus,
   stopLocalEmbeddingRuntime,
 } from '@/lib/server/local-embedding-runtime'
+import { DomainError } from '@/lib/server/domain-errors'
 import { getLocalEmbeddingModel } from '@/lib/server/local-embedding-catalog'
 import { normalizeHuggingFaceCustomModelReference } from '@/lib/server/local-embedding-custom-model'
 
@@ -87,7 +88,7 @@ export async function POST(request: Request) {
 
     throw new ApiRequestError(400, 'action must be install, install-custom, start, or stop')
   } catch (error) {
-    const status = error instanceof ApiRequestError ? error.status : 400
+    const status = error instanceof DomainError ? error.status : 500
     const message = error instanceof Error ? error.message : 'Local embedding request failed'
     return noStoreJsonError(message, status)
   }

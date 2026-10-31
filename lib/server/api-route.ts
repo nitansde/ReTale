@@ -201,6 +201,14 @@ export function apiRequestErrorResponse(error: unknown) {
   return error instanceof DomainError ? noStoreJsonError(error.message, error.status) : null
 }
 
+/** Expected failures keep their status and message; anything else is a logged 500 with a fixed message. */
+export function apiErrorResponse(error: unknown, fallback: string) {
+  const requestError = apiRequestErrorResponse(error)
+  if (requestError) return requestError
+  console.error(`${fallback}:`, error)
+  return noStoreJsonError(fallback, 500)
+}
+
 export function requireNonEmptyId(value: string, field: string) {
   const normalized = value.trim()
   if (!normalized) {

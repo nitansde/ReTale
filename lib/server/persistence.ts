@@ -1248,14 +1248,8 @@ function listResettableTables() {
 }
 
 function clearBusinessDataTables() {
-  const tables = listResettableTables()
-  execute('PRAGMA foreign_keys = OFF')
-  try {
-    for (const tableName of tables) {
-      execute(`DELETE FROM ${quoteSqlIdentifier(tableName)}`)
-    }
-  } finally {
-    execute('PRAGMA foreign_keys = ON')
+  for (const tableName of listResettableTables()) {
+    execute(`DELETE FROM ${quoteSqlIdentifier(tableName)}`)
   }
 }
 

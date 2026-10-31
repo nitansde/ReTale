@@ -68,7 +68,9 @@ export async function fetchKnowledgeProjection(options?: {
     searchParams.set('asOfChapter', String(asOfChapter))
   }
   if (statusOnly) searchParams.set('statusOnly', '1')
-  const search = searchParams.size ? `?${searchParams.toString()}` : ''
+  // `URLSearchParams.size` is missing in Safari 16 / Firefox < 126, which Next still targets.
+  const query = searchParams.toString()
+  const search = query ? `?${query}` : ''
   return requestClientGet(`/api/knowledge-view${search}`, {
     signal: options?.signal,
     parse: async (response) => {

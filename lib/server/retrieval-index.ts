@@ -195,6 +195,7 @@ const OLLAMA_RETRIEVAL_EMBEDDING_MAX_BATCH_CHARS = 6000
 const LANCEDB_INDEX_LOG_PREFIX = '[LanceDB Index]'
 const LANCEDB_INDEX_WAIT_TIMEOUT_SECONDS = 3600
 const LANCEDB_VECTOR_INDEX_NPROBES = 32
+const LANCEDB_VECTOR_INDEX_PARTITIONS = 128
 const LANCE_INDEX_UNAVAILABLE_WARNING = 'Lance retrieval index is missing or stale for this branch; rebuild knowledge to refresh retrieval evidence.'
 const PACKABLE_TEXT_SPAN_TYPES = new Set(['paragraph', 'evidence', 'summary'])
 const MAX_PACKED_TEXT_SPAN_TOKENS = 320
@@ -205,7 +206,7 @@ const branchRetrievalIndexLocks = new Map<string, Promise<void>>()
 function createLanceDbVectorIndexConfig() {
   return lancedb.Index.ivfFlat({
     distanceType: 'l2',
-    numPartitions: 128,
+    numPartitions: LANCEDB_VECTOR_INDEX_PARTITIONS,
     maxIterations: 20,
     sampleRate: 64,
   })
@@ -1301,7 +1302,7 @@ async function resumePendingBranchTable(params: {
       totalBatches,
       completedBatches,
     })
-    const vectorIndexError = await ensureVectorIndex(table)
+    const vectorIndexError = await ensureVectorIndex(table, totalRows)
     if (vectorIndexError) {
       setPendingBranchTableRow({
         branchId,
@@ -1344,7 +1345,11 @@ async function ensureTextIndex(table: Awaited<ReturnType<typeof openBranchTable>
   }
 }
 
-async function ensureVectorIndex(table: Awaited<ReturnType<typeof openBranchTable>> extends infer T ? Exclude<T, null> : never) {
+async function ensureVectorIndex(table: Awaited<ReturnType<typeof openBranchTable>> extends infer T ? Exclude<T, null> : never, rowCount: number) {
+  // IVF training needs a row per partition and LanceDB refuses below that, which
+  // would fail every rebuild of a short novel. A flat scan is exact at this size.
+  if (rowCount < LANCEDB_VECTOR_INDEX_PARTITIONS) return null
+
   try {
     await table.createIndex('vector', {
       config: createLanceDbVectorIndexConfig(),
@@ -1685,7 +1690,7 @@ async function writeBranchTableRows(params: {
       totalBatches,
       completedBatches: totalBatches,
     })
-    const vectorIndexError = await ensureVectorIndex(table)
+    const vectorIndexError = await ensureVectorIndex(table, finalRows.length)
     logLanceIndex(`create vector index done: elapsed=${formatElapsed(Date.now() - vectorIndexStartedAt)}${vectorIndexError ? `, error=${vectorIndexError}` : ''}`)
     if (vectorIndexError) {
       setPendingBranchTableRow({

@@ -238,6 +238,21 @@ describe('production build provenance', () => {
     expect(source.fingerprint).toMatch(/^[a-f0-9]{64}$/)
   })
 
+  it('names the tsconfig when next build itself rewrites it', async () => {
+    const fixture = productionFixture('production build tsconfig fixture')
+    const tsconfigPath = path.join(fixture, 'tsconfig.build.json')
+    fs.writeFileSync(tsconfigPath, '{}\n')
+    const rewritingSpawn = () => {
+      const child = new EventEmitter() as ChildProcess
+      fs.writeFileSync(tsconfigPath, '{"compilerOptions":{"jsx":"react-jsx"}}\n')
+      queueMicrotask(() => child.emit('exit', 0, null))
+      return child
+    }
+
+    await expect(runNextProductionBuild([], { repoRoot: fixture, spawn: rewritingSpawn, buildWorker: async () => ({}) }))
+      .rejects.toThrow('next build updated tsconfig.build.json')
+  })
+
   it('writes provenance only after a successful build and rejects failed builds', async () => {
     const fixture = productionFixture('production build wrapper fixture')
     const successfulSpawnCalls: string[][] = []

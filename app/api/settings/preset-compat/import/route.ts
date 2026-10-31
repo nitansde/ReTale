@@ -159,7 +159,7 @@ export async function POST(request: Request) {
         nameHint: normalizeNameHint(body.nameHint),
         existingNames: getPresetExistingNames(current, replacementId),
         now,
-        idFactory: replacementId ? () => replacementId : undefined,
+        presetId: replacementId ?? undefined,
       })
 
       const preset = replacementId && existingPreset

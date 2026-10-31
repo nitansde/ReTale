@@ -230,7 +230,6 @@ function renderActionsHook(options: {
         selectedTimelineInstructionText: '',
       },
       loadFromBackend: coreParams.loadFromBackend,
-      saveToBackend: coreParams.saveToBackend,
       deleteNovelFromBackend: options.deleteNovelFromBackend ?? vi.fn(async (novelId: string) => deletedNovelResult(novelId)),
       reconcileNovelDeletionFromBackend: options.reconcileNovelDeletionFromBackend ?? vi.fn(async () => 'deleted' as const),
       isNovelDeletionPending: options.isNovelDeletionPending ?? false,

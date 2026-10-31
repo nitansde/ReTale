@@ -1,7 +1,13 @@
 import { countChineseFriendlyWords, plainTextLinesToHtml } from '@/lib/utils'
 import type { Chapter, PersistedNovelState } from '@/lib/types'
 
-const CHAPTER_HEADING_REGEX = /(第\s*[0-9一二三四五六七八九十百千零两]+\s*章[^\n]*)/g
+const CHAPTER_NUMBER = '[0-9一二三四五六七八九十百千零两]+'
+// A heading starts its line, so "他想起第一章说过的话" inside a paragraph is not one.
+// Web-novel TXT also puts a volume marker or bracket before it on the same line.
+const CHAPTER_HEADING_REGEX = new RegExp(
+  `^[ \\t\\u3000]*((?:(?:正文|第\\s*${CHAPTER_NUMBER}\\s*[卷部集篇][^\\n]*?)[ \\t\\u3000]*)?[【\\[（(《]?第\\s*${CHAPTER_NUMBER}\\s*章[^\\n]*)`,
+  'm',
+)
 
 function buildImportedChapter(params: {
   id: string
@@ -32,10 +38,12 @@ export function importNovelIntoWorkspace(state: PersistedNovelState, input: { ti
 
   const now = Date.now()
   const novelId = `novel_${now}`
-  const parts = cleanText.split(CHAPTER_HEADING_REGEX).map((item) => item.trim()).filter(Boolean)
+  // split() with one capture group always yields [preface, heading, body, heading, body, ...].
+  // Keep empty entries: dropping an empty body would shift every later heading/body pair.
+  const [prefacePart = '', ...chapterParts] = cleanText.split(CHAPTER_HEADING_REGEX).map((item) => item.trim())
 
   const importedChapters: Chapter[] = []
-  const preface = parts[0] && !CHAPTER_HEADING_REGEX.test(parts[0]) ? parts[0].trim() : ''
+  const preface = chapterParts.length ? prefacePart : ''
 
   if (preface) {
     importedChapters.push(
@@ -49,22 +57,16 @@ export function importNovelIntoWorkspace(state: PersistedNovelState, input: { ti
     )
   }
 
-  if (parts.length >= 2) {
-    const startIndex = preface ? 1 : 0
-    for (let i = startIndex; i < parts.length; i += 2) {
-      const heading = parts[i]
-      const body = parts[i + 1] ?? ''
-      if (!heading) continue
-      importedChapters.push(
-        buildImportedChapter({
-          id: `ch_${now}_${importedChapters.length + 1}`,
-          novelId,
-          title: heading,
-          order: importedChapters.length + 1,
-          contentText: body,
-        })
-      )
-    }
+  for (let i = 0; i < chapterParts.length; i += 2) {
+    importedChapters.push(
+      buildImportedChapter({
+        id: `ch_${now}_${importedChapters.length + 1}`,
+        novelId,
+        title: chapterParts[i],
+        order: importedChapters.length + 1,
+        contentText: chapterParts[i + 1] ?? '',
+      })
+    )
   }
 
   if (!importedChapters.length) {

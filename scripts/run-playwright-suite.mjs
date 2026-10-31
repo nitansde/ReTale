@@ -54,6 +54,8 @@ const args = ['playwright', 'test', '--config', 'playwright.config.mjs']
 if (selector) {
   args.push('--grep', selector)
 }
+// Anything after the selector goes to Playwright, for example --repeat-each=10.
+args.push(...process.argv.slice(3))
 
 const result = spawnSync('npx', args, {
   cwd: ROOT,

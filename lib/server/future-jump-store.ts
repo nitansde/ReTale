@@ -1,5 +1,5 @@
 import { execute, queryAll, queryOne, withTransaction } from '@/lib/server/database-access'
-import { deleteStoryTimelineNodesByIds, findStoryTimelineNodeByFutureJumpRunId } from '@/lib/server/story-timeline-store'
+import { deleteStoryTimelineNode, findStoryTimelineNodeByFutureJumpRunId } from '@/lib/server/story-timeline-store'
 import type {
   FutureJumpSourceContext,
   FutureJumpRevisionHistoryItem,
@@ -300,9 +300,9 @@ export async function deleteFutureJumpRun(runId: string, db: Db = defaultDb) {
   if (!run) return null
 
   await db.withTransaction(async () => {
-    if (run.timelineNodeId) {
-      deleteStoryTimelineNodesByIds([run.timelineNodeId], db)
-    }
+    // Promote children like the timeline route does: removing only the node row
+    // would drop them to the root, and cascading would destroy their content.
+    if (run.timelineNodeId) deleteStoryTimelineNode(run.timelineNodeId, db)
 
     db.execute('DELETE FROM future_jump_runs WHERE id = ?', runId)
   })

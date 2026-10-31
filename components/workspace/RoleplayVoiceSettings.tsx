@@ -8,6 +8,13 @@ import { RoleplayVoiceSelect } from './RoleplayVoiceSelect'
 export function RoleplayVoiceSettings({ settings, onSaved }: { settings: PublicVoiceSettings; onSaved: (settings: PublicVoiceSettings) => void }) {
   const { t } = useI18n()
   const [draft, setDraft] = useState(settings)
+  // The quick picker below the form can change the voice while the form is open;
+  // follow that selection without discarding other unsaved edits.
+  const [syncedVoiceId, setSyncedVoiceId] = useState(settings.voiceId)
+  if (syncedVoiceId !== settings.voiceId) {
+    setSyncedVoiceId(settings.voiceId)
+    setDraft({ ...draft, voiceId: settings.voiceId })
+  }
   const [keys, setKeys] = useState({ sonioxApiKey: '', qwenApiKey: '', fishApiKey: '' })
   const [cleared, setCleared] = useState<Record<string, boolean>>({})
   const [saving, setSaving] = useState(false)

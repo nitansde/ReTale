@@ -182,7 +182,42 @@ describe('preset compat regex runtime', () => {
     ])
   })
 
-  it('emits REGEX_MACRO_UNSUPPORTED_MODE for non-MVP substituteRegex macro modes', () => {
+  it('inserts macros into the find pattern raw for mode 1 and escaped for mode 2', () => {
+    const run = (substituteRegex: string) => runPresetCompatRegexRuntime({
+      value: 'A.B AxB',
+      phase: 'user_input',
+      standalone: [createRegexRecord({ pattern: '{{user}}', replacement: 'X', substituteRegex })],
+      embedded: [],
+      macroProcessor: createMacroOptions({ user: 'A.B' }),
+    })
+
+    expect(run('1').value).toBe('X X')
+    expect(run('2').value).toBe('X AxB')
+  })
+
+  it('resolves replacement macros in every mode, matching SillyTavern', () => {
+    const result = runPresetCompatRegexRuntime({
+      value: 'hello',
+      phase: 'assistant_output',
+      standalone: [createRegexRecord({ pattern: 'hello', replacement: '{{user}}', substituteRegex: null, placements: ['assistant_output'] })],
+      embedded: [],
+      macroProcessor: createMacroOptions({ user: 'Alice' }),
+    })
+
+    expect(result.value).toBe('Alice')
+  })
+
+  it('warns instead of silently skipping default-flag user_input rules in the prompt pass', () => {
+    const rule = createRegexRecord({ id: 'send-time-rule', pattern: 'hello', replacement: 'bye' })
+    const promptPass = runPresetCompatRegexRuntime({ value: 'hello', phase: 'user_input', standalone: [rule], embedded: [], isPrompt: true })
+
+    expect(promptPass.value).toBe('hello')
+    expect(promptPass.skippedRuleIds).toEqual(['send-time-rule'])
+    expect(promptPass.warnings).toEqual([expect.stringContaining('Enable Prompt Only')])
+    expect(runPresetCompatRegexRuntime({ value: 'hello', phase: 'user_input', standalone: [rule], embedded: [] }).value).toBe('bye')
+  })
+
+  it('emits REGEX_MACRO_UNSUPPORTED_MODE for unknown substituteRegex modes', () => {
     const result = runPresetCompatRegexRuntime({
       value: 'hello',
       phase: 'user_input',
@@ -190,7 +225,7 @@ describe('preset compat regex runtime', () => {
         id: 'macro-runtime-unsupported',
         pattern: 'hello',
         replacement: '{{user}}',
-        substituteRegex: '2',
+        substituteRegex: '3',
       })],
       embedded: [],
       macroProcessor: createMacroOptions({ user: 'Alice' }),
@@ -200,7 +235,7 @@ describe('preset compat regex runtime', () => {
     expect(result.appliedRuleIds).toEqual([])
     expect(result.skippedRuleIds).toEqual(['macro-runtime-unsupported'])
     expect(result.warnings).toEqual([
-      'Rule macro-runtime-unsupported replacement macro diagnostic [REGEX_MACRO_UNSUPPORTED_MODE]: substituteRegex=2 is not supported for replacement-time macro substitution.',
+      'Rule macro-runtime-unsupported replacement macro diagnostic [REGEX_MACRO_UNSUPPORTED_MODE]: substituteRegex=3 is not supported for replacement-time macro substitution.',
     ])
   })
 

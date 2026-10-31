@@ -2,10 +2,11 @@ import type { VoiceEvent, VoiceSettings } from '@/lib/voice-chat'
 import { speakableText, splitVoicePhrases, usesDialogueQuotes, type SpeechState } from '@/lib/voice-chat'
 import type { VoiceTrace } from '@/lib/server/voice/debug'
 
-export async function requestFishPhrase(text: string, settings: VoiceSettings, signal: AbortSignal, format: 'pcm' | 'mp3' = 'pcm') {
+export async function requestFishPhrase(text: string, settings: VoiceSettings, signal: AbortSignal, format: 'pcm' | 'mp3' = 'pcm', timeoutMs = 30_000) {
   const started = Date.now()
+  // The timeout also governs the body stream, so whole-reply callers pass a longer one.
   const response = await fetch('https://api.fish.audio/v1/tts', {
-    method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+    method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
     headers: { Authorization: `Bearer ${settings.fishApiKey}`, 'Content-Type': 'application/json', model: settings.fishModel },
     // Fish accepts 24 kHz PCM, while its MPEG encoder only supports 32/44.1 kHz.
     // Sending 24 kHz with mp3 returns a 400 and leaves the reply button silent.

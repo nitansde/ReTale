@@ -16,7 +16,7 @@ export async function POST(request: Request) {
     if (!settings.fishApiKey || !settings.voiceId) return jsonError('请先配置 Fish API Key 和音色 ID / Configure Fish API key and voice ID', 400)
     const text = speakableText(body.text, { depth: 0, star: false, quote: 0, quoted: usesDialogueQuotes(body.text) })
     if (!/[\p{L}\p{N}]/u.test(text)) return jsonError('没有可朗读的台词 / No dialogue to read', 400)
-    const { response } = await requestFishPhrase(text, settings, request.signal, 'mp3')
+    const { response } = await requestFishPhrase(text, settings, request.signal, 'mp3', 110_000)
     return new Response(response.body, { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' } })
   } catch (error) {
     return apiRequestErrorResponse(error) ?? jsonError('语音播放失败，请检查 Fish 配置及额度 / Speech failed; check Fish settings and quota', 502)

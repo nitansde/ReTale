@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import {
   ApiRequestError,
+  apiErrorResponse,
   assertMultipartFormDataMediaType,
   createByteLimitedRequest,
   noStoreJson,
@@ -56,7 +57,10 @@ export async function POST(request: Request) {
       MAX_MATERIAL_BODY_SIZE_BYTES,
       '蒸馏素材上传不能超过 10 MiB',
     )
-    const formData = await limitedRequest.formData()
+    const formData = await limitedRequest.formData().catch((error: unknown) => {
+      if (error instanceof ApiRequestError) throw error
+      throw new ApiRequestError(400, 'Invalid multipart form data')
+    })
     const file = formData.get('file')
     if (!(file instanceof File)) {
       return NextResponse.json({ ok: false, error: '请选择 TXT 文件' }, { status: 400 })
@@ -72,12 +76,6 @@ export async function POST(request: Request) {
     })
     return NextResponse.json({ ok: true, material }, { status: 201 })
   } catch (error) {
-    if (error instanceof ApiRequestError) {
-      return NextResponse.json({ ok: false, error: error.message }, { status: error.status })
-    }
-    return NextResponse.json({
-      ok: false,
-      error: error instanceof Error ? error.message : '蒸馏素材上传失败',
-    }, { status: 400 })
+    return apiErrorResponse(error, '蒸馏素材上传失败')
   }
 }

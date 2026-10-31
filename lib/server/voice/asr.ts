@@ -101,7 +101,7 @@ export async function transcribeVoice(settings: VoiceSettings, names: string[], 
         }
         if (data.type === 'session.updated') markReady()
         transcript.accept(data)
-      } catch { close(new Error('ASR returned an invalid response')) }
+      } catch (error) { close(error instanceof Error && error.message.startsWith('Speech segment') ? error : new Error('ASR returned an invalid response')) }
     })
     socket.on('error', () => close(new Error('Unable to connect to ASR; check network, endpoint and API key')))
     socket.on('close', () => close(new Error('ASR disconnected; start a new call')))

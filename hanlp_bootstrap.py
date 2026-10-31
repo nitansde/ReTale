@@ -390,6 +390,17 @@ def _shift_items(items, offset):
     return shifted
 
 
+def _utf16_offsets(text):
+    """Code-point index -> UTF-16 code-unit index; the Node consumer slices by UTF-16."""
+    offsets = [0] * (len(text) + 1)
+    total = 0
+    for index, char in enumerate(text):
+        offsets[index] = total
+        total += 2 if ord(char) > 0xFFFF else 1
+    offsets[len(text)] = total
+    return offsets
+
+
 def _build_group(items, entity_type, chapter_no):
     grouped = defaultdict(list)
     for surface, item_type, mention in items:
@@ -425,6 +436,11 @@ def _run(text, chapter_no):
         doc = _predict(model, batch_texts, tasks, skip_tasks)
         for (offset, segment), document in zip(batch, _documents_from_batch(doc, len(batch))):
             items.extend(_shift_items(_ner_items_from_document(document, segment), offset))
+
+    utf16 = _utf16_offsets(text)
+    for _, _, mention in items:
+        mention["startOffset"] = utf16[mention["startOffset"]]
+        mention["endOffset"] = utf16[mention["endOffset"]]
 
     return {
         "people": _build_group(items, "person", chapter_no),

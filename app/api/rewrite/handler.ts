@@ -738,6 +738,9 @@ async function runRecoverableRewriteJobInNovel(jobId: string, novelId: string) {
       currentStep: progressMessage('progress.rewriteFailed'),
       payload: { ...payload, error: message },
       errorMessage: message,
+      // Outside the attempt scope here; fence explicitly so a stale runner
+      // cannot mark a retried job failed.
+      expectedAttemptId: claim.attemptId,
       db,
     })
   } finally {
@@ -814,7 +817,7 @@ async function handleRewriteBody(
         ? runtime.resolvedRuntime.providerRuntime.request
         : runtime.resolvedRuntime.providerRuntime.request.options,
       presetCompat: presetCompatMetadata,
-      signal: options.signal,
+      signal: options.signal ?? request.signal,
     }
     const streamResult = runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
       ? await streamRewriteWithOpenAICompatible(promptPayload, runtime.resolvedRuntime.providerRuntime.config)
@@ -863,8 +866,8 @@ async function handleRewriteBody(
   }
 
   const result = runtime.resolvedRuntime.providerRuntime.provider === 'openai-compatible'
-    ? await generateRewriteWithOpenAICompatible({ ...rewriteInput, signal: options.signal }, runtime.resolvedRuntime.providerRuntime.config)
-    : await generateRewriteWithOllama({ ...rewriteInput, signal: options.signal }, runtime.resolvedRuntime.providerRuntime.config)
+    ? await generateRewriteWithOpenAICompatible({ ...rewriteInput, signal: options.signal ?? request.signal }, runtime.resolvedRuntime.providerRuntime.config)
+    : await generateRewriteWithOllama({ ...rewriteInput, signal: options.signal ?? request.signal }, runtime.resolvedRuntime.providerRuntime.config)
 
   if (result.enabled && result.content?.length) {
     const transformedCandidates = result.content.map((content) => {

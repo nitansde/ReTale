@@ -67,7 +67,7 @@ export function RoleplayVoicePanel(props: {
       <p role="status" className="flex items-center gap-2 text-sm text-violet-200">{showSettings ? t('voice.settings') : <>{state === 'connecting' || state === 'thinking' || state === 'ending' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}{muted && active ? t('voice.muted') : t(`voice.${state}`)}</>}</p>
       <button type="button" disabled={active} onClick={() => setShowSettings(!showSettings)} className={cn('inline-flex min-h-10 items-center gap-1 rounded-lg px-2 hover:bg-overlay/5 disabled:opacity-40', showSettings ? 'text-sm text-zinc-200' : 'text-xs text-zinc-400')}>{showSettings ? <ArrowLeft className="h-4 w-4" /> : <Settings2 className="h-4 w-4" />}{t(showSettings ? 'voice.back' : 'voice.settings')}</button>
     </div>
-    {showSettings && settings ? <RoleplayVoiceSettings key={settings.voiceId} settings={settings} onSaved={props.onSaved} /> : <>
+    {showSettings && settings ? <RoleplayVoiceSettings settings={settings} onSaved={props.onSaved} /> : <>
       {!active ? <p className="text-xs leading-5 text-zinc-400">{t('voice.hint')}</p> : null}
       {!secure ? <p className="text-xs leading-5 text-amber-300">{t('voice.secureRequired')}</p> : null}
       {error ? <p role="alert" className="break-words text-sm text-rose-300">{error}</p> : null}

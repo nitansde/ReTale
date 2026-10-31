@@ -203,6 +203,10 @@ export async function requestProviderEndpoint(params: {
     }
 
     if (!params.streamed || !response.body) {
+      // Buffer here so a timeout or abort during the body read maps to a
+      // ProviderRequestError below instead of surfacing a raw AbortError to the caller.
+      await response.clone().arrayBuffer()
+      clearRequestTimeout()
       return { response, cleanup }
     }
 

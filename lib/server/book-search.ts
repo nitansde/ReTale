@@ -1,5 +1,6 @@
 import { BOOK_SEARCH_RESULT_LIMIT, type BookSearchMatch, type BookSearchMode, type BookSearchResult } from '@/lib/book-search'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
+import { hasNovelStorage } from '@/lib/server/db-resolver'
 import { ResourceNotFoundError } from '@/lib/server/domain-errors'
 import { getMainBranchId } from '@/lib/server/knowledge-store'
 import { hasLanceBookTextEmbeddings, searchLanceBookText } from '@/lib/server/retrieval-index'
@@ -19,6 +20,7 @@ function excerpt(text: string, query: string) {
 }
 
 function getSearchDatabase(novelId: string) {
+  if (!hasNovelStorage(novelId)) throw new ResourceNotFoundError('Novel not found')
   const db = createNovelDatabaseAccess(novelId)
   if (!db.queryOne('SELECT id FROM NovelRecord WHERE id = ? UNION SELECT id FROM WorkspaceRuntimeNovel WHERE id = ?', novelId, novelId)) {
     throw new ResourceNotFoundError('Novel not found')

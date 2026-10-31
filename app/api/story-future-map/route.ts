@@ -1,4 +1,4 @@
-import { noStoreJson } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, noStoreJson } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { findStoryBranch, normalizeBranchId } from '@/lib/server/knowledge-store'
 import { loadFutureMapSourceData } from '@/lib/server/outline-bootstrap'
@@ -110,9 +110,6 @@ export async function GET(request: Request) {
       defaults,
     })
   } catch (error) {
-    return noStoreJson(
-      { ok: false, error: error instanceof Error ? error.message : 'Failed to load story future map' },
-      { status: 500 }
-    )
+    return apiRequestErrorResponse(error) ?? noStoreJson({ ok: false, error: 'Failed to load story future map' }, { status: 500 })
   }
 }

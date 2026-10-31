@@ -2609,8 +2609,26 @@ describe('retrieval-index cache reuse helpers', () => {
     expect(getActiveMockTable(database, mockLanceDb)).not.toBe(originalTable)
   }, 120000)
 
+  it('skips the vector index below one row per IVF partition so short novels can finish a rebuild', async () => {
+    const { ivfFlat, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-resume-vector-stage')
+
+    await expect(retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')).resolves.toMatchObject({ rowCount: 3 })
+    expect(ivfFlat).not.toHaveBeenCalled()
+  })
+
   it('resumes from building_vector_index without recreating the pending table', async () => {
     const { aiSettings, database, embedTextsWithOllama, ivfFlat, mockLanceDb, retrievalIndex } = await createRetrievalIndexHarness('retale-retrieval-index-resume-vector-stage')
+
+    // LanceDB refuses to train an IVF index below one row per partition.
+    const insertScene = database.prepare(
+      `INSERT INTO TextSpan (
+        id, novelId, branchId, chapterId, chapterNo, lineStart, lineEnd,
+        charStart, charEnd, text, spanType, tokenEstimate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    for (let index = 0; index < 130; index += 1) {
+      insertScene.run(`span-scene-${index}`, 'novel-001', 'novel-001:main', 'chapter-1', 1, 10 + index, 10 + index, 100 + index, 101 + index, `场景证据 ${index}`, 'scene', 8)
+    }
 
     await retrievalIndex.rebuildBranchRetrievalIndex('novel-001', 'novel-001:main')
     const originalTable = getActiveMockTable(database, mockLanceDb)

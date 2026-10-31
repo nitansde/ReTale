@@ -1,4 +1,4 @@
-import { noStoreJson, noStoreJsonError, requireNonEmptyId } from '@/lib/server/api-route'
+import { apiRequestErrorResponse, noStoreJson, noStoreJsonError, requireNonEmptyId } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess } from '@/lib/server/database-access'
 import { findContinueBlockById } from '@/lib/server/continue-block-store'
 
@@ -24,7 +24,6 @@ export async function GET(request: Request, ctx: RouteContext<'/api/continue-blo
 
     return noStoreJson(detail)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to load continue block detail'
-    return noStoreJsonError(message, message.endsWith(' is required') ? 400 : 500)
+    return apiRequestErrorResponse(error) ?? noStoreJsonError('Failed to load continue block detail', 500)
   }
 }

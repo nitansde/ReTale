@@ -32,10 +32,10 @@ function excerptText(detail: WhatIfSessionDetail) {
   return detail.selectedText.trim() || detail.originalText.trim() || ''
 }
 
-function formatCreatedAt(value: string) {
+function formatCreatedAt(value: string, locale: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(locale === 'zh' ? 'zh-CN' : 'en', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -127,9 +127,9 @@ export function WhatIfSessionView(props: {
       readableLabel || null,
         instructionPreview ? `${t('continue.instructionPreview')} ${instructionPreview}` : null,
         t('futureJump.sourceChapter', { count: detail?.sourceChapterNo ?? props.anchorChapterNo }),
-        detail ? t('roleplay.createdAt', { value: formatCreatedAt(detail.createdAt) }) : null,
+        detail ? t('roleplay.createdAt', { value: formatCreatedAt(detail.createdAt, locale) }) : null,
     ].filter(Boolean) as string[],
-    [detail, instructionPreview, props.anchorChapterNo, readableLabel, t]
+    [detail, instructionPreview, locale, props.anchorChapterNo, readableLabel, t]
   )
   const revisionEntries = useMemo(
     () => [...(detail?.revisions ?? [])].sort((left, right) => right.revisionNo - left.revisionNo),
@@ -248,7 +248,7 @@ export function WhatIfSessionView(props: {
                           <p className="text-sm font-medium text-zinc-100">{t('whatIf.historyRevision', { count: revision.revisionNo, kind: revision.revisionKind })}</p>
                           {revisionPreview ? <p className="mt-2 text-xs leading-6 text-fuchsia-100">{t('continue.instructionPreview')} · {revisionPreview}</p> : null}
                         </div>
-                        <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-[11px] text-zinc-400">{formatCreatedAt(revision.createdAt)}</span>
+                        <span className="rounded-full border border-line/10 bg-shade/20 px-3 py-1 text-[11px] text-zinc-400">{formatCreatedAt(revision.createdAt, locale)}</span>
                       </div>
                       <div className="mt-3 rounded-[18px] border border-fuchsia-300/18 bg-fuchsia-500/10 p-4">
                         {renderReaderBodyParagraphs(revision.generatedText, 'text-zinc-100')}

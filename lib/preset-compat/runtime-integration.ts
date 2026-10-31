@@ -95,21 +95,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+// SillyTavern presets ship `seed: -1`, meaning "no fixed seed".
+function isFixedSeed(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
 function readNumericSeed(runtime: PresetCompatResolvedRuntime) {
   const rootSeed = runtime.activePreset?.passthrough?.root
-  if (isRecord(rootSeed) && typeof rootSeed.seed === 'number' && Number.isFinite(rootSeed.seed)) {
+  if (isRecord(rootSeed) && isFixedSeed(rootSeed.seed)) {
     return rootSeed.seed
   }
 
   if (runtime.providerRuntime.provider === 'ollama') {
     const seed = runtime.providerRuntime.request.options.seed
-    if (typeof seed === 'number' && Number.isFinite(seed)) {
+    if (isFixedSeed(seed)) {
       return seed
     }
   }
 
   const openAiSeed = runtime.activePreset?.runtimeSampler.seed
-  return typeof openAiSeed === 'number' && Number.isFinite(openAiSeed) ? openAiSeed : 0
+  return isFixedSeed(openAiSeed) ? openAiSeed : null
 }
 
 function buildRuntimeValues(runtime: PresetCompatResolvedRuntime, runtimeContext?: PresetCompatPromptRuleRuntimeContext) {
