@@ -10,6 +10,10 @@
     --font-app-ui: var(--font-noto-sans-sc), var(--font-geist-sans), sans-serif;
     --font-app-reading: var(--font-noto-serif-sc), serif;
   }
+
+  input:placeholder-shown {
+    text-overflow: ellipsis;
+  }
 }
 
 @theme inline {
@@ -88,5 +92,18 @@ body {
   from {
     opacity: 0;
     transform: translateY(10px) scale(0.99);
+  }
+}
+
+/* Unlayered so it beats text-sm: iOS Safari zooms the page on focus when a field is under 16px. */
+@media (max-width: 1023px), (pointer: coarse) {
+  input:not([type='checkbox'], [type='radio'], [type='range'], [type='file'], [type='color']),
+  select {
+    min-height: 2.75rem;
+    font-size: 16px;
+  }
+
+  textarea {
+    font-size: 16px;
   }
 }

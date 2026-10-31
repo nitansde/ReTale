@@ -70,7 +70,7 @@ export function WorkspaceHeader({
 
   return (
     <>
-    <header className="sticky top-0 z-30 mb-2 shrink-0 border-b border-line/10 bg-panel/92 px-4 py-2 shadow-[0_14px_40px_rgb(0_0_0/calc(0.3*var(--shadow-strength)))] backdrop-blur-2xl sm:mb-4 sm:rounded-[24px] sm:border sm:py-3 sm:shadow-[0_20px_70px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))] lg:rounded-[28px]">
+    <header className="sticky top-0 z-30 mb-2 shrink-0 border-b border-line/10 bg-panel px-4 py-2 shadow-[0_14px_40px_rgb(0_0_0/calc(0.3*var(--shadow-strength)))] sm:mb-4 sm:rounded-[24px] sm:border sm:py-3 sm:shadow-[0_20px_70px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))] lg:rounded-[28px] lg:bg-panel/92 lg:backdrop-blur-2xl">
       <div className="grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-1 lg:hidden" data-testid="workspace-mobile-header">
         <button
           type="button"

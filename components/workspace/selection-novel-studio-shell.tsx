@@ -446,7 +446,7 @@ export function SelectionNovelStudio() {
           mobileSelectionActions={!desktop && !core.readerMode.isEditing && activeWorkspaceSelection.kind === 'chapter' && centerPaneView === 'body' && selectionText.trim() ? chapterSelectionActions : null}
           mobileReaderAction={!desktop && activeWorkspaceSelection.kind === 'chapter' ? (
             centerPaneView === 'graph'
-              ? <button type="button" onClick={() => setCenterPaneView('body')} className="min-h-12 flex-1 rounded-xl text-sm text-violet-200">{t('workspace.centerPane.bodyTab')}</button>
+              ? <button type="button" onClick={() => setCenterPaneView('body')} className="flex min-h-12 min-w-14 flex-1 flex-col items-center justify-center gap-1 rounded-xl text-xs text-violet-200 hover:bg-overlay/[0.05]"><BookOpen className="h-4 w-4" aria-hidden="true" />{t('workspace.centerPane.bodyTab')}</button>
               : <>
                   {!core.readerMode.isEditing ? <WorkspaceRewriteGuide modelConfigured={rewriteModelConfigured} provider={resolvedAISettings.rewrite.provider} onOpenSettings={openAIModelSettings} /> : null}
                   <WorkspaceReaderToolbar compact isEditing={core.readerMode.isEditing} isSaving={core.readerMode.isSaving} onStartEditing={core.readerMode.startEditing} onFinishEditing={core.readerMode.finishEditing} />

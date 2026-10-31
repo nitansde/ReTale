@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo } from 'react'
-import { AlertTriangle, GitBranch, Network, RefreshCcw } from 'lucide-react'
+import { AlertTriangle, ChevronRight, GitBranch, Network, RefreshCcw } from 'lucide-react'
 import { GraphSelectionEvidence } from '@/components/graph/graph-selection-evidence'
 import { GraphExplorer } from '@/components/graph/graph-explorer'
 import { GraphInspector } from '@/components/graph/graph-inspector'
@@ -56,9 +56,9 @@ export function ChapterGraphBrowser(props: {
         <p className="flex min-w-0 items-start gap-2 text-sm leading-6 text-zinc-300"><GitBranch className="mt-1 h-4 w-4 shrink-0 text-fuchsia-200" />{t('graph.branchInheritsParentDescription', { chapterNo: sourceMeta.chapterNo, chapterTitle: sourceMeta.chapterTitle })}</p>
         {props.parentChapter ? <button type="button" onClick={props.onJumpToParent} className="min-h-11 rounded-xl px-3 text-sm text-fuchsia-100 hover:bg-overlay/[0.05]">{t('graph.jumpToParent')}</button> : null}
       </section> : null}
-      {warnings.length ? <details className="rounded-2xl border border-amber-400/20 bg-amber-500/8 p-3">
-        <summary className="min-h-8 cursor-pointer text-sm text-amber-100"><AlertTriangle className="mr-2 inline h-4 w-4" />{t('graph.warnings')} · {warnings.length}</summary>
-        <div className="mt-2 space-y-2">{warnings.map((warning) => <p key={warning} className="break-words text-sm leading-6 text-amber-100/90">{warning}</p>)}</div>
+      {warnings.length ? <details className="group rounded-2xl border border-amber-400/20 bg-amber-500/8 px-3">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 text-sm text-amber-100 [&::-webkit-details-marker]:hidden"><ChevronRight className="h-4 w-4 shrink-0 transition group-open:rotate-90" aria-hidden="true" /><AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />{t('graph.warnings')} · {warnings.length}</summary>
+        <div className="space-y-2 pb-3">{warnings.map((warning) => <p key={warning} className="break-words text-sm leading-6 text-amber-100/90">{warning}</p>)}</div>
       </details> : null}
       {props.error && !props.loading ? <p role="alert" className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-4 text-sm leading-6 text-rose-100">{props.error}</p> : null}
       {props.loading && !props.data ? <p role="status" className="rounded-2xl border border-line/10 p-6 text-sm text-zinc-400">{t('graph.loading')}</p> : null}

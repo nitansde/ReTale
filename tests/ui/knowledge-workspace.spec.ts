@@ -580,6 +580,8 @@ test('saving AI settings waits for the current full knowledge projection refresh
 
 
 test('knowledge status keeps truthful fallback, queued, redacted, and mobile target semantics', async ({ page }) => {
+  // Geometry is measured right after a dialog opens, so its scale-in animation must not run.
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   let operationStatus: 'running' | 'queued' = 'running'
 
   await page.route('**/api/knowledge-view*', async (route) => {

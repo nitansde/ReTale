@@ -93,7 +93,7 @@ export function PresetCompatRegexEditor({ title, regexRecord, onUpdate, attachme
               data-testid={`preset-compat-${attachment ? 'standalone' : 'embedded'}-regex-toggle-${regexRecord.id}`}
               checked={!regexRecord.disabled}
               onChange={(event) => onUpdate({ disabled: !event.target.checked })}
-              className="h-3.5 w-3.5 rounded border-line/20 bg-transparent"
+              className="h-6 w-6 rounded border-line/20 bg-transparent lg:h-3.5 lg:w-3.5"
             />
             Runtime enabled
           </label>

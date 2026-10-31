@@ -8,10 +8,10 @@ import { cn } from '@/lib/utils'
 type DialogPlacement = 'center' | 'left' | 'right' | 'bottom'
 
 const PLACEMENT_STYLES: Record<DialogPlacement, string> = {
-  center: 'm-auto max-h-[88vh] w-[calc(100%-2rem)] max-w-xl rounded-[30px]',
+  center: 'm-auto max-h-[88dvh] w-[calc(100%-2rem)] max-w-xl rounded-[30px]',
   left: 'mr-auto h-full w-[86vw] max-w-sm rounded-r-[30px]',
   right: 'ml-auto h-full w-[86vw] max-w-sm rounded-l-[30px]',
-  bottom: 'mt-auto max-h-[88vh] w-full rounded-t-[30px]',
+  bottom: 'mt-auto max-h-[88dvh] w-full rounded-t-[30px]',
 }
 
 const FOCUSABLE_SELECTOR = [

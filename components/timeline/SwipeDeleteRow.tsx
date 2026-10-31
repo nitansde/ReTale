@@ -67,7 +67,7 @@ export function SwipeDeleteRow({ children, onDelete, deleteLabel, deleting, clas
       }}
     >
       <div
-        className={cn('relative z-10 flex min-w-0 flex-1 touch-pan-y items-start gap-1 bg-raised lg:!transform-none', !dragging && 'transition-transform duration-150 motion-reduce:transition-none')}
+        className={cn('relative z-10 flex min-w-0 flex-1 touch-pan-y items-start gap-1 bg-raised lg:bg-transparent lg:!transform-none', !dragging && 'transition-transform duration-150 motion-reduce:transition-none')}
         style={{ transform: `translateX(${offset}px)` }}
         onPointerDown={(event) => {
           suppressClickRef.current = false

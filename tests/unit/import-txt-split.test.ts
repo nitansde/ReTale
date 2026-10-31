@@ -38,6 +38,13 @@ describe('TXT import chapter splitting', () => {
     expect(chapters[1].content).toContain('这里才是正文')
   })
 
+  it('keeps a long paragraph that opens with a chapter number in the body', () => {
+    const paragraph = `第三章的内容我已经看过了，${'海雾从码头漫上来，林舟把信折好放进口袋。'.repeat(4)}`
+    const chapters = importChapters(`第1章 开端\n${paragraph}\n第2章 转折\n正文`)
+    expect(chapters.map((chapter) => chapter.title)).toEqual(['第1章 开端', '第2章 转折'])
+    expect(chapters[0].content).toContain('第三章的内容')
+  })
+
   it('falls back to a single chapter when the text has no headings', () => {
     expect(importTitles('没有任何章节标题的正文')).toEqual(['第1章 导入正文'])
   })

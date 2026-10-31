@@ -4,8 +4,9 @@ import type { Chapter, PersistedNovelState } from '@/lib/types'
 const CHAPTER_NUMBER = '[0-9一二三四五六七八九十百千零两]+'
 // A heading starts its line, so "他想起第一章说过的话" inside a paragraph is not one.
 // Web-novel TXT also puts a volume marker or bracket before it on the same line.
+// ponytail: the length cap only rejects long sentences; a short line such as "第三章看完了。" still splits.
 const CHAPTER_HEADING_REGEX = new RegExp(
-  `^[ \\t\\u3000]*((?:(?:正文|第\\s*${CHAPTER_NUMBER}\\s*[卷部集篇][^\\n]*?)[ \\t\\u3000]*)?[【\\[（(《]?第\\s*${CHAPTER_NUMBER}\\s*章[^\\n]*)`,
+  `^[ \\t\\u3000]*((?:(?:正文|第\\s*${CHAPTER_NUMBER}\\s*[卷部集篇][^\\n]*?)[ \\t\\u3000]*)?[【\\[（(《]?第\\s*${CHAPTER_NUMBER}\\s*章[^\\n]{0,60}$)`,
   'm',
 )
 

@@ -2561,6 +2561,8 @@ test('focused future jump chooser direct-chapter mode shows real summaries and k
 
 
 test('focused Future Map overlay is single-column without mobile overflow and preserves desktop columns', async ({ page }) => {
+  // Geometry is measured right after a dialog opens, so its scale-in animation must not run.
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.setViewportSize({ width: 390, height: 844 })
   await mockNovelResourceApi(page, buildWorkspacePayload)
   await page.route('**/api/story-timeline*', async (route) => {

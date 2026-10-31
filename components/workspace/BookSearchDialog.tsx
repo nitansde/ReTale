@@ -105,13 +105,13 @@ export function BookSearchDialog({ novelId, onClose, onSelect }: {
           ))}
         </div>
       </fieldset>
-      <form onSubmit={(event) => { void search(event) }} className="flex gap-2" role="search">
+      <form onSubmit={(event) => { void search(event) }} className="flex flex-col gap-2 sm:flex-row" role="search">
         <input ref={inputRef} type="search" value={query} onChange={(event) => changeQuery(event.target.value)}
           maxLength={BOOK_SEARCH_QUERY_LIMIT} aria-label={t('bookSearch.query')}
           placeholder={t(mode === 'semantic' ? 'bookSearch.placeholder' : 'bookSearch.exactPlaceholder')}
-          className="min-h-11 min-w-0 flex-1 rounded-xl border border-line/15 bg-shade/20 px-3 text-sm outline-none focus:border-violet-300/60" />
+          className="min-h-11 w-full min-w-0 rounded-xl border border-line/15 bg-shade/20 px-3 text-sm outline-none focus:border-violet-300/60 sm:flex-1" />
         <button type="submit" disabled={loading || !query.trim()}
-          className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-violet-500/20 px-4 text-sm text-violet-100 transition hover:bg-violet-500/30 disabled:opacity-50">
+          className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-violet-500/20 px-4 text-sm text-violet-100 transition hover:bg-violet-500/30 disabled:opacity-50">
           {loading ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Search className="h-4 w-4" aria-hidden="true" />}
           {t('bookSearch.submit')}
         </button>

@@ -243,7 +243,7 @@ export function PresetCompatBuiltinSystemPromptEditor({
                     data-testid={`preset-compat-builtin-system-toggle-${surfaceId}`}
                     checked={rule.enabled}
                     onChange={(event) => onUpdateBuiltinSystemPrompt(surfaceId, { enabled: event.target.checked })}
-                    className="h-3.5 w-3.5 rounded border-line/20 bg-transparent"
+                    className="h-6 w-6 rounded border-line/20 bg-transparent lg:h-3.5 lg:w-3.5"
                   />
                   {t('preset.enabled')}
                 </label>
@@ -428,7 +428,7 @@ export function PresetCompatPresetEditor({
               type="button"
               data-testid={`preset-compat-preset-delete-${preset.id}`}
               onClick={onDeletePreset}
-              className="rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 transition hover:bg-rose-500/20"
+              className="min-h-11 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 transition hover:bg-rose-500/20"
             >
               {t('preset.deletePreset')}
             </button>
@@ -436,7 +436,7 @@ export function PresetCompatPresetEditor({
               type="button"
               data-testid={`preset-compat-preset-export-${preset.id}`}
               onClick={onExportPreset}
-              className="rounded-2xl border border-line/10 bg-overlay/[0.04] px-4 py-2 text-sm text-zinc-100 transition hover:bg-overlay/[0.08]"
+              className="min-h-11 rounded-2xl border border-line/10 bg-overlay/[0.04] px-4 py-2 text-sm text-zinc-100 transition hover:bg-overlay/[0.08]"
             >
               {t('preset.exportPresetJson')}
             </button>
@@ -607,7 +607,7 @@ export function PresetCompatPresetEditor({
                   type="button"
                   data-testid="preset-compat-preview-generate"
                   onClick={handleGenerateSurfacePreviews}
-                  className="rounded-2xl border border-line/10 bg-shade/20 px-4 py-2 text-sm text-zinc-100 transition hover:bg-overlay/[0.06]"
+                  className="min-h-11 rounded-2xl border border-line/10 bg-shade/20 px-4 py-2 text-sm text-zinc-100 transition hover:bg-overlay/[0.06]"
                 >
                   {previewGenerationStatus === 'idle' ? t('preset.preview.generate') : previewGenerationStatus === 'generating' ? t('preset.preview.refreshing') : t('preset.preview.refresh')}
                 </button>
@@ -706,7 +706,7 @@ export function PresetCompatPresetEditor({
                       data-testid={`preset-compat-rule-toggle-${firstPromptRule.id}`}
                       checked={firstPromptRule.enabled}
                       onChange={(event) => onUpdatePromptRule(firstPromptRule.id, { enabled: event.target.checked })}
-                      className="h-3.5 w-3.5 rounded border-line/20 bg-transparent"
+                      className="h-6 w-6 rounded border-line/20 bg-transparent lg:h-3.5 lg:w-3.5"
                     />
                     {t('preset.enabled')}
                   </label>
@@ -746,7 +746,7 @@ export function PresetCompatPresetEditor({
                       data-testid={`preset-compat-rule-toggle-${rule.id}`}
                       checked={rule.enabled}
                       onChange={(event) => onUpdatePromptRule(rule.id, { enabled: event.target.checked })}
-                      className="h-3.5 w-3.5 rounded border-line/20 bg-transparent"
+                      className="h-6 w-6 rounded border-line/20 bg-transparent lg:h-3.5 lg:w-3.5"
                     />
                     {t('preset.enabled')}
                   </label>

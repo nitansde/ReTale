@@ -210,7 +210,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
       backdropClassName="z-[65]"
       surfaceTestId="preset-compat-library-modal"
       mobileFullscreen
-      className="max-h-[calc(100vh-1.5rem)] max-w-7xl rounded-[28px] p-4 sm:max-h-[88vh] sm:w-[calc(100%-3rem)] sm:rounded-[32px] sm:p-5"
+      className="max-h-[calc(100dvh-1.5rem)] max-w-7xl rounded-[28px] p-4 sm:max-h-[88dvh] sm:w-[calc(100%-3rem)] sm:rounded-[32px] sm:p-5"
     >
         {statusMessage || resolvedErrorMessage ? (
           <div className="sticky top-0 z-20 mb-4 space-y-2 bg-panel/94 py-2 backdrop-blur-xl">
@@ -276,14 +276,14 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                   type="button"
                   onClick={() => void handleSave()}
                   disabled={saving || presetCompatLibraryLoading}
-                  className="rounded-2xl bg-violet-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60"
+                  className="min-h-11 rounded-2xl bg-violet-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-60"
                 >
                   {saving ? t('preset.saving') : t('preset.save')}
                 </button>
                 <button
                   type="button"
                   onClick={handleExportRegexBundle}
-                  className="rounded-2xl border border-line/10 bg-overlay/[0.04] px-4 py-2 text-sm text-zinc-100 transition hover:bg-overlay/[0.08]"
+                  className="min-h-11 rounded-2xl border border-line/10 bg-overlay/[0.04] px-4 py-2 text-sm text-zinc-100 transition hover:bg-overlay/[0.08]"
                 >
                   {t('preset.exportRegexBundle')}
                 </button>
@@ -376,7 +376,7 @@ export function PresetCompatLibraryModal({ activeSurfaceId = null, activeSelecti
                                 data-testid={`preset-compat-builtin-system-toggle-${surfaceId}`}
                                 checked={rule.enabled}
                                 onChange={(event) => updatePresetCompatBuiltinSystemPrompt(surfaceId, { enabled: event.target.checked })}
-                                className="h-3.5 w-3.5 rounded border-line/20 bg-transparent"
+                                className="h-6 w-6 rounded border-line/20 bg-transparent lg:h-3.5 lg:w-3.5"
                               />
                               {t('preset.enabled')}
                             </label>

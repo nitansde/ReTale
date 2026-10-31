@@ -321,8 +321,8 @@ export function FutureMapOverlay(props: FutureMapOverlayProps) {
       closeDisabled={creating}
       backdropClassName="bg-shade/72"
       titleClassName="sr-only"
-      contentClassName="mt-0 flex min-h-[calc(100vh-2rem)] flex-col sm:min-h-[calc(100vh-3rem)]"
-      className="my-4 min-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-[1680px] rounded-[34px] border-sky-300/20 p-0 shadow-[0_30px_120px_rgb(0_0_0/calc(0.55*var(--shadow-strength)))] sm:my-6 sm:min-h-[calc(100vh-3rem)] sm:w-[calc(100%-3rem)]"
+      contentClassName="mt-0 flex min-h-[calc(100dvh-2rem)] flex-col sm:min-h-[calc(100dvh-3rem)]"
+      className="my-4 min-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-[1680px] rounded-[34px] border-sky-300/20 p-0 shadow-[0_30px_120px_rgb(0_0_0/calc(0.55*var(--shadow-strength)))] sm:my-6 sm:min-h-[calc(100dvh-3rem)] sm:w-[calc(100%-3rem)]"
     >
       <div className="flex flex-1 flex-col" data-testid="future-map-overlay">
             <div className="border-b border-line/8 px-5 py-5 sm:px-7 sm:py-6">
