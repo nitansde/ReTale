@@ -107,3 +107,41 @@ body {
     font-size: 16px;
   }
 }
+
+/* Landscape phones are about 350px tall, so both bars stay thin to leave room for reading. */
+@media (max-width: 1023px) and (max-height: 500px) {
+  .workspace-header {
+    margin-bottom: 0.25rem;
+    padding-block: 0;
+  }
+
+  .workspace-mobile-toolbar {
+    padding-block: 0.125rem;
+  }
+
+  .workspace-mobile-toolbar :is(a, button) {
+    flex-direction: row;
+    gap: 0.375rem;
+    min-height: 2.5rem;
+  }
+
+  .roleplay-frame,
+  .roleplay-composer {
+    padding-block: 0.25rem;
+  }
+
+  .roleplay-composer[data-expanded='false'] > .roleplay-composer-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .roleplay-composer[data-expanded='false'] .roleplay-composer-field {
+    flex: 1;
+  }
+
+  .roleplay-composer[data-expanded='false'] .roleplay-composer-actions {
+    margin-top: 0;
+  }
+}

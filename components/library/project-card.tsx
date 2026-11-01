@@ -4,6 +4,7 @@ import Image from 'next/image'
 import { useState } from 'react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { Ellipsis, LoaderCircle, Pencil, Trash2 } from 'lucide-react'
+import { localizeUpdatedAt } from '@/lib/i18n/messages'
 import { useI18n } from '@/lib/i18n/provider'
 import type { LibraryKnowledgeStatus } from '@/lib/library-knowledge-status'
 import type { LibrarySummary } from '@/store/novel-store-types'
@@ -35,7 +36,7 @@ export function ProjectCard({
   deleting?: boolean
   disabled?: boolean
 }) {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
   const [menuOpen, setMenuOpen] = useState(false)
   const knowledgeStatus = novel.knowledgeStatus ?? 'unknown'
 
@@ -112,7 +113,7 @@ export function ProjectCard({
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-zinc-500">
               <span>{t('library.cardChapterCount', { count: novel.chapterCount })}</span>
               <span>{t('library.cardWordCount', { count: novel.wordCount.toLocaleString() })}</span>
-              <span className="hidden sm:inline">{novel.updatedAt}</span>
+              <span className="hidden sm:inline">{localizeUpdatedAt(novel.updatedAt, locale)}</span>
             </div>
 
             {opening ? (

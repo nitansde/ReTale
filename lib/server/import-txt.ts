@@ -1,4 +1,5 @@
-import { countChineseFriendlyWords, plainTextLinesToHtml } from '@/lib/utils'
+import { getMessage } from '@/lib/i18n/messages'
+import { countChineseFriendlyWords, formatNowLabel, plainTextLinesToHtml } from '@/lib/utils'
 import type { Chapter, PersistedNovelState } from '@/lib/types'
 
 const CHAPTER_NUMBER = '[0-9一二三四五六七八九十百千零两]+'
@@ -27,7 +28,7 @@ function buildImportedChapter(params: {
     originalContent: plainTextLinesToHtml(cleanText),
     status: 'draft' as const,
     wordCount: countChineseFriendlyWords(cleanText),
-    updatedAt: '刚刚 · 导入',
+    updatedAt: getMessage('zh', 'store.importUpdatedAt', { time: formatNowLabel() }),
     trajectory: ['从 TXT 导入'],
   }
 }

@@ -70,7 +70,7 @@ export function WorkspaceHeader({
 
   return (
     <>
-    <header className="sticky top-0 z-30 mb-2 shrink-0 border-b border-line/10 bg-panel px-4 py-2 shadow-[0_14px_40px_rgb(0_0_0/calc(0.3*var(--shadow-strength)))] sm:mb-4 sm:rounded-[24px] sm:border sm:py-3 sm:shadow-[0_20px_70px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))] lg:rounded-[28px] lg:bg-panel/92 lg:backdrop-blur-2xl">
+    <header className="workspace-header sticky top-0 z-30 mb-2 shrink-0 border-b border-line/10 bg-panel px-4 py-2 shadow-[0_14px_40px_rgb(0_0_0/calc(0.3*var(--shadow-strength)))] sm:mb-4 sm:rounded-[24px] sm:border sm:py-3 sm:shadow-[0_20px_70px_rgb(0_0_0/calc(0.35*var(--shadow-strength)))] lg:rounded-[28px] lg:bg-panel/92 lg:backdrop-blur-2xl">
       <div className="grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-1 lg:hidden" data-testid="workspace-mobile-header">
         <button
           type="button"
@@ -175,7 +175,7 @@ export function WorkspaceHeader({
       </DialogSurface>
     </header>
     {!hideMobileToolbar ? (
-      <nav aria-label={t('workspace.mobile.navigation')} data-testid="workspace-mobile-toolbar" className="fixed inset-x-0 bottom-0 z-30 border-t border-line/8 bg-panel px-3 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:hidden">
+      <nav aria-label={t('workspace.mobile.navigation')} data-testid="workspace-mobile-toolbar" className="workspace-mobile-toolbar fixed inset-x-0 bottom-0 z-30 border-t border-line/8 bg-panel px-3 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:hidden">
         {mobileSelectionActions || <div className="flex items-center justify-around gap-1">
           <Link href="/library" onNavigate={handleBackNavigation} aria-busy={backPending} aria-label={t('workspace.header.backToLibrary')} className="flex min-h-12 min-w-14 flex-1 flex-col items-center justify-center gap-1 rounded-xl text-xs text-zinc-300 hover:bg-overlay/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70">
             <House className="h-4 w-4" aria-hidden="true" />{t('workspace.header.home')}

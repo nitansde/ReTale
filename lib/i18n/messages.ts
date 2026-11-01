@@ -3064,3 +3064,29 @@ export function getMessage(locale: Locale, key: TranslationKey, values?: Transla
 export function tm(key: TranslationKey, values?: TranslationValues) {
   return getMessage(getClientLocale(), key, values)
 }
+
+const UPDATED_AT_KEYS = [
+  'store.importUpdatedAt',
+  'store.editedUpdatedAt',
+  'store.appliedRewriteUpdatedAt',
+  'store.insertedCandidateUpdatedAt',
+  'store.branchUpdatedAt',
+  'store.newChapterUpdatedAt',
+] as const satisfies readonly TranslationKey[]
+
+// Imports used to store this instead of a time, so the label can be any age.
+const LEGACY_IMPORT_TIME = '刚刚'
+
+/** Chapters store this label as text in the language active at save time, so translate it for display. */
+export function localizeUpdatedAt(label: string, locale: Locale) {
+  for (const key of UPDATED_AT_KEYS) {
+    for (const dictionary of Object.values(dictionaries)) {
+      const suffix = dictionary[key].replace('{{time}}', '')
+      if (!label.endsWith(suffix)) continue
+      const time = label.slice(0, -suffix.length)
+      const localized = getMessage(locale, key, { time })
+      return time === LEGACY_IMPORT_TIME ? localized.slice(`${time} · `.length) : localized
+    }
+  }
+  return label
+}

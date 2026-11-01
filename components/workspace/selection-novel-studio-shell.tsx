@@ -411,7 +411,7 @@ export function SelectionNovelStudio() {
 
   return (
     <main className={cn('bg-[radial-gradient(circle_at_top,_var(--page-glow),_transparent_30%),var(--background)] text-zinc-100', isRoleplaySession ? 'h-dvh overflow-hidden' : 'min-h-screen')}>
-      <div className={cn('mx-auto flex max-w-[1720px] flex-col px-0 pt-0 sm:px-5 sm:pt-3 lg:px-6', isRoleplaySession ? 'h-full min-h-0 sm:pb-3 lg:pb-4' : 'min-h-screen pb-[calc(5rem+env(safe-area-inset-bottom))] lg:pb-10')}>
+      <div className={cn('mx-auto flex max-w-[1720px] flex-col px-0 pt-0 sm:px-5 sm:pt-3 lg:px-6', isRoleplaySession ? 'roleplay-frame h-full min-h-0 sm:pb-3 lg:pb-4' : 'min-h-screen pb-[calc(5rem+env(safe-area-inset-bottom))] lg:pb-10')}>
         {searchNovelId === currentNovelId ? (
           <BookSearchDialog key={currentNovelId} novelId={currentNovelId}
             onClose={() => setSearchNovelId(null)}
