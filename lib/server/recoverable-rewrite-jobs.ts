@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { DatabaseAccess } from '@/lib/server/database-access'
 import { safeParseJsonObject } from '@/lib/server/json-parse'
 import { execute, queryAll, queryOne } from '@/lib/server/database-access'
+import { updateKnowledgeJobRow } from '@/lib/server/knowledge-job-update'
 import {
   createTaskWatchdogAttemptId,
   getTaskWatchdogAttemptId,
@@ -211,23 +212,13 @@ export function updateRecoverableRewriteJob(jobId: string, params: {
     ? mergeTaskWatchdogState(mergedPayload, { attemptId: expectedAttemptId })
     : mergedPayload
 
-  const querySuffix = expectedAttemptId
-    ? ` AND json_extract(COALESCE(payloadJson, '{}'), '$.taskWatchdog.attemptId') = ?`
-    : ''
-
-  return db.execute(
-    `UPDATE KnowledgeJob
-      SET status = ?, progress = ?, currentStep = ?, payloadJson = ?, errorMessage = ?, updatedAt = CURRENT_TIMESTAMP
-      WHERE id = ? AND jobType = ?${querySuffix}`,
-    params.status,
-    params.progress,
-    params.currentStep,
-    JSON.stringify(nextPayload),
-    params.errorMessage ?? null,
-    jobId,
-    RECOVERABLE_REWRITE_JOB_TYPE,
-    ...(expectedAttemptId ? [expectedAttemptId] : []),
-  )
+  return updateKnowledgeJobRow(db, jobId, {
+    status: params.status,
+    progress: params.progress,
+    currentStep: params.currentStep,
+    payloadJson: JSON.stringify(nextPayload),
+    errorMessage: params.errorMessage ?? null,
+  }, { jobType: RECOVERABLE_REWRITE_JOB_TYPE, attemptId: expectedAttemptId })
 }
 
 export function claimRecoverableRewriteJob(jobId: string, params: { progress: number; currentStep: string; db?: RecoverableRewriteDb }) {
@@ -246,16 +237,13 @@ export function claimRecoverableRewriteJob(jobId: string, params: { progress: nu
     claimedAt: new Date().toISOString(),
     claimedBy: 'rewrite_runner',
   })
-  const result = db.execute(
-    `UPDATE KnowledgeJob
-       SET status = 'running', progress = ?, currentStep = ?, payloadJson = ?, errorMessage = NULL, updatedAt = CURRENT_TIMESTAMP
-       WHERE id = ? AND jobType = ? AND status = 'queued'`,
-    params.progress,
-    params.currentStep,
-    JSON.stringify(claimPayload),
-    jobId,
-    RECOVERABLE_REWRITE_JOB_TYPE,
-  )
+  const result = updateKnowledgeJobRow(db, jobId, {
+    status: 'running',
+    progress: params.progress,
+    currentStep: params.currentStep,
+    payloadJson: JSON.stringify(claimPayload),
+    errorMessage: null,
+  }, { jobType: RECOVERABLE_REWRITE_JOB_TYPE, statuses: ['queued'] })
   if (result.changes !== 1) {
     const nextRow = readRecoverableRewriteJob(jobId, db)
     return { claimed: false as const, status: nextRow?.status ?? null, attemptId: null }

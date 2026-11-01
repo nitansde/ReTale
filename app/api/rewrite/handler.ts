@@ -4,6 +4,7 @@ import { progressMessage } from '@/lib/i18n/progress-message'
 import { after, NextResponse } from 'next/server'
 import { apiRequestErrorResponse, MAX_GENERATION_JSON_BODY_BYTES, noStoreJson, readJsonObject } from '@/lib/server/api-route'
 import { createNovelDatabaseAccess, runWithNovelDatabaseAccess } from '@/lib/server/database-access'
+import { updateKnowledgeJobRow } from '@/lib/server/knowledge-job-update'
 import { applyPresetCompatCreativeRuntime } from '@/lib/preset-compat/apply-runtime'
 import {
   deserializePresetCompatResponseMetadata,
@@ -683,13 +684,12 @@ async function runRecoverableRewriteJobInNovel(jobId: string, novelId: string) {
 
   const payload = normalizeRecoverableRewriteJobPayload(row.payloadJson)
   if (!payload) {
-    db.execute(
-      `UPDATE KnowledgeJob SET status = 'failed', progress = 0, currentStep = ?, errorMessage = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND jobType = ?`,
-      progressMessage('progress.rewriteInvalid'),
-      'Recoverable rewrite job payload is invalid',
-      jobId,
-      RECOVERABLE_REWRITE_JOB_TYPE,
-    )
+    updateKnowledgeJobRow(db, jobId, {
+      status: 'failed',
+      progress: 0,
+      currentStep: progressMessage('progress.rewriteInvalid'),
+      errorMessage: 'Recoverable rewrite job payload is invalid',
+    }, { jobType: RECOVERABLE_REWRITE_JOB_TYPE })
     return
   }
 

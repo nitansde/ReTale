@@ -3,6 +3,7 @@ import type { KnowledgeJobType } from '@/lib/server/knowledge-rebuild'
 import type { DatabaseAccess } from '@/lib/server/database-access'
 import { RECOVERABLE_REWRITE_JOB_TYPE } from '@/lib/server/recoverable-rewrite-jobs'
 import { execute, queryAll, queryOne } from '@/lib/server/database-access'
+import { updateKnowledgeJobRow } from '@/lib/server/knowledge-job-update'
 import {
   createTaskWatchdogAttemptId,
   mergeTaskWatchdogState,
@@ -215,18 +216,12 @@ export function reconcileKnowledgeJobWatchdog(params: ReconcileKnowledgeJobWatch
       failureReason: 'timeout_no_progress',
     })
 
-    const updateResult = db.execute(
-      `UPDATE KnowledgeJob
-       SET status = ?, currentStep = ?, errorMessage = ?, payloadJson = ?, updatedAt = CURRENT_TIMESTAMP
-       WHERE id = ? AND status = ? AND updatedAt = ?`,
-      nextStatus,
+    const updateResult = updateKnowledgeJobRow(db, currentRow.id, {
+      status: nextStatus,
       currentStep,
       errorMessage,
-      JSON.stringify(nextPayload),
-      currentRow.id,
-      currentRow.status,
-      currentRow.updatedAt,
-    )
+      payloadJson: JSON.stringify(nextPayload),
+    }, { statuses: [currentRow.status], updatedAt: currentRow.updatedAt })
 
     if (updateResult.changes !== 1) {
       continue

@@ -45,6 +45,7 @@ import { generateCandidatePromotionSummary } from '@/lib/server/candidate-promot
 import { classifyHanlpBootstrapCharacters } from '@/lib/server/character-tier'
 import { abortKnowledgeRebuildUntilIdle, waitForKnowledgeJobCompletionStatus } from '@/lib/server/knowledge-job-status'
 import { createWorkspaceKnowledgeSync } from '@/lib/server/knowledge-workspace-sync'
+import { updateKnowledgeJobRow } from '@/lib/server/knowledge-job-update'
 import { reconcileKnowledgeJobWatchdog } from '@/lib/server/knowledge-job-watchdog'
 import {
   createTaskWatchdogAttemptId,
@@ -534,24 +535,15 @@ function updateKnowledgeJob(
     }
   }
 
-  const entries = Object.entries(fields).flatMap<[string, SqlParam]>(([key, value]) => {
-    if (value === undefined) return []
-    if (key === 'payload') return nextPayloadJson === undefined ? [] : [['payloadJson', nextPayloadJson]]
-    return [[key, value as SqlParam]]
-  })
-  if (fields.payload === undefined && nextPayloadJson !== undefined) {
-    entries.push(['payloadJson', nextPayloadJson])
+  const columns = {
+    status: fields.status,
+    currentStep: fields.currentStep,
+    progress: fields.progress,
+    errorMessage: fields.errorMessage,
+    payloadJson: nextPayloadJson,
   }
-  if (!entries.length) return
-  const attemptGuardSql = expectedAttemptId
-    ? ` AND json_extract(COALESCE(payloadJson, '{}'), '$.taskWatchdog.attemptId') = ?`
-    : ''
-  return execute(
-    `UPDATE KnowledgeJob SET ${entries.map(([key]) => `${key} = ?`).join(', ')}, updatedAt = CURRENT_TIMESTAMP WHERE id = ?${attemptGuardSql}`,
-    ...entries.map(([, value]) => value ?? null),
-    jobId,
-    ...(expectedAttemptId ? [expectedAttemptId] : [])
-  )
+  if (Object.values(columns).every((value) => value === undefined)) return
+  return updateKnowledgeJobRow({ execute }, jobId, columns, { attemptId: expectedAttemptId })
 }
 
 async function runKnowledgeJobWithAttempt<T>(jobId: string, attemptId: string, callback: () => Promise<T>) {
@@ -1229,41 +1221,23 @@ function setWriteQueueInKnowledgeJob(jobId: string, chapters: Array<{ chapterId:
     extractedChapters,
   }
 
-  updateKnowledgeJob(jobId, {
-    progress: getKnowledgeStructuredWorkProgress(nextState),
-    payload: {
-      ...state.payload,
-      phase: state.phase,
-      pendingChapterIds: state.pendingChapterIds,
-      chapterWeightsById: state.chapterWeightsById,
-      totalChapterWeight: state.totalChapterWeight,
-      processedChapterWeight: state.processedChapterWeight,
-      extractedChapters,
-      currentBatchChapters: extractedChapters,
-    },
-  })
+  writeKnowledgeRebuildJobState(
+    jobId,
+    nextState,
+    { currentBatchChapters: extractedChapters },
+    { progress: getKnowledgeStructuredWorkProgress(nextState) },
+  )
 
   return nextState
 }
 
 function resetCurrentBatchAndReturnToExtract(jobId: string, state: KnowledgeRebuildJobState) {
-  updateKnowledgeJob(jobId, {
-    payload: {
-      ...state.payload,
-      phase: 'extract',
-      pendingChapterIds: state.pendingChapterIds,
-      chapterWeightsById: state.chapterWeightsById,
-      totalChapterWeight: state.totalChapterWeight,
-      processedChapterWeight: state.processedChapterWeight,
-      extractedChapters: [],
-      currentBatchChapters: [],
-      orderedAliasDiscoveries: [],
-      appliedAliasDiscoveryCount: 0,
-      stageStartedAtByKey: {
-        ...(state.payload.stageStartedAtByKey ?? {}),
-        extract: (state.payload.stageStartedAtByKey ?? {}).extract ?? new Date().toISOString(),
-      },
-    },
+  writeKnowledgeRebuildJobState(jobId, state, {
+    phase: 'extract',
+    extractedChapters: [],
+    currentBatchChapters: [],
+    orderedAliasDiscoveries: [],
+    appliedAliasDiscoveryCount: 0,
   })
 }
 
@@ -1276,13 +1250,7 @@ function getCurrentBatchChaptersForProcessing(state: KnowledgeRebuildJobState, w
     .sort((left, right) => left.chapterNo - right.chapterNo)
 }
 
-function getKnowledgeRebuildJobState(jobId: string): KnowledgeRebuildJobState | null {
-  const row = queryOne<{ payloadJson: string | null }>('SELECT payloadJson FROM KnowledgeJob WHERE id = ?', jobId)
-  const payload = parseKnowledgeRebuildJobPayload(row?.payloadJson ?? null)
-  if (!payload) {
-    return null
-  }
-
+function toKnowledgeRebuildJobState(payload: KnowledgeRebuildJobPayload): KnowledgeRebuildJobState {
   return {
     payload,
     phase: payload.phase ?? 'extract',
@@ -1292,6 +1260,34 @@ function getKnowledgeRebuildJobState(jobId: string): KnowledgeRebuildJobState | 
     processedChapterWeight: typeof payload.processedChapterWeight === 'number' ? Math.max(0, payload.processedChapterWeight) : 0,
     extractedChapters: Array.isArray(payload.extractedChapters) ? payload.extractedChapters : [],
   }
+}
+
+function getKnowledgeRebuildJobState(jobId: string): KnowledgeRebuildJobState | null {
+  const row = queryOne<{ payloadJson: string | null }>('SELECT payloadJson FROM KnowledgeJob WHERE id = ?', jobId)
+  const payload = parseKnowledgeRebuildJobPayload(row?.payloadJson ?? null)
+  return payload ? toKnowledgeRebuildJobState(payload) : null
+}
+
+function writeKnowledgeRebuildJobState(
+  jobId: string,
+  state: KnowledgeRebuildJobState,
+  payload: Partial<KnowledgeRebuildJobPayload> = {},
+  runtime: { currentStep?: string; progress?: number } = {},
+) {
+  updateKnowledgeJob(jobId, {
+    ...runtime,
+    payload: {
+      ...state.payload,
+      phase: state.phase,
+      pendingChapterIds: state.pendingChapterIds,
+      chapterWeightsById: state.chapterWeightsById,
+      totalChapterWeight: state.totalChapterWeight,
+      processedChapterWeight: state.processedChapterWeight,
+      extractedChapters: state.extractedChapters,
+      currentBatchChapters: state.payload.currentBatchChapters ?? [],
+      ...payload,
+    },
+  })
 }
 
 function isKnowledgeRebuildJobStateInitialized(state: KnowledgeRebuildJobState | null) {
@@ -1326,10 +1322,6 @@ function initializeKnowledgeRebuildJobState(jobId: string, payload: KnowledgeReb
       extractedChapters: payload.extractedChapters ?? [],
       currentBatchChapters: payload.currentBatchChapters ?? [],
       embeddingSettingsSnapshot: getOrCreateEmbeddingSettingsSnapshot(payload),
-      stageStartedAtByKey: {
-        ...(payload.stageStartedAtByKey ?? {}),
-        [payload.phase ?? 'extract']: (payload.stageStartedAtByKey ?? {})[payload.phase ?? 'extract'] ?? new Date().toISOString(),
-      },
     },
   })
 }
@@ -1360,42 +1352,9 @@ export function updateKnowledgeRebuildJobTelemetry(jobId: string, telemetry: Kno
   const basePayload: KnowledgeRebuildJobPayload | null = parsedPayload ?? (typeof row?.branchId === 'string' ? { branchId: row.branchId } : null)
   if (!basePayload) return null
 
-  const mergedPayload = mergeKnowledgeRebuildTelemetryPayloadForTesting(basePayload, telemetry)
-  const pendingChapterIds = Array.isArray(basePayload.pendingChapterIds) ? basePayload.pendingChapterIds : []
-  const chapterWeightsById = basePayload.chapterWeightsById ?? {}
-  const extractedChapters = Array.isArray(basePayload.extractedChapters) ? basePayload.extractedChapters : []
-  const phase = basePayload.phase ?? 'extract'
-  const totalChapterWeight = typeof basePayload.totalChapterWeight === 'number'
-    ? Math.max(0, basePayload.totalChapterWeight)
-    : 0
-  const processedChapterWeight = typeof basePayload.processedChapterWeight === 'number'
-    ? Math.max(0, basePayload.processedChapterWeight)
-    : 0
-
-  updateKnowledgeJob(jobId, {
-    payload: {
-      ...mergedPayload,
-      phase,
-      currentChapterId: basePayload.currentChapterId ?? null,
-      pendingChapterIds,
-      chapterWeightsById,
-      totalChapterWeight,
-      processedChapterWeight,
-      extractedChapters,
-      currentBatchChapters: basePayload.currentBatchChapters ?? [],
-      totalChapterCount: basePayload.totalChapterCount ?? (pendingChapterIds.length + extractedChapters.length),
-    },
-  })
-
-  return {
-    phase,
-    pendingChapterIds,
-    chapterWeightsById,
-    totalChapterWeight,
-    processedChapterWeight,
-    extractedChapters,
-    payload: mergedPayload,
-  }
+  const state = toKnowledgeRebuildJobState(mergeKnowledgeRebuildTelemetryPayloadForTesting(basePayload, telemetry))
+  writeKnowledgeRebuildJobState(jobId, state, { currentChapterId: state.payload.currentChapterId ?? null })
+  return state
 }
 
 function setKnowledgeRebuildJobIndexProgress(jobId: string, indexProgress: KnowledgeRebuildIndexProgress) {
@@ -1405,27 +1364,16 @@ function setKnowledgeRebuildJobIndexProgress(jobId: string, indexProgress: Knowl
   }
 
   const nextProgress = getIndexProgressValue(indexProgress)
-  updateKnowledgeJob(jobId, {
-    currentStep: getIndexCurrentStep(indexProgress),
-    progress: 0.96 + nextProgress * 0.04,
-    payload: {
-      ...state.payload,
-      phase: state.phase,
+  writeKnowledgeRebuildJobState(
+    jobId,
+    state,
+    {
       currentChapterId: state.payload.currentChapterId ?? null,
-      pendingChapterIds: state.pendingChapterIds,
-      chapterWeightsById: state.chapterWeightsById,
-      totalChapterWeight: state.totalChapterWeight,
-      processedChapterWeight: state.processedChapterWeight,
-      extractedChapters: state.extractedChapters,
-      currentBatchChapters: state.payload.currentBatchChapters ?? [],
-      extractionSettings: state.payload.extractionSettings,
-      rawTextEmbeddingProgress: state.payload.rawTextEmbeddingProgress,
-      rawTextEmbeddingCacheHitRate: state.payload.rawTextEmbeddingCacheHitRate,
-      stageTimingsMs: state.payload.stageTimingsMs,
       embeddingSettingsSnapshot: getOrCreateEmbeddingSettingsSnapshot(state.payload),
       indexProgress,
     },
-  })
+    { currentStep: getIndexCurrentStep(indexProgress), progress: 0.96 + nextProgress * 0.04 },
+  )
 
   return {
     ...state,
@@ -1472,19 +1420,7 @@ function removePendingChaptersFromKnowledgeJob(jobId: string, chapterIds: string
     extractedChapters,
   }
 
-  updateKnowledgeJob(jobId, {
-    progress: getKnowledgeStructuredWorkProgress(nextState),
-    payload: {
-      ...state.payload,
-      phase: nextState.phase,
-      pendingChapterIds: nextState.pendingChapterIds,
-      chapterWeightsById: nextState.chapterWeightsById,
-      totalChapterWeight: nextState.totalChapterWeight,
-      processedChapterWeight: nextState.processedChapterWeight,
-      extractedChapters: nextState.extractedChapters,
-      currentBatchChapters: state.payload.currentBatchChapters ?? [],
-    },
-  })
+  writeKnowledgeRebuildJobState(jobId, nextState, {}, { progress: getKnowledgeStructuredWorkProgress(nextState) })
 
   return nextState
 }
@@ -1523,20 +1459,7 @@ function completePendingChapterInKnowledgeJob(
     extractedChapters,
   }
 
-  updateKnowledgeJob(jobId, {
-    progress: getKnowledgeStructuredWorkProgress(nextState),
-    payload: {
-      ...state.payload,
-      currentChapterId: null,
-      phase: state.phase,
-      pendingChapterIds: nextState.pendingChapterIds,
-      chapterWeightsById: nextState.chapterWeightsById,
-      totalChapterWeight: nextState.totalChapterWeight,
-      processedChapterWeight: nextState.processedChapterWeight,
-      extractedChapters: nextState.extractedChapters,
-      currentBatchChapters: state.payload.currentBatchChapters ?? [],
-    },
-  })
+  writeKnowledgeRebuildJobState(jobId, nextState, { currentChapterId: null }, { progress: getKnowledgeStructuredWorkProgress(nextState) })
 
   return nextState
 }
@@ -1558,25 +1481,7 @@ function setKnowledgeRebuildJobPhase(
     phase,
   }
 
-  updateKnowledgeJob(jobId, {
-    currentStep: runtime?.currentStep,
-    progress: runtime?.progress,
-    payload: {
-      ...state.payload,
-      phase,
-      pendingChapterIds: state.pendingChapterIds,
-      chapterWeightsById: state.chapterWeightsById,
-      totalChapterWeight: state.totalChapterWeight,
-      processedChapterWeight: state.processedChapterWeight,
-      extractedChapters: state.extractedChapters,
-      currentBatchChapters: state.payload.currentBatchChapters ?? [],
-      totalChapterCount: state.payload.totalChapterCount ?? (state.pendingChapterIds.length + state.extractedChapters.length),
-      stageStartedAtByKey: {
-        ...(state.payload.stageStartedAtByKey ?? {}),
-        [phase]: (state.payload.stageStartedAtByKey ?? {})[phase] ?? new Date().toISOString(),
-      },
-    },
-  })
+  writeKnowledgeRebuildJobState(jobId, nextState, {}, runtime)
 
   return nextState
 }
@@ -1585,21 +1490,11 @@ function markInlineKnowledgeCleanupCompleted(jobId: string) {
   const state = getKnowledgeRebuildJobState(jobId)
   if (!state) return null
 
-  updateKnowledgeJob(jobId, {
-    payload: {
-      ...state.payload,
-      phase: state.phase,
-      inlineCleanupCompleted: true,
-      pendingChapterIds: state.pendingChapterIds,
-      chapterWeightsById: state.chapterWeightsById,
-      totalChapterWeight: state.totalChapterWeight,
-      processedChapterWeight: state.processedChapterWeight,
-      extractedChapters: state.extractedChapters,
-      currentBatchChapters: state.payload.currentBatchChapters ?? [],
-      stageStartedAtByKey: {
-        ...(state.payload.stageStartedAtByKey ?? {}),
-        cleanup: (state.payload.stageStartedAtByKey ?? {}).cleanup ?? new Date().toISOString(),
-      },
+  writeKnowledgeRebuildJobState(jobId, state, {
+    inlineCleanupCompleted: true,
+    stageStartedAtByKey: {
+      ...(state.payload.stageStartedAtByKey ?? {}),
+      cleanup: (state.payload.stageStartedAtByKey ?? {}).cleanup ?? new Date().toISOString(),
     },
   })
 
@@ -1620,19 +1515,12 @@ function removeExtractedChapterFromKnowledgeJob(jobId: string, chapterId: string
     extractedChapters,
   }
 
-  updateKnowledgeJob(jobId, {
-    progress: getKnowledgeStructuredWorkProgress(nextState),
-    payload: {
-      ...state.payload,
-      phase: state.phase,
-      pendingChapterIds: state.pendingChapterIds,
-      chapterWeightsById: state.chapterWeightsById,
-      totalChapterWeight: state.totalChapterWeight,
-      processedChapterWeight: state.processedChapterWeight,
-      extractedChapters,
-      currentBatchChapters: extractedChapters.length ? state.payload.currentBatchChapters ?? [] : [],
-    },
-  })
+  writeKnowledgeRebuildJobState(
+    jobId,
+    nextState,
+    { currentBatchChapters: extractedChapters.length ? state.payload.currentBatchChapters ?? [] : [] },
+    { progress: getKnowledgeStructuredWorkProgress(nextState) },
+  )
 
   return nextState
 }
@@ -2631,18 +2519,7 @@ function updateHanlpBootstrapState(jobId: string, updater: (state: KnowledgeRebu
   if (!state) return null
 
   const nextHanlpBootstrap = updater(state.payload.hanlpBootstrap ?? createEmptyHanlpBootstrapState(state.payload.totalChapterCount ?? 0))
-  updateKnowledgeJob(jobId, {
-    payload: {
-      ...state.payload,
-      phase: state.phase,
-      pendingChapterIds: state.pendingChapterIds,
-      chapterWeightsById: state.chapterWeightsById,
-      totalChapterWeight: state.totalChapterWeight,
-      processedChapterWeight: state.processedChapterWeight,
-      extractedChapters: state.extractedChapters,
-      hanlpBootstrap: nextHanlpBootstrap,
-    },
-  })
+  writeKnowledgeRebuildJobState(jobId, state, { hanlpBootstrap: nextHanlpBootstrap })
 
   return {
     ...state,
@@ -3177,22 +3054,14 @@ function setBatchAliasSyncPlanInKnowledgeJob(params: {
     chapterNo: chapter.chapterNo,
   }))
 
-  updateKnowledgeJob(params.jobId, {
-    payload: {
-      ...state.payload,
-      phase: state.phase,
-      pendingChapterIds: state.pendingChapterIds,
-      chapterWeightsById: state.chapterWeightsById,
-      totalChapterWeight: state.totalChapterWeight,
-      processedChapterWeight: state.processedChapterWeight,
-      extractedChapters,
-      currentBatchChapters: extractedChapters,
-      orderedAliasDiscoveries: params.orderedAliasDiscoveries,
-      appliedAliasDiscoveryCount: Math.min(
-        Math.max(0, state.payload.appliedAliasDiscoveryCount ?? 0),
-        params.orderedAliasDiscoveries.length,
-      ),
-    },
+  writeKnowledgeRebuildJobState(params.jobId, state, {
+    extractedChapters,
+    currentBatchChapters: extractedChapters,
+    orderedAliasDiscoveries: params.orderedAliasDiscoveries,
+    appliedAliasDiscoveryCount: Math.min(
+      Math.max(0, state.payload.appliedAliasDiscoveryCount ?? 0),
+      params.orderedAliasDiscoveries.length,
+    ),
   })
 
   return getKnowledgeRebuildJobState(params.jobId)
@@ -3280,18 +3149,9 @@ function applyOrderedBatchAliasDiscoveries(params: {
     })
   }
 
-  updateKnowledgeJob(params.jobId, {
-    payload: {
-      ...state.payload,
-      phase: state.phase,
-      pendingChapterIds: state.pendingChapterIds,
-      chapterWeightsById: state.chapterWeightsById,
-      totalChapterWeight: state.totalChapterWeight,
-      processedChapterWeight: state.processedChapterWeight,
-      extractedChapters: state.extractedChapters,
-      orderedAliasDiscoveries,
-      appliedAliasDiscoveryCount: orderedAliasDiscoveries.length,
-    },
+  writeKnowledgeRebuildJobState(params.jobId, state, {
+    orderedAliasDiscoveries,
+    appliedAliasDiscoveryCount: orderedAliasDiscoveries.length,
   })
 
   return getKnowledgeRebuildJobState(params.jobId)

@@ -1,6 +1,7 @@
 import type { KnowledgeJobType } from '@/lib/server/knowledge-rebuild'
 import type { DatabaseAccess } from '@/lib/server/database-access'
 import { reconcileKnowledgeJobWatchdog } from '@/lib/server/knowledge-job-watchdog'
+import { updateKnowledgeJobRow } from '@/lib/server/knowledge-job-update'
 import { getMainBranchId } from '@/lib/server/knowledge-store'
 import { scheduleKnowledgeWorkerProcess } from '@/lib/server/knowledge-worker-scheduler'
 import { abortRecoverableRewriteJob, RECOVERABLE_REWRITE_JOB_TYPE } from '@/lib/server/recoverable-rewrite-jobs'
@@ -66,16 +67,13 @@ function persistAbortedBackgroundTask(jobId: string, db: BackgroundTaskDb = defa
     lastAction: 'aborted',
     lastActionAt: new Date().toISOString(),
   })
-  const result = db.execute(
-    `UPDATE KnowledgeJob
-     SET status = 'aborted', progress = 0, currentStep = ?, errorMessage = ?, payloadJson = ?, updatedAt = CURRENT_TIMESTAMP
-     WHERE id = ? AND status IN (?, ?, ?)`,
-    '已中止',
-    '已中止',
-    JSON.stringify(payload),
-    jobId,
-    ...ACTIVE_BACKGROUND_TASK_STATUSES,
-  )
+  const result = updateKnowledgeJobRow(db, jobId, {
+    status: 'aborted',
+    progress: 0,
+    currentStep: '已中止',
+    errorMessage: '已中止',
+    payloadJson: JSON.stringify(payload),
+  }, { statuses: ACTIVE_BACKGROUND_TASK_STATUSES })
   return result.changes === 1
 }
 
