@@ -4,12 +4,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { LoaderCircle, RefreshCw, Sparkles, Trash2, X } from 'lucide-react'
 import { DialogSurface } from '@/components/ui/DialogSurface'
 import { Notice } from '@/components/ui/Notice'
+import { useWritingSkillJob } from '@/components/writing-skills/use-writing-skill-job'
 import { useI18n } from '@/lib/i18n/provider'
-import type {
-  WritingSkillCard,
-  WritingSkillCardDetail,
-  WritingSkillDistillationJob,
-} from '@/lib/writing-skill-types'
+import type { WritingSkillCard, WritingSkillCardDetail } from '@/lib/writing-skill-types'
 import {
   DEFAULT_WRITING_SKILL_CONTEXT_WINDOW,
   DEFAULT_WRITING_SKILL_TOTAL_BUDGET,
@@ -17,14 +14,6 @@ import {
   type WritingSkillContextWindow,
   type WritingSkillTotalBudget,
 } from '@/lib/writing-skill-defaults'
-
-type AgentState =
-  | { kind: 'ready' }
-  | { kind: 'running'; job: WritingSkillDistillationJob }
-  | { kind: 'result'; card: WritingSkillCardDetail }
-  | { kind: 'error'; message: string }
-
-const TERMINAL_JOB_STATUSES = new Set(['COMPLETED', 'FAILED', 'INSUFFICIENT_EVIDENCE', 'CANCELLED'])
 
 async function fetchLibraryWritingSkillCards(libraryId: string) {
   const response = await fetch(`/api/material-libraries/${encodeURIComponent(libraryId)}/writing-skills`, { cache: 'no-store' })
@@ -44,33 +33,36 @@ export function WritingSkillDistillationPanel({
 }) {
   const { t } = useI18n()
   const [instruction, setInstruction] = useState('')
-  const [agentState, setAgentState] = useState<AgentState>({ kind: 'ready' })
   const [cards, setCards] = useState<WritingSkillCard[]>([])
   const [cardsLoading, setCardsLoading] = useState(true)
   const [refineInstruction, setRefineInstruction] = useState('')
   const [scanContextWindow, setScanContextWindow] = useState<WritingSkillContextWindow>(DEFAULT_WRITING_SKILL_CONTEXT_WINDOW)
   const [scanTotalBudget, setScanTotalBudget] = useState<WritingSkillTotalBudget>(DEFAULT_WRITING_SKILL_TOTAL_BUDGET)
   const [saving, setSaving] = useState(false)
-  const pollingJobIdRef = useRef<string | null>(null)
   const instructionInputRef = useRef<HTMLInputElement>(null)
 
-  const loadCardDetail = useCallback(async (cardId: string) => {
-    const response = await fetch(`/api/writing-skills/${encodeURIComponent(cardId)}`, { cache: 'no-store' })
-    const data = await response.json() as { ok?: boolean; card?: WritingSkillCardDetail; error?: string }
-    if (!response.ok || !data.ok || !data.card) throw new Error(data.error || t('writingSkill.loadFailed'))
-    return data.card
-  }, [t])
+  const refreshCards = useCallback(async () => {
+    if (library) setCards(await fetchLibraryWritingSkillCards(library.id))
+  }, [library])
+
+  const { jobState: agentState, setJobState: setAgentState, loadCardDetail, startJob, cancelJob } = useWritingSkillJob({
+    loadCards: refreshCards,
+    pendingJob: {
+      libraryId: library?.id ?? '',
+      modelConfigId: 'knowledgeExtraction',
+      userInstruction: instruction,
+    },
+  })
 
   const loadCards = useCallback(async () => {
-    if (!library) return
     try {
-      setCards(await fetchLibraryWritingSkillCards(library.id))
+      await refreshCards()
     } catch (error) {
       setAgentState({ kind: 'error', message: error instanceof Error ? error.message : t('writingSkill.loadFailed') })
     } finally {
       setCardsLoading(false)
     }
-  }, [library, t])
+  }, [refreshCards, setAgentState, t])
 
   useEffect(() => {
     if (!open || !library) return
@@ -87,78 +79,7 @@ export function WritingSkillDistillationPanel({
     return () => {
       cancelled = true
     }
-  }, [open, library, t])
-
-  const pollJob = useCallback(async (jobId: string) => {
-    pollingJobIdRef.current = jobId
-    while (pollingJobIdRef.current === jobId) {
-      const response = await fetch(`/api/writing-skill-jobs/${encodeURIComponent(jobId)}`, { cache: 'no-store' })
-      const data = await response.json() as { ok?: boolean; job?: WritingSkillDistillationJob; error?: string }
-      if (!response.ok || !data.ok || !data.job) throw new Error(data.error || t('writingSkill.jobFailed'))
-      const job = data.job
-      if (pollingJobIdRef.current !== jobId) return
-      setAgentState({ kind: 'running', job })
-      if (TERMINAL_JOB_STATUSES.has(job.status)) {
-        pollingJobIdRef.current = null
-        if (job.status === 'COMPLETED' && job.resultCardId) {
-          const card = await loadCardDetail(job.resultCardId)
-          setAgentState({ kind: 'result', card })
-          await loadCards()
-          return
-        }
-        if (job.status === 'CANCELLED') {
-          setAgentState({ kind: 'ready' })
-          return
-        }
-        setAgentState({ kind: 'error', message: job.errorMessage || job.message || t('writingSkill.jobFailed') })
-        return
-      }
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 900))
-    }
-  }, [loadCardDetail, loadCards, t])
-
-  useEffect(() => () => {
-    pollingJobIdRef.current = null
-  }, [])
-
-  const startJob = async (url: string, body?: Record<string, unknown>) => {
-    try {
-      setAgentState({
-        kind: 'running',
-        job: {
-          id: 'pending',
-          libraryId: library?.id ?? '',
-          libraryVersion: null,
-          userInstruction: instruction,
-          modelConfigId: 'knowledgeExtraction',
-          status: 'PENDING',
-          message: t('writingSkill.starting'),
-          randomSeed: 0,
-          roundCount: 0,
-          sampledRanges: [],
-          candidateRefs: [],
-          candidateCount: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          errorMessage: null,
-          resultCardId: null,
-          createdAt: '',
-          updatedAt: '',
-        },
-      })
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body ?? {}),
-      })
-      const data = await response.json() as { ok?: boolean; jobId?: string; error?: string }
-      if (!response.ok || !data.ok || !data.jobId) throw new Error(data.error || t('writingSkill.jobFailed'))
-      await pollJob(data.jobId)
-    } catch (error) {
-      pollingJobIdRef.current = null
-      setAgentState({ kind: 'error', message: error instanceof Error ? error.message : t('writingSkill.jobFailed') })
-    }
-  }
+  }, [open, library, setAgentState, t])
 
   const startCreate = () => {
     if (!library || !instruction.trim()) return
@@ -167,14 +88,6 @@ export function WritingSkillDistillationPanel({
       scanContextWindow,
       scanTotalBudget,
     })
-  }
-
-  const cancelJob = async () => {
-    const jobId = agentState.kind === 'running' ? agentState.job.id : null
-    if (!jobId || jobId === 'pending') return
-    pollingJobIdRef.current = null
-    await fetch(`/api/writing-skill-jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }).catch(() => undefined)
-    setAgentState({ kind: 'ready' })
   }
 
   const updateCard = async (card: WritingSkillCardDetail) => {
@@ -207,7 +120,7 @@ export function WritingSkillDistillationPanel({
       const response = await fetch(`/api/writing-skills/${encodeURIComponent(cardId)}`, { method: 'DELETE' })
       const data = await response.json() as { ok?: boolean; error?: string }
       if (!response.ok || !data.ok) throw new Error(data.error || t('writingSkill.deleteFailed'))
-      setAgentState({ kind: 'ready' })
+      setAgentState({ kind: 'idle' })
       await loadCards()
     } catch (error) {
       setAgentState({ kind: 'error', message: error instanceof Error ? error.message : t('writingSkill.deleteFailed') })
@@ -268,7 +181,7 @@ export function WritingSkillDistillationPanel({
       className="max-w-2xl"
       initialFocusRef={instructionInputRef}
     >
-      {agentState.kind === 'ready' ? (
+      {agentState.kind === 'idle' ? (
         <div className="space-y-5">
           <label className="block">
             <span className="mb-2 block text-sm font-medium text-zinc-200">{t('writingSkill.question')}</span>
@@ -460,7 +373,7 @@ export function WritingSkillDistillationPanel({
       {agentState.kind === 'error' ? (
         <div className="space-y-4">
           <Notice variant="error">{agentState.message}</Notice>
-          <button type="button" onClick={() => setAgentState({ kind: 'ready' })} className="rounded-2xl border border-line/10 px-4 py-2.5 text-sm text-zinc-300">{t('writingSkill.tryAgain')}</button>
+          <button type="button" onClick={() => setAgentState({ kind: 'idle' })} className="rounded-2xl border border-line/10 px-4 py-2.5 text-sm text-zinc-300">{t('writingSkill.tryAgain')}</button>
         </div>
       ) : null}
     </DialogSurface>

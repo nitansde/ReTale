@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { LibraryPageShell, LIBRARY_ACTION_ROW_CLASS_NAME, LIBRARY_PRIMARY_ACTION_CLASS_NAME, LIBRARY_SECONDARY_ACTION_CLASS_NAME } from '@/components/library/LibraryPageShell'
 import { Notice } from '@/components/ui/Notice'
+import { useWritingSkillJob } from '@/components/writing-skills/use-writing-skill-job'
 import { useI18n } from '@/lib/i18n/provider'
 import {
   DEFAULT_WRITING_SKILL_CONTEXT_WINDOW,
@@ -28,16 +29,9 @@ import {
 import type {
   WritingSkillCard,
   WritingSkillCardDetail,
-  WritingSkillDistillationJob,
   WritingSkillMaterialSourceSummary,
   WritingSkillSourceRef,
 } from '@/lib/writing-skill-types'
-
-type StudioState =
-  | { kind: 'cards' }
-  | { kind: 'running'; job: WritingSkillDistillationJob }
-  | { kind: 'result'; card: WritingSkillCardDetail }
-  | { kind: 'error'; message: string }
 
 type SourcesResponse = {
   ok?: boolean
@@ -51,8 +45,6 @@ type SourcesResponse = {
   modelError?: string
   error?: string
 }
-
-const TERMINAL_JOB_STATUSES = new Set(['COMPLETED', 'FAILED', 'INSUFFICIENT_EVIDENCE', 'CANCELLED'])
 
 function sourceKey(source: WritingSkillSourceRef) {
   return `${source.sourceType}:${source.sourceId}`
@@ -71,7 +63,6 @@ async function readJson<T>(response: Response) {
 export function WritingSkillStudio() {
   const { t } = useI18n()
   const uploadRef = useRef<HTMLInputElement | null>(null)
-  const pollingJobIdRef = useRef<string | null>(null)
   const [librarySources, setLibrarySources] = useState<WritingSkillMaterialSourceSummary[]>([])
   const [uploadedSources, setUploadedSources] = useState<WritingSkillMaterialSourceSummary[]>([])
   const [selectedSourceKeys, setSelectedSourceKeys] = useState<Set<string>>(new Set())
@@ -81,7 +72,6 @@ export function WritingSkillStudio() {
   const [instruction, setInstruction] = useState('')
   const [scanContextWindow, setScanContextWindow] = useState<WritingSkillContextWindow>(DEFAULT_WRITING_SKILL_CONTEXT_WINDOW)
   const [scanTotalBudget, setScanTotalBudget] = useState<WritingSkillTotalBudget>(DEFAULT_WRITING_SKILL_TOTAL_BUDGET)
-  const [studioState, setStudioState] = useState<StudioState>({ kind: 'cards' })
   const [refineInstruction, setRefineInstruction] = useState('')
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -119,12 +109,14 @@ export function WritingSkillStudio() {
     setCards(data.cards ?? [])
   }, [t])
 
-  const loadCardDetail = useCallback(async (cardId: string) => {
-    const response = await fetch(`/api/writing-skills/${encodeURIComponent(cardId)}`, { cache: 'no-store' })
-    const data = await readJson<{ ok?: boolean; card?: WritingSkillCardDetail; error?: string }>(response)
-    if (!response.ok || !data.ok || !data.card) throw new Error(data.error || t('writingSkill.loadFailed'))
-    return data.card
-  }, [t])
+  const { jobState: studioState, setJobState: setStudioState, loadCardDetail, startJob, cancelJob } = useWritingSkillJob({
+    loadCards,
+    pendingJob: {
+      libraryId: '',
+      modelConfigId: activeModel?.modelConfigId ?? 'rewrite',
+      userInstruction: instruction,
+    },
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -142,77 +134,6 @@ export function WritingSkillStudio() {
     }
   }, [loadCards, loadSources, t])
 
-  // Stop polling only on unmount: `t` changes on a locale switch and must not
-  // silently abandon a running job.
-  useEffect(() => () => { pollingJobIdRef.current = null }, [])
-
-  const pollJob = useCallback(async (jobId: string) => {
-    pollingJobIdRef.current = jobId
-    while (pollingJobIdRef.current === jobId) {
-      const response = await fetch(`/api/writing-skill-jobs/${encodeURIComponent(jobId)}`, { cache: 'no-store' })
-      const data = await readJson<{ ok?: boolean; job?: WritingSkillDistillationJob; error?: string }>(response)
-      if (!response.ok || !data.ok || !data.job) throw new Error(data.error || t('writingSkill.jobFailed'))
-      const job = data.job
-      if (pollingJobIdRef.current !== jobId) return
-      setStudioState({ kind: 'running', job })
-      if (TERMINAL_JOB_STATUSES.has(job.status)) {
-        pollingJobIdRef.current = null
-        if (job.status === 'COMPLETED' && job.resultCardId) {
-          const card = await loadCardDetail(job.resultCardId)
-          setStudioState({ kind: 'result', card })
-          await loadCards()
-          return
-        }
-        if (job.status === 'CANCELLED') {
-          setStudioState({ kind: 'cards' })
-          return
-        }
-        setStudioState({ kind: 'error', message: job.errorMessage || job.message || t('writingSkill.jobFailed') })
-        return
-      }
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 900))
-    }
-  }, [loadCardDetail, loadCards, t])
-
-  const startJob = async (url: string, body: Record<string, unknown>) => {
-    try {
-      setStudioState({
-        kind: 'running',
-        job: {
-          id: 'pending',
-          libraryId: '',
-          libraryVersion: null,
-          userInstruction: instruction,
-          modelConfigId: activeModel?.modelConfigId ?? 'rewrite',
-          status: 'PENDING',
-          message: t('writingSkill.starting'),
-          randomSeed: 0,
-          roundCount: 0,
-          sampledRanges: [],
-          candidateRefs: [],
-          candidateCount: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          errorMessage: null,
-          resultCardId: null,
-          createdAt: '',
-          updatedAt: '',
-        },
-      })
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const data = await readJson<{ ok?: boolean; jobId?: string; error?: string }>(response)
-      if (!response.ok || !data.ok || !data.jobId) throw new Error(data.error || t('writingSkill.jobFailed'))
-      await pollJob(data.jobId)
-    } catch (error) {
-      pollingJobIdRef.current = null
-      setStudioState({ kind: 'error', message: error instanceof Error ? error.message : t('writingSkill.jobFailed') })
-    }
-  }
-
   const startCreate = () => {
     if (!instruction.trim() || !selectedSources.length) return
     void startJob('/api/writing-skills', {
@@ -221,14 +142,6 @@ export function WritingSkillStudio() {
       scanContextWindow,
       scanTotalBudget,
     })
-  }
-
-  const cancelJob = async () => {
-    const jobId = studioState.kind === 'running' ? studioState.job.id : null
-    if (!jobId || jobId === 'pending') return
-    pollingJobIdRef.current = null
-    await fetch(`/api/writing-skill-jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }).catch(() => undefined)
-    setStudioState({ kind: 'cards' })
   }
 
   const toggleSource = (source: WritingSkillMaterialSourceSummary) => {
@@ -290,7 +203,7 @@ export function WritingSkillStudio() {
       const data = await readJson<{ ok?: boolean; card?: WritingSkillCardDetail; error?: string }>(response)
       if (!response.ok || !data.ok || !data.card) throw new Error(data.error || t('writingSkill.saveFailed'))
       await loadCards()
-      setStudioState({ kind: 'cards' })
+      setStudioState({ kind: 'idle' })
       setSaveNotice(t('writingSkill.saved'))
       window.setTimeout(() => setSaveNotice(''), 2400)
     } catch (error) {
@@ -307,7 +220,7 @@ export function WritingSkillStudio() {
       const response = await fetch(`/api/writing-skills/${encodeURIComponent(cardId)}`, { method: 'DELETE' })
       const data = await readJson<{ ok?: boolean; error?: string }>(response)
       if (!response.ok || !data.ok) throw new Error(data.error || t('writingSkill.deleteFailed'))
-      setStudioState({ kind: 'cards' })
+      setStudioState({ kind: 'idle' })
       await loadCards()
     } catch (error) {
       setStudioState({ kind: 'error', message: error instanceof Error ? error.message : t('writingSkill.deleteFailed') })
@@ -470,7 +383,7 @@ export function WritingSkillStudio() {
           </section>
         ) : studioState.kind === 'result' ? (
           <section className="border-b border-line/10 pb-6 sm:rounded-[24px] sm:border sm:bg-overlay/[0.04] sm:p-5">
-            <button type="button" onClick={() => setStudioState({ kind: 'cards' })} className="mb-6 inline-flex items-center gap-2 text-sm text-zinc-400 hover:text-zinc-100">
+            <button type="button" onClick={() => setStudioState({ kind: 'idle' })} className="mb-6 inline-flex items-center gap-2 text-sm text-zinc-400 hover:text-zinc-100">
               <ArrowLeft className="h-4 w-4" /> {t('writingSkill.backToCards')}
             </button>
             <label className="block">
@@ -585,7 +498,7 @@ export function WritingSkillStudio() {
         ) : studioState.kind === 'error' ? (
           <section className="space-y-4 border-b border-line/10 pb-6 sm:rounded-[24px] sm:border sm:bg-overlay/[0.04] sm:p-5">
             <Notice variant="error">{studioState.message}</Notice>
-            <button type="button" onClick={() => setStudioState({ kind: 'cards' })} className="rounded-2xl border border-line/10 px-4 py-2.5 text-sm text-zinc-300">{t('writingSkill.tryAgain')}</button>
+            <button type="button" onClick={() => setStudioState({ kind: 'idle' })} className="rounded-2xl border border-line/10 px-4 py-2.5 text-sm text-zinc-300">{t('writingSkill.tryAgain')}</button>
           </section>
         ) : (
           <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
