@@ -2,6 +2,7 @@ import { readJsonObject, apiRequestErrorResponse, MAX_PRESET_JSON_BODY_BYTES } f
 import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import {
+  extractStandaloneRegexEntries,
   normalizePresetCompatPresetImport,
   normalizePresetCompatStandaloneRegexImport,
 } from '@/lib/preset-compat/normalize'
@@ -26,25 +27,6 @@ function normalizeConflictPolicy(value: unknown): ConflictPolicy | null {
 
 function normalizeNameHint(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
-}
-
-function extractStandaloneRegexEntries(payload: unknown): unknown[] | null {
-  if (Array.isArray(payload)) {
-    return payload
-  }
-  if (!isRecord(payload)) {
-    return null
-  }
-  if (Array.isArray(payload.regex_scripts)) {
-    return payload.regex_scripts
-  }
-  if (isRecord(payload.RegexBinding) && Array.isArray(payload.RegexBinding.regexes)) {
-    return payload.RegexBinding.regexes
-  }
-  if (isRecord(payload.SPreset) && isRecord(payload.SPreset.RegexBinding) && Array.isArray(payload.SPreset.RegexBinding.regexes)) {
-    return payload.SPreset.RegexBinding.regexes
-  }
-  return null
 }
 
 function resolvePresetReplacementId(payload: unknown, library: PresetCompatLibrary) {

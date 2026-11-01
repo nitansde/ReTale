@@ -2043,108 +2043,18 @@ export function hasUsableKnowledgeExtraction(
     || extraction.openThreads.length > 0
 }
 
-async function requestStructuredExtraction(params: {
-  baseUrl: string
-  model: string
-  prompt: string
-  timeoutMs: number
-  repairMessage?: string
-  debug?: Pick<LlmDebugLogParams, 'folder' | 'stage' | 'attempt'>
-}) {
-  const controller = new AbortController()
-  const effectiveTimeoutMs = Math.max(params.timeoutMs, NON_STREAM_PROVIDER_TIMEOUT_MS)
-  const timeout = setTimeout(() => controller.abort(), effectiveTimeoutMs)
-  const url = `${params.baseUrl.replace(/\/$/, '')}/api/chat`
-  const messages: Array<{ role: 'system' | 'user'; content: string }> = [
+function buildStructuredExtractionMessages(prompt: string): Array<{ role: 'system' | 'user'; content: string }> {
+  return [
     {
       role: 'system',
       content: 'Return exactly one valid JSON object for chapter knowledge. Never return a top-level array. Never output markdown or commentary.',
     },
-    {
-      role: 'user',
-      content: params.repairMessage ? `${params.prompt}\n\n修复要求：${params.repairMessage}` : params.prompt,
-    },
+    { role: 'user', content: prompt },
   ]
-  const requestBody = {
-    model: params.model,
-    stream: false,
-    think: false,
-    format: EXTRACTION_SCHEMA,
-    keep_alive: '5m',
-    options: {
-      temperature: 0,
-    },
-    messages,
-  }
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    })
-
-    if (!response.ok) {
-      const text = await response.text()
-      await writeLlmDebugLog({
-        folder: params.debug?.folder ?? 'knowledge-extraction',
-        provider: 'ollama',
-        model: params.model,
-        streamed: false,
-        stage: params.debug?.stage,
-        attempt: params.debug?.attempt,
-        request: { url, body: requestBody, messages },
-        response: { status: response.status, rawText: text, error: `Ollama HTTP ${response.status}` },
-      })
-      throw new Error(`Ollama HTTP ${response.status}: ${text.slice(0, 400)}`)
-    }
-
-    const data = await response.json() as OllamaChatResponse
-    await writeLlmDebugLog({
-      folder: params.debug?.folder ?? 'knowledge-extraction',
-      provider: 'ollama',
-      model: params.model,
-      streamed: false,
-      stage: params.debug?.stage,
-      attempt: params.debug?.attempt,
-      request: { url, body: requestBody, messages },
-      response: { status: response.status, rawText: data.message?.content?.trim() || '', parsed: data },
-    })
-    return data
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Ollama HTTP ')) {
-      throw error
-    }
-    await writeLlmDebugLog({
-      folder: params.debug?.folder ?? 'knowledge-extraction',
-      provider: 'ollama',
-      model: params.model,
-      streamed: false,
-      stage: params.debug?.stage,
-      attempt: params.debug?.attempt,
-      request: { url, body: requestBody, messages },
-      response: { error: error instanceof Error ? error.message : 'Ollama extraction request failed' },
-    })
-    throw error
-  } finally {
-    clearTimeout(timeout)
-  }
 }
 
-async function requestStructuredRepair(params: {
-  baseUrl: string
-  model: string
-  invalidContent: string
-  timeoutMs: number
-  errorMessage: string
-  debug?: Pick<LlmDebugLogParams, 'folder' | 'stage' | 'attempt'>
-}) {
-  const controller = new AbortController()
-  const effectiveTimeoutMs = Math.max(params.timeoutMs, NON_STREAM_PROVIDER_TIMEOUT_MS)
-  const timeout = setTimeout(() => controller.abort(), effectiveTimeoutMs)
-  const url = `${params.baseUrl.replace(/\/$/, '')}/api/chat`
-  const messages: Array<{ role: 'system' | 'user'; content: string }> = [
+function buildStructuredRepairMessages(invalidContent: string, errorMessage: string): Array<{ role: 'system' | 'user'; content: string }> {
+  return [
     {
       role: 'system',
       content: 'Repair malformed JSON into exactly one valid JSON object that matches the requested chapter-knowledge shape. Never return a top-level array. Do not add commentary or markdown.',
@@ -2155,77 +2065,12 @@ async function requestStructuredRepair(params: {
         '下面是一段本地模型生成的无效 JSON，请只修复 JSON 结构问题。',
         '请只返回与当前请求格式完全匹配的 JSON 对象。',
         '不要补充原文中不存在的事实，不要输出解释。',
-        `解析错误：${params.errorMessage}`,
+        `解析错误：${errorMessage}`,
         '无效 JSON：',
-        params.invalidContent,
+        invalidContent,
       ].join('\n\n'),
     },
   ]
-  const requestBody = {
-    model: params.model,
-    stream: false,
-    think: false,
-    format: EXTRACTION_SCHEMA,
-    keep_alive: '5m',
-    options: {
-      temperature: 0,
-    },
-    messages,
-  }
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    })
-
-    if (!response.ok) {
-      const text = await response.text()
-      await writeLlmDebugLog({
-        folder: params.debug?.folder ?? 'knowledge-extraction',
-        provider: 'ollama',
-        model: params.model,
-        streamed: false,
-        stage: params.debug?.stage,
-        attempt: params.debug?.attempt,
-        request: { url, body: requestBody, messages },
-        response: { status: response.status, rawText: text, error: `Ollama HTTP ${response.status}` },
-      })
-      throw new Error(`Ollama HTTP ${response.status}: ${text.slice(0, 400)}`)
-    }
-
-    const data = await response.json() as OllamaChatResponse
-    await writeLlmDebugLog({
-      folder: params.debug?.folder ?? 'knowledge-extraction',
-      provider: 'ollama',
-      model: params.model,
-      streamed: false,
-      stage: params.debug?.stage,
-      attempt: params.debug?.attempt,
-      request: { url, body: requestBody, messages },
-      response: { status: response.status, rawText: data.message?.content?.trim() || '', parsed: data },
-    })
-    return data
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Ollama HTTP ')) {
-      throw error
-    }
-    await writeLlmDebugLog({
-      folder: params.debug?.folder ?? 'knowledge-extraction',
-      provider: 'ollama',
-      model: params.model,
-      streamed: false,
-      stage: params.debug?.stage,
-      attempt: params.debug?.attempt,
-      request: { url, body: requestBody, messages },
-      response: { error: error instanceof Error ? error.message : 'Ollama repair request failed' },
-    })
-    throw error
-  } finally {
-    clearTimeout(timeout)
-  }
 }
 
 export async function extractChapterKnowledgeWithOllama(params: {
@@ -2256,22 +2101,15 @@ export async function extractChapterKnowledgeWithOllama(params: {
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const response = attempt === 0
-        ? await requestStructuredExtraction({
-            baseUrl: config.baseUrl,
-            model: config.model,
-            prompt,
-            timeoutMs: config.timeoutMs,
-            debug: { folder: 'knowledge-extraction', stage: 'extract', attempt },
-          })
-        : await requestStructuredRepair({
-            baseUrl: config.baseUrl,
-            model: config.model,
-            invalidContent: lastContent,
-            timeoutMs: config.timeoutMs,
-            errorMessage: lastError,
-            debug: { folder: 'knowledge-extraction', stage: 'repair', attempt },
-          })
+      const response = await requestOllamaChat({
+        baseUrl: config.baseUrl,
+        model: config.model,
+        messages: attempt === 0 ? buildStructuredExtractionMessages(prompt) : buildStructuredRepairMessages(lastContent, lastError),
+        timeoutMs: config.timeoutMs,
+        temperature: 0,
+        format: EXTRACTION_SCHEMA,
+        debug: { folder: 'knowledge-extraction', stage: attempt === 0 ? 'extract' : 'repair', attempt },
+      })
 
       const content = response.message?.content?.trim() ?? ''
       lastContent = content
@@ -2411,16 +2249,6 @@ async function requestOllamaChat(params: {
       debug: params.debug,
       invalidJsonMessage: 'Ollama provider returned malformed JSON.',
       emptyBodyMessage: 'Ollama provider returned an empty response body.',
-    })
-    await writeLlmDebugLog({
-      folder: params.debug?.folder ?? 'ollama',
-      provider: 'ollama',
-      model: params.model,
-      streamed: false,
-      stage: params.debug?.stage,
-      attempt: params.debug?.attempt,
-      request: { url, body: requestBody, messages: params.messages },
-      response: { status: response.status, rawText: data.message?.content?.trim() || '', parsed: data },
     })
     return data
   } finally {

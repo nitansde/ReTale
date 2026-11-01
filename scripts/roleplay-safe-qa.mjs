@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { execSync } from 'node:child_process'
+import { detectListeningPids } from './production-port-safety.mjs'
 import {
   assertOwnedTestPath,
   markOwnedTestRoot,
@@ -32,24 +32,18 @@ export function assertSafeQaUrls() {
 }
 
 export function assertPort3000Available() {
+  let pids
   try {
-    const output = execSync(`lsof -ti tcp:${SAFE_QA_PORT} -sTCP:LISTEN`, { stdio: ['ignore', 'pipe', 'ignore'] })
-      .toString()
-      .trim()
+    pids = detectListeningPids(SAFE_QA_PORT)
+  } catch {
+    return
+  }
 
-    if (!output) {
-      return
-    }
-
-    const pids = output.split(/\s+/).filter(Boolean)
+  if (pids.length > 0) {
     throw new Error(
       `[roleplay-safe-qa] Refusing to start because ${SAFE_QA_HOST}:${SAFE_QA_PORT} is already in use by PID(s): ${pids.join(', ')}. `
       + 'Safe QA will not kill unknown port-3000 listeners.'
     )
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('[roleplay-safe-qa]')) {
-      throw error
-    }
   }
 }
 

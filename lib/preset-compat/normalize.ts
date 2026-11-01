@@ -480,12 +480,12 @@ function normalizeRegexRecord(
   return regexRecord
 }
 
-function getRegexArrayFromStandalonePayload(payload: unknown): unknown[] {
+export function extractStandaloneRegexEntries(payload: unknown): unknown[] | null {
   if (Array.isArray(payload)) {
     return payload
   }
   if (!isRecord(payload)) {
-    return []
+    return null
   }
   if (Array.isArray(payload.regex_scripts)) {
     return payload.regex_scripts
@@ -496,7 +496,7 @@ function getRegexArrayFromStandalonePayload(payload: unknown): unknown[] {
   if (isRecord(payload.SPreset) && isRecord(payload.SPreset.RegexBinding) && Array.isArray(payload.SPreset.RegexBinding.regexes)) {
     return payload.SPreset.RegexBinding.regexes
   }
-  return []
+  return null
 }
 
 export function getPromptExportMeta(promptRule: PresetCompatPromptRule) {
@@ -526,14 +526,9 @@ export function normalizePresetCompatStandaloneRegexImport(
   options: NormalizePresetCompatStandaloneRegexOptions = {}
 ): NormalizedPresetCompatStandaloneRegexImport {
   const warnings: string[] = []
-  const regexPayload = getRegexArrayFromStandalonePayload(payload)
   const namesInUse = new Set(Array.from(options.existingNames ?? []).filter((name): name is string => typeof name === 'string'))
 
-  if (!Array.isArray(regexPayload)) {
-    return { regexes: [], warnings: ['Standalone regex payload was not an array and was skipped.'] }
-  }
-
-  const regexes = regexPayload
+  const regexes = (extractStandaloneRegexEntries(payload) ?? [])
     .map((entry, index) => normalizeRegexRecord(entry, index, namesInUse, warnings, options))
     .filter((entry): entry is PresetCompatRegexRecord => entry !== null)
 

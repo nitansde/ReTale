@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
-import { spawn, spawnSync, execFileSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { detectListeningPids } from './production-port-safety.mjs'
 import {
   assertOwnedTestDatabaseUrl,
   assertOwnedTestPath,
@@ -120,34 +121,12 @@ function resolveModeConfig(mode) {
 }
 
 function ensurePortAvailable(host, port) {
-  try {
-    const output = execFileSync('lsof', ['-nP', '-iTCP:' + String(port), '-sTCP:LISTEN', '-t'], {
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).toString().trim()
-
-    if (!output) {
-      return
-    }
-
-    const pids = output.split(/\s+/).filter(Boolean)
+  const pids = detectListeningPids(port)
+  if (pids.length > 0) {
     throw new Error(
       `[retale-server] Refusing to start because ${host}:${port} is already in use by PID(s): ${pids.join(', ')}. `
       + 'Stop that listener manually before starting this server.'
     )
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('[retale-server]')) {
-      throw error
-    }
-
-    if (typeof error === 'object' && error && 'status' in error && error.status === 1) {
-      return
-    }
-
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-      throw new Error(`[retale-server] Cannot verify that ${host}:${port} is free because lsof is unavailable`, { cause: error })
-    }
-
-    throw error
   }
 }
 
