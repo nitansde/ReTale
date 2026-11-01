@@ -761,26 +761,28 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
   // Stable identity: this feeds useCallback deps all the way to the popstate listener,
   // which would otherwise be removed and re-added on every render.
   const { resetPresetCompatSessionStateForSelection } = params
+  const resetRewriteContext = useCallback(() => {
+    setGenerationContext(null)
+    setGraphContext(null)
+    setContextPreviewError('')
+    setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
+    setGraphSelection(null)
+    setDisabledContextBlockIds([])
+    setExcludedGraphEdgeIds([])
+    setExcludedEvidenceIds([])
+    setGraphMutationPendingId(null)
+    setGraphMutationError('')
+  }, [])
   const chapterResetControls = useMemo(() => ({
-    defaultGraphReviewControls: DEFAULT_GRAPH_REVIEW_CONTROLS,
     resetPresetCompatSessionStateForChapter: (chapter: Chapter) => {
       resetPresetCompatSessionStateForSelection(toChapterTimelineSelection(chapter), ['rewrite', 'future_jump', 'roleplay'])
     },
+    resetRewriteContext,
     setSelectionText,
     setLockedSelectionText,
-    setGenerationContext,
-    setGraphContext,
-    setContextPreviewError,
-    setGraphReviewControls,
-    setGraphSelection,
-    setDisabledContextBlockIds,
-    setExcludedGraphEdgeIds,
-    setExcludedEvidenceIds,
-    setGraphMutationPendingId,
-    setGraphMutationError,
     setToolbarPos,
     setActiveMode,
-  }), [resetPresetCompatSessionStateForSelection])
+  }), [resetPresetCompatSessionStateForSelection, resetRewriteContext])
 
   const {
     sortedChapters,
@@ -1589,19 +1591,10 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     setActiveContinueBlockRewriteContext(null)
     setPendingFutureJumpRewriteLaunch(null)
     setPendingContinueBlockRewriteLaunch(null)
-    setGenerationContext(null)
-    setGraphContext(null)
-    setContextPreviewError('')
-    setGraphReviewControls(DEFAULT_GRAPH_REVIEW_CONTROLS)
     setContextPanelOpen(false)
-    setGraphSelection(null)
-    setDisabledContextBlockIds([])
-    setExcludedGraphEdgeIds([])
-    setExcludedEvidenceIds([])
-    setGraphMutationPendingId(null)
-    setGraphMutationError('')
+    resetRewriteContext()
     setRewriteState((current) => ({ ...current, error: '' }))
-  }, [activeMode, currentChapter, invalidateRecoverableRewriteOwnership, params, workspaceSelection])
+  }, [activeMode, currentChapter, invalidateRecoverableRewriteOwnership, params, resetRewriteContext, workspaceSelection])
 
   useEffect(() => {
     if (centerPaneView === 'body') return
@@ -1906,6 +1899,7 @@ export function useSelectionNovelStudioCore(params: SelectionNovelStudioCorePara
     setGraphMutationPendingId,
     graphMutationError,
     setGraphMutationError,
+    resetRewriteContext,
     chapterGraphData,
     setChapterGraphData,
     chapterGraphLoading,

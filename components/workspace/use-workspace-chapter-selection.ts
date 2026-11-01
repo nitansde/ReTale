@@ -2,12 +2,7 @@
 
 import { useCallback, useEffect, useMemo } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
-import type {
-  GenerationContextBuildData,
-  GraphContextSourceMeta,
-  GraphReviewControls,
-  GraphSelection,
-} from '@/components/graph/types'
+import type { GraphContextSourceMeta } from '@/components/graph/types'
 import type { Chapter, ProductSurfaceId } from '@/lib/types'
 import { useNovelStore } from '@/store/novel-store'
 import { useWorkspaceChapterPrefetch } from '@/components/workspace/use-workspace-chapter-prefetch'
@@ -37,20 +32,10 @@ export type PendingSourceJump = {
 }
 
 type ChapterResetControls = {
-  defaultGraphReviewControls: GraphReviewControls
   resetPresetCompatSessionStateForChapter: (chapter: Chapter) => void
+  resetRewriteContext: () => void
   setSelectionText: Dispatch<SetStateAction<string>>
   setLockedSelectionText: Dispatch<SetStateAction<string>>
-  setGenerationContext: Dispatch<SetStateAction<GenerationContextBuildData | null>>
-  setGraphContext: Dispatch<SetStateAction<GenerationContextBuildData['graphContext'] | null>>
-  setContextPreviewError: Dispatch<SetStateAction<string>>
-  setGraphReviewControls: Dispatch<SetStateAction<GraphReviewControls>>
-  setGraphSelection: Dispatch<SetStateAction<GraphSelection>>
-  setDisabledContextBlockIds: Dispatch<SetStateAction<string[]>>
-  setExcludedGraphEdgeIds: Dispatch<SetStateAction<string[]>>
-  setExcludedEvidenceIds: Dispatch<SetStateAction<string[]>>
-  setGraphMutationPendingId: Dispatch<SetStateAction<string | null>>
-  setGraphMutationError: Dispatch<SetStateAction<string>>
   setToolbarPos: Dispatch<SetStateAction<WorkspaceFloatingPosition | null>>
   setActiveMode: Dispatch<SetStateAction<WorkspaceActionMode | null>>
 }
@@ -124,16 +109,7 @@ export function useWorkspaceChapterSelection(options: UseWorkspaceChapterSelecti
     resetControls.resetPresetCompatSessionStateForChapter(chapter)
     resetControls.setSelectionText('')
     resetControls.setLockedSelectionText('')
-    resetControls.setGenerationContext(null)
-    resetControls.setGraphContext(null)
-    resetControls.setContextPreviewError('')
-    resetControls.setGraphReviewControls(resetControls.defaultGraphReviewControls)
-    resetControls.setGraphSelection(null)
-    resetControls.setDisabledContextBlockIds([])
-    resetControls.setExcludedGraphEdgeIds([])
-    resetControls.setExcludedEvidenceIds([])
-    resetControls.setGraphMutationPendingId(null)
-    resetControls.setGraphMutationError('')
+    resetControls.resetRewriteContext()
     resetControls.setToolbarPos(null)
     resetControls.setActiveMode(null)
   }, [resetControls])

@@ -3,7 +3,6 @@
 import { act, renderHook } from '@testing-library/react'
 import type { Dispatch, SetStateAction } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import type { GenerationContextBuildData, GraphReviewControls, GraphSelection } from '@/components/graph/types'
 import {
   WORKSPACE_CHAPTER_ACTION_ENTRY_MODES,
   useWorkspaceChapterSelection,
@@ -13,13 +12,6 @@ import {
   type WorkspaceRoleplayTurn,
 } from '@/components/workspace/use-workspace-chapter-selection'
 import type { Chapter } from '@/lib/types'
-
-const DEFAULT_GRAPH_REVIEW_CONTROLS: GraphReviewControls = {
-  maxHops: 2,
-  hideLowConfidence: false,
-  confirmedOnly: false,
-  showPotentiallyStale: false,
-}
 
 function createStateSetterMock<T>() {
   return vi.fn() as unknown as Dispatch<SetStateAction<T>>
@@ -41,22 +33,12 @@ function buildChapter(overrides: Partial<Chapter>): Chapter {
 
 function createResetControls() {
   return {
-    defaultGraphReviewControls: DEFAULT_GRAPH_REVIEW_CONTROLS,
     resetPresetCompatSessionStateForChapter: vi.fn<(chapter: Chapter) => void>(),
     setRoleplayTurns: createStateSetterMock<WorkspaceRoleplayTurn[]>(),
     setRoleplayDraft: createStateSetterMock<string>(),
     setSelectionText: createStateSetterMock<string>(),
     setLockedSelectionText: createStateSetterMock<string>(),
-    setGenerationContext: createStateSetterMock<GenerationContextBuildData | null>(),
-    setGraphContext: createStateSetterMock<GenerationContextBuildData['graphContext'] | null>(),
-    setContextPreviewError: createStateSetterMock<string>(),
-    setGraphReviewControls: createStateSetterMock<GraphReviewControls>(),
-    setGraphSelection: createStateSetterMock<GraphSelection>(),
-    setDisabledContextBlockIds: createStateSetterMock<string[]>(),
-    setExcludedGraphEdgeIds: createStateSetterMock<string[]>(),
-    setExcludedEvidenceIds: createStateSetterMock<string[]>(),
-    setGraphMutationPendingId: createStateSetterMock<string | null>(),
-    setGraphMutationError: createStateSetterMock<string>(),
+    resetRewriteContext: vi.fn<() => void>(),
     setToolbarPos: createStateSetterMock<WorkspaceFloatingPosition | null>(),
     setActiveMode: createStateSetterMock<WorkspaceActionMode | null>(),
   }
@@ -101,16 +83,7 @@ describe('useWorkspaceChapterSelection', () => {
     expect(resetControls.resetPresetCompatSessionStateForChapter).toHaveBeenCalledWith(chapterTwo)
     expect(resetControls.setSelectionText).toHaveBeenCalledWith('')
     expect(resetControls.setLockedSelectionText).toHaveBeenCalledWith('')
-    expect(resetControls.setGenerationContext).toHaveBeenCalledWith(null)
-    expect(resetControls.setGraphContext).toHaveBeenCalledWith(null)
-    expect(resetControls.setContextPreviewError).toHaveBeenCalledWith('')
-    expect(resetControls.setGraphReviewControls).toHaveBeenCalledWith(DEFAULT_GRAPH_REVIEW_CONTROLS)
-    expect(resetControls.setGraphSelection).toHaveBeenCalledWith(null)
-    expect(resetControls.setDisabledContextBlockIds).toHaveBeenCalledWith([])
-    expect(resetControls.setExcludedGraphEdgeIds).toHaveBeenCalledWith([])
-    expect(resetControls.setExcludedEvidenceIds).toHaveBeenCalledWith([])
-    expect(resetControls.setGraphMutationPendingId).toHaveBeenCalledWith(null)
-    expect(resetControls.setGraphMutationError).toHaveBeenCalledWith('')
+    expect(resetControls.resetRewriteContext).toHaveBeenCalledOnce()
     expect(resetControls.setToolbarPos).toHaveBeenCalledWith(null)
     expect(resetControls.setActiveMode).toHaveBeenCalledWith(null)
     expect(setCenterPaneView).not.toHaveBeenCalled()
