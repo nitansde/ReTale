@@ -179,12 +179,14 @@ Supported behavior:
 - source formats: raw pattern strings and `/pattern/flags` literals
 - replacement tokens: `{{match}}`, `$0`, numbered captures, and named captures
 - runtime gates: `promptOnly`, `markdownOnly`, `minDepth`, `maxDepth`, and `runOnEdit`
+- `substituteRegex`: mode `1` inserts macro values into the find pattern as written, mode `2` inserts them regex-escaped; replacement strings always resolve macros
 - hard limits: at most `100` active rules and input length at most `200000` characters
 
 Preserved or degraded behavior:
 
 - placements outside `user_input` and `assistant_output`, including `slash_command`, `world_info`, `reasoning`, and `md_display`
-- `substituteRegex` modes other than `0`
+- `substituteRegex` values other than `0`, `1`, and `2`
+- `user_input` rules with neither `promptOnly` nor `markdownOnly`: SillyTavern runs these once when a message is sent, and ReTale has no such step, only a prompt pass over the whole assembled prompt where they could rewrite context blocks. They are skipped with a warning; enable `promptOnly` to run a rule on the assembled prompt
 - edit-hook semantics beyond the current bounded runtime
 
 ## Preserved-only fields and passthrough behavior

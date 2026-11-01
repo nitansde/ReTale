@@ -46,7 +46,7 @@ Knowledge graph rebuilds use the server-side `hanlp_bootstrap.py` script before 
 
 The rebuild API returns quickly with a queued/running job status. The server continues the rebuild in the background and the workspace polls job state instead of blocking the whole site while HanLP is running.
 
-Background task watchdogs use `RETALE_TASK_STALE_TIMEOUT_MS` to decide when a queued/running knowledge or recoverable rewrite job has stopped making progress, and `RETALE_TASK_MAX_RETRIES` to cap automatic retry attempts. When a job is retried, ReTale writes a new in-payload attempt token so stale old workers cannot overwrite the newer retry or a terminal watchdog failure. Detached worker startup failures are fenced by the scheduled attempt token before they can mark a queued job failed. Knowledge-view reads also reschedule queued watchdog retries, so users do not need to press rebuild again after a stale worker is reconciled.
+Background task watchdogs use `RETALE_TASK_STALE_TIMEOUT_MS` to decide when a queued/running knowledge or recoverable rewrite job has stopped making progress, and `RETALE_TASK_MAX_RETRIES` to cap automatic retry attempts (`0` disables them). When a job is retried, ReTale writes a new in-payload attempt token so stale old workers cannot overwrite the newer retry or a terminal watchdog failure. Detached worker startup failures are fenced by the scheduled attempt token before they can mark a queued job failed. Knowledge-view reads also reschedule queued watchdog retries, so users do not need to press rebuild again after a stale worker is reconciled.
 
 Detached knowledge workers retain stderr and fatal exception diagnostics in `worker-logs/` beside the novel's `novel.db`. Each log is capped at 512 KiB; rotation retains at most 20 recent log files per novel (10 MiB), including logs from exited workers. Files use owner-only permissions and survive server restarts. Stderr also remains visible in the launching server's logs, including failures before the worker logger starts. Recording diagnostics does not change attempt ownership or overwrite running/completed jobs.
 
@@ -202,7 +202,6 @@ There is no server workspace endpoint. Browser clients use only the novel and ch
 - Structural novel changes use revision-aware `POST /api/novels/:novelId` requests with the same complete three-header contract.
 - Novel import completes synchronously and makes the imported novel ready at revision 1.
 - A stale revision conflict preserves local edits instead of replacing them with server state.
-- PATCH falls back to revision-aware POST only when the server reports PATCH as unsupported with HTTP 405 or 501.
 - Browser API requests use same-origin checks; additional cross-origin access is opt-in.
 - AI settings are saved through `POST /api/settings/ai`
 
