@@ -10,11 +10,11 @@
 
 [**在线体验 Demo →**](https://ainitan.com) &nbsp;·&nbsp; [快速开始](#快速开始) &nbsp;·&nbsp; [常见问题](#常见问题)
 
-<img src="docs/images/demo-reader-zh.png" width="31%" alt="阅读小说正文，底部是主页、故事、搜索、魔改和编辑正文">&nbsp;
-<img src="docs/images/demo-rewrite-zh.png" width="31%" alt="选中一句正文，写下魔改要求，生成整章新版本">&nbsp;
-<img src="docs/images/demo-roleplay-zh.png" width="31%" alt="扮演谢无咎与宁知雪对话，AI 接写旁白和对方台词">
+<img src="docs/images/demo-reader-zh.gif" width="31%" alt="从书库打开小说，滑动阅读正文">&nbsp;
+<img src="docs/images/demo-rewrite-zh.gif" width="31%" alt="选中一句正文，写下魔改要求，生成整章新版本">&nbsp;
+<img src="docs/images/demo-roleplay-zh.gif" width="31%" alt="扮演谢无咎对宁知雪说一句话，AI 接写旁白和她的回应">
 
-<sub>截图来自 <a href="https://ainitan.com">Demo 站</a>：示例书籍为原创短篇，AI 结果为模拟内容。</sub>
+<sub>动图录自 <a href="https://ainitan.com">Demo 站</a>：示例书籍为原创短篇，AI 结果为预设的模拟内容，语音为 Fish Audio 预先生成的样例。</sub>
 
 </div>
 
@@ -25,7 +25,7 @@
 
 <table>
 <tr>
-<td width="34%"><img src="docs/images/demo-branches-zh.png" alt="章节导航：原文第 3 章下挂着 What-if 与改写分支"></td>
+<td width="34%"><img src="docs/images/demo-branches-zh.gif" alt="打开章节导航，原文章节下挂着改写、续写、What-if 与角色扮演分支"></td>
 <td>
 
 ### ✍️ 魔改：把“如果当时……”写成另一个版本
@@ -43,23 +43,40 @@ ReTale 以这段情节为切入点，结合章节上下文生成整章新版本�
 </td>
 </tr>
 <tr>
-<td width="34%"><img src="docs/images/demo-graph-zh.png" alt="关联图谱：本章人物、势力、概念和物品之间的关系"></td>
+<td width="34%"><img src="docs/images/demo-voice-zh.gif" alt="和魔王房东莉莉丝语音通话：说出一句话，她用语音当场回答，台词同步写进对话"></td>
 <td>
+
+### 🎙️ 语音通话：开口说话，角色当场回答
+
+切到「语音聊天」，像打电话一样直接对角色说话。ReTale 边听边转写，角色用你选的音色开口回答，回复沿用同一套人物设定、前情和分支历史，通话内容同步写进对话。想插话就直接开口，角色会停下来听；只有完整播完的句子才会保存。
+
+> **陆白：** 算公费。奥多已经在做账了，梅露说她的圣女徽章还能刷开教会后门。<br>
+> **莉莉丝：** 你们背着房东开会了？……下次叫上我。会议室的电费，是我交的。
+
+需要自备语音识别（Soniox 或 Qwen）和语音合成（Fish Audio）的密钥，见[语音通话](#可选语音通话)。在 [Demo 站](https://ainitan.com)打开任意一本书的 RP-01，就能听一段模拟通话。
 
 ### 🎭 走进故事，和角色对话
 
-选中一个场景进入「角色扮演」，选你扮演的人物和互动对象，给一句台词或一个剧情方向，AI 接着写对方的回应与动作。可以继续、重新生成，也能从任意一轮分叉。勾选「仅对话」时，对方每次只回一两句，像真的在聊天。
+不想开口，也可以打字。选中一个场景进入「角色扮演」，选你扮演的人物和互动对象，给一句台词或一个剧情方向，AI 接着写对方的回应与动作。可以继续、重新生成，也能从任意一轮分叉。勾选「仅对话」时，对方每次只回一两句，像真的在聊天。
 
-**可选语音通话：** 直接开口说话，角色用你选的音色实时回答，可随时打断。需要自备语音识别和语音合成的密钥，见[语音通话](#可选语音通话)。
+</td>
+</tr>
+<tr>
+<td width="34%"><img src="docs/images/demo-graph-zh.gif" alt="打开关联图谱：本章人物、势力、概念和物品之间的关系"></td>
+<td>
 
 ### 🕸️ 人物、关系、设定，一查就有
 
 构建故事知识库后，ReTale 会整理人物、关系、地点、世界设定、大纲和事件。忘了“他们为什么结盟”，或拿不准“这个角色此时知道什么”，打开「故事上下文」或「图谱」就能看到。
 
+### 🧭 忘了原句，也能找回情节
+
+记得原话就精确搜索；只记得情节，就用一句描述按含义查找，例如“她第一次把船票留给他”。按含义搜索需要另配 Embedding 检索模型。
+
 </td>
 </tr>
 <tr>
-<td width="34%"><img src="docs/images/demo-context-zh.png" alt="故事上下文：人物身份与能力，每条都附带原文出处"></td>
+<td width="34%"><img src="docs/images/demo-context-zh.gif" alt="故事上下文：人物身份与能力，每条都附带原文出处"></td>
 <td>
 
 ### 🔎 每条设定都有原文依据
@@ -69,10 +86,6 @@ ReTale 以这段情节为切入点，结合章节上下文生成整章新版本�
 ### 📚 写作技巧卡
 
 在「写作技巧」里选一本书或上传 TXT 素材，说出想学什么，比如“有潜台词的对话”“紧张的追逐场面”。ReTale 会提炼写法、避免事项和参考范文，创作时可以随手选用。
-
-### 🧭 忘了原句，也能找回情节
-
-记得原话就精确搜索；只记得情节，就用一句描述按含义查找，例如“她第一次把船票留给他”。按含义搜索需要另配 Embedding 检索模型。
 
 </td>
 </tr>

@@ -10,11 +10,11 @@ Highlight a passage, describe your idea, and let the story take another path.
 
 [**Try the demo →**](https://ainitan.com) &nbsp;·&nbsp; [Get started](#get-started) &nbsp;·&nbsp; [Common questions](#common-questions)
 
-<img src="docs/images/demo-reader-en.png" width="31%" alt="Reading a chapter, with Home, Story, Search, Rewrite and Edit text along the bottom">&nbsp;
-<img src="docs/images/demo-rewrite-en.png" width="31%" alt="A selected line, a rewrite instruction, and a preview of the rewritten chapter">&nbsp;
-<img src="docs/images/demo-roleplay-en.png" width="31%" alt="Playing Noor in a conversation with Dax, with AI-written narration and reply">
+<img src="docs/images/demo-reader-en.gif" width="31%" alt="Opening a book from the library and scrolling through a chapter">&nbsp;
+<img src="docs/images/demo-rewrite-en.gif" width="31%" alt="Selecting a line, typing a rewrite instruction, and previewing the rewritten chapter">&nbsp;
+<img src="docs/images/demo-roleplay-en.gif" width="31%" alt="Playing Noor and sending Dax a line; AI writes narration and his reply">
 
-<sub>Screenshots from the <a href="https://ainitan.com">demo site</a>: original sample books, simulated AI results.</sub>
+<sub>Recorded on the <a href="https://ainitan.com">demo site</a>: original and public-domain sample books, scripted stand-ins for AI results, and sample voices pre-generated with Fish Audio.</sub>
 
 </div>
 
@@ -25,7 +25,7 @@ Highlight a passage, describe your idea, and let the story take another path.
 
 <table>
 <tr>
-<td width="34%"><img src="docs/images/demo-branches-en.png" alt="Chapter navigation with What-if and Rewrite branches under chapter 3"></td>
+<td width="34%"><img src="docs/images/demo-branches-en.gif" alt="Opening chapter navigation, where rewrite, continuation, What-if and roleplay branches hang under the original chapters"></td>
 <td>
 
 ### ✍️ Turn “what if…” into another version
@@ -43,23 +43,40 @@ Rewrites, continuations, and alternate branches live in chapter navigation, so y
 </td>
 </tr>
 <tr>
-<td width="34%"><img src="docs/images/demo-graph-en.png" alt="Chapter graph linking characters and concepts with labeled relationships"></td>
+<td width="34%"><img src="docs/images/demo-voice-en.gif" alt="A voice call with Mr Darcy: Elizabeth speaks a line, he answers aloud, and the exchange is written into the conversation"></td>
 <td>
+
+### 🎙️ Voice calls: talk to a character out loud
+
+Switch to **Voice chat** and speak to the character as if on a phone call. ReTale transcribes as you talk, and the character answers aloud in a voice you choose, drawing on the same character notes, story so far, and branch history. The call is written into the conversation as you go. Start talking to interrupt and the character stops to listen; only sentences that finished playing are saved.
+
+> **Elizabeth:** Then perhaps you will tell me what you meant by it.<br>
+> **Darcy:** That I was ill-humoured, and disliked the room, and made you answerable for both. You were not.
+
+This needs your own speech-recognition (Soniox or Qwen) and text-to-speech (Fish Audio) keys; see [Voice calls](#optional-voice-calls). On the [demo site](https://ainitan.com), open RP-01 in any book to hear a simulated call.
 
 ### 🎭 Step into a character’s role
 
-Select a scene and enter **Roleplay**. Choose who you play and whom you talk to, give a line or a direction, and AI answers in character with actions and narration. Continue, regenerate, or branch from any turn. With **Dialogue only**, the other character replies in one or two sentences, like a real conversation.
+Prefer typing? Select a scene and enter **Roleplay**. Choose who you play and whom you talk to, give a line or a direction, and AI answers in character with actions and narration. Continue, regenerate, or branch from any turn. With **Dialogue only**, the other character replies in one or two sentences, like a real conversation.
 
-**Optional voice calls:** speak out loud and hear the character answer in a voice you choose, interrupting whenever you like. This needs your own speech keys; see [Voice calls](#optional-voice-calls).
+</td>
+</tr>
+<tr>
+<td width="34%"><img src="docs/images/demo-graph-en.gif" alt="Opening the chapter graph, which links characters and concepts with labeled relationships"></td>
+<td>
 
 ### 🕸️ Characters, relationships, and world details at a glance
 
 Build the story’s knowledge base and ReTale organizes characters, relationships, places, world details, outlines, and events. Open **Story context** or **Graph** to recall why two people became allies or what a character knows by now.
 
+### 🧭 Find a scene without the exact words
+
+Search exact phrases, or describe a scene in your own words, such as “the first time she leaves him a ferry ticket.” Searching by meaning needs an embedding model.
+
 </td>
 </tr>
 <tr>
-<td width="34%"><img src="docs/images/demo-context-en.png" alt="Story context with character details, each citing the source passage"></td>
+<td width="34%"><img src="docs/images/demo-context-en.gif" alt="Story context with character details, each citing the source passage"></td>
 <td>
 
 ### 🔎 Every detail cites the book
@@ -69,10 +86,6 @@ Character and relationship details quote their source and link back to it. Befor
 ### 📚 Writing-skill cards
 
 In **Writing skills**, pick a book or upload TXT reference material and say what to study, such as dialogue with subtext or a tense chase. ReTale extracts techniques, pitfalls, and example passages you can select while writing.
-
-### 🧭 Find a scene without the exact words
-
-Search exact phrases, or describe a scene in your own words, such as “the first time she leaves him a ferry ticket.” Searching by meaning needs an embedding model.
 
 </td>
 </tr>
