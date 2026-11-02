@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { Geist, Noto_Sans_SC, Noto_Serif_SC } from 'next/font/google'
+import { Geist, Literata, Noto_Sans_SC, Noto_Serif_SC } from 'next/font/google'
 import { cookies } from 'next/headers'
 import { FontPreferencesProvider } from '@/components/FontPreferencesProvider'
 import { ThemePreferencesProvider } from '@/components/ThemePreferencesProvider'
@@ -24,6 +24,12 @@ const notoSerifSC = Noto_Serif_SC({
   variable: '--font-noto-serif-sc',
   subsets: ['latin'],
   weight: 'variable',
+})
+
+// English reading font; not preloaded because the Chinese interface never uses it by default.
+const literata = Literata({
+  variable: '--font-literata',
+  preload: false,
 })
 
 export const metadata: Metadata = {
@@ -52,7 +58,7 @@ export default async function RootLayout({
       data-locale={initialLocale}
       data-theme={initialTheme}
       style={getFontPreferenceStyles(fontPreferences)}
-      className={`${geistSans.variable} ${notoSansSC.variable} ${notoSerifSC.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${notoSansSC.variable} ${notoSerifSC.variable} ${literata.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-background text-zinc-100">
         <I18nProvider initialLocale={initialLocale} localeCookiePresent={localeCookiePresent}>

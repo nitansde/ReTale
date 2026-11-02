@@ -54,7 +54,7 @@ export function WorkspaceAppearanceSettings() {
                 }}
                 className="min-h-11 w-full rounded-xl border border-line/15 bg-field px-3 py-2 text-base text-zinc-100 sm:text-sm outline-none focus-visible:border-violet-300/60 focus-visible:ring-2 focus-visible:ring-violet-300/30"
               >
-                {(['chinese', 'english'] as const).map((group) => (
+                {(['auto', 'chinese', 'english'] as const).map((group) => (
                   <optgroup key={group} label={t(`appearance.${group}`)}>
                     {FONT_OPTIONS.filter((font) => font.group === group).map((font) => (
                       <option key={font.id} value={font.id}>{font.label}</option>

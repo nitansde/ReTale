@@ -6,6 +6,9 @@ const SANS_FALLBACK = 'var(--font-noto-sans-sc), var(--font-geist-sans), sans-se
 const SERIF_FALLBACK = 'var(--font-noto-serif-sc), serif'
 
 export const FONT_OPTIONS = [
+  // The automatic faces follow the interface language; globals.css defines them.
+  { id: 'auto-sans', label: '自动 · 无衬线 Auto sans', group: 'auto', family: 'var(--font-auto-sans)' },
+  { id: 'auto-serif', label: '自动 · 衬线 Auto serif', group: 'auto', family: 'var(--font-auto-serif)' },
   { id: 'noto-sans-sc', label: '思源黑体 · Noto Sans SC', group: 'chinese', family: SANS_FALLBACK },
   { id: 'noto-serif-sc', label: '思源宋体 · Noto Serif SC', group: 'chinese', family: SERIF_FALLBACK },
   { id: 'pingfang', label: '苹方 · PingFang', group: 'chinese', family: `"PingFang SC", "PingFang TC", ${SANS_FALLBACK}` },
@@ -15,6 +18,7 @@ export const FONT_OPTIONS = [
   { id: 'geist', label: 'Geist', group: 'english', family: `var(--font-geist-sans), ${SANS_FALLBACK}` },
   { id: 'arial', label: 'Arial', group: 'english', family: `Arial, Helvetica, ${SANS_FALLBACK}` },
   { id: 'verdana', label: 'Verdana', group: 'english', family: `Verdana, ${SANS_FALLBACK}` },
+  { id: 'literata', label: 'Literata', group: 'english', family: `var(--font-literata), ${SERIF_FALLBACK}` },
   { id: 'georgia', label: 'Georgia', group: 'english', family: `Georgia, ${SERIF_FALLBACK}` },
   { id: 'times-new-roman', label: 'Times New Roman', group: 'english', family: `"Times New Roman", Times, ${SERIF_FALLBACK}` },
 ] as const
@@ -23,8 +27,8 @@ export type FontId = (typeof FONT_OPTIONS)[number]['id']
 export type FontPreferences = { interfaceFont: FontId; readingFont: FontId }
 
 export const DEFAULT_FONT_PREFERENCES: FontPreferences = {
-  interfaceFont: 'noto-sans-sc',
-  readingFont: 'noto-serif-sc',
+  interfaceFont: 'auto-sans',
+  readingFont: 'auto-serif',
 }
 
 export function isFontId(value: unknown): value is FontId {

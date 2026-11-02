@@ -7,8 +7,17 @@
     color-scheme: dark;
     --background: #0a0c12;
     --foreground: #f4f4f5;
-    --font-app-ui: var(--font-noto-sans-sc), var(--font-geist-sans), sans-serif;
-    --font-app-reading: var(--font-noto-serif-sc), serif;
+    --font-auto-sans: var(--font-noto-sans-sc), var(--font-geist-sans), sans-serif;
+    --font-auto-serif: var(--font-noto-serif-sc), serif;
+    --font-app-ui: var(--font-auto-sans);
+    --font-app-reading: var(--font-auto-serif);
+  }
+
+  /* CJK fonts draw ’ ‘ “ ” full-width, so English leads with Latin faces and
+     keeps Noto SC only for Chinese characters. */
+  :root:lang(en) {
+    --font-auto-sans: var(--font-geist-sans), var(--font-noto-sans-sc), sans-serif;
+    --font-auto-serif: var(--font-literata), var(--font-noto-serif-sc), serif;
   }
 
   input:placeholder-shown {
