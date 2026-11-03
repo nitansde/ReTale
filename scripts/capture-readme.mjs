@@ -17,12 +17,18 @@ const labels = {
     instruction: '让宁知雪当众替矿工作证，师徒关系提前决裂。', say: '秋娘就是方秋娘。伙房每天多煮的那碗粥，是给她失踪的孩子留的，留了十三年。',
     rewrite: '魔改', generate: '生成版本', nav: '打开章节导航', context: '打开故事上下文', more: '更多选项', graph: '图谱', map: '图谱',
     dialogue: '我的台词', voice: '语音聊天', start: '开始通话', end: '结束通话', listening: '正在聆听',
+    skills: '写作技巧', skillSource: '西游记·大闹天宫', learn: '学吴承恩怎样用官职、请帖和座位写名分之争', skillPlaceholder: '例如：五官',
+    distill: '开始提炼', skillPicker: '写作技巧（可多选）', skillTitle: '把身份冲突变成具体物件',
+    skillTarget: '退婚当天，我继承了反派宗门', skillLine: '谢无咎从抽屉里翻出一本账', skillUse: '让七派的名分落在请帖和座次上，正道先输给自己的规矩。',
   },
   en: {
     book: 'The Last Safe Room', voiceBook: 'Pride and Prejudice', line: 'I ignored the sword and went for her pulse.',
     instruction: 'Let Noor call Dax back before the fire door closes.', say: "It doesn't have to be. You have one respawn left. You're allowed to keep it.",
     rewrite: 'Rewrite', generate: 'Generate version', nav: 'Open chapter navigation', context: 'Open story context', more: 'More options', graph: 'Graph', map: 'Map',
     dialogue: 'My dialogue', voice: 'Voice chat', start: 'Start call', end: 'End call', listening: 'Listening',
+    skills: 'Writing skills', skillSource: 'Pride and Prejudice', learn: 'How Austen lets a joke protect wounded pride', skillPlaceholder: 'Example: facial features',
+    distill: 'Start distilling', skillPicker: 'Writing skills (select multiple)', skillTitle: 'Let wit carry a social wound',
+    skillTarget: 'A Bargain of Salt and Crows', skillLine: 'He could not lie. I could.', skillUse: 'Let Maeve’s jokes guard her pride, and cost her.',
   },
 }
 const button = (page, name) => page.getByRole('button', { name, exact: true })
@@ -47,7 +53,8 @@ const openRoleplay = async (page, label, title) => {
   await openBook(page, title); await button(page, label.nav).click(); await page.getByText('RP-01').first().click(); await page.waitForTimeout(1500)
 }
 
-// Each shot: optional setup off camera, then the recorded part. `rec.fast(n)` plays waiting n× faster.
+// Each shot: optional setup off camera, then the recorded part. `rec.fast(n)` plays waiting n× faster;
+// `rec.cut(fn)` runs fn off camera.
 const shots = {
   reader: {
     record: async (page, label) => { await page.waitForTimeout(900); await openBook(page, label.book); await scroll(page, 450, 12); await page.waitForTimeout(1200) },
@@ -93,6 +100,26 @@ const shots = {
       await page.waitForTimeout(1200); await button(page, label.end).click(); await page.waitForTimeout(1500)
     },
   },
+  skills: {
+    setup: async (page, label) => { await page.getByText(label.skills, { exact: true }).first().click(); await page.waitForTimeout(1500) },
+    record: async (page, label, rec) => {
+      await page.waitForTimeout(700); await page.getByRole('button', { name: new RegExp(`^${label.skillSource}`) }).click(); await page.waitForTimeout(600)
+      await scroll(page, 620, 10); await page.waitForTimeout(400)
+      const box = page.getByPlaceholder(label.skillPlaceholder)
+      await box.click(); rec.fast(2); await box.pressSequentially(label.learn, { delay: 20 }); rec.fast(1); await page.waitForTimeout(500)
+      await button(page, label.distill).click(); await page.waitForTimeout(1800)
+      await scroll(page, 520, 12); await page.waitForTimeout(1500)
+      // Then use the card on a book by another author, in a different genre.
+      await rec.cut(async () => {
+        await page.goto(`${demo}library/`, { waitUntil: 'networkidle' }); await openBook(page, label.skillTarget)
+        await select(page, label.skillLine); await page.waitForTimeout(600); await button(page, label.rewrite).first().click(); await page.waitForTimeout(1200)
+      })
+      const request = page.getByRole('textbox').first()
+      await page.waitForTimeout(600); await request.click(); await request.fill(''); rec.fast(2); await request.pressSequentially(label.skillUse, { delay: 20 }); rec.fast(1); await page.waitForTimeout(500)
+      await page.locator('summary').getByText(label.skillPicker).click(); await page.waitForTimeout(900)
+      await page.locator('label').filter({ hasText: label.skillTitle }).first().click(); await page.waitForTimeout(2200)
+    },
+  },
   graph: {
     setup: (page, label) => openBook(page, label.book),
     record: async (page, label) => {
@@ -116,12 +143,13 @@ async function record(page, run) {
   const cdp = await page.context().newCDPSession(page)
   const frames = []
   let speed = 1
+  let paused = false
   cdp.on('Page.screencastFrame', ({ data, metadata, sessionId }) => {
-    frames.push({ data, time: metadata.timestamp, speed })
+    if (!paused) frames.push({ data, time: metadata.timestamp, speed })
     cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {})
   })
   await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 92, maxWidth: 780, maxHeight: 1688 })
-  await run({ fast: (factor) => { speed = factor } })
+  await run({ fast: (factor) => { speed = factor }, cut: async (offCamera) => { paused = true; await offCamera(); paused = false } })
   await cdp.send('Page.stopScreencast')
   return frames
 }

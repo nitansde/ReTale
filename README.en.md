@@ -62,16 +62,24 @@ Prefer typing? Select a scene and enter **Roleplay**. Choose who you play and wh
 </td>
 </tr>
 <tr>
+<td width="34%"><img src="docs/images/demo-skills-en.gif" alt="Selecting Pride and Prejudice, asking what to learn from Austen, and distilling a skill card; then ticking that card while rewriting a different book"></td>
+<td>
+
+### 📚 Distill a favorite author’s craft into your own stories
+
+Love how an author handles dialogue, pacing, or atmosphere? In **Writing skills**, pick their books (several at once if you like) or upload a TXT, and say in one line what you want to learn, such as “how Austen lets a joke protect wounded pride” or “dialogue with subtext.” ReTale finds the passages that show it and distills a skill card: a few techniques, what to avoid, and example passages from the original, with each technique traced back to its source.
+
+A card isn’t tied to the book it came from. Tick it while rewriting, continuing, or roleplaying in any other book, and the AI writes with those techniques, using the card’s examples as models: bring a classic novel’s handling of a crowded council into your web novel, or give a romantasy Austen’s barbed wit. Recognized character names in the examples are replaced with placeholders first, so the original cast stays out of your story.
+
+</td>
+</tr>
+<tr>
 <td width="34%"><img src="docs/images/demo-graph-en.gif" alt="Opening the chapter graph, which links characters and concepts with labeled relationships"></td>
 <td>
 
 ### 🕸️ Characters, relationships, and world details at a glance
 
 Build the story’s knowledge base and ReTale organizes characters, relationships, places, world details, outlines, and events. Open **Story context** or **Graph** to recall why two people became allies or what a character knows by now.
-
-### 🧭 Find a scene without the exact words
-
-Search exact phrases, or describe a scene in your own words, such as “the first time she leaves him a ferry ticket.” Searching by meaning needs an embedding model.
 
 </td>
 </tr>
@@ -83,9 +91,9 @@ Search exact phrases, or describe a scene in your own words, such as “the firs
 
 Character and relationship details quote their source and link back to it. Before generating, **Advanced context** lets you review and adjust what the AI receives, so you set the direction and can see what it is based on.
 
-### 📚 Writing-skill cards
+### 🧭 Find a scene without the exact words
 
-In **Writing skills**, pick a book or upload TXT reference material and say what to study, such as dialogue with subtext or a tense chase. ReTale extracts techniques, pitfalls, and example passages you can select while writing.
+Search exact phrases, or describe a scene in your own words, such as “the first time she leaves him a ferry ticket.” Searching by meaning needs an embedding model.
 
 </td>
 </tr>
@@ -98,6 +106,7 @@ In **Writing skills**, pick a book or upload TXT reference material and say what
 - **Spoiler-free graph-aware RAG:** local HanLP handles Chinese word segmentation and entity recognition first. An LLM then extracts characters, relationships, events, and world rules into a SQLite knowledge graph. Every fact carries a chapter validity range and source evidence, so writing chapter N only uses what is known by chapter N.
 - **Hybrid retrieval:** each book gets a LanceDB index for semantic plus full-text recall over passages, character cards, events, and world details, merged with the graph facts. SQLite is the single source of truth; the index can always be rebuilt from it.
 - **Reviewable, cost-aware context:** the selection, earlier chapters, characters, relationships, and evidence are assembled by priority and trimmed to a context budget. You can inspect and toggle each block in **Advanced context** before generating. Stable background comes first and new history is appended last, so provider prefix caches (DeepSeek and others) hit more often and requests cost less.
+- **Sourced skill distillation:** ReTale samples the source text in rounds within the reading budget you set, has the model pick out passages that match your request, and distills techniques, pitfalls, and examples only from those passages; each technique records where its evidence sits in the original. Character and setting names the knowledge base recognizes are replaced with placeholders first, so only the craft travels to another story.
 - **Branching story tree:** rewrites, continuation blocks, What-ifs, Future Jumps, and roleplay sessions are nodes in one tree, and context follows each node’s ancestry. Long histories can be compressed into summaries so you can keep writing.
 - **Real-time voice pipeline:** streaming speech recognition (Soniox / Qwen) plus local voice detection in a browser AudioWorklet lets you interrupt just by speaking. Replies are split into sentences and synthesized while they are still being written (Fish Audio), and only sentences that finished playing are saved.
 - **Lightweight local stack:** Next.js 16, React, and TypeScript on Node’s built-in SQLite, with a separate database per book. Knowledge building runs in a background worker that can pause and resume. No Neo4j, hosted vector database, or GPU required.
